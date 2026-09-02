@@ -271,6 +271,18 @@ pub struct PalwPanelConfig {
     /// bond, because the registration names it as payee and the carrier must pay the collateral to
     /// exactly that script.
     pub pay_address: Option<String>,
+    /// **The class this node will produce for, already resolved** (`--palw-producer-class`).
+    ///
+    /// A `Hash64` and not a hex string on purpose: the daemon resolves the flag ONCE, for the
+    /// producer and for this service together, so a bad id fails in one place with one message
+    /// instead of being parsed twice and disagreeing.
+    ///
+    /// It is here because the collateral a bond needs is a function of the class whose claims it
+    /// will reserve against, and `--palw-register-bond` runs this service while the flag naming
+    /// that class was read only by the producer. A newcomer registering a bond for a model tier
+    /// therefore got the FLOOR's number — see `size_bond_collateral`. `None` is the floor, which is
+    /// both the default and the truth for a node that never passed the flag.
+    pub producer_class: Option<Hash64>,
 }
 
 pub struct PalwPanelService {
@@ -593,6 +605,16 @@ impl PalwPanelService {
     /// one cannot ask: whether a carrier holding an output that small can be relayed at all. That
     /// answer needs the funding UTXO, which is resolved after this — see
     /// `min_carryable_collateral`.
+    ///
+    /// **Exposure is released at `Final`, not at bind, so sizing for one claim buys a ceiling of
+    /// exactly one claim.** `has_exposure_room` is `reserved + claim <= ceiling`, and
+    /// `release_for_claim` runs on `Final` and on `Voided` and nowhere else — up to
+    /// `MAX_CLAIM_EXPOSURE_DAA` after the claim was created. A bond sized for a single claim
+    /// therefore admits the first block and refuses the second for hours, which reads exactly like
+    /// a stuck producer: `holding: the bond's exposure ceiling leaves no room for another claim
+    /// [... exposure=0/N per_claim=M]`, forever, with real money already locked. The whole
+    /// derivation is `palw_v2_collateral_for_claim_lifetime_v1`, which genesis has always used and
+    /// this path did not.
     fn size_bond_collateral(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> Result<u64, String> {
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
             &self.consensus_config.params.palw_consensus_mode
@@ -601,40 +623,71 @@ impl PalwPanelService {
         };
         let floor = bundle.state.min_collateral_sompi();
 
-        // **The floor is not a usable default.** A bond may hold a claim only while
-        // `reserved_exposure + claim_exposure <= collateral * max_exposure_ratio_permille / 1000`
-        // (`has_exposure_room`), and one claim costs `pwu * slash_value_per_pwu` — where `pwu`
-        // rises with the class's retargeted difficulty. So the chain's minimum collateral buys a
-        // bond that may be unable to hold even ONE claim, and the producer would report "the
-        // bond's exposure ceiling leaves no room for another claim" forever, having locked real
-        // money to get there. Sizing from the chain is the only default that is not silently
-        // useless; the operator can still ask for more.
-        let ratio = bundle.admission.max_exposure_ratio_permille().max(1) as u128;
-        // **One inference's exposure, not one block's derived pwu.** Under ADR-0072 `facts.pwu`
-        // is expected draws × one inference and grows with difficulty, while admission item 8
-        // reserves `palw_exposure_pwu_v1` — the one inference the block commits to. Sizing from
-        // `facts.pwu` overstated the need by the draw count and warned honest operators away.
-        let one_claim = session.palw_producer_facts_v2(bundle.base_class_id, None).zip(session.palw_v2_registration_terms()).map(
-            |(facts, terms)| {
-                let per_inference = facts.pwu / kaspa_consensus_core::palw_pwu::palw_expected_attempts_v1(facts.class_target).max(1);
-                (per_inference as u128).saturating_mul(terms.slash_value_per_pwu as u128)
-            },
-        );
-        let for_one_claim = one_claim
-            .map(|exposure| u64::try_from(exposure.saturating_mul(1000).div_ceil(ratio)).unwrap_or(u64::MAX))
-            .unwrap_or(floor);
-        let sized = for_one_claim.max(floor);
+        // **The class this bond will be asked to CARRY — the operator's, not the network's floor.**
+        //
+        // A claim reserves `pwu_per_inference x slash_value_per_pwu` against the bond of the
+        // producer that made it, and `pwu_per_inference` is a property of the CLASS: on
+        // testnet-11 the Qwen3.6 tier's canonical inference counts 348x the floor's. Sizing from
+        // `bundle.base_class_id` regardless was therefore not a conservative default but the wrong
+        // question — it priced a bond for work this node had already been told it would not be
+        // doing. The measured shape (issue #95): a newcomer passing
+        // `--palw-producer-class=<a model tier>` registered a floor-priced bond and its producer
+        // then held forever.
+        let class_id = self.config.producer_class.unwrap_or(bundle.base_class_id);
 
-        let collateral = self.config.bond_collateral.unwrap_or(sized);
+        // **One inference's normative work, not one block's derived pwu.** Under ADR-0072
+        // `facts.pwu` is `expected_draws x pwu_per_inference` and grows with the class's
+        // difficulty, while what a claim reserves is `palw_exposure_pwu_v1` — the one inference
+        // the block commits to. Dividing the draws back out recovers the registration's own frozen
+        // figure, which is what the lifetime derivation is denominated in.
+        let per_inference = session
+            .palw_producer_facts_v2(class_id, None)
+            .map(|facts| facts.pwu / kaspa_consensus_core::palw_pwu::palw_expected_attempts_v1(facts.class_target).max(1));
+        // The FULL claim lifetime, and the same function every genesis registry is sized by
+        // (`palw_rc_params_with_classes` re-derives its bonds from the dearest class it registers).
+        // Its factors are deliberately an over-estimate — funding a bond above its requirement
+        // costs an operator nothing the chain enforces, and funding one below it is the permanent
+        // wedge above.
+        let needed = per_inference
+            .map(kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1)
+            .map(|sized| sized.max(floor));
+
+        let collateral = match (self.config.bond_collateral, needed) {
+            // Their money, their exposure ceiling: an explicit value is always honoured (subject to
+            // the chain's floor below), even when the chain cannot be asked what it should be.
+            (Some(named), _) => named,
+            (None, Some(sized)) => sized,
+            // **No facts, no default.** Falling back to the chain's floor here is what the old code
+            // did, and it is the failure this whole function is about: a bond registered at 400,000
+            // sompi against a class that needs three orders of magnitude more, with nothing said.
+            // Transient before the state store has a tip, so the caller's five-second retry loop
+            // simply asks again; permanent only if the id names no registered class.
+            (None, None) => {
+                return Err(format!(
+                    "this chain reports no producer facts for class {class_id}, so the collateral a bond for it \
+                     needs cannot be derived — waiting. If that id came from --palw-producer-class, check it \
+                     against the class table; sizing against the network floor instead would register a bond that \
+                     cannot hold one of this class's claims."
+                ));
+            }
+        };
+
         if collateral < floor {
             return Err(format!("--palw-bond-collateral {collateral} is below this chain's floor of {floor} sompi"));
         }
-        if collateral < sized {
-            // Their money, their call — but not silently. This is the number whose absence turns
-            // into a producer that holds forever.
+        if let Some(sized) = needed
+            && collateral < sized
+        {
+            // Their money, their call — but not silently, and named against the class they
+            // CONFIGURED rather than against the floor. The old warning compared every value to
+            // the floor class's number, so an operator mining a model tier saw no warning at any
+            // amount above 400,000 sompi — the one reading that would have caught issue #95 before
+            // the money moved.
             warn!(
-                "[{PALW_PANEL}] --palw-bond-collateral {collateral} is below the {sized} sompi one claim on this \
-                 chain's floor class currently needs; this bond will register and may then be unable to hold a claim"
+                "[{PALW_PANEL}] --palw-bond-collateral {collateral} is below the {sized} sompi that a claim of class \
+                 {class_id} needs on this chain for its whole life (exposure is released at Final, not at bind, so \
+                 the ceiling has to hold every claim in flight at once); this bond will register and its producer \
+                 may then hold forever with 'the bond's exposure ceiling leaves no room for another claim'"
             );
         } else if self.config.bond_collateral.is_none() {
             // Once. This runs on every 5 s pass of the registration loop, and a node waiting for
@@ -642,9 +695,11 @@ impl PalwPanelService {
             // reading the log — which is where the actionable "no confirmed UTXO" line lives.
             static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                let scope = if self.config.producer_class.is_some() { "--palw-producer-class" } else { "this chain's base class" };
                 info!(
-                    "[{PALW_PANEL}] sizing collateral at {collateral} sompi — the chain's floor is {floor} and one \
-                     claim on the base class currently needs {for_one_claim}"
+                    "[{PALW_PANEL}] sizing collateral at {collateral} sompi — enough for class {class_id} ({scope}) \
+                     to hold its claims for their whole lifetime, not just one at a time. The chain's own floor is \
+                     {floor}."
                 );
             }
         }
