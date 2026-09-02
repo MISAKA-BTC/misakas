@@ -40,24 +40,32 @@ instructions built on them are marked where they no longer apply. If a section t
 `palw-worker`, a GGUF sha, `CPU_THREADS`, or a per-header inference cost, it is describing the old
 lane.
 
-> **Current identity — DEPLOYED 2026-09-02 ("Relaunch 5c", the three-class re-genesis with the
-> corrected Qwen3.6 `graph-v3` and Qwen2.5-A16 registrations). Wipe your datadir if you joined
-> earlier; the startup genesis-mismatch guard refuses un-wiped nodes, and every earlier
-> fingerprint is refused at the handshake.**
+> **Current identity — "Relaunch 5e": ADR-0075 (a model's certification is a consensus object) and
+> ADR-0076 (each class's attempt lane is priced from its own share and its own counted work), on
+> the SAME genesis card as 5c and 5d. Wipe your datadir whatever you joined earlier — the state
+> version moved to 16 and a node started over an older one refuses at boot and names the remedy —
+> and rebuild: every earlier fingerprint is refused at the handshake.**
 >
-> * consensus fingerprint: **`d38abe4420a53c585917404ef2195e0d643cf472b38e385c6515087c840014e5`**
+> * consensus fingerprint: **`a7baab7957d27bbd2591cd24f70ee92b555ab26cd49ef425cbd7093f06e222d9`**
 > * genesis hash: **`08e9c8a4cb59714574bc76e25e4dc16bb24e213fc2f0f6c8c6fd5d8c4a25ef70…`** (`PALW_RC_GENESIS`,
 >   coinbase payload marker `misaka-palw-rc`) — measured from the running node's own startup line,
 >   which is the only value your node will be judged by.
-> * build: `v1.1.0-b4a98a937` or later from `main` (`e7578d17` at the time of writing).
+> * build: `v1.1.0` from `main` at the Relaunch 5e landing. Any commit whose build announces the
+>   fingerprint above will do — and that, not a commit id, is the check:
+>   `kaspad --testnet --netsuffix=11` prints it on the second line of its startup log.
 > * registered classes, court-certified end-to-end: BASE-0 `f1c5635c…` (the floor, no model),
 >   PALW-QWEN36 `5bd9ae3d…` (graph-v3, 33.27 GiB artifact root `f4aad4fd…`), PALW-QWEN25-A16
->   `71bbb755…` (artifact root `1a7457f1…`). The A16 class produced its first accepted block at
->   02:19:58 CEST on 2026-09-02; the previous ids `ec7bbcbf…` and `f942e268…` do not exist on this
->   chain.
+>   `71bbb755…` (artifact root `1a7457f1…`); the previous ids `ec7bbcbf…` and `f942e268…` do not
+>   exist on this chain. **The ids did not move at 5e** — a class id is its profile's id, and the
+>   per-class target ADR-0076 changed is economics, not identity — so a producer flag written for
+>   5c or 5d still names the right class.
+> * what a miner will meet: the model tiers hold 489‰ of cadence each and the floor 22‰, and as of
+>   5e the three are PRICED for that (5d gave all three one target and the floor took 100 % of the
+>   blocks for its first hour). A floor block is ~12,664 expected inferences; a Qwen3.6 block is
+>   about one. Mining the floor is now the slow lane, on purpose.
 >
-> Same-day predecessors `accaadce…` and `f0e50f83…` (2026-09-02, each live for about an hour) and
-> `5ccdd684…` (Relaunch 4, genesis `8d2002cc…`) are archived, not continued. The 10B premine cap,
+> Predecessors `e2b91c16…` (Relaunch 5d), `d38abe44…` (5c), `accaadce…` and `f0e50f83…` (all
+> 2026-09-02) and `5ccdd684…` (Relaunch 4, genesis `8d2002cc…`) are archived, not continued. The 10B premine cap,
 > the eight genesis bond seats and the community allocations are unchanged from Relaunch 4.
 > Post-genesis class registrations from any previous chain do not carry over and must be
 > re-registered on this chain. What changed in consensus is recorded in

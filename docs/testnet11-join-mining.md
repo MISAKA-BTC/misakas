@@ -46,15 +46,16 @@ was withdrawn on 2026-08-29.)
 A node on the right chain logs
 
 ```
-Consensus params fingerprint: d38abe4420a53c585917404ef2195e0d643cf472b38e385c6515087c840014e5 (network testnet-11)
+Consensus params fingerprint: a7baab7957d27bbd2591cd24f70ee92b555ab26cd49ef425cbd7093f06e222d9 (network testnet-11)
 ```
 
-(Identity as of **Relaunch 5c, 2026-09-02** — genesis `08e9c8a4…` (`PALW_RC_GENESIS`). Earlier
-values — `f0e50f83…` and `accaadce…` (both 2026-09-02, each live for about an hour),
-`5ccdd684…` (2026-08-31), `f3bf86b4…` (2026-08-30), `95265934…` (2026-08-29) — name archived
-chains; a node still announcing any of them is refused at the handshake by every node on this
-one. If you joined an earlier testnet-11, wipe the appdir; the old chain is archived, not
-continued.)
+(Identity as of **Relaunch 5e, 2026-09-02** — genesis `08e9c8a4…` (`PALW_RC_GENESIS`), which 5e
+keeps: the genesis card has not moved since 5c, only the ruleset over it. Earlier values —
+`e2b91c16…` (5d), `d38abe44…` (5c), `f0e50f83…` and `accaadce…` (all 2026-09-02), `5ccdd684…`
+(2026-08-31), `f3bf86b4…` (2026-08-30), `95265934…` (2026-08-29) — name archived rulesets; a node
+still announcing any of them is refused at the handshake by every node on this one. **Wipe the
+appdir whatever you joined before**: the fleet archives its datadirs at every relaunch and starts
+an empty chain, and 5e's state version refuses an older one at boot outright.)
 
 A different fingerprint means a different ruleset, and the two will refuse each other at handshake.
 Do not treat that as a connectivity problem.
