@@ -224,6 +224,16 @@ impl DbPalwStateV2Store {
         self.tip.write(DirectDbWriter::new(&self.db), &PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh })
     }
 
+    /// Stage a tip row VERBATIM through this store's own db handle — the direct-write twin of
+    /// [`Self::set_tip_record_batch`], for the tests that must leave behind a snapshot which
+    /// cannot be read back (a disk that flipped a byte, or a row written by another schema).
+    /// Test-only for the same reason: production computes the root from the state it stores.
+    #[cfg(test)]
+    pub fn set_tip_record_for_tests(&mut self, record: PalwStateTipRecordV2) -> StoreResult<()> {
+        use kaspa_database::prelude::DirectDbWriter;
+        self.tip.write(DirectDbWriter::new(&self.db), &record)
+    }
+
     /// Remove the tip row, reproducing the state a pruned join (or a `reindex_if_stale` after a
     /// schema bump) leaves behind: a live ConsensusV2 bundle with no PALW state under it. Test-only,
     /// because nothing in production should ever reach that state deliberately — the startup guard

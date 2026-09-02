@@ -683,6 +683,25 @@ pub struct Params {
     /// activation.
     pub palw_inactivity_leak: Option<PalwInactivityLeakV1>,
 
+    /// **ADR-0075 Decision 14 — only a chunk that can complete a group may spend the block's
+    /// certification cap.** `None` on every shipped preset, so the behaviour is byte-identical to
+    /// not having the field.
+    ///
+    /// The acceptance rehearsal counts a chunk against `PALW_CERTIFICATION_MAX_PER_BLOCK` when it
+    /// would complete its group, and it asked only `count == 1` for a group that does not exist
+    /// yet. So an `ObjectChunk { index: 5, count: 1 }` — sixty bytes the transition refuses on its
+    /// face as `ChunkIndexOutOfRange` — was charged as a grading, and two of them per block starve
+    /// every genuine `FamilyCertified` in that block for two ordinary fees.
+    ///
+    /// **A bare fence with no companion value.** The rule it arms is the transition's own
+    /// `index < count`, not a configured quantity, so there is nothing beside it that could be
+    /// normalised out of [`Self::consensus_identity_id`] and disagreed about silently — the hazard
+    /// `palw_bond_maturity` documents. Fenced rather than applied outright because it changes which
+    /// objects a block accepts, and therefore the state root: an upgraded node and an un-upgraded
+    /// one would compute two roots for one block, which is the shape this whole file exists to
+    /// refuse.
+    pub palw_chunk_cap_charge: Option<ForkActivation>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -1366,6 +1385,10 @@ impl Params {
         if self.palw_inactivity_leak.is_some_and(|l| l.activation == ForkActivation::never()) {
             self.palw_inactivity_leak = None;
         }
+        // ADR-0075 D14, a bare fence: the D2 collapse, for the D2 reason.
+        if self.palw_chunk_cap_charge == Some(ForkActivation::never()) {
+            self.palw_chunk_cap_charge = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -1541,6 +1564,7 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_inactivity_leak,
+            palw_chunk_cap_charge,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -1645,6 +1669,16 @@ impl Params {
         }
         match palw_inactivity_leak.as_mut() {
             Some(leak) => fork(&mut leak.activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0075 D14. A pure fence with no payload, so visiting it is safe — appended AFTER its
+        // siblings because the schedule id hashes these in sequence and inserting into the middle
+        // would move every preset's schedule id for a field none of them set.
+        match palw_chunk_cap_charge.as_mut() {
+            Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
                 visit(&mut absent);
@@ -1833,6 +1867,7 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_inactivity_leak,
+            palw_chunk_cap_charge,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -1999,6 +2034,12 @@ impl Params {
             h.write(b"palw_inactivity_leak");
             h.write(leak.activation.daa_score().to_le_bytes());
             h.write(leak.t_leak_daa.to_le_bytes());
+        }
+        // ADR-0075 D14, Some-only like its siblings: an unset fence writes nothing, so every
+        // shipped preset fingerprints byte-identically to before the field existed.
+        if let Some(activation) = palw_chunk_cap_charge {
+            h.write(b"palw_chunk_cap_charge");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
         // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
@@ -2279,6 +2320,7 @@ impl Params {
             palw_heartbeat: self.palw_heartbeat,
             palw_attempt_work: self.palw_attempt_work,
             palw_inactivity_leak: self.palw_inactivity_leak,
+            palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -3187,6 +3229,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_heartbeat: None,
     palw_attempt_work: None,
     palw_inactivity_leak: None,
+    palw_chunk_cap_charge: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -3319,6 +3362,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_heartbeat: None,
     palw_attempt_work: None,
     palw_inactivity_leak: None,
+    palw_chunk_cap_charge: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -3433,6 +3477,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_heartbeat: None,
     palw_attempt_work: None,
     palw_inactivity_leak: None,
+    palw_chunk_cap_charge: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -6858,6 +6903,7 @@ pub const DEVNET_PARAMS: Params = Params {
         ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
     }),
     palw_inactivity_leak: None,
+    palw_chunk_cap_charge: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -7669,6 +7715,71 @@ mod consensus_params_id_tests {
         let mut armed_rc = palw_rc_shipped_params();
         armed_rc.palw_frontier_provenance = Some(ForkActivation::always());
         armed_rc.validate_palw_v2().expect("and on the V2 preset that actually runs the rule");
+    }
+
+    /// **ADR-0075 D14's fence, in the same four positions.**
+    ///
+    /// The rule it arms changes which objects a block accepts — a chunk whose index falls outside
+    /// its own count no longer spends the block's certification cap — and therefore the state root.
+    /// So it has to reach a running network the way D2 and D4 do: scheduled ahead, old and new
+    /// builds still peers, and the difference visible in the fingerprint the operator log prints.
+    /// A bundle placement would move `palw_ruleset_id_v2`, which `for_each_fence` never descends
+    /// into, and every old/new pair would refuse the handshake outright.
+    #[test]
+    fn the_chunk_cap_charge_fence_separates_networks_only_when_it_is_in_force() {
+        let shipped = MAINNET_PARAMS;
+        assert!(shipped.palw_chunk_cap_charge.is_none(), "every shipped preset must leave ADR-0075 D14 dormant");
+
+        let mut scheduled = MAINNET_PARAMS;
+        scheduled.palw_chunk_cap_charge = Some(ForkActivation::new(9_000_000));
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            scheduled.consensus_identity_id(),
+            "scheduling D14 ahead must keep old and new builds peers — it is an acceptance rule and it has to reach a \
+             running network by rolling deploy"
+        );
+        assert_ne!(
+            shipped.consensus_params_id(),
+            scheduled.consensus_params_id(),
+            "…and still be visible in the fingerprint, or two builds grade different object sets in silence"
+        );
+
+        let mut at_genesis = MAINNET_PARAMS;
+        at_genesis.palw_chunk_cap_charge = Some(ForkActivation::always());
+        assert_ne!(
+            shipped.consensus_identity_id(),
+            at_genesis.consensus_identity_id(),
+            "in force from block 1 on one side is a rule difference — the two accept different objects from one block"
+        );
+
+        let mut never_armed = MAINNET_PARAMS;
+        never_armed.palw_chunk_cap_charge = Some(ForkActivation::never());
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            never_armed.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse is gone"
+        );
+
+        // Independent of the fences beside it — arming one must never read as arming another.
+        let mut d14_and_d2 = MAINNET_PARAMS;
+        d14_and_d2.palw_chunk_cap_charge = Some(ForkActivation::always());
+        d14_and_d2.palw_frontier_provenance = Some(ForkActivation::always());
+        assert_ne!(d14_and_d2.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
+
+        // Armable on every shipped preset, at any height: the rule is the transition's own
+        // `index < count` and there is no registry, duration or quantity behind it to satisfy.
+        for (name, base) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            for height in [ForkActivation::always(), ForkActivation::new(1), ForkActivation::new(9_000_000)] {
+                let mut armed = base.clone();
+                armed.palw_chunk_cap_charge = Some(height);
+                armed.validate_palw_v2().unwrap_or_else(|e| panic!("{name}: D14 must be armable at any height: {e}"));
+            }
+        }
+        let mut armed_rc = palw_rc_shipped_params();
+        armed_rc.palw_chunk_cap_charge = Some(ForkActivation::always());
+        armed_rc.validate_palw_v2().expect("and on the V2 preset that actually grades chunks");
     }
 
     /// **ADR-0065 D4's fence, in the same four positions.**

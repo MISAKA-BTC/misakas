@@ -428,6 +428,9 @@ pub struct VirtualStateProcessor {
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0066 Decision 4: the inactivity leak's fence and its duration.
     pub(super) palw_inactivity_leak: Option<kaspa_consensus_core::config::params::PalwInactivityLeakV1>,
+    /// ADR-0075 D14's fence, `None` on every shipped preset. See
+    /// [`Self::palw_chunk_cap_charge_at`], which is the ONE place this is resolved.
+    pub(super) palw_chunk_cap_charge: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     /// ADR-0033 (B14): the PALW credit gate's fence — `None` (every shipped network) keeps
     /// the whole gate dormant; `Some` makes crossing commitments mintable in the coinbase
@@ -697,6 +700,7 @@ impl VirtualStateProcessor {
             ),
             palw_maturity_warn_last_band: std::sync::atomic::AtomicU64::new(0),
             palw_inactivity_leak: params.palw_inactivity_leak,
+            palw_chunk_cap_charge: params.palw_chunk_cap_charge,
             max_block_parents: params.max_block_parents(),
             mergeset_size_limit: params.mergeset_size_limit(),
             palw_heartbeat_width_fence: params.palw_heartbeat_width_fence(),
@@ -3938,6 +3942,23 @@ impl VirtualStateProcessor {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let store = self.palw_state_v2_store.read();
         let (tip_block, tip_state) = store.load_tip(state_params).ok().flatten()?;
+        // **Both ends of the walk must be blocks this consensus can reach, or the walk is a
+        // panic.** `calculate_chain_path` asks `is_chain_ancestor_of`, which `unwrap`s the
+        // reachability lookup — `KeyNotFound` there is `process::exit(1)`, not an error.
+        //
+        // A STAGING consensus is built `skip_adding_genesis`, so it has no virtual state row and
+        // `get_sink()` answers the all-zero hash, which is not a block. It has a PALW tip, because
+        // the headers-proof IBD imports the peer's pruning-point carriage immediately before asking
+        // this question — so the tip load succeeds and the candidate is the zero hash. Every node
+        // taking that path past its own genesis died on the next line; a peer can steer a victim
+        // into it by advertising a chain whose pruning point the victim lacks.
+        //
+        // No order is the honest answer here: this consensus cannot weigh a candidate it does not
+        // hold, and `None` is what every caller already treats as "no opinion".
+        let unknown = |block: BlockHash| !self.reachability_service.has_reachability_data(block);
+        if unknown(candidate) || unknown(tip_block) {
+            return None;
+        }
         // The order must be the CANDIDATE's, not the sink's, or every candidate would compare
         // equal and the authority would be a constant (P0-4 in fork-choice clothing). The walk
         // from the materialized tip to the candidate is what makes it candidate-scoped.
@@ -3957,8 +3978,21 @@ impl VirtualStateProcessor {
     pub(crate) fn palw_pruning_point_allowed_v2(&self, candidate_point: BlockHash) -> bool {
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return true };
         let store = self.palw_state_v2_store.read();
-        let Some((_, state)) = store.load_tip(state_params).ok().flatten() else { return true };
-        let Ok(header) = self.headers_store.get_header(candidate_point) else { return true };
+        // **Fail CLOSED on what cannot be read, and OPEN only on what genuinely is not there yet.**
+        //
+        // This was one `.ok().flatten()`, which spells both answers the same way: a `load_tip` that
+        // returns `Err` — a corrupted snapshot, or one written by another schema — became `None`
+        // became "every pruning point allowed", so the gate deleted the history under trial exactly
+        // when it had lost the ability to weigh it. The deep-reorg gate beside it was already fixed
+        // for this shape, and records it: the gate failed open on exactly the candidate it could not
+        // weigh. `Ok(None)` is different and stays open — a V2 chain before its first tip has no
+        // frontier to respect, and refusing there would mean a fresh node could never prune.
+        let state = match store.load_tip(state_params) {
+            Ok(Some((_, state))) => state,
+            Ok(None) => return true,
+            Err(_) => return false,
+        };
+        let Ok(header) = self.headers_store.get_header(candidate_point) else { return false };
         let (frontier, _) = state.safe_frontier();
         kaspa_consensus_core::palw_fork_authority_v2::pruning_point_allowed_v2(header.blue_score, frontier)
     }
@@ -4722,12 +4756,29 @@ impl VirtualStateProcessor {
             // same object and the grader is never run for a drill the block may not carry.
             // A chunk that completes its group applies the FamilyCertified it carried, so it
             // counts against the same cap (ADR-0075 Decision 14).
+            //
+            // **A chunk the transition will refuse on its face completes nothing, and must not
+            // spend the cap.** This asked only `count == 1` for a group that does not exist yet,
+            // so `ObjectChunk { group: anything, index: 5, count: 1 }` — sixty bytes, refused by
+            // the transition as `ChunkIndexOutOfRange` — was charged as a grading. Two of them per
+            // block exhaust `PALW_CERTIFICATION_MAX_PER_BLOCK` and every genuine `FamilyCertified`
+            // in that block is dropped, for two ordinary fees. The index rule is the transition's
+            // own (`index < count`); asking it here is what makes this predicate answer the
+            // question it is named for.
+            //
+            // **Behind ADR-0075 D14's fence, `None` on every shipped preset.** It decides which
+            // objects a block accepts and therefore its state root, so an upgraded node and an
+            // un-upgraded one must not disagree about it in silence — see
+            // [`Self::palw_chunk_cap_charge_at`]. Dormant, the conjunct is `true` and the
+            // predicate is byte-identical to the one before the fence existed.
+            let index_rule_charged = self.palw_chunk_cap_charge_at(point.daa_score);
             let completes_a_group = match &object {
                 kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectChunk { group, index, count, .. } => {
-                    match folded.pending_chunk_group(group) {
-                        Some(p) => p.count == *count && !p.parts.contains_key(index) && p.parts.len() + 1 == *count as usize,
-                        None => *count == 1,
-                    }
+                    (!index_rule_charged || *index < *count)
+                        && match folded.pending_chunk_group(group) {
+                            Some(p) => p.count == *count && !p.parts.contains_key(index) && p.parts.len() + 1 == *count as usize,
+                            None => *count == 1,
+                        }
                 }
                 _ => false,
             };
@@ -5464,6 +5515,13 @@ impl VirtualStateProcessor {
     /// dissenting seat is two rules wearing one name.
     fn palw_unavailable_abstains_at(&self, daa_score: u64) -> bool {
         self.palw_unavailable_abstains.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0075 D14, resolved in exactly one place.** Past the fence, a chunk whose index falls
+    /// outside its own count completes nothing — the transition refuses it as
+    /// `ChunkIndexOutOfRange` — so it must not spend the block's certification cap.
+    fn palw_chunk_cap_charge_at(&self, daa_score: u64) -> bool {
+        self.palw_chunk_cap_charge.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **ADR-0065 D1, resolved in exactly one place.** The window, or `None` when the rule is off.
