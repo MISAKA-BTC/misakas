@@ -3427,11 +3427,27 @@ fn verify_kv_anchor<'a>(
     // whose only fault was registering the map that describes its cache. A class whose map id is
     // neither registered map has no anchor arm at all: its bindings carry zero checkpoints, so a
     // carried anchor is an accusation about a leg nobody committed.
+    //
+    // **A hybrid's `attn=` half IS integer-kv v2**, so its compositions resolve here too. Both
+    // `palw_hybrid_state_chunk_map_name_v1` and `…_v2` spell their attention half as
+    // `PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2` verbatim — the two compositions differ only in
+    // their `gdn=` half — and this arm reads the ATTENTION geometry. Without them a hybrid class
+    // could never carry the attention anchor its own map entitles it to: every anchored attention
+    // refutation on the one class shape ADR-0077 Decision 13 registers came back `Unadjudicable`,
+    // on honest material, for declaring the composition the decision requires.
     let declared = binding.shape_profile.state_chunk_map_id;
     let (geometry, elem) = if declared == map::integer_kv_state_chunk_map_id_v1() {
         (map::integer_kv_state_geometry_v1(&binding.shape_profile, positions), KvAnchorElemV1::I8)
-    } else if declared == map::integer_kv_state_chunk_map_id_v2() {
+    } else if declared == map::integer_kv_state_chunk_map_id_v2()
+        || declared == map::hybrid_state_chunk_map_id_v1()
+        || declared == map::hybrid_state_chunk_map_id_v2()
+    {
         (map::integer_kv_state_geometry_v2(&binding.shape_profile, positions), KvAnchorElemV1::I32Le)
+    } else if declared == map::tiled_kv_state_chunk_map_id_v3() || declared == map::hybrid_state_chunk_map_id_v3() {
+        // The tiled enumeration (graph v4): the same `i32` cache, chunked at
+        // `PALW_ATTN_HISTORY_TILE_V4` positions so one opening is a TILE of the history rather
+        // than the history.
+        (map::tiled_kv_state_geometry_v3(&binding.shape_profile, positions), KvAnchorElemV1::I32Le)
     } else {
         return Err(PalwStepRefuteError::Unadjudicable);
     };

@@ -413,6 +413,13 @@ pub fn base0_state_chunk_geometry_v1(
         || declared == map::hybrid_state_chunk_map_id_v2()
     {
         map::integer_kv_state_geometry_v2(profile, positions)
+    } else if declared == map::tiled_kv_state_chunk_map_id_v3() || declared == map::hybrid_state_chunk_map_id_v3() {
+        // **Graph v4's tiled enumeration.** The same four-byte cache as v2, chunked at
+        // `PALW_ATTN_HISTORY_TILE_V4` positions instead of at the transport leg's 1 MiB cap — the
+        // capture side of the same rule the court reads in `verify_kv_anchor`. Mirrored here and
+        // not re-derived: a producer that chunked a v3 class at v2's width would commit chunks
+        // whose count is not the map's, and its own anchored replay would refuse its own state.
+        map::tiled_kv_state_geometry_v3(profile, positions)
     } else {
         return Err(LegError::CheckpointStateUnavailable { chunk_index: 0 });
     };
