@@ -581,7 +581,9 @@ PY
 )
   log "network domain $NETWORK_DOMAIN (devnet ‖ genesis ${MISAKA_DEVNET_GENESIS:0:16}…)"
 
-  python3 - "$WORK_DIR/keys" "$NODES" <<'PY'
+  # `n + 1` seeds: the N seats, plus one for the registrar, which runs on its own bond (see the
+  # registration stage) so its panel cannot collide with a seat's.
+  python3 - "$WORK_DIR/keys" "$((NODES + 1))" <<'PY'
 import hashlib, os, sys
 d, n = sys.argv[1], int(sys.argv[2])
 h = lambda b: hashlib.blake2b(b, digest_size=32).hexdigest()
@@ -653,13 +655,30 @@ PY
   log "chain up — node-0 is at $(blocks_of 0) blocks (produced or accepted)"
   advance 1
 
-  log "registering $MODEL_ID from the artifact"
-  if ! MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg" \
+  # **The registrar needs `--palw-panel` and a bond, and neither is implied by
+  # `--palw-register-class`.** Class registration is built and submitted inside the PANEL loop
+  # (`kaspad/src/palw_panel.rs`), and the panel service starts only for
+  # `args.palw_panel || args.palw_register_bond`, and only with a `--palw-producer-bond`
+  # (`daemon.rs`). A registrar given the registration flag alone is a node that follows the chain
+  # forever at 0% CPU and prints nothing about registering — which is exactly what the first run of
+  # this drill did for eighteen minutes, and what the FP drill does too, because this invocation
+  # was copied from it.
+  #
+  # It runs on its OWN bond so it cannot collide with node-0's panel: devnet's genesis carries
+  # `PALW_DEVNET_GENESIS_BONDS` = 6 public-seed bonds, so bond `NODES` is free whenever NODES < 6,
+  # and the registrar is then the outside operator ADR-0054 describes rather than one of the seats.
+  REG_BOND="$NODES"
+  [ "$REG_BOND" -lt 6 ] || die "NODES=$NODES leaves no free devnet genesis bond for the registrar (there are 6: consensus/core/src/config/premine.rs, PALW_DEVNET_GENESIS_BONDS). Run with NODES<=5."
+  REG_ADDR="$("$CLI_BIN" --network devnet key address --key-file "$WORK_DIR/keys/bond-$REG_BOND.seed" | tail -1 | awk '{print $NF}')"
+  [ -n "$REG_ADDR" ] || die "cannot derive the registrar bond $REG_BOND address"
+  log "registering $MODEL_ID from the artifact (as bond $REG_BOND, the outside operator)"
+  if ! MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-reg" \
         --rpclisten-borsh=127.0.0.1:17830 --nogrpc --nodnsseed --disable-upnp \
-        --connect=127.0.0.1:16430 --utxoindex \
+        --connect=127.0.0.1:16430 --utxoindex --palw-panel \
         --palw-register-class="$MODEL_ID" --palw-class-artifact="$MISAKA_PALW_ARTIFACT" \
-        --palw-producer-key="$WORK_DIR/keys/bond-0.seed" --palw-producer-pay-address="${ADDRS[0]}" \
-        --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1))" \
+        --palw-producer-key="$WORK_DIR/keys/bond-$REG_BOND.seed" --palw-producer-pay-address="$REG_ADDR" \
+        --palw-producer-bond="$PREMINE_TXID:$REG_BOND" \
+        --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + REG_BOND))" \
         >"$WORK_DIR/register-class.log" 2>&1; then
     tail -30 "$WORK_DIR/register-class.log" >&2
     die "registering $MODEL_ID failed — see $WORK_DIR/register-class.log"
