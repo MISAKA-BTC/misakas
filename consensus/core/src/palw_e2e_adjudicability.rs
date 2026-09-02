@@ -813,21 +813,44 @@ pub fn certify_e2e_free_prompt_lane_v1(
     Ok(PalwE2eFreePromptCertificateV1 { family: base.family, family_digest: base.family_digest, _sealed: () })
 }
 
-/// **The RC free-prompt-certified set** — the families whose free-prompt lane may bear weight
-/// under ADR-0073 Decision 2. Read through [`family_certified_for_weight_v1`] against
-/// [`palw_rc_court_fp_e2e_root_v1`], exactly as the attempt set is.
+/// **The RC free-prompt-certified set** — the families whose free-prompt lane bears weight
+/// (ADR-0073 Decision 2, activated by ADR-0074 Decision 6). A class is in it by its drilled
+/// class id, and the transition refuses a free-prompt commitment on any class that is not
+/// (`PalwStateParamsV2::fp_certified_classes`).
 ///
-/// EMPTY, deliberately: Decision 2 is decided but not activated (it waits on Decision 3, the
-/// shared price unit), and an empty set is how "no class's free-prompt lane bears weight yet"
-/// is spelled so that the day it does is a diff to this function and a fingerprint move, never
-/// a flag. The floor's free-prompt drill already certifies (see `misaka-palw-base0`'s
-/// `e2e_drill`); it enters here with Decision 3.
+/// One entry: the floor, from `misaka-palw-base0`'s
+/// `the_floor_free_prompt_lane_certifies_and_a_swapped_question_is_refused`, whose covering is
+/// pinned here exactly as the attempt set's is (`e2e_drill` asserts the two agree). QWEN25-A16
+/// and QWEN36 join when their free-prompt paths exist and drill.
 pub fn palw_rc_fp_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
-    Vec::new()
+    let mut out = Vec::with_capacity(1);
+    if let Ok(floor) = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY) {
+        out.push(PalwE2eFamilyV1 {
+            family_id: palw_e2e_family_id_v1("PALW-BASE-0"),
+            drilled_class_id: floor.shape_profile_id(),
+            kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&floor),
+            covering: PalwE2eCoveringV1 {
+                pre: true,
+                gdn: false,
+                attn: true,
+                post: true,
+                prefill: true,
+                decode: true,
+                convicted_leaves: 6,
+                malformed_refused: true,
+            },
+        });
+    }
+    out
 }
 
-/// The root the free-prompt set commits to — derived from [`palw_rc_fp_certified_families_v1`]
-/// rather than pinned, because the set is empty; the pin arrives with the first entry.
+/// The class ids whose free-prompt lane is certified — what the state params carry
+/// (ADR-0074 Decision 6).
+pub fn palw_rc_fp_certified_class_ids_v1() -> BTreeSet<Hash64> {
+    palw_rc_fp_certified_families_v1().into_iter().map(|f| f.drilled_class_id).collect()
+}
+
+/// The root the free-prompt set commits to, derived from [`palw_rc_fp_certified_families_v1`].
 pub fn palw_rc_court_fp_e2e_root_v1() -> Hash64 {
     palw_court_e2e_root_of_v1(&palw_rc_fp_certified_families_v1())
 }

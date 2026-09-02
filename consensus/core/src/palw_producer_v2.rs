@@ -520,6 +520,10 @@ pub struct PalwSeatDutyV2 {
     /// honest free-prompt executor, and a quorum of those DEFAULTS the producer — the panel
     /// would convict the lane's every user for using it.
     pub free_prompt: bool,
+    /// The leaf count the free-prompt claim was priced from (ADR-0074 Decision 5): a seat's one
+    /// pricing check is that the capture it authenticated has exactly this many leaves. Zero on
+    /// an attempt.
+    pub work_leaves: u64,
 }
 
 /// **Every seat duty this node holds at one chain point** (launch blockers §2).
@@ -716,6 +720,7 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
                     _ => 0,
                 },
                 free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
+                work_leaves: claim.work_leaves,
             });
         }
     }

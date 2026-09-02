@@ -778,15 +778,17 @@ mod tests {
     /// **The floor's free-prompt lane certifies through the shipped court** (ADR-0073 Decision
     /// 1f) — the same drill as the attempt lane's, over a job the user fixed — and the certifier
     /// refuses the substitutions that matter: a question the vectors were not about, and a
-    /// question that is not its own. Decision 2 is decided and not activated: the RC free-prompt
-    /// set is empty and its root is derived from exactly that.
+    /// question that is not its own. The RC free-prompt-certified set's floor entry is pinned
+    /// from this very drill.
     #[test]
     fn the_floor_free_prompt_lane_certifies_and_a_swapped_question_is_refused() {
         use kaspa_consensus_core::palw_e2e_adjudicability::{
             PalwE2eError, certify_e2e_free_prompt_lane_v1, palw_court_e2e_root_of_v1, palw_rc_court_fp_e2e_root_v1,
             palw_rc_fp_certified_families_v1,
         };
-        use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwFreePromptJobV3};
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3,
+        };
         use kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2;
         use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 
@@ -816,10 +818,16 @@ mod tests {
             decode_token_limit: 2,
             max_context_tokens: profile.n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
         };
         let drill = drill_free_prompt_evidence_v1(base0_family_id_v1(), &backend, &profile, root, &job, &ids)
             .expect("the floor drills its free-prompt lane");
         let certificate = certify_e2e_free_prompt_lane_v1(&drill).expect("the floor's free-prompt lane certifies");
+        // **The RC set's floor entry IS this drill's family** (ADR-0074 Decision 6): the pinned
+        // covering, kernel set and drilled class are what the shipped court certified here.
+        let rc = palw_rc_fp_certified_families_v1();
+        assert_eq!(rc.len(), 1, "the floor is the one free-prompt-certified family");
+        assert_eq!(rc[0], certificate.family, "the RC entry is pinned from this drill, field for field");
         let attempt = base0_certificate_v1().expect("the floor's attempt certificate");
         assert_eq!(certificate.family.drilled_class_id, attempt.family.drilled_class_id, "one graph, whichever lane drilled it");
         assert_eq!(certificate.family.kernel_ids, attempt.family.kernel_ids, "…and one kernel set");
@@ -845,8 +853,7 @@ mod tests {
         not_own.questions[0].prompt_token_ids[0] ^= 1;
         assert!(matches!(certify_e2e_free_prompt_lane_v1(&not_own), Err(PalwE2eError::FreePromptQuestionNotItsOwn { .. })));
 
-        assert!(palw_rc_fp_certified_families_v1().is_empty(), "Decision 2 is decided, not activated");
-        assert_eq!(palw_rc_court_fp_e2e_root_v1(), palw_court_e2e_root_of_v1(&[]));
+        assert_eq!(palw_rc_court_fp_e2e_root_v1(), palw_court_e2e_root_of_v1(&rc), "the root is the set's");
     }
 }
 

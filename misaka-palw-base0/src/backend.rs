@@ -187,6 +187,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             activation_leg_root: Hash64::default(),
             checkpoint_leg_root: Hash64::default(),
             step_leg_root: Hash64::default(),
+            step_leaf_count: 0,
         };
 
         // The context the COURT will recompute against — built first, and then run under. The
@@ -210,6 +211,8 @@ impl PalwExecutionBackendV1 for Base0Backend {
             activation_leg_root: run.binding.activation_leg_root,
             checkpoint_leg_root,
             step_leg_root,
+            // The price (ADR-0074 Decision 5): read off the binding, never declared.
+            step_leaf_count: run.binding.step_leaf_count,
             ..shape
         };
         let material = base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
@@ -416,6 +419,7 @@ mod tests {
             decode_token_limit,
             max_context_tokens: backend.profile().n_ctx,
             privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
         }
     }
 
@@ -473,7 +477,6 @@ mod tests {
     #[test]
     fn a_free_prompt_run_assembles_a_commitment_whose_fields_are_all_derived() {
         use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_commitment_v3, palw_fp_job_context_v3};
-        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpCuWeightsV3, fp_cu_v3};
 
         let backend = floor_backend();
         let prompt: Vec<usize> = vec![3, 5, 8, 13, 21];
@@ -481,19 +484,13 @@ mod tests {
         let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
 
         let class = floor_class_facts(&backend);
-        let weights = PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 4 };
         let retention = 4_096;
-        let commitment =
-            palw_fp_commitment_v3(&job, &class, &run, RC_NETWORK_ID, &weights, retention).expect("a finished run commits");
+        let commitment = palw_fp_commitment_v3(&job, &class, &run, RC_NETWORK_ID, retention).expect("a finished run commits");
 
-        // Priced by the assembly, from counts and weights — never carried up from the executor.
-        assert_eq!(commitment.cu, fp_cu_v3(job.prompt_tokens, run.facts.decode_tokens_executed, &weights));
-        // `5 * 1` is written out rather than folded: the two products ARE the assertion — five
-        // prompt tokens at prefill_weight 1 plus two decoded at decode_weight 4. Reducing it to
-        // `5 + 8` would state the answer and stop showing which weight met which count.
-        #[allow(clippy::identity_op)]
-        let expected_cu = 5 * 1 + 2 * 4;
-        assert_eq!(commitment.cu, expected_cu, "the weights are applied to the counts, not to the ceiling");
+        // Priced by the capture's leaf count (ADR-0074 Decision 5) — read off the binding the run
+        // committed, never carried up as a number the executor chose.
+        assert_eq!(commitment.work_leaves, run.facts.step_leaf_count);
+        assert!(commitment.work_leaves > 0, "a run that touched no leaf committed nothing");
 
         // The schedule is a function of the context and the counts. Recomputing it the way a
         // verifier does must land on the same value.
@@ -917,6 +914,7 @@ mod tests {
             activation_leg_root: Hash64::default(),
             checkpoint_leg_root: Hash64::default(),
             step_leg_root: Hash64::default(),
+            step_leaf_count: 0,
         };
         let ctx = palw_fp_job_context_v3(&job, &floor_class_facts(&backend), &shape, RC_NETWORK_ID).expect("the FP context");
         assert_eq!(ctx.job_id, binding.job_context.job_id, "the drill runs the job the honest capture ran");
@@ -953,8 +951,8 @@ mod end_to_end_tests {
     use crate::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
     use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_v3};
     use kaspa_consensus_core::palw_freeprompt_v3::{
-        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwBeaconFactV3, PalwFpCuWeightsV3, PalwFreePromptJobV3, fp_claim_id_v3,
-        fp_quanta_v3,
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwBeaconFactV3, PalwFreePromptJobV3,
+        fp_claim_id_v3, fp_quanta_v3,
     };
     use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
     use kaspa_consensus_core::palw_state_v2::{
@@ -966,12 +964,6 @@ mod end_to_end_tests {
     const MATURITY: u64 = 5;
     const USE_WINDOW: u64 = 50;
     const NETWORK: &[u8] = b"misaka-palw-rc";
-    /// **The shipped devnet quantum.** It was 1,000, which no registered class could reach; it is
-    /// now 100 (lowered with `pwu_per_quantum`, weight-per-CU held constant — see the constant's
-    /// comment in `palw_fp_devnet_v3`), and the floor's widest job (705 CU) clears it. This test
-    /// asserts on the shipped value so it fails if that pricing regresses, rather than pinning its
-    /// own.
-    const QUANTUM_CU: u128 = 100;
 
     fn h(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
@@ -1012,6 +1004,7 @@ mod end_to_end_tests {
             decode_token_limit: decode,
             max_context_tokens: backend.profile().n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
         };
         let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
         let class = PalwFpClassFactsV3 {
@@ -1021,16 +1014,26 @@ mod end_to_end_tests {
             shape_profile_id: backend.profile().shape_profile_id(),
             cu_ruleset_id: Hash64::default(),
         };
-        let weights = PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 };
-        let commitment = palw_fp_commitment_v3(&job, &class, &run, NETWORK, &weights, 999_999).expect("a finished run commits");
+        let commitment = palw_fp_commitment_v3(&job, &class, &run, NETWORK, 999_999).expect("a finished run commits");
         let claim_id = fp_claim_id_v3(&commitment);
-        let quanta = fp_quanta_v3(commitment.cu, QUANTUM_CU, 16);
-        assert!(quanta >= 1, "this job must earn at least one draw to be worth certifying, got {quanta} at cu {}", commitment.cu);
+        // The floor's quantum is an eighth of its own canonical job (ADR-0074 Decision 5).
+        let (canonical_ctx, _) = backend.job_for_anchor(h(0xF1)).expect("the floor implies a canonical job");
+        let canonical_leaves = kaspa_consensus_core::palw_step::step_leaf_count(backend.profile(), &canonical_ctx).expect("counts");
+        let quantum = kaspa_consensus_core::palw_freeprompt_v3::fp_class_quantum_leaves_v1(canonical_leaves, 8);
+        let quanta = fp_quanta_v3(commitment.work_leaves, quantum, 64);
+        assert!(
+            quanta >= 1,
+            "this job must earn at least one draw to be worth certifying, got {quanta} at {} leaves",
+            commitment.work_leaves
+        );
 
         // ---- the chain: register, commit, bind, license, finalise ------------------------------
         // The base class is the floor's REAL id — the state machine refuses a first registration
         // that is not the declared base, and the whole point here is that this is the floor.
-        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, entry.class_id(), 4, 1000, 100, 800, 0).unwrap();
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, entry.class_id(), 4, 1000, 100, 800, 0)
+            .unwrap()
+            .with_fp_quanta(8, 64)
+            .unwrap();
         let at =
             |block: u64, daa: u64, blue: u64| PalwBlockContextV2 { block: h(block), daa_score: daa, blue_score: blue, subsidy: 0 };
         let registrations = vec![
@@ -1038,7 +1041,9 @@ mod end_to_end_tests {
                 class_id: entry.class_id(),
                 artifact_root: root,
                 slash_value_per_pwu: 5,
-                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                // The floor's own canonical job, so the transition's quantum is the 963 leaves
+                // this test priced against (ADR-0074 Decision 5).
+                pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: canonical_leaves },
                 // Every ticket admits: the lottery is tested where it lives, and a target that
                 // refused here would make this test about luck.
                 initial_target: u128::MAX,
@@ -1064,8 +1069,9 @@ mod end_to_end_tests {
             class_id: entry.class_id(),
             bond: PalwBondKeyV2(bond_outpoint),
             executor_pubkey: pubkey.clone(),
-            pwu: quanta as u64 * 100,
-            quanta,
+            work_leaves: commitment.work_leaves,
+            prompt_token_ids_hash: commitment.job.prompt_token_ids_hash,
+            decode_tokens_executed: commitment.decode_tokens_executed,
             trace_root: commitment.trace_root,
             output_root: commitment.output_root,
             execution_root: commitment.execution_root,
@@ -1090,7 +1096,8 @@ mod end_to_end_tests {
         // roots are honestly that material's, and a root-only seat certifies it. The seat
         // re-prices what it actually ran against these two numbers (kaspad's `fp_price_of`), so
         // they have to be on the duty or the check is unwritable.
-        assert_eq!(duty.pwu, quanta as u64 * 100, "the duty carries the claim's pwu");
+        assert_eq!(duty.pwu, quanta as u64 * quantum, "the duty carries the claim's pwu — whole quanta of the floor's own job");
+        assert_eq!(duty.work_leaves, commitment.work_leaves, "and the leaves it was priced from");
         assert_eq!(duty.quanta, quanta, "and its quanta");
         let (s4, _) = apply_palw_transition_v2(
             &s3,

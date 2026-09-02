@@ -29,7 +29,7 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
-use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpWorkerResultV3, PalwFreePromptCommitmentV3, fp_claim_id_v3, fp_cu_v3};
+use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpWorkerResultV3, PalwFreePromptCommitmentV3, fp_claim_id_v3};
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_hashes::Hash64;
 use kaspa_pq_validator_core::{VALIDATOR_SEED_LEN, ValidatorKey};
@@ -78,6 +78,9 @@ fn main() {
     let mut print_claim = false;
     let mut print_pubkey = false;
     let mut class_id: Option<String> = None;
+    // The class's canonical job in leaves — what a quantum is an eighth of (ADR-0074 Decision 5).
+    // Defaults to the floor's; a rail for another class passes that class's `pwu_per_inference`.
+    let mut class_leaves: u64 = 7_708;
     while let Some(arg) = args.pop_front() {
         let mut value = |what: &str| args.pop_front().unwrap_or_else(|| die(format!("{what} needs a value")));
         match arg.as_str() {
@@ -87,6 +90,7 @@ fn main() {
             "--funding-amount" => funding_amount = value("--funding-amount").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--fee" => fee = value("--fee").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--class-id" => class_id = Some(value("--class-id")),
+            "--class-leaves" => class_leaves = value("--class-leaves").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--print-claim" => print_claim = true,
             // The public key a `--bond-key-seed` file yields, so an operator can put the SAME key
             // in the gateway's identity file before any inference runs. Without this the two
@@ -95,7 +99,7 @@ fn main() {
             other => die(format!(
                 "unknown argument {other:?}\nusage: misaka-palw-fp-rail --artifact <outbox/fp-job-XXXX> [--print-claim] \
                  [--bond-key-seed <file> [--print-bond-pubkey] --funding-outpoint <txid:index> --funding-amount <sompi> \
-                 [--fee <sompi>]] [--class-id <128hex>]"
+                 [--fee <sompi>]] [--class-id <128hex>] [--class-leaves <u64>]"
             )),
         }
     }
@@ -174,7 +178,7 @@ fn main() {
                 "signing_purpose": "PalwFpCommitmentV3",
                 "prompt_tokens": commitment.job.prompt_tokens,
                 "decode_tokens_executed": commitment.decode_tokens_executed,
-                "cu": commitment.cu.to_string(),
+                "work_leaves": commitment.work_leaves,
             })
         );
         return;
@@ -207,23 +211,14 @@ fn main() {
         ),
     )
     .unwrap_or_else(|e| die(format!("cannot construct the devnet bundle: {e}")));
-    let weights = *bundle.freeprompt.cu_weights();
-    let derived_cu = fp_cu_v3(commitment.job.prompt_tokens, commitment.decode_tokens_executed, &weights);
-    if commitment.cu != derived_cu {
-        die(format!(
-            "the artifact's cu {} is not this bundle's price for the executed shape ({derived_cu}) — the gateway and the rail \
-             disagree about the network's weights",
-            commitment.cu
-        ));
-    }
 
     let tx = key
         .build_fp_commitment_tx(
             commitment.job.network_domain,
             commitment.clone(),
             result.prompt_token_ids.clone(),
-            &weights,
             &bundle.freeprompt,
+            class_leaves,
             funding_outpoint,
             &funding_entry,
             fee,
@@ -234,14 +229,17 @@ fn main() {
     let tx_bytes = borsh::to_vec(&tx).unwrap_or_else(|e| die(format!("cannot serialize the transaction: {e}")));
     std::fs::write(&tx_path, &tx_bytes).unwrap_or_else(|e| die(format!("cannot write {}: {e}", tx_path.display())));
 
-    let (quanta, pwu) = bundle.freeprompt.derive_quanta_and_pwu(commitment.cu).expect("the builder already refused a sub-quantum job");
+    let (quanta, pwu) = bundle
+        .freeprompt
+        .derive_quanta_and_pwu(commitment.work_leaves, class_leaves)
+        .expect("the builder already refused a sub-quantum job");
     let summary = serde_json::json!({
         "schema": "misaka.palw.fp-rail-tx.v1",
         "fp_claim_id": hex(claim_id),
         "subnetwork": "0x4a (PALW_FP_COMMITMENT)",
         "transaction_bytes": tx_bytes.len(),
         "payload_bytes": tx.payload.len(),
-        "cu": commitment.cu.to_string(),
+        "work_leaves": commitment.work_leaves,
         "quanta": quanta,
         "pwu": pwu,
         "prompt_tokens": commitment.job.prompt_tokens,

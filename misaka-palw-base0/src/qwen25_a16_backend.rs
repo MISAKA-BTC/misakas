@@ -72,7 +72,11 @@ pub fn qwen25_a16_prompt_for_anchor(anchor: Hash64, vocab: usize, prefill: u32) 
 /// does not know which family produced them.
 /// `None` when the run does not carry the rows it claims to have selected from — the same refusal
 /// `qwen36_roots_v1` makes, for the same reason and against the same gossiped-material attack.
-pub fn qwen25_a16_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen25A16RunV1) -> Option<(Hash64, Hash64, Hash64, Hash64)> {
+pub fn qwen25_a16_roots_v1(
+    job: &PalwJobContextV2,
+    shape_id: Hash64,
+    run: &Qwen25A16RunV1,
+) -> Option<(Hash64, Hash64, Hash64, Hash64)> {
     let context = job.context_hash();
     let prefill = job.declared_prefill_tokens as usize;
     // **A missing row is a refusal, never an empty one** (ADR-0068 launch audit; see the twin
@@ -230,8 +234,8 @@ pub fn a16_execute_for_attempt_v1(
             let geometry = checkpoints.next_geometry().map_err(|e| format!("{e:?}"))?;
             let mut chunks = Vec::with_capacity(geometry.chunk_count() as usize);
             for index in 0..geometry.chunk_count() {
-                let entry = map::integer_kv_state_chunk_entry_v1(&geometry, index)
-                    .ok_or_else(|| format!("the map has no chunk {index}"))?;
+                let entry =
+                    map::integer_kv_state_chunk_entry_v1(&geometry, index).ok_or_else(|| format!("the map has no chunk {index}"))?;
                 chunks.push(cache.state_chunk_bytes_v1(&entry).ok_or_else(|| {
                     format!(
                         "this cache does not fit the state map the class declares (chunk {index}, {} bytes per row)",
@@ -674,6 +678,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             activation_leg_root: Hash64::default(),
             checkpoint_leg_root: Hash64::default(),
             step_leg_root: Hash64::default(),
+            step_leaf_count: 0,
         };
         // Built BEFORE the run and run under: `palw_fp_execution_root_v3` recomputes the court's
         // root from this context, so an execution carried out under any other one commits a root
@@ -704,6 +709,8 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 activation_leg_root: run.binding.activation_leg_root,
                 checkpoint_leg_root,
                 step_leg_root,
+                // The price (ADR-0074 Decision 5): read off the binding, never declared.
+                step_leaf_count: run.binding.step_leaf_count,
                 ..shape
             },
             output_token_ids: run.generated_token_ids,
@@ -883,7 +890,7 @@ mod free_prompt_tests {
     use crate::engine_a16::derived_a16_store;
     use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_execution_root_v3, palw_fp_job_context_v3};
     use kaspa_consensus_core::palw_freeprompt_v3::{
-        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFreePromptJobV3,
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFreePromptJobV3,
     };
     use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v1, qwen25_a16_profile_v2};
     use kaspa_consensus_core::palw_state_chunk_map as map;
@@ -956,6 +963,7 @@ mod free_prompt_tests {
             decode_token_limit: decode,
             max_context_tokens: profile.n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
         }
     }
 

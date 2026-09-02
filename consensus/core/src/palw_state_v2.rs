@@ -201,7 +201,11 @@ use std::collections::{BTreeMap, BTreeSet};
 ///
 /// The claim record gains a field, so unlike 12 this is not root-schema-neutral: an old build
 /// cannot decode this state at all, which is the honest failure and the reason the number moves.
-pub const PALW_STATE_V2_VERSION: u16 = 14;
+///
+/// *15 (ADR-0074):* the claim record gains `work_leaves` and `work_id`, the state a derived
+/// work-id index, and free-prompt claims are priced in leaves against the class's own job —
+/// again not schema-neutral, again the number moves.
+pub const PALW_STATE_V2_VERSION: u16 = 15;
 
 pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
 
@@ -478,6 +482,17 @@ pub struct PalwStateParamsV2 {
     /// `0` disables the hold (the pre-FP configuration, and what every attempt-only fixture runs
     /// at — on that lane the block cost already does this job).
     fp_abandon_hold_daa: u64,
+    /// **ADR-0074 Decision 5: a quantum is this fraction of a class's canonical job.** Zero means
+    /// the free-prompt lane is unpriced and no commitment enters the state — the attempt-only
+    /// configuration every fixture without a receipt lane runs at.
+    fp_quanta_per_canonical_job: u32,
+    /// Per-receipt jackpot bound, the same number the bundle's free-prompt params declare.
+    fp_max_quanta_per_receipt: u32,
+    /// **ADR-0074 Decision 6: the classes whose free-prompt lane is certified** (by drilled
+    /// class id — `palw_rc_fp_certified_class_ids_v1`). `Some(set)`: a commitment on any other
+    /// class is refused. `None`: ungated, the pre-gate configuration fixtures run at — a preset
+    /// always sets it.
+    fp_certified_classes: Option<BTreeSet<Hash64>>,
     /// **ADR-0054: how fast a class's cadence share may follow its own production, in permille of
     /// its own share per closed epoch.**
     ///
@@ -558,6 +573,9 @@ impl PalwStateParamsV2 {
             min_collateral_sompi,
             fp_attempt_share_permille,
             fp_abandon_hold_daa,
+            fp_quanta_per_canonical_job: 0,
+            fp_max_quanta_per_receipt: 0,
+            fp_certified_classes: None,
             // Zero: `new` builds a network that pays no PALW reward, which is what every caller
             // predating the reward wiring meant and still means. See
             // `with_worker_carve_permille`.
@@ -609,6 +627,36 @@ impl PalwStateParamsV2 {
     /// Set the retirement span. Must sit strictly above the abandon hold when both are on: the two
     /// are the only deadlines a terminal claim can own, and ordering them is what makes the index
     /// recomputable from the record — the hold entry first, the retirement entry after it.
+    /// ADR-0074 Decision 5: price the free-prompt lane. Both numbers must be non-zero — a zero
+    /// quantum divides nothing, a zero cap certifies receipts that can never draw.
+    pub fn with_fp_quanta(mut self, quanta_per_canonical_job: u32, max_quanta_per_receipt: u32) -> Result<Self, PalwStateV2Error> {
+        if quanta_per_canonical_job == 0 || max_quanta_per_receipt == 0 {
+            return Err(PalwStateV2Error::InvalidParams("the free-prompt price needs a non-zero quanta-per-job and a non-zero cap"));
+        }
+        self.fp_quanta_per_canonical_job = quanta_per_canonical_job;
+        self.fp_max_quanta_per_receipt = max_quanta_per_receipt;
+        Ok(self)
+    }
+
+    pub fn fp_quanta_per_canonical_job(&self) -> u32 {
+        self.fp_quanta_per_canonical_job
+    }
+
+    pub fn fp_max_quanta_per_receipt(&self) -> u32 {
+        self.fp_max_quanta_per_receipt
+    }
+
+    /// ADR-0074 Decision 6: gate the free-prompt lane on certification. The set may be empty —
+    /// that is "no class's free-prompt lane bears weight", not "ungated".
+    pub fn with_fp_certified_classes(mut self, certified: BTreeSet<Hash64>) -> Self {
+        self.fp_certified_classes = Some(certified);
+        self
+    }
+
+    pub fn fp_certified_classes(&self) -> Option<&BTreeSet<Hash64>> {
+        self.fp_certified_classes.as_ref()
+    }
+
     pub fn with_claim_retirement_daa(mut self, claim_retirement_daa: u64) -> Result<Self, PalwStateV2Error> {
         if claim_retirement_daa > 0 && self.fp_abandon_hold_daa > 0 && claim_retirement_daa <= self.fp_abandon_hold_daa {
             return Err(PalwStateV2Error::InvalidParams("the claim retirement span must outlast the abandon hold"));
@@ -1169,6 +1217,19 @@ pub enum PalwPwuRuleV2 {
     DerivedV1 { pwu_per_inference: u64 },
 }
 
+impl PalwPwuRuleV2 {
+    /// **The class's job size in leaves** — what a free-prompt quantum is a fraction of (ADR-0074
+    /// Decision 5). A derived class names it exactly (`pwu_per_inference` IS its canonical step
+    /// leaf count by genesis rule). `MaxPerAttempt` is pre-derivation scaffolding — fixtures and
+    /// nets that weigh nothing — and its ceiling stands in for the job size there.
+    pub fn canonical_leaves_v1(&self) -> u64 {
+        match self {
+            PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => *pwu_per_inference,
+            PalwPwuRuleV2::MaxPerAttempt(max) => *max,
+        }
+    }
+}
+
 /// One class as an operator needs to see it: what it is, and the two numbers that gate producing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwClassRowV2 {
@@ -1368,6 +1429,12 @@ pub struct PalwClaimStateV2 {
     /// what makes "never an addition to the schedule" true: the carve is taken from the subsidy
     /// that existed when the work was accepted, so no later block's subsidy can be drawn twice.
     pub escrowed_reward: u64,
+    /// The capture's leaf count a free-prompt claim was priced from (ADR-0074 Decision 5);
+    /// zero on an attempt, whose price is `pwu` itself.
+    pub work_leaves: u64,
+    /// The work identity a free-prompt claim holds while it lives (ADR-0074 Decision 4);
+    /// `None` on an attempt.
+    pub work_id: Option<Hash64>,
     pub phase: PalwClaimPhaseV2,
 }
 
@@ -1959,8 +2026,12 @@ pub enum PalwConsensusObjectV2 {
         /// which closed P0-2); this lane could not, because the key did not survive extraction into
         /// the object. Carrying it is what makes the comparison expressible here at all.
         executor_pubkey: Vec<u8>,
-        pwu: u64,
-        quanta: u32,
+        /// The capture's leaf count (ADR-0074 Decision 5); the transition prices it against the
+        /// class's canonical job.
+        work_leaves: u64,
+        /// With `decode_tokens_executed` and the bond: the work identity (ADR-0074 Decision 4).
+        prompt_token_ids_hash: Hash64,
+        decode_tokens_executed: u32,
         trace_root: Hash64,
         output_root: Hash64,
         /// The DA/court trio an attempt carries in its envelope, carried here instead because a
@@ -2137,6 +2208,14 @@ pub enum PalwStateV2Error {
     QuantumAlreadySpent { claim: Hash64, index: u32 },
     #[error("a free-prompt commitment with zero quanta licenses nothing and does not enter the state")]
     ZeroQuanta,
+    #[error("work {work_id} is already claimed by {claim} — one inference, one claim (ADR-0074 Decision 4)")]
+    DuplicateWork { work_id: Hash64, claim: Hash64 },
+    #[error("the free-prompt lane is unpriced on this network (no quanta per canonical job) — a commitment cannot enter the state")]
+    FreePromptLaneUnpriced,
+    #[error(
+        "class {0}'s free-prompt lane is not certified — no drill has shown its free-prompt path adjudicates (ADR-0074 Decision 6)"
+    )]
+    FreePromptLaneUncertified(Hash64),
     #[error("free-prompt pwu {pwu} does not divide into {quanta} uniform non-zero quanta")]
     NonUniformQuanta { pwu: u64, quanta: u32 },
     #[error("class {frozen} cannot be frozen on evidence about class {evidenced}")]
@@ -2235,6 +2314,10 @@ pub struct PalwChainStateV2 {
     deadlines: BTreeSet<(u64, Hash64)>,
     /// `(accepted_blue_score, claim)` for every non-terminal claim — what the frontier reads.
     unresolved: BTreeSet<(u64, Hash64)>,
+    /// **One inference, one claim** (ADR-0074 Decision 4): the work identity of every live
+    /// free-prompt claim, keyed to the claim that holds it. A derived index of `claims`
+    /// (`PalwClaimStateV2::work_id`), rebuilt like `unresolved`, and never hashed on its own.
+    work_ids: BTreeMap<Hash64, Hash64>,
     /// Open court sessions per claim — what gates `ReceiptLicensed → Final`.
     open_courts_by_claim: BTreeMap<Hash64, u32>,
     /// `(deadline_daa, session)` — the court backstop sweep queue. Exactly rebuildable from the
@@ -2271,6 +2354,7 @@ impl PalwChainStateV2 {
             retired_safe_weight: 0,
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
+            work_ids: BTreeMap::new(),
             open_courts_by_claim: BTreeMap::new(),
             court_deadlines: BTreeSet::new(),
         }
@@ -2642,6 +2726,10 @@ impl PalwChainStateV2 {
         }
         if unresolved != self.unresolved {
             return Err(PalwStateV2Error::CarriageInconsistent("unresolved index differs from the claims".into()));
+        }
+        let work_ids: BTreeMap<Hash64, Hash64> = self.claims.iter().filter_map(|(id, c)| c.work_id.map(|w| (w, *id))).collect();
+        if work_ids != self.work_ids {
+            return Err(PalwStateV2Error::CarriageInconsistent("work-id index differs from the claims".into()));
         }
         if open_courts != self.open_courts_by_claim {
             return Err(PalwStateV2Error::CarriageInconsistent("open-court index differs from the sessions".into()));
@@ -3109,6 +3197,17 @@ impl<'a> TransitionBuilder<'a> {
             && !record.phase.is_terminal()
         {
             self.state.unresolved.insert((record.accepted_blue_score, key));
+        }
+        // The work-id index follows the claim's own field the same way (ADR-0074 Decision 4).
+        if let Some(previous) = &old
+            && let Some(work_id) = previous.work_id
+        {
+            self.state.work_ids.remove(&work_id);
+        }
+        if let Some(record) = &new
+            && let Some(work_id) = record.work_id
+        {
+            self.state.work_ids.insert(work_id, key);
         }
         self.entries.push(PalwDeltaEntryV2::Claim { key, old, new });
     }
@@ -4774,8 +4873,8 @@ fn apply_class_retargets(
                 let Some(floor_price) = incumbent_price else { continue };
                 let targets = if counters_are_receipts { &builder.state.receipt_targets } else { &builder.state.class_targets };
                 let Some(current) = targets.get(&class_id).map(|t| t.target) else { continue };
-                let next = crate::palw_class_daa::converge_idle_target_v1(current, floor_price, builder.params.class_daa_max_factor())
-                    .max(1);
+                let next =
+                    crate::palw_class_daa::converge_idle_target_v1(current, floor_price, builder.params.class_daa_max_factor()).max(1);
                 if next != current {
                     if counters_are_receipts {
                         builder.write_receipt_target(class_id, Some(PalwClassTargetV2 { target: next }));
@@ -5500,8 +5599,9 @@ fn apply_object(
             class_id,
             bond,
             executor_pubkey,
-            pwu,
-            quanta,
+            work_leaves,
+            prompt_token_ids_hash,
+            decode_tokens_executed,
             trace_root,
             output_root,
             execution_root,
@@ -5528,37 +5628,52 @@ fn apply_object(
             if let PalwClassStatusV2::Frozen { .. } = class.status {
                 return Err(PalwStateV2Error::FrozenClass(*class_id));
             }
-            if *quanta == 0 {
+            // **Priced in leaves against the class's own canonical job** (ADR-0074 Decision 5):
+            // the quantum is a fraction of the class's job size, quanta are whole quanta of the
+            // capture's leaves, and pwu is quanta × quantum — the attempt lane's unit.
+            let (per_job, cap) = (builder.params.fp_quanta_per_canonical_job, builder.params.fp_max_quanta_per_receipt);
+            if per_job == 0 || cap == 0 {
+                return Err(PalwStateV2Error::FreePromptLaneUnpriced);
+            }
+            // **Weight is the price of adjudicability, on this lane too** (ADR-0073 Decision 2,
+            // ADR-0074 Decision 6): a class whose free-prompt path no drill has certified takes
+            // no free-prompt claim, so nothing it could not be convicted over ever licenses a
+            // block.
+            if let Some(certified) = &builder.params.fp_certified_classes
+                && !certified.contains(class_id)
+            {
+                return Err(PalwStateV2Error::FreePromptLaneUncertified(*class_id));
+            }
+            let quantum = crate::palw_freeprompt_v3::fp_class_quantum_leaves_v1(class.pwu_rule.canonical_leaves_v1(), per_job);
+            let quanta = crate::palw_freeprompt_v3::fp_quanta_v3(*work_leaves, quantum, cap);
+            if quanta == 0 {
                 return Err(PalwStateV2Error::ZeroQuanta);
             }
-            if *pwu % (*quanta as u64) != 0 || *pwu / (*quanta as u64) == 0 {
-                return Err(PalwStateV2Error::NonUniformQuanta { pwu: *pwu, quanta: *quanta });
-            }
-            // **Fail-closed on the one field the court cannot do without (audit C3).**
-            // `adjudicate_court_close_v2` binds a refutation to the CLAIM's `execution_root`; a
-            // claim carrying none has nothing to bind against, so every dispute about it dies at
-            // `ExecutionRootMismatch` and its producer can commit arithmetic fraud with impunity.
-            // Refusing the claim is the only safe reading — admitting it and hoping no fraud
-            // occurs is precisely the fail-open shape the consumer-layer audit found ten of.
-            //
-            // This used to refuse every commitment the free-prompt worker could build — its
-            // execution path once captured no legs and deliberately emitted the null root rather
-            // than a fabricated value. It no longer does: `execute_free_prompt` runs the same
-            // capture path as an attempt and commits the binding's own root (byte-identical to
-            // `palw_fp_execution_root_v3`, tested where each backend lives), so what this refuses
-            // today is a commitment assembled by something that is not the shipped worker. The
-            // court itself is ADR-0073 Decision 1's.
+            let pwu = (quanta as u64).checked_mul(quantum).ok_or(PalwStateV2Error::Overflow("free-prompt pwu"))?;
+            // **Fail-closed on the one field the court cannot do without (audit C3).** A claim
+            // carrying no execution root has nothing a refutation's binding can be tested
+            // against; the shipped worker commits the binding's own root, so what this refuses
+            // is a commitment built by something else.
             if *execution_root == Hash64::default() {
                 return Err(PalwStateV2Error::UnadjudicableCommitment(*claim_id));
             }
-            let reserved = (palw_exposure_pwu_v1(class, *pwu) as u128)
-                .checked_mul(class.slash_value_per_pwu as u128)
-                .ok_or(PalwStateV2Error::Overflow("reserve"))?;
+            // **One inference, one claim** (ADR-0074 Decision 4).
+            let work_id = crate::palw_freeprompt_v3::fp_work_id_v1(class_id, prompt_token_ids_hash, *decode_tokens_executed, &bond.0);
+            if let Some(holder) = builder.state.work_ids.get(&work_id) {
+                return Err(PalwStateV2Error::DuplicateWork { work_id, claim: *holder });
+            }
+            // **Exposure is the work claimed.** An attempt's `pwu` is statistical (expected draws
+            // × one inference), so its exposure is the one inference the block commits to; a
+            // free-prompt claim's `pwu` IS its leaves (ADR-0074 Decision 5), so its exposure is
+            // exactly that — neither a whole canonical job for a small user job nor one job for a
+            // claim the size of eight.
+            let reserved =
+                (pwu as u128).checked_mul(class.slash_value_per_pwu as u128).ok_or(PalwStateV2Error::Overflow("reserve"))?;
             let claim = PalwClaimStateV2 {
-                source: PalwClaimSourceV2::FreePrompt { quanta: *quanta, spent: BTreeSet::new() },
+                source: PalwClaimSourceV2::FreePrompt { quanta, spent: BTreeSet::new() },
                 class_id: *class_id,
                 bond: *bond,
-                pwu: *pwu,
+                pwu,
                 accepted_daa: ctx.daa_score,
                 rebound_daa: None,
                 accepted_blue_score: ctx.blue_score,
@@ -5579,6 +5694,8 @@ fn apply_object(
                 // precisely the "addition to the schedule" ADR-0042 Decision 10 forbids. The
                 // receipt lane is paid by the spends it serves, not by the block that carried it.
                 escrowed_reward: 0,
+                work_leaves: *work_leaves,
+                work_id: Some(work_id),
                 phase: PalwClaimPhaseV2::Provisional,
             };
             builder.reserve_for_claim(&claim)?;
@@ -5712,6 +5829,8 @@ fn apply_attempt(
         // already paid that blue its worker share in full and withheld nothing, so an escrow
         // here would be a release with no matching withhold, minted on top of the schedule.
         escrowed_reward: if origin.escrows_reward { worker_carve_v2(builder.params, ctx.subsidy) } else { 0 },
+        work_leaves: 0,
+        work_id: None,
         phase: PalwClaimPhaseV2::Provisional,
     };
     builder.reserve_for_claim(&claim)?;
@@ -5863,6 +5982,7 @@ fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
         .filter(|(_, claim)| !claim.phase.is_terminal())
         .map(|(id, claim)| (claim.accepted_blue_score, *id))
         .collect();
+    state.work_ids = state.claims.iter().filter_map(|(id, claim)| claim.work_id.map(|w| (w, *id))).collect();
     state.open_courts_by_claim = BTreeMap::new();
     state.court_deadlines = BTreeSet::new();
     for (id, session) in &state.court_sessions {
@@ -6067,6 +6187,7 @@ impl PalwStateCarriageV2 {
             last_point: self.last_point,
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
+            work_ids: BTreeMap::new(),
             open_courts_by_claim: BTreeMap::new(),
             court_deadlines: BTreeSet::new(),
         };
@@ -6165,7 +6286,7 @@ pub(crate) mod tests {
     fn params() -> PalwStateParamsV2 {
         // base = h64(1), max_factor = 4, tolerance = 1000‰ (grant floor: 1‰ at E = 1000),
         // fp split = 1000 (pure-attempt: the receipt lane measures nothing — the V1 identity).
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap().with_fp_quanta(8, 64).unwrap()
     }
 
     // ---- ADR-0056 Decisions 3 and 5 ------------------------------------------------------------
@@ -6659,7 +6780,9 @@ pub(crate) mod tests {
                 class_id: h64(1),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
-                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                // A 160-leaf job: the free-prompt quantum is 20, so 60 leaves are three quanta
+                // and 40 are two (ADR-0074 Decision 5). Attempts in these fixtures claim ≤ 160.
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
                 initial_target: u128::MAX / 2,
                 share_permille: 1000,
                 activation_daa: 0,
@@ -6910,7 +7033,7 @@ pub(crate) mod tests {
         let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
         let subsidy = 1_000u64;
         let env = attempt(40, 1);
-        let commitments = [fp_commit(0xF01, 8, 2), fp_commit(0xF02, 8, 2), fp_commit(0xF03, 8, 2)];
+        let commitments = [fp_commit(0xF01, 40, 2), fp_commit(0xF02, 40, 2), fp_commit(0xF03, 40, 2)];
         let (s2, _) = apply(&s1, &p, &PalwBlockContextV2 { subsidy, ..ctx(2, 101, 2) }, &commitments, Some(&env));
 
         assert_eq!(s2.claims_iter().count(), 4, "three commitments and one attempt are all in state");
@@ -9794,7 +9917,8 @@ pub(crate) mod tests {
     fn an_abandoned_free_prompt_claim_holds_its_collateral() {
         // 300 collateral-units of exposure per claim (pwu 60 x slash_value 5), a ceiling of
         // 500%o of 100_000, and a hold of 50 DAA.
-        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 50).unwrap();
+        let p =
+            PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 50).unwrap().with_fp_quanta(8, 64).unwrap();
         let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
         let (s2, _) = apply(&base, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
         let reserved = s2.reserved_exposure(&bond_key(1));
@@ -9943,6 +10067,8 @@ pub(crate) mod tests {
     fn an_abandoned_claim_survives_both_of_its_deadlines() {
         // The hold fixture, plus a retirement strictly later than the hold — the shipped ordering.
         let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 50)
+            .unwrap()
+            .with_fp_quanta(8, 64)
             .unwrap()
             .with_claim_retirement_daa(200)
             .unwrap();
@@ -10172,22 +10298,31 @@ pub(crate) mod tests {
         // worst-case block per epoch is not grantable, which is what keeps a mid-flight zero
         // budget unrepresentable.
         assert_eq!(
-            PalwStateParamsV2::new(100, 1, 1, 1, 1, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap().min_grantable_share_permille(),
+            PalwStateParamsV2::new(100, 1, 1, 1, 1, 1000, h64(1), 4, 1000, 100, 1000, 0)
+                .unwrap()
+                .with_fp_quanta(8, 64)
+                .unwrap()
+                .min_grantable_share_permille(),
             1
         );
         assert_eq!(
-            PalwStateParamsV2::new(100, 1, 1, 1, 1, 100, h64(1), 4, 1000, 100, 1000, 0).unwrap().min_grantable_share_permille(),
+            PalwStateParamsV2::new(100, 1, 1, 1, 1, 100, h64(1), 4, 1000, 100, 1000, 0)
+                .unwrap()
+                .with_fp_quanta(8, 64)
+                .unwrap()
+                .min_grantable_share_permille(),
             10
         );
     }
 
     #[test]
     fn the_beta_rounding_is_floor_and_only_floor() {
-        let p = PalwStateParamsV2::new(333, 10, 10, 10, 10, 10, h64(1), 4, 1000, 100, 1000, 0).unwrap();
+        let p = PalwStateParamsV2::new(333, 10, 10, 10, 10, 10, h64(1), 4, 1000, 100, 1000, 0).unwrap().with_fp_quanta(8, 64).unwrap();
         assert_eq!(immature_contribution_v2(&p, 10), 3, "⌊10·333/1000⌋ = 3, never 4");
         assert_eq!(immature_contribution_v2(&p, 1), 0, "⌊1·333/1000⌋ = 0: a tiny claim may contribute nothing");
         assert_eq!(immature_contribution_v2(&p, 3), 0);
-        let full = PalwStateParamsV2::new(1000, 10, 10, 10, 10, 10, h64(1), 4, 1000, 100, 1000, 0).unwrap();
+        let full =
+            PalwStateParamsV2::new(1000, 10, 10, 10, 10, 10, h64(1), 4, 1000, 100, 1000, 0).unwrap().with_fp_quanta(8, 64).unwrap();
         assert_eq!(immature_contribution_v2(&full, 40), 40, "β = 1 is identity");
     }
 
@@ -10202,8 +10337,10 @@ pub(crate) mod tests {
             // compares the two, so a fixture that carried anything else would be testing the
             // rejection path by accident.
             executor_pubkey: vec![7; 4],
-            pwu,
-            quanta,
+            work_leaves: pwu,
+            // One prompt per claim word, so two fixtures are two works (ADR-0074 Decision 4).
+            prompt_token_ids_hash: h64(0x7E00 ^ claim_word),
+            decode_tokens_executed: quanta,
             trace_root: h64(41),
             output_root: h64(42),
             execution_root: h64(43),
@@ -10420,22 +10557,82 @@ pub(crate) mod tests {
         assert_eq!(refused.unwrap_err(), PalwStateV2Error::NotFreePromptClaim(attempt_claim));
     }
 
-    /// Malformed commitments are refused at the door: zero quanta parks nothing in state, and a
-    /// pwu that does not divide into uniform non-zero quanta is not a commitment.
+    /// Malformed commitments are refused at the door: no leaves is no work, and work below one
+    /// quantum of its class draws nothing — while a ragged leaf count is simply floored to whole
+    /// quanta (ADR-0074 Decision 5: the remainder certifies, it never draws).
     #[test]
-    fn fp_commitments_with_broken_quantization_are_refused() {
+    fn fp_commitments_below_a_quantum_are_refused_and_ragged_ones_are_floored() {
         let p = params();
         let genesis = PalwChainStateV2::genesis();
         let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
 
-        let zero = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 0)], None);
-        assert_eq!(zero.unwrap_err(), PalwStateV2Error::ZeroQuanta);
-
-        let ragged = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 61, 3)], None);
-        assert_eq!(ragged.unwrap_err(), PalwStateV2Error::NonUniformQuanta { pwu: 61, quanta: 3 });
-
         let hollow = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 0, 3)], None);
-        assert_eq!(hollow.unwrap_err(), PalwStateV2Error::NonUniformQuanta { pwu: 0, quanta: 3 });
+        assert_eq!(hollow.unwrap_err(), PalwStateV2Error::ZeroQuanta);
+        let sub_quantum = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 19, 1)], None);
+        assert_eq!(sub_quantum.unwrap_err(), PalwStateV2Error::ZeroQuanta, "19 leaves is under the class's 20-leaf quantum");
+
+        let (ragged, _) = apply(&s1, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 61, 3)], None);
+        let claim = ragged.claim(&h64(0xFC)).unwrap();
+        assert_eq!(claim.pwu, 60, "61 leaves floor to three whole quanta of twenty");
+        assert!(matches!(claim.source, PalwClaimSourceV2::FreePrompt { quanta: 3, .. }));
+        assert_eq!(claim.work_leaves, 61, "…and the leaves that ran stay on the record");
+        assert_eq!(claim.reserved, 60 * 5, "exposure is the work claimed, at the class's slash value");
+
+        // An unpriced lane (the attempt-only configuration) admits no commitment at all.
+        let unpriced = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap();
+        let (u1, _) = apply(&genesis, &unpriced, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let refused = apply_palw_transition_v2(&u1, &unpriced, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+        assert_eq!(refused.unwrap_err(), PalwStateV2Error::FreePromptLaneUnpriced);
+    }
+
+    /// **Weight is the price of adjudicability on this lane too** (ADR-0074 Decision 6): with a
+    /// certified set in force, a commitment on a class outside it is refused by name, one inside
+    /// it is admitted, and an empty set refuses every class — while `None` (fixtures) gates none.
+    #[test]
+    fn fp_commitments_on_an_uncertified_class_are_refused() {
+        let genesis = PalwChainStateV2::genesis();
+        let other_only = params().with_fp_certified_classes([h64(2)].into_iter().collect());
+        let (s1, _) = apply(&genesis, &other_only, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let refused = apply_palw_transition_v2(&s1, &other_only, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+        assert_eq!(refused.unwrap_err(), PalwStateV2Error::FreePromptLaneUncertified(h64(1)));
+
+        let none_certified = params().with_fp_certified_classes(BTreeSet::new());
+        let (n1, _) = apply(&genesis, &none_certified, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let refused = apply_palw_transition_v2(&n1, &none_certified, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+        assert_eq!(
+            refused.unwrap_err(),
+            PalwStateV2Error::FreePromptLaneUncertified(h64(1)),
+            "an empty set is a gate, not its absence"
+        );
+
+        let this_one = params().with_fp_certified_classes([h64(1)].into_iter().collect());
+        let (c1, _) = apply(&genesis, &this_one, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let (c2, _) = apply(&c1, &this_one, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+        assert!(matches!(c2.claim(&h64(0xFC)).unwrap().phase, PalwClaimPhaseV2::Provisional), "a certified class takes the claim");
+    }
+
+    /// **One inference, one claim** (ADR-0074 Decision 4): the same work — class, prompt, decode
+    /// count, bond — under a second claim id is refused while the first claim lives; another
+    /// prompt is other work and is admitted beside it.
+    #[test]
+    fn fp_the_same_work_is_claimable_once_while_its_claim_lives() {
+        let p = params();
+        let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+
+        let mut twin = fp_commit(0xFD, 60, 3);
+        if let PalwConsensusObjectV2::FreePromptCommitted { prompt_token_ids_hash, .. } = &mut twin {
+            *prompt_token_ids_hash = h64(0x7E00 ^ 0xFC);
+        }
+        let refused = apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[twin], None);
+        assert!(matches!(refused, Err(PalwStateV2Error::DuplicateWork { claim, .. }) if claim == h64(0xFC)), "got {refused:?}");
+
+        let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[fp_commit(0xFD, 60, 3)], None);
+        assert_eq!(s3.claims_iter().count(), 2, "another prompt is other work");
+        assert_eq!(
+            s3.claim(&h64(0xFD)).unwrap().work_id,
+            Some(crate::palw_freeprompt_v3::fp_work_id_v1(&h64(1), &h64(0x7E00 ^ 0xFD), 3, &bond_key(1).0))
+        );
     }
 
     /// The spend's delta replays and reverts bit-for-bit — the reorg primitive holds for the new
@@ -10476,7 +10673,8 @@ pub(crate) mod tests {
     /// it.
     #[test]
     fn a_silent_receipt_lane_does_not_ratchet_the_attempt_lane() {
-        let p = PalwStateParamsV2::new(100, 60, 60, 20, 500, 100, h64(1), 4, 1000, 100, 900, 0).unwrap();
+        let p =
+            PalwStateParamsV2::new(100, 60, 60, 20, 500, 100, h64(1), 4, 1000, 100, 900, 0).unwrap().with_fp_quanta(8, 64).unwrap();
         let genesis = PalwChainStateV2::genesis();
         let (mut s, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
         let before = s.class_targets.get(&h64(1)).map(|t| t.target).expect("the class has a target");
@@ -10486,11 +10684,7 @@ pub(crate) mod tests {
             let (next, _) = apply(&s, &p, &ctx(10 + i, 110 + i, 10 + i), &[], Some(&env));
             s = next;
         }
-        assert_eq!(
-            s.epoch_counters.get(&h64(1)).map(|c| c.produced_blocks),
-            Some(6),
-            "the attempt lane produced the whole epoch"
-        );
+        assert_eq!(s.epoch_counters.get(&h64(1)).map(|c| c.produced_blocks), Some(6), "the attempt lane produced the whole epoch");
         let receipts: u64 = s.receipt_epoch_counters.values().map(|c| c.produced_blocks).sum();
         assert_eq!(receipts, 0, "the premise: a fresh network has no certified quantum to spend, so no receipt block exists");
 
@@ -10516,7 +10710,8 @@ pub(crate) mod tests {
     fn two_lane_retarget_splits_one_census() {
         // Split 800‰: epoch_length 100, so daa 100..200 is epoch 1, closed when a block lands at
         // daa ≥ 200.
-        let split = PalwStateParamsV2::new(100, 60, 60, 20, 500, 100, h64(1), 4, 1000, 100, 800, 0).unwrap();
+        let split =
+            PalwStateParamsV2::new(100, 60, 60, 20, 500, 100, h64(1), 4, 1000, 100, 800, 0).unwrap().with_fp_quanta(8, 64).unwrap();
         let genesis = PalwChainStateV2::genesis();
         let (s1, _) = apply(&genesis, &split, &ctx(1, 100, 1), &register_class_and_bond(), None);
 
@@ -10576,7 +10771,8 @@ pub(crate) mod tests {
 
         // And at split = 1000 (every pre-FP fixture), the receipt lane never moves: same walk,
         // attempt production only.
-        let pure = PalwStateParamsV2::new(100, 60, 60, 20, 500, 100, h64(1), 4, 1000, 100, 1000, 0).unwrap();
+        let pure =
+            PalwStateParamsV2::new(100, 60, 60, 20, 500, 100, h64(1), 4, 1000, 100, 1000, 0).unwrap().with_fp_quanta(8, 64).unwrap();
         let (t1, _) = apply(&PalwChainStateV2::genesis(), &pure, &ctx(1, 100, 1), &register_class_and_bond(), None);
         let (t2, _) = apply(&t1, &pure, &ctx(2, 110, 2), &[], Some(&attempt(40, 1)));
         let boot_pure = t2.receipt_target(&h64(1)).unwrap().target;
@@ -10893,7 +11089,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&14u16.to_le_bytes()); // version_le(2) = 14, restated from the ADR (ADR-0071 Decision 3: bonds declare what they can judge)
+            s.update(&15u16.to_le_bytes()); // version_le(2) = 15, restated from the ADR (ADR-0074: the claim record prices its leaves and holds its work id)
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -11014,6 +11210,8 @@ pub(crate) mod tests {
                 reserved: 79_000,
                 immature_contribution: 1_580,
                 escrowed_reward: 12,
+                work_leaves: 0,
+                work_id: None,
                 phase: PalwClaimPhaseV2::Provisional,
             },
         );
@@ -11036,6 +11234,8 @@ pub(crate) mod tests {
                 reserved: 0,
                 immature_contribution: 0,
                 escrowed_reward: 0,
+                work_leaves: 31_600,
+                work_id: None,
                 phase: PalwClaimPhaseV2::Final { final_daa: 60 },
             },
         );
@@ -11208,16 +11408,16 @@ pub(crate) mod tests {
     /// schema and rides the same number. The empty root moves for the version alone, which is
     /// exactly the pair of signals these two constants exist to separate.
     #[test]
-    fn the_version_14_state_root_golden_vectors() {
+    fn the_version_15_state_root_golden_vectors() {
         assert_eq!(
             PalwChainStateV2::genesis().state_root().to_string(),
-            "4233a04ab57e6005613c3842e93bb2dafcfd80c73838301bf7082e25bdaf390a94e8fa38cafa21873a24f9384612e4e0299b325a229f89922dee800b8163f682",
-            "the empty state's version-14 root moved"
+            "da6c2c38d6a5893c74fa2431aff8b3bff4c47fdcf116844b27e44e3a3c04a6b12b6ec5f6faed1d4e02b588cc8a3c120be6be242ccb1fd0780366afc5418936ee",
+            "the empty state's version-15 root moved"
         );
         assert_eq!(
             m02_populated_state().state_root().to_string(),
-            "9fe572101e0cd2ca9f4ebb88297ee97e86100b14b97336a24999ce8c0331c52a9aad2ca2939ad0345cab7550a9657ca9d86ced3f9fb2d1751f64e1ccec68d6f3",
-            "the inhabited state's version-14 root moved"
+            "175c0d4d16e075cebd15f4d541785de1fa796c0f7ede8f0cac33de8b42b470e2d574c7b149cb80a4019abc378fedddadfcfc0d308bc2db774be62eb8b8b1e725",
+            "the inhabited state's version-15 root moved"
         );
     }
 }

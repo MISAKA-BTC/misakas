@@ -53,6 +53,12 @@ pub enum PalwFpExecutionV3Error {
     ContextOverflow { prefill: u32, decode: u32, max: u32 },
     #[error("the network id is empty or over the cap")]
     NetworkIdShape,
+    /// The context handed to the assembly names another job than the one being committed.
+    #[error("the job context is not this job's (job_id differs)")]
+    ContextIsNotTheJobs,
+    /// The context and the run's facts do not recompute the root the run committed.
+    #[error("the job context does not reproduce the run's execution root")]
+    ContextDoesNotReproduceTheRoot,
 }
 
 /// What a finished free-prompt run measured, beside its output.
@@ -73,6 +79,9 @@ pub struct PalwFpRunFactsV3 {
     pub checkpoint_leg_root: Hash64,
     /// The step leg root — the tree the court's bisection ladder walks.
     pub step_leg_root: Hash64,
+    /// The capture's leaf count — what the run is PRICED at (ADR-0074 Decision 5). Read off the
+    /// binding, never declared: the seat compares it to `capture_shape().step_leaf_count`.
+    pub step_leaf_count: u64,
 }
 
 /// The class facts a free-prompt job resolves THROUGH the registry rather than carrying.
@@ -178,6 +187,44 @@ pub fn palw_fp_job_context_v3(
 
 pub const PALW_FP_V3_DOMAIN_EXECUTION_SEED: &[u8] = b"misaka-palw/fp-v3/execution-seed/v1";
 
+/// **The commitment, from the capture's OWN job context** (ADR-0074 Decision 1, the canonical
+/// work queue). A node that runs a family's `execute_free_prompt` does not know which network id
+/// or class facts that family built its context under — the base0 floor keys its own, a chain
+/// class keys the network's — but the capture it retained carries the context whose hash the
+/// execution root commits to. Assembling from THAT context is what makes the commitment the
+/// seats' `verify_material` reproduces, whichever family ran it; assembling from a guessed
+/// context would commit a root no capture matches and the claim would never license.
+pub fn palw_fp_commitment_from_context_v3(
+    job: &PalwFreePromptJobV3,
+    context: &PalwJobContextV2,
+    run: &crate::palw_backend::PalwFpRunV1,
+    trace_retention_daa: u64,
+) -> Result<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3, PalwFpExecutionV3Error> {
+    if context.job_id != crate::palw_freeprompt_v3::fp_job_id_v3(job) {
+        return Err(PalwFpExecutionV3Error::ContextIsNotTheJobs);
+    }
+    let context_hash = context.context_hash();
+    let (schedule_root, _calls) =
+        crate::palw_v2::expected_schedule_commitment_v2(&context_hash, job.prompt_tokens, run.facts.decode_tokens_executed);
+    let execution_root = palw_fp_execution_root_v3(context, &run.facts);
+    if execution_root != run.outcome.execution_root {
+        return Err(PalwFpExecutionV3Error::ContextDoesNotReproduceTheRoot);
+    }
+    Ok(crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3 {
+        job: job.clone(),
+        trace_root: run.outcome.trace_root,
+        output_root: run.outcome.output_root,
+        schedule_root,
+        execution_root,
+        decode_tokens_executed: run.facts.decode_tokens_executed,
+        stop_reason: run.facts.stop_reason,
+        work_leaves: run.facts.step_leaf_count,
+        trace_manifest_root: run.outcome.trace_manifest_root,
+        trace_chunk_count: run.outcome.trace_chunk_count,
+        trace_retention_daa,
+    })
+}
+
 /// The execution seed a free-prompt job runs under — a function of CHAIN facts, not a field.
 ///
 /// Bound to the network domain, the class and the anchor block. Every one of those is either
@@ -204,7 +251,6 @@ pub fn palw_fp_commitment_v3(
     class: &PalwFpClassFactsV3,
     run: &crate::palw_backend::PalwFpRunV1,
     network_id: &[u8],
-    weights: &crate::palw_freeprompt_v3::PalwFpCuWeightsV3,
     trace_retention_daa: u64,
 ) -> Result<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3, PalwFpExecutionV3Error> {
     let context = palw_fp_job_context_v3(job, class, &run.facts, network_id)?;
@@ -219,7 +265,7 @@ pub fn palw_fp_commitment_v3(
         execution_root: palw_fp_execution_root_v3(&context, &run.facts),
         decode_tokens_executed: run.facts.decode_tokens_executed,
         stop_reason: run.facts.stop_reason,
-        cu: crate::palw_freeprompt_v3::fp_cu_v3(job.prompt_tokens, run.facts.decode_tokens_executed, weights),
+        work_leaves: run.facts.step_leaf_count,
         trace_manifest_root: run.outcome.trace_manifest_root,
         trace_chunk_count: run.outcome.trace_chunk_count,
         trace_retention_daa,
@@ -281,6 +327,7 @@ mod tests {
             decode_token_limit: 128,
             max_context_tokens: 4_096,
             privacy_mode: crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: crate::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
         }
     }
 
@@ -301,6 +348,7 @@ mod tests {
             full_logits_trace_root: h64(0x7A),
             activation_leg_root: h64(0xAC),
             checkpoint_leg_root: h64(0xC4),
+            step_leaf_count: 4_096,
             step_leg_root: h64(0x57),
         }
     }

@@ -6595,7 +6595,7 @@ pub fn palw_v2_params_on_base(
     genesis_artifact_root: crate::Hash64,
     genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
 ) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
-    let bundle = crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+    let mut bundle = crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
         base_class_id,
         class_catalog_root,
         court_catalog_root,
@@ -6603,6 +6603,10 @@ pub fn palw_v2_params_on_base(
         genesis_artifact_root,
         genesis_bonds,
     )?;
+    // **The free-prompt lane bears weight only on a certified class** (ADR-0074 Decision 6): a
+    // shipped preset always carries the drilled set, so the gate is never absent on a network
+    // that carries value. The test bundles stay ungated on purpose.
+    bundle.state = bundle.state.with_fp_certified_classes(crate::palw_e2e_adjudicability::palw_rc_fp_certified_class_ids_v1());
     // The identity is the base's, in ONE place: `Params::from(testnet-12)` and this must not be
     // able to disagree about which genesis, cadence or activation set the RC network has — a
     // node whose bundled and bundle-less forms differ in anything but the bundle would be two

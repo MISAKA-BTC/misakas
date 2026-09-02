@@ -669,8 +669,9 @@ mod tests {
             // Any key: this test asks whether the object may ride a carriage, which is decided
             // before any state is consulted.
             executor_pubkey: vec![7; 4],
-            pwu: 8,
-            quanta: 2,
+            work_leaves: 8,
+            prompt_token_ids_hash: h64(0x7E),
+            decode_tokens_executed: 2,
             trace_root: h64(41),
             output_root: h64(42),
             execution_root: h64(43),
