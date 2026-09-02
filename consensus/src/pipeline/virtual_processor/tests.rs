@@ -9824,3 +9824,190 @@ async fn palw_v2_a_block_grades_at_most_two_family_drills_and_a_class_binds_to_t
         }
     }
 }
+
+/// **ADR-0075 security amendment SA-1 and SA-2: the permissionless lane pays rent, and pays it
+/// before the work is done.**
+///
+/// Decision 1 rested certification's whole unsigned, permissionless design on "the transaction fee
+/// is the rent", and nothing on the accepting path had ever read a fee — so both prices were the
+/// mempool's flat floor. Past `palw_certification_rent`:
+///
+/// * **SA-2** — a `FamilyCertified` whose carrier paid less than its vector count's price is
+///   dropped BEFORE the court grades it and, the part that matters, before it consumes one of the
+///   block's two grading slots. Charging a refused object a slot would let a griefer starve honest
+///   drills for the price of a floor fee, which is the denial `PALW_CERTIFICATION_MAX_PER_BLOCK`
+///   exists to stop.
+/// * **SA-1** — a chunk that OPENS a group is charged the carriage of the room it reserves. A
+///   one-part-sized chunk declaring eight parts held one of eight state-root slots for ~5.5 days at
+///   the flat floor; now it pays what eight hundred kilobytes of carriage costs.
+///
+/// The evidence is real (the floor's own drills), the ruleset is the mainnet one with a V2 bundle,
+/// and the honest path is asserted with the fence ARMED — a paid drill is graded and recorded
+/// exactly as it is without the fence.
+#[tokio::test]
+async fn palw_v2_certification_and_chunk_carriage_pay_rent_past_the_fence() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::{
+        PALW_CERTIFICATION_MAX_PER_BLOCK, PalwCertificationEvidenceV1, PalwCertifiedLaneV1, PalwConsensusObjectV2,
+        palw_certification_min_fee_v1, palw_object_chunk_group_rent_v1, palw_object_chunks_with_cap_v1,
+    };
+    use misaka_palw_base0::e2e_drill::{PalwRcFamilyV1, rc_attempt_evidence_v1, rc_free_prompt_evidence_v1};
+
+    // The flat mempool floor a carrier used to be able to pay for any of this.
+    const FLOOR: u64 = 250_000;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+    let armed = |rent: Option<ForkActivation>| {
+        let bundle = bundle.clone();
+        ConfigBuilder::new(MAINNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params(move |p| {
+                p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+                p.palw_certification_rent = rent;
+                *p = p.clone().with_palw_v2_cadence();
+            })
+            .build()
+    };
+
+    let floor_attempt = rc_attempt_evidence_v1(PalwRcFamilyV1::Base0).expect("the floor drills its attempt lane");
+    let floor_fp = rc_free_prompt_evidence_v1(PalwRcFamilyV1::Base0).expect("the floor drills its free-prompt lane");
+    let a16_attempt = rc_attempt_evidence_v1(PalwRcFamilyV1::Qwen25A16).expect("the A16 fixture drills its attempt lane");
+    let attempt_object = |e: kaspa_consensus_core::palw_e2e_adjudicability::PalwE2eDrillEvidenceV1| {
+        PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(e)) }
+    };
+    let fp_object = PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::FreePrompt(floor_fp)) };
+    let floor_object = attempt_object(floor_attempt);
+    let a16_object = attempt_object(a16_attempt);
+    let price = |object: &PalwConsensusObjectV2| match object {
+        PalwConsensusObjectV2::FamilyCertified { evidence } => palw_certification_min_fee_v1(evidence.vector_count()),
+        other => panic!("{other:?} is not a certification"),
+    };
+    // The family each drill grades to — the name under which it is recorded. Asserted by NAME and
+    // not by count, because the count cannot tell the two apart: the block's grading cap is two, so
+    // "one attempt family landed" is true whether it is the underpaid floor's or the paid A16's,
+    // and a rule that drops the wrong one of them would read as green.
+    let digest_of = |object: &PalwConsensusObjectV2| match object {
+        PalwConsensusObjectV2::FamilyCertified { evidence } => evidence.grade().expect("this build grades its own drill").digest(),
+        other => panic!("{other:?} is not a certification"),
+    };
+    let floor_family = digest_of(&floor_object);
+    let a16_family = digest_of(&a16_object);
+    assert_ne!(floor_family, a16_family, "the two attempt drills are two families");
+    let attempt_families = |folded: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2| {
+        folded.chain_certified_families(PalwCertifiedLaneV1::Attempt).iter().map(|f| f.digest()).collect::<Vec<_>>()
+    };
+    assert!(price(&floor_object) > FLOOR, "a real drill's grading costs more than the flat floor it used to pay");
+
+    // A context at some chain height, with the state and evaluation point the walk would use.
+    async fn walked(config: kaspa_consensus_core::config::Config) -> TestContext {
+        let mut ctx = TestContext::new(TestConsensus::new(&config));
+        for _ in 0..2 {
+            ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+        }
+        ctx
+    }
+    let point_of = |ctx: &TestContext| kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: ctx.consensus.get_sink(),
+        daa_score: ctx.consensus.get_virtual_daa_score(),
+        blue_score: 5,
+        subsidy: 0,
+    };
+
+    // ── SA-2, armed ──────────────────────────────────────────────────────────────────────────
+    let ctx = walked(armed(Some(ForkActivation::always()))).await;
+    let vp = ctx.consensus.virtual_processor();
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let point = point_of(&ctx);
+    let (accepted, folded) = vp.palw_v2_accepted_priced_objects_for_tests(
+        &state,
+        &bundle.state,
+        &point,
+        vec![
+            // Underpaid: the flat floor a griefer used to buy 32 court re-executions with.
+            (floor_object.clone(), FLOOR),
+            (fp_object.clone(), price(&fp_object)),
+            (a16_object.clone(), price(&a16_object)),
+        ],
+        point.block,
+    );
+    assert_eq!(
+        accepted.len(),
+        PALW_CERTIFICATION_MAX_PER_BLOCK,
+        "the underpaid drill is dropped ungraded and spends no grading slot, so BOTH paid ones land"
+    );
+    assert_eq!(folded.chain_certified_families(PalwCertifiedLaneV1::FreePrompt).len(), 1, "the paid free-prompt family is recorded");
+    assert_eq!(
+        attempt_families(&folded),
+        vec![a16_family],
+        "the attempt family the block recorded is the PAID one — the underpaid floor drill was never graded, and the slot it \
+         would have burned went to the A16 carrier behind it"
+    );
+
+    // The honest path, with the fence armed: pay the rent and the same drill is graded.
+    let (accepted, folded) = vp.palw_v2_accepted_priced_objects_for_tests(
+        &state,
+        &bundle.state,
+        &point,
+        vec![(floor_object.clone(), price(&floor_object))],
+        point.block,
+    );
+    assert_eq!(accepted.len(), 1, "a drill that paid its rent is graded");
+    assert_eq!(attempt_families(&folded), vec![floor_family], "and recorded: the rent buys the grading, it does not forbid it");
+
+    // ── SA-1, armed: opening a chunk group ───────────────────────────────────────────────────
+    let bytes = borsh::to_vec(&floor_object).expect("the object serializes");
+    let chunks = palw_object_chunks_with_cap_v1(&floor_object, bytes.len().div_ceil(4)).expect("it chunks").expect("it needs to");
+    let PalwConsensusObjectV2::ObjectChunk { group, count, .. } = chunks[0].clone() else { panic!("a chunk") };
+    let room = palw_object_chunk_group_rent_v1(count);
+    assert!(room > FLOOR, "reserving a {count}-part group costs more than the flat floor");
+
+    let (accepted, unopened) =
+        vp.palw_v2_accepted_priced_objects_for_tests(&state, &bundle.state, &point, vec![(chunks[0].clone(), room - 1)], point.block);
+    assert!(accepted.is_empty(), "an opener that underpays the room is dropped, and the block stands");
+    assert!(unopened.pending_chunk_group(&group).is_none(), "and no slot is held: the junk never reaches the state root");
+
+    let (accepted, opened) =
+        vp.palw_v2_accepted_priced_objects_for_tests(&state, &bundle.state, &point, vec![(chunks[0].clone(), room)], point.block);
+    assert_eq!(accepted.len(), 1, "the same chunk, having paid the room, opens the group");
+    let held = opened.pending_chunk_group(&group).expect("the group is held");
+    assert_eq!(held.count, count);
+    // Extending it is not charged the room again — that would tax only the carrier that completes.
+    // A later chain point, because `opened` already folded one object at `point`: the transition
+    // demands a strictly increasing blue score along a chain.
+    let next = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: kaspa_hashes::Hash64::from_u64_word(0xB1_0075),
+        daa_score: point.daa_score + 1,
+        blue_score: point.blue_score + 8,
+        subsidy: 0,
+    };
+    let (accepted, _) =
+        vp.palw_v2_accepted_priced_objects_for_tests(&opened, &bundle.state, &next, vec![(chunks[1].clone(), FLOOR)], next.block);
+    assert_eq!(accepted.len(), 1, "a chunk that extends an open group reserves nothing new and pays no room rent");
+
+    // ── The fence OFF: byte-identical to before the amendment ────────────────────────────────
+    let ctx = walked(armed(None)).await;
+    let vp = ctx.consensus.virtual_processor();
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let point = point_of(&ctx);
+    let (accepted, folded) = vp.palw_v2_accepted_priced_objects_for_tests(
+        &state,
+        &bundle.state,
+        &point,
+        vec![(floor_object, FLOOR), (fp_object, FLOOR), (a16_object, FLOOR)],
+        point.block,
+    );
+    assert_eq!(accepted.len(), PALW_CERTIFICATION_MAX_PER_BLOCK, "unarmed, the cap is the only limit and the floor fee buys grading");
+    assert_eq!(
+        attempt_families(&folded),
+        vec![floor_family],
+        "unarmed, the flat-fee floor drill is graded first and the A16 behind it is what the cap drops — the pre-amendment \
+         behaviour, byte for byte"
+    );
+    assert_eq!(folded.chain_certified_families(PalwCertifiedLaneV1::FreePrompt).len(), 1);
+    let (accepted, opened) =
+        vp.palw_v2_accepted_priced_objects_for_tests(&state, &bundle.state, &point, vec![(chunks[0].clone(), FLOOR)], point.block);
+    assert_eq!(accepted.len(), 1, "unarmed, a one-floor-fee opener holds a slot exactly as it did");
+    assert!(opened.pending_chunk_group(&group).is_some());
+}

@@ -44,7 +44,7 @@ use kaspa_consensus_core::{
     hashing,
     header::Header,
     muhash::MuHashExtensions,
-    subnets::SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
+    subnets::{SUBNETWORK_ID_PALW_FP_COMMITMENT, SUBNETWORK_ID_PALW_LIFECYCLE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD},
     tx::{
         MutableTransaction, PopulatedTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry,
         ValidatedTransaction, VerifiableTransaction,
@@ -171,6 +171,25 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// circulation nowhere" — would be false at the only moment it mattered. Only RELEASED bonds
     /// appear: a locked one cannot be spent, so it owes nothing yet.
     pub palw_v2_bond_burns: std::collections::HashMap<TransactionOutpoint, u64>,
+
+    /// **ADR-0075 SA-1/SA-2: what each accepted lifecycle carrier PAID.**
+    ///
+    /// ADR-0075 Decision 1 rests certification's whole permissionless design on "the transaction
+    /// fee is the rent", and until this map existed no layer downstream of here could read a fee:
+    /// `AcceptanceData` records a transaction id and an index and nothing about value, and the
+    /// object walk that grades a certification is a pure function of the transactions. The fee is
+    /// known exactly HERE — `calculated_fee` is `in − out` over the composed view — so it is kept
+    /// here and read by `palw_v2_objects_of_block` two frames along.
+    ///
+    /// Both PALW object bands are collected — 0x4b's lifecycle carriers and 0x4a's free-prompt
+    /// commitments — because `palw_v2_objects_of_block` builds one list out of both walks, and a
+    /// band missing from the map would read as "paid nothing" rather than as "not priced". No rule
+    /// prices a free-prompt commitment today; the alternative is a silent exemption the day one
+    /// does.
+    ///
+    /// Filled only while a V2 bundle is installed AND the rent fence is armed, so on every shipped
+    /// preset it is empty and costs one `is_some_and`.
+    pub palw_v2_lifecycle_fees: std::collections::HashMap<TransactionId, u64>,
 }
 
 impl<'a> UtxoProcessingContext<'a> {
@@ -193,6 +212,7 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_v2_escrow_withheld: 0,
             palw_v2_unentitled_blues: BlockHashSet::default(),
             palw_v2_bond_burns: Default::default(),
+            palw_v2_lifecycle_fees: Default::default(),
         }
     }
 
@@ -378,11 +398,22 @@ impl VirtualStateProcessor {
             // Below either fence `finality_fee` stays 0 ⇒ byte-identical splits.
             let finality_fee_active = pov_daa_score >= self.evm_activation_daa_score
                 && self.dns_params.as_ref().is_some_and(|p| pov_daa_score >= p.finality_fee_activation_daa_score);
+            // ADR-0075 SA-1/SA-2: the fee of every accepted PALW object carrier, kept for the walk
+            // that grades a certification (see `UtxoProcessingContext::palw_v2_lifecycle_fees`).
+            // Off — and the map empty — unless the rent fence is armed, so every shipped preset
+            // walks this loop exactly as it did before the field existed.
+            let collect_lifecycle_fees = self.palw_certification_rent_at(pov_daa_score);
             let mut block_fee = 0u64;
             let mut finality_fee = 0u64;
             for (validated_tx, _) in validated_transactions.iter() {
                 ctx.mergeset_diff.add_transaction(validated_tx, pov_daa_score).unwrap();
                 ctx.accepted_tx_ids.push(validated_tx.id());
+                if collect_lifecycle_fees
+                    && (validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
+                        || validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_FP_COMMITMENT)
+                {
+                    ctx.palw_v2_lifecycle_fees.insert(validated_tx.id(), validated_tx.calculated_fee);
+                }
                 // **Audit C-08 part three: the miner does not collect what the chain destroyed.**
                 //
                 // A released PALW bond's spend must leave `slashed` sompi unclaimed by any output,

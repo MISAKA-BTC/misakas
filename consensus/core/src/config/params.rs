@@ -683,6 +683,36 @@ pub struct Params {
     /// activation.
     pub palw_inactivity_leak: Option<PalwInactivityLeakV1>,
 
+    /// **ADR-0075 security amendment SA-1/SA-2 — the permissionless lane pays rent.** `None` on
+    /// every shipped preset, so the behaviour is byte-identical to not having the field at all.
+    ///
+    /// ADR-0075 Decision 1 made certification objects unsigned and permissionless on the argument
+    /// that "the transaction fee is the rent". It was not: nothing on the accepting path ever
+    /// looked at what a carrier paid, so both prices were the mempool's flat relay floor.
+    ///
+    /// * **SA-1.** A chunk group reserves one of `PALW_OBJECT_CHUNK_MAX_GROUPS` slots in the state
+    ///   root for `PALW_OBJECT_CHUNK_TTL_DAA` (~5.5 days at 120 s), and a ONE-BYTE chunk declaring
+    ///   `count = 8` reserves as much of it as a full one. Past this fence a chunk that OPENS a
+    ///   group must be carried by a transaction paying
+    ///   [`crate::palw_state_v2::palw_object_chunk_group_rent_v1`] — the carriage price of the room
+    ///   it reserves rather than of the bytes it sent.
+    /// * **SA-2.** A `FamilyCertified` costs every validator up to
+    ///   `PALW_CERTIFICATION_MAX_VECTORS` court re-executions whether it passes or is refused, and
+    ///   the vectors are counted from a field the submitter writes. Past this fence an object whose
+    ///   carrier paid less than [`crate::palw_state_v2::palw_certification_min_fee_v1`] of its
+    ///   vector count is dropped BEFORE it is graded and before it consumes one of the block's two
+    ///   grading slots.
+    ///
+    /// **TOP LEVEL for the reason on `palw_unavailable_abstains`**: this rule must be able to reach
+    /// a LIVE network, and a fence inside the V2 bundle moves `palw_ruleset_id_v2`, which
+    /// `for_each_fence` never descends into — so every old/new pair would fail the handshake
+    /// outright instead of peering with a warning.
+    ///
+    /// A bare fence with no companion value, deliberately: both prices are derived from constants
+    /// this binary enforces, so there is nothing beside the fence to normalise away (the trap
+    /// `palw_bond_maturity`'s window documents).
+    pub palw_certification_rent: Option<ForkActivation>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -1020,6 +1050,28 @@ impl Params {
         }
         if self.pow_palw_activation.is_active(u64::MAX - 1) || self.pow_palw_ollama_activation.is_active(u64::MAX - 1) {
             return Err(PalwModeV2Error::Invalid("a ConsensusV2 network may not activate any V1 PALW proof-of-work"));
+        }
+        // **ADR-0075 SA-3: two rows of the card may not be one operator.**
+        //
+        // `derive_panel_v2` seats ONE bond per operator id, so two genesis rows sharing an operator
+        // — the shape a card assembled from copied rows takes, and the shape a single host holding
+        // two seats' keys takes — is not two seats. It is one seat and one row of dead collateral,
+        // and the registry silently shrinks by one below every count this file already gates on
+        // (`palw_v2_min_genesis_bonds_v1`, `palw_v2_maturity_armable_bonds_v1`), which is how an
+        // apparently armable card produces a network whose claims cannot bind. The card is written
+        // by hand; this is the only place that reads it before a chain exists.
+        {
+            let mut operators = std::collections::BTreeSet::new();
+            for object in &bundle.genesis_objects {
+                if let crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered { operator_pubkey, .. } = object
+                    && !operators.insert(crate::palw_state_v2::palw_operator_id_v2(operator_pubkey))
+                {
+                    return Err(PalwModeV2Error::Invalid(
+                        "two genesis bonds share an operator id: the panel draw seats one bond per operator, so the \
+                         registry is smaller than it looks and the seat counts this gate checks are wrong",
+                    ));
+                }
+            }
         }
         // **The chain must still hold what the lattice will ask it for** (audit M2-20).
         //
@@ -1366,6 +1418,10 @@ impl Params {
         if self.palw_inactivity_leak.is_some_and(|l| l.activation == ForkActivation::never()) {
             self.palw_inactivity_leak = None;
         }
+        // ADR-0075 SA-1/SA-2, a bare fence: the D2 collapse, for the D2 reason.
+        if self.palw_certification_rent == Some(ForkActivation::never()) {
+            self.palw_certification_rent = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -1541,6 +1597,7 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_inactivity_leak,
+            palw_certification_rent,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -1645,6 +1702,16 @@ impl Params {
         }
         match palw_inactivity_leak.as_mut() {
             Some(leak) => fork(&mut leak.activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0075 SA-1/SA-2. A pure fence with no payload beside it, so visiting it is safe: both
+        // prices are constants this binary enforces, and there is nothing for the identity
+        // visitor's `0`/`u64::MAX` normalisation to flatten.
+        match palw_certification_rent.as_mut() {
+            Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
                 visit(&mut absent);
@@ -1833,6 +1900,7 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_inactivity_leak,
+            palw_certification_rent,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -1999,6 +2067,14 @@ impl Params {
             h.write(b"palw_inactivity_leak");
             h.write(leak.activation.daa_score().to_le_bytes());
             h.write(leak.t_leak_daa.to_le_bytes());
+        }
+        // ADR-0075 SA-1/SA-2, Some-only like every fence above it: arming it changes which
+        // lifecycle objects a block may open a chunk group with and which it may grade, so it
+        // belongs in the fingerprint — and every shipped preset leaves it `None` and fingerprints
+        // byte-identically to a build without the field at all.
+        if let Some(activation) = palw_certification_rent {
+            h.write(b"palw_certification_rent");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
         // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
@@ -2279,6 +2355,7 @@ impl Params {
             palw_heartbeat: self.palw_heartbeat,
             palw_attempt_work: self.palw_attempt_work,
             palw_inactivity_leak: self.palw_inactivity_leak,
+            palw_certification_rent: self.palw_certification_rent,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -3187,6 +3264,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_heartbeat: None,
     palw_attempt_work: None,
     palw_inactivity_leak: None,
+    palw_certification_rent: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -3319,6 +3397,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_heartbeat: None,
     palw_attempt_work: None,
     palw_inactivity_leak: None,
+    palw_certification_rent: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -3433,6 +3512,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_heartbeat: None,
     palw_attempt_work: None,
     palw_inactivity_leak: None,
+    palw_certification_rent: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -6858,6 +6938,7 @@ pub const DEVNET_PARAMS: Params = Params {
         ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
     }),
     palw_inactivity_leak: None,
+    palw_certification_rent: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -7748,6 +7829,96 @@ mod consensus_params_id_tests {
         both.palw_bootstrap_activation = Some(ForkActivation::always());
         both.palw_unavailable_abstains = Some(ForkActivation::always());
         assert_ne!(both.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
+    }
+
+    /// **ADR-0075 SA-1/SA-2's rent fence keeps the D4 discipline**, which is the only discipline
+    /// that lets a rule reach a LIVE network: dormant on every shipped preset and therefore absent
+    /// from the fingerprint, visible in `consensus_params_id` the moment it is scheduled, and a
+    /// change of identity only when it is in force at genesis.
+    #[test]
+    fn the_certification_rent_fence_separates_networks_only_when_it_is_in_force() {
+        for (name, shipped) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(shipped.palw_certification_rent.is_none(), "{name} must leave ADR-0075's rent fence dormant");
+        }
+        let shipped = MAINNET_PARAMS;
+
+        let mut armed = MAINNET_PARAMS;
+        armed.palw_certification_rent = Some(ForkActivation::new(9_000_000));
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            armed.consensus_identity_id(),
+            "scheduling the rent for a future height must keep old and new builds peers — a live network is where this rule has to arrive"
+        );
+        assert_ne!(
+            shipped.consensus_params_id(),
+            armed.consensus_params_id(),
+            "…and still be a visible commitment: a price nobody can read off the fingerprint is a silent fork"
+        );
+        assert_ne!(shipped.consensus_schedule_id(), armed.consensus_schedule_id(), "the operator log must name it");
+
+        let mut at_genesis = MAINNET_PARAMS;
+        at_genesis.palw_certification_rent = Some(ForkActivation::always());
+        assert_ne!(
+            shipped.consensus_identity_id(),
+            at_genesis.consensus_identity_id(),
+            "in force from block 1 on one side is a rule difference — the two disagree about which objects a block may grade and which may open a chunk group"
+        );
+
+        let mut never_armed = MAINNET_PARAMS;
+        never_armed.palw_certification_rent = Some(ForkActivation::never());
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            never_armed.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse ahead of the dns_params early return is gone"
+        );
+
+        // Independent of its neighbours: arming the rent must not read as arming D4.
+        let mut d4 = MAINNET_PARAMS;
+        d4.palw_unavailable_abstains = Some(ForkActivation::always());
+        assert_ne!(d4.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
+    }
+
+    /// **ADR-0075 SA-3: the genesis gate refuses a card whose rows share an operator.**
+    ///
+    /// `derive_panel_v2` seats one bond per operator id, so a duplicated row is one seat and one
+    /// dead collateral output — and every seat count this file gates on would be reading a registry
+    /// larger than the one the draw sees.
+    #[test]
+    fn a_card_with_two_rows_sharing_an_operator_is_refused_at_genesis() {
+        use crate::palw_mode_v2::PalwConsensusMode;
+        use crate::palw_state_v2::PalwConsensusObjectV2 as Obj;
+
+        let params = palw_rc_shipped_params();
+        params.validate_palw_v2().expect("the shipped card's operators are distinct");
+
+        let mut doubled = params.clone();
+        let PalwConsensusMode::ConsensusV2(bundle) = &mut doubled.palw_consensus_mode else { panic!("the RC is a V2 network") };
+        let copy =
+            bundle.genesis_objects.iter().find(|o| matches!(o, Obj::BondRegistered { .. })).expect("the card registers bonds").clone();
+        // A DIFFERENT bond outpoint, the SAME operator — the shape a card assembled by copying a
+        // row takes, and the one the seat counts cannot see.
+        let copy = match copy {
+            Obj::BondRegistered { pubkey, operator_pubkey, collateral, payout_payload, capable_classes, signature, .. } => {
+                Obj::BondRegistered {
+                    bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
+                        crate::tx::TransactionId::from_u64_word(0xDEAD_BEEF),
+                        0,
+                    )),
+                    pubkey,
+                    operator_pubkey,
+                    collateral,
+                    payout_payload,
+                    capable_classes,
+                    signature,
+                }
+            }
+            other => panic!("{other:?}"),
+        };
+        bundle.genesis_objects.push(copy);
+        let err = doubled.validate_palw_v2().expect_err("a duplicated operator is refused");
+        assert!(format!("{err}").contains("operator id"), "the refusal names what it found: {err}");
     }
 
     /// **Every fence in the fingerprint is normalised, including the nested ones** (re-audit R-2).

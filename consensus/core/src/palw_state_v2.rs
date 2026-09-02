@@ -2241,6 +2241,92 @@ pub const PALW_OBJECT_CHUNK_MAX_GROUPS: usize = 8;
 /// A group nobody completes within this many DAA is evicted when the room is needed.
 pub const PALW_OBJECT_CHUNK_TTL_DAA: u64 = 4_000;
 
+// ---------------------------------------------------------------------------------------------
+// ADR-0075 security amendment SA-1 / SA-2: what the permissionless lane pays
+// ---------------------------------------------------------------------------------------------
+
+/// The mempool's own relay rate, in sompi per kilogram of transaction mass.
+///
+/// Mirrored rather than imported: the one spelling of this rate that already exists
+/// (`kaspa_pq_validator_core::relay_fee_for_compute_mass`, which is what `misaka palw
+/// submit-object` sizes every certification carrier with) lives in a crate that DEPENDS on this
+/// one, so importing it would be a cycle. `the_rent_rate_is_the_relay_rate_submit_object_pays`
+/// pins the arithmetic against the numbers that function is built from, so the two cannot drift
+/// silently — the failure mode a mirrored constant has, and the reason this note exists.
+const PALW_RENT_RELAY_FEE_SOMPI_PER_KG: u64 = 10_000;
+
+/// The flat floor under [`palw_relay_fee_for_mass_v1`] — `ATTESTATION_TX_FEE_FLOOR_SOMPI`.
+const PALW_RENT_FEE_FLOOR_SOMPI: u64 = 250_000;
+
+/// `relay_fee_for_compute_mass`, re-expressed here (see [`PALW_RENT_RELAY_FEE_SOMPI_PER_KG`]).
+///
+/// Rate × mass, plus a quarter for the margin the submitter tool already adds, floored at the
+/// attestation floor. Saturating throughout: this prices a `usize` a peer chose, and a rent rule
+/// that could panic on a hostile number would be the denial of service it exists to stop.
+pub fn palw_relay_fee_for_mass_v1(mass: u64) -> u64 {
+    let min_fee = mass.saturating_mul(PALW_RENT_RELAY_FEE_SOMPI_PER_KG) / 1_000;
+    min_fee.saturating_add(min_fee / 4).max(PALW_RENT_FEE_FLOOR_SOMPI)
+}
+
+/// The transaction mass one fault vector's grading is priced at (ADR-0075 SA-2).
+///
+/// A `FamilyCertified` costs every validator one court re-execution per vector, up to
+/// [`PALW_CERTIFICATION_MAX_VECTORS`], and the vector count is a field the submitter writes —
+/// nothing ties it to how large the object is. So the price is taken from the count rather than
+/// from the bytes: a five-kilobyte object carrying thirty-two vectors buys thirty-two
+/// re-executions at a five-kilobyte object's price, which is the whole hole.
+///
+/// The number is the carriage this evidence is ALLOWED to occupy divided by the vectors it is
+/// allowed to carry: `PALW_OBJECT_CHUNK_MAX_BYTES × PALW_OBJECT_CHUNK_MAX_COUNT` (800,000, the
+/// most a chunked object may span) over `PALW_CERTIFICATION_MAX_VECTORS` (32). A drill that
+/// actually uses its vector budget therefore pays what its full-size carriage would have cost at
+/// the relay rate, and one that plants six pays for six.
+pub const PALW_CERTIFICATION_MASS_PER_VECTOR: u64 =
+    (PALW_OBJECT_CHUNK_MAX_BYTES as u64 * PALW_OBJECT_CHUNK_MAX_COUNT as u64) / PALW_CERTIFICATION_MAX_VECTORS as u64;
+
+/// **ADR-0075 SA-2: what a `FamilyCertified` carrying `vectors` fault vectors must have paid.**
+///
+/// Read at the acceptance filter, before the object is graded and before it consumes one of the
+/// block's [`PALW_CERTIFICATION_MAX_PER_BLOCK`] grading slots, so the CPU a block can ask of every
+/// validator is bounded by fees its carriers actually paid.
+pub fn palw_certification_min_fee_v1(vectors: usize) -> u64 {
+    palw_relay_fee_for_mass_v1((vectors as u64).saturating_mul(PALW_CERTIFICATION_MASS_PER_VECTOR))
+}
+
+/// **ADR-0075 SA-1: what OPENING a chunk group must have paid.**
+///
+/// A group reserves one of [`PALW_OBJECT_CHUNK_MAX_GROUPS`] slots in the state root for up to
+/// [`PALW_OBJECT_CHUNK_TTL_DAA`], and `count` is declared by the chunk that opens it — so a ONE
+/// BYTE chunk saying `count = 8` reserves exactly as much room as a full-size one, and used to pay
+/// the flat relay floor for it. The rent is the carriage price of the ROOM the group reserves
+/// (`count × PALW_OBJECT_CHUNK_MAX_BYTES`) rather than of the bytes this carrier sent.
+///
+/// An honest full-size opener already pays most of this — its own bytes are `1/count` of the room
+/// and the floor is flat — so the price of a real drill rises by well under a factor of two, while
+/// the price of parking eight junk groups rises by the ratio between one byte and the eight
+/// hundred kilobytes they hold. Chunks that EXTEND an existing group are not priced here: they
+/// reserve nothing new, and charging them would tax only the honest carrier that completes.
+///
+/// # This is a PRICE, and SA-1 asked for a DEPOSIT — what is missing and why
+///
+/// The amendment's rule is "a deposit … refunded when the group completes into an accepted object
+/// and forfeited at TTL or on refusal. Junk pays; honesty is refunded." Two of those three
+/// properties hold here — junk pays, and it pays before the state root is touched — and the
+/// refund does not: an honest drill pays the same rent a junk group does, and the rent is a FEE,
+/// so a griefer who mines the block carrying his own junk collects it back.
+///
+/// A refund needs the chain to REMEMBER which outpoint backs which group, which is a field on
+/// [`PalwPendingChunksV2`] and therefore a schema change — and [`PALW_STATE_V2_VERSION`] is hashed
+/// both into every state root (`state_root`) and into `consensus_params_id`, so a bumped version
+/// re-mints every V2 network whether or not the fence is armed. That is exactly what the fence
+/// discipline exists to prevent, so the deposit cannot be added by an activation; it belongs to
+/// the next state-version bump, alongside the lock (the pending group's outpoint joins
+/// `palw_v2_locked_bond_outpoints`) and the forfeit (it joins `palw_v2_bond_burn_obligations`),
+/// both of which are two lines each once the outpoint is in state.
+pub fn palw_object_chunk_group_rent_v1(count: u8) -> u64 {
+    palw_relay_fee_for_mass_v1((count as u64).saturating_mul(PALW_OBJECT_CHUNK_MAX_BYTES as u64))
+}
+
 pub fn palw_object_chunk_group_id_v1(object_bytes: &[u8]) -> Hash64 {
     let mut state = keyed(PALW_STATE_V2_DOMAIN_OBJECT_CHUNK_GROUP);
     state.update(&(object_bytes.len() as u64).to_le_bytes());
@@ -11457,6 +11543,74 @@ pub(crate) mod tests {
         let later = d + PALW_OBJECT_CHUNK_TTL_DAA + 1;
         let (s4, _) = apply(&s3, &p, &ctx(later, later, later), &[one_more], None);
         assert!(s4.pending_chunk_group(&group).is_none(), "the oldest group expired and was evicted to make room");
+    }
+
+    /// **ADR-0075 SA-1/SA-2: the rent rate is the one `misaka palw submit-object` already pays.**
+    ///
+    /// [`palw_relay_fee_for_mass_v1`] mirrors `kaspa_pq_validator_core::relay_fee_for_compute_mass`
+    /// because that crate depends on this one and the import would be a cycle. This half pins the
+    /// LITERALS the mirror is built from — 10,000 sompi per kilogram, plus a quarter, floored at
+    /// the 250,000-sompi attestation floor — so the copy here cannot be edited without a red line.
+    /// The other half, that the two functions agree, can only be asserted from a crate that sees
+    /// both, and is `the_rent_the_chain_charges_is_the_relay_rate_this_tool_pays` in `misaka-cli`.
+    #[test]
+    fn the_rent_rate_is_the_relay_rate_submit_object_pays() {
+        let expect = |mass: u64| {
+            let min_fee = mass * 10_000 / 1_000;
+            (min_fee + min_fee / 4).max(250_000)
+        };
+        for mass in [0u64, 1, 999, 1_000, 20_000, 100_000, 800_000, 1 << 20] {
+            assert_eq!(palw_relay_fee_for_mass_v1(mass), expect(mass), "mass {mass}");
+        }
+        assert_eq!(palw_relay_fee_for_mass_v1(0), 250_000, "the floor is the floor");
+        // A hostile number prices rather than panics: this runs on a peer-supplied vector count.
+        assert!(palw_relay_fee_for_mass_v1(u64::MAX) > 0);
+        assert!(palw_certification_min_fee_v1(usize::MAX) > 0);
+        assert!(palw_object_chunk_group_rent_v1(u8::MAX) > 0);
+    }
+
+    /// **The grading price is taken from the vector count, and it is what the hole was.**
+    ///
+    /// A `FamilyCertified` buys one court re-execution per vector on every node, and the count is a
+    /// field its submitter writes — so a small object carrying the maximum count used to buy the
+    /// maximum work at a small object's price. The price is monotone in the count and, at the cap,
+    /// equals the carriage of the largest object the chunk rules admit.
+    #[test]
+    fn grading_is_priced_by_the_vectors_it_asks_for_not_the_bytes_it_sent() {
+        assert!(
+            palw_certification_min_fee_v1(PALW_CERTIFICATION_MAX_VECTORS) > palw_certification_min_fee_v1(6),
+            "a drill planting the maximum pays more than one planting six"
+        );
+        assert_eq!(
+            palw_certification_min_fee_v1(PALW_CERTIFICATION_MAX_VECTORS),
+            palw_relay_fee_for_mass_v1(PALW_OBJECT_CHUNK_MAX_BYTES as u64 * PALW_OBJECT_CHUNK_MAX_COUNT as u64),
+            "at the cap the rent is the carriage of the largest object the chunk rules admit"
+        );
+        // The hole, in one line: the flat relay floor a tiny carrier pays is far under what
+        // thirty-two re-executions now cost.
+        assert!(palw_certification_min_fee_v1(PALW_CERTIFICATION_MAX_VECTORS) > palw_relay_fee_for_mass_v1(5_000));
+    }
+
+    /// **A chunk group's opener is charged the ROOM, not the bytes** (ADR-0075 SA-1).
+    ///
+    /// The griefing budget the amendment names is a one-byte chunk declaring `count = 8`: it
+    /// reserves one of eight state-root slots for eight hundred kilobytes over ~5.5 days and used
+    /// to pay the flat floor for it. The rent is the same whatever the opener's own size, and it is
+    /// what a full group's carriage costs.
+    #[test]
+    fn opening_a_chunk_group_rents_the_room_it_reserves() {
+        assert_eq!(
+            palw_object_chunk_group_rent_v1(PALW_OBJECT_CHUNK_MAX_COUNT),
+            palw_relay_fee_for_mass_v1(PALW_OBJECT_CHUNK_MAX_BYTES as u64 * PALW_OBJECT_CHUNK_MAX_COUNT as u64)
+        );
+        assert!(
+            palw_object_chunk_group_rent_v1(PALW_OBJECT_CHUNK_MAX_COUNT) > palw_object_chunk_group_rent_v1(1),
+            "a group that reserves eight parts costs more than one that reserves one"
+        );
+        // What the amendment measured: the whole table, held with junk, used to cost eight flat
+        // floors. It now costs the carriage of everything it is holding.
+        let junk_table = palw_object_chunk_group_rent_v1(PALW_OBJECT_CHUNK_MAX_COUNT) * PALW_OBJECT_CHUNK_MAX_GROUPS as u64;
+        assert!(junk_table > 250_000 * PALW_OBJECT_CHUNK_MAX_GROUPS as u64 * 30);
     }
 
     #[test]
