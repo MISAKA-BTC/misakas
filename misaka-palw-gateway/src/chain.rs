@@ -126,8 +126,16 @@ impl ChainFacts {
         None
     }
 
+    /// Were these facts actually READ? A source with no node, and a node that could not be
+    /// reached, are both "I do not know" — and the second one is the trap: a failed read leaves
+    /// every gate at its `false` default, which reads exactly like a chain that answered no.
+    fn known(&self) -> bool {
+        self.live && self.read_error.is_none()
+    }
+
     /// What `/health` says. All four names appear in every answer, including the unknown one —
-    /// a field that disappears when it is unknown is a field an operator reads as fine.
+    /// a field that disappears when it is unknown is a field an operator reads as fine, and a
+    /// `false` where the truth is "unreachable" is a field an operator acts on wrongly.
     pub fn health_json(&self) -> serde_json::Value {
         serde_json::json!({
             "source": self.source,
@@ -135,11 +143,11 @@ impl ChainFacts {
             "read_error": self.read_error,
             "chain_point": self.chain_point,
             "daa_score": self.daa_score,
-            "registered": if self.live { serde_json::json!(self.registered) } else { serde_json::json!("unknown") },
-            "fp_certified": if self.live { serde_json::json!(self.fp_certified) } else { serde_json::json!("unknown") },
-            "bond_active": if self.live { serde_json::json!(self.bond_active) } else { serde_json::json!("unknown") },
+            "registered": if self.known() { serde_json::json!(self.registered) } else { serde_json::json!("unknown") },
+            "fp_certified": if self.known() { serde_json::json!(self.fp_certified) } else { serde_json::json!("unknown") },
+            "bond_active": if self.known() { serde_json::json!(self.bond_active) } else { serde_json::json!("unknown") },
             "bond_not_ready_reason": self.bond_not_ready_reason,
-            "exposure_room": if self.live { serde_json::json!(self.exposure_room_sompi) } else { serde_json::json!("unknown") },
+            "exposure_room": if self.known() { serde_json::json!(self.exposure_room_sompi) } else { serde_json::json!("unknown") },
             "bond_collateral": self.bond_collateral,
             "chain_claim_exposure_sompi": self.claim_exposure_sompi,
             "fp_quanta_per_canonical_job": self.fp_quanta_per_canonical_job,
@@ -369,6 +377,16 @@ mod tests {
         for name in ["registered", "fp_certified", "bond_active", "exposure_room"] {
             assert_eq!(health[name], serde_json::json!("unknown"), "{name} must be present and honest");
         }
+        // A node that could not be REACHED is the same unknown, and this is the trap: a failed
+        // read leaves every gate at its `false` default, which reads exactly like a chain that
+        // answered no. An operator would go looking for a certification they already have.
+        let unreachable = ChainFacts { read_error: Some("connection refused".into()), ..certified() };
+        let health = unreachable.health_json();
+        for name in ["registered", "fp_certified", "bond_active", "exposure_room"] {
+            assert_eq!(health[name], serde_json::json!("unknown"), "{name} is unknown when the node could not be read");
+        }
+        assert!(unreachable.commit_refusal().unwrap().contains("could not be read"), "and the refusal says which");
+
         // And the live form answers all four with real values, which is what Decision 3 asks for.
         let health = certified().health_json();
         for name in ["registered", "fp_certified", "bond_active"] {
