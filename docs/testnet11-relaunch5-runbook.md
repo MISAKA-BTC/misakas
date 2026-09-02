@@ -217,6 +217,12 @@ roots, the A16 inventory-root pin and the genesis hash (`08e9c8a4…`) are uncha
 fingerprint move on the same genesis, which the handshake still treats as a different network:
 every node wipes, exactly as 5c.
 
+**Pre-check done 03:20 CEST**: this session re-derived the value from the peer's tip `9d038706` in
+an isolated detached worktree with its own target dir — `shipped_presets_have_pinned_fingerprints`
+ok, pinned testnet-11 `f6afe2e2…` / devnet `fd041c40…`, the A16 inventory-root pin present and
+`a16_root_probe` green. Step (2) below is therefore already satisfied *if* the pushed commit is
+`9d038706`; any other commit is re-derived again.
+
 **5d go/no-go gate** (all three, in order): (1) the user merges/pushes the tree and says when;
 (2) this session re-derives the fingerprint from the pushed commit in an isolated worktree and it
 equals the value above; (3) the stop-ALL → archive → rotate the four per-genesis stores → install
