@@ -6694,13 +6694,23 @@ pub fn palw_v2_params_on_base(
     genesis_artifact_root: crate::Hash64,
     genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
 ) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
-    let mut bundle = crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+    // **The devnet preset runs the lattice in minutes** (ADR-0077 Decision 7); every other base
+    // runs testnet-11's windows. A preset property, not a flag: a node's windows are inside its
+    // ruleset id, and a drill that has to reach `Final` and spend a quantum in one session needs
+    // windows a multi-node chain can cross in a session.
+    let windows = if base.net.network_type == crate::network::NetworkType::Devnet {
+        &crate::palw_fp_devnet_v3::PALW_DEVNET_WINDOWS_V1
+    } else {
+        &crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1
+    };
+    let mut bundle = crate::palw_fp_devnet_v3::palw_fp_bundle_with_windows_v3(
         base_class_id,
         class_catalog_root,
         court_catalog_root,
         genesis_pwu_per_inference,
         genesis_artifact_root,
         genesis_bonds,
+        windows,
     )?;
     // **The free-prompt lane bears weight only on a certified class** (ADR-0074 Decision 6): a
     // shipped preset always carries the drilled set, so the gate is never absent on a network
@@ -8372,7 +8382,7 @@ mod consensus_params_id_tests {
             // is a deliberate no-op there and the interval is `bits`' job — so what this buys is
             // the ROOM above the floor that a model tier registering later needs, which is the
             // same reason mainnet's floor-only mint is seeded rather than left at half the space.
-            ("devnet", DEVNET_PARAMS, "ecb408a97e183c8edf6922c20bb5aa8a2c482c9dddcdfcdf213d2ece4727358a"),
+            ("devnet", DEVNET_PARAMS, "84153175ce88050495c96e7d906fb4398b11eda187d5dc59e8b61c9dc54f0215"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

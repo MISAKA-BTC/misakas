@@ -192,6 +192,7 @@ pub mod palw_fp_admission_v3;
 pub mod palw_fp_beacon_v3;
 pub mod palw_fp_devnet_v3;
 pub mod palw_fp_execution_v3;
+pub mod palw_fp_interval_v1;
 pub mod palw_fp_objects_v3;
 pub mod palw_freeprompt_v3;
 pub mod palw_genesis_v2;

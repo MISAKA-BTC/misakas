@@ -48,6 +48,18 @@ pub const PALW_FP_V3_L1_TAG_BYTES: usize = PALW_ATTEMPT_V2_L1_TAG_BYTES;
 /// here — a mode this module does not understand must not certify, because certification is a
 /// promise the panel can replay from chain data alone.
 pub const PALW_FP_PRIVACY_PUBLIC_DA: u8 = 1;
+/// **`PanelDa` — privacy mode 2 (ADR-0077 Decision 16): the prompt ids travel with the capture
+/// the executor serves to its panel, never in the commitment transaction.** The job still carries
+/// `prompt_token_ids_hash`; a seat checks `H(ids) == prompt_token_ids_hash` before it reads
+/// anything else and files `Valid` only for a claim whose ids it holds; withholding is the
+/// two-sided quorum's `ProducerDefaulted` arm; a court close that addresses a gather carries the
+/// ids as it does now, so a disputed prompt becomes public. *Private unless disputed* — five seats
+/// see the prompt, a dispute publishes it, and nothing here is confidentiality.
+///
+/// Admission refuses this mode until the ruleset move that carries its rules
+/// (`PalwFreePromptParamsV3::panel_da_enabled`), exactly as the worker refuses every non-PublicDA
+/// mode today: a mode the panel cannot replay must not execute.
+pub const PALW_FP_PRIVACY_PANEL_DA: u8 = 2;
 
 pub const PALW_FP_V3_DOMAIN_JOB_ID: &[u8] = b"misaka-palw/fp-v3/job-id/v1";
 /// **v2, because the commitment gained `execution_root`.** The golden-vector rule this module
@@ -912,12 +924,29 @@ impl PalwReceiptSpendEnvelopeV3 {
 /// The two arms differ only in where tokenization happens; after it, the execution — and
 /// therefore the trace — is one code path, which is what makes text-in and ids-in equality a
 /// property a smoke test can pin rather than a hope.
+/// One segment of a segment-wise chat prompt (ADR-0077 Decision 6).
+///
+/// The gateway emits the model's control tokens as `Special` ids it read off the worker's
+/// manifest (`PalwFpWorkerManifestV1::special_tokens`), and the user's text as `Text` bytes; the
+/// worker encodes every `Text` segment with special-token parsing DISABLED and concatenates the
+/// two as ids. Untrusted text can therefore never smuggle a control token, and the model sees the
+/// template it was trained on. Consensus sees ids only, so this is executor-side.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwFpPromptSegmentV1 {
+    Special(u32) = 0,
+    Text(Vec<u8>) = 1,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum PalwFpWorkerInputV3 {
     Text(Vec<u8>) = 0,
     TokenIds(Vec<u32>) = 1,
+    /// The segment-wise chat arm (ADR-0077 Decision 6): see [`PalwFpPromptSegmentV1`].
+    Segments(Vec<PalwFpPromptSegmentV1>) = 2,
 }
 
 /// The v3 job request: every field of the eventual [`PalwFreePromptJobV3`] the worker cannot
@@ -1090,6 +1119,70 @@ impl PalwFpWorkerResultV3 {
             trace_retention_daa,
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The resident worker (ADR-0077 Decision 1, `--mode v3-serve`): one artifact mapping, one
+// manifest handshake, then the SAME request/result frames over a persistent stream.
+// ---------------------------------------------------------------------------------------------
+
+/// The worker mode a gateway keeps resident: the artifact is mapped once, the manifest is the
+/// first frame out, and every job after it is one [`PalwFpWorkerRequestV3`] frame in and a run of
+/// [`PalwFpWorkerFrameV1`]s out, ending in exactly one `Result` or `Refused`.
+pub const PALW_FP_WORKER_MODE_SERVE_V3: &str = "v3-serve";
+/// The one-shot form the drills and the replay arm use: one request frame in, one bare
+/// [`PalwFpWorkerResultV3`] frame out, process exit.
+pub const PALW_FP_WORKER_MODE_JOB_V3: &str = "v3-job";
+pub const PALW_FP_WORKER_MODE_MANIFEST_V3: &str = "v3-manifest";
+pub const PALW_FP_WORKER_MANIFEST_V1_VERSION: u16 = 1;
+
+/// **What a worker IS, stated once per process** (the `v3-manifest` answer, as a frame).
+///
+/// The identity pins a request must match, the width the class registers (`n_ctx`, read from the
+/// catalog row and never from the artifact's rotary span — a runtime that answered wider than the
+/// court admits would be exactly the two-products split ADR-0077 R0 exists to close), and the
+/// control-token ids a gateway needs to build a segment-wise prompt.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpWorkerManifestV1 {
+    pub version: u16,
+    /// The catalog model id this worker serves (e.g. `Qwen/Qwen2.5-1.5B/graph-v2`).
+    pub model_id: String,
+    pub class_id: Hash64,
+    pub model_profile_id: Hash64,
+    pub runtime_manifest_hash: Hash64,
+    pub runtime_class_id: Hash64,
+    pub shape_profile_id: Hash64,
+    pub trace_scheme_id: Hash64,
+    pub tokenizer_id: Hash64,
+    /// The class's registered context: prompt + answer, total.
+    pub n_ctx: u32,
+    pub prefill_single_batch_cap: u32,
+    pub vocab: u32,
+    /// The model's special tokens by their tokenizer names (`<|im_start|>`, `<|im_end|>`,
+    /// `<|endoftext|>`, …), so a gateway builds [`PalwFpPromptSegmentV1::Special`] from names and
+    /// never from ids it guessed.
+    pub special_tokens: Vec<(String, u32)>,
+    /// The ids at which generation ENDS for this model — the display stop. The execution still
+    /// runs to the job's declared budget (the step leaves bind the executed count before the first
+    /// leaf is hashed), so the commitment covers every executed token and the answer ends here.
+    pub eog_token_ids: Vec<u32>,
+}
+
+/// One frame a `v3-serve` worker writes. Per accepted request: zero or more `Token`s in decode
+/// order, then exactly one `Result`; a request the worker will not run is answered with exactly
+/// one `Refused` and the worker stays up — one bad job must not drop a resident artifact.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwFpWorkerFrameV1 {
+    /// The first frame of a serve session, once.
+    Manifest(PalwFpWorkerManifestV1) = 0,
+    /// One generated id as soon as it is selected (ADR-0077 Decision 2 — the answer streams; the
+    /// commitment does not). `rendered` is this id's rendering alone; the gateway re-renders the
+    /// committed ids at completion and refuses a stream that does not match them.
+    Token { token_id: u32, rendered: Vec<u8> } = 1,
+    Result(Box<PalwFpWorkerResultV3>) = 2,
+    Refused { reason: String } = 3,
 }
 
 // ---------------------------------------------------------------------------------------------

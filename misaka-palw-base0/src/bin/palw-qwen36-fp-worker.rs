@@ -218,6 +218,8 @@ fn run_job(trace_out: PathBuf) {
             }
             ids.clone()
         }
+        // ADR-0077 Decision 6 (P-06): the segment-wise arm is encoded by the worker library.
+        PalwFpWorkerInputV3::Segments(_) => die("v3-job rejected: the segments arm is not wired on this worker yet".into()),
     };
     if let Some(bad) = prompt_ids.iter().find(|t| **t >= loaded.vocab) {
         die(format!("v3-job rejected: token id {bad} is outside the model's vocab ({})", loaded.vocab));
