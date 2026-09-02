@@ -1,6 +1,35 @@
 # ADR-0081: Long context — the input is a state chain
 
-**Status:** PROPOSED (2026-09-03). ADR-0080 separated the length of an ANSWER from the width of a
+**Status: REFUTED IN PART, 2026-09-03, before any of it was implemented**, together with ADR-0080,
+whose mechanism it builds on — see that ADR's status block for the three findings. Two things here
+survive and one is this ADR's own error, recorded because the error is more instructive than the
+proposal:
+
+* **§1.2 stands and is the most useful thing in this document.** `prompt_token_ids_hash_v2` really
+  is a flat digest (`palw_v2.rs:521`), a flat digest really cannot be opened, and the `n_ctx × 4`
+  term really does ride every node. Decision 3 — make it a Merkle root — is worth doing on its own
+  merits, independently of segmentation, because it lowers the close cost of EVERY long-context
+  design including the ones that replace this one.
+* **§1.3 IS WRONG, and it was this author's error, stated confidently.** It claims the state chain
+  "already exists and is already enforced" and cites `prev_checkpoint_leaf_hash` and
+  `palw_step_leg.rs:1215`. The chain exists — INSIDE ONE CLAIM. `checkpoint_genesis_prev_v2`
+  derives the chain's genesis link from `job_context_hash` ALONE (`palw_step_leg.rs:627`), and
+  `verify_kv_anchor` is intra-claim in every one of its checks: it requires
+  `covered_decode_call == disputed_call − 1` exactly and compares roots keyed to THIS claim's
+  context (`palw_step_refute.rs:3390`, `:3409`). So the machinery is built to bind a chain to one
+  claim and to forbid grafting it across claims — the precise opposite of what Decision 2 needed
+  from it, which made Decision 2 look far cheaper than it is.
+
+The second bullet is the mirror of the mistake §1.3 was written to prevent. This document warns, in
+that same section, that "a thing recorded as missing that the code already holds sends the next
+reader to rebuild it" — and then made the opposite error, recording as held a thing that holds
+something narrower. Both directions cost the same, and the check that catches both is the same one:
+read what the mechanism BINDS, not just that it exists.
+
+**Do not implement §3 as written.** Decision 3 (Merkle prompt ids) may be lifted out and pursued
+alone; everything that depends on a cross-claim chain waits for a successor to ADR-0080.
+
+**Original status:** PROPOSED (2026-09-03). ADR-0080 separated the length of an ANSWER from the width of a
 verified unit: a long generation became a chain of short decode segments, each binding its
 predecessor's committed state. This ADR does the symmetric thing for the PROMPT, and it is not a
 copy of ADR-0080 with the arrow reversed — prefill is not decode, and the difference is where the

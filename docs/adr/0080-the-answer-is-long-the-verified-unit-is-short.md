@@ -1,6 +1,41 @@
 # ADR-0080: The answer is long; the verified unit is short
 
-**Status:** PROPOSED (2026-09-03). Written against a measurement that closed a door, and against the
+**Status: REFUTED IN PART, 2026-09-03, before any of it was implemented.** §1's measurement stands
+and is the best statement of the 512 wall this project has; Decision 3's economic invariant stands
+and is worth keeping whatever replaces this. The MECHANISM — one answer as N claims — does not
+survive three findings, each verified against the code by a second reader and then by this ADR's
+own author:
+
+* **A derivation cannot name a multi-claim answer, and that is fatal to the acceptance condition.**
+  `PalwDerivedArtifactV1` carries a singular `claim_id` and a singular `output_root`, whose doc
+  comment is "MUST equal the claim's committed `output_root` — a cross-check, not a second source"
+  (`palw_derived_v1.rs:107-124`), and the transition enforces it. And `output_commitment_v2`
+  (`palw_v2.rs:890`) is a FLAT keyed hash — `job_context_hash ‖ ids ‖ rendered_hash` under one
+  domain key — so no id can be opened from it and no concatenation relation between two claims'
+  output roots is checkable, because each is keyed to a DIFFERENT `job_context_hash`. "The answer
+  is the concatenation of N segments" is therefore not a statement this chain can verify, and
+  ADR-0078's leg does not survive segmentation as drafted.
+* **`fp_work_id_v1` refuses segmented claims outright.** It is keyed on `(class_id,
+  prompt_token_ids_hash, decode_tokens_executed, executor_bond)` with no state and no parent
+  (`palw_freeprompt_v3.rs:286-299`), so the second segment of one prompt is `DuplicateWork`.
+* **The per-CLAIM costs make it more expensive than the carrier it exists to respect.** Decision 3
+  is right that the FP quanta and the quantum ticket are per-leaf and neutral. Everything else that
+  pays or weighs is per-claim or per-block: exposure reserves a flat `pwu_per_inference` per claim
+  regardless of leaves executed, the panel is five seats and three receipts per claim, the epoch
+  budget is per block, `PALW_DERIVED_MAX_PER_CLAIM` is four per claim. A 37-segment answer is 37
+  panels and 111 ML-DSA-87 receipts at 4,627 bytes — about **514 KB of signatures for one answer**.
+* **The cost of the parent field is a re-mint, not a fence.** A `parent` in `PalwJobContextV2`
+  changes `context_hash`'s preimage, which carries `PALW_TRACE_COMMITMENT_VERSION_V2`, so every
+  class id, every trace root and every checkpoint leaf moves. That is a new trace-commitment
+  version.
+
+**What this ADR is now for:** §1 is the motivation any successor needs, and Decision 3's invariant
+is the requirement any successor must satisfy. Do not implement §3 as written. The measurement this
+ADR should have asked for FIRST is not latency — it is whether a derivation can name a multi-claim
+answer at all, because if it cannot, segmentation buys long output at the price of the artifact leg,
+which is half of what it was for.
+
+**Original status:** PROPOSED (2026-09-03). Written against a measurement that closed a door, and against the
 observation that the door was the wrong one to be pushing on. ADR-0077 Decision 13 planned a context
 ladder of 512 → 2,048 → 8,192 positions per family, each rung a registered class. The first rung is
 not admissible and no compression reaches it (§1). This ADR does not make 512 fit. It removes the
