@@ -1001,6 +1001,7 @@ mod tests {
                     // the anchoring itself.
                     path_from_ladder: true,
                     count_ids: true,
+                    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                 },
             )
             .expect("derives")
