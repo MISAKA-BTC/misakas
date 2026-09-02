@@ -356,9 +356,23 @@ mod tests {
     use crate::palw_state_v2::{PalwClassStateV2, PalwClassStatusV2, PalwPwuRuleV2, palw_exposure_pwu_v1};
     use kaspa_hashes::Hash64;
 
-    /// testnet-11's shipped free-prompt price, read from `palw_fp_devnet_v3`'s own constants
-    /// through the bundle rather than retyped: a quantum is an eighth of the class's canonical
-    /// job and a receipt draws at most 64 of them.
+    /// **The shipped free-prompt params**, fetched from a preset this repo actually ships rather
+    /// than retyped here. `palw_fp_devnet_v3`'s `FP_QUANTA_PER_CANONICAL_JOB` and
+    /// `MAX_QUANTA_PER_RECEIPT` are private to that module, so the bundle is the supported way to
+    /// read them — and reading them is the point: every band edge this census measures is a
+    /// function of these two numbers, so typing them in by hand would let a re-priced network
+    /// leave the whole census silently wrong while all its tests stayed green.
+    fn shipped_fp() -> crate::palw_freeprompt_v3::PalwFreePromptParamsV3 {
+        let params = crate::config::params::devnet_shipped_params();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("the shipped devnet preset is a ConsensusV2 bundle");
+        };
+        bundle.freeprompt.clone()
+    }
+
+    /// A quantum is an eighth of the class's canonical job and a receipt draws at most 64 of them
+    /// — asserted against [`shipped_fp`] by `the_census_quotes_the_values_the_code_actually_holds`,
+    /// so these two are a convenience for the arithmetic below and never a second source.
     const QUANTA_PER_CANONICAL_JOB: u32 = 8;
     const MAX_QUANTA_PER_RECEIPT: u32 = 64;
 
@@ -399,6 +413,13 @@ mod tests {
         assert_eq!(PALW_DERIVED_MAX_PER_CLAIM, 4, "four derivations per claim");
         assert_eq!(STAKE_ATTESTATION_SIG_LEN, 4_627, "one ML-DSA-87 signature");
         assert_eq!(PALW_V2_MAX_PAYOUTS_PER_BLOCK, 8, "the payout queue drains eight claims per block");
+
+        // **The two numbers every band edge in this census is a function of.** Read from a
+        // shipped preset, not retyped: if a network re-prices free-prompt quanta, the cap edge
+        // this census calls "the direction that matters" moves with it, and this is what says so.
+        let fp = shipped_fp();
+        assert_eq!(fp.quanta_per_canonical_job(), QUANTA_PER_CANONICAL_JOB, "a quantum is an eighth of the canonical job");
+        assert_eq!(fp.max_quanta_per_receipt(), MAX_QUANTA_PER_RECEIPT, "and a receipt draws at most 64 of them");
         assert_eq!(crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.fp_abandon_hold, 600, "the RC abandon hold, in DAA");
         assert_eq!(
             crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.max_claim_exposure_daa(),
@@ -842,15 +863,39 @@ mod tests {
         assert_eq!(cost.seat_interval_replays, 37 * single.seat_interval_replays);
     }
 
-    /// The helper this module prices with is the transition's own arithmetic, taken from
-    /// `apply_free_prompt` (`palw_state_v2.rs:6808-6814`). If the transition ever prices a claim
-    /// differently, every number above is wrong — so the equality is asserted rather than assumed.
+    /// **The helper this module prices with is pinned to the shipped derivation, not to itself.**
+    ///
+    /// This test used to re-spell `price`'s own body inline and assert the two matched, which is
+    /// a tautology: it would have stayed green through any drift in the code it claimed to track.
+    /// It now compares against [`crate::palw_freeprompt_v3::PalwFreePromptParamsV3::derive_quanta_and_pwu`]
+    /// on the SHIPPED params — the method whose own doc calls it "the derivation the transition
+    /// runs (ADR-0074 Decision 5), exposed so a builder or a seat can ask the same question before
+    /// the chain does". That method independently spells all three steps this module depends on:
+    /// the quantum, the floored-and-capped quanta, and `pwu = quanta × quantum`.
+    ///
+    /// It also carries the sub-quantum floor as `None`, which is `apply_free_prompt`'s
+    /// `ZeroQuanta` refusal (`palw_state_v2.rs:6810`) — so the band's lower edge is checked here
+    /// against shipped code rather than asserted from a citation.
+    ///
+    /// **What is still not pinned**, and is named in the module's gaps: `apply_free_prompt` itself
+    /// is not called, so the step from `pwu` to `reserved = pwu × slash_value_per_pwu`
+    /// (`palw_state_v2.rs:6831`) is read off the cited line. A transition-level test would close
+    /// that and belongs in `palw_state_v2`'s own suite.
     #[test]
-    fn the_price_here_is_the_transitions_price() {
-        for (leaves, pwu_per_inference) in [(1_600u64, 1_600u64), (7, 160), (51_200, 1_600), (1, 3)] {
-            let quantum = fp_class_quantum_leaves_v1(pwu_per_inference, QUANTA_PER_CANONICAL_JOB);
-            let quanta = fp_quanta_v3(leaves, quantum, MAX_QUANTA_PER_RECEIPT);
-            assert_eq!(price(leaves, pwu_per_inference), (quanta, quantum, quanta as u64 * quantum));
+    fn the_price_here_is_the_shipped_derivations_price() {
+        let fp = shipped_fp();
+        for (leaves, pwu_per_inference) in [(1_600u64, 1_600u64), (7, 160), (51_200, 1_600), (1, 3), (199, 1_600), (12_800, 1_600)] {
+            let (quanta, quantum, pwu) = price(leaves, pwu_per_inference);
+            match fp.derive_quanta_and_pwu(leaves, pwu_per_inference) {
+                Some((shipped_quanta, shipped_pwu)) => {
+                    assert_eq!(quanta, shipped_quanta, "quanta for {leaves} leaves");
+                    assert_eq!(pwu, shipped_pwu, "pwu for {leaves} leaves");
+                    assert_eq!(pwu, quanta as u64 * quantum, "and pwu is quanta x quantum, as the transition writes it");
+                }
+                // The sub-quantum floor: the shipped derivation returns `None` exactly where
+                // `apply_free_prompt` raises `ZeroQuanta`, and where this module prices 0.
+                None => assert_eq!(quanta, 0, "{leaves} leaves is sub-quantum and the chain refuses it"),
+            }
             // And the class's rule answers the leaf count the transition feeds the quantum.
             assert_eq!(class(pwu_per_inference, 5).pwu_rule.canonical_leaves_v1(), pwu_per_inference);
         }
