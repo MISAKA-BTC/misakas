@@ -24,6 +24,8 @@ model), ADR-0028 (sampling decides nothing; only the court convicts).
 non-streaming); the "streaming" and "encrypted prompts" rows of ADR-0044's *not decided* list;
 ADR-0073 Phase ① 1e (a seat hashes the whole capture), on the free-prompt lane.
 
+> **Security amendment appended (2026-09-02)** — see the last section (SA-1…SA-7): a public gateway spends the operator's exposure and the spend is bounded; interval openings are served to bonded requesters only; F1 covers the prompt side of the stream; the turn deadline is derived, not chosen; `PanelDa`'s enforcement is a licence until ADR-0062 lands; the persistent runtime re-verifies what it mapped.
+
 ## 1. What was measured
 
 The three classes testnet-11 registers, read off `canonical_classes_v1` /
@@ -450,3 +452,49 @@ implemented, whatever else has landed.
 
 This is ADR-0077; ADR-0076 is the last committed on `main`. A concurrent claimant of 0077 renumbers
 the later writer, per ADR-0036 Decision 5.
+
+## Security amendment (2026-09-02) — hardening before Phases A–D are built
+
+**SA-1 — A public gateway spends the operator's exposure, and the spend is bounded.** Under
+Decision 4 a stranger's prompt becomes the operator's claim: it reserves `claim_exposure` on the
+bond and, if the pipeline is faulty, forfeits it. Rules: (a) a per-source quota and a global
+public-job budget expressed as a fraction of the bond's exposure room, so the operator's own claims
+are never starved; (b) a queued commitment expires with its anchor and is never submitted stale;
+(c) the operator may mark a source class "answer, never commit"; (d) the loss bound is stated in
+the gateway's own `/health`: at most `claim_exposure` per claim and at most the exposure ceiling
+ratio of collateral in flight (`FreePromptExposureCeiling`, 500‰ on the RC).
+
+**SA-2 — Interval openings are served to bonded requesters only, bounded and rate-limited.**
+Decision 8 turns the executor into a server of openings; an unauthenticated opening endpoint is a
+bandwidth amplifier against every producer. A request carries the requester's bond key and
+signature — a seat of the claim's panel or an Active bond acting as challenger — is refused
+otherwise, is bounded to `O(interval × row + log₂ leaves)` bytes per opening, and is rate-limited
+per bond. The same rule covers `request_palw_material` today.
+
+**SA-3 — F1 covers the prompt side of the stream.** Decision 2 checks the streamed answer against
+the committed output ids; the gateway must also commit exactly the prompt ids it built (segments,
+specials, user text) and abort — no commitment — if the displayed prompt and the committed ids
+diverge. W5 is extended to both sides.
+
+**SA-4 — The turn deadline is derived, not chosen.** The implementation found Decision 12's
+"2,040" counted rounds where the shipped clock counts moves ((64 + 2) × 60 = 3,960 > 3,000) and
+proposes `court_turn_deadline` 60 → 40. A deadline is a slashing rule for the honest responder: it
+must be ≥ the worst-case honest replay of one interval on the slowest fleet host plus
+`2 × NETWORK_DELAY_BOUND`, derived and pinned per class row, and the ladder depth
+`(⌈log₂ leaves⌉ + terminal)` must fit `window_court` under that deadline — otherwise the court
+convicts by clock.
+
+**SA-5 — Decision 16's enforcement is a licence, not a punishment, until ADR-0062 lands.** With
+ADR-0065 Decision 4 armed, id withholding under `PanelDa` yields abstention → no quorum → redraw →
+timeout void without slash. The mode's disclosure text says so. And seats, gateways and workers log
+no prompt ids or text by default — "private unless disputed" is false if the default log is a
+disclosure.
+
+**SA-6 — Decision 1's persistent runtime re-verifies what it mapped.** Mapping once is the point;
+the artifact is opened read-only, its digest verified at map time (ADR-0079 Decision 9),
+re-verified when the file's identity (device, inode, size) changes, and an I/O fault on a mapped
+page is a `JobFailed`, never a crash of the supervisor or the node.
+
+**SA-7 — Decision 14's exposure growth is refused at the gateway, not discovered at the
+transition:** when a claim's `claim_exposure` would exceed the bond's room, the gateway answers and
+does not submit (Decision 4's queue), and `/health` names it.

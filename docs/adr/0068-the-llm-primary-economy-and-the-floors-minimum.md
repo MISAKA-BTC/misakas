@@ -51,6 +51,19 @@
 - Amends: testnet-11's de-facto floor-majority cadence (share table 550/200/250) and
   `min_base_class_share_permille = 100`.
 
+> **Deployed (index reconciliation, 2026-09-02).** The Status above records Phase 2 as
+> "implemented on this branch … gated on the operator's re-genesis go". The go was given: Relaunch
+> 5 shipped the LLM-primary table from genesis (`fe8a7284`), and testnet-11 has run it through
+> Relaunch 5c, 5d and 5e — floor reserve 20‰, genesis shares 489/489/22, heartbeat lane and
+> attempt-work constant armed from genesis (`palw_rc_arm_phase1`; the Phase 1 sentence "fences
+> shipped OFF everywhere but devnet" is the pre-train state). What later ADRs added on top of this
+> table: [ADR-0069](0069-e2e-adjudicability-is-the-price-of-weight.md) (a class holds that share
+> only while its family is certified end to end), [ADR-0072](0072-the-ticket-is-the-execution.md)
+> (the lottery priced in inferences, so F2's constant is compared against a per-inference draw) and
+> [ADR-0076](0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md) (each class's
+> attempt-lane target seeded from its own share and work — the 5d measurement that a shared seed
+> gave the floor 98.5 % of blocks against this table). Map: [`README.md`](README.md).
+
 ## 1. Goal
 
 Rewards AND block production come from LLM computation by default; base (model-free)

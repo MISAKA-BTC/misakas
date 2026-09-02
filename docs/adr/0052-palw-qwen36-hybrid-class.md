@@ -10,6 +10,18 @@ ADR-0039 (which forbids weight without a complete catalog), ADR-0051 (execution 
 ADR-0027/0028/0030 (the court this class does not yet reach),
 `consensus/core/src/palw_qwen36_ops.rs`, `misaka-palw-base0/src/qwen36.rs`.
 
+> **Status as of the index reconciliation (2026-09-02).** "Registers no class and activates
+> nothing … must not carry weight" is the 2026-08-26 morning state; the same-day Amendment below
+> moved `consensus_params_id` and derived the genesis-form `ClassRegistered`. Since then the class
+> has been re-described as the court-capable graph-v3 row ([ADR-0067](0067-classes-are-chain-data-kernels-are-the-build.md);
+> the registered v1 row stays liveness-admissible and unprosecutable), its step space is adjudicable
+> end to end ([ADR-0070](0070-the-model-tiers-step-spaces-are-adjudicable.md)), and it carries
+> weight on testnet-11 as a certified family ([ADR-0069](0069-e2e-adjudicability-is-the-price-of-weight.md),
+> on chain by [ADR-0075](0075-certification-is-a-consensus-object.md)). The "ADR-0051 (execution
+> families)" this file relates to was superseded the same day by [ADR-0053](0053-palw-one-execution-family.md);
+> the A16 tier it cites is [ADR-0047](0047-palw-a16-activation-tier.md), resident since 2026-09-02.
+> Map: [`README.md`](README.md).
+
 ## Context — what ADR-0040 declined, and why the bill came due
 
 ADR-0040 named the three things it was leaving out: "integerising GatedDeltaNet, interleaved

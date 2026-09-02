@@ -8,6 +8,19 @@ to make. See "What landed" at the foot of this document for exactly what is and 
 
 **Neither part is a re-mint. Both must be activations, and both must be fenced at TOP LEVEL.**
 
+> **Arming and closures after the Status line (index reconciliation, 2026-09-02).** "Both
+> dormant … ship OFF" was the 2026-08-31 state. [ADR-0068](0068-the-llm-primary-economy-and-the-floors-minimum.md)
+> arms `Params::palw_heartbeat` from genesis on testnet-11 (Relaunch 5 onward) and devnet, closes
+> Decision 3 (attempt blue work leaves `calc_work(bits)` — `Params::palw_attempt_work`, a 2²⁰
+> constant against ε = 1) and closes F3a (width bound: at most four heartbeats per mergeset, or any
+> number forming one chain — its F5 amendment). Decision 4's fence `Params::palw_inactivity_leak`
+> is still `None` everywhere and the committed table is still unbuilt. The sentence "a V2 network's
+> doctrine is to re-mint rather than schedule" is the testnet practice, not the doctrine: consensus
+> changes ship by activation (mainnet), and [ADR-0072](0072-the-ticket-is-the-execution.md) §3 records
+> the activation shape. Map: [`README.md`](README.md).
+
+> **Security amendment appended (2026-09-02)** — see the last section: Decision 4's table must be verified from the pruning-point snapshot or no leak is computed; the leak is monotone with hysteresis; it never lowers the denominator below `min_active_validators`; `t_leak_daa` enters the identity raw before arming.
+
 ## Why the first implementation failed, sorted by cause
 
 The audit recorded four findings. Sorting them by *mechanism* rather than by symptom is what makes
@@ -229,3 +242,25 @@ visitor, so two operators scheduling one height with different values share an i
 disagree the moment the fence fires. For the heartbeat price there is a second lock — the binary
 refuses to start if the fence names a `work_log2` it does not implement — because that value has a
 second source in `StateLayer0`. `t_leak_daa` has no second source and therefore no such lock.
+
+## Security amendment (2026-09-02) — Decision 4's committed table, before it is built
+
+**SA-1 — The table is part of the pruning-point's authenticated snapshot, and a node that cannot
+verify it computes no leak.** A pruned-IBD node derives quorum denominators from a table it did not
+compute; if that table is not committed and verified, archival and pruned nodes exclude different
+validators and the finality overlay partitions along the `--archival` flag — the F4 shape this ADR
+deleted from the heartbeat lane. Fail closed: no verified table ⇒ full denominator ⇒ no leak.
+
+**SA-2 — The leak is monotone with hysteresis.** Exclusion after `t_leak_daa` of silence;
+re-inclusion only when the validator's fresh attestation is itself final. A validator flapping
+around the threshold must not swing the quorum on a block of its choosing.
+
+**SA-3 — The leak never lowers the denominator below `min_active_validators`.** If it would,
+finality halts (no certificates) rather than continuing as a small-quorum overlay. ADR-0060
+Decision 4 accepted double-finality risk under a long partition; it did not accept a two-validator
+quorum, and the floor must be a rule.
+
+**SA-4 — Arming precondition: `t_leak_daa` (and `work_log2`) are in `consensus_params_id` raw**, not
+through the fence visitor that normalises them away — the open item above, restated as a gate. Two
+builds that peer with different `t_leak_daa` and then diverge on finality is the
+`inactivity_leak_daa` accident under a new name.
