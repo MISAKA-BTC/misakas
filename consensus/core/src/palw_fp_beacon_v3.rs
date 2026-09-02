@@ -562,10 +562,19 @@ mod tests {
     #[test]
     fn a_fold_whose_blocks_straddle_the_fence_is_still_a_fold() {
         const EXEC: u8 = crate::pow_layer0::POW_ALGO_ID_PALW_EXEC_V3;
+        // **Both walks, because production calls the other one.** `derive_beacon_fact_v3` is the
+        // truncatable walk and has no caller outside these tests; the node's walk is
+        // `derive_beacon_fact_to_genesis_v3` (processor.rs). They share the ring and the predicate
+        // but not their terminal arms, so a case proven on one is not proven on the other.
+        let both = |slot: u64, pairs: &[(u64, u8)]| {
+            let a = derive_beacon_fact_v3(slot, ATTEMPT, K3, chain(pairs));
+            let b = derive_beacon_fact_to_genesis_v3(slot, ATTEMPT, K3, chain(pairs));
+            assert_eq!(a, b, "the two walks disagree on a chain that reaches a witness below the slot");
+            a
+        };
         // Slot 100, fence somewhere in (105, 120]: 130 and 120 are post-fence attempt blocks,
         // 105 is a pre-fence one, and 95 is the predecessor witness below the slot.
-        let straddling = chain(&[(130, EXEC), (125, RECEIPT), (120, EXEC), (105, ATTEMPT), (95, ATTEMPT)]);
-        let fact = derive_beacon_fact_v3(100, ATTEMPT, K3, straddling).unwrap();
+        let fact = both(100, &[(130, EXEC), (125, RECEIPT), (120, EXEC), (105, ATTEMPT), (95, ATTEMPT)]).unwrap();
 
         // All three attempt blocks joined the fold, in ascending chain order, and the draw is
         // determined at the k-th — the same answer the same chain gives with one id throughout.
@@ -573,8 +582,7 @@ mod tests {
         assert_eq!((fact.beacon_daa, fact.prev_attempt_daa), (130, 95));
         assert_eq!(
             fact,
-            derive_beacon_fact_v3(100, ATTEMPT, K3, chain(&[(130, ATTEMPT), (125, RECEIPT), (120, ATTEMPT), (105, ATTEMPT), (95, ATTEMPT)]))
-                .unwrap(),
+            both(100, &[(130, ATTEMPT), (125, RECEIPT), (120, ATTEMPT), (105, ATTEMPT), (95, ATTEMPT)]).unwrap(),
             "the fence changed the ANSWER, not just which ids the walk recognises"
         );
         validate_beacon_fact_v3(100, &fact).expect("what the chain derived, the validator accepts");
@@ -582,14 +590,35 @@ mod tests {
         // And the failure the union prevents, stated as its own case: with only two blocks above
         // the slot once the pre-fence one is excluded, an exact-comparison walk would report a
         // short fold. The union reports a complete one.
-        let two_above = chain(&[(130, EXEC), (120, EXEC), (105, ATTEMPT), (95, ATTEMPT)]);
-        assert_eq!(derive_beacon_fact_v3(100, ATTEMPT, K3, two_above).unwrap().beacon_daa, 130);
+        assert_eq!(both(100, &[(130, EXEC), (120, EXEC), (105, ATTEMPT), (95, ATTEMPT)]).unwrap().beacon_daa, 130);
 
         // The fold still refuses to complete when the chain genuinely lacks `k` attempt blocks,
         // on either lane — the predicate widens what counts, never how many are needed.
         assert_eq!(
-            derive_beacon_fact_v3(100, ATTEMPT, K3, chain(&[(130, EXEC), (120, RECEIPT), (95, ATTEMPT)])).unwrap_err(),
+            both(100, &[(130, EXEC), (120, RECEIPT), (95, ATTEMPT)]).unwrap_err(),
             PalwBeaconDeriveV3Error::NoBeaconYet { slot: 100, needed: 3, found: 1 }
+        );
+
+        // **The genesis walk's own terminal arm, on a straddling fold — the shape Relaunch 5f
+        // actually produces.** A chain re-minted onto the execution-priced lane has no attempt
+        // block below its early slots at all, so the node's walk runs the iterator out and folds
+        // with a witness of 0. The truncatable walk cannot answer here (running out of chain is
+        // not the same fact as reaching genesis), and that asymmetry is the arm no case above
+        // reaches: every one of them ends at a block below the slot.
+        let to_genesis = chain(&[(130, EXEC), (125, RECEIPT), (120, EXEC), (105, ATTEMPT)]);
+        let young = derive_beacon_fact_to_genesis_v3(100, ATTEMPT, K3, to_genesis).unwrap();
+        assert_eq!(young.beacon_block, fp_beacon_fold_v3(&[h64(105), h64(120), h64(130)]));
+        assert_eq!((young.beacon_daa, young.prev_attempt_daa), (130, 0));
+        validate_beacon_fact_v3(100, &young).expect("a witness of 0 is below every slot");
+        assert_eq!(
+            derive_beacon_fact_v3(100, ATTEMPT, K3, chain(&[(130, EXEC), (125, RECEIPT), (120, EXEC), (105, ATTEMPT)])).unwrap_err(),
+            PalwBeaconDeriveV3Error::WalkTooShort { slot: 100 },
+            "the truncatable walk must not invent the genesis fact the other one is entitled to"
+        );
+        // And the same young chain still refuses a fold it has not produced.
+        assert_eq!(
+            derive_beacon_fact_to_genesis_v3(100, ATTEMPT, K3, chain(&[(130, EXEC), (120, EXEC)])).unwrap_err(),
+            PalwBeaconDeriveV3Error::NoBeaconYet { slot: 100, needed: 3, found: 2 }
         );
     }
 }
