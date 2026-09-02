@@ -61,9 +61,12 @@ pub struct PalwConsensusObjectV3Carrier {
 pub fn palw_fp_objects_from_accepted_txs_v3<V>(
     txs: &[Transaction],
     network_domain: Hash64,
-    // Kept on the signature so every caller still hands the walk the bundle it reads under; the
-    // price it used to derive from these params is the transition's now (ADR-0074 Decision 5).
-    _freeprompt: &PalwFreePromptParamsV3,
+    // On the signature so every caller hands the walk the bundle it reads under. The PRICE it used
+    // to derive from these params is the transition's now (ADR-0074 Decision 5); what it reads
+    // here is `panel_da_enabled` — ADR-0077 Decision 16's arming, and the reason the flag is a
+    // rule rather than a decoration. This is the layer that holds the ruleset, so this is where
+    // "is mode 2 admissible on this network" is answered.
+    freeprompt: &PalwFreePromptParamsV3,
     _accepted_block: BlockHash,
     // **The ML-DSA-87 verifier, and it is not optional.** Without it this walk turned any
     // stranger's 0x4a transaction into a claim bound to any bond outpoint it named — including the
@@ -91,7 +94,7 @@ where
         };
         // The same stateless rules a peer applies — re-run here rather than assumed, because this
         // walk must be total over whatever was accepted.
-        if payload.validate_stateless_v3(network_domain).is_err() {
+        if payload.validate_stateless_under_v3(network_domain, freeprompt).is_err() {
             out.skipped.push((id, "payload is not stateless-admissible"));
             continue;
         }
