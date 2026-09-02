@@ -685,6 +685,89 @@ mod tests {
         assert!(engine.plan_from_profile(&base).is_ok(), "the corrected profile must plan under the shipped ceiling");
     }
 
+    /// **Round-3 defect I-3: the consensus shape caps admit more than this build will
+    /// materialise, and the operator's refusal has to say which of those two happened.**
+    ///
+    /// The band the derivation test pins is measured over the three classes THIS BUILD compiles,
+    /// and classes are permissionless (ADR-0054) — so the population the ceiling actually meets is
+    /// not the population it was calibrated against. That gap is not a suspicion: this constructs a
+    /// declaration the consensus shape caps accept — `validate_shape` bounds a node's tile and
+    /// requires a non-zero width, and bounds the width nowhere — whose worst job is far inside the
+    /// leaf cap and whose one-token trace is over the ceiling.
+    ///
+    /// So the ceiling is this NODE's capacity, not a bound the gate implies. Deriving it from the
+    /// caps would put it at `PALW_STEP_MAX_LEAVES × PALW_STEP_MAX_TILE_LEN × 4` — a terabyte, which
+    /// is the "number nothing chose" problem again. What is fixed instead is the thing an operator
+    /// can act on: the refusal must not read as "this build cannot serve the registered graph",
+    /// because the graph is servable and the chain admitted it; a node with a larger ceiling runs
+    /// it, and the divergence is node-local servability, never block validity.
+    ///
+    /// This also binds the VALUE from the other side: restore the 1 GiB ceiling and the witness no
+    /// longer crosses it, so whoever moves the constant has to come here and say what the new claim
+    /// is.
+    #[test]
+    fn the_consensus_shape_caps_admit_more_than_this_build_will_materialise() {
+        use kaspa_consensus_core::palw_step::{PALW_STEP_MAX_LEAVES, PALW_STEP_MAX_TILE_LEN, worst_case_step_leaf_count_v1};
+        let (artifact, base) = tiny_class();
+        let max_position = artifact.shape.max_position as u64;
+
+        // One extra declared row, of a width no consensus cap bounds, tiled at the widest tile the
+        // court admits — so it costs 306 leaves per position and 80 MB of committed trace.
+        let mut witness = base.clone();
+        let mut wide = witness.pre_nodes.last().cloned().expect("the pre table is non-empty");
+        wide.out_len = PalwStepOutLenV1::Fixed { elements: 20_000_000 };
+        wide.tile_len = PALW_STEP_MAX_TILE_LEN;
+        wide.input_refs = vec![(witness.pre_nodes.len() - 1) as u16];
+        wide.weight_name = String::new();
+        wide.weight_dtypes = Vec::new();
+        witness.pre_nodes.push(wide);
+
+        witness.validate_shape().expect("the consensus shape caps admit this declaration");
+        let leaves = worst_case_step_leaf_count_v1(&witness).expect("…and its worst job is inside the leaf cap");
+        let trace = crate::engine_a16::interpreted_trace_bytes_v1(&witness, max_position);
+        println!("witness: {leaves} worst-case leaves (cap {PALW_STEP_MAX_LEAVES}), {trace} bytes of committed trace");
+        assert!(
+            leaves * 2 < PALW_STEP_MAX_LEAVES,
+            "the witness sits near the leaf cap ({leaves}), so the gate — not the ceiling — is what stops it and this \
+             test would be proving the opposite of what it says"
+        );
+        assert!(
+            trace > PALW_INTERPRETER_TRACE_BYTES_CEILING_V1,
+            "a shape the consensus caps admit costs {trace} bytes and this build's ceiling is \
+             {PALW_INTERPRETER_TRACE_BYTES_CEILING_V1}: if that is no longer true, the ceiling now covers everything \
+             the caps allow — say so here, and in the constant's doc, rather than leaving both claims standing"
+        );
+
+        // The plan refuses it by name, before an allocation…
+        {
+            let engine = A16Engine::new(&artifact).expect("the store resolves");
+            match engine.plan_from_profile(&witness) {
+                Err(crate::engine_a16::A16PlanErrorV1::OverMemoryCeiling { bytes, ceiling }) => {
+                    assert_eq!((bytes, ceiling), (trace, PALW_INTERPRETER_TRACE_BYTES_CEILING_V1));
+                }
+                other => panic!("the ceiling must refuse the witness, got {other:?}"),
+            }
+        }
+
+        // …and the sentence a node's operator reads says whose limit it was.
+        let refusal = match crate::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile(
+            std::sync::Arc::new(artifact),
+            b"misaka-palw-rc".to_vec(),
+            witness,
+            (1, 1),
+        ) {
+            Err(why) => why,
+            Ok(_) => panic!("this build must not materialise the witness"),
+        };
+        println!("operator sees: {refusal}");
+        assert!(refusal.contains("capacity"), "a capacity refusal must say so: {refusal}");
+        assert!(
+            !refusal.contains("cannot serve the registered graph"),
+            "the chain admitted this class and another build serves it — telling the operator this build cannot serve \
+             the graph sends them looking for software that is not missing: {refusal}"
+        );
+    }
+
     /// **ADR-0067 SA-1: the shipped ceiling is answerable to a measurement, in both directions.**
     ///
     /// The mechanism is proven by the test above — a ceiling one byte under a profile's own cost

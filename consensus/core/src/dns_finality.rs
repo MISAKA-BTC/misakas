@@ -12136,7 +12136,7 @@ mod tests {
         // A store that reaches past the far edge: covered on the step that crosses it.
         let covered: Vec<Option<u64>> = (0..=window + 1).map(|d| Some(tip_blue - d)).collect();
         assert_eq!(
-            leak_table_provenance_from_walk_v1(tip_blue, window, covered.clone()),
+            leak_table_provenance_from_walk_v1(tip_blue, window, covered),
             LeakTableProvenanceV1::SelfComputed,
             "every header from the tip to past the window's far edge is readable — this is the table"
         );
@@ -12174,14 +12174,27 @@ mod tests {
             "a store that is short at the very top leaks nobody"
         );
         // The lazy contract the caller relies on: a decided walk must not be drained, because in
-        // the processor each step is a store read.
+        // the processor each step is a `headers_store` read plus a reachability read-lock.
+        //
+        // **The fixture is deeper than the deciding step on purpose (round-3 defect I-4).** The
+        // first form of this check counted over `covered`, which holds exactly `window + 2`
+        // entries — the same number the assertion allows — so an implementation that drained the
+        // whole iterator produced exactly the expected count and this assertion could not fail
+        // either way. The walk is handed 50 blocks more than it can need now, so draining costs
+        // `window + 52` steps and the count says so.
+        let deep: Vec<Option<u64>> = (0..=window + 51).map(|d| Some(tip_blue - d)).collect();
         let mut steps = 0usize;
-        let counted = covered.iter().map(|b| {
+        let counted = deep.iter().map(|b| {
             steps += 1;
             *b
         });
         assert_eq!(leak_table_provenance_from_walk_v1(tip_blue, window, counted), LeakTableProvenanceV1::SelfComputed);
-        assert_eq!(steps, window as usize + 2, "the walk stops on the step that decides it, not at the end of the chain");
+        assert_eq!(
+            steps,
+            window as usize + 2,
+            "the walk stops on the step that decides it, not at the end of the chain — it was handed {} entries",
+            deep.len()
+        );
     }
 
     /// **ADR-0066 SA-2: exclusion is monotone, and re-entry waits for finality.**
