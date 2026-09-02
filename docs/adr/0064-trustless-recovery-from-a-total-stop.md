@@ -7,6 +7,15 @@ wrong. What it does deliver is landed and dormant: a bond becomes usable one cha
 and the pipeline stops disagreeing with the state machine about which state answers *is this bond
 registered*. Facts A and B stand on their own.
 
+> **Superseded in effect (index reconciliation, 2026-09-02).** Facts A and B stand and are cited
+> by later ADRs. The mechanism (one earlier bond lookup) is landed and dormant behind
+> `palw_bootstrap_activation`, and by this ADR's own correction does not close the deadlock. The
+> open item it left — a lane a chain that has given nothing can still produce — is answered on armed
+> presets by the heartbeat lane in [ADR-0066](0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md)'s
+> form, armed from genesis on testnet-11 and devnet by [ADR-0068](0068-the-llm-primary-economy-and-the-floors-minimum.md)
+> Phase 2, whose drill showed unattended producer re-entry over the clock. "The heartbeat lane is
+> `false` since the 2026-08-30 audit" describes the build of that day. Map: [`README.md`](README.md).
+
 ## The question
 
 If every bonded producer stops permanently, can the chain restart **without** an operator, a

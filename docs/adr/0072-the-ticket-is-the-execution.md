@@ -10,6 +10,8 @@ its bucket. Consistent with the standing doctrine that consensus changes ship by
 version, never by re-genesis: this is a version bump (`PALW_ATTEMPT_V2_VERSION` 5 → 6) and a
 coordinated upgrade, not a re-mint.
 
+> **Security amendment appended (2026-09-02)** — see the last section: the mainnet activation path §3 records must seed the new lane's targets (ADR-0076), ship the fork-id handshake before the fence, fence the version check, and prove cross-lane replay is refused by algo id.
+
 ## 1. The finding
 
 An algo-6 header enters two lotteries: the class ticket (admission item 6b, against the class's
@@ -202,3 +204,25 @@ inferences is the only kind that can be handed to real work.
 | ADR-0071 Decision 2 — `executions = tries >> k` | withdrawn: `executions = tries`; the bucket `k = 22` stands as the anchor's position field |
 | Admission item 6b in the envelope-only list | moved to `check_palw_class_lottery_v3`, called from the composed entry point |
 | The three DA fields, producer-chosen | pinned by equality at the composed entry point (`check_palw_attempt_da_pins_v1`); every family derives the manifest the consensus way |
+
+## Security amendment (2026-09-02) — the mainnet activation path, before it is built
+
+**SA-1 — The new lane is seeded, not restarted.** At the fence, every class's new-lane target is
+`attempt_target_seed_v1(share, pwu_per_inference)` from the fold at the fence (ADR-0076
+Decision 1), and the lane-filtered difficulty window starts from the pre-fence window's last `bits`,
+not from genesis bits. A window restarted from genesis is the empty-chain start burst — an issuance
+and reorg hazard on a network that cannot re-mint.
+
+**SA-2 — The fork-id handshake precedes the fence.** A node advertises `(genesis, fired fences, next
+fence)` and, past the fence height, refuses peers whose fired set differs. Without it the un-upgraded
+minority extends the old arm, refuses the majority's blocks, and neither side sees a partition —
+the silent-fork lesson this repository has already paid for. It is the precondition of any mainnet
+fence, not a follow-up ADR.
+
+**SA-3 — The version check is fenced.** §3's Decision 7 analysis found the attempt version check is
+not fence-gated. A mainnet fence requires pre-fence history validated by the old arm and post-fence
+blocks by the new, in one binary, pinned by a test that syncs a mixed history from genesis.
+
+**SA-4 — Cross-lane replay is refused by construction**: the new lane's `algo_id` enters the
+Layer-0 digest, so an attempt built for the old lottery is not a candidate in the new; a test
+asserts a valid version-5 attempt is refused after the fence by algo id, not merely by version.

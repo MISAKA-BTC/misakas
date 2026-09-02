@@ -1,4 +1,4 @@
-# ADR-0045 — PALW V2 consensus-object carriage: the registrations ride their collateral, the verdicts ride their evidence
+# ADR-0046 — PALW V2 consensus-object carriage: the registrations ride their collateral, the verdicts ride their evidence
 
 - **Status:** Accepted (2026-08-20)
 - **Relates to:** ADR-0042 (the ruleset this feeds; its Decision 5 state machine consumes
@@ -120,23 +120,29 @@ acceptance, where the record is). Replay against an already-retiring bond is a s
   signature, because a correct bind is a fact about the chain, not a claim about the sender
   (`validate_panel_bound_v2` is the acceptance check; a wrong anchor or a dead claim is a
   skip).
-- **`PALW_V2_RECEIPTS` carries `{claim, served: bool, receipts}`.** Acceptance runs
-  `validate_receipt_quorum_v2` (every receipt signature, `signed_daa` windows, `Unavailable`
-  particulars) and requires the quorum's direction to equal the declared `served` — a carrier
-  claiming "licensed" over a defaulting quorum is malformed *relative to state*, so it skips.
-  `served = true` maps to `ReceiptLicensed`, `false` to `ProducerDefaulted`; both hand the
-  transition the verdict set, because the transition prices the seats the quorum refuted
-  (audit C5's both-directions slash).
-- **`PALW_V2_COURT_OPEN` carries `{claim, challenger_bond, challenger_signature}`** — the
-  signature over `H(domain ‖ claim ‖ challenger_bond)` under the challenger bond's executor
-  key. A challenge names the stake that backs it (ADR-0042 Decision 8: refuted challengers are
-  slashed), so it must be the staker's own act. `session_id` is **derived**:
-  `H(domain ‖ claim ‖ challenger_bond)` — one open session per (claim, challenger) pair, a
-  duplicate is a stateful skip (`DuplicateSession` is unreachable by construction).
-- **`PALW_V2_COURT_CLOSE` carries `{session_id, verdict, proof}`.** The proof is the court
-  module's terminal object (the one-step adjudication of ADR-0030/0033, C3's
-  `check_execution_root_binding` included); acceptance verifies it and skips a carrier whose
-  verdict its proof does not establish. Timeout defaults are NOT carried (Decision 1) — a
+- **`PALW_V2_RECEIPTS` carries `{claim, receipts}` and declares no direction.** Acceptance runs
+  `validate_receipt_quorum_v2` (every receipt signature under the seat bond's registry key,
+  `signed_daa` windows, `Unavailable` particulars, one answer per seat) and the quorum it
+  returns IS the direction: `Licensed` maps to `ReceiptLicensed`, `ProducerUnavailable` to
+  `ProducerDefaulted` — the two are provably disjoint (`2·quorum > seat_count`), so nothing is
+  left for a declaration to add except a chance to contradict the derivation. Both objects hand
+  the transition the seat-verdict set, because the transition prices the seats the quorum
+  refuted (audit C5's both-directions slash).
+- **`PALW_V2_COURT_OPEN` carries `{claim, challenger_bond, space, space_size,
+  challenger_signature}`** — the signature over
+  `H(domain ‖ claim ‖ challenger_bond ‖ space ‖ space_size)` under the challenger bond's
+  executor key: a challenge names the stake that backs it (ADR-0042 Decision 8: refuted
+  challengers are slashed) AND the dispute shape it commits to, so a relayer cannot re-mount
+  one signature onto a different bisection space. `session_id` is **derived** — it is
+  `court_session_id_v2(claim, claim.trace_root, executor_bond, challenger_bond, space,
+  space_size)`, whose extra inputs come from the candidate state, which is why the carrier does
+  not carry it (`validate_court_opened_v2` is the acceptance check; a lapsed window, a missing
+  challenger or a self-challenge is a skip).
+- **`PALW_V2_COURT_CLOSE` carries `{session_id, proof}` and NO verdict.**
+  `adjudicate_court_close_v2` returns the only verdict the proof supports (the terminal
+  arithmetic adjudication of ADR-0030/0033, C3's `check_execution_root_binding` included), and
+  the transition is handed `CourtClosed` with THAT verdict — never one the object announced. A
+  proof that does not adjudicate is a skip. Timeout defaults are NOT carried (Decision 1) — a
   session nobody closes is closed by the deadline sweep.
 
 ## Decision 5 — order is acceptance order
@@ -166,15 +172,21 @@ state per ADR-0043).
 
 - The **bytes of `PALW_V2_BOND_BURN_SPK`** and the spend gate's wiring — they land with the
   acceptance seam, which owns UTXO rules.
-- The **court proof's exact wire struct** — the court module owns its terminal object; this
-  ADR fixes only that the CLOSE carrier presents it and acceptance verifies it.
+- The **court proof's future proof classes** — `PalwCourtVerdictProofV2` is the court module's
+  own enum (today: `Arithmetic { refutation, operand_openings }`); the CLOSE carrier presents
+  whatever variants that enum grows, and acceptance verifies them through
+  `adjudicate_court_close_v2`. This ADR fixes the carriage, not the proof taxonomy.
 - Any **runtime class lifecycle** — a governance ADR allocates its own kinds.
 - **Relay/mempool policy** for the band (standardness, RBF-adjacent races) — policy, not
   consensus; the skip semantics above make every policy outcome safe.
 
 ## Number hygiene
 
-0043 was claimed the same day by the parallel session (`palw-v2-state-root-ordering` — read
-before numbering, per ADR-0036 Decision 5). 0044 is committed on the `palw-freeprompt-v3`
-branch (free-prompt PALW) and is left to it; this record takes 0045 so neither merge direction
-renumbers anybody.
+This record briefly shipped as ADR-0045 and was renumbered the same day, by its own rule.
+0043 was claimed hours earlier by a parallel session (`palw-v2-state-root-ordering`), 0044 is
+committed on the `palw-freeprompt-v3` branch (free-prompt PALW), and 0045 — checked against
+committed branches at numbering time, then claimed at 17:56 by a THIRD parallel lane
+(`palw-cross-class-v1`, `palw-class-economy-on-chain`) nineteen minutes before this record's
+first commit at 18:15. ADR-0036 Decision 5 breaks the tie by timestamp: the later writer
+renumbers, and that is this record — now 0046. (Two commits on this branch, `aebb5b24` and
+`c1425406`, say "ADR-0045" in their immutable messages; they mean this record.)
