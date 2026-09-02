@@ -676,22 +676,40 @@ PY
   [ "$REG_BOND" -lt 6 ] || die "NODES=$NODES leaves no free devnet genesis bond for the registrar (there are 6: consensus/core/src/config/premine.rs, PALW_DEVNET_GENESIS_BONDS). Run with NODES<=5."
   REG_ADDR="$("$CLI_BIN" --network devnet key address --key-file "$WORK_DIR/keys/bond-$REG_BOND.seed" | tail -1 | awk '{print $NF}')"
   [ -n "$REG_ADDR" ] || die "cannot derive the registrar bond $REG_BOND address"
+  # **And it runs in the BACKGROUND, because it never exits.** `class_registration_done` sets a
+  # flag and the panel loop carries on being a panel (`palw_panel.rs`); there is no shutdown after
+  # a successful registration. A drill that waits for the process is waiting for something that
+  # will not happen — measured here: the registration reached a block at 06:00:24 and the process
+  # was still running five minutes later. So the drill waits for the LOG LINE the panel prints
+  # when it has seen its own carrier on the chain, and then stops the registrar: its job is done
+  # and a fourth node mapping a 1.7 GiB artifact is not free.
   log "registering $MODEL_ID from the artifact (as bond $REG_BOND, the outside operator)"
-  if ! MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-reg" \
+  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-reg" \
         --rpclisten-borsh=127.0.0.1:17830 --nogrpc --nodnsseed --disable-upnp \
         --connect=127.0.0.1:16430 --utxoindex --palw-panel \
         --palw-register-class="$MODEL_ID" --palw-class-artifact="$MISAKA_PALW_ARTIFACT" \
         --palw-producer-key="$WORK_DIR/keys/bond-$REG_BOND.seed" --palw-producer-pay-address="$REG_ADDR" \
         --palw-producer-bond="$PREMINE_TXID:$REG_BOND" \
         --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + REG_BOND))" \
-        >"$WORK_DIR/register-class.log" 2>&1; then
-    tail -30 "$WORK_DIR/register-class.log" >&2
-    die "registering $MODEL_ID failed — see $WORK_DIR/register-class.log"
-  fi
+        >"$WORK_DIR/register-class.log" 2>&1 &
+  reg_pid=$!
+  pids+=("$reg_pid")
+  reg_deadline=$((SECONDS + STEP_WAIT))
+  until grep -q "class registration in tx .* is on the chain" "$WORK_DIR/register-class.log" 2>/dev/null; do
+    if ! kill -0 "$reg_pid" 2>/dev/null; then
+      tail -30 "$WORK_DIR/register-class.log" >&2
+      die "the registrar exited before its registration reached the chain — see $WORK_DIR/register-class.log"
+    fi
+    [ $SECONDS -lt $reg_deadline ] || { tail -30 "$WORK_DIR/register-class.log" >&2; die "the class registration did not reach the chain within ${STEP_WAIT}s"; }
+    sleep 5
+  done
+  # The lifecycle line the CHAIN printed, not the panel's own report of its mempool receipt: the
+  # panel's "submitted" is a mempool acceptance, and an object can die inside a block that stands.
+  all_nodes_logged "PALW lifecycle carried.*ClassRegistered" \
+    || log "WARNING: not every node logged ClassRegistered — the class may be registered on one side only"
+  kill "$reg_pid" 2>/dev/null || true
   advance 2
-  CLASS_ID=$(grep -oE '[0-9a-f]{128}' "$WORK_DIR/register-class.log" | tail -1 || true)
-  [ -n "$CLASS_ID" ] || { tail -30 "$WORK_DIR/register-class.log" >&2; die "no class id in the registration log"; }
-  log "class ${CLASS_ID:0:16}…"
+  log "the class registration is on the chain"
 
   submit() {
     local f="$1"; local args=()
@@ -706,7 +724,21 @@ PY
   log "certifying the a16 family on the free-prompt lane (ADR-0075)"
   "$CERTIFY_BIN" drill --family a16 --lane fp --out "$WORK_DIR/obj/a16-fp.obj" || die "the a16 fp drill did not produce evidence"
   submit "$WORK_DIR/obj/a16-fp.obj"
-  "$CERTIFY_BIN" bind --model-id "$MODEL_ID" --lane fp --out "$WORK_DIR/obj/a16-bind.obj" || die "palw-certify bind refused $MODEL_ID"
+  # **And this is where the CLASS ID comes from.** Nothing prints the registered class id: the
+  # panel never logs it, no RPC lists classes, and `palw-class inspect` prints artifact ROOTS. The
+  # FP drill scrapes `grep -oE '[0-9a-f]{128}' | tail -1` out of the registration log, and on a log
+  # that runs past the registration that is the last BLOCK HASH — silently the wrong id, which is
+  # the exact failure its own comment warns about ("a wrong value here does not fail loudly").
+  #
+  # `palw-certify bind` derives it instead: a class IS its shape profile id
+  # (`catalog_profile_by_model_id_v1(court, model_id).shape_profile_id()`), and bind prints it
+  # beside the object it just wrote. Derived from the model id, not scraped from a log.
+  "$CERTIFY_BIN" bind --model-id "$MODEL_ID" --lane fp --out "$WORK_DIR/obj/a16-bind.obj" \
+    >"$WORK_DIR/obj/a16-bind.out" 2>&1 || { cat "$WORK_DIR/obj/a16-bind.out" >&2; die "palw-certify bind refused $MODEL_ID"; }
+  cat "$WORK_DIR/obj/a16-bind.out" >&2
+  CLASS_ID=$(sed -n 's/.*class \([0-9a-f]\{128\}\).*/\1/p' "$WORK_DIR/obj/a16-bind.out" | head -1)
+  [ -n "$CLASS_ID" ] || die "palw-certify bind did not print the class id for $MODEL_ID — see $WORK_DIR/obj/a16-bind.out"
+  log "class ${CLASS_ID:0:16}… (derived by palw-certify bind from the model id)"
   submit "$WORK_DIR/obj/a16-bind.obj"
   all_nodes_logged "PALW lifecycle carried.*ClassLaneCertified" \
     || log "WARNING: not every node logged the class-lane binding — the commitment may be refused as uncertified"
@@ -758,11 +790,30 @@ except Exception: sys.exit(1)
     sleep 2
   done
   echo "$health" >"$WORK_DIR/health.json"
-  python3 -c "
+  # **`registered` is the check that the class id is the CHAIN's**, and it is fail-closed. The
+  # gateway reads the chain for exactly this class id (ADR-0077 Decision 3), so `registered: false`
+  # means the identity file names a class this chain does not hold — the FP drill's own warning
+  # ("a wrong value here does not fail loudly") made loud. Polled, because the registration needs
+  # to reach the node the gateway reads.
+  chain_deadline=$((SECONDS + STEP_WAIT))
+  while :; do
+    python3 -c "
+import json,urllib.request
+open('$WORK_DIR/health.json','w').write(urllib.request.urlopen('http://127.0.0.1:$GATEWAY_PORT/health', timeout=5).read().decode())
+" 2>/dev/null || true
+    python3 -c "
 import json
 h = json.load(open('$WORK_DIR/health.json')).get('chain', {})
 print('  chain: ' + ' '.join(f'{k}={h.get(k)}' for k in ('registered','fp_certified','bond_active','exposure_room')))
 " >&2
+    if python3 -c "
+import json,sys
+h = json.load(open('$WORK_DIR/health.json')).get('chain', {})
+sys.exit(0 if h.get('registered') is True and h.get('fp_certified') is True else 1)
+"; then break; fi
+    [ $SECONDS -lt $chain_deadline ] || die "the gateway still reads registered/fp_certified as not-both-true for class ${CLASS_ID:0:16}… after ${STEP_WAIT}s. Either the registration did not reach this node, or the class id is not the one the chain holds — and no shipped tool prints the registered class id, so this drill derives it from palw-certify bind (see $WORK_DIR/obj/a16-bind.out)."
+    sleep 10
+  done
 
   # **The row, from the class that is actually running.** The gateway prints the worker manifest's
   # n_ctx on its first line; a --n-ctx flag that disagrees with it is refused rather than silently
