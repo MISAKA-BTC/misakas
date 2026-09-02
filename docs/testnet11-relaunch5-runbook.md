@@ -233,6 +233,16 @@ below is satisfied only for the exact commit the user pushes.
 equals the value above; (3) the stop-ALL → archive → rotate the four per-genesis stores → install
 → per-host start order below is run as one window. Nobody "restarts everything".
 
+### A16 keeps producing — 03:20 CEST
+
+seat2 (bond 2, class `71bbb755…`) produced blocks #1–#8 at 02:19:58, 02:25:55, 02:32:53, 02:38:44,
+02:50:52, 02:58:00, 03:04:32, 03:12:00 — one every 6–8 minutes, zero refusals. The only warnings
+since its producer started are five P2P flow timeouts (`SendPingsFlow` / `HandleRelayInvsFlow`,
+120 s, to .113 and ibm) — the signature of a process that stalls while swapping: seat2 holds
+13.7 GB resident with C's swap at 12.5 / 20 GB in use (host available 6.9 GB), the double artifact
+mapping's cost until the code follow-up lands. No OOM kill since 02:01. Watch item, not a blocker:
+if swap use keeps climbing, the fix is the mapping change, not a third role on host C.
+
 ### Why the cadence takes hours, not minutes — measured 03:15 CEST, and what 5d can do about it
 
 The floor rate rose again after 03:00 (80–110 blocks/hour at 03:06–03:15 against 30) while the
