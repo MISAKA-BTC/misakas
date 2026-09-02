@@ -92,6 +92,8 @@ impl Factory {
                 GetValidatorStatus,
                 GetTokenLedgerEntry,
                 GetPalwProducerFacts,
+                GetPalwDerivedArtifacts,
+                GetPalwFreePromptClaim,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 NotifyBlockAdded,

@@ -80,6 +80,8 @@ impl Router {
                 GetValidatorStatus,
                 GetTokenLedgerEntry,
                 GetPalwProducerFacts,
+                GetPalwDerivedArtifacts,
+                GetPalwFreePromptClaim,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 GetValidatorAttestationTarget,

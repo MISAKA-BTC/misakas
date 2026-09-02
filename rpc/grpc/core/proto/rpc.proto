@@ -1397,3 +1397,85 @@ message GetTokenEmissionInfoResponseMessage {
   uint64 foldCursor = 10;
   RPCError error = 1000;
 }
+
+// ADR-0078 Decision 5 — "verification belongs to the consumer, and the chain makes it possible".
+// The chain holds one DerivedArtifactV1 per (claim, transformer) and never checks its content:
+// the whole guarantee is that anyone holding the answer can recompute output_root, dsl_hash and
+// artifact_hash and compare them with what the chain says (invariant X6). These two calls are the
+// read that makes it possible. Hash64 identities travel as 128-hex.
+//
+// The answer's output token ids are NOT here and are not on the chain in any form: a verifier
+// holds them from the gateway's response beside the job's context hash and the family. What these
+// messages carry is the chain's side of the comparison.
+message GetPalwDerivedArtifactsRequestMessage {
+  // 128-hex free-prompt claim id.
+  string claimId = 1;
+}
+
+// One row of the chain's derived-artifact table, key half and row half together: transformerId
+// lives in the state table's KEY and the row does not repeat it.
+message RpcPalwDerivedArtifactMessage {
+  string transformerId = 1;
+  // derived_id_v1 — total over every field of the object, so it is what the signature covers.
+  string derivedId = 2;
+  string grammarId = 3;
+  uint32 kind = 4;
+  // The kind table's name for `kind`, or empty when this build has none. A convenience: the chain
+  // checks kind != 0 and interprets no kind (Decision 9 / X8).
+  string kindName = 5;
+  string dslHash = 6;
+  string artifactHash = 7;
+  uint64 artifactBytes = 8;
+  uint64 acceptedDaa = 9;
+}
+
+message GetPalwDerivedArtifactsResponseMessage {
+  // False off ConsensusV2 and for a claim this chain does not hold — an honest answer, not an error.
+  bool found = 1;
+  string claimId = 2;
+  // The claim's committed output_root: what every accepted row had to equal, and what X6
+  // recomputes from the ids, the job's context hash and the family.
+  string outputRoot = 3;
+  // Hex of the executor bond's registered ML-DSA-87 public key; empty once the bond retires.
+  string executorPubkey = 4;
+  // "txid:index".
+  string executorBond = 5;
+  string classId = 6;
+  // provisional | panel_bound | receipt_licensed | final | voided. Decision 4: a derivation of a
+  // claim that later voids is a derivation of a voided claim, and says so when read.
+  string claimPhase = 7;
+  string claimVoidReason = 8;
+  string claimAcceptedBlock = 9;
+  uint64 claimAcceptedDaa = 10;
+  repeated RpcPalwDerivedArtifactMessage artifacts = 11;
+  RPCError error = 1000;
+}
+
+message GetPalwFreePromptClaimRequestMessage {
+  string claimId = 1;
+}
+
+message GetPalwFreePromptClaimResponseMessage {
+  bool found = 1;
+  string claimId = 2;
+  // False for a block's own attempt claim, which has no derivable answer.
+  bool isFreePrompt = 3;
+  string classId = 4;
+  string executorPubkey = 5;
+  string executorBond = 6;
+  string outputRoot = 7;
+  string traceRoot = 8;
+  string executionRoot = 9;
+  uint64 workLeaves = 10;
+  string workId = 11;
+  uint32 quanta = 12;
+  uint32 quantaSpent = 13;
+  string phase = 14;
+  string voidReason = 15;
+  uint64 phaseDaa = 16;
+  string acceptedBlock = 17;
+  uint64 acceptedDaa = 18;
+  uint64 traceRetentionDaa = 19;
+  uint32 derivedCount = 20;
+  RPCError error = 1000;
+}

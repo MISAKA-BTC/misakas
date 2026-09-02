@@ -5873,6 +5873,8 @@ dependencies = [
  "kaspa-wrpc-client",
  "misaka-endpoints",
  "misaka-palw",
+ "misaka-palw-base0",
+ "misaka-palw-derive",
  "misaka-palw-pow-driver",
  "serde",
  "serde_json",

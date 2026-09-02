@@ -169,6 +169,66 @@ The tool re-runs the grammar and the transformer and compares `dsl_hash`, `artif
 convicts the executor for it (Decision 5 says so plainly); what it costs is the executor's name
 on a provenance anyone can show is wrong.
 
+## Verifying from the chain (Decision 5, the read path)
+
+`palw-derive verify` above needs the object as a FILE — which is the executor's copy. A stranger
+who was handed only the answer has no such file, and until the two calls below existed the
+`derived_artifact` / `derived_artifacts_of` table had no reader outside the transition that wrote
+it: the object sat in the state root and nowhere a person could reach. Decision 5 promises that "a
+false object is publicly demonstrable by anyone holding the DSL"; these are what makes the
+demonstration possible without asking the executor for anything.
+
+### The two RPCs
+
+| call | answers |
+|---|---|
+| `getPalwDerivedArtifacts { claimId }` | the claim's derivations — per row `transformerId`, `derivedId`, `grammarId`, `kind`/`kindName`, `dslHash`, `artifactHash`, `artifactBytes`, `acceptedDaa` — plus the claim's `outputRoot`, `executorPubkey`, `executorBond`, `classId`, `claimPhase` (+ `claimVoidReason`) and accepting block/DAA |
+| `getPalwFreePromptClaim { claimId }` | the claim itself: `outputRoot`, `traceRoot`, `executionRoot`, `workLeaves`, `workId`, `quanta`/`quantaSpent`, `phase` (+ `voidReason`, `phaseDaa`), `traceRetentionDaa`, `derivedCount` |
+
+Both are answered on wRPC (Borsh) and gRPC, `found: false` off `ConsensusV2` and for a claim this
+chain does not hold — an honest answer, not an error; a malformed claim id IS an error, so the two
+cannot be confused. `claimPhase` is there because Decision 4 says a derivation of a claim that
+later voids "is a derivation of a voided claim, and says so when read".
+
+**`output_token_ids` are on NO chain, by design.** The claim commits
+`output_root = output_commitment_v2(job_context_hash, ids, family_rendered_hash)` and nothing else,
+because ADR-0044 Decision 8's sentence about not silently publishing prompts applies to answers
+word for word. So verification is a comparison of two independent sources: the chain's side comes
+from these calls, and the ids, the job's context hash, the family and the canonical DSL come from
+the gateway's own response (`misaka.output_token_ids`, `misaka.job_context_hash`, `misaka.family`,
+`misaka.derivation.dsl`). A verifier holding both from one source would be checking nothing.
+
+### The consumer's two commands
+
+```bash
+# what the chain holds about this claim's derivations
+misaka palw derived <claim-id> --rpc <host:port> [--json]
+
+# re-run it over the answer you kept, and compare — `consistent`, or the first mismatch by name
+misaka palw derived-verify <claim-id> --answer <gateway-response.json> --rpc <host:port> [--json]
+```
+
+`--answer` takes the gateway's response (the whole chat completion, or just its `misaka` block), the
+outbox's `<stem>.json` artifact summary, or a bare JSON array of the answer's output token ids;
+`--dsl <file>`, `--job-context-hash <hex>` and `--family base0|qwen36|qwen25-a16` fill in or override
+what the file does not carry. Only the HTTP response carries `output_token_ids` — the outbox summary
+does not, so verifying from it checks the derivation and says `NOT output_root` rather than passing
+a check it did not make. The command
+rebuilds the object from what the chain returned, then checks, in this order:
+
+| field | what it means when it disagrees |
+|---|---|
+| `output_root` | X6's first recomputation: those ids, that context hash and that family do not produce the claim's root — the answer is not this claim's answer |
+| `dsl_hash`, `artifact_hash`, `artifact_bytes` | the derivation itself is false: re-running the named grammar and transformer over the answer gives something else |
+| `kind` | X8: the object's kind disagrees with its own transformer's manifest — a disagreement the chain cannot catch, because it interprets no kind |
+| `derived_id` | a check on the READER, not the executor: the object rebuilt here is not the one the chain accepted, so the network domain or the executor key is wrong |
+
+Exit 0 and `consistent`, or exit 1 with the first mismatching field named and both values printed.
+An object whose `transformer_id` this build does not publish is reported `UNVERIFIABLE` rather than
+passed — SA-5's promise is that an unverifiable statement can be SAID to be unverifiable. A pass
+also states which of the three recomputations it covered, because "consistent" over one of them is
+not the same sentence as "consistent" over all three.
+
 ## The two-architecture drill (X3)
 
 ```bash

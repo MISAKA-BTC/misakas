@@ -29,6 +29,7 @@ mod forward;
 mod key_roles;
 mod keys;
 mod node;
+mod palw_derived;
 mod palw_fp;
 #[cfg(feature = "evm-send")]
 mod prea;
@@ -381,6 +382,40 @@ enum PalwCmd {
         /// Actually broadcast (otherwise a dry-run preview).
         #[arg(long)]
         yes: bool,
+    },
+    /// ADR-0078 Decision 5: read what the chain holds about a free-prompt claim's DERIVATIONS —
+    /// the grammar, the transformer, the DSL and artifact hashes, and the claim's own output_root.
+    /// The answer's token ids are on no chain; hold them from the gateway response.
+    Derived {
+        /// 128-hex free-prompt claim id (the gateway's `fp_claim_id`).
+        claim_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// ADR-0078 X6: re-run the derivation the chain names, over the answer you kept, and say
+    /// whether the chain's copy agrees — `consistent`, or the first mismatching field by name.
+    DerivedVerify {
+        /// 128-hex free-prompt claim id.
+        claim_id: String,
+        /// The gateway's response JSON (its `misaka` block carries `output_token_ids`,
+        /// `job_context_hash`, `family` and the canonical DSL), or a bare JSON array of the
+        /// answer's output token ids.
+        #[arg(long)]
+        answer: std::path::PathBuf,
+        /// The canonical DSL bytes, when the response file does not carry them inline.
+        #[arg(long)]
+        dsl: Option<std::path::PathBuf>,
+        /// 128-hex job context hash, overriding the one in `--answer`.
+        #[arg(long)]
+        job_context_hash: Option<String>,
+        /// Family of the class that answered (`base0`, `qwen36`, `qwen25-a16`), overriding
+        /// `--answer`'s.
+        #[arg(long)]
+        family: Option<String>,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -886,6 +921,10 @@ async fn main() -> std::process::ExitCode {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
         Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await,
+        Command::Palw(PalwCmd::Derived { claim_id, json }) => palw_derived::show(&ctx, &claim_id, json).await,
+        Command::Palw(PalwCmd::DerivedVerify { claim_id, answer, dsl, job_context_hash, family, json }) => {
+            palw_derived::verify(&ctx, &claim_id, &answer, dsl.as_deref(), job_context_hash.as_deref(), family.as_deref(), json).await
+        }
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, key })) => {
             wallet::utxo_list(&ctx, address.as_deref(), &key.source()).await
         }

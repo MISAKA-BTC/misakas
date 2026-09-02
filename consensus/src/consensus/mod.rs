@@ -1230,6 +1230,29 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_locked_bond_outpoints_v2_impl()
     }
 
+    /// ADR-0078 Decision 5, on the node: the materialized tip, then [`palw_derived_claim_view_v1`].
+    ///
+    /// The state store's tip is a snapshot read like every other `palw_*` answer here, and the
+    /// arithmetic is the free function below so a test can put the same question to a folded state
+    /// without a store — the read a consumer makes and the read the transition just wrote must be
+    /// the same read.
+    #[allow(clippy::type_complexity)]
+    fn palw_derived_artifacts_v1(
+        &self,
+        claim_id: kaspa_hashes::Hash64,
+    ) -> Option<(
+        kaspa_consensus_core::palw_state_v2::PalwClaimStateV2,
+        Vec<u8>,
+        Vec<(kaspa_consensus_core::palw_derived_v1::PalwDerivedKeyV1, kaspa_consensus_core::palw_derived_v1::PalwDerivedRowV1)>,
+    )> {
+        let state_params = match &self.config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => &bundle.state,
+            _ => return None,
+        };
+        let (_chain_point, state) = self.storage.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        palw_derived_claim_view_v1(&state, claim_id)
+    }
+
     fn get_virtual_bits(&self) -> u32 {
         self.lkg_virtual_state.load().bits
     }
@@ -3002,4 +3025,40 @@ impl ConsensusApi for Consensus {
         let (_pruning_point, pruning_index) = self.pruning_point_store.read().pruning_point_and_index().unwrap();
         (0..=pruning_index).rev().take(n).map(|ind| self.past_pruning_points_store.get(ind).unwrap()).collect_vec()
     }
+}
+
+/// **ADR-0078 Decision 5: what a consumer may read off the chain about one claim's derivations.**
+///
+/// The arithmetic behind [`ConsensusApi::palw_derived_artifacts_v1`], separated from the tip read
+/// so the acceptance test can ask a folded state the same question the RPC asks a materialized
+/// one. Three answers in one, because a derivation is only checkable next to the claim it names:
+///
+/// * the claim, for the `output_root` X6 recomputes against, the phase (a derivation of a claim
+///   that later voided is a derivation of a voided claim, "and says so when read"), and the block
+///   that accepted the claim;
+/// * the executor's registered bond key — what the object's `executor_pubkey` had to equal to be
+///   accepted, so a reader learns whose name is on the provenance without a second lookup. Empty
+///   for a claim whose bond has since retired: the claim outlives the bond record, and an empty
+///   key is the honest statement of that rather than a refusal to answer;
+/// * the derived rows under this claim, in transformer-id order (the table's own order), each
+///   still paired with its key so `transformer_id` — which the row does not repeat — is on the
+///   wire.
+///
+/// `None` only when the chain does not have the claim. What it never does is resolve
+/// `grammar_id`, `transformer_id` or `kind`: consensus holds no registry (see
+/// `check_derived_shape_v1`'s note on SA-5), and a read that pretended otherwise would be
+/// inventing meaning the transition never checked.
+#[allow(clippy::type_complexity)]
+pub fn palw_derived_claim_view_v1(
+    state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    claim_id: kaspa_hashes::Hash64,
+) -> Option<(
+    kaspa_consensus_core::palw_state_v2::PalwClaimStateV2,
+    Vec<u8>,
+    Vec<(kaspa_consensus_core::palw_derived_v1::PalwDerivedKeyV1, kaspa_consensus_core::palw_derived_v1::PalwDerivedRowV1)>,
+)> {
+    let claim = state.claim(&claim_id)?.clone();
+    let executor_pubkey = state.bond(&claim.bond).map(|b| b.pubkey.clone()).unwrap_or_default();
+    let rows = state.derived_artifacts_of(claim_id).map(|(key, row)| (*key, row.clone())).collect();
+    Some((claim, executor_pubkey, rows))
 }

@@ -206,6 +206,37 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **ADR-0078 Decision 5: the chain's half of "verification belongs to the consumer".**
+    ///
+    /// A derivation is a statement the chain stores and never checks the content of — so the only
+    /// thing that makes it checkable is that a stranger can READ it. Until this call existed the
+    /// `derived_artifacts` table had no reader outside the transition that wrote it: the object
+    /// was in the state root and nowhere a person could reach, which makes Decision 5's promise
+    /// ("every step is a pure function of bytes the consumer has and ids the chain has") a promise
+    /// about ids nobody could fetch.
+    ///
+    /// Returns, for `claim_id`: the claim as the chain holds it (its `output_root` — the value X6
+    /// recomputes against — its phase, so a derivation of a claim that later voided says so when
+    /// read, and its accepting block), the claim's executor bond key (the key the object's
+    /// `executor_pubkey` had to equal to be accepted), and every `(key, row)` of the derived
+    /// table under that claim. `None` on a network that is not `ConsensusV2`, on one whose state
+    /// store holds no tip, and on a claim this chain does not have — three honest answers, none of
+    /// them an error.
+    ///
+    /// A tuple rather than a named view because the pieces are three existing state types and a
+    /// fourth name for them would be a fourth thing to keep in agreement.
+    #[allow(clippy::type_complexity)]
+    fn palw_derived_artifacts_v1(
+        &self,
+        _claim_id: kaspa_hashes::Hash64,
+    ) -> Option<(
+        crate::palw_state_v2::PalwClaimStateV2,
+        Vec<u8>,
+        Vec<(crate::palw_derived_v1::PalwDerivedKeyV1, crate::palw_derived_v1::PalwDerivedRowV1)>,
+    )> {
+        None
+    }
+
     fn get_virtual_bits(&self) -> u32 {
         unimplemented!()
     }

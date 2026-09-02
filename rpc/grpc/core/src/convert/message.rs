@@ -411,6 +411,70 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwProducerFactsResponse>, protowire:
         error: None,
     }
 });
+// ADR-0078 Decision 5 — the consumer's read path. The row's `transformer_id` is the state table's
+// KEY and the row does not repeat it, so it is carried explicitly on both sides of this wire; drop
+// it and a verifier receives a `dsl_hash` with no name for the function that made it.
+from!(item: &kaspa_rpc_core::GetPalwDerivedArtifactsRequest, protowire::GetPalwDerivedArtifactsRequestMessage, {
+    Self { claim_id: item.claim_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwDerivedArtifactsResponse>, protowire::GetPalwDerivedArtifactsResponseMessage, {
+    Self {
+        found: item.found,
+        claim_id: item.claim_id.clone(),
+        output_root: item.output_root.clone(),
+        executor_pubkey: item.executor_pubkey.clone(),
+        executor_bond: item.executor_bond.clone(),
+        class_id: item.class_id.clone(),
+        claim_phase: item.claim_phase.clone(),
+        claim_void_reason: item.claim_void_reason.clone(),
+        claim_accepted_block: item.claim_accepted_block.clone(),
+        claim_accepted_daa: item.claim_accepted_daa,
+        artifacts: item
+            .artifacts
+            .iter()
+            .map(|a| protowire::RpcPalwDerivedArtifactMessage {
+                transformer_id: a.transformer_id.clone(),
+                derived_id: a.derived_id.clone(),
+                grammar_id: a.grammar_id.clone(),
+                kind: a.kind,
+                kind_name: a.kind_name.clone(),
+                dsl_hash: a.dsl_hash.clone(),
+                artifact_hash: a.artifact_hash.clone(),
+                artifact_bytes: a.artifact_bytes,
+                accepted_daa: a.accepted_daa,
+            })
+            .collect(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwFreePromptClaimRequest, protowire::GetPalwFreePromptClaimRequestMessage, {
+    Self { claim_id: item.claim_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwFreePromptClaimResponse>, protowire::GetPalwFreePromptClaimResponseMessage, {
+    Self {
+        found: item.found,
+        claim_id: item.claim_id.clone(),
+        is_free_prompt: item.is_free_prompt,
+        class_id: item.class_id.clone(),
+        executor_pubkey: item.executor_pubkey.clone(),
+        executor_bond: item.executor_bond.clone(),
+        output_root: item.output_root.clone(),
+        trace_root: item.trace_root.clone(),
+        execution_root: item.execution_root.clone(),
+        work_leaves: item.work_leaves,
+        work_id: item.work_id.clone(),
+        quanta: item.quanta,
+        quanta_spent: item.quanta_spent,
+        phase: item.phase.clone(),
+        void_reason: item.void_reason.clone(),
+        phase_daa: item.phase_daa,
+        accepted_block: item.accepted_block.clone(),
+        accepted_daa: item.accepted_daa,
+        trace_retention_daa: item.trace_retention_daa,
+        derived_count: item.derived_count,
+        error: None,
+    }
+});
 from!(item: &kaspa_rpc_core::GetTokenSupplyRequest, protowire::GetTokenSupplyRequestMessage, { Self { asset_id: item.asset_id } });
 from!(item: RpcResult<&kaspa_rpc_core::GetTokenSupplyResponse>, protowire::GetTokenSupplyResponseMessage, {
     Self {
@@ -1117,6 +1181,65 @@ try_from!(item: &protowire::GetPalwProducerFactsResponseMessage, RpcResult<kaspa
         fp_max_quanta_per_receipt: item.fp_max_quanta_per_receipt,
     }
 });
+try_from!(item: &protowire::GetPalwDerivedArtifactsRequestMessage, kaspa_rpc_core::GetPalwDerivedArtifactsRequest, {
+    Self { claim_id: item.claim_id.clone() }
+});
+try_from!(item: &protowire::GetPalwDerivedArtifactsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwDerivedArtifactsResponse>, {
+    Self {
+        found: item.found,
+        claim_id: item.claim_id.clone(),
+        output_root: item.output_root.clone(),
+        executor_pubkey: item.executor_pubkey.clone(),
+        executor_bond: item.executor_bond.clone(),
+        class_id: item.class_id.clone(),
+        claim_phase: item.claim_phase.clone(),
+        claim_void_reason: item.claim_void_reason.clone(),
+        claim_accepted_block: item.claim_accepted_block.clone(),
+        claim_accepted_daa: item.claim_accepted_daa,
+        artifacts: item
+            .artifacts
+            .iter()
+            .map(|a| kaspa_rpc_core::RpcPalwDerivedArtifact {
+                transformer_id: a.transformer_id.clone(),
+                derived_id: a.derived_id.clone(),
+                grammar_id: a.grammar_id.clone(),
+                kind: a.kind,
+                kind_name: a.kind_name.clone(),
+                dsl_hash: a.dsl_hash.clone(),
+                artifact_hash: a.artifact_hash.clone(),
+                artifact_bytes: a.artifact_bytes,
+                accepted_daa: a.accepted_daa,
+            })
+            .collect(),
+    }
+});
+try_from!(item: &protowire::GetPalwFreePromptClaimRequestMessage, kaspa_rpc_core::GetPalwFreePromptClaimRequest, {
+    Self { claim_id: item.claim_id.clone() }
+});
+try_from!(item: &protowire::GetPalwFreePromptClaimResponseMessage, RpcResult<kaspa_rpc_core::GetPalwFreePromptClaimResponse>, {
+    Self {
+        found: item.found,
+        claim_id: item.claim_id.clone(),
+        is_free_prompt: item.is_free_prompt,
+        class_id: item.class_id.clone(),
+        executor_pubkey: item.executor_pubkey.clone(),
+        executor_bond: item.executor_bond.clone(),
+        output_root: item.output_root.clone(),
+        trace_root: item.trace_root.clone(),
+        execution_root: item.execution_root.clone(),
+        work_leaves: item.work_leaves,
+        work_id: item.work_id.clone(),
+        quanta: item.quanta,
+        quanta_spent: item.quanta_spent,
+        phase: item.phase.clone(),
+        void_reason: item.void_reason.clone(),
+        phase_daa: item.phase_daa,
+        accepted_block: item.accepted_block.clone(),
+        accepted_daa: item.accepted_daa,
+        trace_retention_daa: item.trace_retention_daa,
+        derived_count: item.derived_count,
+    }
+});
 try_from!(item: &protowire::GetTokenSupplyRequestMessage, kaspa_rpc_core::GetTokenSupplyRequest, { Self { asset_id: item.asset_id } });
 try_from!(item: &protowire::GetTokenSupplyResponseMessage, RpcResult<kaspa_rpc_core::GetTokenSupplyResponse>, {
     Self {
@@ -1622,5 +1745,107 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+/// **ADR-0078 Decision 5 on the gRPC wire.** The read exists so a stranger can check a derivation;
+/// a field that does not survive the conversion is a check they cannot make.
+#[cfg(test)]
+mod palw_derived_artifacts_tests {
+    use kaspa_rpc_core::{GetPalwDerivedArtifactsResponse, GetPalwFreePromptClaimResponse, RpcPalwDerivedArtifact, RpcResult};
+
+    #[test]
+    fn a_claims_derivations_survive_the_grpc_conversion() {
+        let response = GetPalwDerivedArtifactsResponse {
+            found: true,
+            claim_id: "cc".repeat(64),
+            output_root: "07".repeat(64),
+            executor_pubkey: "ab".repeat(2592),
+            executor_bond: format!("{}:3", "b0".repeat(32)),
+            class_id: "c1".repeat(64),
+            claim_phase: "voided".to_string(),
+            claim_void_reason: "court_fraud".to_string(),
+            claim_accepted_block: "bb".repeat(32),
+            claim_accepted_daa: 91_300,
+            artifacts: vec![
+                RpcPalwDerivedArtifact {
+                    transformer_id: "7a".repeat(64),
+                    derived_id: "d1".repeat(64),
+                    grammar_id: "6a".repeat(64),
+                    kind: 6,
+                    kind_name: "music".to_string(),
+                    dsl_hash: "d5".repeat(64),
+                    artifact_hash: "a7".repeat(64),
+                    artifact_bytes: 4_096,
+                    accepted_daa: 91_337,
+                },
+                RpcPalwDerivedArtifact {
+                    transformer_id: "7b".repeat(64),
+                    derived_id: "d2".repeat(64),
+                    grammar_id: "6b".repeat(64),
+                    kind: 1,
+                    kind_name: "scene".to_string(),
+                    dsl_hash: "d6".repeat(64),
+                    artifact_hash: "a8".repeat(64),
+                    artifact_bytes: 1_048_576,
+                    accepted_daa: 91_338,
+                },
+            ],
+        };
+        let wire: crate::protowire::GetPalwDerivedArtifactsResponseMessage = RpcResult::Ok(&response).into();
+        let back: GetPalwDerivedArtifactsResponse = GetPalwDerivedArtifactsResponse::try_from(&wire).unwrap();
+        assert!(back.found);
+        assert_eq!(back.output_root, response.output_root, "ADR-0078 X6 recomputes against exactly this");
+        assert_eq!(back.executor_pubkey, response.executor_pubkey, "the executor's name on the provenance");
+        assert_eq!(back.executor_bond, response.executor_bond);
+        assert_eq!(back.claim_phase, "voided");
+        assert_eq!(back.claim_void_reason, "court_fraud", "Decision 4: a voided claim's derivation says so when read");
+        assert_eq!(back.artifacts.len(), 2, "a bounded table, not a page");
+        for (b, r) in back.artifacts.iter().zip(response.artifacts.iter()) {
+            assert_eq!(b.transformer_id, r.transformer_id, "the key's half of the row must not be lost");
+            assert_eq!(b.derived_id, r.derived_id);
+            assert_eq!(b.grammar_id, r.grammar_id);
+            assert_eq!((b.kind, &b.kind_name), (r.kind, &r.kind_name));
+            assert_eq!(b.dsl_hash, r.dsl_hash);
+            assert_eq!(b.artifact_hash, r.artifact_hash);
+            assert_eq!(b.artifact_bytes, r.artifact_bytes);
+            assert_eq!(b.accepted_daa, r.accepted_daa);
+        }
+    }
+
+    #[test]
+    fn the_claim_facts_survive_the_grpc_conversion() {
+        let response = GetPalwFreePromptClaimResponse {
+            found: true,
+            claim_id: "cc".repeat(64),
+            is_free_prompt: true,
+            class_id: "c1".repeat(64),
+            executor_pubkey: "ab".repeat(2592),
+            executor_bond: format!("{}:3", "b0".repeat(32)),
+            output_root: "07".repeat(64),
+            trace_root: "77".repeat(64),
+            execution_root: "e7".repeat(64),
+            work_leaves: 4_194_304,
+            work_id: "17".repeat(64),
+            quanta: 8,
+            quanta_spent: 3,
+            phase: "final".to_string(),
+            void_reason: String::new(),
+            phase_daa: 91_500,
+            accepted_block: "bb".repeat(32),
+            accepted_daa: 91_300,
+            trace_retention_daa: 100_000,
+            derived_count: 2,
+        };
+        let wire: crate::protowire::GetPalwFreePromptClaimResponseMessage = RpcResult::Ok(&response).into();
+        let back: GetPalwFreePromptClaimResponse = GetPalwFreePromptClaimResponse::try_from(&wire).unwrap();
+        assert_eq!(back.output_root, response.output_root);
+        assert_eq!(back.trace_root, response.trace_root);
+        assert_eq!(back.execution_root, response.execution_root);
+        assert_eq!(back.work_id, response.work_id);
+        assert_eq!((back.quanta, back.quanta_spent), (8, 3));
+        assert_eq!(back.derived_count, 2);
+        assert!(back.is_free_prompt);
+        assert_eq!(back.phase, "final");
     }
 }

@@ -10111,4 +10111,34 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
     let (accepted, still) = vp.palw_v2_accepted_objects_and_state_for_tests(&folded, &params, &point2, vec![good], point2.block);
     assert_eq!(accepted.len(), 0, "a duplicate derivation is dropped");
     assert_eq!(still.derived_artifacts_of(claim_id).count(), 1);
+
+    // **ADR-0078 Decision 5: the read half of the same object.** Accepting a derivation puts it in
+    // the state root, which is not the same as making it CHECKABLE — "verification belongs to the
+    // consumer" is a promise about ids a stranger can fetch, and until this read existed the
+    // `derived_artifacts` table had no reader outside the transition that wrote it. This is the
+    // function `getPalwDerivedArtifacts` calls once it has loaded the tip, put to the state the
+    // acceptance just produced: the same state, the same object, no second path to disagree on.
+    let (read_claim, read_key, read_rows) =
+        crate::consensus::palw_derived_claim_view_v1(&folded, claim_id).expect("the chain holds the claim it just accepted");
+    assert_eq!(read_claim.output_root, output_root, "X6 recomputes against the CLAIM's root, which the row does not carry");
+    assert_eq!(read_key, executor_pubkey, "the executor's registered key — whose name the provenance is on");
+    assert_eq!(read_rows.len(), 1, "one derivation was accepted, so one is readable");
+    let (read_row_key, read_row) = &read_rows[0];
+    assert_eq!(read_row_key.claim, claim_id);
+    assert_eq!(read_row_key.transformer, transformer, "transformer_id lives in the KEY and the row never repeats it");
+    assert_eq!(read_row.derived_id, kaspa_consensus_core::palw_derived_v1::derived_id_v1(&object), "total over every field");
+    assert_eq!(read_row.grammar_id, object.grammar_id);
+    assert_eq!(read_row.kind, object.kind);
+    assert_eq!(read_row.dsl_hash, object.dsl_hash);
+    assert_eq!(read_row.artifact_hash, object.artifact_hash);
+    assert_eq!(read_row.artifact_bytes, object.artifact_bytes);
+    assert_eq!(read_row.accepted_daa, point2.daa_score);
+    // A claim the chain does not hold reads as `None`, never as an empty list: "this claim carries
+    // no derivation" and "this is not my chain's claim" are different answers, and a verifier that
+    // could not tell them apart would report a clean bill of health about somebody else's chain.
+    assert!(crate::consensus::palw_derived_claim_view_v1(&folded, Hash64::from_u64_word(0xDEAD)).is_none());
+    // And a claim with none reads as an empty list rather than as absence: the pre-derivation
+    // state has the claim and no rows.
+    let (_, _, none_yet) = crate::consensus::palw_derived_claim_view_v1(&with_claim, claim_id).expect("the claim exists there too");
+    assert!(none_yet.is_empty(), "before the derivation the claim is readable and carries nothing");
 }
