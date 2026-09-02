@@ -484,6 +484,8 @@ impl SignerState {
             // that verifies as a consensus commitment or a block-producing spend.
             SigningPurpose::PalwFpCommitmentV3 => Some(PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT),
             SigningPurpose::PalwFpSpendV3 => Some(PALW_FP_V3_MLDSA87_SPEND_CONTEXT),
+            // ADR-0078: a derivation's context is reserved the same way and for the same reason.
+            SigningPurpose::PalwDerivedArtifactV1 => Some(kaspa_consensus_core::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT),
             SigningPurpose::Transaction => None,
         };
         match required_ctx {
@@ -584,7 +586,8 @@ impl SignerState {
             }
             SignerMessageDigest::PalwAttemptV2(h)
             | SignerMessageDigest::PalwFpCommitmentV3(h)
-            | SignerMessageDigest::PalwFpSpendV3(h) => h.as_bytes().to_vec(),
+            | SignerMessageDigest::PalwFpSpendV3(h)
+            | SignerMessageDigest::PalwDerivedArtifactV1(h) => h.as_bytes().to_vec(),
         };
         let sig = key.sign_with_context(&digest, &req.context);
 

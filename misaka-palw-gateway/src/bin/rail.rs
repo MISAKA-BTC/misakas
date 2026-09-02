@@ -29,7 +29,11 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
+use kaspa_consensus_core::palw_derived_v1::{
+    PALW_DERIVED_V1_MLDSA87_CONTEXT, PalwDerivedArtifactV1, derived_id_v1, palw_derived_message_v1,
+};
 use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpWorkerResultV3, PalwFreePromptCommitmentV3, fp_claim_id_v3};
+use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_hashes::Hash64;
 use kaspa_pq_validator_core::{VALIDATOR_SEED_LEN, ValidatorKey};
@@ -77,6 +81,9 @@ fn main() {
     let mut fee: u64 = 250_000;
     let mut print_claim = false;
     let mut print_pubkey = false;
+    // ADR-0078 Decision 6: sign a derivation the gateway left unsigned in the outbox.
+    let mut derive_stem: Option<PathBuf> = None;
+    let mut print_derived_message = false;
     let mut class_id: Option<String> = None;
     // The class's canonical job in leaves — what a quantum is an eighth of (ADR-0074 Decision 5).
     // Defaults to the floor's; a rail for another class passes that class's `pwu_per_inference`.
@@ -96,12 +103,60 @@ fn main() {
             // in the gateway's identity file before any inference runs. Without this the two
             // halves of the rail can only be matched by a failed signing attempt.
             "--print-bond-pubkey" => print_pubkey = true,
+            "--derive-artifact" => derive_stem = Some(PathBuf::from(value("--derive-artifact"))),
+            "--print-derived-message" => print_derived_message = true,
             other => die(format!(
                 "unknown argument {other:?}\nusage: misaka-palw-fp-rail --artifact <outbox/fp-job-XXXX> [--print-claim] \
                  [--bond-key-seed <file> [--print-bond-pubkey] --funding-outpoint <txid:index> --funding-amount <sompi> \
-                 [--fee <sompi>]] [--class-id <128hex>] [--class-leaves <u64>]"
+                 [--fee <sompi>]] [--class-id <128hex>] [--class-leaves <u64>]\n       misaka-palw-fp-rail --derive-artifact <outbox/fp-job-XXXX> (--bond-key-seed <file> | --print-derived-message)"
             )),
         }
+    }
+    // **A derivation is signed by the same key as the claim, under its own context** (ADR-0078
+    // Decision 4). The gateway wrote `<stem>.derived-unsigned.borsh`; this writes the consensus
+    // object `<stem>.derived-object.borsh`, which `misaka palw submit-object` carries — or, with
+    // `--print-derived-message`, emits the digest a signer sidecar signs under
+    // `SigningPurpose::PalwDerivedArtifactV1`.
+    if let Some(stem) = derive_stem {
+        let unsigned_path = PathBuf::from(format!("{}.derived-unsigned.borsh", stem.display()));
+        let object: PalwDerivedArtifactV1 = read_borsh(&unsigned_path, "unsigned derivation");
+        let message = palw_derived_message_v1(&object);
+        if print_derived_message {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema": "misaka.palw.fp-rail-derived-message.v1",
+                    "derived_id": hex(derived_id_v1(&object)),
+                    "claim_id": hex(object.claim_id),
+                    "message": hex(message),
+                    "signing_purpose": "PalwDerivedArtifactV1",
+                })
+            );
+            return;
+        }
+        let seed = read_seed(&seed_path.unwrap_or_else(|| die("--bond-key-seed <file> is required to sign (or use --print-derived-message)".into())));
+        let key = ValidatorKey::from_seed(seed);
+        if key.public_key() != object.executor_pubkey.as_slice() {
+            die("the bond key does not match the derivation's executor_pubkey — this key cannot sign this derivation".into());
+        }
+        let signature = key.sign_with_context(message.as_byte_slice(), PALW_DERIVED_V1_MLDSA87_CONTEXT).to_vec();
+        let consensus_object = PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(object.clone()), signature };
+        kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&consensus_object)
+            .unwrap_or_else(|why| die(format!("the signed derivation would not ride: {why}")));
+        let out = PathBuf::from(format!("{}.derived-object.borsh", stem.display()));
+        std::fs::write(&out, borsh::to_vec(&consensus_object).unwrap()).unwrap_or_else(|e| die(format!("cannot write {}: {e}", out.display())));
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema": "misaka.palw.fp-rail-derived-object.v1",
+                "derived_id": hex(derived_id_v1(&object)),
+                "claim_id": hex(object.claim_id),
+                "kind": object.kind,
+                "object_file": out.display().to_string(),
+                "submit": "misaka palw submit-object --object <object_file> --yes",
+            })
+        );
+        return;
     }
     if print_pubkey {
         let seed = read_seed(&seed_path.unwrap_or_else(|| die("--print-bond-pubkey needs --bond-key-seed <file>".into())));

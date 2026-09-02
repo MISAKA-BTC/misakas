@@ -81,7 +81,11 @@ that wants the chain to hold a thing has to argue against this sentence.
 
 **Decision 2 — the DSL is the claim's output, canonicalized by a registered grammar.** The
 transformer's input is the rendering of the ids the claim committed (`output_root` is
-`output_commitment_v2` over exactly those ids, so a consumer holding the answer recomputes it),
+`output_commitment_v2(job_context_hash, ids, rendered_hash)` — the ids, the job's context hash,
+and the family's rendered-output hash, which on every shipped family is itself a keyed hash of
+the ids; so a consumer holding the answer's ids, the job's context hash (a public value the
+gateway returns beside the answer) and the family's name recomputes it — implementation note,
+2026-09-02: the ADR's first draft read "over exactly those ids", and the code says three inputs),
 passed through a grammar's canonicalizer — a pure function (whitespace, key order, number form,
 nothing semantic) named by `grammar_id`. `dsl_hash = H(grammar_id ‖ canonical bytes)`. A parse
 failure yields no derived object and nothing else: the inference still certifies and still mines,
@@ -179,6 +183,145 @@ A kind is versioned by its grammar and its transformer, never by editing a row: 
 new build is a new `grammar_id` / `transformer_id`, and the old derivations stay checkable against
 the old ids forever, which is the same reason a PALW class is its graph.
 
+**Decision 9 — the kind space is every (canonical representation, deterministic generator) pair;
+the table is open, and the chain interprets none of it.** The v1 rows are the first seven of a
+space whose shape is fixed by Decisions 2–5 and not by the rows: anything a model can answer in a
+form a grammar canonicalizes, followed by anything a pure integer function can make of it, is a
+kind. So the question this ADR settles for the network is not "what can Qwen3.6 make" but "how
+many kinds of checkable computation can a prompt be the entrance to". The pipeline is §2's, every
+time:
+
+```text
+natural language
+   → the class (Qwen3.6, A16, any certified class)          one inference, one claim (ADR-0077 R0)
+   → canonical representation                               grammar_id, dsl_hash
+   → deterministic generator                                transformer_id
+   → artifact                                               artifact_hash, artifact_bytes
+   → DerivedArtifactV1, beside the claim                     the chain holds this and only this
+```
+
+Three consequences, each a rule:
+
+* **Ids are assigned once and never reused.** A row's id is stable from the day it is written,
+  whether or not its transformer exists yet. The chain checks `kind != 0` and interprets nothing
+  else: what a kind means is the manifest behind `transformer_id`, and an object whose kind
+  disagrees with its transformer's manifest is a false object under Decision 5 — demonstrable by
+  anyone holding the manifest. Adding a row is therefore never a ruleset move.
+* **◎ and ○ name which half is deterministic today.** A row is ◎ when the DSL is text a model
+  already writes (JSON, source, a note list, a netlist) and the generator is integer or exact
+  arithmetic. A row is ○ when the generator people actually want is itself a model (diffusion,
+  speech, video) or float DSP: then the DSL half is a kind now — the storyboard, the voice
+  script, the layer list — and the artifact half enters later, as a class through ADR-0075's route
+  (§8) or as a fixed-point transformer through Decision 3's gate.
+* **"The answer is the thing" is a kind.** For a document, a story, a curriculum, a spec, the
+  transformer is the identity writer (`identity/v1`: the canonical DSL bytes ARE the artifact), so
+  a chapter a person keeps carries the same provenance as a mesh.
+
+The candidate table. One row per thing a person asks for; rows that are the same artifact under
+another name are folded into their base row and listed under it, so that an id names an artifact
+and not a marketing category.
+
+| id | kind | asked for as | the DSL (the model's answer) | transformer | artifact | fit |
+|---|---|---|---|---|---|---|
+| 1 | `scene` | 3D: buildings, characters, props, scenes | Decision 8 | Decision 8 | `.glb` | ◎ |
+| 2 | `image` | illustrations, UI mocks, textures, diagrams (as vectors); logos | Decision 8 | Decision 8 | `.png` | ◎ vector · ○ pixel models (a class) |
+| 3 | `cad` | parts, enclosures, mechanisms | Decision 8 | Decision 8 | `.stl`, `.step` | ◎ |
+| 4 | `code` | Rust, C/C++, Python, TS programs; Android/iOS/web apps (`app`) | Decision 8 | Decision 8; the app is its toolchain | outputs + test log | ◎ per named toolchain |
+| 5 | `map` | 2D/3D maps, dungeons, worlds; GIS maps, routes, terrain, spatial data (`gis`) | Decision 8 | Decision 8 | the map file | ◎ |
+| 6 | `music` | MIDI, scores, chord progressions, composition | Decision 8 | Decision 8 | `.mid` | ◎ |
+| 7 | `simulation` | physics (integer), fluids (integer lattice), traffic, economy, game AI runs | Decision 8 | Decision 8 | trace + summary | ◎ |
+| 8 | `text` | documents, articles, stories, scripts, summaries; lore, settings, characters, events (`world`); problems, materials, explanations, curricula (`education`); product specs (`product`) | canonical Markdown / plain text, optionally under a schema | `identity/v1` | the text | ◎ |
+| 9 | `design` | API, DB schema, architecture, IaC | OpenAPI-, DDL- and HCL-shaped JSON | canonical schema writer + validator | schema files | ◎ |
+| 10 | `game` | game rules, stages, NPCs, quests, world data packs | game-data JSON | validated game-data compiler | data pack | ◎ |
+| 11 | `circuit` | schematics, PCB, Verilog/VHDL | netlist / HDL source | netlist canonicalizer; a deterministic integer HDL elaborator + simulator | netlist, sim trace | ◎ |
+| 12 | `storyboard` | video: storyboard, cuts, motion, a video spec | shot-list DSL in ticks | canonical shot-list writer | the storyboard | ○ (the video is a class or a float render) |
+| 13 | `voice` | speech, narration, voice settings | SSML-shaped DSL | canonical writer | the script | ○ (synthesis is float DSP or a class) |
+| 14 | `animation` | rig, pose, motion, timeline | keyframe DSL: ticks, fixed-point transforms | integer keyframe compiler + canonical glTF animation writer | `.glb` | ◎ |
+| 15 | `ui` | HTML, React, CSS, layouts; pages, components, SEO structure (`web`); UI systems and design tokens (`design`) | component-tree + token DSL | canonical HTML/CSS/token writer | site bundle | ◎ |
+| 16 | `data` | SQL, analysis steps, statistical models, reports | SQL + an integer statistics plan over pinned tables | in-tree integer query engine | result set + report | ◎ integer · ○ float statistics |
+| 17 | `science` | formulas, numerical methods, scientific computation | exact-rational / fixed-point program | exact evaluator | results | ◎ exact · ○ float |
+| 18 | `robot` | motion plans, control code, task plans | waypoint / task DSL in fixed point | integer plan validator | the plan | ○ (execution on hardware is off-chain) |
+| 19 | `agent` | agent workflows, tool plans, task graphs | task-graph DSL | DAG validator + canonical writer | the task graph | ◎ the plan · execution is Decision 10 |
+| 20 | `database` | schema, migrations, queries, ETL | DDL/DML DSL | in-tree deterministic engine applies it to a pinned fixture | schema + fixture state | ◎ |
+| 21 | `zk` | circuits, constraints, proof configurations | R1CS/PLONK-shaped constraint DSL | constraint compiler + integer satisfiability check on a witness | constraint system + check log | ◎ |
+| 22 | `contract` | smart contracts, transactions, contract specs | EVM initcode + a test manifest | the in-tree EVM | runtime code + test log | ◎ |
+| 23 | `math` | proofs, derivations, algorithms | proof-term DSL | in-tree proof checker (integer) | the checked proof | ◎ |
+| 24 | `molecule` | molecular structures, reaction paths, experiment plans | SMILES / graph DSL | canonical graph writer + integer validity check | canonical structure | ○ (property prediction is float) |
+| 25 | `manufacturing` | process plans, BOMs, routings; part structure | process DSL | integer scheduler / BOM compiler | plan + BOM | ◎ |
+| 26 | `building` | BIM, floor plans, structural specs | fixed-point plan DSL | integer plan compiler | plan file (`.glb`, IFC-shaped) | ○ (structural analysis is float) |
+| 27 | `procedural` | terrain, cities, worlds, environments | procedural DSL: seed + integer rules | integer generator | `.glb` / map | ◎ |
+
+Priority among them is Decision 11's; admission is Decision 3's, one pair at a time.
+
+**Decision 10 — four modes beyond generation ride the same object.** PALW is not limited to
+"the model made something". Each mode below is a derivation with a different input shape, and
+none needs a second object:
+
+* **Transformation** (image → 3D, audio → MIDI, text → code, CAD A → CAD B, CSV → database). The
+  source is part of the prompt and committed by the claim's prompt commitment. Where the source
+  is bytes the model did not read as tokens, the DSL names them by hash and the transformer takes
+  them as a second input: `dsl_hash` covers the naming, so the derivation is still a pure function
+  of the DSL and of bytes the consumer must hold — X6's "answer ids" gains "and the named inputs",
+  and nothing else moves.
+* **Optimization** (faster code, a lighter CAD, a smaller circuit, a tighter stage, a shorter
+  route). The answer is the candidate; the transformer builds it AND measures it with an integer
+  cost model — instruction count on the in-tree VM, triangle count, gate count, path length in
+  integer units — never a clock. The metric is in the artifact. "Better" is the difference of two
+  derivations' metrics, and anyone can recompute both.
+* **Verification** (code → tests, math → proof, circuit → simulation, CAD → constraint check,
+  contract → invariant check). The transformer is a checker and the artifact is its verdict log.
+  A checker is the purest transformer in the table — small output, and determinism is its whole
+  point. A derived verdict is still not a court verdict (Decision 5): it convicts nobody; it is a
+  statement anyone can re-run.
+* **Planning** (natural language → task graph → agent execution → receipts). The artifact is the
+  canonical task graph. Its execution is not a derivation — it touches clocks, networks and other
+  inferences — and each inference it runs is its own claim (ADR-0077 R0). Linking a plan's claims
+  into one object is the cross-claim item §8 leaves open, on purpose.
+
+What generalizes is the name. The lineage's object is not *LLM output mining*; it is
+**deterministic computational claim mining**: a canonical claim, a checkpointed receipt, a court
+that verifies, a reward — and two entrances to it:
+
+```text
+                        PALW
+                          │
+             ┌────────────┴────────────┐
+             │                         │
+           LLM                    computation
+     Qwen3.6, A16, …        generator / compiler / checker
+             │                         │
+     an inference is a         a transformer is a derivation      ← this ADR (weight: none)
+     claim (ADR-0077)          a step-space transformer is a       ← Decision 7 (weight: as a class)
+             │                 class (ADR-0075's route)
+             └────────────┬────────────┘
+                          ▼
+                   canonical claim
+                          ▼
+                checkpoint / receipt
+                          ▼
+                 court verification
+                          ▼
+                       reward
+```
+
+Read exactly: in this ADR only the left entrance bears weight. The right entrance is a derivation
+— committed, checkable, weightless — until the transformer registers as a family (Decision 7).
+That is not a limitation the diagram hides; it is the honest weight of a computation no court can
+yet try, and Decision 7 is the door.
+
+**Decision 11 — the order in which domains open, and what §6 does with it.** The first areas,
+in order: **① code → ② 3D / CAD → ③ game (map, game data, procedural) → ④ image / music → ⑤
+simulation → ⑥ agent → ⑦ science / engineering computation.** §6's Q-03 still starts with
+`scene` and `music`, because they are the cheapest proof that the machinery meets X3; after Q-04
+the work follows this order — Q-05 is `code` and `cad`, Q-06 is `map`, `image` and `simulation` —
+and the remaining rows enter in the order above, each as a grammar/transformer pair through
+Decision 3's gate, with no ADR per kind. For ① the first toolchain NAMED is the one the tree
+already holds at consensus grade: the in-tree EVM (`contract`, and `code` under `toolchain =
+evm/v1`), X3-green on the day it ships. Pinned external toolchains (rustc → wasm32, solc, clang →
+wasm32) are manifests — toolchain hash, arguments, environment whitelist, `SOURCE_DATE_EPOCH`, no
+network — whose two-architecture drill runs on the fleet's Intel, AMD and Apple hosts, and none
+is named by an object until its drill passes, exactly as Decision 3 says.
+
 ## 4. What this costs, stated before it is measured
 
 * **Chain bytes.** One `DerivedArtifactV1` is a few hundred bytes; at most four per claim. No
@@ -206,10 +349,15 @@ X3   A transformer named by any object is byte-identical on two architectures ov
 X4   A parse failure under a grammar produces no object and changes nothing about the claim.
 X5   A derivation credits no weight, no payment and no exposure (Decision 7 is the only way it
      ever will, and it is not this ADR).
-X6   From (answer ids, grammar_id, transformer_id) alone, a consumer recomputes output_root,
-     dsl_hash and artifact_hash and reaches the object's values or a demonstrable mismatch.
+X6   From (answer ids, the job's context hash, the family, grammar_id, transformer_id) alone, a
+     consumer recomputes output_root, dsl_hash and artifact_hash and reaches the object's values
+     or a demonstrable mismatch (`palw-derive verify`).
 X7   ADR-0077's R0 and R1 hold unchanged: one inference, one claim; the receipt's bytes and the
      seat's bytes are what they were.
+X8   A kind id is assigned once and never reused; the chain checks kind != 0 and interprets no
+     kind — a kind that disagrees with its transformer's manifest is demonstrable, never meaning.
+X9   Extra inputs of a transformation or an optimization are named by hash inside the DSL, so
+     dsl_hash still fixes the whole derivation; a metric is an integer cost model, never a clock.
 ```
 
 ## 6. Order of work
@@ -220,8 +368,8 @@ X7   ADR-0077's R0 and R1 hold unchanged: one inference, one claim; the receipt'
 | Q-02 | the transition arm and the bounded table | X2 green; retirement with the claim |
 | Q-03 | grammar + transformer for `scene` and `music` (the two with trivially canonical outputs) | X3 green on x86_64 and arm64 |
 | Q-04 | the gateway's derivation step and one-response delivery | a browser request returns text, a GLB, and a signed object; X6 checked by the client |
-| Q-05 | `map`, `image`, `simulation` transformers | X3 green each |
-| Q-06 | `code` (hermetic toolchain) and `cad` (exact kernel, booleans last) | X3 green each; the kernel's boolean either exact or absent |
+| Q-05 | `code` (the hermetic runner, and `contract` / `evm/v1` as the first named toolchain) and `cad` (exact kernel, booleans last) — Decision 11's ① and ② | X3 green each; the kernel's boolean either exact or absent; an external toolchain is named only by its fleet drill |
+| Q-06 | `map`, `image`, `simulation` transformers — ③, ④, ⑤ | X3 green each |
 | Q-07 | the DA election for the DSL | served on request; off by default |
 | Q-08 | Decision 7's first family — a simulation kind as a step space | its own ADR |
 
@@ -255,6 +403,10 @@ and the GLB holding the megabytes.
   transformer.
 * **Cross-claim derivations** (an artifact made from several answers) — an object with several
   `claim_id`s; not needed for any kind in the table, and left out until one needs it.
+* **Which external toolchain is named first for `code`** — a drill result on the fleet, not a
+  sentence here; until one passes, `code` ships its runner and `contract` ships the in-tree EVM.
+* **The rows of Decision 9 beyond v1** — each is admitted by its own grammar/transformer pair
+  through Decision 3, in Decision 11's order; their ids are fixed now so nothing renumbers later.
 
 ## 9. Number hygiene
 

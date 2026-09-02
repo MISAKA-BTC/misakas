@@ -22,6 +22,8 @@ path = "src/bin/rail.rs"
 kaspa-consensus-core.workspace = true
 kaspa-hashes.workspace = true
 kaspa-pq-validator-core.workspace = true
+# ADR-0078: the derivation step — registered grammars and content-named transformers.
+misaka-palw-derive.workspace = true
 
 borsh.workspace = true
 faster-hex.workspace = true

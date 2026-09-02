@@ -286,6 +286,12 @@ fn run_job(trace_out: PathBuf) {
         "chunk_count": run.outcome.trace_chunk_count,
         "material_bytes": run.outcome.material.len(),
         "execution_root": hex(run.outcome.execution_root),
+        // ADR-0078 X6: the one input a consumer cannot derive from the answer alone — the job's
+        // context hash — so that `output_root` is recomputable from (ids, this, the family's
+        // rendered-hash rule) by anyone the answer is handed to.
+        "job_context_hash": hex(context.context_hash()),
+        "output_root": hex(run.outcome.output_root),
+        "family": "qwen36",
     });
     std::fs::write(retain_dir.join("manifest.json"), serde_json::to_vec_pretty(&manifest_doc).unwrap())
         .unwrap_or_else(|e| die(format!("cannot write the retention manifest: {e}")));
