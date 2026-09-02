@@ -29,9 +29,9 @@
 //! here invents a coordinate — [`kaspa_consensus_core::palw_step::canonical_step_leaf_index`] is
 //! what says where a tile belongs, so a capture cannot disagree with the profile about that.
 
-use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepTableV1, canonical_step_leaf_index};
+use kaspa_consensus_core::palw_step::{canonical_step_leaf_index, PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepTableV1};
 use kaspa_consensus_core::palw_step_leg::{
-    PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1, step_merkle_root_v1, step_tile_leaf_hash_v1,
+    step_merkle_root_v1, step_tile_leaf_hash_v1, PalwStepTileLeafV1, PALW_STEP_LEG_OBJECT_VERSION_V1,
 };
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
@@ -317,9 +317,17 @@ pub fn base0_step_tiles_v1(
     Ok(out)
 }
 
-/// The step leg's Merkle root over `leaves`.
+/// The step leg's Merkle root over `leaves`, against the DEFAULT ladder top.
 pub fn base0_step_merkle_root_v1(tiles: &Base0StepTilesV1) -> Option<Hash64> {
-    step_merkle_root_v1(&tiles.leaves).ok()
+    base0_step_merkle_root_capped_v1(tiles, kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// The step leg's Merkle root against the ladder top the RULESET froze
+/// (`PalwCourtParamsV2::max_step_leaf_count`). The leg's own cap is a default, not the rule, and a
+/// class whose step space is wider than the default cannot commit against it — see
+/// `kaspa_consensus_core::palw_step_leg::step_merkle_root_capped_v1`.
+pub fn base0_step_merkle_root_capped_v1(tiles: &Base0StepTilesV1, step_ladder_cap: u64) -> Option<Hash64> {
+    kaspa_consensus_core::palw_step_leg::step_merkle_root_capped_v1(&tiles.leaves, step_ladder_cap).ok()
 }
 
 /// **The bisection's state at index `i`: a commitment to the execution prefix through leaf `i`.**
@@ -686,13 +694,41 @@ pub fn base0_binding_from_capture_with_profile_v1(
     full_logits_trace_root: Hash64,
     activation_leg_root: Hash64,
 ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, LegError> {
+    base0_binding_from_capture_with_profile_capped_v1(
+        profile,
+        ctx,
+        tiles,
+        checkpoints,
+        checkpoint_profile,
+        full_logits_trace_root,
+        activation_leg_root,
+        kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+    )
+}
+
+/// The same commitment against the ladder top the RULESET froze — the COMMIT side of the same
+/// defect the opening side had. A class whose step space is wider than the leg's default constant
+/// could not build a binding at all, so "arm the deeper ladder" needed this as well as the leg's
+/// opening depth. A caller with no ruleset in scope passes the default and nothing moves.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_binding_from_capture_with_profile_capped_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    tiles: &Base0StepTilesV1,
+    checkpoints: &Base0CheckpointsV1,
+    checkpoint_profile: &kaspa_consensus_core::palw_legs::PalwCheckpointProfileV1,
+    full_logits_trace_root: Hash64,
+    activation_leg_root: Hash64,
+    step_ladder_cap: u64,
+) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, LegError> {
     use kaspa_consensus_core::palw_step_leg::{
-        PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, checkpoint_empty_root_v2, execution_commitment_root_v2,
+        checkpoint_empty_root_v2, execution_commitment_root_v2, step_merkle_root_capped_v1, PalwStepBindingV2,
+        PALW_STEP_LEG_OBJECT_VERSION_V1,
     };
     let context_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
     let step_leaf_count = tiles.leaves.len() as u64;
-    let step_merkle_root = step_merkle_root_v1(&tiles.leaves).map_err(|_| LegError::EmptySpace)?;
+    let step_merkle_root = step_merkle_root_capped_v1(&tiles.leaves, step_ladder_cap).map_err(|_| LegError::EmptySpace)?;
     // **From the profile, not from the family constant.** A producer files what ITS class
     // registered; reaching for the constant here would work today and would silently file the
     // integer family's map for a class that had registered something else. One source.
@@ -847,9 +883,42 @@ pub fn base0_refutation_from_capture_v1(
     // the long form: one opening per cached position.
     kv_checkpoint: Option<kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1>,
 ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, LegError> {
-    use kaspa_consensus_core::palw_step_leg::step_opening_v1;
+    base0_refutation_from_capture_capped_v1(
+        profile,
+        ctx,
+        tiles,
+        binding,
+        target,
+        prompt_token_ids,
+        decode_tokens,
+        kv_checkpoint,
+        kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+    )
+}
+
+/// [`base0_refutation_from_capture_v1`] against the ladder top the RULESET froze.
+///
+/// The two openings this builds — the output opening and the per-run range siblings — are the
+/// prover's side of the court's question, and both were capped by a module constant rather than by
+/// `PalwCourtParamsV2::max_step_leaf_count`. On a ladder deeper than the default that made an
+/// HONEST prover unable to answer at all, which is the same defect as the leg's opening-depth
+/// literal and is fixed the same way: the cap arrives from the caller, and the caller that has no
+/// ruleset in scope passes the default and behaves exactly as before.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_refutation_from_capture_capped_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    tiles: &Base0StepTilesV1,
+    binding: kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    target: PalwStepCoordinateV1,
+    prompt_token_ids: Vec<u32>,
+    decode_tokens: Option<kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1>,
+    kv_checkpoint: Option<kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1>,
+    step_ladder_cap: u64,
+) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, LegError> {
+    use kaspa_consensus_core::palw_step_leg::step_opening_capped_v1;
     use kaspa_consensus_core::palw_step_refute::{
-        PalwExecutionStepRefutationV1, PalwStepInputRowV1, canonical_input_leaves_v1_anchored,
+        canonical_input_leaves_v1_anchored, PalwExecutionStepRefutationV1, PalwStepInputRowV1,
     };
 
     let leaf_of =
@@ -860,11 +929,8 @@ pub fn base0_refutation_from_capture_v1(
         tile: target.tile_index,
     })?;
     let output_preimage = leaf_of(target_index).ok_or(LegError::UnknownSlot { layer: 0, slot: target.node_slot as u16 })?;
-    let output_opening = step_opening_v1(&tiles.leaves, target_index).map_err(|_| LegError::NotACanonicalCoordinate {
-        layer: 0,
-        slot: target.node_slot as u16,
-        tile: target.tile_index,
-    })?;
+    let output_opening = step_opening_capped_v1(&tiles.leaves, target_index, step_ladder_cap)
+        .map_err(|_| LegError::NotACanonicalCoordinate { layer: 0, slot: target.node_slot as u16, tile: target.tile_index })?;
 
     // The canonical input set, in the checker's own order — asked for rather than reconstructed,
     // so a prover cannot disagree with the court about what a step reads.
@@ -889,9 +955,14 @@ pub fn base0_refutation_from_capture_v1(
         let mut run_siblings = Vec::with_capacity(runs.len());
         for (start, len) in runs {
             let first = row[start].0 as usize;
-            run_siblings.push(kaspa_consensus_core::palw_step_leg::step_merkle_range_siblings_v1(&tiles.leaves, first, len).map_err(
-                |_| LegError::NotACanonicalCoordinate { layer: 0, slot: row[start].1.node_slot as u16, tile: row[start].1.tile_index },
-            )?);
+            run_siblings.push(
+                kaspa_consensus_core::palw_step_leg::step_merkle_range_siblings_capped_v1(&tiles.leaves, first, len, step_ladder_cap)
+                    .map_err(|_| LegError::NotACanonicalCoordinate {
+                        layer: 0,
+                        slot: row[start].1.node_slot as u16,
+                        tile: row[start].1.tile_index,
+                    })?,
+            );
         }
         inputs.push(PalwStepInputRowV1 { preimages, run_siblings });
     }
@@ -910,7 +981,7 @@ pub fn base0_refutation_from_capture_v1(
 mod a16_row_tests {
     use super::*;
     use crate::artifact::{Base0ArtifactV1, Base0ShapeV1};
-    use crate::engine_a16::{A16Cache, A16Engine, derived_a16_store};
+    use crate::engine_a16::{derived_a16_store, A16Cache, A16Engine};
 
     /// A small deterministic A16 class — the same construction the engine's own tests use, kept
     /// tiny so the assertion is about coordinates rather than about arithmetic.
@@ -981,7 +1052,7 @@ mod a16_row_tests {
     /// through the code that is supposed to honour it.
     #[test]
     fn the_checkpoint_capture_follows_the_declared_state_map() {
-        use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
+        use kaspa_consensus_core::palw_base0_profile::{base0_profile_v1, rc_job_context, PALW_RC_BASE0_GEOMETRY};
         use kaspa_consensus_core::palw_state_chunk_map as map;
 
         let base = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the RC geometry is a profile");
@@ -1087,9 +1158,9 @@ mod a16_row_tests {
 mod tests {
     use super::*;
     use crate::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
-    use kaspa_consensus_core::palw_base0_profile::{PalwBase0GeometryV1, base0_profile_v1};
+    use kaspa_consensus_core::palw_base0_profile::{base0_profile_v1, PalwBase0GeometryV1};
     use kaspa_consensus_core::palw_step::step_leaf_count;
-    use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, trace_scheme_id_v2};
+    use kaspa_consensus_core::palw_v2::{trace_scheme_id_v2, PALW_TRACE_COMMITMENT_VERSION_V2};
 
     fn geometry() -> PalwBase0GeometryV1 {
         PalwBase0GeometryV1 {
@@ -1272,7 +1343,7 @@ mod tests {
     /// merits — and one tampered tile is a conviction.
     #[test]
     fn a_capture_becomes_a_refutation_the_court_adjudicates_both_ways() {
-        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+        use kaspa_consensus_core::palw_step_refute::{check_execution_step_refutation_v1, PalwStepRefuteError};
 
         let a = artifact();
         let profile = base0_profile_v1(geometry()).expect("expressible");
