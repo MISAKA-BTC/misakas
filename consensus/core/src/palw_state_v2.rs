@@ -2206,6 +2206,13 @@ pub struct PalwClassLaneCertificationV2 {
 /// that has no business on one object.
 pub const PALW_CERTIFICATION_MAX_VECTORS: usize = 32;
 
+/// **ADR-0075 Decision 9: the most `FamilyCertified` objects one block may carry.** Grading is
+/// CPU every node spends; the fee bounds how many objects a block can be paid to carry, this bounds
+/// how many it may carry at all. Applied by the acceptance walk in transaction order — the third
+/// in a block is dropped and the block stands, so a block cannot be made invalid by a stranger's
+/// evidence. Two per block is one family per lane for one model tier per block.
+pub const PALW_CERTIFICATION_MAX_PER_BLOCK: usize = 2;
+
 // ---------------------------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------------------------

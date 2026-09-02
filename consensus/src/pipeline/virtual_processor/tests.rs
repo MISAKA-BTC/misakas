@@ -9735,3 +9735,92 @@ async fn a_receipt_carriage_passes_the_header_signature_gate() {
         );
     }
 }
+
+/// **ADR-0075 Decision 9 on a mainnet-based ruleset: a block grades two family drills and drops
+/// the third, and a class binds to what the block recorded.** The evidence is real — the floor's
+/// attempt and free-prompt drills and the A16 fixture's attempt drill — graded by the acceptance
+/// walk on `MAINNET_PARAMS` with the V2 bundle, which is what a carded mainnet is.
+#[tokio::test]
+async fn palw_v2_a_block_grades_at_most_two_family_drills_and_a_class_binds_to_them() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::{
+        PALW_CERTIFICATION_MAX_PER_BLOCK, PalwCertificationEvidenceV1, PalwCertifiedLaneV1, PalwClassStatusV2, PalwConsensusObjectV2,
+    };
+    use misaka_palw_base0::e2e_drill::{PalwRcFamilyV1, rc_attempt_evidence_v1, rc_free_prompt_evidence_v1};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor();
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: ctx.consensus.get_sink(),
+        daa_score: ctx.consensus.get_virtual_daa_score(),
+        blue_score: 5,
+        subsidy: 0,
+    };
+
+    let floor_attempt = rc_attempt_evidence_v1(PalwRcFamilyV1::Base0).expect("the floor drills its attempt lane");
+    let floor_fp = rc_free_prompt_evidence_v1(PalwRcFamilyV1::Base0).expect("the floor drills its free-prompt lane");
+    let a16_attempt = rc_attempt_evidence_v1(PalwRcFamilyV1::Qwen25A16).expect("the A16 fixture drills its attempt lane");
+    let objects = vec![
+        PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(floor_attempt)) },
+        PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::FreePrompt(floor_fp)) },
+        PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(a16_attempt.clone())) },
+    ];
+    let (accepted, folded) =
+        vp.palw_v2_accepted_objects_and_state_for_tests(&state, &bundle.state, &point, objects, ctx.consensus.get_sink());
+    assert_eq!(accepted.len(), PALW_CERTIFICATION_MAX_PER_BLOCK, "two drills are graded, the third is dropped and the block stands");
+    assert_eq!(folded.chain_certified_families(PalwCertifiedLaneV1::Attempt).len(), 1, "the floor's attempt family");
+    assert_eq!(folded.chain_certified_families(PalwCertifiedLaneV1::FreePrompt).len(), 1, "the floor's free-prompt family");
+
+    // The next block carries what the cap dropped.
+    let a16_object = PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(a16_attempt)) };
+    let point2 = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: kaspa_hashes::Hash64::from_u64_word(0xB102),
+        daa_score: point.daa_score + 1,
+        blue_score: point.blue_score + 8,
+        subsidy: 0,
+    };
+    let (accepted, folded) =
+        vp.palw_v2_accepted_objects_and_state_for_tests(&folded, &bundle.state, &point2, vec![a16_object], point2.block);
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(folded.chain_certified_families(PalwCertifiedLaneV1::Attempt).len(), 2, "the A16 family joins in the next block");
+
+    // A class the recorded free-prompt family covers binds to it: the base class, whose profile
+    // is the floor's, if it is Active on this chain.
+    let base = bundle.base_class_id;
+    if matches!(folded.class(&base).map(|c| &c.status), Some(PalwClassStatusV2::Active)) {
+        let profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
+            kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
+        )
+        .expect("the floor's profile");
+        if profile.shape_profile_id() == base {
+            let bind = PalwConsensusObjectV2::ClassLaneCertified {
+                class_id: base,
+                lane: PalwCertifiedLaneV1::FreePrompt,
+                profile: Box::new(profile),
+            };
+            let point3 = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: kaspa_hashes::Hash64::from_u64_word(0xB103),
+                daa_score: point2.daa_score + 1,
+                blue_score: point2.blue_score + 8,
+                subsidy: 0,
+            };
+            let (accepted, folded) =
+                vp.palw_v2_accepted_objects_and_state_for_tests(&folded, &bundle.state, &point3, vec![bind], point3.block);
+            assert_eq!(accepted.len(), 1, "the binding is accepted");
+            assert!(folded.fp_lane_certification(&base).is_some(), "and recorded");
+        }
+    }
+}

@@ -152,3 +152,57 @@ share at registration (ADR-0049 Decision H); `PalwRegistrationTermsV2` now carri
 certified families, so the SDK and the panel price that registration correctly without an RPC of
 their own. `a_model_this_build_never_pinned_is_seated_through_the_chain_alone` runs the route on
 the Qwen3.5-2B graph-v3 class, which no RC set names.
+
+## 7. Mainnet: the rules of operation (Decisions 9–13)
+
+Mainnet's PALW is born the way every RC is born: the pinned genesis card
+(`PALW_MAINNET_GENESIS_BONDS`, `PALW_MAINNET_GENESIS_ARTIFACT_ROOT`,
+`PALW_MAINNET_QWEN36_ARTIFACT_ROOT`, `PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT`) assembled by the same
+`palw_v2_params_on_base` the RC networks use, so the certification rules are the ruleset's, not a
+mainnet special case (ADR-0042 Decision 11: the last RC and mainnet share one ruleset id, built
+from one git tag). The card is empty until real operator keys exist; while it is, mainnet is the
+hash-only network it is today, byte for byte. This section decides how the objects operate once
+it is not.
+
+**Decision 9 — Who may submit, and how much.** Anyone. A `FamilyCertified` or
+`ClassLaneCertified` is an ordinary transaction under the standard mass ceiling, paying the
+standard relay fee; no bond, no signature, no allow-list — the court grades the evidence and the
+class's own profile hash grades the binding, so a gatekeeper would add nothing but a gatekeeper.
+Two bounds hold the cost: at most `PALW_CERTIFICATION_MAX_VECTORS` (32) fault vectors per object,
+and at most `PALW_CERTIFICATION_MAX_PER_BLOCK` (2) `FamilyCertified` objects graded per block,
+counted in transaction order by the acceptance walk — the third is dropped and the block stands,
+so a stranger's evidence can make a block slower to validate by two drills, never invalid.
+
+**Decision 10 — Revocation.** There is no revocation object, on purpose. A class that misbehaves
+is frozen by a contradiction certificate (`ClassFrozen`), which removes its weight and refuses its
+claims; its certification record stays as history and does nothing. A *family* certificate can
+only be wrong if the court that graded it is wrong, and a court defect is a ruleset change: under
+ADR-0042 Decision 11 that is a new network identity, born with an empty chain set, on which every
+family re-certifies through the same objects. Nothing on the old identity is edited.
+
+**Decision 11 — Upgrade.** Within one identity, a family's coverage grows by posting a second
+drill whose kernel set is a superset (a different digest, a second record; the class binding
+finds whichever covers it). Across identities, everything re-certifies — the genesis set of the
+new identity is derived by the coverage rule from the drills the new court grades
+(`palw_rc_fp_certified_class_ids_v1`), and the chain set starts empty. A class's own profile never
+changes (its id IS its profile), so a class never needs re-binding on one identity.
+
+**Decision 12 — Expiry.** None by time. A certification is bound to the network identity that
+recorded it and lives with the class record: a class reclaimed to Dormant and re-registered under
+the same id keeps its free-prompt certification (same profile, same kernels) and takes its share
+from the registration rules, which read genesis ∪ chain. What DOES lapse is everything, on a
+ruleset change — the wipe policy below.
+
+**Decision 13 — State version 16 and the migration that is not one.** Mainnet has no PALW state
+today; a carded mainnet is born at version 16. Testnet-11 moves 15 → 16 by the Relaunch 5e
+re-genesis, as every ruleset change has: a node that starts this build over a datadir written by
+another version refuses at boot with the reason and the remedy (wipe, resync from peers announcing
+this build's fingerprint), because `PalwStateCarriageV2::into_state` accepts only its own version
+and the P2P handshake already refuses the old fingerprint. No in-place migration exists and none
+is planned: a chain-certified set is chain history of one identity.
+
+**Deployment and verification.** `docs/mainnet-palw-certification-runbook.md`: the card, the
+build from the final RC tag, the simultaneous validator swap (every validator on one build —
+a mixed fleet forks at the first certification object), and the verification ladder (devnet
+rehearsal of the three transactions, the announce fingerprint, the first `FamilyCertified` on the
+live chain read back from every validator's `[palw-lifecycle]` line).

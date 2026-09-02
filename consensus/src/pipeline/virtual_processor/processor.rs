@@ -1071,8 +1071,14 @@ impl VirtualStateProcessor {
         let mut palw_state = match self.palw_state_params_v2.as_ref() {
             None => None,
             Some(params) => {
-                let loaded =
-                    self.palw_state_v2_store.read().load_tip(params).expect("a stored V2 tip must load under its own committed root");
+                let loaded = self.palw_state_v2_store.read().load_tip(params).unwrap_or_else(|e| {
+                    panic!(
+                        "the stored PALW V2 tip does not load under this build ({e}). A state written by another \
+                         PALW_STATE_V2_VERSION or ruleset is not migrated in place: this network re-genesises on a \
+                         ruleset change (ADR-0042 Decision 11, ADR-0075 §7), so wipe the datadir and resync from peers \
+                         announcing this build's fingerprint"
+                    )
+                });
                 match loaded {
                     None => None,
                     Some((tip_block, tip_state)) if tip_block == from => Some(tip_state),
@@ -4709,7 +4715,22 @@ impl VirtualStateProcessor {
         let mut folded = state.clone();
         let mut rehearsal = *point;
         let mut accepted = Vec::with_capacity(objects.len());
+        let mut certifications_graded = 0usize;
         for object in objects {
+            // ADR-0075 Decision 9: a block grades at most `PALW_CERTIFICATION_MAX_PER_BLOCK`
+            // family drills. Counted before grading, in transaction order, so every node drops the
+            // same object and the grader is never run for a drill the block may not carry.
+            if matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. }) {
+                if certifications_graded >= kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK {
+                    info!(
+                        "Block {block}: a FamilyCertified object was dropped, and the block stands: the block already carries {} \
+                         (PALW_CERTIFICATION_MAX_PER_BLOCK)",
+                        kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK
+                    );
+                    continue;
+                }
+                certifications_graded += 1;
+            }
             match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
                     match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_verdict_policy(
