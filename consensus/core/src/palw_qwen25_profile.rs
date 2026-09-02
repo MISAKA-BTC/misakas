@@ -75,41 +75,6 @@ pub struct PalwQwen25GeometryV1 {
     pub tile_len: u32,
 }
 
-/// **The epsilon the dense converter actually builds, as opposed to the one the family declared.**
-///
-/// `qwen25-convert` writes `eps_q: 1 << 8` — copied from the floor — and every geometry below
-/// declares `rms_eps_q: 1`. This module's own header records the split as "two arithmetic
-/// specifications under one model id", and it is not cosmetic: the engine norms with the
-/// ARTIFACT's epsilon and the court re-norms with the CLASS's, so an artifact built at 256 under a
-/// class registered at 1 has every honest execution convicted.
-///
-/// It also has a consequence nobody had measured until the model gate ran on a real converted
-/// artifact: `Qwen25A16Backend::from_registered_profile` calls `plan_from_profile`, which compares
-/// the two and returns `GeometryMismatch { rms_eps_q: profile 1, artifact 256 }` — **at every
-/// width, including the n_ctx-16 row the chain has registered since Relaunch 5**. So the dense
-/// family cannot serve a REGISTERED graph at all, and the shipped worker survives only because it
-/// uses `Qwen25A16Backend::new`, which compiles no plan and therefore never compares. A class whose
-/// backend cannot be built from its own registered profile is a class that cannot be court-capable,
-/// which is exactly what a free-prompt claim on it needs to be.
-///
-/// The hybrid family hit the same wall and answered it with
-/// [`crate::palw_qwen36_profile::qwen36_geometry_artifact_eps`], whose own doc comment points AT
-/// the dense family as the precedent. This is that answer, for the family that set the precedent.
-pub const QWEN25_ARTIFACT_EPS_Q: i64 = 1 << 8;
-
-/// A dense-lineage geometry with its epsilon corrected to [`QWEN25_ARTIFACT_EPS_Q`].
-///
-/// A field update on the SAME const rather than a second hand-kept table, so the corrected geometry
-/// cannot drift from the frozen one in any other field. The existing rows keep their consts exactly
-/// as the chain registered them — their ids are live chain facts and this function must not move
-/// them — and this is the one declared difference. Because `rms_eps_q` reaches
-/// `PalwShapeProfileV3::base0_rms_eps_q`, and the shape profile's id IS the class id, a row built
-/// on this geometry is a NEW CLASS and not a repair of an old one. That is the same rule the
-/// `graph-v2` and `graph-v3` rows were born under.
-pub const fn qwen25_geometry_artifact_eps(g: PalwQwen25GeometryV1) -> PalwQwen25GeometryV1 {
-    PalwQwen25GeometryV1 { rms_eps_q: QWEN25_ARTIFACT_EPS_Q, ..g }
-}
-
 /// `Qwen2.5-1.5B`, measured 2026-08-21. The nearest existing member to the "2B" the goal names.
 pub const QWEN25_1_5B: PalwQwen25GeometryV1 = PalwQwen25GeometryV1 {
     layer_count: 28,

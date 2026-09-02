@@ -581,7 +581,7 @@ mod tests {
             v3.profile.base0_rms_eps_q, v3.artifact_shape.eps_q,
             "the graph-v3 row must declare the epsilon the converter builds, or plan_from_profile refuses it"
         );
-        assert_eq!(v3.profile.base0_rms_eps_q, kaspa_consensus_core::palw_qwen25_profile::QWEN25_ARTIFACT_EPS_Q);
+        assert_eq!(v3.profile.base0_rms_eps_q, kaspa_consensus_core::palw_qwen25_profile::QWEN25_A16_ARTIFACT_EPS_Q);
 
         // The predecessors carry the split, and that is a fact about the chain rather than a bug to
         // fix here: their ids are live and correcting one in place would rename a registered class.
