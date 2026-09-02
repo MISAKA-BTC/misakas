@@ -1,0 +1,68 @@
+{
+  "v": 1,
+  "seed": 1,
+  "steps": 300,
+  "width": 32,
+  "height": 24,
+  "rules": {
+    "kind": "agents",
+    "bounce": true,
+    "jitter": 0
+  },
+  "cells": [],
+  "entities": [
+    {
+      "id": "alpha",
+      "x": 3,
+      "y": 4,
+      "vx": 5,
+      "vy": 2,
+      "attrs": {
+        "hp": 100,
+        "team": 1
+      }
+    },
+    {
+      "id": "bravo",
+      "x": 30,
+      "y": 20,
+      "vx": -7,
+      "vy": -3,
+      "attrs": {
+        "hp": 80,
+        "team": 2
+      }
+    },
+    {
+      "id": "charlie",
+      "x": 16,
+      "y": 12,
+      "vx": 0,
+      "vy": 9,
+      "attrs": {}
+    },
+    {
+      "id": "delta",
+      "x": 0,
+      "y": 0,
+      "vx": 64,
+      "vy": 64,
+      "attrs": {
+        "hp": 1,
+        "team": 1,
+        "z": -9223372036854775808
+      }
+    },
+    {
+      "id": "echo",
+      "x": 31,
+      "y": 23,
+      "vx": -1,
+      "vy": 1,
+      "attrs": {
+        "team": 2,
+        "hp": 55
+      }
+    }
+  ]
+}
