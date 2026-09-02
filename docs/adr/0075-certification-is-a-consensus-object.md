@@ -206,3 +206,23 @@ build from the final RC tag, the simultaneous validator swap (every validator on
 a mixed fleet forks at the first certification object), and the verification ladder (devnet
 rehearsal of the three transactions, the announce fingerprint, the first `FamilyCertified` on the
 live chain read back from every validator's `[palw-lifecycle]` line).
+
+**Decision 14 — An object too large for one carrier rides in chunks, reassembled in state.**
+Measured on the RC drills: the A16 fixture's attempt drill is 82 KB, the QWEN36 fixture's 248 KB
+(183 KB of it the profile repeated in every refutation's binding), the floor's 310 KB. A block
+carries at most `max_block_mass / TRANSIENT_BYTE_TO_MASS_FACTOR` ≈ 125 KB of transaction bytes,
+and a standard transaction is bounded the same way, so most drills do not fit one carrier and a
+single-carrier rule would have made "permissionless" mean "only small graphs". `ObjectChunk {
+group, index, count, bytes }` is a lifecycle object: `group` is the digest of the whole object's
+bytes (`palw_object_chunk_group_id_v1`), each part is at most `PALW_OBJECT_CHUNK_MAX_BYTES`
+(100,000), a group spans at most `PALW_OBJECT_CHUNK_MAX_COUNT` (8) parts. The chain keeps the
+parts IN STATE (`pending_chunks`, in the state root, carried and reverted like every collection)
+and, in the block that completes a group, hashes the assembly, decodes it, requires a
+`FamilyCertified`, and applies it through the same arm a directly carried one goes through —
+which is why the per-block grading cap counts a completing chunk as a certification. The table
+holds at most `PALW_OBJECT_CHUNK_MAX_GROUPS` (8) half-assembled groups; a group nobody completes
+within `PALW_OBJECT_CHUNK_TTL_DAA` (4,000) is evicted, in key order, when the room is needed. A
+part that duplicates, a part under another count, an assembly that does not hash to its group,
+or a chunked object of any other kind is refused and the block stands. `palw-certify drill`
+writes the chunks beside the whole object and `misaka-cli palw submit-object` carries them as one
+chained burst, each carrier funded from the previous one's change.

@@ -292,12 +292,15 @@ pub fn palw_operator_id_v2(operator_pubkey: &[u8]) -> Hash64 {
 pub const PALW_STATE_V2_DOMAIN_STATE_ROOT: &[u8] = b"misaka-palw/state-v2/state-root/v1";
 pub const PALW_STATE_V2_DOMAIN_COLLECTION: &[u8] = b"misaka-palw/state-v2/collection/v1";
 pub const PALW_STATE_V2_DOMAIN_CARRIAGE: &[u8] = b"misaka-palw/state-v2/carriage/v1";
+/// ADR-0075 Decision 14: the digest an `ObjectChunk` group is keyed by — the whole object's bytes.
+pub const PALW_STATE_V2_DOMAIN_OBJECT_CHUNK_GROUP: &[u8] = b"misaka-palw/state-v2/object-chunk-group/v1";
 
 /// Every domain this module keys, so the cross-family uniqueness test can see them.
 pub const PALW_STATE_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_STATE_V2_DOMAIN_STATE_ROOT,
     PALW_STATE_V2_DOMAIN_COLLECTION,
     PALW_STATE_V2_DOMAIN_CARRIAGE,
+    PALW_STATE_V2_DOMAIN_OBJECT_CHUNK_GROUP,
     // The two authorisation domains in this module. A signing domain that no sweep can see is a
     // domain nothing stops another family from reusing, and a reused domain is a signature made
     // for one purpose accepted for another.
@@ -2093,6 +2096,16 @@ pub enum PalwConsensusObjectV2 {
         lane: PalwCertifiedLaneV1,
         profile: Box<crate::palw_step::PalwShapeProfileV3>,
     },
+    /// **ADR-0075 Decision 14: one chunk of an object too large for one carrier.** `group` is
+    /// `palw_object_chunk_group_id_v1` of the whole object's bytes; the chain keeps the parts in
+    /// `pending_chunks` and applies the object — a `FamilyCertified`, the only kind that needs
+    /// this — in the block that completes the group.
+    ObjectChunk {
+        group: Hash64,
+        index: u8,
+        count: u8,
+        bytes: Vec<u8>,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -2212,6 +2225,64 @@ pub const PALW_CERTIFICATION_MAX_VECTORS: usize = 32;
 /// in a block is dropped and the block stands, so a block cannot be made invalid by a stranger's
 /// evidence. Two per block is one family per lane for one model tier per block.
 pub const PALW_CERTIFICATION_MAX_PER_BLOCK: usize = 2;
+
+/// **ADR-0075 Decision 14: an object too large for one carrier rides in chunks.** A block carries
+/// at most ~125 KB of transaction bytes (`TRANSIENT_BYTE_TO_MASS_FACTOR` × bytes ≤
+/// `max_block_mass`, and a standard transaction is bounded the same way), and a family drill is
+/// 80–320 KB, so a `FamilyCertified` is cut into `ObjectChunk`s of at most this many bytes, each an
+/// ordinary lifecycle transaction. The chain reassembles them IN STATE (`pending_chunks`), keyed
+/// by the digest of the whole object, and applies the object in the block that completes the
+/// group — deterministic on every node, replayed and reverted like any other transition.
+pub const PALW_OBJECT_CHUNK_MAX_BYTES: usize = 100_000;
+/// The most chunks one object may span: 800 KB, above any drill the RC families produce.
+pub const PALW_OBJECT_CHUNK_MAX_COUNT: u8 = 8;
+/// The most groups the state holds half-assembled at once; expired ones are evicted first.
+pub const PALW_OBJECT_CHUNK_MAX_GROUPS: usize = 8;
+/// A group nobody completes within this many DAA is evicted when the room is needed.
+pub const PALW_OBJECT_CHUNK_TTL_DAA: u64 = 4_000;
+
+pub fn palw_object_chunk_group_id_v1(object_bytes: &[u8]) -> Hash64 {
+    let mut state = keyed(PALW_STATE_V2_DOMAIN_OBJECT_CHUNK_GROUP);
+    state.update(&(object_bytes.len() as u64).to_le_bytes());
+    state.update(object_bytes);
+    finish(state)
+}
+
+/// Cut an object into the chunks that carry it, `None` when it fits one carrier as it is.
+pub fn palw_object_chunks_v1(object: &PalwConsensusObjectV2) -> Result<Option<Vec<PalwConsensusObjectV2>>, PalwStateV2Error> {
+    palw_object_chunks_with_cap_v1(object, PALW_OBJECT_CHUNK_MAX_BYTES)
+}
+
+/// [`palw_object_chunks_v1`] with the chunk size a parameter (tests cut small objects finely).
+pub fn palw_object_chunks_with_cap_v1(
+    object: &PalwConsensusObjectV2,
+    cap: usize,
+) -> Result<Option<Vec<PalwConsensusObjectV2>>, PalwStateV2Error> {
+    let bytes = borsh::to_vec(object).map_err(|_| PalwStateV2Error::Overflow("object serialization"))?;
+    if bytes.len() <= cap {
+        return Ok(None);
+    }
+    let count = bytes.len().div_ceil(cap);
+    if count > PALW_OBJECT_CHUNK_MAX_COUNT as usize {
+        return Err(PalwStateV2Error::ObjectTooLargeToChunk { bytes: bytes.len(), max: cap * PALW_OBJECT_CHUNK_MAX_COUNT as usize });
+    }
+    let group = palw_object_chunk_group_id_v1(&bytes);
+    Ok(Some(
+        bytes
+            .chunks(cap)
+            .enumerate()
+            .map(|(i, part)| PalwConsensusObjectV2::ObjectChunk { group, index: i as u8, count: count as u8, bytes: part.to_vec() })
+            .collect(),
+    ))
+}
+
+/// A half-assembled object (ADR-0075 Decision 14): the parts that have arrived, in state.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwPendingChunksV2 {
+    pub count: u8,
+    pub opened_daa: u64,
+    pub parts: BTreeMap<u8, Vec<u8>>,
+}
 
 // ---------------------------------------------------------------------------------------------
 // Errors
@@ -2384,6 +2455,26 @@ pub enum PalwStateV2Error {
     ClassAlreadyWeighted { class: Hash64, share: u16 },
     #[error("class {class} is not Active, so a certification cannot seat it")]
     CertificationNeedsActiveClass { class: Hash64 },
+    #[error("an object of {bytes} bytes does not fit {max} bytes of chunks (ADR-0075 Decision 14)")]
+    ObjectTooLargeToChunk { bytes: usize, max: usize },
+    #[error("a chunk group of {count} parts is outside 1..={max}")]
+    ChunkCountOutOfRange { count: u8, max: u8 },
+    #[error("chunk index {index} is outside a group of {count}")]
+    ChunkIndexOutOfRange { index: u8, count: u8 },
+    #[error("a chunk of {bytes} bytes is empty or above {max}")]
+    ChunkTooLarge { bytes: usize, max: usize },
+    #[error("chunk group {group} was opened with another part count")]
+    ChunkGroupIncoherent { group: Hash64 },
+    #[error("chunk group {group} already holds part {index}")]
+    ChunkDuplicate { group: Hash64, index: u8 },
+    #[error("{max} chunk groups are already half-assembled; complete or outlive one first")]
+    TooManyPendingChunkGroups { max: usize },
+    #[error("the assembled bytes of chunk group {group} hash to {computed} — not the group they were sent under")]
+    ChunkGroupHashMismatch { group: Hash64, computed: Hash64 },
+    #[error("the assembled chunk group does not decode as a consensus object: {0}")]
+    ChunkedObjectUndecodable(String),
+    #[error("only a FamilyCertified may ride in chunks; every other object fits one carrier")]
+    ChunkedObjectKindNotAllowed,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2455,6 +2546,8 @@ pub struct PalwChainStateV2 {
     fp_certified_families: BTreeMap<Hash64, PalwCertifiedFamilyStateV2>,
     /// ADR-0075 Decision 5: classes whose free-prompt lane a chain-certified family covers.
     fp_certified_classes: BTreeMap<Hash64, PalwClassLaneCertificationV2>,
+    /// ADR-0075 Decision 14: objects half-assembled from chunks, by group digest.
+    pending_chunks: BTreeMap<Hash64, PalwPendingChunksV2>,
     safe_weight: u128,
     bounded_immature: u128,
     safe_frontier_blue_score: u64,
@@ -2513,6 +2606,7 @@ impl PalwChainStateV2 {
             certified_families: BTreeMap::new(),
             fp_certified_families: BTreeMap::new(),
             fp_certified_classes: BTreeMap::new(),
+            pending_chunks: BTreeMap::new(),
             safe_weight: 0,
             bounded_immature: 0,
             safe_frontier_blue_score: 0,
@@ -2582,6 +2676,11 @@ impl PalwChainStateV2 {
     /// gate; the free-prompt arm reads both.
     pub fn fp_lane_certification(&self, class: &Hash64) -> Option<&PalwClassLaneCertificationV2> {
         self.fp_certified_classes.get(class)
+    }
+
+    /// ADR-0075 Decision 14: the parts of a chunked object that have arrived so far.
+    pub fn pending_chunk_group(&self, group: &Hash64) -> Option<&PalwPendingChunksV2> {
+        self.pending_chunks.get(group)
     }
 
     pub fn class_target(&self, id: &Hash64) -> Option<&PalwClassTargetV2> {
@@ -2757,6 +2856,7 @@ impl PalwChainStateV2 {
         state.update(collection_root(b"certified_families", &self.certified_families).as_byte_slice());
         state.update(collection_root(b"fp_certified_families", &self.fp_certified_families).as_byte_slice());
         state.update(collection_root(b"fp_certified_classes", &self.fp_certified_classes).as_byte_slice());
+        state.update(collection_root(b"pending_chunks", &self.pending_chunks).as_byte_slice());
         state.update(collection_root(b"panels", &self.panels).as_byte_slice());
         state.update(collection_root(b"court_sessions", &self.court_sessions).as_byte_slice());
         state.update(collection_root(b"epoch_counters", &self.epoch_counters).as_byte_slice());
@@ -3243,6 +3343,11 @@ pub enum PalwDeltaEntryV2 {
         old: Option<PalwClassLaneCertificationV2>,
         new: Option<PalwClassLaneCertificationV2>,
     },
+    PendingChunks {
+        key: Hash64,
+        old: Option<PalwPendingChunksV2>,
+        new: Option<PalwPendingChunksV2>,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -3400,6 +3505,14 @@ impl<'a> TransitionBuilder<'a> {
             None => self.state.fp_certified_classes.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::FpCertifiedClass { key, old, new });
+    }
+
+    fn write_pending_chunks(&mut self, key: Hash64, new: Option<PalwPendingChunksV2>) {
+        let old = match &new {
+            Some(record) => self.state.pending_chunks.insert(key, record.clone()),
+            None => self.state.pending_chunks.remove(&key),
+        };
+        self.entries.push(PalwDeltaEntryV2::PendingChunks { key, old, new });
     }
 
     #[allow(dead_code)] // ADR-0045 Decision 2's boundary derivation is the writer; it lands next.
@@ -5678,6 +5791,68 @@ fn apply_object(
                 }
             }
         }
+        PalwConsensusObjectV2::ObjectChunk { group, index, count, bytes } => {
+            if *count == 0 || *count > PALW_OBJECT_CHUNK_MAX_COUNT {
+                return Err(PalwStateV2Error::ChunkCountOutOfRange { count: *count, max: PALW_OBJECT_CHUNK_MAX_COUNT });
+            }
+            if *index >= *count {
+                return Err(PalwStateV2Error::ChunkIndexOutOfRange { index: *index, count: *count });
+            }
+            if bytes.is_empty() || bytes.len() > PALW_OBJECT_CHUNK_MAX_BYTES {
+                return Err(PalwStateV2Error::ChunkTooLarge { bytes: bytes.len(), max: PALW_OBJECT_CHUNK_MAX_BYTES });
+            }
+            let mut pending = match builder.state.pending_chunks.get(group) {
+                Some(pending) => {
+                    if pending.count != *count {
+                        return Err(PalwStateV2Error::ChunkGroupIncoherent { group: *group });
+                    }
+                    if pending.parts.contains_key(index) {
+                        return Err(PalwStateV2Error::ChunkDuplicate { group: *group, index: *index });
+                    }
+                    pending.clone()
+                }
+                None => {
+                    // Room is made by evicting groups past their TTL — in key order, so every
+                    // node evicts the same ones — and refused when none can be made.
+                    let expired: Vec<Hash64> = builder
+                        .state
+                        .pending_chunks
+                        .iter()
+                        .filter(|(_, p)| p.opened_daa.saturating_add(PALW_OBJECT_CHUNK_TTL_DAA) < ctx.daa_score)
+                        .map(|(k, _)| *k)
+                        .collect();
+                    for key in expired {
+                        builder.write_pending_chunks(key, None);
+                    }
+                    if builder.state.pending_chunks.len() >= PALW_OBJECT_CHUNK_MAX_GROUPS {
+                        return Err(PalwStateV2Error::TooManyPendingChunkGroups { max: PALW_OBJECT_CHUNK_MAX_GROUPS });
+                    }
+                    PalwPendingChunksV2 { count: *count, opened_daa: ctx.daa_score, parts: BTreeMap::new() }
+                }
+            };
+            pending.parts.insert(*index, bytes.clone());
+            if pending.parts.len() < pending.count as usize {
+                builder.write_pending_chunks(*group, Some(pending));
+            } else {
+                // The group is complete: the object it carried is applied HERE, in this block, by
+                // the same arms every directly-carried object goes through.
+                let mut whole = Vec::with_capacity(pending.parts.values().map(Vec::len).sum());
+                for i in 0..pending.count {
+                    whole.extend_from_slice(&pending.parts[&i]);
+                }
+                let computed = palw_object_chunk_group_id_v1(&whole);
+                if computed != *group {
+                    return Err(PalwStateV2Error::ChunkGroupHashMismatch { group: *group, computed });
+                }
+                let inner: PalwConsensusObjectV2 =
+                    borsh::from_slice(&whole).map_err(|e| PalwStateV2Error::ChunkedObjectUndecodable(e.to_string()))?;
+                if !matches!(inner, PalwConsensusObjectV2::FamilyCertified { .. }) {
+                    return Err(PalwStateV2Error::ChunkedObjectKindNotAllowed);
+                }
+                builder.write_pending_chunks(*group, None);
+                apply_object(builder, ctx, &inner)?;
+            }
+        }
         PalwConsensusObjectV2::ClassFrozen { class_id, certificate } => {
             let record = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?.clone();
             if let PalwClassStatusV2::Frozen { .. } = record.status {
@@ -6301,6 +6476,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::FpCertifiedClass { key, old, new } => {
             swap_write!(state.fp_certified_classes, key, old, new)
         }
+        PalwDeltaEntryV2::PendingChunks { key, old, new } => swap_write!(state.pending_chunks, key, old, new),
         // Launch blockers §8: the retired-claims accumulator. Its own entry rather than a third
         // component of `Weights`, because it moves on a different event (a retirement sweep) than
         // the two that ride together (a maturation).
@@ -6453,6 +6629,7 @@ pub struct PalwStateCarriageV2 {
     pub certified_families: BTreeMap<Hash64, PalwCertifiedFamilyStateV2>,
     pub fp_certified_families: BTreeMap<Hash64, PalwCertifiedFamilyStateV2>,
     pub fp_certified_classes: BTreeMap<Hash64, PalwClassLaneCertificationV2>,
+    pub pending_chunks: BTreeMap<Hash64, PalwPendingChunksV2>,
     pub panels: BTreeMap<Hash64, PalwPanelStateV2>,
     pub court_sessions: BTreeMap<Hash64, PalwCourtSessionStateV2>,
     pub epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
@@ -6494,6 +6671,7 @@ impl PalwStateCarriageV2 {
             certified_families: state.certified_families.clone(),
             fp_certified_families: state.fp_certified_families.clone(),
             fp_certified_classes: state.fp_certified_classes.clone(),
+            pending_chunks: state.pending_chunks.clone(),
             panels: state.panels.clone(),
             court_sessions: state.court_sessions.clone(),
             epoch_counters: state.epoch_counters.clone(),
@@ -6550,6 +6728,7 @@ impl PalwStateCarriageV2 {
             certified_families: self.certified_families,
             fp_certified_families: self.fp_certified_families,
             fp_certified_classes: self.fp_certified_classes,
+            pending_chunks: self.pending_chunks,
             panels: self.panels,
             court_sessions: self.court_sessions,
             epoch_counters: self.epoch_counters,
@@ -11140,6 +11319,123 @@ pub(crate) mod tests {
         assert!(s1.chain_certified_families(PalwCertifiedLaneV1::Attempt).is_empty());
     }
 
+    /// ADR-0075 Decision 14: an object cut into chunks is reassembled IN STATE — parts accumulate
+    /// under the group digest, the object applies in the block that completes it, a group whose
+    /// bytes do not hash to their group is refused, a duplicate part is refused, only a
+    /// `FamilyCertified` may ride this way, and the group table is bounded with expiry.
+    #[test]
+    fn chunked_objects_reassemble_in_state_and_apply_when_complete() {
+        use crate::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+        use crate::palw_e2e_adjudicability::{PalwE2eDrillEvidenceV1, palw_e2e_family_id_v1};
+
+        let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's profile");
+        let evidence = |tag: &str| PalwE2eDrillEvidenceV1 {
+            family_id: palw_e2e_family_id_v1(tag),
+            profile: profile.clone(),
+            artifact_root: h64(9),
+            vectors: Vec::new(),
+            malformed_inputs_refused: 0,
+        };
+        let inner =
+            PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(evidence("CHUNKED"))) };
+        let chunks = palw_object_chunks_with_cap_v1(&inner, 1_000).expect("chunks").expect("the object exceeds the cap");
+        assert!(chunks.len() >= 3, "the floor's profile alone is several KB, so several chunks: {}", chunks.len());
+        let PalwConsensusObjectV2::ObjectChunk { group, count, .. } = &chunks[0] else { panic!("a chunk") };
+        let (group, count) = (*group, *count);
+        assert_eq!(count as usize, chunks.len());
+
+        let p = params();
+        let (mut state, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        // Every part but the last accumulates; the state root moves with each.
+        let mut daa = 101;
+        for chunk in &chunks[..chunks.len() - 1] {
+            let before = state.state_root();
+            let (next, delta) = apply(&state, &p, &ctx(daa, daa, daa), std::slice::from_ref(chunk), None);
+            assert_ne!(next.state_root(), before, "a part is state");
+            assert_eq!(revert_delta_v2(&next, &delta, &p).unwrap().state_root(), before, "and reverts");
+            state = next;
+            daa += 1;
+        }
+        let pending = state.pending_chunk_group(&group).expect("the group is half-assembled");
+        assert_eq!(pending.parts.len(), chunks.len() - 1);
+        assert_eq!(pending.count, count);
+
+        // A duplicate part is refused; a part under another count is refused.
+        assert_eq!(
+            apply_palw_transition_v2(&state, &p, &ctx(daa, daa, daa), std::slice::from_ref(&chunks[0]), None).unwrap_err(),
+            PalwStateV2Error::ChunkDuplicate { group, index: 0 }
+        );
+        let PalwConsensusObjectV2::ObjectChunk { bytes: last_bytes, index: last_index, .. } = chunks.last().unwrap().clone() else {
+            panic!()
+        };
+        let other_count = PalwConsensusObjectV2::ObjectChunk { group, index: last_index, count: count + 1, bytes: last_bytes.clone() };
+        assert_eq!(
+            apply_palw_transition_v2(&state, &p, &ctx(daa, daa, daa), &[other_count], None).unwrap_err(),
+            PalwStateV2Error::ChunkGroupIncoherent { group }
+        );
+        // Tampered bytes complete the group but do not hash to it.
+        let mut tampered = last_bytes.clone();
+        tampered[0] ^= 1;
+        let bad_last = PalwConsensusObjectV2::ObjectChunk { group, index: last_index, count, bytes: tampered };
+        assert!(matches!(
+            apply_palw_transition_v2(&state, &p, &ctx(daa, daa, daa), &[bad_last], None).unwrap_err(),
+            PalwStateV2Error::ChunkGroupHashMismatch { .. }
+        ));
+        // The genuine last part completes the group and the inner object is APPLIED — here it is
+        // an empty drill, so the court's refusal is the proof that grading ran.
+        let refused =
+            apply_palw_transition_v2(&state, &p, &ctx(daa, daa, daa), std::slice::from_ref(chunks.last().unwrap()), None).unwrap_err();
+        assert!(matches!(refused, PalwStateV2Error::CertificationRefused { .. }), "got {refused:?}");
+
+        // Only a FamilyCertified may ride in chunks.
+        let bind = PalwConsensusObjectV2::ClassLaneCertified {
+            class_id: profile.shape_profile_id(),
+            lane: PalwCertifiedLaneV1::FreePrompt,
+            profile: Box::new(profile.clone()),
+        };
+        let bind_chunks = palw_object_chunks_with_cap_v1(&bind, 1_000).unwrap().unwrap();
+        let mut s2 = state.clone();
+        let mut d = daa + 1;
+        for chunk in &bind_chunks[..bind_chunks.len() - 1] {
+            s2 = apply(&s2, &p, &ctx(d, d, d), std::slice::from_ref(chunk), None).0;
+            d += 1;
+        }
+        assert_eq!(
+            apply_palw_transition_v2(&s2, &p, &ctx(d, d, d), std::slice::from_ref(bind_chunks.last().unwrap()), None).unwrap_err(),
+            PalwStateV2Error::ChunkedObjectKindNotAllowed
+        );
+
+        // The table is bounded, and an expired group makes room.
+        let mut s3 = state.clone();
+        let mut d = daa + 1;
+        let mut opened = 1usize;
+        let mut tag = 0u32;
+        while opened < PALW_OBJECT_CHUNK_MAX_GROUPS {
+            tag += 1;
+            let object = PalwConsensusObjectV2::FamilyCertified {
+                evidence: Box::new(PalwCertificationEvidenceV1::Attempt(evidence(&format!("G{tag}")))),
+            };
+            let first = palw_object_chunks_with_cap_v1(&object, 1_000).unwrap().unwrap().remove(0);
+            s3 = apply(&s3, &p, &ctx(d, d, d), &[first], None).0;
+            opened += 1;
+            d += 1;
+        }
+        let one_more = palw_object_chunks_with_cap_v1(
+            &PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(evidence("OVER"))) },
+            1_000,
+        )
+        .unwrap()
+        .unwrap()
+        .remove(0);
+        assert_eq!(
+            apply_palw_transition_v2(&s3, &p, &ctx(d, d, d), std::slice::from_ref(&one_more), None).unwrap_err(),
+            PalwStateV2Error::TooManyPendingChunkGroups { max: PALW_OBJECT_CHUNK_MAX_GROUPS }
+        );
+        let later = d + PALW_OBJECT_CHUNK_TTL_DAA + 1;
+        let (s4, _) = apply(&s3, &p, &ctx(later, later, later), &[one_more], None);
+        assert!(s4.pending_chunk_group(&group).is_none(), "the oldest group expired and was evicted to make room");
+    }
+
     #[test]
     fn fp_a_bond_at_its_exposure_ceiling_is_refused_a_further_claim() {
         let genesis = PalwChainStateV2::genesis();
@@ -11424,6 +11720,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::LastPoint { .. } => "last_point",
                     PalwDeltaEntryV2::CertifiedFamily { .. } => "certified_family",
                     PalwDeltaEntryV2::FpCertifiedClass { .. } => "fp_certified_class",
+                    PalwDeltaEntryV2::PendingChunks { .. } => "pending_chunks",
                 });
             }
         }
@@ -11676,6 +11973,7 @@ pub(crate) mod tests {
             s.update(spec_collection_root(b"certified_families", &c.certified_families).as_byte_slice());
             s.update(spec_collection_root(b"fp_certified_families", &c.fp_certified_families).as_byte_slice());
             s.update(spec_collection_root(b"fp_certified_classes", &c.fp_certified_classes).as_byte_slice());
+            s.update(spec_collection_root(b"pending_chunks", &c.pending_chunks).as_byte_slice());
             s.update(spec_collection_root(b"panels", &c.panels).as_byte_slice());
             s.update(spec_collection_root(b"court_sessions", &c.court_sessions).as_byte_slice());
             s.update(spec_collection_root(b"epoch_counters", &c.epoch_counters).as_byte_slice());
@@ -11895,6 +12193,7 @@ pub(crate) mod tests {
             certified_families: _,
             fp_certified_families: _,
             fp_certified_classes: _,
+            pending_chunks: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -11979,12 +12278,12 @@ pub(crate) mod tests {
     fn the_version_16_state_root_golden_vectors() {
         assert_eq!(
             PalwChainStateV2::genesis().state_root().to_string(),
-            "2e2161674299e529326b62deb4228bac5bd3802186f4e229658f6696424a117dff37c08d598f16df274805f579e01f2c1598ba750f521ff5131ece50eeac26b8",
+            "e1857aa05a67ed03a7a5d4c77452264a335d40570548c93fa7373c14264db6e453c914f94a1586a454acef7dc3f403baf9076751f9f6d97699f43c3a776984fd",
             "the empty state's version-16 root moved"
         );
         assert_eq!(
             m02_populated_state().state_root().to_string(),
-            "b45c48b1fbf9f8163ba275b1eb824bb71f36c0ee336f8e6a630a83bc0c7ea26c4ca30222a897e743cb82366269a1a38437297df2c84ed84958ced5fe217c5218",
+            "570658711710b35f467d8a6e67818f0a04e23265fc8ae2a1502a7a4085f09c882f370afea8ad17c8f86584a746a6b01d9683cadef068e77feefb8b41dd7c5292",
             "the inhabited state's version-16 root moved"
         );
     }

@@ -20,7 +20,9 @@
 //! fixture certify the kernels the 1.5B and 35B classes reach (ADR-0069 Decision 2).
 
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
-use kaspa_consensus_core::palw_state_v2::{PalwCertificationEvidenceV1, PalwCertifiedLaneV1, PalwConsensusObjectV2};
+use kaspa_consensus_core::palw_state_v2::{
+    PALW_OBJECT_CHUNK_MAX_BYTES, PalwCertificationEvidenceV1, PalwCertifiedLaneV1, PalwConsensusObjectV2, palw_object_chunks_v1,
+};
 use misaka_palw_base0::e2e_drill::{
     PalwRcFamilyV1, catalog_profile_by_model_id_v1, covering_rc_family_v1, rc_attempt_evidence_v1, rc_free_prompt_evidence_v1,
 };
@@ -93,7 +95,8 @@ fn main() {
             // Graded here first, so a drill the chain would refuse never leaves this machine.
             let graded = evidence.grade().unwrap_or_else(|e| die(format!("this build's court refuses its own drill: {e}")));
             let vectors = evidence.vector_count();
-            let bytes = write_object(out, &PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(evidence) });
+            let object = PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(evidence) };
+            let bytes = write_object(out, &object);
             println!(
                 "wrote {out}: FamilyCertified, {lane} lane, family {} ({}), digest {}, {vectors} fault vectors, {} kernels, {bytes} bytes",
                 family.name(),
@@ -101,6 +104,27 @@ fn main() {
                 graded.digest(),
                 graded.kernel_ids.len()
             );
+            // ADR-0075 Decision 14: a drill above one carrier's bytes rides in chunks — written
+            // beside the whole object, submitted in index order.
+            match palw_object_chunks_v1(&object) {
+                Ok(None) => println!("fits one carrier: submit {out} as it is"),
+                Ok(Some(chunks)) => {
+                    let mut names = Vec::with_capacity(chunks.len());
+                    for chunk in &chunks {
+                        let PalwConsensusObjectV2::ObjectChunk { index, count, group, .. } = chunk else { unreachable!() };
+                        let name = format!("{out}.chunk{index}");
+                        let n = write_object(&name, chunk);
+                        println!("wrote {name}: ObjectChunk {index}/{count} of group {group}, {n} bytes");
+                        names.push(name);
+                    }
+                    println!(
+                        "too large for one carrier ({bytes} > {PALW_OBJECT_CHUNK_MAX_BYTES}): submit the chunks in order — \
+                         misaka-cli palw submit-object {} --yes",
+                        names.iter().map(|n| format!("--object {n}")).collect::<Vec<_>>().join(" ")
+                    );
+                }
+                Err(e) => die(format!("the drill cannot be chunked: {e}")),
+            }
         }
         Some("bind") => {
             let model_id = flag(&args, "--model-id").unwrap_or_else(|| usage());
@@ -147,6 +171,9 @@ fn main() {
                         if derived == *class_id { "matches" } else { "MISMATCH" },
                         kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(profile).len()
                     );
+                }
+                PalwConsensusObjectV2::ObjectChunk { group, index, count, bytes: part } => {
+                    println!("ObjectChunk: part {index} of {count} of group {group}, {} bytes", part.len());
                 }
                 other => println!("{other:?}"),
             }

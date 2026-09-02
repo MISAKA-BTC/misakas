@@ -108,7 +108,8 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // signature because neither needs one — the evidence is graded by the court in the
         // transition, and the class binding is checked against the class's own profile hash.
         | PalwConsensusObjectV2::FamilyCertified { .. }
-        | PalwConsensusObjectV2::ClassLaneCertified { .. } => Ok(()),
+        | PalwConsensusObjectV2::ClassLaneCertified { .. }
+        | PalwConsensusObjectV2::ObjectChunk { .. } => Ok(()),
         // **Audit M-01: a door nobody can authenticate is shut.**
         //
         // `BondRetireRequested { bond }` carried no signature and no owner binding, and a bond key

@@ -1245,6 +1245,55 @@ mod certification_object_tests {
         assert_eq!(s3.class_share_permille(&base_class), Some(1000 - floor));
     }
 
+    /// **A drill too large for one carrier rides in chunks and certifies exactly as one that
+    /// fits** (ADR-0075 Decision 14): the floor's attempt drill is ~310 KB, four chunks; the
+    /// family is recorded in the block that completes the group, and nothing before it.
+    #[test]
+    fn a_drill_too_large_for_one_carrier_certifies_through_chunks() {
+        use kaspa_consensus_core::palw_state_v2::{PALW_OBJECT_CHUNK_MAX_BYTES, palw_object_chunks_v1};
+
+        let (a16, a16_profile, a16_root) = a16_fixture_v1().expect("the base class fixture");
+        let base_class = a16_profile.shape_profile_id();
+        let (canonical, _) = a16.job_for_anchor(h(0xF1)).expect("a canonical job");
+        let base_leaves = kaspa_consensus_core::palw_step::step_leaf_count(&a16_profile, &canonical).expect("counts");
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base_class, 4, 1000, 100, 800, 0).unwrap();
+        let registration = Obj::ClassRegistered {
+            class_id: base_class,
+            artifact_root: a16_root,
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: base_leaves },
+            initial_target: u128::MAX,
+            share_permille: 1000,
+            activation_daa: 0,
+            admission: None,
+        };
+        let (s0, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &params, &at(1, 100, 1), &[registration], None).unwrap();
+
+        let evidence = rc_attempt_evidence_v1(PalwRcFamilyV1::Base0).expect("the floor drills");
+        let object = Obj::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(evidence)) };
+        let bytes = borsh::to_vec(&object).unwrap().len();
+        assert!(bytes > PALW_OBJECT_CHUNK_MAX_BYTES, "the floor's drill is {bytes} bytes — the case chunks exist for");
+        let chunks = palw_object_chunks_v1(&object).expect("chunkable").expect("chunked");
+        let mut state = s0;
+        let mut daa = 101;
+        for (i, chunk) in chunks.iter().enumerate() {
+            let (next, _) = apply_palw_transition_v2(&state, &params, &at(daa, daa, daa), std::slice::from_ref(chunk), None)
+                .unwrap_or_else(|e| panic!("chunk {i} of {}: {e}", chunks.len()));
+            let recorded = next.chain_certified_families(PalwCertifiedLaneV1::Attempt).len();
+            if i + 1 < chunks.len() {
+                assert_eq!(recorded, 0, "nothing is certified before the group completes");
+            } else {
+                assert_eq!(recorded, 1, "the family is recorded in the block that completes the group");
+                assert_eq!(
+                    next.chain_certified_families(PalwCertifiedLaneV1::Attempt)[0].family_id,
+                    PalwRcFamilyV1::Base0.family_id()
+                );
+            }
+            state = next;
+            daa += 1;
+        }
+    }
+
     fn h(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
     }
@@ -1781,5 +1830,31 @@ mod permissionless_tests {
             ),
             "a certified set that does not match the network's commitment must be refused outright"
         );
+    }
+}
+
+#[cfg(test)]
+mod evidence_size_probe {
+    use super::*;
+
+    /// Where the bytes of a family drill go — printed, so the carriage design can be sized.
+    #[test]
+    fn print_evidence_size_breakdown() {
+        for family in [PalwRcFamilyV1::Base0, PalwRcFamilyV1::Qwen25A16, PalwRcFamilyV1::Qwen36] {
+            let ev = rc_attempt_evidence_v1(family).expect("drills");
+            let total = borsh::to_vec(&ev).unwrap().len();
+            let profile = borsh::to_vec(&ev.profile).unwrap().len();
+            let v = &ev.vectors[0];
+            let honest = borsh::to_vec(&v.honest).unwrap().len();
+            let honest_profile = borsh::to_vec(&v.honest.binding.shape_profile).unwrap().len();
+            let binding = borsh::to_vec(&v.honest.binding).unwrap().len();
+            let openings = borsh::to_vec(&v.operand_openings).unwrap().len();
+            println!(
+                "{}: total={total} vectors={} profile={profile} | vector0: honest_refutation={honest} (binding={binding}, of which profile={honest_profile}) openings={openings} ({} openings)",
+                family.name(),
+                ev.vectors.len(),
+                v.operand_openings.len()
+            );
+        }
     }
 }

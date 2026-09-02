@@ -24,6 +24,7 @@ NODES="${NODES:-3}"
 WORK_DIR="${WORK_DIR:-$REPO_ROOT/.misaka-palw-certify-devnet}"
 WAIT="${WAIT:-240}"
 PREMINE_TXID="6d6973616b612d7072656d696e65$(printf '0%.0s' $(seq 1 100))"   # "misaka-premine" zero-padded to 64 bytes
+MAIN_PREMINE_INDEX=40   # consensus/core/src/config/premine.rs; bond n's fee float sits at MAIN_PREMINE_INDEX + 1 + n
 
 log() { printf '[certify-e2e] %s\n' "$*" >&2; }
 die() { log "FATAL: $*"; exit 1; }
@@ -47,12 +48,18 @@ for ((i=0; i<NODES; i++)); do
   addr="$("$CLI_BIN" --network devnet key address --key-file "$WORK_DIR/keys/bond-$i.seed" | tail -1 | awk '{print $NF}')"
   [ -n "$addr" ] || die "cannot derive bond $i's address"
   p2p=$((16310 + i)); rpc=$((17610 + i))
-  args=(--devnet --appdir="$WORK_DIR/node-$i" --listen=127.0.0.1:$p2p --rpclisten-borsh=127.0.0.1:$rpc --utxoindex --nodnsseed
-        --palw-produce --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i" --palw-producer-pay-address="$addr")
+  # --nogrpc: every node would otherwise bind the same default gRPC port and the later ones exit.
+  # --enable-unsynced-mining: a chain with only a genesis is "not synced"; the producer still
+  # requires peers and open participation (the gate's other clauses are not waived).
+  args=(--devnet --appdir="$WORK_DIR/node-$i" --listen=127.0.0.1:$p2p --rpclisten-borsh=127.0.0.1:$rpc --utxoindex --nodnsseed --disable-upnp
+        --nogrpc --enable-unsynced-mining
+        --palw-produce --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i" --palw-producer-pay-address="$addr"
+        --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
   if [ "$i" -gt 0 ]; then args+=(--connect=127.0.0.1:16310); fi
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
-  pids+=($!)
-  log "node-$i pid ${pids[-1]} bond $PREMINE_TXID:$i pay $addr"
+  pid=$!
+  pids+=("$pid")
+  log "node-$i pid $pid bond $PREMINE_TXID:$i pay $addr"
 done
 
 blocks_of() { grep -c "produced block #" "$WORK_DIR/node-$1.log" 2>/dev/null || true; }
@@ -65,14 +72,26 @@ log "node-0 produced $(blocks_of 0) blocks; waiting for the peers to follow"
 sleep 10
 
 CLI=("$CLI_BIN" --network devnet --rpc 127.0.0.1:17610)
-submit() { "${CLI[@]}" palw submit-object --key-file "$WORK_DIR/keys/main.seed" --object "$1" --yes; }
+# An object above one carrier's bytes was written as `<f>.chunkN` files by palw-certify; submit
+# those in order (ADR-0075 Decision 14), else the object itself.
+submit() {
+  local f="$1"; local args=()
+  if ls "$f".chunk* >/dev/null 2>&1; then
+    for c in $(ls "$f".chunk* | sort -t k -k3 -n); do args+=(--object "$c"); done
+  else
+    args=(--object "$f")
+  fi
+  "${CLI[@]}" palw submit-object --key-file "$WORK_DIR/keys/main.seed" "${args[@]}" --yes
+  # The next burst funds itself from this one's change, which must be in a block first.
+  sleep 8
+}
 
 "$CERTIFY_BIN" drill --family base0 --lane fp --out "$WORK_DIR/obj/base0-fp.obj"
 submit "$WORK_DIR/obj/base0-fp.obj"
-sleep 20
+sleep 12
 "$CERTIFY_BIN" bind --model-id "PALW-BASE-0/rc" --lane fp --out "$WORK_DIR/obj/base0-bind.obj"
 submit "$WORK_DIR/obj/base0-bind.obj"
-sleep 20
+sleep 12
 "$CERTIFY_BIN" drill --family base0 --lane attempt --out "$WORK_DIR/obj/base0-attempt.obj"
 "$CERTIFY_BIN" drill --family a16 --lane attempt --out "$WORK_DIR/obj/a16-attempt.obj"
 "$CERTIFY_BIN" drill --family qwen36 --lane attempt --out "$WORK_DIR/obj/qwen36-attempt.obj"
@@ -81,12 +100,13 @@ sleep 45
 
 fail=0
 for ((i=0; i<NODES; i++)); do
-  fam=$(grep -c "FamilyCertified" "$WORK_DIR/node-$i.log" || true)
+  fam=$(grep -c "carried.*FamilyCertified" "$WORK_DIR/node-$i.log" || true)
   bind=$(grep -c "ClassLaneCertified" "$WORK_DIR/node-$i.log" || true)
   drops=$(grep -c "lifecycle object was dropped" "$WORK_DIR/node-$i.log" || true)
   log "node-$i: FamilyCertified lines=$fam ClassLaneCertified lines=$bind dropped=$drops blocks=$(blocks_of $i)"
-  grep -E "PALW lifecycle carried|lifecycle object was dropped|FamilyCertified object was dropped" "$WORK_DIR/node-$i.log" | sed "s/^/  node-$i: /" >&2 || true
-  grep -q "PALW lifecycle carried.*FamilyCertified" "$WORK_DIR/node-$i.log" || { log "node-$i never carried a FamilyCertified"; fail=1; }
+  grep -E "PALW lifecycle carried.*(ObjectChunk|FamilyCertified|ClassLaneCertified)|lifecycle object was dropped|FamilyCertified object was dropped" "$WORK_DIR/node-$i.log" | sed "s/[0-9a-f]\{128\}/<h>/g; s/^/  node-$i: /" >&2 || true
+  grep -q "PALW lifecycle carried.*FamilyCertified" "$WORK_DIR/node-$i.log" || { log "node-$i never carried a FamilyCertified (direct or assembled from chunks)"; fail=1; }
+  grep -q "assembled from its chunks" "$WORK_DIR/node-$i.log" || { log "node-$i never completed a chunk group"; fail=1; }
   grep -q "PALW lifecycle carried.*ClassLaneCertified" "$WORK_DIR/node-$i.log" || { log "node-$i never carried a ClassLaneCertified"; fail=1; }
 done
 [ "$fail" -eq 0 ] && log "PASS: every validator carried the certification objects" || die "a validator disagreed — see the logs in $WORK_DIR"

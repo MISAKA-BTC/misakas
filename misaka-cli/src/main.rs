@@ -356,9 +356,11 @@ enum PalwCmd {
     SubmitObject {
         #[command(flatten)]
         key: KeyArgs,
-        /// The borsh `PalwConsensusObjectV2` file (`palw-certify drill|bind --out`).
-        #[arg(long)]
-        object: std::path::PathBuf,
+        /// The borsh `PalwConsensusObjectV2` file(s) (`palw-certify drill|bind --out`). Pass the
+        /// chunks of one object in index order (`f.chunk0 f.chunk1 …`); each rides its own
+        /// carrier, funded from the previous carrier's change.
+        #[arg(long = "object", required = true, num_args = 1..)]
+        object: Vec<std::path::PathBuf>,
         /// Actually broadcast (otherwise a dry-run preview).
         #[arg(long)]
         yes: bool,
@@ -813,7 +815,7 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture }) => {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref()).await
         }
-        Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_object(&ctx, &key.source(), &object, yes).await,
+        Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await,
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, key })) => {
             wallet::utxo_list(&ctx, address.as_deref(), &key.source()).await
         }

@@ -164,115 +164,234 @@ pub async fn submit(ctx: &Ctx, path: &Path, yes: bool, material_out: Option<&Pat
     Ok(())
 }
 
-/// **`palw submit-object`** (ADR-0075): carry a lifecycle object the chain judges on its own —
-/// a `FamilyCertified` whose evidence the court grades in the transition, or a `ClassLaneCertified`
-/// checked against the class's own profile hash and the chain's certified families. The carrier
-/// is funded from the CLI key's largest mature UTXO; the fee is sized from the carrier's own
-/// compute mass, because a drill's evidence is hundreds of kilobytes and a send-sized fee would
-/// be refused by the mempool as insufficient.
-pub async fn submit_object(ctx: &Ctx, ks: &crate::keys::KeySource, path: &Path, yes: bool) -> Result<(), CliError> {
+/// **`palw submit-object`** (ADR-0075): carry lifecycle objects the chain judges on its own — a
+/// `FamilyCertified` whose evidence the court grades in the transition, the `ObjectChunk`s of one
+/// too large for a carrier (Decision 14), or a `ClassLaneCertified` checked against the class's
+/// own profile hash and the chain's certified families. The carriers are funded from the CLI
+/// key's largest mature UTXO, each after the first from the previous carrier's change, so a
+/// chunked object goes out as one chained burst; every fee is sized from its carrier's own
+/// compute mass, because a drill's chunk is a hundred kilobytes and a send-sized fee would be
+/// refused by the mempool as insufficient.
+pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std::path::PathBuf], yes: bool) -> Result<(), CliError> {
     use kaspa_consensus_core::mass::MassCalculator;
     use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+    use kaspa_consensus_core::tx::UtxoEntry;
 
-    let bytes = std::fs::read(path).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", path.display())))?;
-    let object: PalwConsensusObjectV2 = borsh::from_slice(&bytes)
-        .map_err(|e| CliError::new(exit::GENERIC, format!("{} is not a borsh consensus object: {e}", path.display())))?;
-    kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object)
-        .map_err(|why| CliError::new(exit::GENERIC, format!("{}: {why}", path.display())))?;
-    let summary = match &object {
-        PalwConsensusObjectV2::FamilyCertified { evidence } => {
-            // Graded here before a fee is spent: the chain would refuse the same bytes, and a
-            // refused object is a dropped carrier — the fee gone, nothing recorded.
-            let family = evidence.grade().map_err(|e| {
-                CliError::new(exit::GENERIC, format!("this build's court refuses the evidence, so the chain would too: {e}"))
-            })?;
-            format!(
-                "FamilyCertified: {} lane, family {} (digest {}), {} fault vectors, {} kernels",
-                evidence.lane(),
-                family.family_id,
-                family.digest(),
-                evidence.vector_count(),
-                family.kernel_ids.len()
-            )
-        }
-        PalwConsensusObjectV2::ClassLaneCertified { class_id, lane, profile } => {
-            let derived = profile.shape_profile_id();
-            if derived != *class_id {
-                return Err(CliError::new(
-                    exit::GENERIC,
-                    format!("the object names class {class_id} but its profile hashes to {derived}; the chain would refuse it"),
-                ));
+    let mut objects = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = std::fs::read(path).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", path.display())))?;
+        let object: PalwConsensusObjectV2 = borsh::from_slice(&bytes)
+            .map_err(|e| CliError::new(exit::GENERIC, format!("{} is not a borsh consensus object: {e}", path.display())))?;
+        kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object)
+            .map_err(|why| CliError::new(exit::GENERIC, format!("{}: {why}", path.display())))?;
+        let summary = match &object {
+            PalwConsensusObjectV2::FamilyCertified { evidence } => {
+                // Graded here before a fee is spent: the chain would refuse the same bytes, and
+                // a refused object is a dropped carrier — the fee gone, nothing recorded.
+                let family = evidence.grade().map_err(|e| {
+                    CliError::new(exit::GENERIC, format!("this build's court refuses the evidence, so the chain would too: {e}"))
+                })?;
+                if bytes.len() > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES {
+                    return Err(CliError::new(
+                        exit::GENERIC,
+                        format!(
+                            "{} is {} bytes, above one carrier's {}; submit the `.chunkN` files palw-certify wrote instead",
+                            path.display(),
+                            bytes.len(),
+                            kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES
+                        ),
+                    ));
+                }
+                format!(
+                    "FamilyCertified: {} lane, family {} (digest {}), {} fault vectors, {} kernels",
+                    evidence.lane(),
+                    family.family_id,
+                    family.digest(),
+                    evidence.vector_count(),
+                    family.kernel_ids.len()
+                )
             }
-            format!("ClassLaneCertified: {lane} lane, class {class_id}")
-        }
-        other => format!("{other:?}"),
-    };
+            PalwConsensusObjectV2::ClassLaneCertified { class_id, lane, profile } => {
+                let derived = profile.shape_profile_id();
+                if derived != *class_id {
+                    return Err(CliError::new(
+                        exit::GENERIC,
+                        format!("the object names class {class_id} but its profile hashes to {derived}; the chain would refuse it"),
+                    ));
+                }
+                format!("ClassLaneCertified: {lane} lane, class {class_id}")
+            }
+            PalwConsensusObjectV2::ObjectChunk { group, index, count, bytes: part } => {
+                format!("ObjectChunk: part {index} of {count} of group {group}, {} bytes", part.len())
+            }
+            other => format!("{other:?}"),
+        };
+        objects.push((path.clone(), object, summary));
+    }
 
     let nv = connect(ctx).await?;
     let key = ks.load_key()?;
     let addr = key.funding_address(nv.params.prefix());
     let all = crate::wallet::page_all(&nv, &addr).await?;
-    let mut spendable: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.mature && !u.bonded).collect();
-    spendable.sort_by(|a, b| b.amount.cmp(&a.amount));
-    let funding = spendable
+    // **Ask the mempool before choosing funding.** An earlier burst's carriers spend a UTXO the
+    // index still lists and pay change the index does not list yet; picking by the index alone
+    // is "output already spent by transaction in the mempool", every second run. Our own pending
+    // transactions are read back, their inputs excluded, their change to us made eligible.
+    let mut pending_spent: std::collections::HashSet<kaspa_consensus_core::tx::TransactionOutpoint> = Default::default();
+    let mut pending_change: Vec<(kaspa_consensus_core::tx::TransactionOutpoint, UtxoEntry)> = Vec::new();
+    if let Ok(entries) = nv.client.get_mempool_entries_by_addresses(vec![addr.clone()], false, false).await {
+        use kaspa_consensus_core::tx::{TransactionInput, TransactionOutpoint, TransactionOutput};
+        let my_spk = kaspa_txscript::pay_to_address_script(&addr);
+        let mut seen: std::collections::BTreeSet<kaspa_consensus_core::tx::TransactionId> = Default::default();
+        for by_address in entries {
+            for entry in by_address.sending.iter().chain(by_address.receiving.iter()) {
+                let rtx = &entry.transaction;
+                let inputs: Vec<TransactionInput> = rtx
+                    .inputs
+                    .iter()
+                    .map(|i| {
+                        TransactionInput::new(
+                            TransactionOutpoint::new(i.previous_outpoint.transaction_id, i.previous_outpoint.index),
+                            i.signature_script.clone(),
+                            i.sequence,
+                            i.sig_op_count,
+                        )
+                    })
+                    .collect();
+                let outputs: Vec<TransactionOutput> =
+                    rtx.outputs.iter().map(|o| TransactionOutput::new(o.value, o.script_public_key.clone())).collect();
+                let tx = Transaction::new(
+                    rtx.version,
+                    inputs,
+                    outputs,
+                    rtx.lock_time,
+                    rtx.subnetwork_id.clone(),
+                    rtx.gas,
+                    rtx.payload.clone(),
+                );
+                let id = tx.id();
+                if !seen.insert(id) {
+                    continue;
+                }
+                for input in &tx.inputs {
+                    pending_spent.insert(input.previous_outpoint);
+                }
+                for (index, output) in tx.outputs.iter().enumerate() {
+                    if output.script_public_key == my_spk {
+                        pending_change.push((
+                            TransactionOutpoint::new(id, index as u32),
+                            UtxoEntry::new(output.value, output.script_public_key.clone(), 0, false),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    let mut candidates: Vec<(kaspa_consensus_core::tx::TransactionOutpoint, UtxoEntry)> = all
+        .iter()
+        .filter(|u| u.mature && !u.bonded && !pending_spent.contains(&u.outpoint))
+        .map(|u| (u.outpoint, u.entry.clone()))
+        .collect();
+    candidates.extend(pending_change.into_iter().filter(|(outpoint, _)| !pending_spent.contains(outpoint)));
+    candidates.sort_by(|a, b| b.1.amount.cmp(&a.1.amount));
+    let (first_outpoint, first_entry) = candidates
         .first()
-        .ok_or_else(|| CliError::new(exit::GENERIC, format!("no mature, unbonded UTXO at {addr} to fund the carrier")))?;
-    // Size the fee from the carrier itself: build once at the floor, read its mass, rebuild.
+        .cloned()
+        .ok_or_else(|| CliError::new(exit::GENERIC, format!("no mature, unbonded, unspent UTXO at {addr} to fund the carrier")))?;
     let floor = kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI;
-    let probe = key
-        .build_palw_lifecycle_tx(&object, funding.outpoint, &funding.entry, floor)
-        .map_err(|e| CliError::new(exit::GENERIC, format!("build the carrier: {e}")))?;
     let calc = MassCalculator::new(
         nv.params.mass_per_tx_byte,
         nv.params.mass_per_script_pub_key_byte,
         nv.params.mass_per_sig_op,
         nv.params.storage_mass_parameter,
     );
-    let compute_mass = calc.calc_non_contextual_masses(&probe).compute_mass;
-    let fee = kaspa_pq_validator_core::relay_fee_for_compute_mass(compute_mass).max(floor);
-    if funding.amount <= fee {
-        return Err(CliError::new(
-            exit::GENERIC,
-            format!("largest spendable UTXO at {addr} holds {} sompi, under the {fee} sompi fee", funding.amount),
-        ));
+
+    // Build every carrier first — chained on the previous one's change — so a refusal costs nothing.
+    let mut funding_outpoint = first_outpoint;
+    let mut funding_entry = first_entry;
+    let mut carriers = Vec::with_capacity(objects.len());
+    for (path, object, summary) in &objects {
+        // Size the fee from the carrier itself: build once at the floor, read its mass, rebuild.
+        let probe = key
+            .build_palw_lifecycle_tx(object, funding_outpoint, &funding_entry, floor)
+            .map_err(|e| CliError::new(exit::GENERIC, format!("build the carrier for {}: {e}", path.display())))?;
+        let compute_mass = calc.calc_non_contextual_masses(&probe).compute_mass;
+        let fee = kaspa_pq_validator_core::relay_fee_for_compute_mass(compute_mass).max(floor);
+        if funding_entry.amount <= fee {
+            return Err(CliError::new(
+                exit::GENERIC,
+                format!("the funding for {} holds {} sompi, under its {fee} sompi fee", path.display(), funding_entry.amount),
+            ));
+        }
+        let tx = key
+            .build_palw_lifecycle_tx(object, funding_outpoint, &funding_entry, fee)
+            .map_err(|e| CliError::new(exit::GENERIC, format!("build the carrier for {}: {e}", path.display())))?;
+        let change = tx.outputs.first().ok_or_else(|| CliError::new(exit::GENERIC, "the carrier has no change output".to_string()))?;
+        funding_outpoint = kaspa_consensus_core::tx::TransactionOutpoint::new(tx.id(), 0);
+        funding_entry = UtxoEntry::new(change.value, change.script_public_key.clone(), 0, false);
+        carriers.push((path.clone(), summary.clone(), tx, compute_mass, fee));
     }
-    let tx = key
-        .build_palw_lifecycle_tx(&object, funding.outpoint, &funding.entry, fee)
-        .map_err(|e| CliError::new(exit::GENERIC, format!("build the carrier: {e}")))?;
-    let txid = tx.id();
+
     if !yes {
         match ctx.output {
             OutputFormat::Json => println!(
                 "{}",
                 serde_json::json!({
-                    "dry_run": true, "txid": txid.to_string(), "object": summary,
-                    "payload_bytes": tx.payload.len(), "compute_mass": compute_mass, "fee_sompi": fee,
-                    "funding": format!("{}:{}", funding.outpoint.transaction_id, funding.outpoint.index),
+                    "dry_run": true,
+                    "carriers": carriers.iter().map(|(path, summary, tx, mass, fee)| serde_json::json!({
+                        "object": path.display().to_string(), "summary": summary, "txid": tx.id().to_string(),
+                        "payload_bytes": tx.payload.len(), "compute_mass": mass, "fee_sompi": fee,
+                    })).collect::<Vec<_>>(),
+                    "funding": format!("{}:{}", first_outpoint.transaction_id, first_outpoint.index),
                 })
             ),
             _ => {
-                println!("{summary}");
+                for (path, summary, tx, mass, fee) in &carriers {
+                    println!("{summary}");
+                    println!(
+                        "  carrier {} for {} ({}-byte payload, compute mass {mass}, fee {fee} sompi)",
+                        tx.id(),
+                        path.display(),
+                        tx.payload.len()
+                    );
+                }
                 println!(
-                    "carrier: {txid} ({}-byte payload, compute mass {compute_mass}, fee {fee} sompi from {}:{})",
-                    tx.payload.len(),
-                    funding.outpoint.transaction_id,
-                    funding.outpoint.index
+                    "funded from {}:{}, each carrier from the previous one's change",
+                    first_outpoint.transaction_id, first_outpoint.index
                 );
                 println!("dry run — nothing was sent. Re-run with --yes to submit.");
             }
         }
         return Ok(());
     }
-    nv.client
-        .submit_transaction(tx.as_ref().into(), false)
-        .await
-        .map_err(|e| CliError::new(exit::GENERIC, format!("submit the carrier: {e}")))?;
+    let mut submitted = Vec::with_capacity(carriers.len());
+    for (path, summary, tx, _, fee) in &carriers {
+        // A funding UTXO the mempool already holds a spend of (an earlier burst's change not yet
+        // in a block) is not a failure of the object: say what to do instead of a bare reject.
+        nv.client.submit_transaction(tx.as_ref().into(), false).await.map_err(|e| {
+            let text = e.to_string();
+            if text.contains("already spent") {
+                CliError::new(
+                    exit::GENERIC,
+                    format!(
+                        "submit the carrier for {}: the funding UTXO is spent by a transaction still in the mempool (an earlier \
+                         submit-object's change has not been mined yet) — wait for a block and re-run; nothing was carried: {text}",
+                        path.display()
+                    ),
+                )
+            } else {
+                CliError::new(exit::GENERIC, format!("submit the carrier for {}: {text}", path.display()))
+            }
+        })?;
+        match ctx.output {
+            OutputFormat::Json => {}
+            _ => println!("submitted {} — {summary} (fee {fee} sompi)", tx.id()),
+        }
+        submitted.push(serde_json::json!({ "object": path.display().to_string(), "txid": tx.id().to_string(), "fee_sompi": fee }));
+    }
     match ctx.output {
-        OutputFormat::Json => println!(
-            "{}",
-            serde_json::json!({ "ok": true, "submitted": true, "txid": txid.to_string(), "object": summary, "fee_sompi": fee })
-        ),
-        _ => println!("submitted {txid} — {summary}; the chain grades it when the carrier is accepted"),
+        OutputFormat::Json => println!("{}", serde_json::json!({ "ok": true, "submitted": true, "carriers": submitted })),
+        _ => println!("the chain grades them when the carriers are accepted; a chunked object applies in the block that completes it"),
     }
     Ok(())
 }

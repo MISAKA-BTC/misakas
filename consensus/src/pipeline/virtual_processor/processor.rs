@@ -4720,7 +4720,20 @@ impl VirtualStateProcessor {
             // ADR-0075 Decision 9: a block grades at most `PALW_CERTIFICATION_MAX_PER_BLOCK`
             // family drills. Counted before grading, in transaction order, so every node drops the
             // same object and the grader is never run for a drill the block may not carry.
-            if matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. }) {
+            // A chunk that completes its group applies the FamilyCertified it carried, so it
+            // counts against the same cap (ADR-0075 Decision 14).
+            let completes_a_group = match &object {
+                kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectChunk { group, index, count, .. } => {
+                    match folded.pending_chunk_group(group) {
+                        Some(p) => p.count == *count && !p.parts.contains_key(index) && p.parts.len() + 1 == *count as usize,
+                        None => *count == 1,
+                    }
+                }
+                _ => false,
+            };
+            if matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
+                || completes_a_group
+            {
                 if certifications_graded >= kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK {
                     info!(
                         "Block {block}: a FamilyCertified object was dropped, and the block stands: the block already carries {} \
@@ -4742,6 +4755,22 @@ impl VirtualStateProcessor {
                         self.palw_unavailable_abstains_at(point.daa_score),
                     ) {
                         Ok((next, _)) => {
+                            if completes_a_group {
+                                // The certification a chunk group carried is applied inside the
+                                // chunk's own arm, so the kinds tally below never names it; say so
+                                // here, in the same words a directly carried one gets, so an
+                                // operator reading every validator's log for the same verdict
+                                // (ADR-0075 §7) sees the family land.
+                                info!(
+                                    "Block {block}: PALW lifecycle carried 1× FamilyCertified (assembled from its chunks; {} attempt-lane and {} free-prompt-lane families are chain-certified now)",
+                                    next.chain_certified_families(kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt)
+                                        .len(),
+                                    next.chain_certified_families(
+                                        kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::FreePrompt
+                                    )
+                                    .len()
+                                );
+                            }
                             folded = next;
                             rehearsal.blue_score = rehearsal.blue_score.saturating_add(1);
                             // **ADR-0067: keep the declaration the chain just accepted.** The
@@ -5374,7 +5403,7 @@ impl VirtualStateProcessor {
                 // ADR-0075: both certification objects are judged entirely by the transition —
                 // the evidence by the court's grader, the class binding by the class's own profile
                 // hash and kernel coverage — and neither needs a signature, a bundle or a store.
-                Obj::FamilyCertified { .. } | Obj::ClassLaneCertified { .. } => {}
+                Obj::FamilyCertified { .. } | Obj::ClassLaneCertified { .. } | Obj::ObjectChunk { .. } => {}
             }
         }
         Ok(())
@@ -12278,6 +12307,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::FreePromptCommitted { .. } => "FreePromptCommitted",
         O::FamilyCertified { .. } => "FamilyCertified",
         O::ClassLaneCertified { .. } => "ClassLaneCertified",
+        O::ObjectChunk { .. } => "ObjectChunk",
     }
 }
 
