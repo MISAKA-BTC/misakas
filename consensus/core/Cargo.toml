@@ -62,6 +62,10 @@ serde-wasm-bindgen.workspace = true
 serde.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
+# ADR-0075 §7: devnet's genesis bonds are ML-DSA-87 keys derived from public seeds at assembly
+# (config::premine::palw_devnet_genesis_bond_keys_v1), so the keygen is a runtime dependency now;
+# the deterministic premine-key generator in the tests uses the same crate.
+libcrux-ml-dsa.workspace = true
 wasm-bindgen.workspace = true
 workflow-core.workspace = true
 workflow-log.workspace = true
@@ -73,10 +77,6 @@ criterion.workspace = true
 bincode.workspace = true
 wasm-bindgen-test.workspace = true
 web-sys.workspace = true
-# kaspa-pq Phase 4b: deterministic ML-DSA-87 single-key premine generator
-# (config::premine::tests::gen_misaka_devnet_premine_key). Mirrors how
-# kaspa-txscript declares libcrux-ml-dsa for its ML-DSA test vectors.
-libcrux-ml-dsa.workspace = true
 
 [[bench]]
 name = "serde_benchmark"

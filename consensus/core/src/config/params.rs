@@ -6467,13 +6467,25 @@ pub fn palw_rc_shipped_params() -> Params {
 /// ADR-0061 admits the empty registry), and `validate_palw_v2` proves the armed heartbeat and
 /// attempt-work fences declare exactly the constants this binary enforces.
 pub fn devnet_shipped_params() -> Params {
-    let params = palw_v2_params_from_artifacts_on_base(DEVNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, Vec::new())
-        // A base that cannot carry the bundle is a build defect, not an operator state: failing
-        // at startup with the gate's own message is the only honest outcome.
-        .unwrap_or_else(|e| panic!("the devnet ADR-0068 drill ruleset does not assemble: {e}"));
-    // The pruning depth-consistency nudge (drill finding F4) moved into the shared assembly at
-    // ADR-0068 Phase 2 — every V2 network gets it there, this one included.
-    params
+    palw_v2_params_from_artifacts_on_base(DEVNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, palw_devnet_genesis_bonds_v1())
+        .unwrap_or_else(|e| panic!("the devnet ADR-0068 drill ruleset does not assemble: {e}"))
+}
+
+/// **Devnet's genesis bond registry, from public seeds** (`palw_devnet_genesis_bond_seed_v1`):
+/// six seats, one per seed, each with its own operator identity and a fee float at its own
+/// address, so a developer can run a producing, seating PALW devnet from genesis — the rehearsal
+/// chain ADR-0075 §7 asks for before any certification object goes near mainnet. Value-less:
+/// the seeds are in the source.
+pub fn palw_devnet_genesis_bonds_v1() -> Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1> {
+    crate::config::premine::palw_devnet_genesis_bond_keys_v1()
+        .iter()
+        .map(|(n, payload, vk)| crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+            bond: crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint(*n)),
+            pubkey: vk.clone(),
+            operator_pubkey: format!("misaka-devnet-operator-{n}").into_bytes(),
+            payout_payload: crate::Hash64::from_bytes(*payload),
+        })
+        .collect()
 }
 
 /// **The PALW-RC network's identity WITHOUT a ruleset bundle — what `NetworkId` testnet-12 maps
@@ -8263,7 +8275,7 @@ mod consensus_params_id_tests {
             // set; devnet keeps its deliberately widened `max_block_parents: 64`. testnet-11 is
             // untouched because its base already carried the whole set — which is the property
             // that made this safe to apply unconditionally.
-            ("devnet", DEVNET_PARAMS, "6c276e16b9f407dd817a1194ad8f15dc92034bd835a3796e63a9f767b71f27fa"),
+            ("devnet", DEVNET_PARAMS, "87331d2ea43ec29bfbcff8527f6c3c8c7fc553d39a55119d942ea219100c80a7"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {
@@ -8536,6 +8548,40 @@ mod consensus_params_id_tests {
     /// carries the genesis free-prompt-certified set derived by kernel coverage — the floor, the
     /// QWEN36 graph-v3 class and the A16 graph-v2 class — under the same `court_e2e_root` the RC
     /// networks commit to; the chain half of every gate starts empty, as it must on a new identity.
+    /// **Devnet's genesis bonds come from public seeds and seat a producing chain** (ADR-0075 §7):
+    /// six bonds, six operators, each key derivable from `palw_devnet_genesis_bond_seed_v1` by
+    /// anyone, each holding a fee float at its own address — and the assembled devnet passes the
+    /// startup gate a node runs, so `kaspad --devnet --palw-produce` under any of the six keys
+    /// makes blocks from genesis without a card of real keys.
+    #[test]
+    fn devnet_genesis_bonds_are_public_seeds_that_seat_a_producing_chain() {
+        use crate::config::premine::{PALW_DEVNET_GENESIS_BONDS, palw_devnet_genesis_bond_seed_v1, premine_outpoint};
+        use crate::palw_mode_v2::PalwConsensusMode;
+
+        let bonds = palw_devnet_genesis_bonds_v1();
+        assert_eq!(bonds.len(), PALW_DEVNET_GENESIS_BONDS as usize);
+        assert!(bonds.len() >= crate::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1(), "enough seats for a panel");
+        let operators: std::collections::BTreeSet<_> = bonds.iter().map(|b| b.operator_pubkey.clone()).collect();
+        assert_eq!(operators.len(), bonds.len(), "one seat is one operator");
+        for (n, bond) in bonds.iter().enumerate() {
+            let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair(palw_devnet_genesis_bond_seed_v1(n as u32));
+            assert_eq!(bond.pubkey, kp.verification_key.as_ref(), "bond {n}'s key is the public seed's");
+            let payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(kp.verification_key.as_ref()).as_bytes();
+            assert_eq!(bond.payout_payload, crate::Hash64::from_bytes(payload), "and it is paid at its own address");
+            assert_eq!(bond.bond.0, premine_outpoint(n as u32), "collateral sits at premine index {n}");
+        }
+        let params = devnet_shipped_params();
+        let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("devnet is V2") };
+        let seated = bundle
+            .genesis_objects
+            .iter()
+            .filter(|o| matches!(o, crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered { .. }))
+            .count();
+        assert_eq!(seated, bonds.len(), "the bundle seats every public-seed bond at genesis");
+        params.validate_palw_v2().expect("the startup gate accepts the bonded devnet");
+        assert_eq!(params.genesis.hash, DEVNET_PARAMS.genesis.hash, "the bonded premine is what the pinned devnet genesis commits to");
+    }
+
     #[test]
     fn a_mainnet_equivalent_genesis_carries_the_certification_rules() {
         use crate::config::premine::{bonded_genesis_utxos, premine_outpoint};

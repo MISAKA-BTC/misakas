@@ -32,21 +32,37 @@ covers the state version, the genesis free-prompt set and every consensus consta
 
 ## 2. Rehearse the route on devnet with the release binaries
 
-Devnet carries the same ruleset. One node with the fixture PoW, one funded key:
+Devnet carries the same ruleset and, since ADR-0075 §7, a genesis bond registry derived from
+PUBLIC seeds (`palw_devnet_genesis_bond_seed_v1(n)` = blake2b-256 of
+`misaka-devnet-genesis-bond-v1/<n>`, six seats), so a bonded, producing, multi-validator devnet
+runs from genesis on any machine — no card of real keys. The fee wallet is devnet's regenerable
+main key (blake2b-256 of `misaka-testnet-premine-9b-claude-managed`). The whole rehearsal is one
+script:
 
 ```bash
-MISAKA_PALW_POW_FIXTURE=1 kaspad --devnet --appdir <dir> --rpclisten-borsh=127.0.0.1:17610 \
-   --palw-key-file <seed> --palw-producer-bond <genesis bond txid>:<index> ...
-palw-certify drill --family base0 --lane fp --out base0-fp.obj
-misaka-cli --network-id devnet --rpc 127.0.0.1:17610 palw submit-object --key-file <seed> --object base0-fp.obj --yes
-palw-certify bind --model-id "PALW-BASE-0/rc" --lane fp --out base0-bind.obj
-misaka-cli --network-id devnet --rpc 127.0.0.1:17610 palw submit-object --key-file <seed> --object base0-bind.obj --yes
+cargo build --release -p kaspad -p misaka-cli -p misaka-palw-base0 --bins
+NODES=3 scripts/misaka-palw-certify-devnet-e2e.sh
 ```
 
-Expected in the node log, in this order: `PALW lifecycle carried 1× FamilyCertified`, then
-`1× ClassLaneCertified`. A dropped object prints `a PALW lifecycle object was dropped, and the
+It starts N validators from the one build in one window (each producing under bond n with the
+fixture PoW, node-0 listening, the rest connected to it), waits for blocks, submits a
+`FamilyCertified` (the floor's free-prompt drill), a `ClassLaneCertified` (the floor bound to it)
+and a burst of three more family drills for the per-block cap, then reads every validator's log:
+each must carry the same objects (`PALW lifecycle carried 1× FamilyCertified`, `1×
+ClassLaneCertified`), and a dropped object prints `a PALW lifecycle object was dropped, and the
 block stands: <reason>` — the reason is the transition's (`CertificationRefused`,
 `FamilyAlreadyCertified`, `NoCertifiedFamilyCovers`, …) and must be understood before deploying.
+By hand, the same three steps are:
+
+```bash
+MISAKA_PALW_POW_FIXTURE=1 kaspad --devnet --appdir <dir> --listen=127.0.0.1:16310 --rpclisten-borsh=127.0.0.1:17610 \
+   --utxoindex --nodnsseed --palw-produce --palw-producer-key <bond-0.seed> \
+   --palw-producer-bond 6d6973616b612d7072656d696e6500…00:0 --palw-producer-pay-address <address of bond-0.seed>
+palw-certify drill --family base0 --lane fp --out base0-fp.obj
+misaka-cli --network devnet --rpc 127.0.0.1:17610 palw submit-object --key-file <main.seed> --object base0-fp.obj --yes
+palw-certify bind --model-id "PALW-BASE-0/rc" --lane fp --out base0-bind.obj
+misaka-cli --network devnet --rpc 127.0.0.1:17610 palw submit-object --key-file <main.seed> --object base0-bind.obj --yes
+```
 
 ## 3. The fleet swap — every validator, one build, one window
 

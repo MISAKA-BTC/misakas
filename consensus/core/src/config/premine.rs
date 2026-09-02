@@ -302,7 +302,45 @@ fn bond_money_rows(cards: &[crate::config::params::PalwRcGenesisBondCard]) -> Ve
     cards.iter().map(|c| (c.premine_index, c.payout_payload)).collect()
 }
 
+/// **Devnet's genesis bonds are derived from public seeds** (ADR-0075 §7's rehearsal network):
+/// `blake2b-256("misaka-devnet-genesis-bond-v1/<n>")` is the ML-DSA-87 seed of bond `n`, so any
+/// developer can run a bonded, block-producing PALW devnet — the chain a certification object is
+/// rehearsed on before it goes near mainnet — without a card of real keys. Value-less by
+/// construction, like `TESTNET_MAIN_SEED`.
+pub const PALW_DEVNET_GENESIS_BONDS: u32 = 6;
+
+pub fn palw_devnet_genesis_bond_seed_v1(n: u32) -> [u8; 32] {
+    let mut h = blake2b_simd::Params::new().hash_length(32).to_state();
+    h.update(b"misaka-devnet-genesis-bond-v1/");
+    h.update(n.to_string().as_bytes());
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(h.finalize().as_bytes());
+    seed
+}
+
+/// `(premine index, payout payload, verification key)` for every devnet genesis bond, derived once.
+pub fn palw_devnet_genesis_bond_keys_v1() -> &'static [(u32, [u8; 64], Vec<u8>)] {
+    static KEYS: std::sync::OnceLock<Vec<(u32, [u8; 64], Vec<u8>)>> = std::sync::OnceLock::new();
+    KEYS.get_or_init(|| {
+        (0..PALW_DEVNET_GENESIS_BONDS)
+            .map(|n| {
+                let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair(palw_devnet_genesis_bond_seed_v1(n));
+                let vk: &[u8] = kp.verification_key.as_ref();
+                let payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(vk).as_bytes();
+                (n, payload, vk.to_vec())
+            })
+            .collect()
+    })
+}
+
+fn palw_devnet_bond_money_rows_v1() -> Vec<(u32, [u8; 64])> {
+    palw_devnet_genesis_bond_keys_v1().iter().map(|(n, payload, _)| (*n, *payload)).collect()
+}
+
 pub fn genesis_premine_utxos_for(net: NetworkId) -> UtxoCollection {
+    if net.network_type == NetworkType::Devnet {
+        return bonded_genesis_utxos(net, &palw_devnet_bond_money_rows_v1(), std::iter::empty());
+    }
     if net.network_type == NetworkType::Testnet && net.suffix == Some(11) {
         return bonded_genesis_utxos(net, &bond_money_rows(crate::config::params::PALW_RC_GENESIS_BONDS), testnet11_community_utxos());
     }
@@ -422,7 +460,6 @@ mod tests {
         for net in [
             NetworkId::new(NetworkType::Mainnet),
             NetworkId::with_suffix(NetworkType::Testnet, 10),
-            NetworkId::new(NetworkType::Devnet),
             NetworkId::new(NetworkType::Simnet),
         ] {
             let utxos = genesis_premine_utxos_for(net);
@@ -434,6 +471,20 @@ mod tests {
             assert_eq!(entry.script_public_key.script().len(), 69, "ML-DSA-87 P2PKH = 69 bytes");
         }
         for (_, entry) in genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11)) {
+            assert!(!entry.is_coinbase);
+            assert_eq!(entry.block_daa_score, 0);
+            assert_eq!(entry.script_public_key.script().len(), 69);
+        }
+        // Devnet carries the public-seed bond registry (ADR-0075 §7): collateral + float per
+        // bond, and the main wallet — the same shape as testnet-11 without a community set.
+        let devnet = genesis_premine_utxos_for(NetworkId::new(NetworkType::Devnet));
+        assert_eq!(
+            devnet.len(),
+            2 * PALW_DEVNET_GENESIS_BONDS as usize + 1,
+            "devnet = collateral + float per public-seed bond, plus the main wallet"
+        );
+        assert_eq!(devnet.values().map(|e| e.amount).sum::<u64>(), MISAKA_PREMINE_CAP_SOMPI, "and still exactly 10B");
+        for (_, entry) in devnet {
             assert!(!entry.is_coinbase);
             assert_eq!(entry.block_daa_score, 0);
             assert_eq!(entry.script_public_key.script().len(), 69);
@@ -614,9 +665,14 @@ mod tests {
         );
         let t10 = genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 10));
         assert_eq!(t10.len(), 1, "t10 carries the main wallet alone");
-        for net in [NetworkType::Mainnet, NetworkType::Devnet, NetworkType::Simnet] {
+        for net in [NetworkType::Mainnet, NetworkType::Simnet] {
             assert_eq!(genesis_premine_utxos_for(NetworkId::new(net)).len(), 1, "{net:?} carries no community set");
         }
+        assert_eq!(
+            genesis_premine_utxos_for(NetworkId::new(NetworkType::Devnet)).len(),
+            2 * PALW_DEVNET_GENESIS_BONDS as usize + 1,
+            "devnet carries its public-seed bonds and no community set"
+        );
     }
 
     /// The three main wallets are pairwise distinct keys, so no network's premine is spendable
@@ -677,6 +733,15 @@ mod tests {
             let rust = commitment.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
             println!("{net:?}_PREMINE_UTXO_COMMITMENT: Hash64::from_bytes([{rust}])");
         }
+        // devnet: premine ∪ the public-seed bonds' collateral ∪ floats — the value
+        // DEVNET_GENESIS.utxo_commitment pins.
+        let mut ms = MuHash::new();
+        for (outpoint, entry) in genesis_premine_utxos_for(NetworkId::new(NetworkType::Devnet)) {
+            ms.add_utxo(&outpoint, &entry);
+        }
+        let commitment = ms.finalize();
+        let rust = commitment.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
+        println!("DEVNET_GENESIS.utxo_commitment: Hash64::from_bytes([{rust}])");
         // testnet-11: premine ∪ collateral ∪ floats ∪ community — the value
         // TESTNET11_GENESIS.utxo_commitment pins.
         let mut ms = MuHash::new();
