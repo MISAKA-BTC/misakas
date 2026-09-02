@@ -1,6 +1,11 @@
 # The remaining PALW wiring, and why it lands as one unit (ADR-0044 FP-08, ADR-0042 PR-08)
 
-Status: the substrate is landed and tested; the pipeline wiring below is **not** started. This
+Status (corrected 2026-09-03): the substrate is landed and tested. "The pipeline wiring below
+is **not** started" was true when this was written and is no longer — the gateway signs,
+submits and stages a capture, and the host-side hardening of that path landed with ADR-0079's
+R-01..R-07. Read the list below as the wiring's invariants, which still hold, not as a
+statement that nothing is wired; ADR-0077 Decision 9 named this file as one of three carrying a
+stale header, and it was the last of the three. This
 document exists because the wiring is where every P0 in this project's audit history was born,
 and because the safest thing to write before wiring is the list of things that must not be
 wired one at a time.
