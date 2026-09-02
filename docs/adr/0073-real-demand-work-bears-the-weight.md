@@ -7,6 +7,15 @@ ADR-0071/0072 (the attempt lane's price and ticket).
 **Amends:** ADR-0044 Decision 4's "the receipt lane is weightless" (after Decisions 1 and 3 it is not);
 ADR-0069's certification scope (a family is certified for the lane it was drilled on).
 
+> **Progress and amendments (index reconciliation, 2026-09-02).** Phase ① (a free-prompt claim
+> is tried in the same court) and Phase ③ (one unit — step leaves — and the attempt drawn by the
+> chain's beacon, [ADR-0074](0074-the-attempt-is-a-claim-drawn-by-the-chain.md)) are landed and
+> ship from Relaunch 5d. Phase ② (the receipt lane bears weight) is DECIDED and still gated;
+> Phase ④ (share / chain position for the lane) is open. Decision 6 is amended by
+> [ADR-0075](0075-certification-is-a-consensus-object.md): a weightless entrant is seated by a
+> `ClassLaneCertified` object, and the certified free-prompt set is chain state (genesis ∪
+> chain), not the first entry in the build's `palw_rc_fp_certified_families_v1`. Map: [`README.md`](README.md).
+
 ## 1. The finding
 
 MISAKA's purpose is a user running a local LLM on a prompt of their own. The chain has two lanes

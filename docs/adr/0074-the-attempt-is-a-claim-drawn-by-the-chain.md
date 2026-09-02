@@ -14,6 +14,13 @@ self-drawn ticket and its pins), ADR-0073 (court → unit → weight → share).
 concrete), ADR-0044 Decision 7 (CU weights withdrawn), ADR-0071/0072's premise that the attempt
 lane is the primary lane.
 
+> **Landed, then amended (index reconciliation, 2026-09-02).** §7 records what landed; Decision 5
+> is as landed (`7676d461`: the quantum is an eighth of the class's own canonical job). Decision 6
+> is amended by [ADR-0075](0075-certification-is-a-consensus-object.md) (the certified set is chain
+> state; a class's free-prompt lane is opened by `ClassLaneCertified`), and
+> [ADR-0076](0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md) seeds the attempt lane's
+> per-class target on top of this ADR's draw. Map: [`README.md`](README.md).
+
 ## 1. Why a beacon, and why not a validator
 
 The ADR-0072 review found that a ticket drawn from the executor's own hash is only as strong as

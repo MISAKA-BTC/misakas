@@ -8,6 +8,16 @@
 
 Status: **Proposed** (2026-08-30). Supersedes nothing; completes ADR-0042 Decision 7.
 
+> **Standing (index reconciliation, 2026-09-02).** Still Proposed, not landed. The harm it was
+> written to stop — an `Unavailable` quorum voiding a claim and slashing the producer's bond with no
+> proof — is removed on armed presets by [ADR-0065](0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md)
+> Decision 4 (`palw_unavailable_abstains`, armed from genesis on testnet-11 since Relaunch 5:
+> `ProducerDefaulted` is unlicensable; the claim falls to a redraw and a receipt timeout, which voids
+> without slashing). What this ADR still adds is the positive half — a provable default that CAN
+> take a bond. The DA fields it lists as "already committed" are pinned by equality since
+> [ADR-0072](0072-the-ticket-is-the-execution.md) Decision 8. The carriage ADR cited as ADR-0046 is
+> [0046](0046-palw-v2-consensus-object-carriage.md). Map: [`README.md`](README.md).
+
 ## The defect
 
 Every other judgement in this lattice is arithmetic. A claim's execution can be disputed by

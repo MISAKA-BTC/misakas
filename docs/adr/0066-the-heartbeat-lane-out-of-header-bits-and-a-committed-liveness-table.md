@@ -8,6 +8,17 @@ to make. See "What landed" at the foot of this document for exactly what is and 
 
 **Neither part is a re-mint. Both must be activations, and both must be fenced at TOP LEVEL.**
 
+> **Arming and closures after the Status line (index reconciliation, 2026-09-02).** "Both
+> dormant … ship OFF" was the 2026-08-31 state. [ADR-0068](0068-the-llm-primary-economy-and-the-floors-minimum.md)
+> arms `Params::palw_heartbeat` from genesis on testnet-11 (Relaunch 5 onward) and devnet, closes
+> Decision 3 (attempt blue work leaves `calc_work(bits)` — `Params::palw_attempt_work`, a 2²⁰
+> constant against ε = 1) and closes F3a (width bound: at most four heartbeats per mergeset, or any
+> number forming one chain — its F5 amendment). Decision 4's fence `Params::palw_inactivity_leak`
+> is still `None` everywhere and the committed table is still unbuilt. The sentence "a V2 network's
+> doctrine is to re-mint rather than schedule" is the testnet practice, not the doctrine: consensus
+> changes ship by activation (mainnet), and [ADR-0072](0072-the-ticket-is-the-execution.md) §3 records
+> the activation shape. Map: [`README.md`](README.md).
+
 ## Why the first implementation failed, sorted by cause
 
 The audit recorded four findings. Sorting them by *mechanism* rather than by symptom is what makes

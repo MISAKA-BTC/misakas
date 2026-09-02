@@ -5,6 +5,13 @@
 
 Status: **Proposed** (2026-08-30).
 
+> **Standing (index reconciliation, 2026-09-02).** Decisions 2 and 3 are built and were verified
+> against testnet-11 (the body's corrections record it); `misaka bond capability` followed the same
+> shape under [ADR-0071](0071-the-attempt-lanes-price-and-the-tickets-bound.md) Decision 3, and
+> `misaka palw submit-object` / `palw-certify` under [ADR-0075](0075-certification-is-a-consensus-object.md)
+> Decision 7. Decision 1's BIP39 half and Decision 4 (the `miner` subcommand) remain open as
+> written. Map: [`README.md`](README.md).
+
 ## How this was found
 
 A user pasted a 24-word BIP39 mnemonic and asked to send from it. `misaka key` could not: it

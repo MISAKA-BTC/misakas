@@ -20,6 +20,17 @@
   lane to fall back to" doctrine — a *bounded, near-weightless* hash lane re-enters, as the
   chain's clock and nothing else.
 
+> **Arming changed after the Status line above was written (index reconciliation, 2026-09-02).**
+> "Both features still ship OFF" was true of the Phase 1 build. [ADR-0068](0068-the-llm-primary-economy-and-the-floors-minimum.md)
+> Phase 2 (Relaunch 5, `palw_rc_arm_phase1`) arms `Params::palw_heartbeat` **from genesis** on
+> testnet-11, on devnet, and on any carded mainnet; only `Params::palw_inactivity_leak`
+> (Decision 4's fence) is still `None` on every preset. Decision 1's lane is therefore live on
+> testnet-11 in [ADR-0066](0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md)'s
+> form — `algo_id = 8`, fixed target, ε = 1 blue work against 2²⁰ per attempt block
+> (`Params::palw_attempt_work`, ADR-0068 F2), width bound "≤ 4 heartbeats or one chain" per
+> mergeset (ADR-0068 F5) — and Decision 2's ramp is the two-step form ADR-0066 §"What landed"
+> describes. Map: [`README.md`](README.md).
+
 ## 1. The failure family, measured
 
 Every liveness failure this project has actually had is one defect wearing four costumes:

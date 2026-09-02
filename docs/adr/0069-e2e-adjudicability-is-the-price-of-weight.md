@@ -15,6 +15,16 @@ weightless until its kernel catalog closes), ADR-0049 (the adjudication contract
 permissionless admission). Consistent with the standing doctrine that consensus changes ship by
 activation, never by re-genesis.
 
+> **Amended by [ADR-0075](0075-certification-is-a-consensus-object.md) (2026-09-02).** Decisions
+> 2 and 5 assumed the certified set is the build's (`palw_rc_court_e2e_root_v1`, pinned). ADR-0075
+> makes certification a consensus object — `FamilyCertified` (a family drill re-graded by the court
+> in the transition) and `ClassLaneCertified` (a class bound to a lane) — so the set the weight
+> gate reads is genesis ∪ chain state (`certified_families`, `fp_certified_families`,
+> `fp_certified_classes`) and a new family is certified by objects, not by a fingerprint move.
+> Decision 6 (registration stays permissionless; weight requires certification) is unchanged and
+> is the route ADR-0075 §7 spells out for mainnet. [ADR-0073](0073-real-demand-work-bears-the-weight.md)
+> narrows a certificate's scope to the lane it was drilled on. Map: [`README.md`](README.md).
+
 ## 1. The goal, stated as a test
 
 PALW's one claim is that its blocks are paid for by *actual* LLM inference. The claim is only as

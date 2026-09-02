@@ -6,6 +6,12 @@
   `palw_state_v2.rs` (the court's opening rung).
 - Declared by: `PALW_ATTEMPT_V2_VERSION` 4 → 5.
 
+> **Note (index reconciliation, 2026-09-02).** "No shipped preset carries `ConsensusV2`" was
+> written on 2026-08-27 and is no longer so: testnet-11 and devnet ship the V2 bundle
+> (`palw_rc_shipped_params`, `devnet_shipped_params`), so Decision 3's window is the RC genesis's.
+> Decision 1's "a receipt header buys no chain position" is the state [ADR-0073](0073-real-demand-work-bears-the-weight.md)
+> Phase ④ proposes to change (open). Map: [`README.md`](README.md).
+
 ## Context
 
 The 2026-08-21/08-27 adversarial audit returned eleven criticals. Three of them are the same

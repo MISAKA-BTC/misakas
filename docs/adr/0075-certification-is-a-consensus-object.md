@@ -11,6 +11,16 @@ ADR-0074 Decision 6 (the free-prompt lane bears weight only on a certified class
 Decision 6 (a weightless entrant is seated by an object, not by a re-genesis), ADR-0074 Decision 6
 (the free-prompt-certified set has a chain half).
 
+> **Landed (index reconciliation, 2026-09-02).** "PROPOSED … implemented on branch" is the
+> drafting state; the implementation is on `main` as the Relaunch 5e build (`ff943fe1` the objects,
+> `49e5e1da` the mainnet rules of §7, `1b49fcaa` Decision 14's chunked carriage, `654b57f1` the
+> re-seed on seating from [ADR-0076](0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md)
+> Decision 4), state version 16, fingerprints re-pinned for 5e. On mainnet's genesis card: §7 names
+> the model-root constants because the assembly *can* pin model tiers; the decided route
+> (Decision 8, ADR-0076 §4) is floor-only at genesis with every model arriving by registration →
+> drill → binding, and mainnet ships `PalwConsensusMode::Disabled` until the card is set. Map:
+> [`README.md`](README.md).
+
 ## 1. The problem: a certificate lived in the binary
 
 ADR-0069 made weight the price of adjudicability: a class holds a share only if some family this
