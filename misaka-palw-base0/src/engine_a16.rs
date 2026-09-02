@@ -1842,7 +1842,17 @@ mod profile_plan_tests {
             let probe_artifact = artifact(1, 4, 12);
             let probe_engine = A16Engine::new(&probe_artifact).expect("the store resolves");
             let real = probe_engine.plan_from_profile(&entry.profile);
-            let corrected = entry.model_id.ends_with("/graph-v2");
+            // **Derived from the GRAPH, not matched on the NAME.** This read
+            // `entry.model_id.ends_with("/graph-v2")`, which is the row's label rather than its
+            // content — and the moment a second corrected row arrived under a different label
+            // (`/graph-v3`, the row that declares the epsilon its artifact executes) the test
+            // classified it as uncorrected, built its comparison profile from the v1 tables, and
+            // failed asserting a v1 property of a v2 graph. The name is a fact about what we called
+            // the row; what the assertions below are about is whether its pre table NAMES the
+            // embed-lift requant, which is a fact about the graph. Same rule as everywhere else in
+            // this tree: derive, never declare.
+            let corrected =
+                entry.profile.pre_nodes.len() == kaspa_consensus_core::palw_base0_profile::QWEN25_A16_PRE_IR_V2.len();
             match (&real, corrected) {
                 // A real profile against a MISMATCHED artifact must refuse on geometry — that is
                 // the root check doing its job, and it tells us the planner reached the geometry
