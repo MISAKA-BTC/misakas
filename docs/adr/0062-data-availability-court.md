@@ -255,3 +255,66 @@ Invariants: **DA-1** an accusation outside the claim's retention window is refus
 second open accusation on one claim is refused; **DA-3** a valid disclosure charges the accuser and
 nobody else; **DA-4** a disclosure carried by a block the producer did not mine is accepted;
 **DA-5** two nodes that saw the disclosure at different wall-clock times reach the same verdict.
+
+## Implementation, 2026-09-02 — the amended form, behind `palw_da_court`
+
+Landed dormant. The fence is a top-level `Params` field, `None` on every shipped preset, so every
+fingerprint, identity and state root is byte-identical to the tree before it; `PALW_STATE_V2_VERSION`
+stays at 16 for the same reason, and moving it is the *arming* release's job, not this one.
+
+What the code does, against each amendment clause:
+
+* **SA-1** — `PalwConsensusObjectV2::DefaultAccused { claim, missing_event_index, accuser,
+  signature }`, riding an ordinary lifecycle transaction. Refused if the index is at or past
+  `trace_chunk_count`, if the whole disclose window does not fit inside the claim's own
+  `trace_retention_daa`, if the claim is terminal or has no bound panel, if the accuser is the
+  producer, is not Active, or is under the registry floor — and if an accusation is already open,
+  which is structural: a claim has one phase. The accuser reserves
+  `⌈claim.reserved / seat_count⌉` on the claim's own exposure ledger.
+* **SA-2** — `MaterialDisclosed { claim, event_index, preimage, opening, signature }`, checked by
+  hash arithmetic only: the preimage re-keys to the opening's event hash, and the opening
+  reconstructs the claim's pinned `trace_root` at `trace_chunk_count` leaves. Bounded by the ride
+  list at `DEFAULT_MAX_CLOSE_BYTES` and at acceptance by the class's own `max_close_bytes`.
+* **SA-3** — the phase `DefaultDisputed { accused_daa, … }`, whose deadline is
+  `accused_daa + W_disclose` with `W_disclose = window_challenge`, re-derived from the record by
+  `assert_deadline_consistency` and `rebuild_deadline_index_v2` on every branch. `validate_palw_v2`
+  proves `W_disclose ≥ 2 × finality_depth` past the fence. Carriage is permissionless.
+* **SA-4** — only the accuser is charged, capped at `min_collateral_sompi`. No seat is touched.
+* **SA-5** — the confirmed default slashes `claim.reserved`, never the bond. **The escrow-funded
+  carriage fee is NOT implemented**: this ruleset has no credit primitive (slashed value is burned,
+  and the only payment path is the coinbase payout queue keyed by claim id), so a refund would be a
+  new payment rule — the one decision this ADR says is made once and not as a side effect. What
+  stands in for it is SA-3's permissionless carriage: a producer with no fee can have anyone carry
+  its signed disclosure.
+* **SA-6** — the DA term enters both lattice bounds (`with_palw_v2_depths` and `validate_palw_v2`)
+  and is zero while dormant. Per claim the session is *contained* in the retention obligation, so it
+  adds nothing to `MAX_CLAIM_EXPOSURE_DAA`; the existing lattice walk in `palw_fp_devnet_v3` now
+  asserts that containment rather than assuming it.
+
+`DefaultDisputed` is the first phase in this ruleset that holds a **second bond's** reservation,
+and that is the whole of its accounting risk. A claim under accusation is not terminal, so every arm
+that voids a live claim can land on one — the panel's own `ProducerDefaulted`, and a `CourtClosed
+{ ExecutorGuilty }` on a session that was already open when the accusation arrived — and none of
+them knows what an accusation cost: `release_for_claim` gives back what the *producer* put up. The
+release therefore lives in **one place, `write_claim`**, beside the unresolved and work-id indices
+and for the reason `write_court` states about the challenger's stake: a release each new arm has to
+remember is a release one of them eventually will not. Left stranded it is not merely wrong
+accounting — `assert_internal_consistency` rebuilds that ledger from the claims, so it would be
+state the fold writes and cannot read back, and the next `load_tip` would refuse the snapshot the
+chain had just written, on every node at once.
+
+The same reasoning polices `resumed`, the one field of this state nothing else re-derives. The
+accusation arm refuses a terminal claim and refuses an already-disputed one, so the phase it
+snapshots is always live and undisputed; the loader asserts that rather than assuming it, because
+the alternative is meeting a bad record at a disclosure a window later with nothing left to say
+where it came from.
+
+Deliberately not restored from Decision 4: the refuted claim resumes **the phase it held**, not a
+fresh `ReceiptLicensed` dated at the disclosure. Restarting the challenge clock would punish a
+producer the chain has just proven honest and would let serial accusations hold a claim — and its
+reservation — open a window at a time.
+
+**Not shipped, and the reason the fence must stay dormant:** nothing in the tree constructs either
+object. Armed with no disclosure responder in the field, every accusation would succeed on silence
+and every producer would be slashable for the price of one bond — audit3 H4's shape, and strictly
+worse than the captured-panel defect this ADR exists to close.

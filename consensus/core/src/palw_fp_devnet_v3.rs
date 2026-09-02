@@ -713,6 +713,36 @@ mod tests {
         // The one that made the difference originally: a licensed claim waits out the challenge
         // window while still holding its reservation, so the bind window alone is not the span.
         assert!(MAX_CLAIM_EXPOSURE_DAA > WINDOW_BIND + WINDOW_CHALLENGE);
+
+        // **ADR-0062 SA-6: the data-availability phase, walked the same way.**
+        //
+        // A `DefaultDisputed` claim holds its reservation like every other live phase, so the
+        // question this test asks — "can the exposure span fund the longest life a claim can
+        // have?" — has to be asked with the DA session in it. It is answered by CONTAINMENT rather
+        // than by addition, and that containment is a rule the accusation arm enforces per claim:
+        //
+        //   * the retention a producer owes is `bind + receipt + challenge + court` from
+        //     ACCEPTANCE (`palw_min_trace_retention_daa_v1`, pinned by ADR-0072 Decision 8);
+        //   * an accusation is refused unless the WHOLE disclose window still fits inside it;
+        //   * so every session ends at or before `accepted + retention`, and the claim's own
+        //     longest path — the redrawn one walked above — has already passed that point.
+        //
+        // Which is why `MAX_CLAIM_EXPOSURE_DAA` does not move for this ADR, and why that is a
+        // measured statement rather than an omission. If a later change lets an accusation reach
+        // past retention, or restarts a window on refutation, this assert is what fails.
+        let retention = WINDOW_BIND + WINDOW_RECEIPT + WINDOW_CHALLENGE + WINDOW_COURT;
+        let disclose = WINDOW_CHALLENGE; // palw_da_disclose_window_daa_v1
+        let latest_accusation = retention - disclose; // the last DAA an accusation is admitted at
+        let da_session_ends = latest_accusation + disclose;
+        assert_eq!(da_session_ends, retention, "the DA session's own bound IS the retention obligation");
+        assert!(
+            da_session_ends <= longest_live_span,
+            "a DA session can outlive the claim path this span was sized on: {da_session_ends} > {longest_live_span}"
+        );
+        assert!(
+            MAX_CLAIM_EXPOSURE_DAA >= longest_live_span.max(da_session_ends),
+            "the exposure span must fund the longest life a claim can have, DA session included"
+        );
     }
     use super::*;
     use crate::palw_mode_v2::{PalwConsensusMode, palw_ruleset_id_v2};

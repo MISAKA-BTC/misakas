@@ -32,7 +32,7 @@ use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2;
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwChainStateV2, PalwConsensusObjectV2, PalwStateParamsV2, PalwStateV2Error,
-    apply_palw_transition_v2_with_verdict_policy, revert_delta_v2,
+    apply_palw_transition_v2_with_fences, revert_delta_v2,
 };
 use kaspa_database::prelude::StoreError;
 use rocksdb::WriteBatch;
@@ -81,6 +81,10 @@ pub struct PalwStateSyncV2 {
     /// state root for the same block and reject the chain it was syncing, and the moment to close
     /// that is before there is a caller, not after someone has to debug it.
     unavailable_abstains: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0062's fence, carried for exactly the reason the one above it is: a replay path that
+    /// folded with the pre-DA-court rule while the live path folded with the post-court one would
+    /// compute a different state root for the same block and reject the chain it was syncing.
+    da_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
 impl PalwStateSyncV2 {
@@ -90,9 +94,10 @@ impl PalwStateSyncV2 {
         store: &DbPalwStateV2Store,
         params: PalwStateParamsV2,
         unavailable_abstains: Option<kaspa_consensus_core::config::params::ForkActivation>,
+        da_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> Result<Self, PalwSyncV2Error> {
         let tip = store.load_tip(&params)?;
-        Ok(Self { params, tip, unavailable_abstains })
+        Ok(Self { params, tip, unavailable_abstains, da_court })
     }
 
     pub fn tip(&self) -> Option<(&BlockHash, &PalwChainStateV2)> {
@@ -137,13 +142,14 @@ impl PalwStateSyncV2 {
         };
         let mut current = tip_state.clone();
         for step in steps {
-            let (next, delta) = apply_palw_transition_v2_with_verdict_policy(
+            let (next, delta) = apply_palw_transition_v2_with_fences(
                 &current,
                 &self.params,
                 &step.ctx,
                 &step.objects,
                 step.attempt.as_ref(),
                 self.unavailable_abstains.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
+                self.da_court.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
             )
             .map_err(|source| PalwSyncV2Error::State { block: step.ctx.block, source })?;
             store.insert_delta_batch(batch, step.ctx.block, next.state_root(), &delta)?;
@@ -328,7 +334,7 @@ mod tests {
         }
 
         // The subject: sync + store + batches.
-        let mut sync = PalwStateSyncV2::load(&store, params(), None).unwrap();
+        let mut sync = PalwStateSyncV2::load(&store, params(), None, None).unwrap();
         assert!(sync.tip().is_none(), "a fresh database has no tip");
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
@@ -340,7 +346,7 @@ mod tests {
         assert_eq!(tip_state, book.state_of(&steps[1].ctx.block).unwrap(), "the sync's tip is the book's state");
 
         // A restart resumes at the same tip, root-verified.
-        let resumed = PalwStateSyncV2::load(&store, params(), None).unwrap();
+        let resumed = PalwStateSyncV2::load(&store, params(), None, None).unwrap();
         let (r_block, r_state) = resumed.tip().unwrap();
         assert_eq!((r_block, r_state), (tip_block, tip_state));
 
@@ -370,7 +376,7 @@ mod tests {
         let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
         store.reindex_if_stale().unwrap();
 
-        let mut sync = PalwStateSyncV2::load(&store, params(), None).unwrap();
+        let mut sync = PalwStateSyncV2::load(&store, params(), None, None).unwrap();
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
         db.write(batch).unwrap();
@@ -396,7 +402,7 @@ mod tests {
         // not exist durably, and the polluted write-through cache of the old handle must not be
         // what answers (the carriage store's crash-window lesson, applied to a refusal).
         let fresh = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
-        let resumed = PalwStateSyncV2::load(&fresh, params(), None).unwrap();
+        let resumed = PalwStateSyncV2::load(&fresh, params(), None, None).unwrap();
         assert_eq!(*resumed.tip().unwrap().0, genesis_block(), "and neither did the durable one");
         assert!(!fresh.has_delta(bad_steps[0].ctx.block).unwrap(), "no row of the refused walk was committed");
     }
@@ -410,7 +416,7 @@ mod tests {
         store.reindex_if_stale().unwrap();
 
         let steps = steps();
-        let mut sync = PalwStateSyncV2::load(&store, params(), None).unwrap();
+        let mut sync = PalwStateSyncV2::load(&store, params(), None, None).unwrap();
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
         sync.advance(&mut store, &mut batch, &steps).unwrap();

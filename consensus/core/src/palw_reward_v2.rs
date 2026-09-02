@@ -79,9 +79,15 @@ pub enum PalwRewardStatusV2 {
 /// Decision 10's ladder: `block accepted → escrow → Final → spendable`, with `Voided → forfeit`.
 pub fn palw_reward_status_v2(phase: &PalwClaimPhaseV2) -> PalwRewardStatusV2 {
     match phase {
-        PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } | PalwClaimPhaseV2::ReceiptLicensed { .. } => {
-            PalwRewardStatusV2::Escrowed
-        }
+        // ADR-0062 SA-1/SA-3: a claim under a data-availability accusation is still LIVE — its
+        // reservation is held and its escrow is neither paid nor destroyed — so it is escrowed
+        // like every other non-terminal phase. Opening a session is not a verdict; the session
+        // ends in a disclosure (the claim resumes) or in the sweep's `void_and_slash` (which makes
+        // it `Voided`, and forfeits there).
+        PalwClaimPhaseV2::Provisional
+        | PalwClaimPhaseV2::PanelBound { .. }
+        | PalwClaimPhaseV2::ReceiptLicensed { .. }
+        | PalwClaimPhaseV2::DefaultDisputed { .. } => PalwRewardStatusV2::Escrowed,
         PalwClaimPhaseV2::Final { .. } => PalwRewardStatusV2::Spendable,
         PalwClaimPhaseV2::Voided { .. } => PalwRewardStatusV2::Forfeited,
     }

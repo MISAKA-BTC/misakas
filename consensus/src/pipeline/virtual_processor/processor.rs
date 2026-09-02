@@ -411,6 +411,12 @@ pub struct VirtualStateProcessor {
     /// ADR-0065 D1's fence and window, `None` on every shipped preset. See
     /// [`Self::palw_bond_maturity_at`], which is the ONE place this is resolved.
     pub(super) palw_bond_maturity: Option<kaspa_consensus_core::config::params::PalwBondMaturityV1>,
+    /// ADR-0062's fence, `None` on every shipped preset. Past it a block may carry a
+    /// `DefaultAccused` / `MaterialDisclosed` and a claim may hold `DefaultDisputed`. See
+    /// [`Self::palw_da_court_at`], which is the ONE place this is resolved — the acceptance
+    /// rehearsal, the fold and the state walk must all get the same answer for the same block, or
+    /// a node that admits an object its fold refuses computes a state root nobody shares.
+    pub(super) palw_da_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -788,6 +794,7 @@ impl VirtualStateProcessor {
             palw_bootstrap_activation: params.palw_bootstrap_activation,
             palw_unavailable_abstains: params.palw_unavailable_abstains,
             palw_bond_maturity: params.palw_bond_maturity,
+            palw_da_court: params.palw_da_court,
             palw_frontier_provenance: params.palw_frontier_provenance,
             finality_depth: params.blockrate.finality_depth,
             palw_credit_params: params.palw_credit.clone(),
@@ -1480,7 +1487,7 @@ impl VirtualStateProcessor {
                                         }
                                     })
                                     .collect();
-                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v5(
+                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v6(
                                     state,
                                     state_params,
                                     self.palw_admission_params_v2.as_ref(),
@@ -1489,6 +1496,7 @@ impl VirtualStateProcessor {
                                     work,
                                     &merged_refs,
                                     self.palw_unavailable_abstains_at(point.daa_score),
+                                    self.palw_da_court_at(point.daa_score),
                                 ) {
                                     Ok((next, delta, merged_skips)) => {
                                         // A skipped merged work is the block standing while a
@@ -4746,13 +4754,14 @@ impl VirtualStateProcessor {
             }
             match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
-                    match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_verdict_policy(
+                    match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_fences(
                         &folded,
                         state_params,
                         &rehearsal,
                         std::slice::from_ref(&object),
                         None,
                         self.palw_unavailable_abstains_at(point.daa_score),
+                        self.palw_da_court_at(point.daa_score),
                     ) {
                         Ok((next, _)) => {
                             if completes_a_group {
@@ -5399,6 +5408,85 @@ impl VirtualStateProcessor {
                         return Err(format!("bond {bond:?}'s capability declaration is not signed by the key it registered"));
                     }
                 }
+                // **ADR-0062 SA-1: an accusation is authorised by the accuser's own bond key, and
+                // by nothing else** — the same lock a retirement carries, for the same reason. A
+                // bond key is a public outpoint, so naming one must differ from owning it:
+                // unsigned, anyone could put an honest producer's claim under a session that
+                // pauses its path to `Final`, under a stranger's identity.
+                //
+                // The FENCE is checked here as well as in the fold. The fold refusing it is what
+                // makes it a rule; this refusing it is what stops a block from being folded at all
+                // on a network where the rule is dormant.
+                Obj::DefaultAccused { claim, missing_event_index, accuser, signature } => {
+                    if !self.palw_da_court_at(point.daa_score) {
+                        return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
+                    }
+                    let record =
+                        state.bond(accuser).ok_or_else(|| format!("an accusation names bond {accuser:?} this chain does not have"))?;
+                    let message = kaspa_consensus_core::palw_state_v2::palw_da_accusation_message_v2(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        claim,
+                        *missing_event_index,
+                        accuser,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_state_v2::PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("claim {claim}'s accusation is not signed by the bond it names"));
+                    }
+                }
+                // **ADR-0062 SA-2: the disclosure is signed by the CLAIM's bond, and bounded by the
+                // ruleset's close ceiling before a single Merkle path is walked.**
+                //
+                // The signature is the producer's, not the carrier's — which is what makes SA-3's
+                // permissionless carriage safe: anyone may carry it, and nobody may write it. The
+                // ceiling is applied here for the reason ADR-0049 Decision C's costs are (audit
+                // H-03): a bound checked only at class admission is a bound nothing enforces where
+                // it is actually spendable.
+                Obj::MaterialDisclosed { claim, event_index, preimage, opening, signature } => {
+                    if !self.palw_da_court_at(point.daa_score) {
+                        return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
+                    }
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "a data-availability disclosure on a network with no V2 court parameters".to_string())?;
+                    if preimage.len() as u64 > court.max_close_bytes() {
+                        return Err(format!(
+                            "claim {claim}'s disclosure is {} bytes, above this ruleset's {}-byte close ceiling",
+                            preimage.len(),
+                            court.max_close_bytes()
+                        ));
+                    }
+                    let record =
+                        state.claim(claim).ok_or_else(|| format!("a disclosure names claim {claim} this chain does not have"))?;
+                    let producer = state
+                        .bond(&record.bond)
+                        .ok_or_else(|| format!("claim {claim}'s producing bond is not in this chain's registry"))?;
+                    let message = kaspa_consensus_core::palw_state_v2::palw_da_disclosure_message_v2(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        claim,
+                        *event_index,
+                        &opening.event_hash,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &producer.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_state_v2::PALW_DA_DISCLOSURE_V2_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("claim {claim}'s disclosure is not signed by the bond that produced it"));
+                    }
+                }
                 Obj::FreePromptCommitted { .. } => {}
                 // ADR-0075: both certification objects are judged entirely by the transition —
                 // the evidence by the court's grader, the class binding by the class's own profile
@@ -5464,6 +5552,14 @@ impl VirtualStateProcessor {
     /// dissenting seat is two rules wearing one name.
     fn palw_unavailable_abstains_at(&self, daa_score: u64) -> bool {
         self.palw_unavailable_abstains.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0062, resolved in exactly one place**, for the reason its neighbour above gives: the
+    /// object-acceptance rehearsal, the fold and the state walk must agree about whether the DA
+    /// court is in force at THIS block, because one admitting what another refuses is two rules
+    /// wearing one name.
+    fn palw_da_court_at(&self, daa_score: u64) -> bool {
+        self.palw_da_court.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **ADR-0065 D1, resolved in exactly one place.** The window, or `None` when the rule is off.
@@ -11327,13 +11423,14 @@ impl VirtualStateProcessor {
                 // registers — it creates no claim, so there is nothing for a carve to attach to.
                 subsidy: 0,
             };
-            let (genesis_state, delta) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_verdict_policy(
+            let (genesis_state, delta) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_fences(
                 &kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis(),
                 state_params,
                 &point,
                 &objects,
                 None,
                 self.palw_unavailable_abstains_at(self.genesis.daa_score),
+                self.palw_da_court_at(self.genesis.daa_score),
             )
             .expect("the bundle's genesis registrations must apply — `validate_palw_v2` ran them at construction");
             let mut batch = WriteBatch::default();
@@ -12308,6 +12405,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::FamilyCertified { .. } => "FamilyCertified",
         O::ClassLaneCertified { .. } => "ClassLaneCertified",
         O::ObjectChunk { .. } => "ObjectChunk",
+        O::DefaultAccused { .. } => "DefaultAccused",
+        O::MaterialDisclosed { .. } => "MaterialDisclosed",
     }
 }
 
