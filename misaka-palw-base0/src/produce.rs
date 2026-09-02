@@ -226,6 +226,28 @@ pub fn base0_execute_for_attempt_v1(
     ctx: &PalwJobContextV2,
     prompt: &[usize],
 ) -> Result<Base0ExecutionV1, ProduceError> {
+    base0_execute_for_attempt_streaming_v1(artifact, profile, ctx, prompt, &mut |_| {})
+}
+
+/// **The same run, with each id handed over as it is SELECTED** (ADR-0077 Decision 2).
+///
+/// One inference, both halves: `on_token` sees the ids in decode order at the moment
+/// `argmax_lowest` picks them, and the capture, the roots and the returned ids are the same run's.
+/// A second inference to produce the stream would be exactly the failure Decision 2 exists to
+/// prevent — a worker that shows one answer and commits another — so the streaming verb is the
+/// loop and the non-streaming one is the loop with a callback that does nothing, never the
+/// reverse.
+///
+/// The callback cannot fail and cannot stop the run. Stopping is the caller's to do around this
+/// (the frame is written at completion, as ADR-0044 Decision 10 says), and a stream that could
+/// abort a run mid-capture would be a stream that decides what got committed.
+pub fn base0_execute_for_attempt_streaming_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    on_token: &mut dyn FnMut(u32),
+) -> Result<Base0ExecutionV1, ProduceError> {
     let prefill = ctx.declared_prefill_tokens as usize;
     let decode_tokens = ctx.exact_decode_tokens as usize;
     if prefill == 0 || decode_tokens == 0 {
@@ -281,6 +303,7 @@ pub fn base0_execute_for_attempt_v1(
     }
     let mut next = argmax_lowest(&last_logits);
     generated.push(next as u32);
+    on_token(next as u32);
     logits_rows.push(last_logits);
 
     // Calls 1..=D−1 — decode. The COORDINATE's position is 0 in every decode call (each call has
@@ -293,6 +316,7 @@ pub fn base0_execute_for_attempt_v1(
         capture.push_call(profile, ctx, call as u32, 0, &rows).map_err(ProduceError::Leg)?;
         next = argmax_lowest(&logits);
         generated.push(next as u32);
+        on_token(next as u32);
         logits_rows.push(logits);
         // A checkpoint after this call if the cadence says so. `call` IS the covered decode call —
         // the cache now holds `prefill + call` positions, which is what the map derives for it.
@@ -595,7 +619,10 @@ pub fn base0_replay_from_checkpoint_v1(
         return Err(ProduceError::Internal("the replay window is not inside this job's decode calls"));
     }
     let positions = map::integer_kv_positions_at_v1(ctx, covered);
-    let geometry = map::integer_kv_state_geometry_v1(profile, positions).map_err(|_| ProduceError::Internal("no state map"))?;
+    // **The map the CLASS declares, not the one this function knew first** — see
+    // `crate::legs::base0_state_chunk_geometry_v1`. Chunking at capture and un-chunking at replay
+    // are one decision; they were two, and the second one ignored the class.
+    let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions).map_err(ProduceError::Leg)?;
     let mut cache = KvCache::from_state_chunks(artifact, &geometry, chunks).map_err(ProduceError::Engine)?;
 
     let leaf_count = step_leaf_count(profile, ctx).map_err(ProduceError::StepSpace)?;

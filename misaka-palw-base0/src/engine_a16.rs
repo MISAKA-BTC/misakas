@@ -204,6 +204,83 @@ impl A16Cache {
         Some(out)
     }
 
+    /// **The inverse of [`Self::state_chunk_bytes_v1`]: a cache rebuilt from committed chunks.**
+    ///
+    /// The restore half of ADR-0077 Decision 10 for this tier. Without it the dense class could
+    /// commit a checkpoint leg and nothing could resume from one, so every dispute and every
+    /// interval opening ran genesis-anchored — which is the cost the checkpoint leg exists to
+    /// remove.
+    ///
+    /// Both widths the encoder writes are read back, decided by the ENTRY rather than guessed:
+    /// `row_bytes == elements` is the one-byte map (each byte an `i8`), `row_bytes == 4 ×
+    /// elements` is this cache's own `i32`. `row_bytes` is a whole multiple of neither for a map
+    /// that describes another class, and that is a refusal.
+    ///
+    /// Every refusal is a refusal to replay, never a partial cache — the rule
+    /// `KvCache::from_state_chunks` states: a cache assembled from material that does not cover
+    /// the state replays against zeros, and zeros are indistinguishable from computed rows once
+    /// they are in a commitment.
+    pub fn from_state_chunks_v1(
+        layers: usize,
+        row_elements: usize,
+        geometry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1,
+        chunks: &[Vec<u8>],
+    ) -> Result<Self, A16EngineError> {
+        use kaspa_consensus_core::palw_state_chunk_map::{
+            PalwStateChunkKindV1, integer_kv_state_chunk_entry_v1, integer_kv_state_row_v1,
+        };
+        if chunks.len() as u64 != geometry.chunk_count() || row_elements == 0 {
+            return Err(A16EngineError::OpRefused("the served chunks are not the map's own count"));
+        }
+        let positions = geometry.positions as usize;
+        let mut cache = Self::new(layers);
+        for side in [&mut cache.keys, &mut cache.values] {
+            for layer in side.iter_mut() {
+                layer.resize(positions, Vec::new());
+            }
+        }
+        for (index, bytes) in chunks.iter().enumerate() {
+            let entry = integer_kv_state_chunk_entry_v1(geometry, index as u64)
+                .ok_or(A16EngineError::OpRefused("the map has no entry for a chunk it counted"))?;
+            let width = entry.row_bytes as usize;
+            let per_element = if width == row_elements {
+                1
+            } else if width == row_elements.checked_mul(4).ok_or(A16EngineError::OpRefused("the map's row width overflows"))? {
+                4
+            } else {
+                return Err(A16EngineError::OpRefused("the map describes a row this cache does not hold"));
+            };
+            for p in entry.position_start..entry.position_start + entry.position_count {
+                let row =
+                    integer_kv_state_row_v1(&entry, bytes, p).ok_or(A16EngineError::OpRefused("a chunk is not its own length"))?;
+                let values: Vec<i32> = if per_element == 1 {
+                    row.iter().map(|b| *b as i8 as i32).collect()
+                } else {
+                    row.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+                };
+                let side = match entry.kind {
+                    PalwStateChunkKindV1::Key => &mut cache.keys,
+                    PalwStateChunkKindV1::Value => &mut cache.values,
+                };
+                let layer = side
+                    .get_mut(entry.attn_layer as usize)
+                    .ok_or(A16EngineError::OpRefused("the map names a layer this cache lacks"))?;
+                layer[p as usize] = values;
+            }
+        }
+        // Every attention layer the map named must now be full at the declared width. A layer it
+        // never named keeps its empty rows, and replaying over those is the zero-state failure.
+        for side in [&cache.keys, &cache.values] {
+            for layer in geometry.attn_layers.iter() {
+                let rows = side.get(*layer as usize).ok_or(A16EngineError::OpRefused("the map names a layer this cache lacks"))?;
+                if rows.len() != positions || rows.iter().any(|r| r.len() != row_elements) {
+                    return Err(A16EngineError::OpRefused("the served chunks do not cover the state they declare"));
+                }
+            }
+        }
+        Ok(cache)
+    }
+
     /// The key rows this cache holds, for tests that need to measure the STATE rather than reason
     /// about its type — `a16_kv_state_does_not_fit_the_one_byte_map_its_class_declares` is the
     /// caller, and what it measures decides whether a checkpoint map is sound for this family.
