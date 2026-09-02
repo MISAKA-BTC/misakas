@@ -101,10 +101,29 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
     let guard = MappedArtifactV1::verify_from_bytes(std::path::Path::new(&artifact_path), &bytes).unwrap_or_else(|e| die(e));
     let artifact = decode_artifact_file_v1(&bytes).unwrap_or_else(|e| die(format!("{artifact_path}: {e}")));
     let digest = artifact.artifact_digest();
-    let tokenizer_commitment = artifact.tokenizer_commitment;
-    let tokenizer =
-        QwenTokenizer::from_json(&std::fs::read(&tokenizer_path).unwrap_or_else(|e| die(format!("{tokenizer_path}: {e}"))))
-            .unwrap_or_else(|e| die(format!("{tokenizer_path}: {e}")));
+    // **The pair is checked, not assumed.** The artifact's `tokenizer_commitment` is inside its
+    // digest, so the artifact CAN name the tokenizer its ids belong to — but until the file this
+    // process opened is hashed and compared, that naming decides nothing, and a wrong
+    // `tokenizer.json` fails SILENTLY: different ids, a different `prompt_token_ids_hash`, a
+    // different `job_context_hash`, and an honest producer defaulted for a claim no seat can
+    // reproduce. So the comparison happens here, once, where its answer is a name.
+    let tokenizer_bytes = std::fs::read(&tokenizer_path).unwrap_or_else(|e| die(format!("{tokenizer_path}: {e}")));
+    let binding = artifact.check_tokenizer_bytes_v1(&tokenizer_bytes);
+    if let Some(why) = binding.refusal() {
+        die(format!("{tokenizer_path}: {why} (artifact {artifact_path})"));
+    }
+    if binding == misaka_palw_base0::artifact::TokenizerBindingV1::Undeclared {
+        // Stated at boot rather than defaulted in silence: the artifacts converted before
+        // `qwen25-convert --a16` bound a commitment carry `Hash64::default()`, so this worker's
+        // jobs publish `tokenizer_id` zero and NOTHING — here or on chain — can prove that the
+        // file below is the one the weights were converted with. Binding it needs a re-converted
+        // artifact, which moves the artifact root and is a genesis decision.
+        eprintln!(
+            "[palw-a16-fp-worker] WARNING: artifact {artifact_path} declares no tokenizer commitment, so {tokenizer_path}              was checked against nothing and every job publishes tokenizer_id 0. A replayer using a different              tokenizer.json derives different token ids and cannot reproduce this producer's claims."
+        );
+    }
+    let tokenizer_commitment = binding.tokenizer_id();
+    let tokenizer = QwenTokenizer::from_json(&tokenizer_bytes).unwrap_or_else(|e| die(format!("{tokenizer_path}: {e}")));
     let load_ms = started.elapsed().as_millis() as u64;
 
     let net = network_id.into_bytes();
@@ -118,8 +137,9 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
             // This family's runtime IS its artifact: the chain registers the digest as
             // `artifact_root`, and both `model_profile_id` and `runtime_class_id` are that value.
             runtime_identity: digest,
-            // The dense artifact carries a tokenizer commitment, so a job's `tokenizer_id` binds
-            // the file that produced its ids.
+            // The answer the pair check gave for the file THIS process opened — the artifact's
+            // commitment when it declares one (and the bytes matched, or we died above), zero
+            // when it declares none.
             tokenizer_id: tokenizer_commitment,
             vocab: entry.profile.vocab_size,
             retention_schema: "misaka.palw.fp-v3-a16-retention.v1",

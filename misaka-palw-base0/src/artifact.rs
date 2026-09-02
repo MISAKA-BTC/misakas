@@ -100,6 +100,52 @@ impl std::fmt::Display for ArtifactError {
     }
 }
 
+/// What [`Base0ArtifactV1::check_tokenizer_bytes_v1`] found when the pair was opened.
+///
+/// Three answers rather than a `Result<(), _>`, because "the artifact declares no tokenizer" is
+/// neither a pass nor a failure: it is the state the shipped dense artifact is in, and a caller
+/// that collapses it into either one is the reason the defect survived.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TokenizerBindingV1 {
+    /// The artifact declares a commitment and this file's bytes hash to it. The value is the
+    /// commitment, which is what a job's `tokenizer_id` publishes.
+    Bound(Hash64),
+    /// The artifact declares a commitment and this file is NOT it. A refusal: every id this file
+    /// produces is an id the class does not mean.
+    Mismatch { declared: Hash64, file: Hash64 },
+    /// The artifact declares none, so this file was not checked against anything.
+    Undeclared,
+}
+
+impl TokenizerBindingV1 {
+    /// The refusal, as a sentence naming what disagreed — `None` when there is nothing to refuse.
+    ///
+    /// Deliberately empty for [`Self::Undeclared`]: an artifact that pins nothing cannot convict a
+    /// tokenizer file, and a runtime that refused on it would refuse every artifact shipped before
+    /// its converter bound one.
+    pub fn refusal(&self) -> Option<String> {
+        match self {
+            Self::Mismatch { declared, file } => Some(format!(
+                "the tokenizer file does not match the one this artifact was built with: the artifact commits to \
+                 {declared}, the file hashes to {file}. Every prompt tokenized here would produce ids the class does \
+                 not mean — a different prompt_token_ids_hash, a different job_context_hash, and a claim no seat can \
+                 reproduce. Open the tokenizer.json the artifact was converted from"
+            )),
+            Self::Bound(_) | Self::Undeclared => None,
+        }
+    }
+
+    /// The commitment to publish as a job's `tokenizer_id`: the artifact's when it declares one,
+    /// zero when it does not.
+    pub fn tokenizer_id(&self) -> Hash64 {
+        match self {
+            Self::Bound(id) => *id,
+            Self::Mismatch { declared, .. } => *declared,
+            Self::Undeclared => Hash64::default(),
+        }
+    }
+}
+
 impl From<RopeGenError> for ArtifactError {
     fn from(e: RopeGenError) -> Self {
         ArtifactError::Rope(e)
@@ -562,6 +608,36 @@ impl Base0ArtifactV1 {
     pub fn with_tokenizer_commitment(mut self, commitment: Hash64) -> Self {
         self.tokenizer_commitment = commitment;
         self
+    }
+
+    /// **Open the artifact and a tokenizer file AS A PAIR, or refuse by name** (ADR-0072
+    /// Decision 8's shape: a value nothing pins, inside something that decides a verdict).
+    ///
+    /// A class's execution is a function of token ids, and an id is only a token because some
+    /// tokenizer says so. The commitment is already inside `artifact_digest`, so the artifact
+    /// CAN say which tokenizer its ids belong to — but until a runtime hashes the file it opened
+    /// and compares, saying so decides nothing. A stranger, or a seat, replaying with a different
+    /// `tokenizer.json` gets different ids, a different `prompt_token_ids_hash`, a different
+    /// `job_context_hash` and a claim that reproduces nothing. That is not a refusal — it is an
+    /// UNREPRODUCIBLE claim, an `Unavailable` quorum, and a producer defaulted for work performed
+    /// correctly. So the comparison happens once, at startup, where its answer is a name.
+    ///
+    /// [`TokenizerBindingV1::Undeclared`] is not an error the caller may treat as a pass in
+    /// silence: it says the artifact pins nothing, so nothing about this file was checked. It is
+    /// legal (a derived artifact has no tokenizer at all, and the shipped dense artifact was
+    /// written before its converter bound one), and a runtime that reaches it must SAY so — a
+    /// commitment that is `Hash64::default()` publishes a `tokenizer_id` of zero, which no
+    /// verifier can use to reject a wrong file.
+    pub fn check_tokenizer_bytes_v1(&self, tokenizer_bytes: &[u8]) -> TokenizerBindingV1 {
+        if self.tokenizer_commitment == Hash64::default() {
+            return TokenizerBindingV1::Undeclared;
+        }
+        let file = Self::tokenizer_commitment_of(tokenizer_bytes);
+        if file == self.tokenizer_commitment {
+            TokenizerBindingV1::Bound(file)
+        } else {
+            TokenizerBindingV1::Mismatch { declared: self.tokenizer_commitment, file }
+        }
     }
 
     /// The commitment for a tokenizer file's bytes.
@@ -1380,6 +1456,61 @@ mod tests {
         assert_ne!(Base0ArtifactV1::tokenizer_commitment_of(b"ab"), Base0ArtifactV1::tokenizer_commitment_of(b"a"));
         // …and its own domain key, so it cannot collide with an artifact digest.
         assert_ne!(Base0ArtifactV1::tokenizer_commitment_of(b""), base.artifact_digest());
+    }
+
+    /// **A commitment nothing compares against decides nothing** (ADR-0072 Decision 8's shape:
+    /// a value nothing pins, inside something that decides a verdict).
+    ///
+    /// The test above proves the tokenizer is in the class IDENTITY. That is only half: an
+    /// identity is a claim about a file, and until a runtime hashes the file it opened and
+    /// compares, a stranger — or a seat — replaying with a different `tokenizer.json` gets
+    /// different token ids, a different `prompt_token_ids_hash`, a different `job_context_hash`
+    /// and a claim that reproduces nothing. It is not refused; it is UNREPRODUCIBLE, and the
+    /// producer is defaulted for work performed correctly. So the pair is checked when it is
+    /// opened, and the wrong file is a refusal BY NAME.
+    ///
+    /// `Undeclared` is its own answer rather than a pass: every dense artifact written before
+    /// `qwen25-convert --a16` bound a commitment carries `Hash64::default()`, and a runtime that
+    /// read that as "checked" is precisely the silence this closes.
+    #[test]
+    fn a_tokenizer_that_is_not_the_committed_one_is_refused_by_name() {
+        let file = b"{\"model\":{\"type\":\"BPE\"},\"version\":\"1\"}";
+        let other = b"{\"model\":{\"type\":\"BPE\"},\"version\":\"2\"}";
+        let base = Base0ArtifactV1::derive_deterministic(tiny(), 13).unwrap();
+
+        // A derived artifact declares none: nothing was checked, and the answer says so rather
+        // than passing.
+        assert_eq!(base.check_tokenizer_bytes_v1(file), TokenizerBindingV1::Undeclared);
+        assert_eq!(base.check_tokenizer_bytes_v1(file).refusal(), None, "an artifact that pins nothing convicts nothing");
+        assert_eq!(
+            base.check_tokenizer_bytes_v1(file).tokenizer_id(),
+            Hash64::default(),
+            "and it publishes a tokenizer_id no verifier can use"
+        );
+
+        let committed = Base0ArtifactV1::tokenizer_commitment_of(file);
+        let bound = base.clone().with_tokenizer_commitment(committed);
+
+        // The right file: bound, and the id a job publishes is the artifact's own commitment.
+        assert_eq!(bound.check_tokenizer_bytes_v1(file), TokenizerBindingV1::Bound(committed));
+        assert_eq!(bound.check_tokenizer_bytes_v1(file).refusal(), None);
+        assert_eq!(bound.check_tokenizer_bytes_v1(file).tokenizer_id(), committed);
+
+        // The wrong file: a refusal, naming both sides. This is the whole defect — without it the
+        // run proceeds and produces ids the class does not mean.
+        let verdict = bound.check_tokenizer_bytes_v1(other);
+        assert_eq!(
+            verdict,
+            TokenizerBindingV1::Mismatch { declared: committed, file: Base0ArtifactV1::tokenizer_commitment_of(other) }
+        );
+        let why = verdict.refusal().expect("a mismatched tokenizer must be a refusal, not a warning");
+        assert!(why.contains(&format!("{committed}")), "the refusal names what the artifact committed to: {why}");
+        assert!(why.contains(&format!("{}", Base0ArtifactV1::tokenizer_commitment_of(other))), "and what the file actually is: {why}");
+
+        // A single byte is enough — the failure this closes is a version bump nobody announced.
+        let mut nudged = file.to_vec();
+        *nudged.last_mut().unwrap() = b' ';
+        assert!(matches!(bound.check_tokenizer_bytes_v1(&nudged), TokenizerBindingV1::Mismatch { .. }));
     }
 
     /// **Condition 6: the requant parameters are inside `artifact_root`, biases included.**
