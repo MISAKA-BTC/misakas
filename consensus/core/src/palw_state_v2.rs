@@ -1836,6 +1836,61 @@ pub fn palw_class_registration_message_v2(
     finish(state)
 }
 
+/// **A class freeze, and the only author it has is the transition** — ADR-0063 SA-5.
+///
+/// The fields are private and [`Self::by_transition`] is `pub(in crate::palw_state_v2)`, which
+/// makes "who may freeze a class" a fact the compiler enforces rather than a policy a later
+/// constructor could relax. ADR-0037 I10, as carried by ADR-0038, says a class freezes on a court
+/// outcome of `Unadjudicable` — a determinism claim refuted by the class's own participants, which
+/// nobody decides — and a freeze that could ALSO be authored by an operator's signature would be a
+/// governance key on a chain that has none, pointed at the one object with no inverse (there is
+/// deliberately no `ClassUnfrozen`).
+///
+/// Wire-compatible with the named-field variant it replaces: borsh writes a newtype variant as its
+/// inner value and a struct as its fields in order, so the bytes are the two fields in the same
+/// order, unchanged. This moves no fingerprint.
+///
+/// `BorshDeserialize` stays derived on purpose. The lifecycle extractor must be able to DECODE
+/// what a transaction carried in order to name it and refuse it, and it does — decoding is the
+/// chain reading, not an operator authoring.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwClassFrozenV2 {
+    class_id: Hash64,
+    certificate: crate::palw_slash::PalwClassContradictionCertificateV1,
+}
+
+impl PalwClassFrozenV2 {
+    /// The one constructor, and it is not reachable from outside this module — not from
+    /// `kaspa-consensus`, not from `kaspad`, not from `misaka-cli`. Inside the module its callers
+    /// are the transition and the transition's own fixtures.
+    ///
+    /// **`dead_code` today, and the warning is telling the truth**: nothing in the shipped tree
+    /// authors a freeze, because the court arm that ADR-0037 I10 (as carried by ADR-0038) says
+    /// should — an `Unadjudicable` terminal freezing the class it could not adjudicate — is not
+    /// wired into this transition yet. `outcome_freezes_class_v1` in `palw_facts` computes the
+    /// predicate and nothing folds it into state. The constructor is here first ON PURPOSE: when
+    /// that arm is written, the door it must come through already exists and has exactly one key,
+    /// which is cheaper than deciding the authority question inside the pass that is busy wiring
+    /// the court.
+    #[allow(dead_code)]
+    pub(in crate::palw_state_v2) fn by_transition(
+        class_id: Hash64,
+        certificate: crate::palw_slash::PalwClassContradictionCertificateV1,
+    ) -> Self {
+        Self { class_id, certificate }
+    }
+
+    /// The class this freeze names. Readable everywhere — reading is not authoring.
+    pub fn class_id(&self) -> Hash64 {
+        self.class_id
+    }
+
+    /// The contradiction certificate the freeze rests on.
+    pub fn certificate(&self) -> &crate::palw_slash::PalwClassContradictionCertificateV1 {
+        &self.certificate
+    }
+}
+
 /// The consensus objects a block can carry into the state, in the block's deterministic
 /// acceptance order. ACCEPTANCE (who may say this, with what proof) belongs to later PRs; the
 /// transition enforces referential integrity and the lattice.
@@ -1945,10 +2000,18 @@ pub enum PalwConsensusObjectV2 {
     /// claim refuted by its own participants, and it needs no governance step because nobody
     /// decided it. The transition checks the structural half here; signatures are the acceptance
     /// layer's, exactly as they are for `BondRegistered`.
-    ClassFrozen {
-        class_id: Hash64,
-        certificate: crate::palw_slash::PalwClassContradictionCertificateV1,
-    },
+    ///
+    /// **The payload has no public constructor** (ADR-0063 SA-5). It carries private fields and
+    /// the only way to make one is [`PalwClassFrozenV2::by_transition`], which is visible inside
+    /// this module and nowhere else — so no operator tool, no `kaspad` flag and no other crate can
+    /// AUTHOR a freeze, whatever it signs it with. Borsh can still decode one, because the
+    /// extractor has to be able to read what a transaction carried in order to refuse it, and both
+    /// doors do: `palw_lifecycle_object_may_ride_v2` refuses it at admission and the acceptance
+    /// layer refuses it again. Who may freeze a class was the question ADR-0063 recorded as
+    /// undecided; it is decided here, in the type, before a constructor could make the answer
+    /// "whoever pays a carrier fee". An operator freeze would be a governance key on a chain that
+    /// has none.
+    ClassFrozen(PalwClassFrozenV2),
     // **There is deliberately no `ClassUnfrozen`, and its absence is the design.**
     //
     // The variant that stood here accepted `{ class_id }` with no evidence and no authority, so
@@ -5876,7 +5939,9 @@ fn apply_object(
                 apply_object(builder, ctx, &inner)?;
             }
         }
-        PalwConsensusObjectV2::ClassFrozen { class_id, certificate } => {
+        PalwConsensusObjectV2::ClassFrozen(frozen_object) => {
+            let class_id = &frozen_object.class_id();
+            let certificate = frozen_object.certificate();
             let record = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?.clone();
             if let PalwClassStatusV2::Frozen { .. } = record.status {
                 return Err(PalwStateV2Error::FrozenClass(*class_id));
@@ -7233,8 +7298,20 @@ pub(crate) mod tests {
         }
     }
 
+    /// The ONLY way a test builds a freeze, here or in any other module's tests: SA-5 leaves the
+    /// constructor visible inside `palw_state_v2` alone, and this fixture is `#[cfg(test)]`, so
+    /// nothing that ships can reach it.
     pub(crate) fn freeze(class_id: Hash64) -> PalwConsensusObjectV2 {
-        PalwConsensusObjectV2::ClassFrozen { class_id, certificate: contradiction(class_id) }
+        frozen_object(class_id, contradiction(class_id))
+    }
+
+    /// Same, with the certificate chosen by the caller — the negative cases below need to name a
+    /// certificate that does NOT match the class they aim it at.
+    pub(crate) fn frozen_object(
+        class_id: Hash64,
+        certificate: crate::palw_slash::PalwClassContradictionCertificateV1,
+    ) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::ClassFrozen(PalwClassFrozenV2::by_transition(class_id, certificate))
     }
 
     fn op_key(v: u64) -> Vec<u8> {
@@ -10335,7 +10412,7 @@ pub(crate) mod tests {
         //     contradiction inside a disposable class, then quote it at the class you want
         //     stopped. Aimed at the entrant here; aimed at BASE-0 it does not even reach this
         //     rule, because (f) refuses a floor freeze whatever the evidence says.
-        let cross = PalwConsensusObjectV2::ClassFrozen { class_id: h64(2), certificate: contradiction(h64(3)) };
+        let cross = frozen_object(h64(2), contradiction(h64(3)));
         let err = apply_palw_transition_v2(&base, &p, &ctx(2, 101, 2), &[cross], None);
         assert!(
             matches!(err, Err(PalwStateV2Error::ContradictionNamesAnotherClass { frozen, evidenced }) if frozen == h64(2) && evidenced == h64(3)),
@@ -10346,26 +10423,14 @@ pub(crate) mod tests {
         //     let anyone halt a class by quoting it agreeing with itself.
         let mut agreeing = contradiction(h64(2));
         agreeing.attestation_b = agreeing.attestation_a.clone();
-        let err = apply_palw_transition_v2(
-            &base,
-            &p,
-            &ctx(2, 101, 2),
-            &[PalwConsensusObjectV2::ClassFrozen { class_id: h64(2), certificate: agreeing }],
-            None,
-        );
+        let err = apply_palw_transition_v2(&base, &p, &ctx(2, 101, 2), &[frozen_object(h64(2), agreeing)], None);
         assert!(matches!(err, Err(PalwStateV2Error::ContradictionNotProven(_))), "got {err:?}");
 
         // (c) An attestation that binds a different job context is a second fact, not a
         //     contradiction.
         let mut foreign_job = contradiction(h64(2));
         foreign_job.attestation_b.job_context_hash = h64(0xDEAD);
-        let err = apply_palw_transition_v2(
-            &base,
-            &p,
-            &ctx(2, 101, 2),
-            &[PalwConsensusObjectV2::ClassFrozen { class_id: h64(2), certificate: foreign_job }],
-            None,
-        );
+        let err = apply_palw_transition_v2(&base, &p, &ctx(2, 101, 2), &[frozen_object(h64(2), foreign_job)], None);
         assert!(matches!(err, Err(PalwStateV2Error::ContradictionNotProven(_))), "got {err:?}");
 
         // (d) The real thing freezes, and the freeze is what every consumer already reads: the
@@ -10395,6 +10460,52 @@ pub(crate) mod tests {
         //     chain, with no path back, because the object that would undo it needs a block.
         let floor = apply_palw_transition_v2(&base, &p, &ctx(2, 101, 2), &[freeze(h64(1))], None);
         assert!(matches!(floor, Err(PalwStateV2Error::BaseClassMayNotFreeze(id)) if id == h64(1)), "got {floor:?}");
+    }
+
+    /// **ADR-0063 SA-5: a class freeze has exactly one author, and an operator is not it.**
+    ///
+    /// The ADR recorded `ClassFrozen` as a verify-only object with no constructor, and left "who
+    /// may freeze a class" undecided. Undecided is not a resting state for an object with no
+    /// inverse: the first constructor anyone writes decides it, and the obvious one to write is an
+    /// operator-signed freeze — a governance key on a chain that has none, aimed at the one switch
+    /// that cannot be switched back.
+    ///
+    /// So it is decided in the TYPE. `PalwClassFrozenV2`'s fields are private and `by_transition`
+    /// is visible only inside `palw_state_v2`, which is why the assertions below are about the two
+    /// things a test can still check: that the door a transaction would come through is shut at
+    /// both locks, and that shutting it moved no bytes. The third property — that no code outside
+    /// this module can author one — is not asserted here because it is not assertable at runtime:
+    /// it is a compile error, and the fixture this test calls is the only spelling that survives.
+    #[test]
+    fn a_class_freeze_cannot_be_authored_outside_the_transition() {
+        let object = freeze(h64(2));
+
+        // (a) Borsh still DECODES one, deliberately: the lifecycle extractor has to be able to
+        //     read what a transaction carried in order to name it and refuse it. Decoding is the
+        //     chain reading; it is not an operator authoring. And what comes back is refused —
+        //     at admission here, and again at the acceptance layer, which has no arm that takes a
+        //     freeze from a transaction.
+        let bytes = borsh::to_vec(&object).expect("a consensus object is borsh-serializable");
+        let decoded: PalwConsensusObjectV2 = borsh::from_slice(&bytes).expect("and borsh-decodable");
+        assert_eq!(decoded, object, "the round trip is lossless — the refusal is a policy, not a parse failure");
+        let refused = crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&decoded)
+            .expect_err("a freeze that arrived on a transaction must be refused at admission");
+        assert!(refused.contains("no layer verifies"), "and it must say why: got {refused}");
+
+        // (b) **No byte moved.** Borsh writes a newtype variant as its inner value and a struct as
+        //     its fields in declaration order, so the payload is the same `class_id ++
+        //     certificate` the named-field variant wrote. This lane may not move a fingerprint,
+        //     and this is the assertion that says so rather than the commit message.
+        let mut expected = vec![bytes[0]]; // the variant tag, read from the object rather than pinned
+        expected.extend(borsh::to_vec(&h64(2)).unwrap());
+        expected.extend(borsh::to_vec(&contradiction(h64(2))).unwrap());
+        assert_eq!(bytes, expected, "the freeze's wire form changed — that would be a consensus change, and SA-5 is not one");
+
+        // (c) The accessors read; they do not author. A freeze the transition made answers for
+        //     itself, which is what every consumer outside this crate now has instead of fields.
+        let PalwConsensusObjectV2::ClassFrozen(payload) = &object else { panic!("built by `freeze`") };
+        assert_eq!(payload.class_id(), h64(2));
+        assert_eq!(payload.certificate(), &contradiction(h64(2)));
     }
 
     /// **A free-prompt claim the court could never bind a refutation to is refused (audit C3,
