@@ -393,14 +393,7 @@ pub fn qwen36_execute_for_attempt_v1(
     ctx: &PalwJobContextV2,
     prompt: &[usize],
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
-    qwen36_execute_for_attempt_capped_v1(
-        artifact,
-        profile,
-        plan,
-        ctx,
-        prompt,
-        kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
-    )
+    qwen36_execute_for_attempt_capped_v1(artifact, profile, plan, ctx, prompt, kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES)
 }
 
 /// [`qwen36_execute_for_attempt_v1`] against the ladder top the CALLER states — the ruleset's
@@ -471,8 +464,8 @@ pub fn qwen36_execute_for_attempt_streaming_capped_v1(
     }
 
     let engine = Qwen36Engine::new(artifact);
-    let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, ctx, max_step_leaf_count)
-        .map_err(|e| format!("{e:?}"))?;
+    let leaf_count =
+        kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, ctx, max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
     let mut capture = crate::legs::Base0StepCaptureV1::new(leaf_count).map_err(|e| format!("{e:?}"))?;
     let checkpoint_profile = qwen36_checkpoint_profile_v1(profile);
     let checkpoints = crate::legs::Base0CheckpointCaptureV1::new(ctx, profile, &checkpoint_profile);

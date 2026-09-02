@@ -252,8 +252,8 @@ pub fn a16_execute_for_attempt_streaming_capped_v1(
         }
     };
 
-    let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, ctx, max_step_leaf_count)
-        .map_err(|e| format!("{e:?}"))?;
+    let leaf_count =
+        kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, ctx, max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
     let mut capture = crate::legs::Base0StepCaptureV1::new(leaf_count).map_err(|e| format!("{e:?}"))?;
     let checkpoint_profile = map::integer_kv_checkpoint_profile_v1(map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
     let mut checkpoints = crate::legs::Base0CheckpointCaptureV1::new(ctx, profile, &checkpoint_profile);
@@ -1304,8 +1304,7 @@ mod free_prompt_tests {
         assert!(price > 1, "a one-leaf job cannot demonstrate a boundary");
 
         // A ruleset one leaf short of this job's price refuses it — in the executor, and named.
-        let tight =
-            Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3)).with_step_ladder_cap(price - 1);
+        let tight = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3)).with_step_ladder_cap(price - 1);
         assert_eq!(tight.step_ladder_cap(), price - 1);
         let err = match tight.execute(&ctx, &prompt) {
             Err(e) => e,

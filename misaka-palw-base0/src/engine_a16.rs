@@ -1870,8 +1870,7 @@ mod profile_plan_tests {
             // the row; what the assertions below are about is whether its pre table NAMES the
             // embed-lift requant, which is a fact about the graph. Same rule as everywhere else in
             // this tree: derive, never declare.
-            let corrected =
-                entry.profile.pre_nodes.len() == kaspa_consensus_core::palw_base0_profile::QWEN25_A16_PRE_IR_V2.len();
+            let corrected = entry.profile.pre_nodes.len() == kaspa_consensus_core::palw_base0_profile::QWEN25_A16_PRE_IR_V2.len();
             match (&real, corrected) {
                 // A real profile against a MISMATCHED artifact must refuse on geometry — that is
                 // the root check doing its job, and it tells us the planner reached the geometry
