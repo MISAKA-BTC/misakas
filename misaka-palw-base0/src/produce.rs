@@ -34,7 +34,9 @@
 use crate::artifact::Base0ArtifactV1;
 use crate::engine::{Base0Engine, EngineError, KvCache, argmax_lowest};
 use crate::legs::{Base0CapturedRowV1, Base0StepCaptureV1, Base0StepTilesV1, LegError, base0_captured_rows_v1};
-use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepTableV1, step_leaf_count};
+use kaspa_consensus_core::palw_step::{
+    PALW_STEP_MAX_LEAVES, PalwShapeProfileV3, PalwStepTableV1, step_leaf_count, step_leaf_count_capped_v1,
+};
 use kaspa_consensus_core::palw_step_leg::PalwStepBindingV2;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
@@ -226,7 +228,19 @@ pub fn base0_execute_for_attempt_v1(
     ctx: &PalwJobContextV2,
     prompt: &[usize],
 ) -> Result<Base0ExecutionV1, ProduceError> {
-    base0_execute_for_attempt_streaming_v1(artifact, profile, ctx, prompt, &mut |_| {})
+    base0_execute_for_attempt_capped_v1(artifact, profile, ctx, prompt, PALW_STEP_MAX_LEAVES)
+}
+
+/// [`base0_execute_for_attempt_v1`] against the ladder top the CALLER states — the ruleset's
+/// `PalwCourtParamsV2::max_step_leaf_count`.
+pub fn base0_execute_for_attempt_capped_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
+) -> Result<Base0ExecutionV1, ProduceError> {
+    base0_execute_for_attempt_streaming_capped_v1(artifact, profile, ctx, prompt, max_step_leaf_count, &mut |_| {})
 }
 
 /// **The same run, with each id handed over as it is SELECTED** (ADR-0077 Decision 2).
@@ -248,6 +262,21 @@ pub fn base0_execute_for_attempt_streaming_v1(
     prompt: &[usize],
     on_token: &mut dyn FnMut(u32),
 ) -> Result<Base0ExecutionV1, ProduceError> {
+    base0_execute_for_attempt_streaming_capped_v1(artifact, profile, ctx, prompt, PALW_STEP_MAX_LEAVES, on_token)
+}
+
+/// **The floor's capture, priced against the RULESET's ladder** (ADR-0077 Decision 12) — the same
+/// threading the two model tiers carry. The delegating entry points above pass
+/// `PALW_STEP_MAX_LEAVES`, which is what every shipped preset froze, so a caller that holds no
+/// ruleset is byte-identical to what it was.
+pub fn base0_execute_for_attempt_streaming_capped_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
+    on_token: &mut dyn FnMut(u32),
+) -> Result<Base0ExecutionV1, ProduceError> {
     let prefill = ctx.declared_prefill_tokens as usize;
     let decode_tokens = ctx.exact_decode_tokens as usize;
     if prefill == 0 || decode_tokens == 0 {
@@ -261,7 +290,7 @@ pub fn base0_execute_for_attempt_streaming_v1(
         return Err(ProduceError::TokenOutOfVocab { token: *bad, vocab });
     }
 
-    let leaf_count = step_leaf_count(profile, ctx).map_err(ProduceError::StepSpace)?;
+    let leaf_count = step_leaf_count_capped_v1(profile, ctx, max_step_leaf_count).map_err(ProduceError::StepSpace)?;
     let mut capture = Base0StepCaptureV1::new(leaf_count).map_err(ProduceError::Leg)?;
     let engine = Base0Engine::new(artifact);
     // **ADR-0049 Decision F's obligation, before the first token.**

@@ -1102,6 +1102,23 @@ fn palw_body_prefix_v1(shape: &PalwLeafShapeV1, k_max: u128, visits: &mut u64) -
     total
 }
 
+/// `Σ_{k=lo+1}^{hi} Post(k)` — the post table's contribution over the DECODE window, taken per
+/// term as a difference of two exact prefix sums rather than as a difference of two saturated
+/// totals (a saturated minuend and subtrahend would answer 0 for a window that is not empty).
+fn palw_logits_window_v1(shape: &PalwLeafShapeV1, lo: u128, hi: u128, visits: &mut u64) -> u128 {
+    if hi <= lo {
+        return 0;
+    }
+    let mut total = shape.logits_const.saturating_mul(hi - lo);
+    for term in &shape.logits_kv {
+        *visits += 1;
+        let sum = kv_scaled_prefix_sum_v1(term.multiplier, term.tile_len, hi)
+            .saturating_sub(kv_scaled_prefix_sum_v1(term.multiplier, term.tile_len, lo));
+        total = total.saturating_add(term.weight.saturating_mul(sum));
+    }
+    total
+}
+
 /// The loop's running total after it has processed the prefill position of kv length `k` — the
 /// value it would put in `TooManyLeaves.got` if it refused there. Non-decreasing in `k`.
 fn palw_prefill_running_total_v1(shape: &PalwLeafShapeV1, k: u128, prefill: u128, visits: &mut u64) -> u128 {
@@ -1209,33 +1226,101 @@ pub fn step_leaf_count(profile: &PalwShapeProfileV3, context: &PalwJobContextV2)
     step_leaf_count_capped_v1(profile, context, PALW_STEP_MAX_LEAVES)
 }
 
+/// The loop's running total after it has processed the step at kv length `s`: a prefill position
+/// for `s < prefill`, the last prefill position (which carries the logits) at `s == prefill`, and
+/// decode call `s − prefill` beyond it. Non-decreasing in `s`, which is what the bisection needs.
+///
+/// With `prefill == 0` there is no prefill call at all and no last-position logits term — the
+/// loop's `p + 1 == prefill` never fires — so the `prefill >= 1` guard is the difference between
+/// this and a `Post(0)` the enumeration never counted.
+fn palw_job_running_total_v1(shape: &PalwLeafShapeV1, s: u128, prefill: u128, visits: &mut u64) -> u128 {
+    let mut total = palw_body_prefix_v1(shape, s, visits);
+    if s >= prefill {
+        if prefill >= 1 {
+            total = total.saturating_add(palw_logits_at_v1(shape, prefill, visits));
+        }
+        total = total.saturating_add(palw_logits_window_v1(shape, prefill, s, visits));
+    }
+    total
+}
+
 /// [`step_leaf_count`] against a ladder top the CALLER states — the job-shaped twin of
 /// [`worst_case_step_leaf_count_capped_v1`], and it exists for the same reason: the canonical job
 /// of a fenced row is counted against the fenced ladder, and one enumeration must answer both
 /// questions or the two drift.
+///
+/// # The in-loop break was the bound, and a caller-stated cap takes it away
+///
+/// This walked one position per token and broke as soon as the running total passed `cap`. Every
+/// position adds at least one leaf on any profile that declares a node, so the walk was bounded by
+/// `cap` positions — ≈4.2e6 node visits at the shipped `2^22`, expensive but finite. **The bound
+/// was the cap, so raising the cap raises the bound**: the same shape under the context ladder's
+/// `2^32` buys ≈4.29e9 positions × up to 64 nodes each, and the two u32 fields that drive the
+/// walk's length (`declared_prefill_tokens`, `exact_decode_tokens`) arrive inside a stranger's
+/// court close with nothing between the close and here comparing them to anything. Threading the
+/// ruleset's `max_step_leaf_count` through to the executor — which is the point of doing it — is
+/// therefore exactly the change that would have turned a bounded walk into an unbounded one.
+///
+/// So it is the closed form now, on the same `PalwLeafShapeV1` derivation
+/// [`worst_case_step_leaf_count_capped_v1`] uses (module note above [`PalwLeafShapeV1`]), costing
+/// `O(pre + gdn + attn + post)` node visits — at most 256 — with no `prefill` and no `decode`
+/// factor at all. The job's enumeration is
+///
+/// ```text
+///   Σ_{k=1}^{P} B(k)  +  [P ≥ 1] · Post(P)  +  Σ_{c=1}^{D} ( B(P+c) + Post(P+c) )  +  aux
+/// ```
+///
+/// with `P = declared_prefill_tokens` and `D = exact_decode_tokens − 1`, and every sum over
+/// positions is a [`kv_scaled_prefix_sum_v1`] (or a multiplication, for the fixed-width terms).
+///
+/// Observable behaviour is unchanged, error payloads included: when the total exceeds `cap` the
+/// reported `got` is still the running total at the FIRST step that exceeded, found by bisection
+/// over the same closed form rather than by having walked there.
+/// `the_job_closed_form_is_the_loop_on_every_shipped_profile` asserts the whole `Result` against
+/// the retained loop over every shipped profile, a sweep of job shapes, and six caps.
 pub fn step_leaf_count_capped_v1(
     profile: &PalwShapeProfileV3,
     context: &PalwJobContextV2,
     cap: u64,
 ) -> Result<u64, PalwStepError> {
+    step_leaf_count_capped_counted_v1(profile, context, cap, &mut 0)
+}
+
+/// [`step_leaf_count_capped_v1`] with the node-visit counter its cost test reads.
+fn step_leaf_count_capped_counted_v1(
+    profile: &PalwShapeProfileV3,
+    context: &PalwJobContextV2,
+    cap: u64,
+    visits: &mut u64,
+) -> Result<u64, PalwStepError> {
     profile.validate_shape()?;
-    let prefill = context.declared_prefill_tokens as u64;
-    let decode_calls = context.exact_decode_tokens.saturating_sub(1) as u64;
+    let shape = palw_leaf_shape_v1(profile, visits);
+    let prefill = context.declared_prefill_tokens as u128;
+    let decode_calls = context.exact_decode_tokens.saturating_sub(1) as u128;
+    let steps = prefill + decode_calls;
+
     let mut total = 0u64;
-    // Prefill call: per position p, kv_len = p+1; logits only at the last position.
-    for p in 0..prefill {
-        total = total.saturating_add(leaves_per_position(profile, p + 1, p + 1 == prefill));
+    if steps >= 1 {
+        total = palw_saturate_u64(palw_job_running_total_v1(&shape, steps, prefill, visits));
         if total > cap {
-            return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
+            // The loop refused at the FIRST step whose running total exceeded, and reported that
+            // prefix. The running total is non-decreasing in `s`, so bisection finds the same step
+            // in ⌈log₂(P + D)⌉ closed-form evaluations instead of `s` walked positions.
+            let (mut lo, mut hi) = (1u128, steps);
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                if palw_saturate_u64(palw_job_running_total_v1(&shape, mid, prefill, visits)) > cap {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            let got = palw_saturate_u64(palw_job_running_total_v1(&shape, lo, prefill, visits));
+            return Err(PalwStepError::TooManyLeaves { got, max: cap });
         }
     }
-    // Decode calls c = 1..=decode_calls: kv_len = prefill + c, logits always.
-    for c in 1..=decode_calls {
-        total = total.saturating_add(leaves_per_position(profile, prefill + c, true));
-        if total > cap {
-            return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
-        }
-    }
+    // The aux series is already O(1) in the job's length and is added exactly where the loop added
+    // it — after the main enumeration cleared the cap, and with the same `+`.
     total += kv_aux_leaf_count(profile, context);
     if total > cap {
         return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
@@ -2238,5 +2323,250 @@ mod tests {
             &mut ladder_narrow,
         );
         assert_eq!(ladder_visits, ladder_narrow, "the closed form's cost is independent of the cap as well as of n_ctx");
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // W1b — the JOB-shaped closed form, and the decode budget the ruleset's ladder buys
+    // -----------------------------------------------------------------------------------------
+
+    /// **The oracle: `step_leaf_count_capped_v1` exactly as it was** — the real position loop over
+    /// the job's prefill and decode calls, calling the real `leaves_per_position`. The closed form
+    /// is proved against THIS and never against a second closed form.
+    fn job_leaf_count_loop_oracle_v1(
+        profile: &PalwShapeProfileV3,
+        context: &PalwJobContextV2,
+        cap: u64,
+        visits: &mut u64,
+    ) -> Result<u64, PalwStepError> {
+        profile.validate_shape()?;
+        let body_nodes =
+            profile.pre_nodes.len() as u64 + (0..profile.layer_count).map(|l| profile.layer_table(l).len() as u64).sum::<u64>();
+        let logits_nodes = profile.post_nodes.len() as u64;
+        let prefill = context.declared_prefill_tokens as u64;
+        let decode_calls = context.exact_decode_tokens.saturating_sub(1) as u64;
+        let mut total = 0u64;
+        for p in 0..prefill {
+            let with_logits = p + 1 == prefill;
+            *visits += body_nodes + if with_logits { logits_nodes } else { 0 };
+            total = total.saturating_add(leaves_per_position(profile, p + 1, with_logits));
+            if total > cap {
+                return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
+            }
+        }
+        for c in 1..=decode_calls {
+            *visits += body_nodes + logits_nodes;
+            total = total.saturating_add(leaves_per_position(profile, prefill + c, true));
+            if total > cap {
+                return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
+            }
+        }
+        total += kv_aux_leaf_count(profile, context);
+        if total > cap {
+            return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
+        }
+        Ok(total)
+    }
+
+    /// The job shapes the sweep runs: the empty ones the schema admits, the one-sided ones (all
+    /// prefill / all decode) where the `[P ≥ 1] · Post(P)` term switches, and a spread of ordinary
+    /// ones. `exact_decode_tokens` is the count, so `D = it − 1` decode CALLS.
+    fn job_shapes_under_test() -> Vec<(u32, u32)> {
+        let mut out = Vec::new();
+        for &prefill in &[0u32, 1, 2, 3, 7, 8, 26, 63, 64, 100, 511, 512] {
+            for &decode in &[0u32, 1, 2, 3, 12, 64, 500] {
+                out.push((prefill, decode));
+            }
+        }
+        out
+    }
+
+    /// **The proof obligation: the job-shaped closed form and the loop are the same function.**
+    ///
+    /// Every profile the worst-case sweep uses, against every job shape above, against six caps —
+    /// the shipped `2^22`, the context ladder's `2^32`, `u64::MAX` (the two that make the whole sum
+    /// run rather than break early), and three caps low enough that the refusal lands at or near
+    /// the first step, which is the only place the two could disagree about `TooManyLeaves.got`.
+    ///
+    /// The assertion is on the whole `Result`, error payload included — not on `is_ok`.
+    #[test]
+    fn the_job_closed_form_is_the_loop_on_every_shipped_profile() {
+        let caps = [1u64, 1000, 100_000, PALW_STEP_MAX_LEAVES, 1 << 32, u64::MAX];
+        let shapes = job_shapes_under_test();
+        let mut compared = 0u64;
+        for (name, profile) in profiles_under_test() {
+            for &(prefill, decode) in &shapes {
+                let mut ctx = tiny_context();
+                ctx.declared_prefill_tokens = prefill;
+                ctx.exact_decode_tokens = decode;
+                for &cap in &caps {
+                    let want = job_leaf_count_loop_oracle_v1(&profile, &ctx, cap, &mut 0);
+                    let got = step_leaf_count_capped_counted_v1(&profile, &ctx, cap, &mut 0);
+                    assert_eq!(got, want, "{name} disagrees at prefill={prefill} decode={decode} cap={cap}");
+                    compared += 1;
+                }
+            }
+        }
+        assert!(compared >= 4_000, "the sweep shrank to {compared} comparisons");
+    }
+
+    /// **The corner the ordinary sweep cannot reach: `u64` saturation on a job.**
+    ///
+    /// Same argument as `the_saturating_total_clamps_where_the_loop_clamps`, on the job-shaped
+    /// twin: the loop accumulates in `u64` with `saturating_add` and the closed form sums in `u128`
+    /// and clamps, so the two agree only if the clamp lands in the same places.
+    #[test]
+    fn the_saturating_job_total_clamps_where_the_loop_clamps() {
+        let mut p = tiny_profile();
+        p.layer_count = 3;
+        p.full_attention_interval = 1;
+        p.gdn_nodes = Vec::new();
+        p.n_ctx = 20_000;
+        p.kv_chunk_calls = 0;
+        p.attn_nodes = (0..PALW_STEP_MAX_NODES_PER_TABLE)
+            .map(|_| node(PalwStepOpKindV1::MatMulF16, PalwStepOutLenV1::KvScaled { multiplier: u32::MAX }, PALW_STEP_MIN_TILE_LEN))
+            .collect();
+        assert!(p.validate_shape().is_ok(), "the shape is inside every declared ceiling");
+
+        let mut ctx = tiny_context();
+        ctx.declared_prefill_tokens = 20_000;
+        ctx.exact_decode_tokens = 1;
+        assert_eq!(step_leaf_count_capped_counted_v1(&p, &ctx, u64::MAX, &mut 0), Ok(u64::MAX), "the total must clamp, not wrap");
+        for cap in [u64::MAX - 1, PALW_STEP_MAX_LEAVES, 1 << 32] {
+            assert_eq!(
+                step_leaf_count_capped_counted_v1(&p, &ctx, cap, &mut 0),
+                job_leaf_count_loop_oracle_v1(&p, &ctx, cap, &mut 0),
+                "the saturating job disagrees at cap={cap}"
+            );
+        }
+    }
+
+    /// **The cost, measured: the walk pays for the job's length, the closed form does not.**
+    ///
+    /// This is the trap W1b had to avoid. The in-loop break was the ONLY thing bounding the walk,
+    /// and it is bounded BY THE CAP — so threading the ruleset's `max_step_leaf_count` through to
+    /// the executor, at a ruleset that froze the context ladder's `2^32`, is precisely the change
+    /// that would have turned ≈4.2e6 node visits into ≈4.29e9.
+    ///
+    /// The first assertion is the fast one on purpose: reverting the closed form makes the last
+    /// block of this test take minutes rather than fail, and a red nobody can watch is a claim.
+    #[test]
+    fn a_job_costs_the_same_at_every_prefill() {
+        let p = sparse_leaf_profile(2, PALW_STEP_MAX_LAYERS);
+        let job = |prefill: u32, decode: u32| {
+            let mut ctx = tiny_context();
+            ctx.declared_prefill_tokens = prefill;
+            ctx.exact_decode_tokens = decode;
+            ctx
+        };
+
+        // Fast, and it is the whole claim: at the SHIPPED cap, a job 50 000× longer costs the
+        // same number of node visits. The loop's cost here is 100 000 × 257 ≈ 2.6e7 visits.
+        let (mut short_visits, mut long_visits) = (0u64, 0u64);
+        let _ = step_leaf_count_capped_counted_v1(&p, &job(2, 1), PALW_STEP_MAX_LEAVES, &mut short_visits);
+        let _ = step_leaf_count_capped_counted_v1(&p, &job(100_000, 1), PALW_STEP_MAX_LEAVES, &mut long_visits);
+        assert_eq!(short_visits, long_visits, "the closed form's cost moved with the prefill: {short_visits} vs {long_visits}");
+        assert_eq!(
+            short_visits,
+            4 * PALW_STEP_MAX_NODES_PER_TABLE as u64,
+            "the closed form should touch each of the four node tables exactly once"
+        );
+
+        // The loop, at the same two shapes, is linear in the prefill — and agrees on the answer.
+        let (mut short_loop, mut long_loop) = (0u64, 0u64);
+        assert_eq!(
+            job_leaf_count_loop_oracle_v1(&p, &job(2, 1), PALW_STEP_MAX_LEAVES, &mut short_loop),
+            step_leaf_count_capped_counted_v1(&p, &job(2, 1), PALW_STEP_MAX_LEAVES, &mut 0)
+        );
+        assert_eq!(
+            job_leaf_count_loop_oracle_v1(&p, &job(100_000, 1), PALW_STEP_MAX_LEAVES, &mut long_loop),
+            step_leaf_count_capped_counted_v1(&p, &job(100_000, 1), PALW_STEP_MAX_LEAVES, &mut 0)
+        );
+        // The loop's cost grows with the job until the CAP breaks it, and then the cap is the
+        // cost: 4.2e6 node entries at `2^22`, which is the number the closed form removes.
+        assert!(long_loop > 30 * short_loop, "the loop's cost is supposed to grow: {short_loop} vs {long_loop}");
+        assert!(
+            long_loop > 4_000_000,
+            "the loop was expected to walk ≈4.2e6 node entries before the cap broke it, walked {long_loop}"
+        );
+        assert!(short_visits * 10_000 < long_loop, "closed form {short_visits} vs loop {long_loop}");
+
+        // And the number the in-loop break was hiding. A context is two free u32 fields; at the
+        // context ladder's cap the break does not fire until ≈4.29e9 positions, which is the walk
+        // this closed form removes. Measured on the closed form only — running the loop here is
+        // the denial of service the test is about.
+        let hostile = job(u32::MAX, u32::MAX);
+        let mut hostile_visits = 0u64;
+        let started = std::time::Instant::now();
+        let answer =
+            step_leaf_count_capped_counted_v1(&p, &hostile, crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, &mut 0);
+        let took = started.elapsed();
+        let _ = step_leaf_count_capped_counted_v1(&p, &hostile, PALW_STEP_MAX_LEAVES, &mut hostile_visits);
+        assert!(took < std::time::Duration::from_millis(50), "the closed form took {took:?} — it is walking something");
+        assert!(
+            matches!(answer, Err(PalwStepError::TooManyLeaves { .. })),
+            "a job of 2^32 prefill positions is past even the 2^32 ladder: {answer:?}"
+        );
+        assert!(hostile_visits < 10_000, "the refusal cost {hostile_visits} node visits — the walk is back");
+    }
+
+    /// **THE number this item exists for: the decode budget is the ruleset's, and it moves.**
+    ///
+    /// The executor prices a job with `step_leaf_count`, so the largest `exact_decode_tokens` a
+    /// given prefill can carry is decided by the ladder that count is measured against — not by
+    /// `n_ctx`. Measured on the dense A16 row: at the shipped `2^22` a 26-token prefill buys **12**
+    /// decode tokens, and **the same prefill buys the same 12 at every `n_ctx` from 512 to 4096**.
+    /// Under ADR-0077 Decision 12's `2^32` it buys **11 120** — three orders of magnitude, from the
+    /// ruleset alone, with the geometry untouched.
+    ///
+    /// That is why W1b exists. Every width the court gains from ADR-0080's split close is worth
+    /// nothing while the executor prices against a module literal, and the reason six of eight real
+    /// prompts got zero decode budget at `n_ctx` 512 was never the context — it was this ladder.
+    ///
+    /// Pinned as exact counts rather than as a tolerance: these are arithmetic, and if they move
+    /// the class's economics moved with them.
+    #[test]
+    fn the_decode_budget_is_the_rulesets_ladder_not_the_context() {
+        let row = |n_ctx: u32| {
+            let geometry = crate::palw_qwen25_profile::PalwQwen25GeometryV1 { n_ctx, ..crate::palw_qwen25_profile::QWEN25_1_5B };
+            crate::palw_qwen25_profile::qwen25_a16_profile_v2(geometry).expect("the dense A16 row")
+        };
+        // The largest `exact_decode_tokens` the ladder admits at this prefill. The field counts the
+        // token selected at the end of prefill too, so a budget of 1 is "prefill only".
+        let budget = |profile: &PalwShapeProfileV3, prefill: u32, cap: u64| -> u32 {
+            let mut ctx = tiny_context();
+            ctx.declared_prefill_tokens = prefill;
+            (1u32..)
+                .take_while(|decode| {
+                    ctx.exact_decode_tokens = *decode;
+                    step_leaf_count_capped_v1(profile, &ctx, cap).is_ok()
+                })
+                .last()
+                .unwrap_or(0)
+        };
+        let ladder = crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES;
+        let p512 = row(512);
+
+        assert_eq!(budget(&p512, 26, PALW_STEP_MAX_LEAVES), 12, "the shipped ladder's budget at prefill 26");
+        assert_eq!(budget(&p512, 24, PALW_STEP_MAX_LEAVES), 14, "the shipped ladder's budget at prefill 24");
+        assert_eq!(budget(&p512, 26, ladder), 11_120, "the fenced ladder's budget at prefill 26");
+        assert_eq!(budget(&p512, 24, ladder), 11_122, "the fenced ladder's budget at prefill 24");
+
+        // **And the context is not the lever.** Four widenings of `n_ctx`, the same budget every
+        // time — the court's close ceiling and the executor's ladder are two different walls, and
+        // ADR-0080 only moves the first one.
+        for n_ctx in [512u32, 1024, 2048, 4096] {
+            assert_eq!(
+                budget(&row(n_ctx), 26, PALW_STEP_MAX_LEAVES),
+                12,
+                "widening n_ctx to {n_ctx} moved the decode budget — re-read this test's premise"
+            );
+        }
+
+        // The price of the job the shipped ladder admits, against the ladder it is measured on.
+        let mut ctx = tiny_context();
+        ctx.declared_prefill_tokens = 26;
+        ctx.exact_decode_tokens = 12;
+        assert_eq!(step_leaf_count_capped_v1(&p512, &ctx, PALW_STEP_MAX_LEAVES), Ok(4_074_040));
+        assert_eq!(PALW_STEP_MAX_LEAVES, 4_194_304);
     }
 }

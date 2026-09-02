@@ -172,7 +172,15 @@ impl PalwModelLineageV1 for DenseLineageV1 {
         // root and refuses anything it cannot prove. A refusal here is not final — the id may be
         // the A16 tier's, whose entries the floor resolver deliberately does not know.
         if let Ok(resolved) = resolve_class_v1(court, class_id, artifact_root, &dense_artifacts(holdings)) {
-            return Some(Ok(Box::new(misaka_palw_base0::backend::Base0Backend::new(resolved))));
+            // **The ladder the RULESET froze, not the module constant** (ADR-0077 Decision 12).
+            // The court is right here and the backend has asked for it since W1; until this line
+            // the answer was always the default, which made the decode budget a property of the
+            // build rather than of the network. Every shipped preset freezes
+            // `max_step_leaf_count` at `PALW_STEP_MAX_LEAVES`, so this changes nothing until a
+            // preset says otherwise — which is the point.
+            return Some(Ok(Box::new(
+                misaka_palw_base0::backend::Base0Backend::new(resolved).with_step_ladder_cap(court.max_step_leaf_count()),
+            )));
         }
         // **The A16 dense class.** Its artifact rides the same container as the floor's, so it is
         // found in the same holdings — under the ROOT FORM the row registers: the v1 row's is the
@@ -191,12 +199,15 @@ impl PalwModelLineageV1 for DenseLineageV1 {
                 .filter_map(artifact_of)
                 .find(|a| entry.artifact_root(a).is_ok_and(|root| root == artifact_root))
             {
-                return Some(Ok(Box::new(misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
-                    artifact,
-                    network_id.to_vec(),
-                    entry.profile.clone(),
-                    entry.canonical_job,
-                ))));
+                return Some(Ok(Box::new(
+                    misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
+                        artifact,
+                        network_id.to_vec(),
+                        entry.profile.clone(),
+                        entry.canonical_job,
+                    )
+                    .with_step_ladder_cap(court.max_step_leaf_count()),
+                )));
             }
             return Some(Err(format!(
                 "the chain names the {} class and this node holds no artifact whose registered root form is {artifact_root} \
