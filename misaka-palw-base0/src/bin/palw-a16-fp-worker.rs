@@ -95,7 +95,7 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
     // 26-token prompt — and it is a default rather than a rule. The court the network's own
     // binary ships is what the class catalog is walked against and what the capture prices
     // against, and they must be the same object or the worker serves rows its own chain refuses.
-    let court = misaka_palw_base0::fp_worker::fp_worker_court_params_v1(&network_id).unwrap_or_else(die);
+    let court = misaka_palw_base0::fp_worker::fp_worker_court_params_v1(&network_id).unwrap_or_else(|why| die(why));
     let entry =
         canonical_class_by_model_id_v1(&court, MODEL_ID).unwrap_or_else(|| die(format!("this build's catalog has no {MODEL_ID} row")));
 
