@@ -5327,3 +5327,24 @@ before any public on-chain free-prompt claim is attempted, and the card records 
 
 So the announcement's `[PENDING] a free-prompt job committed ON the public chain` line has its reading: unreachable
 tonight with the shipped rail; the local (D5-bound) commitments and derivations of 7a stand as stated.
+
+**7b, continued (18:45 UTC).** 3e's fix is `b037cdc2` on `palw-adr0082-impl` (= `7aa3d5ad` the fix + the `Cargo.lock`
+follow-up; parent the frozen `4d572142`; files `misaka-palw-gateway/Cargo.toml`, `misaka-palw-gateway/src/bin/rail.rs`,
+two `Cargo.lock` lines — verified locally before it was carried anywhere). It closes **two** defects found live, one
+behind the other:
+1. the empty funding script (above);
+2. `transaction has 250000 fees which is under the required amount of 263870` — the rail's flat `--fee` default sat
+   under the node's mass-based relay minimum for a commitment whose payload carries the prompt token ids (8,186 B).
+   `--fee` is now optional: the rail builds once at the floor, sizes the fee with `estimate_overlay_fee` from the
+   probe's payload length, rebuilds at that fee, and prints `fee_sompi`.
+With `--fee 300000` by hand, run-1's devnet nodes **accepted the commitment** — `submitted 944fbf1bf7e59a07…`
+(claim `1bd0e0a7…`, subnetwork 0x4a) at 18:27:33Z — the first free-prompt commitment a mempool has taken on this
+code; the run's stage-6 window closed 60 s later and its cleanup tore the nodes down before a block carried it.
+Run 2 launched 18:31:20Z on the fixed rail (unmodified drill script; kaspad/worker/gateway unchanged from the cut);
+"carried in a block / Final / receipt" wait for it.
+
+True now, in the card's words: *a free-prompt commitment transaction was accepted by a devnet mempool on the cut's
+consensus code (rail fixed post-freeze, tool crate only).* On ibm the series is applied over `candidate-6e01ba07` on
+the branch `candidate-6e01ba07+rail-b037cdc2` and `misaka-palw-fp-rail` alone is rebuilt with `--locked`; the sha of
+that binary is recorded below when the build lands. The kaspad in service stays `14065c93…`; the fingerprint does not
+move.
