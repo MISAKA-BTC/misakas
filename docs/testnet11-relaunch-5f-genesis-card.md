@@ -505,6 +505,45 @@ thing done before the cut and it is done ONCE.
 | `PALW_RC_COURT_E2E_ROOT_BYTES` | `consensus/core/src/palw_e2e_adjudicability.rs` | here, second — see the ordering below |
 | state version 18 → 19, ADR-0043 goldens | `palw-adr0082-impl` | 5b, on that branch |
 
+### THE RE-PIN LIST WAS WRONG AND THE MISSING ONE ABORTS EVERY HOST AT STARTUP
+
+**`PALW_RC_GENESIS` holds TWO literals that both move at this re-genesis, and the procedure re-pins
+one of them.** `hash` (`config/genesis.rs:348`) and `utxo_commitment` are separate constants; the
+header hash covers the commitment, so the community premine moves both.
+
+Every guard that could catch the second one is looking somewhere else:
+
+| guard | what it actually covers |
+|---|---|
+| `every_genesis_commits_to_the_premine_this_build_mints` | **`utxo_commitment` only**. Goes green on a commitment-only paste. |
+| `config::premine::tests::print_premine_commitment` — the ceremony tool the card names | prints `*_PREMINE_UTXO_COMMITMENT` and `*.utxo_commitment` lines. **Never a genesis hash.** |
+| `test_genesis_hashes` — the test that recomputes each genesis' own hash | iterates `[GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS, SIMNET_GENESIS, DEVNET_GENESIS]` (`genesis.rs:499`). **`PALW_RC_GENESIS` is not in that list.** |
+
+And `TESTNET11_GENESIS` is not a near-miss for it — `genesis.rs:462` calls it a **"retired fossil"**,
+`params.rs:7969` sets `params.genesis = PALW_RC_GENESIS`, and their hashes differ
+(`08e9c8a4…` against `572f80c0…`). **So the hash test recomputes the genesis this network does not
+ship and skips the one it does.**
+
+**The failure sequence, which is why this is the worst thing found today:** the operator adds the
+community entries, runs the first gate in §6's own table, gets the premine failure, runs the printer
+it names, pastes what it prints — and `cargo test -p kaspa-consensus-core --lib` goes **fully
+green** while `PALW_RC_GENESIS.hash` still names the pre-community block. The fleet is then stopped,
+wiped and redeployed, and **every host aborts at startup**. There is no earlier symptom, because
+every gate the card told the operator to run has passed.
+
+**So the freeze re-pins FIVE, not four**, and the fifth has no test until one is written:
+
+    1  PALW_RC_GENESIS.utxo_commitment    every_genesis_commits_to_the_premine_this_build_mints
+    1b PALW_RC_GENESIS.hash               *** NOTHING CATCHES THIS ***
+    2  the two shipped fingerprints       shipped_presets_have_pinned_fingerprints
+    3  the free-prompt golden             palw_freeprompt_v3::golden_vector_ids_are_frozen
+    4  the eight transformer ids          transformer_id_pin
+
+**Must land before the cut:** add `PALW_RC_GENESIS` to `test_genesis_hashes`'s list, and make the
+ceremony printer emit the genesis hash beside the commitment it already prints. Both are one line.
+*The card said this re-pin was safe because a ceremony tool did it rather than a hand edit — and the
+ceremony tool does not print the value.*
+
 ### The re-pin list is SEVEN items and only FOUR have a red test — here is where the other three went
 
 Measured on the re-merged tree (`4205f535`): `misaka-palw-base0` 360/0, `kaspa-consensus-core`
