@@ -808,6 +808,29 @@ Landing the registration without the eps replacement leaves 489‰ on an unexecu
 the eps fix without the registration leaves the worker pointed at nothing. *Written as one item
 because two items are how half of it ships.*
 
+### ASK THE SAME THING TWO WAYS — the only cheap detector for a broken instrument
+
+**This is the method that made this cut work, and it was used all day before anyone named it.** Every
+pair below caught something; **not one of the single measurements would have.**
+
+| the pair | what the second one caught |
+|---|---|
+| ancestry **and** content-grep | a fixer "absent by ancestry" that was present by content, and vice versa |
+| arity **and** prompt-ids form | 81,599 measured under a court `validate_palw_v2` refuses to assemble |
+| the library route **and** the binary route | `bind` naming the genesis row in a test and the wrong graph through its own argument parsing |
+| a re-armed ruleset **and** the genesis object itself | a third close figure, from the only route that asks what the chain answers |
+| the pass count **and** the wall clock | a suite whose artifact cases skipped, printing the same ten dots and the same `ok` |
+| two sessions measuring independently | every number in this card that survived |
+
+**The mechanism is not redundancy — it is that a broken instrument answers ONE question
+confidently.** A failed fetch, a filter with no digit class, a helper hardcoding one of three fields,
+a skip that returns early: each produces a believable result, and nothing inside that result says it
+is wrong. **A contradiction between two askings is the cheapest signal in this whole system**, and it
+is available for the cost of asking twice.
+
+*The counter-instinct is the dangerous one: when two measurements disagree, the pull is to pick the
+convenient one and move. Every finding in this section came from someone refusing to.*
+
 ### The short function name is the genesis-anchored one, and it answers the wrong court
 
 **Measured against myself: I reached for the wrong variant six times in one day**, and every time the
