@@ -52,6 +52,19 @@ use blake2b_simd::Params;
 /// A node on the old wire cannot decode the new payload, and must not.
 pub const PALW_FP_V3_VERSION: u16 = 5;
 
+/// **The widest `work_leaves` any RULESET may make prosecutable** — the bound a caller that holds
+/// no bundle uses, and the only honest one for a context-free door (ADR-0082 Decision 1).
+///
+/// A commitment's leaf count is bounded by the ladder its network froze
+/// (`PalwCourtParamsV2::max_step_leaf_count`), and the widest a ladder may be is
+/// [`crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES`] — the constant that sits
+/// inside `palw_ruleset_id_v2`, so raising it is a re-mint and never a value a running chain can
+/// exceed. Every entry point here that is not handed a bundle passes THIS, because the door's own
+/// contract is that it is never stricter than the walk: bounding it at the executor's
+/// `palw_step::PALW_STEP_MAX_LEAVES` (`2^22`) made transaction isolation refuse carriers the
+/// `2^26` walk would have credited, which is the one direction that gate is forbidden to fail in.
+pub const PALW_FP_STRUCTURAL_WORK_LEAVES_CAP: u64 = crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES;
+
 /// Width of the expanded spend L1 tag — the attempt lane's width, so the Layer-0 finalizer's call
 /// shape is identical across both block kinds.
 pub const PALW_FP_V3_L1_TAG_BYTES: usize = PALW_ATTEMPT_V2_L1_TAG_BYTES;
@@ -898,7 +911,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         // **`PanelDa` disarmed, because a caller that passed no arming has armed nothing**
         // (ADR-0077 Decision 16). This entry predates the mode; every one of its callers refuses
         // mode 2 today and keeps refusing it until it starts passing the answer.
-        self.validate_v3(Some(network_domain), false, false)
+        self.validate_v3(Some(network_domain), false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
     }
 
     /// The same rules **under this network's arming** — the entry that can admit a `PanelDa`
@@ -906,7 +919,20 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// at the point the caller is judging; a caller that cannot resolve it calls
     /// [`Self::validate_stateless_v3`] and gets the disarmed answer.
     pub fn validate_stateless_under_v3(&self, network_domain: Hash64, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false)
+        self.validate_v3(Some(network_domain), panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
+    }
+
+    /// The same rules **under this network's arming AND its ruleset's ladder** (ADR-0082
+    /// Decision 1). `max_step_leaf_count` is `PalwCourtParamsV2::max_step_leaf_count` off the
+    /// bundle the accepting block is folded under — the only entry that can refuse a commitment
+    /// this network's court could not prosecute.
+    pub fn validate_stateless_under_ruleset_v3(
+        &self,
+        network_domain: Hash64,
+        panel_da_armed: bool,
+        max_step_leaf_count: u64,
+    ) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(Some(network_domain), panel_da_armed, false, max_step_leaf_count)
     }
 
     /// **The half a context-free caller can run: everything except the two checks that need the
@@ -938,16 +964,28 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// Mode 2's own shape rule, that the payload carries no ids, needs no arming at all and is
     /// checked under both answers.
     pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, false, false)
+        self.validate_v3(None, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
     }
 
     /// The shape half under a known arming — the door on a network that carries the rule, and
     /// what a builder asks before it spends an inference on a job the chain will refuse.
     pub fn validate_shape_under_v3(&self, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false)
+        self.validate_v3(None, panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
     }
 
-    fn validate_v3(&self, network_domain: Option<Hash64>, panel_da_armed: bool, decode_rules_armed: bool) -> Result<(), PalwFpV3Error> {
+    /// The shape half **under a ruleset's ladder** — for a builder that holds the bundle and wants
+    /// the answer the walk will give, rather than the weaker one isolation can give.
+    pub fn validate_shape_under_ruleset_v3(&self, panel_da_armed: bool, max_step_leaf_count: u64) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(None, panel_da_armed, false, max_step_leaf_count)
+    }
+
+    fn validate_v3(
+        &self,
+        network_domain: Option<Hash64>,
+        panel_da_armed: bool,
+        decode_rules_armed: bool,
+        max_step_leaf_count: u64,
+    ) -> Result<(), PalwFpV3Error> {
         let c = &self.commitment;
         let job = &c.job;
         if job.version != PALW_FP_V3_VERSION {
@@ -1027,8 +1065,24 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         if c.work_leaves == 0 {
             return Err(PalwFpV3Error::ZeroWorkLeaves);
         }
-        if c.work_leaves > crate::palw_step::PALW_STEP_MAX_LEAVES {
-            return Err(PalwFpV3Error::WorkLeavesAboveCap { got: c.work_leaves, max: crate::palw_step::PALW_STEP_MAX_LEAVES });
+        // **The ladder is the RULESET's, and a caller with none of its own must not be stricter
+        // than the walk** (ADR-0082 Decision 1: "the ruleset's is read from the bundle, never
+        // typed").
+        //
+        // This was `crate::palw_step::PALW_STEP_MAX_LEAVES` — the EXECUTOR's `2^22` — on a network
+        // whose classes are admitted at `2^26`. The graph-v5 dense 512 row's canonical job counts
+        // 6,630,544 leaves, so the admission gate accepted the class and this line refused every
+        // honest commitment it can produce: `validate_palw_fp_commitment_tx` rejected the carrier
+        // at transaction isolation, so no block could hold one, and the extraction walk skipped it
+        // as "not stateless-admissible" if one ever got in. That also inverted this door's own
+        // stated invariant — "strictly weaker than the walk, so it can never reject something the
+        // walk would have accepted" — because the walk's ladder is the bundle's.
+        //
+        // The default the arming-free entries pass is therefore the STRUCTURAL top
+        // ([`PALW_FP_STRUCTURAL_WORK_LEAVES_CAP`]), the widest ladder any ruleset may freeze, and
+        // the `*_under_ruleset_v3` entries pass the bundle's own number.
+        if c.work_leaves > max_step_leaf_count {
+            return Err(PalwFpV3Error::WorkLeavesAboveCap { got: c.work_leaves, max: max_step_leaf_count });
         }
         if c.trace_chunk_count == 0 {
             return Err(PalwFpV3Error::ZeroTraceChunks);
@@ -1460,26 +1514,43 @@ impl PalwFpCommitmentTxPayloadV3 {
     /// The signature is verified by the caller (this crate holds no ML-DSA implementation);
     /// [`Self::signed_message`] is what it must verify over.
     pub fn validate_stateless_v3(&self, network_domain: Hash64) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), false, false)
+        self.validate_v3(Some(network_domain), false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
     }
 
     /// The same, **under this network's arming** — the entry the extraction walk uses, and the
     /// only one that can admit a `PanelDa` payload (ADR-0077 Decision 16). `panel_da_armed` is
     /// `Params::palw_panel_da_at` at the accepting block's DAA score.
     pub fn validate_stateless_under_v3(&self, network_domain: Hash64, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false)
+        self.validate_v3(Some(network_domain), panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
+    }
+
+    /// The same **under the ruleset's ladder as well as its arming** — what the extraction walk
+    /// runs when the caller holds the bundle
+    /// ([`PalwFreePromptCommitmentEnvelopeV3::validate_stateless_under_ruleset_v3`]).
+    pub fn validate_stateless_under_ruleset_v3(
+        &self,
+        network_domain: Hash64,
+        panel_da_armed: bool,
+        max_step_leaf_count: u64,
+    ) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(Some(network_domain), panel_da_armed, false, max_step_leaf_count)
     }
 
     /// The context-free half — see [`PalwFreePromptCommitmentEnvelopeV3::validate_shape_v3`] for
     /// why the transaction validator can only run this one, and why the arming it asks is the
     /// height-free one.
     pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, false, false)
+        self.validate_v3(None, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
     }
 
     /// The shape half under a known arming — `Params::palw_panel_da_admissible` at the door.
     pub fn validate_shape_under_v3(&self, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false)
+        self.validate_v3(None, panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
+    }
+
+    /// The shape half under a ruleset's ladder — for a builder holding the bundle.
+    pub fn validate_shape_under_ruleset_v3(&self, panel_da_armed: bool, max_step_leaf_count: u64) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(None, panel_da_armed, false, max_step_leaf_count)
     }
 
     /// **The signature, on the payload that actually rides a transaction.**
@@ -1499,12 +1570,18 @@ impl PalwFpCommitmentTxPayloadV3 {
             .validate_signature_v3(verify_mldsa87)
     }
 
-    fn validate_v3(&self, network_domain: Option<Hash64>, panel_da_armed: bool, decode_rules_armed: bool) -> Result<(), PalwFpV3Error> {
+    fn validate_v3(
+        &self,
+        network_domain: Option<Hash64>,
+        panel_da_armed: bool,
+        decode_rules_armed: bool,
+        max_step_leaf_count: u64,
+    ) -> Result<(), PalwFpV3Error> {
         if self.version != PALW_FP_V3_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
         }
         let envelope = PalwFreePromptCommitmentEnvelopeV3 { commitment: self.commitment.clone(), signature: self.signature.clone() };
-        envelope.validate_v3(network_domain, panel_da_armed, decode_rules_armed)?;
+        envelope.validate_v3(network_domain, panel_da_armed, decode_rules_armed, max_step_leaf_count)?;
         // **`PanelDa` carries NO ids, and the check is a REQUIREMENT, not a tolerance** (ADR-0077
         // Decision 16). Placed before the canonical arm because the privacy mode decides what the
         // chain may hold and the prompt mode decides where the ids come from: a mode-2 payload
@@ -1758,10 +1835,31 @@ mod tests {
         let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: zero, signature: sig() };
         assert!(matches!(e.validate_stateless_v3(net()), Err(PalwFpV3Error::ZeroWorkLeaves)));
 
+        // **Above the STRUCTURAL cap, which is what an entry with no bundle bounds at.** This read
+        // `PALW_STEP_MAX_LEAVES + 1` and therefore pinned the executor's `2^22` as the chain's
+        // answer; a class the `2^26` ruleset admits produces honest counts above it, so the pin
+        // was the defect rather than the guard. The ruleset's own number is asked for by
+        // `validate_stateless_under_ruleset_v3`, exercised directly below.
         let mut above = commitment();
-        above.work_leaves = crate::palw_step::PALW_STEP_MAX_LEAVES + 1;
+        above.work_leaves = PALW_FP_STRUCTURAL_WORK_LEAVES_CAP + 1;
         let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: above, signature: sig() };
         assert!(matches!(e.validate_stateless_v3(net()), Err(PalwFpV3Error::WorkLeavesAboveCap { .. })));
+
+        // The executor's constant is no longer a bound anybody applies: a count above `2^22` and
+        // inside the structural top is admissible with no bundle in hand, and refused BY THE
+        // RULESET when one is.
+        let mut wide = commitment();
+        wide.work_leaves = crate::palw_step::PALW_STEP_MAX_LEAVES + 1;
+        let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: wide, signature: sig() };
+        assert_eq!(e.validate_stateless_v3(net()), Ok(()), "the executor's 2^22 is not the chain's ladder");
+        assert_eq!(
+            e.validate_stateless_under_ruleset_v3(net(), false, crate::palw_step::PALW_STEP_MAX_LEAVES),
+            Err(PalwFpV3Error::WorkLeavesAboveCap {
+                got: crate::palw_step::PALW_STEP_MAX_LEAVES + 1,
+                max: crate::palw_step::PALW_STEP_MAX_LEAVES
+            }),
+            "a ruleset that froze 2^22 still refuses it, and names its own number"
+        );
 
         let mut overrun = commitment();
         overrun.decode_tokens_executed = overrun.job.decode_token_limit + 1;
