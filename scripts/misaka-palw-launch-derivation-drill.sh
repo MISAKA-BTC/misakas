@@ -815,7 +815,18 @@ PY
 }
 JSON
   port=$((GATEWAY_PORT + tier_index))
+  # `MISAKA_PALW_NETWORK_ID` is the worker's, inherited through the gateway that spawns it. The
+  # worker refuses to start without it, and refuses for a good reason: every committed root hangs
+  # off a context hash that absorbs the network name, so a guess produces a claim no seat can
+  # replay. It is `devnet` here because that is what this drill's kaspad prints for `params.net`.
+  #
+  # `MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR` is set because this drill exists to diagnose. ADR-0079
+  # SA-7 withholds worker stderr by default, which is right for a public gateway and wrong here:
+  # the first run of this stage failed with "the worker exited before announcing its manifest" and
+  # "1 log lines withheld" — and the withheld line was the whole answer. 600 seconds of waiting
+  # were spent on a message that had already been written.
   MISAKA_PALW_ARTIFACT="$artifact" MISAKA_PALW_TOKENIZER="$tokenizer" \
+  MISAKA_PALW_NETWORK_ID=devnet MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1 \
   MISAKA_PALW_NETWORK_ID="devnet" MISAKA_PALW_MODEL_ID="$model_id" \
   "$GATEWAY_BIN" --listen "127.0.0.1:$port" --worker "$worker" \
     --outbox "$outbox" --identity "$idir/identity.json" \
