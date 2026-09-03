@@ -5468,3 +5468,12 @@ runbook carries per-host inference time for every registered class.
 in the kernel log; `misaka-t11-node` 8.6 GB resident, `misaka-t11-seat4` 10.4 GB (both map the 33 GiB Qwen3.6 file;
 the page cache is shared), pool slot small. Tight but stable; `.113` has no liveness watchdog — post-cut: give the
 public entry the same `palw-liveness-watch` as ibm and 5.104, and read its memory before adding any further mapping.
+
+**7b, continued — run 2 on the fixed rail (3e, 19:14 UTC):** stages 1–5 OK (3 blocks; genesis class `4277d84f…`;
+V5 family + `ClassLaneCertified` on 3/3; `/health`; job `56b67039…`, claim `a4257df4…`), and **5b OK: "commitment
+submitted in tx f8653448…"** with no operator flags — `fee_sompi 329837` auto-sized from the 8,186-byte payload
+(run 1's node minimum was 263,870; the estimator's 25 % margin), `pwu 1657636`, `quanta 2`. So the on-chain sentence's
+first half is earned on the shipped path **on devnet**: a free-prompt commitment built, signed and accepted by a
+mempool on the cut's consensus code (rail fixed post-freeze, tool crate only). Stage 6 (FreePromptCommitted →
+PanelBound → ReceiptLicensed → Final on every node), 7 (a receipt block) and 8 (the artifact derived from the claim's
+own answer) follow as they land. The public chain's own claim still waits for the v5 lane binding.
