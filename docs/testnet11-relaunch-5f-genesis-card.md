@@ -741,6 +741,26 @@ underneath it was one incapable of failing, and the test was shaped to agree wit
 than with the code. You cannot find it by re-reading either the doc or the test; you find it only by
 **writing the comparison the doc describes and watching it go red**.
 
+**And the shape is NOT mechanisable — this is a limitation, measured, not an unwritten gate.**
+`assert_eq!(f(), f())` looks greppable, so it was swept: **25 hits, about 20 of them legitimate**
+determinism checks where `f` has hidden state (fresh buffers, iteration order, memoisation) —
+`the_same_dsl_twice_is_the_same_bytes` under a "determinism" heading, `assert_eq!(run(), run())`
+where `run()` builds fresh state each call, and eighteen more. **A gate on this pattern fires on all
+of them, and the first thing anyone does is add allow-comments to the real determinism tests** —
+which leaves the tree worse than no gate, because the exemptions become where defects hide and now
+they carry a blessing.
+
+What made the defect a defect was never the shape: it was **the doc above it claiming a different
+comparison**. Had that doc said "this id is stable across two derivations", the identical line would
+have been correct and unremarkable. *The discriminator is agreement between prose and assertion, and
+no static check reads that.* The instrument stays manual: **do what the doc says and see whether the
+code minds.**
+
+**The root cause is worth more than either.** All three instances were written in the same sitting
+as the thing they test — *the nearest value is the one you already have in hand, and it type-checks*.
+That IS greppable, unlike the shape: **a test introduced in the same commit as its subject** is where
+to look, as a review heuristic rather than a gate.
+
 *Pinned as three-way DISTINCTNESS rather than three literals — a literal would join the re-pin set
 whenever any of the three graphs moved, for no benefit, while the property actually worth holding is
 that they stay tellable apart. A collision means a row built by one route silently names the class
