@@ -195,6 +195,78 @@ pub fn base0_fp_recompute_state_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
     }
 
     let positions = kaspa_consensus_core::palw_state_chunk_map::integer_kv_positions_at_v1(ctx, decode_calls);
+    seat_state_here_v1(profile, decode_calls, positions, kernels)
+}
+
+/// **Run the job's prefix and return the state a seat holds at absolute POSITION `positions`**
+/// (ADR-0082 Decision 4, amended, on the seat's side).
+///
+/// [`base0_fp_recompute_state_v1`] counts in decode CALLS, which is the unit the per-call cadence
+/// commits in and the only unit that had a checkpoint to compare against. A class whose map
+/// addresses history tiles commits one after every position, prefill included, so its seat has to
+/// be able to stop at a prefill position too — and its `covered_decode_call` field IS a position
+/// count, which is what makes the returned state comparable to the committed leaf.
+///
+/// `positions` is the number of cache rows to stop after (`covered`), so `positions = 0` is a
+/// state with nothing in it and is refused rather than served: a root over an empty map is not the
+/// root of a state, it is the root of nothing.
+pub fn base0_fp_recompute_state_at_position_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    prompt_token_ids: &[u32],
+    output_token_ids: &[u32],
+    positions: u32,
+    kernels: &mut K,
+) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
+    if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != ctx.prompt_token_ids_hash {
+        return Err(Base0FpRecomputeError::PromptIdsAreNotTheJobs);
+    }
+    let prefill = ctx.declared_prefill_tokens as usize;
+    if prompt_token_ids.len() != prefill {
+        return Err(Base0FpRecomputeError::PromptIsNotTheJobsLength {
+            declared: ctx.declared_prefill_tokens,
+            got: prompt_token_ids.len(),
+        });
+    }
+    let job_decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
+    let job_positions = ctx.declared_prefill_tokens.saturating_add(job_decode_calls);
+    if positions > job_positions || positions == 0 {
+        return Err(Base0FpRecomputeError::DecodeCallsBeyondTheJob {
+            asked: positions,
+            job: job_positions,
+        });
+    }
+    if profile.state_chunk_map_id == Hash64::default() {
+        return Err(Base0FpRecomputeError::NoStateChunkMapRegistered);
+    }
+    // The decode calls this position count implies — zero while the walk is still inside the
+    // prefill, which is the case the per-call form could not express at all.
+    let decode_calls = (positions as usize).saturating_sub(prefill) as u32;
+    if (output_token_ids.len() as u64) < decode_calls as u64 {
+        return Err(Base0FpRecomputeError::OutputIdsTooShort { need: decode_calls as usize, got: output_token_ids.len() });
+    }
+
+    // The executor's own walk, stopped at `positions` rows: the prefill in order, then decode call
+    // `c` consuming the id call `c − 1` produced.
+    for (position, token) in prompt_token_ids.iter().enumerate().take((positions as usize).min(prefill)) {
+        kernels.forward_no_capture(*token as usize, position)?;
+    }
+    for call in 1..=decode_calls {
+        let token = output_token_ids[call as usize - 1];
+        let position = prefill + call as usize - 1;
+        kernels.forward_no_capture(token as usize, position)?;
+    }
+    seat_state_here_v1(profile, decode_calls, positions, kernels)
+}
+
+/// The state serialisation both entries share — one spelling of "chunk what the kernels hold and
+/// root it", so a position-stopped walk and a call-stopped one cannot root the same state two ways.
+fn seat_state_here_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
+    profile: &PalwShapeProfileV3,
+    decode_calls: u32,
+    positions: u32,
+    kernels: &K,
+) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
     let chunks = kernels.state_chunks(profile, positions)?;
     let state_chunks_root = crate::fp_interval::base0_state_chunks_root_v1(&profile.state_chunk_map_id, &chunks)
         .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?;
@@ -309,6 +381,38 @@ impl<'a> Qwen36RecomputeKernelsV1<'a> {
         }
         (layers, states)
     }
+
+    /// **This cache's bytes for one ATTENTION chunk of the v3 composition** — the hybrid's
+    /// analogue of `A16Cache::state_chunk_bytes_v1`, and the same discipline: the width is read
+    /// off the entry rather than assumed, and a row that does not fit the declared width is
+    /// refused instead of narrowed.
+    ///
+    /// The composition's attention half is `tiled_kv_state_geometry_v3` verbatim, whose rows are
+    /// little-endian `i32` at `attn_kv_heads × attn_head_dim × 4` bytes — the width the `i32` cache
+    /// this engine holds actually is. A checkpoint that opened to a state the producer never held
+    /// is worse than a missing one, and the producer has signed for it.
+    fn attn_chunk_bytes_v1(
+        &self,
+        entry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1,
+    ) -> Option<Vec<u8>> {
+        use kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1;
+        let side = match entry.kind {
+            PalwStateChunkKindV1::Key => &self.cache.keys,
+            PalwStateChunkKindV1::Value => &self.cache.values,
+        };
+        let layer = side.get(entry.attn_layer as usize)?;
+        let mut out = Vec::with_capacity((entry.position_count as usize) * (entry.row_bytes as usize));
+        for p in entry.position_start..entry.position_start + entry.position_count {
+            let row = layer.get(p as usize)?;
+            if entry.row_bytes as usize != row.len().checked_mul(4)? {
+                return None;
+            }
+            for value in row {
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        Some(out)
+    }
 }
 
 impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
@@ -328,7 +432,7 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
             .map_err(|e| Base0FpRecomputeError::Engine(format!("forward at {position}: {e}")))
     }
 
-    fn state_chunks(&self, profile: &PalwShapeProfileV3, _positions: u32) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
+    fn state_chunks(&self, profile: &PalwShapeProfileV3, positions: u32) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
         use kaspa_consensus_core::palw_state_chunk_map as map;
         let declared = profile.state_chunk_map_id;
         let (layers, states) = self.recurrence_state();
@@ -347,13 +451,71 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
             return crate::fp_capture::base0_gdn_state_chunks_v1(&geometry, &states)
                 .map_err(|e| Base0FpRecomputeError::Map(e.to_string()));
         }
-        if declared == map::hybrid_state_chunk_map_id_v1()
-            || declared == map::hybrid_state_chunk_map_id_v2()
-            || declared == map::hybrid_state_chunk_map_id_v3()
-        {
+        // **The v3 composition, in the order its own NAME spells** (ADR-0082 Decision 4; stream
+        // G's patch note 5). The order is not this function's opinion:
+        // `palw_hybrid_state_chunk_map_name_v3` is `palw-hybrid-state/attn=…/gdn=…/v3` — `attn=`
+        // before `gdn=` — and `hybrid_state_chunk_entry_v3` is the enumeration that reads it. This
+        // walks THAT enumeration rather than restating it, so a seat's chunks are the executor's
+        // chunks by construction; a second derivation that merely agreed is how a producer and a
+        // court come to open different bytes.
+        //
+        // The two halves run at two cadences and this function does not choose between them:
+        // `hybrid_state_geometry_for_covered_v1` asks
+        // `palw_checkpoint_leaf_carries_recurrence_v1` whether THIS checkpoint carries the
+        // recurrence at all — every position for the attention tiles, the derived spacing for the
+        // recurrence state, because a `heads × k_dim × v_dim × 4` state is not prefix-stable and a
+        // per-position commitment of it would hash 2 MiB a token.
+        if declared == map::hybrid_state_chunk_map_id_v3() {
+            let geometry = map::hybrid_state_geometry_for_covered_v1(profile, positions)
+                .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")))?;
+            let gdn_geometry = crate::fp_capture::base0_gdn_state_geometry_v2(&layers, heads, dim, dim, kernel)
+                .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?;
+            // The composition promises ONE chunk per `(kind, layer, head)`; the executor's own v2
+            // geometry splits a head only when its slice does not fit a chunk, which
+            // `hybrid_state_geometry_v3` refuses outright. Checked rather than assumed: two
+            // enumerations of one state that disagree about their chunk count is a leg nobody can
+            // open at the index the other named.
+            if gdn_geometry.chunk_count() != geometry.gdn_chunk_count() {
+                return Err(Base0FpRecomputeError::Map(format!(
+                    "the recurrence enumerates {} chunks and the composition names {}",
+                    gdn_geometry.chunk_count(),
+                    geometry.gdn_chunk_count()
+                )));
+            }
+            let gdn_chunks = if geometry.gdn_chunk_count() == 0 {
+                Vec::new()
+            } else {
+                crate::fp_capture::base0_gdn_state_chunks_v2(&gdn_geometry, &states)
+                    .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?
+            };
+            let mut out = Vec::with_capacity(geometry.chunk_count() as usize);
+            for index in 0..geometry.chunk_count() {
+                let entry = map::hybrid_state_chunk_entry_v3(&geometry, index)
+                    .ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
+                match entry {
+                    map::PalwHybridChunkEntryV1::AttentionCache(entry) => {
+                        out.push(self.attn_chunk_bytes_v1(&entry).ok_or(Base0FpRecomputeError::StateIsNotTheMaps {
+                            chunk_index: index,
+                        })?);
+                    }
+                    map::PalwHybridChunkEntryV1::RecurrenceState { .. } => {
+                        let within = (index - geometry.attn.chunk_count()) as usize;
+                        let bytes =
+                            gdn_chunks.get(within).ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
+                        if bytes.len() as u64 != entry.byte_len() {
+                            return Err(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index });
+                        }
+                        out.push(bytes.clone());
+                    }
+                }
+            }
+            return Ok(out);
+        }
+        if declared == map::hybrid_state_chunk_map_id_v1() || declared == map::hybrid_state_chunk_map_id_v2() {
             return Err(Base0FpRecomputeError::NoStateSerializer {
-                why: "a hybrid map names an attention half and a recurrence half, and no side of the tree spells the order they \
-                      compose in — the class that registers the composed map is the side that does (ADR-0082 Decision 9)",
+                why: "the v1 and v2 hybrid compositions name an attention half and a recurrence half and no side of the tree \
+                      enumerates them; the v3 composition does (palw_state_chunk_map::hybrid_state_chunk_entry_v3) and is what a \
+                      graph-v5 hybrid registers (ADR-0082 Decision 4)",
             });
         }
         Err(Base0FpRecomputeError::Map(format!("this family serves no geometry for the map {declared}")))

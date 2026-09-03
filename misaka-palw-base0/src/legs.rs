@@ -1074,6 +1074,44 @@ pub fn base0_binding_from_step_root_v1(
 /// `binding` is the producer's own commitment; its `step_leaf_count` and `step_merkle_root` must be
 /// the ones `tiles` produced or the openings will not verify, which is the check doing its job
 /// rather than a caller's obligation.
+/// **Any checkpoint's chunks, re-derived from a cache that has run PAST it** (ADR-0082 Decision 4,
+/// amended — the half that makes the per-position cadence affordable).
+///
+/// The attention cache is prefix-stable: the K or V row written at position `j` is the same bytes
+/// in every later cache, because rows are appended and never revised. So an entry naming
+/// `position_start .. position_start + position_count` reads the same bytes out of the cache at
+/// position 4,000 that it read out of the cache at position 40, and a producer that folded its
+/// checkpoints away ([`Base0CheckpointRetentionV1::Fold`]) can still answer for every one of them
+/// with the cache it is holding anyway.
+///
+/// `covered` is the leaf's own counter, so the caller passes what the leaf says rather than
+/// recomputing which position it means; the geometry is taken at the cadence's position count,
+/// which is the one both the capture and the court take.
+///
+/// This is the DA obligation ADR-0082 Decision 7 states — "to SERVE any opening the leg names, not
+/// to STORE it" — for the half of the state that is prefix-stable. A recurrence state is not, and
+/// is committed at the derived spacing instead
+/// ([`kaspa_consensus_core::palw_context_ladder::palw_checkpoint_leaf_carries_recurrence_v1`]).
+pub fn base0_checkpoint_chunks_at_v1<F>(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    covered: u32,
+    mut chunk: F,
+) -> Result<Vec<Vec<u8>>, LegError>
+where
+    F: FnMut(&kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>>,
+{
+    let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, ctx, covered);
+    let geometry = base0_state_chunk_geometry_v1(profile, positions)?;
+    let mut out = Vec::with_capacity(geometry.chunk_count() as usize);
+    for index in 0..geometry.chunk_count() {
+        let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
+            .ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?;
+        out.push(chunk(&entry).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?);
+    }
+    Ok(out)
+}
+
 /// **The anchor a refutation of `disputed_call` should carry**, assembled from the producer's own
 /// committed leg.
 ///

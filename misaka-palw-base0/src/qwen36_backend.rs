@@ -559,8 +559,12 @@ fn qwen36_execute_streaming_v1(
         logits_rows.push(logits);
     }
 
-    let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
-    let checkpoints = checkpoints.finish(decode_calls / checkpoint_profile.checkpoint_interval).map_err(|e| format!("{e:?}"))?;
+    // The count the CLASS's cadence says this job has (ADR-0082 Decision 4, amended). The shipped
+    // hybrid registers the checkpoint sentinel and commits none, and `palw_checkpoint_count_v1`
+    // returns exactly what `decode_calls / interval` returned for it — the derivation is here so a
+    // hybrid that registers the composed map is sealed at the count its own leg has rather than at
+    // a per-call one nobody would file.
+    let checkpoints = checkpoints.finish_canonical_v1().map_err(|e| format!("{e:?}"))?;
     let captured = capture.finish(max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
 
     // The retained rows ARE the selecting rows — row `r` is the one `generated[r]` was chosen
