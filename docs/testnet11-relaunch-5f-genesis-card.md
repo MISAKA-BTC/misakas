@@ -5308,3 +5308,22 @@ v5 489 × 6,630,544 = 3,242,336,016 ≥ 2,147,483,648 → MAX; QWEN36 489 × 2,6
 both to the digit of the chain's readings. The heaviest inference rides at the ticket floor by design. Nothing for
 the audit; the "skips the fused row" line sent to 3e is withdrawn. The value was right, the mechanism was borrowed
 unread — [[send-the-value-with-what-produced-it]] again.
+
+### 7b — the on-chain sentence's reading: the rail cannot fund a claim (3e's drill, 18:40 UTC)
+
+3e's tip drill on the cut's code passed stages 3–5 (V5 `ClassLaneCertified` on 3/3 nodes; `/health` naming all four
+chain-side reasons; a chat answered — job `4916876c…`, claim `1bd0e0a7…`) and **failed stage 5b on the shipped path**:
+
+    Rejected transaction f89b61c7…: transaction … is not standard: transaction output #0: non-standard script form
+
+Mechanism (read by 3e in both directions): `misaka-palw-gateway/src/bin/rail.rs:288` builds the funding `UtxoEntry`
+with `ScriptPublicKey::default()`; `build_funded_overlay_tx` mirrors that script into the change output →
+`ScriptClass::NonStandard` → `check_transaction_standard.rs:156`; and `calc_mldsa87_signature_hash` commits to the
+entry's script, so the signature was over the wrong digest — the tx could never have been valid. No drill had reached
+a live submit before tonight. Fix is gateway-crate only (the entry's script = `pay_to_address_script(funding_address)`,
+plus a named refusal if the derived script is not `is_pq_standard()`); **no consensus, kaspad or validator-core bytes
+move, the fingerprint is untouched, the chain does not move.** The rail binary on ibm is rebuilt from 3e's fix commit
+before any public on-chain free-prompt claim is attempted, and the card records which sha it came from.
+
+So the announcement's `[PENDING] a free-prompt job committed ON the public chain` line has its reading: unreachable
+tonight with the shipped rail; the local (D5-bound) commitments and derivations of 7a stand as stated.
