@@ -1275,7 +1275,7 @@ where they expect it.
     an ignored test FORCED to run     counts as FAILED
     same absent fixture — and NEITHER verdict is about the code
 
-Measured: the three `palw_agent_recovery` tests "failed" in **0.016s** each under `--run-ignored
+Measured: the three worker-dependent agent tests "failed" in **0.016s** each under `--run-ignored
 all`, panicking on `env::var("MISAKA_PALW_GGUF").expect(…)`. Nothing ran. **The duration is the tell
 again** — 16 ms cannot spawn a resident agent and a fresh process.
 
@@ -1919,7 +1919,7 @@ the lineage ships.*
 
 ## The instrumentation I wrote to measure the last open gap had two defects, both already written down
 
-The three `palw_agent_recovery` tests are the one measurement still open. I drove them
+The three worker-dependent agent tests are the one measurement still open. I drove them
 on ibm from a script — `/root/agent-recovery.sh` — and the script contained **two defects
 this session already has notes about**. Neither produced an error.
 
@@ -1975,3 +1975,65 @@ line in §5 is unchanged until the tests are observed, and if the build error tu
 be something other than the pinned-llama.cpp link I named, then my stated reason for the
 gap was wrong even though the gap was real** — a true fact with a fabricated cause, which
 is the form that survives review because the conclusion checks out.
+
+### Correction, same hour: I named the group after one of its three files
+
+I have been calling them *"the three `palw_agent_recovery` tests"*, and 1c wrote the phrase
+back to me in their ledger. They are **three tests in three different files**, one each:
+
+```
+palw_agent_recovery::a_dead_agent_costs_a_delay_and_not_a_tag
+palw_agent_concurrency::concurrent_seeds_are_faster_and_are_the_same_tags
+palw_agent_equivalence::the_resident_agent_and_a_fresh_process_compute_the_same_tag
+```
+
+The number was right; the **address** was wrong. And the address is what a command consumes:
+my script ran `cargo test --test palw_agent_recovery -- --ignored`, which builds and selects
+**exactly one binary**. It would have printed `1 passed` and I would have reported that the
+three had run. *A group named after the member you happen to know will be selected by that
+member's name.*
+
+1c got the complete set — but by tooling, not by knowing the layout, having never checked
+the files either:
+
+```
+cargo nextest run --run-ignored all --no-fail-fast \
+  -E 'test(the_resident_agent_and_a_fresh_process_compute_the_same_tag) or
+      test(concurrent_seeds_are_faster_and_are_the_same_tags) or
+      test(a_dead_agent_costs_a_delay_and_not_a_tag)'
+```
+
+> **Prefer the selector whose output proves its own reach.** nextest names the *binary* on
+> every result line, so three distinct binaries in the output is the evidence the filter
+> found all three. `--test <file>` prints `1 passed` and looks identical to a complete run
+> of a one-member set. **The count in the result is not evidence about the size of the
+> intended group unless the result also names what it selected.**
+
+### And the gap's stated cause was right while its consequence was not
+
+The build panic is verbatim what §5 claims:
+
+```
+misaka-palw-worker links the PINNED llama.cpp build, which this repository does not
+contain, and MISAKA_LLAMA_SRC is not set.
+```
+
+But **`misaka-palw-pow-driver` does not depend on that crate.** The tests spawn the worker
+as a **subprocess** from `$PALW_WORKER`. They need a *binary*, not a *build* — and ibm has
+two prebuilt ones (Aug 14 and Aug 16), both of which execute. So the sentence *"they cannot
+run"* did not follow from the true fact I attached it to.
+
+> **A correct cause with an unchecked implication is harder to catch than a wrong fact**,
+> because the quotable part survives every review. The thing to check is not the citation;
+> it is the *therefore*.
+
+Same shape, one line further: I have been carrying **"`palw-worker` runs on all three fleet
+hosts."** `pgrep -x palw-worker` on ibm is **0**. The binaries are present and executable
+and nothing is running one — the re-executor spawns it on demand. *"Runs on" carried an
+implication nobody tested.*
+
+All three are running on ibm now against the real 1.2 GB pinned model. **Two caveats stated
+before the result rather than after it:** the ibm checkout is `8923b354` detached — **not
+the tree being cut** — and the worker binary is three weeks old, so an equivalence pass is a
+pass against a stale counterpart. Whatever colour it comes back, it is evidence about the
+property and not about 5f's copy of these tests, and §5 keeps its stated gap.
