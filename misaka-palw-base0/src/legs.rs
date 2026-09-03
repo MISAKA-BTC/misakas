@@ -1170,8 +1170,13 @@ impl Base0CheckpointCaptureV1 {
 
     /// Seal the capture at the count the job canonically has.
     ///
-    /// `expected` is `decode_calls / interval`, which the court recomputes; a producer that sealed
-    /// a different number would be committing to checkpoints it never took (or hiding ones it did).
+    /// `expected` is the count the CLASS's cadence gives the job — `decode_calls / interval` under
+    /// `PerDecodeCall` and `prefill + decode_calls` under `PerPosition`
+    /// ([`kaspa_consensus_core::palw_context_ladder::palw_checkpoint_count_v1`], which the court
+    /// recomputes). A producer that sealed a different number would be committing to checkpoints it
+    /// never took (or hiding ones it did), and one that spelled the per-call rule for itself would
+    /// seal a per-position leg at zero: [`Self::finish_canonical_v1`] is the producer's entry for
+    /// exactly that reason.
     pub fn finish(self, expected: u32) -> Result<Base0CheckpointsV1, LegError> {
         let got = self.leaves.len() as u32;
         if got != expected {

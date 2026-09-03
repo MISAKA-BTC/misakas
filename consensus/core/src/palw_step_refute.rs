@@ -3625,8 +3625,11 @@ fn intra_table_index(profile: &PalwShapeProfileV3, slot: u32) -> Option<usize> {
 ///
 /// **Under a class whose map addresses history tiles the same sentence is true at every POSITION**
 /// (ADR-0082 Decision 4, amended): its leg commits a checkpoint after every position, prefill
-/// included, so `covered = p` for a dispute at absolute position `p` and the residue is that
-/// position's own two cache-write rows. Before the amendment a prefill dispute had no anchor at
+/// included, so `covered = p + 1` for a dispute at absolute position `p` — the state once position
+/// `p`'s own K and V rows have been written, which is exactly what attention at `p` reads — and the
+/// residue is EMPTY. (It read `covered = p` here while the code has always computed `p + 1`
+/// (`palw_context_ladder::palw_checkpoint_covered_for_step_v1`), so a reader implementing to the
+/// prose built an anchor this function refuses by name.) Before the amendment a prefill dispute had no anchor at
 /// all and opened `p + 1` rows per kind, which is the 3-chunk close ADR-0082 §5 shuts at
 /// acceptance. [`crate::palw_context_ladder::palw_checkpoint_covered_for_step_v1`] is the one
 /// spelling of which checkpoint that is.

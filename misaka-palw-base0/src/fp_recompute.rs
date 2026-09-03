@@ -39,13 +39,18 @@
 //!
 //! # What is NOT decided here
 //!
-//! The composition of a HYBRID class's checkpoint — the attention half's chunks beside the
-//! recurrence's — has no committed spelling anywhere in the tree, because the shipped hybrid class
-//! registers the checkpoint sentinel and takes no checkpoints at all
-//! ([`crate::qwen36_backend::qwen36_checkpoint_profile_v1`]). This module refuses such a class BY
-//! NAME rather than inventing an order: an enumeration invented on the seat side would be a second
-//! opinion about a consensus object, and the class that registers the composed map is the side
-//! that gets to spell it.
+//! The v1 and v2 HYBRID compositions. Their names pair an attention half with a recurrence half
+//! and nothing in the tree enumerates them, so this module refuses those two BY NAME rather than
+//! inventing an order: an enumeration invented on the seat side would be a second opinion about a
+//! consensus object.
+//!
+//! The **v3** composition is a different matter and this module no longer refuses it: it is
+//! enumerated by `palw_state_chunk_map::hybrid_state_chunk_entry_v3` — the consensus side, which
+//! is the side that gets to spell it — and a graph-v5 hybrid registers it (ADR-0082 Decision 4).
+//! The walk here is not a second derivation either: both this seat and the PRODUCER's capture go
+//! through `crate::legs::base0_composed_state_chunks_v1`, so the chunk at index `i` is the same
+//! bytes on both sides by construction. (The header used to say this module refuses "such a class"
+//! outright while implementing the v3 composition four hundred lines below — audit B, L-1.)
 
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
