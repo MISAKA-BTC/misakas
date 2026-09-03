@@ -74,7 +74,7 @@ carries the model's own answer bytes and the artifacts derived from them.
 | decode budget at 512 | 503 max | `n_ctx − chat template (8) − prompt`; 503 is the ceiling, available only to a one-token prompt. The corpus needs 261 and 286, so it fits with room — but a real request costs more than one. |
 | the corpus's own cost | cad 66, music 261, scene 286 | `cargo test -p misaka-palw-derive --test corpus_width -- --nocapture` |
 | dense class faithfulness | **45 of 57 top-1**, 56/57 top-5, rank corr 0.893 | `qwen25-convert <checkpoint-dir> --a16`, which prints it at conversion time |
-| artifacts open in foreign software | 4 agreed, 0 disagreed | `python3 scripts/misaka-palw-artifact-thirdparty.py --require docs/evidence-qwen36-model-gate/artifacts/` |
+| artifacts open in foreign software | 4 agreed, 0 disagreed | `pip install mido numpy-stl pygltflib && python3 scripts/misaka-palw-artifact-thirdparty.py --require docs/evidence-qwen36-model-gate/artifacts/` |
 | the format checker has teeth | five injuries, each refused by name | `python3 scripts/misaka-palw-artifact-conformance.py selftest` |
 | a second implementation agrees | — | `python3 scripts/misaka-palw-derive-stranger.py selftest` |
 

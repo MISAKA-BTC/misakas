@@ -3418,3 +3418,54 @@ trailing bytes read off the file, the worker's refusal text, the ibm probe, and 
 twenty-six minutes.* **A second measurement that agrees converts "one machine computed this" into
 "this is a property of the artifacts."** Tonight the same habit found a launch-stopper once and
 confirmed a result twice — a good rate for something whose expected yield is nothing.
+
+## Announcement gate, defect 3: the row about independent verification could not verify
+
+Draft line 77 claims **"4 agreed, 0 disagreed"**. Run verbatim on a clean machine:
+
+```
+SKIP  …artifact.mid   mido is not installed — nothing was learned
+SKIP  …artifact.stl   numpy-stl is not installed — nothing was learned
+0 agreed, 0 disagreed, 4 unchecked (a skip is not a pass)            exit 1
+```
+
+**The row asserting that foreign software opens these files is the row whose command does not
+open them**, on any machine that has not already installed the libraries — and the number in the
+draft was obtained on one that had. A reader gets `0 agreed` and concludes the claim is false.
+
+Fixed by naming the dependency in the command itself:
+
+```
+pip install mido numpy-stl pygltflib && python3 scripts/misaka-palw-artifact-thirdparty.py --require …
+```
+
+With them present: **`4 agreed, 0 disagreed, 0 unchecked`, exit 0.** The claim is true; the
+command was not sufficient to reach it.
+
+> **The script itself is exemplary and is why this was catchable at all.** It counts `unchecked`
+> as its own column, prints *"a skip is not a pass"* on the total line, and **exits 1** when
+> `--require` was given and a library was missing. That is the `skip-looks-like-pass` defect
+> solved rather than documented — *a missing dependency cannot be read as success here, by
+> construction.* Every other tool tonight that hid an absence hid it in a passing exit code.
+
+### The three artifacts I derived, read by three foreign libraries
+
+```
+AGREE  …artifact.glb   pygltflib   {"meshes": 2, "nodes": 3, "accessors": 6, "blend_materials": 1}
+AGREE  …artifact.stl   numpy-stl   {"triangles": 20, "volume": 36.0}
+AGREE  …artifact.mid   mido        {"format": 1, "tracks": 2, "ppq": 192, "note_ons": 9, "seconds": 6.75}
+3 agreed, 0 disagreed, 0 unchecked                                                        exit 0
+```
+
+**Four independent readers now agree on these files**: my own parsers written from the container
+specs, plus three third-party libraries that have never seen this project. Every field lines up —
+2 meshes / 3 nodes, 20 triangles, format 1 / 2 tracks / ppq 192 / 9 note-ons.
+
+**And `numpy-stl` computes the enclosed volume as `36.0`** — which is the exact figure the
+announcement's §2 claims for the demonstration corpus, *"the description's sketch has shoelace
+area 12 extruded 3"*. **A library with no knowledge of this project agrees the solid is the
+solid**, on an artifact derived tonight rather than on a stored one.
+
+*That is the goal's "practical output" item, measured: a MIDI that plays 6.75 seconds and 9
+notes, a 20-triangle solid of volume 36.0, and a glTF scene of 3 nodes — each produced by the
+chain's deriver and each accepted by software that owes it nothing.*
