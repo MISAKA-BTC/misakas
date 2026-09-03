@@ -46,7 +46,21 @@ demonstration corpus the STL's enclosed volume is **36.0**, and the description'
 shoelace area 12 extruded 3. A library that has never seen this project agrees the solid is the
 solid.
 
-**3. Re-run the measurement that says the model can do this at all.**
+**3. Certify the class yourself, with the same two commands an operator runs.**
+The class that produces these artifacts can be certified on both lanes, and each certification object
+fits one carrier — no chunking, so the split-carriage path is not on this row's critical path at all:
+
+    palw-certify drill  --family a16-v5 --lane attempt   # 6 fault vectors, 10 kernels, 76,873 B
+    palw-certify drill  --family a16-v5 --lane fp        #                              80,293 B
+    palw-certify bind   --artifact <the .palwart> --lane fp
+    palw-certify bind   --model-id "Qwen/Qwen2.5-1.5B/graph-v5@512" --lane fp
+
+The last two name the same class, and it is the one the genesis registers. **The certificate's
+kernels are the kernels a fault was actually planted in** — the evidence carries the drilled set and
+the coverage rule requires the declared set to be a subset of it, so a family cannot claim an
+adjudication nobody performed.
+
+**4. Re-run the measurement that says the model can do this at all.**
 `palw-model-gate` (dense) and `palw-qwen36-model-gate` ship as binaries. `docs/evidence-qwen36-model-gate/`
 carries the model's own answer bytes and the artifacts derived from them.
 
