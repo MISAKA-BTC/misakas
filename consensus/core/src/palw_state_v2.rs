@@ -212,7 +212,16 @@ use std::collections::{BTreeMap, BTreeSet};
 /// this carriage and would not root it the same way if it could, so the number moves; the
 /// ruleset id moves with it through the preset fingerprint (a testnet-11 relaunch; mainnet
 /// ships PALW off and is untouched, ADR-0078 §4).
-pub const PALW_STATE_V2_VERSION: u16 = 18;
+///
+/// **Version 19 (2026-09-03, ADR-0082 Decision 2).** A court session gains ONE additive phase —
+/// `PalwCourtSessionStateV2::dissection`, the history dissection of a fused attention leaf — and
+/// the object enum gains its three moves (`CourtAttnRootClaimed`, `CourtAttnDissected`,
+/// `CourtAttnChildChosen`). It is `None` on every session a shipped preset can open, because
+/// `Params::palw_kary_court` is `None` on every shipped preset and the phase is only openable
+/// under it; but a session record is inside the state root and an 18 build would neither decode
+/// this one nor root it identically, so the number moves and the ADR-0043 golden vectors move
+/// with it.
+pub const PALW_STATE_V2_VERSION: u16 = 19;
 
 /// **Where a class's receipt-lane target starts** (ADR-0074 follow-up): one draw in two per
 /// quantum, whatever the class's attempt-lane `initial_target` says. See the `ClassRegistered`
@@ -1817,6 +1826,23 @@ pub struct PalwCourtSessionStateV2 {
     /// closes the session against whoever was due to move. An offense that is produced by
     /// absence cannot be forged by presence.
     pub ladder: crate::palw_bisect::PalwBisectLadderV1,
+    /// **The history dissection of a fused attention leaf — ADR-0082 Decision 2, one PHASE of
+    /// this session and never a second session.**
+    ///
+    /// The ladder narrows to one leaf. For every op but `AttnFused` the handoff at `Terminal` is
+    /// a single recompute; for a fused site the leaf's neighbourhood is the whole history, so the
+    /// handoff is the short interactive protocol `palw_attn_court_v1` implements. It lives HERE,
+    /// beside the ladder, for the reason the ladder itself lives here: silence past a rung
+    /// deadline is an offense produced by ABSENCE, and only a machine every node computes the
+    /// same way can mint it. A phase carried anywhere else would be a second clock the sweep does
+    /// not read.
+    ///
+    /// `None` on every session a shipped preset can open — the phase is only openable under
+    /// `Params::palw_kary_court`, which is `None` everywhere — so the arms that write it are
+    /// consensus inert until a network arms the fence. `Some` is itself the record that the fence
+    /// WAS active when this dispute reached its terminal leaf, which is what lets the close read
+    /// the fence off the session instead of re-resolving it at another DAA.
+    pub dissection: Option<crate::palw_attn_court_v1::PalwAttnDissectPhaseV1>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -2700,6 +2726,76 @@ pub enum PalwConsensusObjectV2 {
         index: u8,
         bytes: Vec<u8>,
     },
+    /// **ADR-0082 Decision 2, move 1: the responder opens the phase with a ROOT CLAIM.**
+    ///
+    /// The ladder has narrowed to one leaf and that leaf is a fused attention site, so the
+    /// terminal adjudication is not a recompute but an exchange. The responder states `(m*, S*)`
+    /// and the value partials `V*` for the disputed output tile, and the court admits the claim
+    /// only if the shipped finalization of `V*` reproduces the row the execution actually
+    /// COMMITTED — which is why the evidence rides with it:
+    ///
+    /// * `binding` is the same `PalwStepBindingV2` every close carries, pinned to the claim's
+    ///   `execution_root` and to its `class_id` before a field of it is read. Without it the
+    ///   root claim would be a statement about an execution nobody named, and a responder whose
+    ///   committed row was forged could state the HONEST row's partials, play every round
+    ///   truthfully and be acquitted for an execution that committed something else.
+    /// * `out_tile` is that committed row, opened against the binding's step tree at the leaf the
+    ///   ladder narrowed to — never a bare vector the mover chose.
+    /// * `operand_openings` prove the site's registered quantization triples against the CLASS's
+    ///   `artifact_root`, exactly as the arithmetic close proves the operands it recomputes with.
+    ///   The finalization is a function of them, so a mover that supplied them would be choosing
+    ///   the arithmetic its own claim is checked under.
+    ///
+    /// Appended at the END: the enum's Borsh discriminant is positional, the same rule
+    /// `CourtCloseDeclared` and `DerivedArtifactV1` were appended under.
+    CourtAttnRootClaimed {
+        session_id: Hash64,
+        root: crate::palw_attn_dissect::PalwAttnRootClaimV1,
+        /// **The arity this dissection will be played at, declared and then refused unless it is
+        /// the ruleset's own** (ADR-0082 Decision 3, patch note 7).
+        ///
+        /// The same split `CourtOpened`'s `space_size` uses: the object declares, the acceptance
+        /// layer compares it with `palw_court_params_at_v2`'s derived value — where the bundle is
+        /// in hand — and the fold constructs from the validated number. It is declared rather
+        /// than re-derived by the fold because the derivation reads the BUNDLE (the window, the
+        /// SA-4 deadline, the registered classes), which the transition never receives; a fold
+        /// that guessed it would deal different children to different nodes.
+        arity: u8,
+        /// Boxed for the reason `PalwClassAdmissionCarriageV2` is: it carries a whole shape
+        /// profile and is by far the largest thing this variant holds.
+        binding: Box<crate::palw_step_leg::PalwStepBindingV2>,
+        out_tile: crate::palw_attn_court_v1::PalwAttnRowOpeningV1,
+        operand_openings: Vec<crate::palw_artifact::PalwArtifactOpeningV1>,
+        /// The responder's ML-DSA-87 over [`crate::palw_court_v2::palw_attn_root_claim_message_v1`],
+        /// under the CLAIM's bond key — the construction `CourtDisclosed` uses, for the P0-9
+        /// reason: unsigned, a challenger could write the answers it wants to convict.
+        signature: Vec<u8>,
+    },
+    /// **Move 2: the responder discloses the `k` children of the disputed range.**
+    ///
+    /// Fold-checked before the challenger moves: `max = max(max_c)`, `S* = Σ S_c`, `V* = Σ V_c`,
+    /// all exact integer operations. A disclosure that does not recompose the parent's own claim
+    /// is a self-contradiction and convicts without any execution being run — which is why this
+    /// object carries no evidence beyond the children themselves.
+    CourtAttnDissected {
+        session_id: Hash64,
+        round: crate::palw_attn_dissect::PalwAttnDissectRoundV1,
+        /// The responder's ML-DSA-87 over
+        /// [`crate::palw_court_v2::palw_attn_round_message_v1`], under the claim's bond key.
+        signature: Vec<u8>,
+    },
+    /// **Move 3: the challenger names the child it disagrees with.**
+    ///
+    /// One byte at every arity. The named child's claim becomes the disputed claim and its range
+    /// the disputed range; one history tile is the bottom, where a close finishes it.
+    CourtAttnChildChosen {
+        session_id: Hash64,
+        choice: crate::palw_attn_court_v1::PalwAttnDissectChoiceV1,
+        /// The challenger's ML-DSA-87 over the choice, under the SESSION's bond key — the
+        /// construction `CourtVerdictPosted` uses, and for its reason: a responder writing the
+        /// challenger's moves would steer the dissection away from its own divergence.
+        signature: Vec<u8>,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -3096,6 +3192,28 @@ pub fn palw_court_close_chunk_digest_v1(bytes: &[u8]) -> Hash64 {
     finish(state)
 }
 
+/// **Is this object court CPU a block has to spend before it can be relayed?** (ADR-0080 design
+/// A W9, extended by ADR-0082 Decision 2.)
+///
+/// A dissection move is graded in the block that carries it: a round's fold is checked before the
+/// challenger may move, a root claim opens the phase against a proven artifact and a verified
+/// binding, and a choice re-cuts the range. That is the same kind of work a completing close
+/// chunk buys, so it is counted against the same per-block slot
+/// ([`PALW_COURT_CLOSE_MAX_PER_BLOCK`]) rather than given a second budget of its own — two
+/// budgets for one resource is two answers to "how much court may one block ask for".
+///
+/// Drop-not-invalidate, at the caller: admission on the lifecycle band is stateless, so a second
+/// carrier relays and mines freely and invalidating would make honest miners produce the invalid
+/// blocks (audit M-01's shape).
+pub fn palw_court_move_is_court_cpu_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(
+        object,
+        PalwConsensusObjectV2::CourtAttnRootClaimed { .. }
+            | PalwConsensusObjectV2::CourtAttnDissected { .. }
+            | PalwConsensusObjectV2::CourtAttnChildChosen { .. }
+    )
+}
+
 /// **Will this object complete a declared close, and therefore be assembled, decoded and
 /// adjudicated in the block that carries it?** (ADR-0080 design A, W9.)
 ///
@@ -3266,6 +3384,15 @@ pub enum PalwStateV2Error {
     EmptyPayoutPayload(PalwBondKeyV2),
     #[error("court session {0} refused a ladder move: {1}")]
     LadderRefused(Hash64, String),
+    // ADR-0082 Decision 2 — the dissection's own refusals.
+    #[error("court session {0} refused a dissection move: {1}")]
+    DissectionRefused(Hash64, String),
+    #[error("court session {0} already has an open dissection; a root claim opens exactly one")]
+    DissectionAlreadyOpen(Hash64),
+    #[error("court session {0} has no open dissection — a dissection move is not a legal move in it")]
+    NoDissection(Hash64),
+    #[error("court session {0}'s ladder has not narrowed to one leaf; a dissection adjudicates the leaf it chose")]
+    LadderNotTerminal(Hash64),
     #[error("court session {0} was opened over a space its own session id does not name")]
     SessionIdMismatch(Hash64),
     #[error(
@@ -6164,12 +6291,62 @@ fn rearm_claim_after_da_session(
 /// index exactly derivable from the session records — which is what lets the index be dropped
 /// from the state root and rebuilt on load. A ladder that has been abandoned or has reached
 /// `Terminal` has no rung clock left to run, so only the backstop applies.
+/// **Whose move a session is waiting on, and by when — the ladder's, or the DISSECTION's once
+/// one is open** (ADR-0082 Decision 2, invariant Z4).
+///
+/// The phase reuses `PalwBisectTurnV1`, so it answers the same pair the ladder does and this is
+/// the ONE place the two are chosen between. Everything downstream — the deadline index, the
+/// sweep's `turn_can_still_move`, its `rung_fired`, and which party a silence is charged to —
+/// reads that pair and nothing else, so a phase cannot grow a second clock by accident.
+///
+/// A session with a phase is a session whose ladder is already `Terminal`: the phase opens at the
+/// handoff. Reading the ladder there would return "no rung clock left" for a dispute that is very
+/// much still exchanging moves, and the backstop would end every dissection on the challenger's
+/// side however diligently it was played.
+/// **Pull a session's live rung deadline back inside its own assembly reserve** (ADR-0080 W4
+/// item 4).
+///
+/// `cap_deadline_to_session_v1` was written for this and had no caller: the rule it states —
+/// "a rung's deadline is `min(accepted + w_round, session.deadline − assembly_reserve)`" — was
+/// documented on both ladders and enforced nowhere, so a rung stamped near the backstop ate the
+/// blocks the close it is waiting for has to be ASSEMBLED over. The party that moved last then
+/// won by arithmetic: the other side was still filing chunks when the deadline it was measured
+/// against arrived.
+///
+/// Called at every point that stamps `last_deadline_daa` — the opening, both ladder rungs, and
+/// all three dissection moves — so there is one place a rung deadline can come from.
+///
+/// **The reserve is the STRUCTURAL cap, [`PALW_COURT_CLOSE_MAX_CHUNKS`], not the ruleset's
+/// `max_close_chunks`.** The ruleset's number lives in the bundle, which the fold never receives,
+/// and a cap resolved from the bundle in one layer and a constant in another is a state-root
+/// split. The structural cap is `>=` the ruleset's on every preset, so it reserves at least the
+/// room a legal close can need — the direction to be wrong in is the one that leaves the mover
+/// more time, not less.
+fn cap_session_rung_deadline_v2(session: &mut PalwCourtSessionStateV2) {
+    let reserve = palw_close_assembly_daa_v1(PALW_COURT_CLOSE_MAX_CHUNKS);
+    let backstop = session.deadline_daa;
+    match session.dissection.as_mut() {
+        Some(phase) => {
+            phase.cap_deadline_to_session_v1(backstop, reserve);
+        }
+        None => {
+            session.ladder.cap_deadline_to_session_v1(backstop, reserve);
+        }
+    }
+}
+
+fn court_turn_and_rung_deadline_v2(session: &PalwCourtSessionStateV2) -> (crate::palw_bisect::PalwBisectTurnV1, u64) {
+    match &session.dissection {
+        Some(phase) => (phase.turn(), phase.last_deadline_daa()),
+        None => (session.ladder.turn(), session.ladder.last_deadline_daa()),
+    }
+}
+
 pub(crate) fn court_next_deadline_v2(session: &PalwCourtSessionStateV2) -> u64 {
     use crate::palw_bisect::PalwBisectTurnV1;
-    match session.ladder.turn() {
-        PalwBisectTurnV1::AwaitDisclosure | PalwBisectTurnV1::AwaitVerdict => {
-            session.deadline_daa.min(session.ladder.last_deadline_daa())
-        }
+    let (turn, rung_deadline) = court_turn_and_rung_deadline_v2(session);
+    match turn {
+        PalwBisectTurnV1::AwaitDisclosure | PalwBisectTurnV1::AwaitVerdict => session.deadline_daa.min(rung_deadline),
         // **`Terminal` has no move the responder can make, so it may not be clocked as if it did.**
         //
         // `declare_no_show` charges the RESPONDER for silence at `Terminal`, but the terminal move
@@ -6225,15 +6402,26 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         // never filed. On the RC ruleset (rungs 60 DAA apart, backstop 2,400) that was every
         // terminal session. The two comments stated opposite rules; this makes the arithmetic obey
         // the one that is documented.
-        let turn_can_still_move = !matches!(
-            session.ladder.turn(),
-            crate::palw_bisect::PalwBisectTurnV1::Terminal | crate::palw_bisect::PalwBisectTurnV1::Abandoned
-        );
-        let rung_fired = turn_can_still_move
-            && session.ladder.last_deadline_daa() < ctx.daa_score
-            && session.ladder.last_deadline_daa() < session.deadline_daa;
+        //
+        // **And the turn is the PHASE's once one is open** (ADR-0082 Decision 2). The dissection
+        // is a phase of this session and not a second one, so the sweep asks the same two
+        // questions of it — who owes a move, and by when — through the same helper the deadline
+        // index uses. Asking the LADDER here would read `Terminal` on every session that had
+        // reached its dissection and hand the whole exchange to the backstop, which closes
+        // challenger-side: a responder could simply stop answering rounds and win.
+        let (turn, rung_deadline) = court_turn_and_rung_deadline_v2(&session);
+        let turn_can_still_move =
+            !matches!(turn, crate::palw_bisect::PalwBisectTurnV1::Terminal | crate::palw_bisect::PalwBisectTurnV1::Abandoned);
+        let rung_fired = turn_can_still_move && rung_deadline < ctx.daa_score && rung_deadline < session.deadline_daa;
         if rung_fired {
-            if let Ok(no_show) = session.ladder.declare_no_show(ctx.daa_score) {
+            // The phase's own `declare_no_show` when a phase is open, the ladder's otherwise —
+            // and both mint the same `PalwBisectNoShowV1` with the same rule at `Terminal`, which
+            // is why the arms below need no second spelling.
+            let declared = match session.dissection.as_mut() {
+                Some(phase) => phase.declare_no_show(ctx.daa_score).map_err(|e| e.to_string()),
+                None => session.ladder.declare_no_show(ctx.daa_score).map_err(|e| e.to_string()),
+            };
+            if let Ok(no_show) = declared {
                 // **Whether the accused could have moved at all, as a fact the chain already
                 // holds** (ADR-0069 Decision 3-3).
                 //
@@ -6279,7 +6467,17 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                     // challenger's side — the right answer for an accusation that was never
                     // supported by an exchange. A responder that has answered once and then goes
                     // silent still loses at the next rung, which is the case the ladder is for.
-                    crate::palw_bisect::PalwBisectPartyV1::Responder if session.ladder.round() == 0 && !class_holds_weight => {
+                    //
+                    // **And it does not reach into a DISSECTION** (ADR-0082 Decision 2). The
+                    // exemption's whole premise is "this responder may not be able to move at
+                    // all"; a session with an open phase has a responder that filed a root claim,
+                    // which is the move the exemption doubts it can make. Letting round 0 of the
+                    // PHASE inherit it would give an executor one free silence per dispute after
+                    // it had already shown it could play — the exemption becoming a strategy
+                    // rather than a mercy.
+                    crate::palw_bisect::PalwBisectPartyV1::Responder
+                        if session.dissection.is_none() && session.ladder.round() == 0 && !class_holds_weight =>
+                    {
                         // Ends the session, convicts nobody, and FINES nobody — see
                         // `rearm_after_unanswered_opening` (audit3 H4). Routing this to the
                         // challenger-side close made the accuser pay for the accused's silence,
@@ -6303,8 +6501,9 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                 }
                 continue;
             }
-            // The ladder is already `Abandoned` — its rung clock is spent and only the backstop
-            // can still act. Rewriting the record re-indexes it under the backstop, so the queue
+            // The machine that owns the turn — the ladder, or the dissection phase once one is
+            // open — is already `Abandoned`: its rung clock is spent and only the backstop can
+            // still act. Rewriting the record re-indexes it under the backstop, so the queue
             // moves forward instead of spinning on a deadline nothing consumes.
             if session.deadline_daa >= ctx.daa_score {
                 let refreshed = session.clone();
@@ -8059,8 +8258,19 @@ fn apply_object(
                     opened_daa: ctx.daa_score,
                     deadline_daa,
                     ladder,
+                    // ADR-0082 Decision 2: a session opens with no dissection. The phase is
+                    // entered at the ladder's `Terminal`, by the responder's root claim, and only
+                    // under `Params::palw_kary_court`.
+                    dissection: None,
                 }),
             );
+            // ADR-0080 W4 item 4: the opening rung is a rung, so it takes the same cap. It is
+            // applied through the record because the cap is a function of the session's backstop,
+            // which is only decided one line above this.
+            if let Some(mut opened) = builder.state.court_sessions.get(session_id).cloned() {
+                cap_session_rung_deadline_v2(&mut opened);
+                builder.write_court(*session_id, Some(opened));
+            }
             // An open court freezes the path to Final: the claim keeps no deadline while any
             // session is open (void-by-timeout of the COURT is PR-07's deadline system).
             //
@@ -8105,6 +8315,7 @@ fn apply_object(
                 .ladder
                 .apply_disclosure(disclosure, ctx.daa_score, builder.params.turn_deadline_daa)
                 .map_err(|e| PalwStateV2Error::LadderRefused(*session_id, e.to_string()))?;
+            cap_session_rung_deadline_v2(&mut session);
             builder.write_court(*session_id, Some(session));
         }
         PalwConsensusObjectV2::CourtVerdictPosted { session_id, verdict, signature: _ } => {
@@ -8114,6 +8325,7 @@ fn apply_object(
                 .ladder
                 .apply_verdict(verdict, ctx.daa_score, builder.params.turn_deadline_daa)
                 .map_err(|e| PalwStateV2Error::LadderRefused(*session_id, e.to_string()))?;
+            cap_session_rung_deadline_v2(&mut session);
             builder.write_court(*session_id, Some(session));
         }
         PalwConsensusObjectV2::CourtCloseDeclared { session_id, side, count, chunk_digests, close_digest, verdict, signature: _ } => {
@@ -8221,6 +8433,87 @@ fn apply_object(
             // not yet read. A group that completes here therefore sits complete until its session
             // ends, and the sweep below deliberately does NOT convict a declarer whose group is
             // complete — the direction to be wrong in is the one that does not destroy collateral.
+        }
+        // -------------------------------------------------------------------------------------
+        // ADR-0082 Decision 2 — the dissection's three moves
+        //
+        // Each arm does exactly two things: it refuses a move that is not legal in this session,
+        // and it hands the message to `PalwAttnDissectPhaseV1`, whose rules are NOT restated here.
+        // The out-of-turn refusal, the fold that must check, the child that must be in range and
+        // the round budget are all the phase's; this is the wiring, and a second copy of a rule is
+        // a second rule.
+        //
+        // **The admissibility fence is the acceptance layer's** (`palw_v2_validate_objects` under
+        // `Params::palw_kary_court_active_at`), the same split every court object's SIGNATURE
+        // uses. What the fold enforces on its own is the arity: an illegal one is refused here,
+        // and whether the legal one is the ruleset's derived value is checked where the bundle is.
+        // -------------------------------------------------------------------------------------
+        PalwConsensusObjectV2::CourtAttnRootClaimed { session_id, root, arity, binding, out_tile, operand_openings, signature: _ } => {
+            let mut session =
+                builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
+            if session.dissection.is_some() {
+                return Err(PalwStateV2Error::DissectionAlreadyOpen(*session_id));
+            }
+            // **A dissection begins where the ladder ends.** The phase adjudicates ONE leaf, and
+            // which leaf that is is the session's own narrowing — so a root claim before the
+            // ladder is terminal is a claim about a step nobody chose.
+            let narrowed = session.ladder.terminal_index().ok_or(PalwStateV2Error::LadderNotTerminal(*session_id))?;
+            let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
+            let class = builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.clone();
+            let operands = crate::palw_artifact::PalwProvenOperandsV1::from_openings_v1(operand_openings, class.artifact_root)
+                .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            // The site is the CLASS's description of the leaf the ladder terminated on — derived
+            // from the coordinate and the registered profile, never supplied by the mover.
+            let derived = crate::palw_court_v2::palw_attn_dispute_site_v2(&claim, binding, &operands, narrowed, None)
+                .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            // **The committed row, opened.** This is the pin that makes the whole protocol be
+            // about THIS execution: without it a responder whose committed output was forged
+            // could state the honest row's partials, play every round truthfully, and be
+            // acquitted for an execution that committed something else.
+            if out_tile.opening.leaf_index != narrowed {
+                return Err(PalwStateV2Error::DissectionRefused(
+                    *session_id,
+                    "the opened output tile is not the leaf the ladder narrowed to".to_string(),
+                ));
+            }
+            let committed = crate::palw_attn_court_v1::palw_attn_opened_lanes_v1(out_tile, &derived.binding, derived.head_lanes.2 as usize)
+                .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            let phase = crate::palw_attn_court_v1::PalwAttnDissectPhaseV1::open_with_arity(
+                *session_id,
+                root,
+                derived.head_lanes,
+                &committed,
+                derived.site.params.values,
+                *arity,
+                derived.tile_positions,
+                ctx.daa_score,
+                builder.params.turn_deadline_daa(),
+                true,
+            )
+            .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            session.dissection = Some(phase);
+            cap_session_rung_deadline_v2(&mut session);
+            builder.write_court(*session_id, Some(session));
+        }
+        PalwConsensusObjectV2::CourtAttnDissected { session_id, round, signature: _ } => {
+            let mut session =
+                builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
+            let phase = session.dissection.as_mut().ok_or(PalwStateV2Error::NoDissection(*session_id))?;
+            phase
+                .apply_round(round, ctx.daa_score, builder.params.turn_deadline_daa())
+                .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            cap_session_rung_deadline_v2(&mut session);
+            builder.write_court(*session_id, Some(session));
+        }
+        PalwConsensusObjectV2::CourtAttnChildChosen { session_id, choice, signature: _ } => {
+            let mut session =
+                builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
+            let phase = session.dissection.as_mut().ok_or(PalwStateV2Error::NoDissection(*session_id))?;
+            phase
+                .apply_choice(choice, ctx.daa_score, builder.params.turn_deadline_daa())
+                .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            cap_session_rung_deadline_v2(&mut session);
+            builder.write_court(*session_id, Some(session));
         }
         PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts } => {
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
@@ -15995,6 +16288,10 @@ pub(crate) mod tests {
                     24,
                 )
                 .unwrap(),
+                // ADR-0082 Decision 2. `None` because no shipped preset can open a phase at all;
+                // the `court_sessions` perturbation below is what holds this record inside the
+                // root, and the field rides in its bytes.
+                dissection: None,
             },
         );
         // ADR-0080 design A: a live close group on the session above — one chunk of two present,
