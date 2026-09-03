@@ -932,6 +932,12 @@ pub const PALW_CONTEXT_LADDER_MAX_DECODE_TOKENS: u32 = crate::palw_v2::PALW_V2_M
 /// refused at EVERY width — `GeometryMismatch { what: "rms_eps_q", profile: 1, artifact: 256 }` —
 /// which is a dense-tier demonstration refused before it starts. The hybrid row below already went
 /// through `qwen36_geometry_artifact_eps` for exactly this; the dense row had no twin.
+///
+/// **Not the registered row.** This is the graph-v2 projection at width `n_ctx`; at 512 it is
+/// class 8d2e6f16… (worst case 59,000,848 leaves), which no network registers. The row the
+/// testnet-11 genesis registers at 512 is [`crate::palw_qwen25_profile::qwen25_a16_graph_v5_profile_v1`]
+/// (class 4277d84f…, 52,778,128). Three pieces of code mistook this accessor's 512 for the
+/// registered one on 2026-09-03; a caller that wants THE 512 row must name its graph.
 pub fn palw_a16_context_row_profile_v1(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
     crate::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v1(crate::palw_qwen25_profile::PalwQwen25GeometryV1 {
         n_ctx,

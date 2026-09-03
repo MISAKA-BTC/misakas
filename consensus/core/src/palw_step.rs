@@ -1840,7 +1840,37 @@ mod tests {
         // 2^24 opens every grammar floor (38 / 60 / 104 plus a prefill) and still tops out at 156,
         // so it would open MIDI and 3D at a NARROWER class than the registered one — which means
         // deriving a third class id, which is the loop this row exists to end.
-        let row = crate::palw_context_ladder::palw_a16_context_row_profile_v1(512).expect("the registered row");
+        // **"Registered" is measured against the shipped genesis set, not asserted in a message.**
+        // This test said "the registered row" three times about `palw_a16_context_row_profile_v1(512)`
+        // — the graph-v2 projection at 512, class 8d2e6f16…, which no network registers — and pinned
+        // ITS worst case, 59,000,848, as the registered row's. The registered row is the graph-v5
+        // dense profile (class 4277d84f…, worst case 52,778,128): every assertion about DIRECTION
+        // held for both rows (both refuse at 2^22 and fit at 2^26), only the magnitude was another
+        // class's, and nothing compared it to anything (8e, 2026-09-03 — the third class-identity
+        // confusion at width 512 that day: the v1 projection is what the ladder module hands out
+        // when asked for "the 512 row" without a graph).
+        let row = crate::palw_qwen25_profile::qwen25_a16_graph_v5_profile_v1().expect("the graph-v5 dense row derives");
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
+            &crate::config::params::palw_rc_shipped_params().palw_consensus_mode
+        else {
+            panic!("the RC preset ships a ConsensusV2 bundle");
+        };
+        assert!(
+            bundle.genesis_objects.iter().any(|o| matches!(
+                o,
+                crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, .. } if *class_id == row.shape_profile_id()
+            )),
+            "this is not the row the testnet-11 genesis registers"
+        );
+        let v1_at_512 = crate::palw_context_ladder::palw_a16_context_row_profile_v1(512).expect("the graph-v2 projection at 512");
+        assert_ne!(v1_at_512.shape_profile_id(), row.shape_profile_id(), "the v1 projection at 512 is a DIFFERENT class");
+        assert!(
+            !bundle.genesis_objects.iter().any(|o| matches!(
+                o,
+                crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, .. } if *class_id == v1_at_512.shape_profile_id()
+            )),
+            "and the v1 projection at 512 is registered nowhere — it must not be called the registered row"
+        );
         for pow in 22..26u32 {
             assert!(
                 worst_case_step_leaf_count_capped_v1(&row, 1 << pow).is_err(),
@@ -1848,7 +1878,12 @@ mod tests {
             );
         }
         let need = worst_case_step_leaf_count_capped_v1(&row, 1 << 26).expect("2^26 admits it");
-        assert_eq!(need, 59_000_848, "the registered row's worst case");
+        // Pinned from this tree's own measurement (`palw-certify bind` on 21a34935: "worst case
+        // 52778128 step leaves"; 1c measured the same), not copied from prose — and the v1
+        // projection's number is asserted to be the OTHER one, so the two can never be swapped again.
+        assert_eq!(need, 52_778_128, "the registered graph-v5 row's worst case");
+        let v1_need = worst_case_step_leaf_count_capped_v1(&v1_at_512, 1 << 26).expect("2^26 admits the v1 projection too");
+        assert_ne!(v1_need, need, "two classes, two numbers: {v1_need} is the unregistered projection's");
         assert!(need <= 1 << 26);
         // and the headroom is stated rather than implied: a row that only just fits is a row one
         // profile correction away from not fitting
@@ -1872,11 +1907,12 @@ mod tests {
     #[test]
     fn the_shipped_ruleset_admits_the_row_the_genesis_registers() {
         let cap = crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
-        let row = crate::palw_context_ladder::palw_a16_context_row_profile_v1(512).expect("the registered row");
+        let row = crate::palw_qwen25_profile::qwen25_a16_graph_v5_profile_v1().expect("the graph-v5 dense row derives");
+        let need = worst_case_step_leaf_count_capped_v1(&row, u64::MAX).expect("uncapped, the count exists");
         let got = worst_case_step_leaf_count_capped_v1(&row, cap);
         assert!(
             got.is_ok(),
-            "the shipped ruleset's ladder is {cap} and the registered n_ctx 512 row needs 59,000,848 — \
+            "the shipped ruleset's ladder is {cap} and the registered n_ctx 512 row needs {need} — \
              W1b made the executor read this field and the field is still the old constant, so no \
              width has moved and the class is capped at 39 positions. got: {got:?}"
         );
@@ -1916,6 +1952,54 @@ mod tests {
             }
         }
         assert!(orphans.is_empty(), "these look like tests and will never run:\n  {}", orphans.join("\n  "));
+    }
+
+    /// **And the other direction: an attribute with no `fn` of its own.**
+    ///
+    /// The guard above catches a test that LOST its attribute — the suite gets smaller by one and
+    /// every surviving name is still unique. The inverse edit leaves the attribute behind: it does
+    /// not disappear, it lands on the next item, so one fn is registered twice and the suite gets
+    /// BIGGER while one body stops running — `2 passed` for one function, plus a `duplicated
+    /// attribute` warning that only prints on a fresh compile and is not a failure. Found on 5f on
+    /// 2026-09-03 under a doc comment describing a DoS guard; the test it described existed under
+    /// another name, and the orphan doubled its neighbour. Counting attributes against fns cannot
+    /// see it (helpers are fns too). The check is adjacency: after a `#[test]`, skipping other
+    /// attributes and doc lines, the next line must be a `fn`, and the fn must not already be
+    /// claimed by an earlier `#[test]`.
+    #[test]
+    fn every_test_attribute_in_this_module_still_has_a_fn_of_its_own() {
+        let src = include_str!("palw_step.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let mut orphans = Vec::new();
+        let mut claimed = std::collections::HashSet::new();
+        for (i, line) in lines.iter().enumerate() {
+            if line.trim() != "#[test]" {
+                continue;
+            }
+            // walk past the attributes and doc lines the attribute may legitimately sit above
+            let mut j = i + 1;
+            while j < lines.len() {
+                let t = lines[j].trim();
+                if t.starts_with("#[") || t.starts_with("///") || t.is_empty() {
+                    j += 1;
+                    continue;
+                }
+                break;
+            }
+            match lines.get(j).map(|l| l.trim()) {
+                Some(t) if t.starts_with("fn ") || t.starts_with("async fn ") => {
+                    if !claimed.insert(j) {
+                        orphans.push(format!("line {}: `#[test]` lands on a fn already claimed by an earlier attribute ({t})", i + 1));
+                    }
+                }
+                other => orphans.push(format!("line {}: `#[test]` is followed by {:?}, not a fn", i + 1, other.unwrap_or("<eof>"))),
+            }
+        }
+        assert!(
+            orphans.is_empty(),
+            "these attributes have no fn of their own — one test would run twice:\n  {}",
+            orphans.join("\n  ")
+        );
     }
 
     #[test]
