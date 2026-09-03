@@ -808,6 +808,36 @@ Landing the registration without the eps replacement leaves 489‰ on an unexecu
 the eps fix without the registration leaves the worker pointed at nothing. *Written as one item
 because two items are how half of it ships.*
 
+### THE 62 SKIPPED TESTS INCLUDE EVERY TEST THIS NIGHT EXERCISES HARDEST
+
+The full suite is **4,072 run, 4,066 passed, 6 failed, 62 skipped** in 407s — and the six are the
+five re-pin tests plus one fixture branch, exactly as owned. But the **skipped** set is the one worth
+reading, because of what this particular night is:
+
+    ibd_participation_tests::a_node_killed_partway_through_recovery_comes_back_safe
+    ibd_participation_tests::e2e_a_a_stronger_chain_found_during_ibd_wins
+    ibd_participation_tests::e2e_b_bootstrap_recovery_crosses_a_provisional_pruning_point
+    ibd_participation_tests::mainnet_gate_handoff_holds_repeatedly_over_a_delayed_link
+    ibd_participation_tests::mainnet_soak_randomized_fault_injection
+    daemon_integration_tests::daemon_utxos_propagation_test
+    simpa tests::test_pruning_via_simpa
+    palw_agent_equivalence::the_resident_agent_and_a_fresh_process_compute_the_same_tag
+
+**These are `#[ignore]`d for cost, which is a defensible standing decision and a DIFFERENT decision
+from "ignored on the night every host is wiped and every node re-syncs from a new genesis."**
+
+The isolated boot on ibm covers the **start**. Every test above covers *a second node joining a
+chain that already moved* — which is literally the next thing that happens after the producer comes
+up. And this project has been bitten there: a pruned-IBD panic that put a joining node into
+permanent quarantine.
+
+*A standing decision made for cost becomes a different decision on the one night its subject is the
+main event. The set did not change; the night did.*
+
+**Running `a_node_killed_partway_through_recovery_comes_back_safe` during the FH2 wait** — it is the
+failure mode with the worst recovery story, and the wall clock is free while the last fixer
+finishes. Whatever it prints goes in §6 as a gate that was run rather than a set that was skipped.
+
 ### THE PREDICTION, taken pre-fmt on impl `41e364b6` — check every paste against it
 
 Recorded **before** the formatting pass, per the ceremony rule, so a value that moves without a named
