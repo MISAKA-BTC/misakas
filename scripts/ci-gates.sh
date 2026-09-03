@@ -198,6 +198,8 @@ expected_reds() {
         printf '    known red: palw_freeprompt_v3::tests::golden_vector_ids_are_frozen -- same re-pin. NOT the namesake in palw_derived_v1.rs\n'
     grep -q "source_tree_sha256" "$log" 2>/dev/null && grep -q "MISMATCH" "$log" 2>/dev/null &&
         printf '    known red: the transformer_id pins -- a87cc282 rustfmt-ed misaka-palw-derive/src/kinds/scene.rs, which moved all eight ids. Same re-pin.\n'
+    grep -q "the_transformer_ids_are_the_ones_this_build_was_pinned_with" "$log" 2>/dev/null &&
+        printf '    known red: transformer_id_pin::the_transformer_ids_are_the_ones_this_build_was_pinned_with -- the Rust half of the same re-pin.\n'
     return 0
 }
 
