@@ -429,7 +429,34 @@ gate above is the one that would have caught all three.
   one class root spelled two ways — from the artifact's inventory and from a constant — with nothing
   forcing them equal, which is the A16 genesis root defect again.
 
+  **Both ends now measured, not inferred:**
+
+      registered by the panel   71bbb755…   the catalog's graph-v2 row at n_ctx 16
+      certified by bind         8d2e6f16…   the artifact's own row at 512
+
+  The registered value is printed by the panel that computed it rather than scraped from a log —
+  an earlier reading came from `grep -oE '[0-9a-f]{128}' | tail -1` and was returning block hashes.
+  **A value an operator is asked to match against a certificate has to be printed by the thing that
+  computed it.**
+
   *It is in no test because no test registers a class it did not also define.* A rehearsal found it.
+
+- **A drill fixture for the fused attention kernel, and it must land BEFORE the family's union.**
+  `graph-v5@512` reaches ten kernels; nine are covered by the certified dense family and
+  `09b81d17ed5a73ef…` is in none. So no `FamilyCertified` can be produced for the row and both lanes
+  ship closed.
+
+  §2's union ruling puts that kernel in the family's declared set. **A family that declares a kernel
+  it has no fixture to drill is a certificate asserting an adjudication nobody has performed** —
+  strictly worse than the honest refusal, because today the class cannot be certified and says so,
+  and with the union alone it would be certified and the assertion would be empty. The first person
+  to discover it would be a challenger unable to open a dispute over a kernel nobody had proven the
+  court can score.
+
+  And the fixture has to be judged by what it PROVES, not by existing: **a fault vector the court
+  scores identically to a correct execution certifies nothing, and that failure looks exactly like
+  success.** If it cannot be authored in this cut, the choice — register the row uncertified, or do
+  not register it — is a genesis decision and belongs here, not in a declaration.
 
   *Two things this is NOT, both checked in the source rather than reasoned about:* it is not the
   court — `shape_profile_id` hashes the profile's borsh and no court field is in that struct, and
