@@ -175,8 +175,30 @@ a fact the **handshake reports** rather than something an operator has to be tru
 ## 2. Build
 
 ```bash
-cargo build --release -p kaspad
+cargo build --release -p kaspad -j 4
 ```
+
+**`-j 4`, not the default, and this is a relaunch hazard rather than a preference.** Every host in
+this fleet is a **23 GB, 8-CPU** machine, and every one of them is already running the chain it is
+about to be wiped of. Measured 2026-09-03, before touching anything:
+
+    169.58.39.220 (ibm)   8 cpu   23 G ram   13 G available   swap 4/7 used    kaspad RSS 18.0 G
+    169.58.232.113        8 cpu   23 G ram   10 G available   swap 2/15 used   kaspad RSS 22.4 G
+    5.104.81.23           8 cpu   23 G ram   12 G available   swap 4/19 used   kaspad RSS 20.1 G
+
+A default `cargo build --release` takes one rustc per CPU. Eight concurrent rustc on this workspace
+against 10–13 GB of headroom, with swap already a third to a half consumed, races the producers into
+swap — and the process the kernel reaches for when it runs out is the **15 GB kaspad**, not the
+build. So the failure is not a slow build: it is the live chain being OOM-killed during the build
+that precedes its own replacement, which then looks like an unrelated outage.
+
+The build step sits **before** the fleet stop in §4b for a good reason — you want to know the binary
+compiles while the old network is still up — so the fix is the job count and not the ordering.
+`-j 4` was measured on ibm alongside both live producers: four rustc, minimum free memory 11.8 GB,
+no swap growth, no producer disturbance.
+
+*(If you have already stopped the fleet, the ceiling is gone and the default `-j` is fine. The rule
+is: bounded while anything is producing.)*
 
 The `evm` feature is a **default** feature of kaspad, so the plain build is the fleet build — the
 revm executor runs in-process, no separate daemon. Only a `--no-default-features` binary lacks the
