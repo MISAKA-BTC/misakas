@@ -3741,3 +3741,45 @@ I then caught it myself and corrected it before the sharpened version could sett
 > and the correction was faster **because I went back to the code rather than to the tally.**
 > What failed was neither of us re-reading. *It was the count having an interest in being larger,
 > which is not a property anyone can read off a number.*
+
+## §4b, fifth defect: `stop` could not reach a running node, and the procedure had no next step
+
+The corrected census found `kaspad.candidate` on ibm. Its cgroup:
+
+```
+pid 1156471   /user.slice/user-0.slice/session-28377.scope     <- a LOGIN SESSION, not a service
+```
+
+**`stop` stops and disables every `.service`. It cannot reach that process at all.** So the
+documented sequence — *stop, then verify* — ends with `verify` reporting `kaspad=1`, NOT CLEAN,
+and **the procedure said nothing about what to do next.**
+
+> That is the dangerous shape, not the missing kill. **An operator at 2 a.m. who has stopped
+> everything, sees `verify` refuse, and finds no next step in the runbook, may read the refusal as
+> a bug in `verify` and wipe anyway** — which defeats the one gate the whole procedure exists to
+> hold. *A gate with no documented way to satisfy it teaches people to bypass it.*
+
+`stop` now enumerates by executable basename — the same walk `census` uses — skips anything whose
+cgroup contains `.service`, and reports what it finds with the cgroup attached:
+
+```
+-- 169.58.39.220 --
+  would kill pid 1156471 (kaspad.candidate, in (deleted) session-28377.scope — NOT a service)
+-- 169.58.232.113 --   none — every node here is owned by a unit
+-- 5.104.81.23 --      none — every node here is owned by a unit
+```
+
+**One host has one; the other two have none** — which is why nobody hit this: on two of three
+hosts the unit loop is complete, and the fleet looks uniform until you ask each process who owns it.
+
+### And the backticks in my own `say` lines were command substitution
+
+```
+== and the nodes NO UNIT OWNS —  above cannot reach these ==
+scripts/relaunch-fleet-wipe.sh: line 135: stop: command not found
+```
+
+I wrote ``say "… `stop` above cannot reach these"`` with markdown in mind. **Inside double quotes
+those are a subshell**, so the word vanished from the output and the shell tried to run `stop`.
+**Third backtick substitution tonight**, after the two commit messages — and the tell is the same
+each time: *a word missing from the output, and an error about a command nobody invoked.*

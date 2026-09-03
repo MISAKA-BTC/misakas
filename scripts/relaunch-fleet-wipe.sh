@@ -101,7 +101,38 @@ stop)
         done
     done
     say ""
+    say "== and the nodes NO UNIT OWNS — the unit loop above cannot reach these =="
+    # Measured 2026-09-03: ibm runs `kaspad.candidate` on /tmp/fpchk from
+    # `/user.slice/user-0.slice/session-28377.scope` — a LOGIN SESSION, not a service. Stopping
+    # every `.service` leaves it running, `verify` then refuses, and before this block the
+    # procedure had no next step: an operator who reads that refusal as a bug and wipes anyway
+    # defeats the entire point of the gate. Enumerate by EXECUTABLE basename, the way `census`
+    # does, and report the cgroup so the operator can see it is not a unit.
+    for h in "${HOSTS[@]}"; do
+        say "-- $h --"
+        found=$(r "$h" 'for d in /proc/[0-9]*; do
+                            exe=$(readlink -f "$d/exe" 2>/dev/null) || continue
+                            case "${exe##*/}" in kaspad*) ;; *) continue ;; esac
+                            cg=$(head -1 "$d/cgroup" 2>/dev/null)
+                            case "$cg" in *.service*) continue ;; esac
+                            echo "${d#/proc/} ${exe##*/} ${cg##*/}"
+                        done')
+        if [ -z "$found" ]; then
+            say "  none — every node here is owned by a unit"
+        else
+            printf '%s\n' "$found" | while read -r pid name cg; do
+                if [ "$EXECUTE" = 1 ]; then
+                    r "$h" "kill $pid" >/dev/null
+                    say "  killed pid $pid ($name, $cg)"
+                else
+                    say "  would kill pid $pid ($name, in $cg — NOT a service)"
+                fi
+            done
+        fi
+    done
+    say ""
     say "-- disable as well as stop: a unit that restarts on boot un-wipes the host."
+    say "-- a node no unit owns survives the unit loop entirely: that is what the block above is for."
     say "-- now run: $0 verify"
     ;;
 verify)
