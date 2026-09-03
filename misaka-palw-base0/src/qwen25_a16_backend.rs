@@ -1019,6 +1019,18 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
 
     fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
         let material = crate::produce::base0_material_decode_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+        // **ADR-0082 Decision 9: a class whose map is the tiled one is served FLAT.** The class's
+        // own declaration decides, not this executor's preference — a graph-v5 seat refuses the
+        // history, and serving it would be bytes spent on evidence nobody will read.
+        if crate::fp_interval::base0_fp_class_requires_flat_openings_v1(&self.profile) {
+            return crate::fp_interval::base0_open_fp_interval_chunkless_v1(
+                &material,
+                index,
+                prompt_token_ids,
+                self.checkpoint_interval(),
+            )
+            .map_err(|e| e.to_string());
+        }
         crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, self.checkpoint_interval())
             .map_err(|e| e.to_string())
     }
@@ -1031,15 +1043,71 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         prompt_token_ids: &[u32],
         work_leaves: u64,
     ) -> kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1 {
-        crate::fp_interval::base0_verify_fp_interval_opening_v1(
+        // The state this seat recomputed for this interval, if it did (ADR-0082 Decision 9). With
+        // one, the replay resumes from the seat's OWN bytes and a chunkless opening is evidence;
+        // without one, this is ADR-0077 Decision 8 unchanged.
+        let state = crate::fp_interval::base0_fp_interval_opening_seat_state_v1(opening, prompt_token_ids, self.checkpoint_interval());
+        crate::fp_interval::base0_verify_fp_interval_opening_with_state_v1(
             opening,
             claim,
             index,
             prompt_token_ids,
             work_leaves,
             self.checkpoint_interval(),
+            state.as_ref(),
             &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
         )
+        .to_consensus_v1()
+    }
+
+    /// **ADR-0082 Decision 9.** The job's prefix, teacher-forced on this seat's own kernels, and
+    /// the tiled root of the state it reaches — never a byte of the executor's history.
+    ///
+    /// The context is built exactly as [`Self::execute_free_prompt_streaming`] builds it, because
+    /// it must be the one the honest producer ran under: a context that differed would name a
+    /// different job, and the state kept for the row check that follows would be looked up under a
+    /// key no opening produces (which reads as `Unverifiable`, never as an accusation).
+    fn fp_recompute_checkpoint_root(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_token_ids: &[u32],
+        output_token_ids: &[u32],
+        decode_calls: u32,
+    ) -> Result<Hash64, String> {
+        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
+        self.artifact_read_probe_v1()?;
+        if !self.court_capable {
+            return Err("the v1 class commits no checkpoint leg, so it has no state root to recompute".to_string());
+        }
+        let class = PalwFpClassFactsV3 {
+            model_profile_id: self.shape_id,
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: self.shape_id,
+            shape_profile_id: self.class_profile_id,
+            cu_ruleset_id: Hash64::default(),
+        };
+        let shape = PalwFpRunFactsV3 {
+            decode_tokens_executed: job.decode_token_limit,
+            stop_reason: kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached,
+            full_logits_trace_root: Hash64::default(),
+            activation_leg_root: Hash64::default(),
+            checkpoint_leg_root: Hash64::default(),
+            step_leg_root: Hash64::default(),
+            step_leaf_count: 0,
+        };
+        let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
+        let mut kernels =
+            crate::fp_recompute::A16RecomputeKernelsV1::new(&self.artifact, self.plan.as_ref()).map_err(|e| e.to_string())?;
+        crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+            &self.profile,
+            &ctx,
+            prompt_token_ids,
+            output_token_ids,
+            decode_calls,
+            &mut kernels,
+        )
+        .map(|state| state.state_chunks_root)
+        .map_err(|e| e.to_string())
     }
 
     fn operand_openings_for(

@@ -70,6 +70,17 @@ use kaspa_hashes::Hash64;
 pub const PALW_BASE0_FP_INTERVAL_MAGIC_V1: [u8; 8] = *b"MSKFPIV1";
 pub const PALW_BASE0_FP_INTERVAL_VERSION_V1: u16 = 1;
 
+/// **The CHUNKLESS opening's magic** (ADR-0082 Decision 9): the same four things
+/// [`Base0FpIntervalOpeningV1`] carries, with the history removed from the third.
+///
+/// A separate magic rather than a version bump inside the v1 body, because the two forms are
+/// different EVIDENCE and a seat must be able to say which one it was handed before it parses a
+/// field: v1's anchor carries the state, v2's names it. A seat on an old executor still reads v1
+/// ([`base0_fp_interval_opening_decode_any_v1`]), and a graph-v5 class refuses v1 — the class's
+/// own bound, not the parser's.
+pub const PALW_BASE0_FP_INTERVAL_MAGIC_V2: [u8; 8] = *b"MSKFPIV2";
+pub const PALW_BASE0_FP_INTERVAL_VERSION_V2: u16 = 2;
+
 /// Why an interval cannot be opened, or an opening read. Plain enum, hand-written `Display` — the
 /// crate's idiom, and the reason [`crate::fp_capture::Base0SparseCaptureError`] states.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -383,6 +394,202 @@ impl Base0FpIntervalOpeningV1 {
     }
 }
 
+/// **A checkpoint NAMED rather than carried** (ADR-0082 Decision 9).
+///
+/// The leaf and its opening against `checkpoint_merkle_root` — everything that authenticates the
+/// state's committed root to the claim, and none of the state. The seat compares
+/// `leaf.state_chunks_root` against the root it computed for itself
+/// ([`crate::fp_recompute`]) and replays from its OWN chunks; the executor's chunks are never
+/// requested, so the history never travels.
+///
+/// 64 bytes of root plus a Merkle path at the checkpoint leg's depth, against
+/// `positions × 2 × kv_dim × 4 × layers` for the v1 form: 7.5 GB at 131,072 positions on the dense
+/// tier is the number Decision 9 was written for.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct Base0FpCheckpointClaimV1 {
+    pub leaf: kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2,
+    /// The leaf's opening against `binding.checkpoint_merkle_root`.
+    pub opening: kaspa_consensus_core::palw_step_leg::PalwStepOpeningV1,
+}
+
+/// **One checkpoint interval, opened WITHOUT the history** — the graph-v5 form.
+///
+/// Field for field [`Base0FpIntervalOpeningV1`], with `anchor` naming the checkpoint instead of
+/// carrying it. Every other term is already flat in the context: the range is one interval of
+/// committed rows, the seed row is one logits row, and the paths are logarithms.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct Base0FpIntervalOpeningV2 {
+    pub version: u16,
+    pub interval_index: u32,
+    pub binding: PalwStepBindingV2,
+    pub range: PalwStepRangeOpeningV1,
+    pub seed_row_leaf_count: u32,
+    pub seed_row_tiles: Vec<PalwStepTileLeafV1>,
+    /// The checkpoint at the interval's start, named. `None` for interval 0, which resumes from
+    /// the prompt and needs no anchor at all.
+    pub anchor: Option<Base0FpCheckpointClaimV1>,
+}
+
+impl Base0FpIntervalOpeningV2 {
+    pub fn encode_v1(&self) -> Result<Vec<u8>, Base0FpIntervalError> {
+        let body = borsh::to_vec(self).map_err(|_| Base0FpIntervalError::NotThisFamilysBytes)?;
+        let mut out = Vec::with_capacity(body.len() + PALW_BASE0_FP_INTERVAL_MAGIC_V2.len());
+        out.extend_from_slice(&PALW_BASE0_FP_INTERVAL_MAGIC_V2);
+        out.extend_from_slice(&body);
+        Ok(out)
+    }
+
+    pub fn decode_v1(bytes: &[u8]) -> Result<Self, Base0FpIntervalError> {
+        let body = bytes.strip_prefix(&PALW_BASE0_FP_INTERVAL_MAGIC_V2).ok_or(Base0FpIntervalError::NotThisFamilysBytes)?;
+        let decoded: Self = borsh::from_slice(body).map_err(|_| Base0FpIntervalError::NotThisFamilysBytes)?;
+        if decoded.version != PALW_BASE0_FP_INTERVAL_VERSION_V2 {
+            return Err(Base0FpIntervalError::NotThisFamilysBytes);
+        }
+        Ok(decoded)
+    }
+
+    /// The v1 form with its history dropped — the executor's cheap route to serving a graph-v5
+    /// seat from the retention it already builds, and the reason the two forms cannot disagree
+    /// about anything but the anchor.
+    pub fn from_chunked_v1(opening: &Base0FpIntervalOpeningV1) -> Self {
+        Self {
+            version: PALW_BASE0_FP_INTERVAL_VERSION_V2,
+            interval_index: opening.interval_index,
+            binding: opening.binding.clone(),
+            range: opening.range.clone(),
+            seed_row_leaf_count: opening.seed_row_leaf_count,
+            seed_row_tiles: opening.seed_row_tiles.clone(),
+            anchor: opening.anchor.as_ref().map(|a| Base0FpCheckpointClaimV1 { leaf: a.leaf.clone(), opening: a.opening.clone() }),
+        }
+    }
+}
+
+/// Either form, as a seat receives it. A seat on an old executor still reads v1; a graph-v5 class
+/// refuses it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Base0FpIntervalOpeningAnyV1 {
+    /// ADR-0077 Decision 8: the checkpoint chunk travels. For an attention family that chunk is
+    /// the history.
+    WithHistory(Box<Base0FpIntervalOpeningV1>),
+    /// ADR-0082 Decision 9: the checkpoint is named and the seat holds the state.
+    Recomputed(Box<Base0FpIntervalOpeningV2>),
+}
+
+/// Decode whichever form arrived. The magic decides, so nothing is mis-parsed as the other.
+pub fn base0_fp_interval_opening_decode_any_v1(bytes: &[u8]) -> Result<Base0FpIntervalOpeningAnyV1, Base0FpIntervalError> {
+    if bytes.starts_with(&PALW_BASE0_FP_INTERVAL_MAGIC_V2) {
+        return Ok(Base0FpIntervalOpeningAnyV1::Recomputed(Box::new(Base0FpIntervalOpeningV2::decode_v1(bytes)?)));
+    }
+    Ok(Base0FpIntervalOpeningAnyV1::WithHistory(Box::new(Base0FpIntervalOpeningV1::decode_v1(bytes)?)))
+}
+
+impl Base0FpIntervalOpeningAnyV1 {
+    /// **The checkpoint this opening's interval resumes from, as the CLAIM commits it** — the
+    /// index and the state's root, for the 64-byte comparison a seat makes against its own
+    /// recompute. `None` for interval 0, which has no checkpoint before it.
+    ///
+    /// It is read out of both forms because the comparison is the same one either way: what
+    /// changes between them is whether the executor also shipped the bytes the root is of.
+    pub fn committed_checkpoint_v1(&self) -> Option<(u32, Hash64)> {
+        match self {
+            Self::WithHistory(o) => o.anchor.as_ref().map(|a| (a.leaf.checkpoint_index, a.leaf.state_chunks_root)),
+            Self::Recomputed(o) => o.anchor.as_ref().map(|a| (a.leaf.checkpoint_index, a.leaf.state_chunks_root)),
+        }
+    }
+
+    /// Which form this was, for a log line and for the class bound that refuses one of them.
+    pub fn carries_the_history(&self) -> bool {
+        matches!(self, Self::WithHistory(_))
+    }
+}
+
+/// **What an opening SAYS its interval resumes from** — the checkpoint index, the decode call it
+/// covers, and the state root committed for it (ADR-0082 Decision 9).
+///
+/// This is what a seat reads BEFORE it recomputes: the covered call says how far to run, and the
+/// root is what the recompute is compared against. `None` for interval 0, which starts at the
+/// prompt, and for bytes that are not an opening.
+///
+/// **Everything here is the executor's word until the replay checks it.** The covered call is
+/// re-derived from the geometry inside
+/// [`base0_verify_fp_interval_opening_with_state_v1`] and an opening that named another one is
+/// refused there — so a lie costs this seat one recompute and buys nothing. A caller that wants
+/// the cheap half of that guard bounds `covered_decode_call` by the job's own decode count before
+/// it spends the pass.
+pub fn base0_fp_interval_opening_anchor_v1(opening_bytes: &[u8]) -> Option<(u32, u32, Hash64)> {
+    let any = base0_fp_interval_opening_decode_any_v1(opening_bytes).ok()?;
+    let (index, root) = any.committed_checkpoint_v1()?;
+    let covered = match &any {
+        Base0FpIntervalOpeningAnyV1::WithHistory(o) => o.anchor.as_ref().map(|a| a.leaf.covered_decode_call),
+        Base0FpIntervalOpeningAnyV1::Recomputed(o) => o.anchor.as_ref().map(|a| a.leaf.covered_decode_call),
+    }?;
+    Some((index, covered, root))
+}
+
+/// **The state this seat already recomputed for the interval this opening is of**, if it has one
+/// (ADR-0082 Decision 9).
+///
+/// The opening says which class, which job and which interval; the covered call follows from the
+/// geometry; and the seat's own recompute is looked up under exactly those. `None` means this seat
+/// has not run the job — the row check then has no state to resume from and files `Unverifiable`,
+/// which is honest and is not an accusation.
+///
+/// One place, because both families ask the same question and a family that asked it its own way
+/// would be a family whose seat resumed from a state computed for another call.
+pub fn base0_fp_interval_opening_seat_state_v1(
+    opening_bytes: &[u8],
+    prompt_token_ids: &[u32],
+    family_checkpoint_interval: u32,
+) -> Option<crate::fp_recompute::Base0FpSeatStateV1> {
+    let any = base0_fp_interval_opening_decode_any_v1(opening_bytes).ok()?;
+    let binding = match &any {
+        Base0FpIntervalOpeningAnyV1::WithHistory(o) => &o.binding,
+        Base0FpIntervalOpeningAnyV1::Recomputed(o) => &o.binding,
+    };
+    let index = match &any {
+        Base0FpIntervalOpeningAnyV1::WithHistory(o) => o.interval_index,
+        Base0FpIntervalOpeningAnyV1::Recomputed(o) => o.interval_index,
+    };
+    let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, family_checkpoint_interval).ok()?;
+    let covered = geometry.anchor_covered_call(index)?;
+    crate::fp_recompute::base0_fp_seat_state_held_v1(&binding.shape_profile, &binding.job_context, prompt_token_ids, covered)
+}
+
+/// **Which classes may not be served the history** (ADR-0082 Decision 9, Decision 4).
+///
+/// The TILED maps are the graph-v5 declaration — `tiled_kv_state_chunk_map_id_v3` and the hybrid
+/// composition over it — and a class that registers one has declared that its cache is addressed a
+/// history tile at a time precisely so that nothing carries the history. Read off the class's own
+/// profile rather than passed in: the rule belongs to the class, and a caller that could pass
+/// `false` would be a caller that could spend the bytes Decision 9 exists to save.
+pub fn base0_fp_class_requires_flat_openings_v1(profile: &PalwShapeProfileV3) -> bool {
+    use kaspa_consensus_core::palw_state_chunk_map as map;
+    profile.state_chunk_map_id == map::tiled_kv_state_chunk_map_id_v3()
+        || profile.state_chunk_map_id == map::hybrid_state_chunk_map_id_v3()
+}
+
+/// **The committed root of a set of state chunks under a class's map** — the two consensus
+/// functions `Base0CheckpointCaptureV1::push_chunks` calls, spelled once.
+///
+/// Both directions of Decision 9 go through it: the seat's own recompute
+/// ([`crate::fp_recompute::base0_fp_recompute_state_v1`]) and the check that an executor's carried
+/// anchor is the binding's ([`checkpoint_anchor_is_the_bindings_v1`]). A second spelling would be
+/// a second opinion about what a producer committed, and the two would agree until the day the
+/// map's leaf rule moved.
+pub fn base0_state_chunks_root_v1(map_id: &Hash64, chunks: &[Vec<u8>]) -> Result<Hash64, Base0FpIntervalError> {
+    use kaspa_consensus_core::palw_step_leg::{
+        PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES, PALW_STEP_LEG_MAX_STATE_CHUNKS, state_chunk_leaf_hash_v1, state_chunks_root_v1,
+    };
+    // The leg's own caps, applied before a byte is hashed. On the seat's own chunks they can only
+    // fire for a class whose map asks for more than the leg carries; on a stranger's they are the
+    // reason a seat does not hash a gigabyte to learn the opening was never admissible.
+    if chunks.len() > PALW_STEP_LEG_MAX_STATE_CHUNKS || chunks.iter().any(|c| c.len() > PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES) {
+        return Err(Base0FpIntervalError::Leg("the state chunks are outside the leg's caps".to_string()));
+    }
+    let hashes: Vec<Hash64> = chunks.iter().enumerate().map(|(i, bytes)| state_chunk_leaf_hash_v1(map_id, i as u32, bytes)).collect();
+    state_chunks_root_v1(&hashes).map_err(|e| Base0FpIntervalError::Leg(format!("{e:?}")))
+}
+
 // ---------------------------------------------------------------------------------------------
 // The executor's side
 // ---------------------------------------------------------------------------------------------
@@ -501,6 +708,26 @@ pub fn base0_open_fp_interval_v1(
         anchor,
     }
     .encode_v1()
+}
+
+/// **Open interval `index` WITHOUT its history** (ADR-0082 Decision 9, executor half).
+///
+/// The same opening [`base0_open_fp_interval_v1`] builds, with the anchor's chunks dropped: what
+/// the seat gets is the checkpoint's leaf and its Merkle opening, which name the state's committed
+/// root, and the seat computes the state itself. Bytes stop depending on `n_ctx`.
+///
+/// Built by stripping the chunked form rather than by a second assembly. The strip happens inside
+/// this process and nothing extra leaves it, and the property that matters — the two forms agree
+/// about every field a seat checks — is then structural instead of tested.
+pub fn base0_open_fp_interval_chunkless_v1(
+    material: &Base0RetainedMaterialV1,
+    index: u32,
+    prompt_token_ids: &[u32],
+    family_checkpoint_interval: u32,
+) -> Result<Vec<u8>, Base0FpIntervalError> {
+    let bytes = base0_open_fp_interval_v1(material, index, prompt_token_ids, family_checkpoint_interval)?;
+    let chunked = Base0FpIntervalOpeningV1::decode_v1(&bytes)?;
+    Base0FpIntervalOpeningV2::from_chunked_v1(&chunked).encode_v1()
 }
 
 /// **The committed checkpoint covering `covered`, as the operands an anchored replay resumes
@@ -664,9 +891,123 @@ pub fn base0_verify_fp_interval_opening_v1<K: Base0FpIntervalKernelsV1>(
     family_checkpoint_interval: u32,
     kernels: &K,
 ) -> PalwFpIntervalVerdictV1 {
+    base0_verify_fp_interval_opening_with_state_v1(
+        opening_bytes,
+        claim,
+        index,
+        prompt_token_ids,
+        work_leaves,
+        family_checkpoint_interval,
+        None,
+        kernels,
+    )
+    .to_consensus_v1()
+}
+
+/// **What a seat concluded about one interval, with the checkpoint named** (ADR-0082 Decision 9).
+///
+/// [`PalwFpIntervalVerdictV1`] plus the one thing Decision 9 adds: the recomputed state root did
+/// not equal the committed one. That is not a leaf fault — no leaf has been compared yet — and it
+/// is not "another claim's opening" either; it is the seat saying the checkpoint the executor
+/// committed is not the state this job reaches, with both roots in hand for whoever opens a court.
+///
+/// It lives here rather than in the consensus enum because a seat's verdict shape is a family
+/// concern and the consensus type is a contract three crates share. [`Self::to_consensus_v1`] is
+/// the projection the backend seam takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Base0FpIntervalSeatVerdictV1 {
+    Valid,
+    Fault {
+        leaf_index: u64,
+    },
+    /// The seat's own recompute of the state at this checkpoint does not have the root the claim
+    /// committed. The seat files NOTHING and may open a court, as any bonded challenger may.
+    CheckpointRootMismatch {
+        checkpoint_index: u32,
+        covered_decode_call: u32,
+        committed: Hash64,
+        recomputed: Hash64,
+    },
+    /// The class registers a tiled map — a graph-v5 row — and the opening carried the history
+    /// anyway. Refused rather than replayed: the whole content of Decision 9 is that a seat's
+    /// bytes do not grow with the context, and a seat that accepts the history has spent them.
+    HistoryNotAdmissible,
+    Mismatch,
+    Unverifiable,
+}
+
+impl Base0FpIntervalSeatVerdictV1 {
+    /// **The projection onto the seam's four arms.**
+    ///
+    /// A checkpoint-root mismatch projects to `Fault` at the interval's first leaf — the same
+    /// treatment the panel gives a row that did not match: file nothing, open a court. It is the
+    /// nearest true arm, and the reason the rich verdict exists is that "nearest" loses the
+    /// checkpoint's name, which the caller that can log it takes from
+    /// [`Self::CheckpointRootMismatch`] directly.
+    pub fn to_consensus_v1(&self) -> PalwFpIntervalVerdictV1 {
+        match self {
+            Self::Valid => PalwFpIntervalVerdictV1::Valid,
+            Self::Fault { leaf_index } => PalwFpIntervalVerdictV1::Fault { leaf_index: *leaf_index },
+            Self::CheckpointRootMismatch { .. } | Self::HistoryNotAdmissible => PalwFpIntervalVerdictV1::Unverifiable,
+            Self::Mismatch => PalwFpIntervalVerdictV1::Mismatch,
+            Self::Unverifiable => PalwFpIntervalVerdictV1::Unverifiable,
+        }
+    }
+}
+
+/// **Replay one opened interval from the seat's OWN state** (ADR-0082 Decision 9), or from the
+/// executor's carried chunks when there is no own state (ADR-0077 Decision 8, unchanged).
+///
+/// `state` is what [`crate::fp_recompute::base0_fp_recompute_state_v1`] returned for this
+/// interval's start. When it is present:
+///
+/// * the committed checkpoint is compared against it — 64 bytes, and a disagreement is named
+///   rather than replayed past;
+/// * the replay resumes from the seat's own chunks, so nothing the executor asserts about the
+///   state enters the comparison;
+/// * a CHUNKLESS opening ([`Base0FpIntervalOpeningV2`]) is admissible, which is what makes the
+///   bytes a seat fetches independent of the context.
+///
+/// When it is absent the chunked form's own anchor is used and this is exactly the ADR-0077
+/// behaviour, which is why one body serves both: "the two forms agree on honest material" is a
+/// property of one implementation rather than a comparison of two.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_verify_fp_interval_opening_with_state_v1<K: Base0FpIntervalKernelsV1>(
+    opening_bytes: &[u8],
+    claim: PalwClaimRootsV1,
+    index: u32,
+    prompt_token_ids: &[u32],
+    work_leaves: u64,
+    family_checkpoint_interval: u32,
+    state: Option<&crate::fp_recompute::Base0FpSeatStateV1>,
+    kernels: &K,
+) -> Base0FpIntervalSeatVerdictV1 {
     // Bytes that are not this family's are bytes this seat cannot check — never an accusation.
-    let Ok(opening) = Base0FpIntervalOpeningV1::decode_v1(opening_bytes) else {
-        return PalwFpIntervalVerdictV1::Unverifiable;
+    let Ok(any) = base0_fp_interval_opening_decode_any_v1(opening_bytes) else {
+        return Base0FpIntervalSeatVerdictV1::Unverifiable;
+    };
+    // The chunkless form is evidence only for a seat that holds the state; one arriving at a seat
+    // that does not is bytes this seat cannot check, and saying so is not an accusation.
+    let carried = match &any {
+        Base0FpIntervalOpeningAnyV1::WithHistory(o)
+            if base0_fp_class_requires_flat_openings_v1(&o.binding.shape_profile) && o.anchor.is_some() =>
+        {
+            return Base0FpIntervalSeatVerdictV1::HistoryNotAdmissible;
+        }
+        // Borrowed, never copied: the thing this arm holds is the history, and a seat that
+        // duplicated it in memory would have paid the bytes twice.
+        Base0FpIntervalOpeningAnyV1::WithHistory(o) => Some(o.as_ref()),
+        // …but interval 0 needs no state: it resumes from the PROMPT, which the seat holds
+        // anyway, so a flat opening of it is complete evidence for a seat that has recomputed
+        // nothing. Refusing it here was refusing the one interval every job has.
+        Base0FpIntervalOpeningAnyV1::Recomputed(o) if state.is_none() && o.anchor.is_some() => {
+            return Base0FpIntervalSeatVerdictV1::Unverifiable;
+        }
+        Base0FpIntervalOpeningAnyV1::Recomputed(_) => None,
+    };
+    let opening = match &any {
+        Base0FpIntervalOpeningAnyV1::WithHistory(o) => Base0FpIntervalOpeningV2::from_chunked_v1(o),
+        Base0FpIntervalOpeningAnyV1::Recomputed(o) => o.as_ref().clone(),
     };
     let binding = &opening.binding;
     // A binding that does not recompute its own committed root is bound to nothing; so is one
@@ -679,22 +1020,22 @@ pub fn base0_verify_fp_interval_opening_v1<K: Base0FpIntervalKernelsV1>(
         || binding.step_leaf_count != work_leaves
         || opening.interval_index != index
     {
-        return PalwFpIntervalVerdictV1::Mismatch;
+        return Base0FpIntervalSeatVerdictV1::Mismatch;
     }
     let profile = &binding.shape_profile;
     let ctx = &binding.job_context;
     if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != ctx.prompt_token_ids_hash {
-        return PalwFpIntervalVerdictV1::Mismatch;
+        return Base0FpIntervalSeatVerdictV1::Mismatch;
     }
     let Ok(geometry) = Base0FpIntervalGeometryV1::from_binding_v1(binding, family_checkpoint_interval) else {
-        return PalwFpIntervalVerdictV1::Mismatch;
+        return Base0FpIntervalSeatVerdictV1::Mismatch;
     };
     let Ok(leaves_geometry) = base0_fp_interval_leaves_v1(profile, ctx, &geometry, index) else {
-        return PalwFpIntervalVerdictV1::Mismatch;
+        return Base0FpIntervalSeatVerdictV1::Mismatch;
     };
     let (Some((first_call, last_call)), count) = (geometry.calls_for(index), leaves_geometry.range_end - leaves_geometry.range_first)
     else {
-        return PalwFpIntervalVerdictV1::Mismatch;
+        return Base0FpIntervalSeatVerdictV1::Mismatch;
     };
 
     // The range must be the one this interval canonically has — an opening of some other window
@@ -704,12 +1045,12 @@ pub fn base0_verify_fp_interval_opening_v1<K: Base0FpIntervalKernelsV1>(
         || opening.seed_row_leaf_count as u64 != leaves_geometry.seed_row_leaves
         || opening.seed_row_tiles.len() as u64 != leaves_geometry.seed_row_leaves
     {
-        return PalwFpIntervalVerdictV1::Mismatch;
+        return Base0FpIntervalSeatVerdictV1::Mismatch;
     }
     // …and it must open against the step leg the binding committed.
     match step_range_opening_root_v1(binding.step_leaf_count, &opening.range) {
         Ok(root) if root == binding.step_merkle_root => {}
-        _ => return PalwFpIntervalVerdictV1::Mismatch,
+        _ => return Base0FpIntervalSeatVerdictV1::Mismatch,
     }
 
     // The id the interval CONSUMED, derived from the anchor call's committed logits row.
@@ -720,52 +1061,90 @@ pub fn base0_verify_fp_interval_opening_v1<K: Base0FpIntervalKernelsV1>(
     let start = match geometry.anchor_covered_call(index) {
         None => Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt_usize },
         Some(covered) => {
-            let Some(seed_token) = seed_token_from_opened_row_v1(profile, ctx, &opening, covered, leaves_geometry.range_first) else {
-                return PalwFpIntervalVerdictV1::Mismatch;
+            let Some(seed_token) = seed_token_from_opened_row_v1(
+                profile,
+                ctx,
+                &opening.seed_row_tiles,
+                &opening.range,
+                covered,
+                leaves_geometry.range_first,
+            ) else {
+                return Base0FpIntervalSeatVerdictV1::Mismatch;
             };
-            let Some(anchor) = opening.anchor.as_ref() else {
-                return PalwFpIntervalVerdictV1::Mismatch;
+            let Some(claimed) = opening.anchor.as_ref() else {
+                return Base0FpIntervalSeatVerdictV1::Mismatch;
             };
-            if !checkpoint_anchor_is_the_bindings_v1(binding, anchor, covered) {
-                return PalwFpIntervalVerdictV1::Mismatch;
+            // The checkpoint the opening NAMES must be the claim's, whichever form carried it.
+            if !checkpoint_claim_is_the_bindings_v1(binding, &claimed.leaf, &claimed.opening, covered) {
+                return Base0FpIntervalSeatVerdictV1::Mismatch;
             }
-            Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: &anchor.chunks, seed_token }
+            match state {
+                // **ADR-0082 Decision 9: the seat's state is its own.** 64 bytes decide whether
+                // the executor's checkpoint is the state this job reaches; nothing about the
+                // state is taken from the opening, and a disagreement is named — with the
+                // checkpoint's index and both roots — rather than replayed past.
+                Some(own) => {
+                    if own.covered_decode_call != covered {
+                        return Base0FpIntervalSeatVerdictV1::Unverifiable;
+                    }
+                    if own.state_chunks_root != claimed.leaf.state_chunks_root {
+                        return Base0FpIntervalSeatVerdictV1::CheckpointRootMismatch {
+                            checkpoint_index: claimed.leaf.checkpoint_index,
+                            covered_decode_call: covered,
+                            committed: claimed.leaf.state_chunks_root,
+                            recomputed: own.state_chunks_root,
+                        };
+                    }
+                    Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: &own.chunks, seed_token }
+                }
+                // ADR-0077 Decision 8, unchanged: no own state, so the carried chunks are the
+                // only state there is — and they must re-derive the root the leaf commits.
+                None => {
+                    let Some(anchor) = carried.and_then(|o| o.anchor.as_ref()) else {
+                        return Base0FpIntervalSeatVerdictV1::Mismatch;
+                    };
+                    if !checkpoint_anchor_is_the_bindings_v1(binding, anchor, covered) {
+                        return Base0FpIntervalSeatVerdictV1::Mismatch;
+                    }
+                    Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: &anchor.chunks, seed_token }
+                }
+            }
         }
     };
 
     let Ok(recomputed) = kernels.replay_interval(profile, ctx, &start, first_call, last_call) else {
         // The seat could not run the interval — its honest `Unverifiable`, and never an
         // accusation against a producer whose material may be perfectly good.
-        return PalwFpIntervalVerdictV1::Unverifiable;
+        return Base0FpIntervalSeatVerdictV1::Unverifiable;
     };
 
     // **Exact equality, leaf by leaf.** The class is a pinned integer computation, so "close" is
     // not a verdict (ADR-0026's refused proof model). The first disagreement is the court's
     // question and is returned as one; it convicts nobody.
     let Some(committed) = opening.range.leaf_hashes.get(leaves_geometry.seed_row_leaves as usize..) else {
-        return PalwFpIntervalVerdictV1::Mismatch;
+        return Base0FpIntervalSeatVerdictV1::Mismatch;
     };
     let mut seen = 0u64;
     for (index, hash) in &recomputed {
         let Some(offset) = index.checked_sub(leaves_geometry.interval_first) else {
             // A replay leaf outside the interval means this seat's window and the committed range
             // disagree about the enumeration — not something to accuse anyone of.
-            return PalwFpIntervalVerdictV1::Unverifiable;
+            return Base0FpIntervalSeatVerdictV1::Unverifiable;
         };
         let Some(want) = committed.get(offset as usize) else {
-            return PalwFpIntervalVerdictV1::Unverifiable;
+            return Base0FpIntervalSeatVerdictV1::Unverifiable;
         };
         if want != hash {
-            return PalwFpIntervalVerdictV1::Fault { leaf_index: *index };
+            return Base0FpIntervalSeatVerdictV1::Fault { leaf_index: *index };
         }
         seen += 1;
     }
     if seen != committed.len() as u64 {
         // The replay did not reach every committed leaf of the interval; a partial check is not a
         // verdict, so it is reported as one it cannot make.
-        return PalwFpIntervalVerdictV1::Unverifiable;
+        return Base0FpIntervalSeatVerdictV1::Unverifiable;
     }
-    PalwFpIntervalVerdictV1::Valid
+    Base0FpIntervalSeatVerdictV1::Valid
 }
 
 /// The id the interval's first call consumed, read off the anchor call's committed logits row.
@@ -777,7 +1156,8 @@ pub fn base0_verify_fp_interval_opening_v1<K: Base0FpIntervalKernelsV1>(
 fn seed_token_from_opened_row_v1(
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
-    opening: &Base0FpIntervalOpeningV1,
+    seed_row_tiles: &[PalwStepTileLeafV1],
+    range: &PalwStepRangeOpeningV1,
     anchor_call: u32,
     range_first: u64,
 ) -> Option<u32> {
@@ -785,9 +1165,9 @@ fn seed_token_from_opened_row_v1(
     let profile_hash = profile.shape_profile_id();
     let slot = logits_node_slot_v1(profile);
     let mut row: Vec<i32> = Vec::new();
-    for (tile_index, leaf) in opening.seed_row_tiles.iter().enumerate() {
+    for (tile_index, leaf) in seed_row_tiles.iter().enumerate() {
         let want_index = range_first + tile_index as u64;
-        if step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf) != *opening.range.leaf_hashes.get(tile_index)? {
+        if step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf) != *range.leaf_hashes.get(tile_index)? {
             return None;
         }
         if leaf.coord.call_index != anchor_call || leaf.coord.node_slot != slot || leaf.coord.position != 0 {
@@ -811,43 +1191,46 @@ fn seed_token_from_opened_row_v1(
 /// against `checkpoint_merkle_root`, its chunks re-derive its own `state_chunks_root`, and it
 /// covers exactly the decode call the geometry names.
 fn checkpoint_anchor_is_the_bindings_v1(binding: &PalwStepBindingV2, anchor: &PalwCheckpointKvOperandsV1, covered: u32) -> bool {
-    use kaspa_consensus_core::palw_step_leg::{
-        PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES, PALW_STEP_LEG_MAX_STATE_CHUNKS, checkpoint_leaf_hash_v2, state_chunk_leaf_hash_v1,
-        state_chunks_root_v1, step_opening_root_v1,
-    };
-    if anchor.leaf.covered_decode_call != covered || anchor.leaf.state_chunk_count as usize != anchor.chunks.len() {
+    if anchor.leaf.state_chunk_count as usize != anchor.chunks.len() {
         return false;
     }
-    // **The leg's own caps, applied before the chunks are hashed and long before they are
-    // restored into a cache.** They arrived inside a stranger's opening; `state_chunks_root_v1`
-    // enforces the count and the engine's restore enforces the geometry, but both are downstream
-    // of the work, and a seat should not do a gigabyte of hashing to learn that an opening was
-    // never admissible.
-    if anchor.chunks.len() > PALW_STEP_LEG_MAX_STATE_CHUNKS
-        || anchor.chunks.iter().any(|c| c.len() > PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES)
-    {
-        return false;
-    }
-    let chunk_hashes: Vec<Hash64> = anchor
-        .chunks
-        .iter()
-        .enumerate()
-        .map(|(i, bytes)| state_chunk_leaf_hash_v1(&binding.state_chunk_map_id, i as u32, bytes))
-        .collect();
-    let Ok(state_root) = state_chunks_root_v1(&chunk_hashes) else {
+    // **The served chunks must re-derive the root the leaf commits.** The check the CHUNKLESS
+    // form does not need and this one cannot do without: resuming from unchecked state would let
+    // a producer that lied about a step hand over a state consistent with the lie.
+    let Ok(state_root) = base0_state_chunks_root_v1(&binding.state_chunk_map_id, &anchor.chunks) else {
         return false;
     };
     if state_root != anchor.leaf.state_chunks_root {
         return false;
     }
+    checkpoint_claim_is_the_bindings_v1(binding, &anchor.leaf, &anchor.opening, covered)
+}
+
+/// **The checkpoint NAMED by an opening is the one the claim committed** — the half of the check
+/// above that does not touch the state, and the whole of it for a chunkless opening (ADR-0082
+/// Decision 9).
+///
+/// Its leaf opens against `checkpoint_merkle_root` and it covers exactly the decode call the
+/// geometry names. What it does NOT establish is that `state_chunks_root` is the root of the state
+/// the job actually reaches — no opening can, because that is arithmetic — and under Decision 9
+/// that is precisely what the seat's own recompute answers.
+fn checkpoint_claim_is_the_bindings_v1(
+    binding: &PalwStepBindingV2,
+    leaf: &kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2,
+    opening: &kaspa_consensus_core::palw_step_leg::PalwStepOpeningV1,
+    covered: u32,
+) -> bool {
+    use kaspa_consensus_core::palw_step_leg::{checkpoint_leaf_hash_v2, step_opening_root_v1};
+    if leaf.covered_decode_call != covered {
+        return false;
+    }
     let ctx_hash = binding.job_context.context_hash();
-    let leaf_hash =
-        checkpoint_leaf_hash_v2(&ctx_hash, &binding.checkpoint_profile.profile_hash(), &binding.state_chunk_map_id, &anchor.leaf);
-    if anchor.opening.leaf_hash != leaf_hash {
+    let leaf_hash = checkpoint_leaf_hash_v2(&ctx_hash, &binding.checkpoint_profile.profile_hash(), &binding.state_chunk_map_id, leaf);
+    if opening.leaf_hash != leaf_hash {
         return false;
     }
     matches!(
-        step_opening_root_v1(binding.checkpoint_count as u64, &anchor.opening),
+        step_opening_root_v1(binding.checkpoint_count as u64, opening),
         Ok(root) if root == binding.checkpoint_merkle_root
     )
 }
@@ -1363,6 +1746,361 @@ mod tests {
             format!("{long_verdict:?}"),
             format!("{anchored_verdict:?}"),
             "the anchored form must reach the SAME verdict as the long one — otherwise a challenger picks the route that convicts"
+        );
+    }
+
+    // =============================================================================================
+    // ADR-0082 Decision 9 (invariant Z5, unit U-05): the seat recomputes, and never fetches the history
+    // =============================================================================================
+
+    use crate::fp_recompute::{Base0FpRecomputeError, Base0FpRecomputeKernelsV1, base0_fp_recompute_state_v1};
+
+    /// The floor's kernels for a RECOMPUTE — the same engine and cache its capture path uses, with
+    /// nothing captured and no token selected. The dense and hybrid tiers ship theirs in
+    /// `crate::fp_recompute`; this one exists because the floor's fixture is the class in this
+    /// file's tests, and it drives exactly the same shared driver.
+    struct FloorRecompute<'a> {
+        engine: crate::engine::Base0Engine<'a>,
+        cache: crate::engine::KvCache,
+        artifact: &'a crate::artifact::Base0ArtifactV1,
+    }
+
+    impl<'a> FloorRecompute<'a> {
+        fn new(artifact: &'a crate::artifact::Base0ArtifactV1) -> Self {
+            Self { engine: crate::engine::Base0Engine::new(artifact), cache: crate::engine::KvCache::new(artifact), artifact }
+        }
+    }
+
+    impl Base0FpRecomputeKernelsV1 for FloorRecompute<'_> {
+        fn forward_no_capture(&mut self, token: usize, position: usize) -> Result<(), Base0FpRecomputeError> {
+            self.engine
+                .forward_token(&mut self.cache, token, position)
+                .map(|_| ())
+                .map_err(|e| Base0FpRecomputeError::Engine(format!("{e:?}")))
+        }
+
+        fn state_chunks(&self, profile: &PalwShapeProfileV3, positions: u32) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
+            let _ = self.artifact;
+            let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions)
+                .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")))?;
+            let mut chunks = Vec::with_capacity(geometry.chunk_count() as usize);
+            for index in 0..geometry.chunk_count() {
+                let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
+                    .ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
+                chunks.push(
+                    self.cache.state_chunk_bytes(&entry).ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?,
+                );
+            }
+            Ok(chunks)
+        }
+    }
+
+    /// The seat's own state at one interval's start, computed the way Decision 9 says: the prompt
+    /// it holds and the committed output ids, teacher-forced, with the family's own kernels.
+    fn seat_state(
+        material: &Base0RetainedMaterialV1,
+        artifact: &crate::artifact::Base0ArtifactV1,
+        prompt_ids: &[u32],
+        covered: u32,
+    ) -> crate::fp_recompute::Base0FpSeatStateV1 {
+        let binding = &material.0;
+        let mut kernels = FloorRecompute::new(artifact);
+        base0_fp_recompute_state_v1(&binding.shape_profile, &binding.job_context, prompt_ids, &material.3, covered, &mut kernels)
+            .expect("the seat can run the floor")
+    }
+
+    /// **(a) Z5's first half: the root a seat recomputes IS the checkpoint the executor committed,
+    /// at every interval of a multi-interval job.**
+    ///
+    /// Nothing about the executor's state is read: the comparison is between 64 bytes the claim
+    /// commits and 64 bytes this process computed from the prompt and the answer's ids.
+    #[test]
+    fn the_recomputed_root_is_the_committed_checkpoint_at_every_interval() {
+        let (material, _claim, ids, artifact) = floor_material(3, 4);
+        let binding = &material.0;
+        let geometry =
+            Base0FpIntervalGeometryV1::from_binding_v1(binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("a geometry");
+        assert!(geometry.interval_count > 1, "the fixture must have at least one checkpoint-anchored interval");
+        let checkpoints = crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(
+            &binding.job_context,
+            &binding.shape_profile,
+            &binding.checkpoint_profile,
+            &material.4,
+        )
+        .expect("the executor's own leg");
+        let mut checked = 0;
+        for index in 1..geometry.interval_count {
+            let covered = geometry.anchor_covered_call(index).expect("an anchored interval");
+            let state = seat_state(&material, &artifact, &ids, covered);
+            let committed = checkpoints
+                .leaves
+                .iter()
+                .find(|l| l.covered_decode_call == covered)
+                .unwrap_or_else(|| panic!("the executor committed a checkpoint at call {covered}"));
+            assert_eq!(
+                state.state_chunks_root, committed.state_chunks_root,
+                "interval {index}: the seat's own recompute must reach the committed state root"
+            );
+            // …and it is the executor's own spelling that produced both, not two hashes that
+            // happen to agree today.
+            assert_eq!(
+                base0_state_chunks_root_v1(&binding.state_chunk_map_id, &state.chunks).expect("a root"),
+                committed.state_chunks_root
+            );
+            checked += 1;
+        }
+        assert!(checked > 0);
+    }
+
+    /// **(e) The two forms agree on honest material**, and the chunkless one is what a graph-v5
+    /// seat is served: the same interval, replayed from the seat's own recomputed state, reaches
+    /// the same verdict as the ADR-0077 replay fed the executor's chunks.
+    #[test]
+    fn the_seats_own_state_and_the_carried_chunks_reach_the_same_verdict() {
+        let (material, claim, ids, artifact) = floor_material(3, 4);
+        let binding = &material.0;
+        let geometry =
+            Base0FpIntervalGeometryV1::from_binding_v1(binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("a geometry");
+        for index in 0..geometry.interval_count {
+            let chunked = base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
+                .expect("the chunked form opens");
+            let flat = base0_open_fp_interval_chunkless_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
+                .expect("the flat form opens");
+            let state = geometry.anchor_covered_call(index).map(|covered| seat_state(&material, &artifact, &ids, covered));
+            let with_history = base0_verify_fp_interval_opening_with_state_v1(
+                &chunked,
+                claim,
+                index,
+                &ids,
+                binding.step_leaf_count,
+                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+                None,
+                &FloorKernels(&artifact),
+            );
+            let recomputed = base0_verify_fp_interval_opening_with_state_v1(
+                &flat,
+                claim,
+                index,
+                &ids,
+                binding.step_leaf_count,
+                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+                state.as_ref(),
+                &FloorKernels(&artifact),
+            );
+            assert_eq!(with_history, Base0FpIntervalSeatVerdictV1::Valid, "interval {index}, the carried form");
+            assert_eq!(recomputed, Base0FpIntervalSeatVerdictV1::Valid, "interval {index}, from the seat's own state");
+        }
+    }
+
+    /// **(b) A tampered checkpoint is refused, and the refusal NAMES it.**
+    ///
+    /// The producer is honest about its own bytes: one cache row is changed and the whole
+    /// commitment is RE-DERIVED from the corrupted chunks, so its roots are self-consistent and
+    /// every check that reads the opening against the claim passes. The only thing that catches it
+    /// is arithmetic nobody can fake — the seat running the job — and what comes back names the
+    /// checkpoint, the call it covers, and both roots.
+    #[test]
+    fn a_tampered_checkpoint_is_refused_and_the_refusal_names_it() {
+        let (honest, _claim, ids, artifact) = floor_material(3, 4);
+        let binding = &honest.0;
+        let geometry =
+            Base0FpIntervalGeometryV1::from_binding_v1(binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("a geometry");
+        let index = 1;
+        let covered = geometry.anchor_covered_call(index).expect("an anchored interval");
+
+        // One byte of one cache row, and then the producer's own commitment over it.
+        let mut chunks = honest.4.clone();
+        chunks[0][0][0] ^= 0x01;
+        let checkpoints = crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(
+            &binding.job_context,
+            &binding.shape_profile,
+            &binding.checkpoint_profile,
+            &chunks,
+        )
+        .expect("the corrupted leg still builds");
+        let tiles = crate::legs::Base0StepTilesV1 {
+            tiles: honest.1.clone(),
+            leaves: {
+                let ctx_hash = binding.job_context.context_hash();
+                let profile_hash = binding.shape_profile.shape_profile_id();
+                let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
+                for (at, leaf) in &honest.1 {
+                    if let Some(slot) = leaves.get_mut(*at as usize) {
+                        *slot = step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+                    }
+                }
+                leaves
+            },
+        };
+        let lying = crate::legs::base0_binding_from_capture_v1(
+            &binding.shape_profile,
+            &binding.job_context,
+            &tiles,
+            &checkpoints,
+            binding.full_logits_trace_root,
+            binding.activation_leg_root,
+        )
+        .expect("the liar's own binding");
+        let claim = PalwClaimRootsV1 {
+            execution_root: lying.committed_execution_root,
+            trace_root: lying.full_logits_trace_root,
+            anchor: lying.job_context.job_id,
+        };
+        let material: Base0RetainedMaterialV1 = (lying, honest.1.clone(), honest.2.clone(), honest.3.clone(), chunks);
+        let opening = base0_open_fp_interval_chunkless_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
+            .expect("the liar serves an opening");
+        let state = seat_state(&material, &artifact, &ids, covered);
+        let verdict = base0_verify_fp_interval_opening_with_state_v1(
+            &opening,
+            claim,
+            index,
+            &ids,
+            material.0.step_leaf_count,
+            PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+            Some(&state),
+            &FloorKernels(&artifact),
+        );
+        match verdict {
+            Base0FpIntervalSeatVerdictV1::CheckpointRootMismatch { checkpoint_index, covered_decode_call, committed, recomputed } => {
+                assert_eq!(covered_decode_call, covered, "the refusal names the call the checkpoint covers");
+                assert_eq!(checkpoint_index, 0, "the fixture's first checkpoint is the one that was tampered with");
+                assert_ne!(committed, recomputed, "the two roots the refusal carries are the two that disagree");
+                assert_eq!(recomputed, state.state_chunks_root, "the recomputed root is the seat's own");
+            }
+            other => panic!("a checkpoint the job does not reach must be named, not {other:?}"),
+        }
+        // And the ONE thing it is not: a conviction. The seam sees a verdict that files nothing.
+        assert_eq!(verdict.to_consensus_v1(), PalwFpIntervalVerdictV1::Unverifiable);
+    }
+
+    /// **(c) Z5's bytes: what a seat fetches does not carry the history, and the history is what
+    /// grows with the context.**
+    ///
+    /// Measured at two contexts on real captures. The assertion is an INEQUALITY, not a number:
+    /// the flat opening's growth from the narrow context to the wide one is strictly smaller than
+    /// the carried form's, by at least the state both checkpoints hold — and the flat form carries
+    /// no state at all, which is the structural half of the same statement.
+    #[test]
+    fn the_bytes_a_seat_fetches_do_not_carry_the_history() {
+        let measure = |prefill: u32, decode: u32| {
+            let (material, _claim, ids, _artifact) = floor_material(prefill, decode);
+            let index = 1;
+            let chunked = base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
+                .expect("the chunked form opens");
+            let flat = base0_open_fp_interval_chunkless_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
+                .expect("the flat form opens");
+            let decoded = Base0FpIntervalOpeningV2::decode_v1(&flat).expect("the flat form decodes");
+            let state_bytes: usize = Base0FpIntervalOpeningV1::decode_v1(&chunked)
+                .expect("decodes")
+                .anchor
+                .map(|a| a.chunks.iter().map(Vec::len).sum())
+                .unwrap_or(0);
+            assert!(decoded.anchor.is_some(), "the interval is checkpoint-anchored at both contexts");
+            (chunked.len(), flat.len(), state_bytes)
+        };
+        let (chunked_narrow, flat_narrow, state_narrow) = measure(3, 4);
+        let (chunked_wide, flat_wide, state_wide) = measure(11, 4);
+
+        println!(
+            "seat bytes per opening: narrow context carried {chunked_narrow} / flat {flat_narrow} (state {state_narrow}); \
+             wide context carried {chunked_wide} / flat {flat_wide} (state {state_wide})"
+        );
+        assert!(state_wide > state_narrow, "the fixture must actually widen the history ({state_narrow} → {state_wide})");
+        // **The difference between the two forms IS the history**, at both contexts: the flat one
+        // is the carried one minus the state, plus the few bytes borsh spends on lengths.
+        const ENCODING_SLACK: usize = 256;
+        for (chunked, flat, state) in [(chunked_narrow, flat_narrow, state_narrow), (chunked_wide, flat_wide, state_wide)] {
+            assert!(
+                chunked - flat >= state && chunked - flat <= state + ENCODING_SLACK,
+                "the flat form must drop exactly the state ({chunked} − {flat} against {state})"
+            );
+        }
+        // …so what a seat fetches grows strictly more slowly with the context than the history
+        // does. An inequality, not a number: the remaining growth is the committed ROWS and the
+        // paths, which are the two terms Z5 names, and neither is the state.
+        assert!(
+            flat_wide.saturating_sub(flat_narrow) < chunked_wide.saturating_sub(chunked_narrow),
+            "what a seat fetches must grow more slowly with the context than the history does \
+             (flat {flat_narrow} → {flat_wide}, carried {chunked_narrow} → {chunked_wide})"
+        );
+    }
+
+    /// **(d) A family that cannot serve the class refuses BY NAME, and the seat files
+    /// `Incapable`.**
+    ///
+    /// The shipped hybrid is exactly this class: it registers the checkpoint sentinel, commits no
+    /// checkpoint leg, and therefore has no state root for a seat to compare against. Saying so is
+    /// the honest verdict (ADR-0075: a row nobody can seat certifies nothing); inventing a root
+    /// would be the dishonest one.
+    #[test]
+    fn a_class_that_commits_no_checkpoint_refuses_by_name() {
+        let (artifact, mut profile, ctx, prompt) = floor_job(3, 4);
+        profile.state_chunk_map_id = Hash64::default();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut kernels = FloorRecompute::new(&artifact);
+        let refusal = base0_fp_recompute_state_v1(&profile, &ctx, &ids, &[1, 2, 3, 4], 1, &mut kernels).expect_err("refused");
+        assert_eq!(refusal, Base0FpRecomputeError::NoStateChunkMapRegistered);
+        assert!(
+            refusal.to_string().contains("no state chunk map"),
+            "the refusal a seat turns into `Incapable` must say what is missing: {refusal}"
+        );
+    }
+
+    /// **The ids the recompute is teacher-forced on are checked, not taken.**
+    ///
+    /// A prompt that is not the job's is refused before a single forward runs — the same rule the
+    /// opener and the refutation both state — because a seat that recomputed from another list
+    /// would compare honest arithmetic on a different job against this claim's checkpoint and call
+    /// the producer a liar.
+    #[test]
+    fn a_recompute_refuses_ids_that_are_not_the_jobs() {
+        let (artifact, profile, ctx, prompt) = floor_job(3, 4);
+        let mut wrong: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        wrong[0] = wrong[0].wrapping_add(1);
+        let mut kernels = FloorRecompute::new(&artifact);
+        assert_eq!(
+            base0_fp_recompute_state_v1(&profile, &ctx, &wrong, &[1, 2, 3, 4], 1, &mut kernels).expect_err("refused"),
+            Base0FpRecomputeError::PromptIdsAreNotTheJobs
+        );
+        // And an answer too short to teacher-force the calls asked for is a refusal too, rather
+        // than a run that quietly fed zeros.
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut kernels = FloorRecompute::new(&artifact);
+        assert_eq!(
+            base0_fp_recompute_state_v1(&profile, &ctx, &ids, &[], 1, &mut kernels).expect_err("refused"),
+            Base0FpRecomputeError::OutputIdsTooShort { need: 1, got: 0 }
+        );
+    }
+
+    /// **A graph-v5 class refuses an opening that carries the history** — which form the class
+    /// requires is the class's own declaration (the tiled map), not a server's preference.
+    #[test]
+    fn a_tiled_class_refuses_an_opening_that_carries_the_history() {
+        let (material, claim, ids, artifact) = floor_material(3, 4);
+        let binding = &material.0;
+        let index = 1;
+        let chunked =
+            base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("the chunked form opens");
+        let mut decoded = Base0FpIntervalOpeningV1::decode_v1(&chunked).expect("decodes");
+        // The class declares the tiled map — Decision 4's graph-v5 declaration.
+        decoded.binding.shape_profile.state_chunk_map_id =
+            kaspa_consensus_core::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3();
+        assert!(base0_fp_class_requires_flat_openings_v1(&decoded.binding.shape_profile));
+        let state = seat_state(&material, &artifact, &ids, 1);
+        assert_eq!(
+            base0_verify_fp_interval_opening_with_state_v1(
+                &decoded.encode_v1().expect("re-encodes"),
+                claim,
+                index,
+                &ids,
+                binding.step_leaf_count,
+                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+                Some(&state),
+                &FloorKernels(&artifact),
+            ),
+            Base0FpIntervalSeatVerdictV1::HistoryNotAdmissible,
+            "a class whose map is the tiled one is not served the history, and a seat that took it \
+             would have spent the bytes Decision 9 exists to save"
         );
     }
 }

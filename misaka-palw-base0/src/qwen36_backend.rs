@@ -1089,6 +1089,12 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             .checkpoint_interval()
             .ok_or_else(|| "this backend serves no registered graph, so it opens no interval".to_string())?;
         let material = crate::produce::base0_material_decode_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+        // ADR-0082 Decision 9, as the dense tier does it: the class's registered map decides
+        // whether the history travels.
+        if self.profile.as_ref().is_some_and(crate::fp_interval::base0_fp_class_requires_flat_openings_v1) {
+            return crate::fp_interval::base0_open_fp_interval_chunkless_v1(&material, index, prompt_token_ids, interval)
+                .map_err(|e| e.to_string());
+        }
         crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, interval).map_err(|e| e.to_string())
     }
 
@@ -1103,15 +1109,68 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let (Some(interval), Some(plan)) = (self.checkpoint_interval(), self.plan.as_ref()) else {
             return kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1::Unverifiable;
         };
-        crate::fp_interval::base0_verify_fp_interval_opening_v1(
+        let state = crate::fp_interval::base0_fp_interval_opening_seat_state_v1(opening, prompt_token_ids, interval);
+        crate::fp_interval::base0_verify_fp_interval_opening_with_state_v1(
             opening,
             claim,
             index,
             prompt_token_ids,
             work_leaves,
             interval,
+            state.as_ref(),
             &Qwen36IntervalKernels { artifact: &self.artifact, plan },
         )
+        .to_consensus_v1()
+    }
+
+    /// **ADR-0082 Decision 9, the hybrid's half.**
+    ///
+    /// The forward is this class's own planned walk. Whether a root comes out of it is the
+    /// CLASS's answer: the shipped hybrid registers the checkpoint sentinel and commits no
+    /// checkpoint at all, so this refuses by name and a seat files `Incapable` — the honest
+    /// verdict for a row this family cannot seat (ADR-0075). A class that registers the recurrence
+    /// map gets a real root; the hybrid composition is refused by name until the side that
+    /// registers it spells the order its two halves compose in.
+    fn fp_recompute_checkpoint_root(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_token_ids: &[u32],
+        output_token_ids: &[u32],
+        decode_calls: u32,
+    ) -> Result<Hash64, String> {
+        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
+        self.artifact_read_probe_v1()?;
+        let (Some(profile), Some(plan)) = (self.profile.as_ref(), self.plan.as_ref()) else {
+            return Err("this backend serves no registered graph, so it recomputes no state".to_string());
+        };
+        let class = PalwFpClassFactsV3 {
+            model_profile_id: self.shape_id,
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: self.shape_id,
+            shape_profile_id: self.class_profile_id,
+            cu_ruleset_id: Hash64::default(),
+        };
+        let shape = PalwFpRunFactsV3 {
+            decode_tokens_executed: job.decode_token_limit,
+            stop_reason: kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached,
+            full_logits_trace_root: Hash64::default(),
+            activation_leg_root: Hash64::default(),
+            checkpoint_leg_root: Hash64::default(),
+            step_leg_root: Hash64::default(),
+            step_leaf_count: 0,
+        };
+        let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
+        let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan);
+        crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+            profile,
+            &ctx,
+            prompt_token_ids,
+            output_token_ids,
+            decode_calls,
+            &mut kernels,
+        )
+        .map(|state| state.state_chunks_root)
+        .map_err(|e| e.to_string())
     }
 
     fn operand_openings_for(
