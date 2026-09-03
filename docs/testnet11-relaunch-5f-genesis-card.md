@@ -5011,3 +5011,17 @@ step 6 check whether the bond outpoints (…:0, …:1) and the fee outpoint (…
 citations against HEAD (cited set == resolved set) and still prints its "at least one does not exist"
 summary — the checker's summary logic is wrong, not the citations. A tool built to catch a class of
 defect carrying one of its own in the verdict line; fixed after the announcement, not before.
+
+## STEP 4 GREEN: the release binary of the cut booted in isolation and printed the cut's fingerprint
+
+```
+18:54:34  [INFO] Consensus params fingerprint: 2222e054f87bed7a33e9c017f5403cd52070d0778776b5bd78143e7f82ff92b7 (network testnet-11)
+verdict   fingerprint OK — and NOT "BOOT FAILED": the corrected script checks liveness and scans for
+          `panicked at` before writing any verdict; M-07 did not fire
+genesis   the node prints no genesis-hash line; the genesis is proven by M-07's silence at boot plus
+          every_genesis_commits_to_the_premine_this_build_mints and test_genesis_hashes green on 5f
+```
+
+Three readings of the one value that moved: the pin test's `got` on the merged tree, the mechanism at
+`params.rs:3058`, and now a node's own line from the release binary on another machine. The un-re-pinned
+binary printed `a5291e00…` and died under M-07 an hour earlier; this one printed `2222e054…` and lived.
