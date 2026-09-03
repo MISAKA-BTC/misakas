@@ -853,6 +853,32 @@ produces it on every machine simultaneously.* Six of the ignored tests are being
 reasoning: the three IBD-participation cases, and the three pow-driver ones — including
 `a_dead_agent_costs_a_delay_and_not_a_tag`, because **a wipe is every agent dying at once.**
 
+**ALL THREE PROPERTIES THIS NIGHT MANUFACTURES ARE NOW MEASURED, AND ALL THREE ARE GREEN.**
+
+    a node killed partway through recovery comes back safe   impl 41e364b6   242s, 7 restarts
+    a stronger chain found during IBD wins                   d7957910       609s
+    bootstrap recovery crosses a provisional pruning point   d7957910       620s
+
+**The third is the scar.** A joining node crossing a provisional pruning point is exactly where this
+project put a node into permanent quarantine before. It passes.
+
+*The two on `d7957910` are one merge behind impl; IBD participation is not a surface FH, FH2 or the
+fmt touches. Caveat stated, not discovered.*
+
+**AND THE IGNORE STRING ITSELF CARRIED A CLAIM NOBODY WAS CHECKING.** Those two tests are marked:
+
+    #[ignore = "passes; opt-in because it takes ~6 minutes — run with --include-ignored"]
+
+They took **10.2 minutes each** — the stated runtime is 70% low. That is trivial. **The word
+`passes` is not.** It is an assertion about the *result*, living on the one test that never runs to
+produce a result — and it is read at exactly the moment someone is deciding not to run the thing
+that would check it. Had these started failing, the attribute would still have said `passes`, and
+the next person weighing the cost would have read a reassurance.
+
+**An `#[ignore]` reason may say WHY. It must not say what the result would be.** That is the
+favourable-staleness shape one level further in than a document, and worse placed: a stale doc is
+read by someone reading; a stale ignore string is read by someone deciding *not* to look.
+
 **RUN, AND GREEN — on the cut tree, with the duration proving it ran.**
 
     impl 41e364b6
