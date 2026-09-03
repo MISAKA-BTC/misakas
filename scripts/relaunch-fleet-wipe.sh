@@ -14,6 +14,14 @@
 #     appdir under /var/lib/misaka-minerpool/ that no `.t11` glob finds)
 #   - the dnsseeders are part of the wipe (a surviving seeder hands new joiners
 #     old-genesis peers, so a newcomer's first contact is the dead chain)
+#   - units are listed with `--plain --all`, never the default. Without --plain a FAILED
+#     unit's name is the bullet glyph; without --all the listing omits every unit that is
+#     enabled but not running right now. Measured on ibm, 2026-09-03, with the naive form:
+#         misaka-miner       inactive  ENABLED    <- absent from the listing
+#         misaka-validator   inactive  ENABLED    <- absent from the listing
+#         palw-ibd-join      failed    transient  <- listed as "●"
+#     An enabled-but-inactive unit is exactly the one that comes back at the next boot,
+#     after the appdirs are moved aside, on a host everybody believes is wiped.
 #
 #   usage: scripts/relaunch-fleet-wipe.sh census        # what is out there, changes nothing
 #          scripts/relaunch-fleet-wipe.sh stop [--execute]
