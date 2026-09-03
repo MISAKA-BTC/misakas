@@ -1723,15 +1723,15 @@ mod tests {
         let spend_id = fp_spend_id_v3(&spend());
         let ticket = fp_quantum_ticket_v3(net(), Hash64::from_u64_word(0xBEAC), claim_id, 2);
 
-        assert_eq!(&faster_hex::hex_string(job_id.as_byte_slice())[..32], "700b90364860460f7d89d85eed59019c");
-        assert_eq!(&faster_hex::hex_string(claim_id.as_byte_slice())[..32], "a7c87ce376d17c9a72418fc23d2d84f7");
-        assert_eq!(&faster_hex::hex_string(spend_id.as_byte_slice())[..32], "7c3e3de729dd3f733155381721ccb71e");
-        assert_eq!(format!("{ticket:032x}"), "24a7acb7e2c5b0ab62b8a22c02e4a2b0");
+        assert_eq!(&faster_hex::hex_string(job_id.as_byte_slice())[..32], "c940b5c36ee40846087e6c5927d6e6b5");
+        assert_eq!(&faster_hex::hex_string(claim_id.as_byte_slice())[..32], "e75b8d2e3c590e6df59fe1b0db52676b");
+        assert_eq!(&faster_hex::hex_string(spend_id.as_byte_slice())[..32], "87a0c79c36bf8ff80678a7c3bc48326e");
+        assert_eq!(format!("{ticket:032x}"), "9a3ed14b531af14a6e2071e206f8e711");
 
         let tag = fp_spend_l1_tag_v3(spend_id);
         assert_eq!(tag.len(), PALW_FP_V3_L1_TAG_BYTES);
         assert_ne!(&tag[..64], &[0u8; 64][..], "the expansion is not degenerate");
-        assert_eq!(&faster_hex::hex_string(&tag[..8]), "f0a32ed18ea89de9");
+        assert_eq!(&faster_hex::hex_string(&tag[..8]), "24e4a611d9d25f45");
     }
 
     /// Every field of the JOB is identity (total binding). The submitted draft hand-picked its

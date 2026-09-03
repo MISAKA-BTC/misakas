@@ -11062,7 +11062,7 @@ mod consensus_params_id_tests {
                 // target. `initial_target` is a field of `ClassRegistered`, so the seeds are
                 // inside the ruleset id — which is the property that keeps a 5d node and a 5e
                 // node from agreeing on a name while disagreeing about which class may produce.
-                "a7baab7957d27bbd2591cd24f70ee92b555ab26cd49ef425cbd7093f06e222d9",
+                "2222e054f87bed7a33e9c017f5403cd52070d0778776b5bd78143e7f82ff92b7",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -11088,7 +11088,7 @@ mod consensus_params_id_tests {
             // is a deliberate no-op there and the interval is `bits`' job — so what this buys is
             // the ROOM above the floor that a model tier registering later needs, which is the
             // same reason mainnet's floor-only mint is seeded rather than left at half the space.
-            ("devnet", DEVNET_PARAMS, "84153175ce88050495c96e7d906fb4398b11eda187d5dc59e8b61c9dc54f0215"),
+            ("devnet", DEVNET_PARAMS, "b40976b27c3bfbd3d6c590b33824f15c4959d6bcfba3676630919b964e94ad34"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

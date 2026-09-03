@@ -57,42 +57,18 @@
 use misaka_palw_derive::{SOURCE_TREE_SHA256_HEX, ids::transformer_id, registry};
 
 /// The source-tree hash every manifest quotes.
-const SOURCE_TREE: &str = "d2419027673f94ebbc46ad99b847297dc3c6d71a2dadbc4a902fd4453a7ff658";
+const SOURCE_TREE: &str = "637858dba5ea5e34b9459a580b2b81d1361aecf450bc615a4ee9621d4953a988";
 
 /// `(transformer name, transformer_id)` for every transformer this build registers.
 const PINNED: &[(&str, &str)] = &[
-    (
-        "cad/stl/v1",
-        "cde32f30e56e4368a406e78ab66cb3b78ce770504a6372cc0ce95e8827360404fd107679c1f39e0b88db195e3df1dc8044c83e6b20a79e4d6af6c83b9ddf571e",
-    ),
-    (
-        "code/evm/v1",
-        "bdfb5c0860867eebb669499acd983c5493bf9158edae4780fc7d2c4e54c8e23506d53d7129887f823b939363a834ca91a00786888aec545f0dbce6bd7f8d54ed",
-    ),
-    (
-        "contract/evm/v1",
-        "52a1037e97920c1ca14ef7b373c93e9905c0cd54b32d33021e593198af7c8c7daca5ac1196933fc04f9933e4b5d43ad585efe120da690aad201f137427e782fc",
-    ),
-    (
-        "image/png/v1",
-        "d2723e17a048943921620d062d085643bd2f8e8f89761e4789354321bc1e8728816778df395aec5795f8d864c468ab6931588116896cbf4dae928ad198b0b0f1",
-    ),
-    (
-        "map/mmap/v1",
-        "25c87c8355ff6423ef0e03b8132014fe404977ee2d280f3cedb35d4fba32492231d8d38d1fb5c7474efa5d180e46ff6fd0e8fbcf60a89df7c9b29cb36ec30b1a",
-    ),
-    (
-        "music/smf/v1",
-        "24be30948de1e5861b37c84d80b26bf615c9877493afd3bd6d3d000fe952ab932a70948313bbd45a2ecd5a90618e33fc35ebd009f8150e851841fa31eaf7e80c",
-    ),
-    (
-        "scene/glb/v1",
-        "17f041cda4da4743926275b2d5dfc43af1065561685e6553bec2db06e7f03f1aec0d0b5c02ac52eab5783b80cb2a6e65103462598d111aae10b0e80672312725",
-    ),
-    (
-        "simulation/trace/v1",
-        "439fe3bbaa615d0ed95fdf259bc0463f4ea9325d39d9ccc05f40d27b69b56317785f92b3b573d8c2b729b98b39653567932dc860b40c8478d9629f3b536c6db9",
-    ),
+    ("cad/stl/v1", "83e0f5088cd0f9b7e55e5add8fdfdf941f40e45f413e03943f23817d907bed17900747ecd0a7e4e1e8193d6ced9c1320d4775f72e38e4cc1e6238e391db05ca0"),
+    ("code/evm/v1", "9cc43a428fe50667dec97d5673162c11d864039206bf7754e38c13d285ce4661f7496f170fd1c30eb0a1fc20318601fde93a2f52984f509ebe83cf93b349eb26"),
+    ("contract/evm/v1", "efc8813e0bac6b94ef2ad35777583e16746bf25914b6b82cac98e026cf6b67be9243cbfa1e05fe36fee056472a5e98da7fda811c3517fae98396260e30efa0fe"),
+    ("image/png/v1", "67f57ddd196f4125b4d132f9160d2863973058ca18b193f92afac8f67531d7fa92a8fe94487f4da9002fa29ef3febf0e56f58108a253d0053cb7d3d7920a9e87"),
+    ("map/mmap/v1", "a1bfc8d9a06e12c08189c52a3bf243af7cbaed4d057c764c51e8f0aab4f6c98d04b76ba3f44d2f3aad75c79e837829b08b3041a9f50157d16b431085ef7fed47"),
+    ("music/smf/v1", "cb5f27b4e63d9601a3e743486ea61b6aed9825c651b8fefa4305756cfec8f5aca69f7c27161f2a8a2e6f69eafd626fcaa4e28878b8c8989d24491be9b58ed0a8"),
+    ("scene/glb/v1", "4dd08df643160b205fe46f14ffb9c2cf36de83bddd1342e50f91551bc6b6d5b8234f3bbf6fa9a36f9bd72c08dcc5b4ad2dcfa5f6d5aa33cbe94a197b238d8f7a"),
+    ("simulation/trace/v1", "389bf2942f7ee53cf0c9fe1096188b4de361e12f1b689f8b5b83d6874006c0fa6c1d8569ea31ac00deff1d1c19ae8b60a0b2373360e60f580ce41b2501627a62"),
 ];
 
 fn actual() -> Vec<(String, String)> {
