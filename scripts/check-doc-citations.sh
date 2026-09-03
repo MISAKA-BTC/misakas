@@ -45,8 +45,15 @@ while read -r cite; do
     if [ -z "$full" ]; then
         printf '  %-44s !! NO SUCH FILE\n' "$cite"; rc=1; continue
     fi
-    if [ -n "$tree" ]; then line=$(git show "$tree:$full" | sed -n "${n}p")
-    else line=$(sed -n "${n}p" "$root/$full"); fi
+    # `"${tree}:${full}"` and NOT `"$tree:consensus/..."`. Under zsh a `:` directly
+    # after a parameter expansion begins a history modifier, and `c` is one of them —
+    # so `"$b:consensus/x.rs"` expands to `palw-adr0082-implonsensus/x.rs`, git show
+    # fails on a ref that never existed, and a piped `grep -c` reports 0 matches from
+    # a command that never opened the file. It reads as evidence of ABSENCE and prints
+    # no error anywhere. This repo's most-cited directory is `consensus/`, so the trap
+    # fires on the common case. Keep both sides braced. (Found by session 1c.)
+    if [ -n "$tree" ]; then line=$(git show "${tree}:${full}" | sed -n "${n}p")
+    else line=$(sed -n "${n}p" "${root}/${full}"); fi
     if [ -z "$line" ]; then
         printf '  %-44s !! LINE %s OUT OF RANGE (%s)\n' "$cite" "$n" "$full"; rc=1; continue
     fi
