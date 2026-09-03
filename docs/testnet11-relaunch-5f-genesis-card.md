@@ -18,6 +18,30 @@ Stating it as a rule and not as history matters, because the previous page said 
 "has not moved since 5c, only the ruleset over it" — true as history, and read as a promise it was
 never making.
 
+### The name is already contested, and the relaunch adds one more claimant
+
+Measured on the live fleet, six hours of `misaka-t11-node0`'s own log:
+
+    genesis mismatches      3,793
+    consensus params mismatches   735
+    distinct foreign genesis hashes seen   at least four
+      4b619a1a…  1,440     8d2002cc…  1,396  (Relaunch 4's)
+      c664a224…    612     08e9c8a4…    345  (this node's own, seen from the other side)
+    the node's own peers    3 of 8 outgoing, inbound accepted
+
+So the node is **not** isolated — it has working peers — and at the same time it is rejecting
+thousands of dials from nodes that answer to `misaka-testnet-11` and build on something else. **At
+least four chains share this network name right now**, and 5f will be the fifth.
+
+Two consequences for the announcement, neither optional:
+
+1. **A joiner must wipe.** Not "should" — an old appdir cannot handshake, and the failure it prints
+   is a genesis or params mismatch, which reads like a bug in the new build rather than the expected
+   result of not wiping.
+2. **The old chains keep answering.** Somebody who points an old node at a seed will keep syncing
+   something, and it will not be this network. The genesis hash is the only thing that tells them
+   apart, so it belongs in the announcement as a value to check, not as trivia.
+
 ---
 
 ## 1. Fences to arm at genesis
