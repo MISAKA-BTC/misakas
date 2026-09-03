@@ -3332,9 +3332,13 @@ pub fn palw_court_close_min_fee_v1(chunks: u64) -> u64 {
 
 /// **Collect [`palw_close_assembly_deposit_v1`] from the bond that backed it** (ADR-0080 W10).
 ///
-/// Called on every path that ends a group WITHOUT a verdict — the sweep's lapse and the completing
-/// chunk's undecodable assembly — and on no path that ends one with a verdict, which is the whole of
-/// "junk pays; honesty is refunded" with nothing moved at declaration time.
+/// **One caller, and that is the point** (audit H-2b): [`TransitionBuilder::write_court`]'s removal
+/// block, which is the single funnel every one of the five session endings goes through. Before
+/// that it was called from `convict_close_declarer_v1` alone, so the two endings that reached that
+/// function charged and the other three did not — a rule stated in one place and enforced in two of
+/// five. A group still in the table when its session ends did not deliver the close it pinned; the
+/// one that did removes itself first ([`TransitionBuilder::end_close_group_delivered`]), which is
+/// the whole of "junk pays; honesty is refunded" with nothing moved at declaration time.
 ///
 /// `slash_bond` clamps to the collateral that is actually there, and the declaration gate refuses a
 /// deposit its bond cannot cover, so the clamp is a belt on a rule already checked rather than the
@@ -3376,9 +3380,14 @@ fn convict_close_declarer_v1(
 ) -> Result<(), PalwStateV2Error> {
     let session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
     let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
-    // Before `write_court`, which deletes the group the deposit is recorded on.
-    forfeit_close_deposit_v1(builder, session_id, side)?;
-    builder.write_court(session_id, None);
+    // **The deposit is not taken here any more, and that is the fix rather than an omission**
+    // (audit H-2b/L-9). This used to call `forfeit_close_deposit_v1` for `side` alone and then
+    // remove the session, which meant two things: every OTHER ending of a session collected
+    // nothing, and where both sides had declared, the side this conviction does not route to had
+    // its row deleted for free. `write_court`'s removal block now charges every group that is
+    // still standing when the session ends, so this call site charges `side` exactly as before
+    // AND the other side, and so does every ending that never reached this function.
+    builder.write_court(session_id, None)?;
     match side {
         PalwCourtSideV1::Executor => {
             // The same treatment a proven fault gets, for the reason the rung sweep gives an
@@ -3404,8 +3413,8 @@ pub fn palw_court_close_chunk_digest_v1(bytes: &[u8]) -> Hash64 {
     finish(state)
 }
 
-/// **Is this object court CPU a block has to spend before it can be relayed?** (ADR-0080 design
-/// A W9, extended by ADR-0082 Decision 2.)
+/// **Is this dissection move court CPU a block has to spend before it can be relayed?** (ADR-0080
+/// design A W9, extended by ADR-0082 Decision 2; audit C-1.)
 ///
 /// A dissection move is graded in the block that carries it: a round's fold is checked before the
 /// challenger may move, a root claim opens the phase against a proven artifact and a verified
@@ -3414,16 +3423,70 @@ pub fn palw_court_close_chunk_digest_v1(bytes: &[u8]) -> Hash64 {
 /// ([`PALW_COURT_CLOSE_MAX_PER_BLOCK`]) rather than given a second budget of its own — two
 /// budgets for one resource is two answers to "how much court may one block ask for".
 ///
+/// # It reads STATE, and the predecessor that did not was the hole
+///
+/// This replaces a bare `matches!` on the enum variant. On the lifecycle band admission is
+/// stateless — `CourtAttnRootClaimed` asks only `!signature.is_empty()` — so
+/// `CourtAttnRootClaimed { session_id: 0, signature: vec![1] }` first in the transaction order
+/// spent the whole NETWORK's single slot on the variant alone and was only then dropped by
+/// acceptance. One minimum-fee transaction per block therefore denied every close completion on
+/// the chain, and a close denied for the `4 x count` DAA of its assembly window is not a delay
+/// but the conviction of the party that filed it ([`convict_close_declarer_v1`]).
+///
+/// So it asks what its sibling [`palw_court_close_completes_a_group_v1`] asks, against the same
+/// folded state: does the session exist, is the phase open (or, for move 1, openable), and does
+/// the mover owe the turn. Every one of those is a refusal the fold makes on the move's face, in
+/// the fold's own order, and every one of them costs nothing to make.
+///
+/// What it deliberately does NOT ask is anything the WORK answers — the fold check, the artifact
+/// openings, the finalization, the child's range. Those are the work the slot exists to bound, so
+/// a block that asks every validator for them has spent the slot whichever way they come out.
+/// That is the line `palw_court_close_completes_a_group_v1` draws for the close half, and it is
+/// drawn here for the same reason.
+///
+/// The mover's SIGNATURE is not asked here and is not missing: `palw_v2_validate_objects` verifies
+/// it (and the k-ary fence) before the caller counts, which is what makes an unauthenticated move
+/// unable to reach the counter at all.
+///
 /// Drop-not-invalidate, at the caller: admission on the lifecycle band is stateless, so a second
 /// carrier relays and mines freely and invalidating would make honest miners produce the invalid
 /// blocks (audit M-01's shape).
-pub fn palw_court_move_is_court_cpu_v1(object: &PalwConsensusObjectV2) -> bool {
-    matches!(
-        object,
-        PalwConsensusObjectV2::CourtAttnRootClaimed { .. }
-            | PalwConsensusObjectV2::CourtAttnDissected { .. }
-            | PalwConsensusObjectV2::CourtAttnChildChosen { .. }
-    )
+pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &PalwConsensusObjectV2) -> bool {
+    use crate::palw_bisect::PalwBisectTurnV1;
+    let session_id = match object {
+        PalwConsensusObjectV2::CourtAttnRootClaimed { session_id, .. }
+        | PalwConsensusObjectV2::CourtAttnDissected { session_id, .. }
+        | PalwConsensusObjectV2::CourtAttnChildChosen { session_id, .. } => session_id,
+        _ => return false,
+    };
+    let Some(session) = state.court_session(session_id) else {
+        return false;
+    };
+    match object {
+        // Move 1 OPENS the phase, so what it needs is a phase not open yet and a ladder that has
+        // narrowed to the leaf a dissection is about — `DissectionAlreadyOpen` and
+        // `LadderNotTerminal`, the fold's own first two refusals.
+        PalwConsensusObjectV2::CourtAttnRootClaimed { root, .. } => {
+            session.dissection.is_none()
+                && session.ladder.terminal_index().is_some()
+                && root.version == crate::palw_attn_dissect::PALW_ATTN_DISSECT_OBJECT_VERSION_V1
+        }
+        // Move 2 is the responder's, and only when the responder owes it.
+        PalwConsensusObjectV2::CourtAttnDissected { round, .. } => session.dissection.as_ref().is_some_and(|phase| {
+            round.version == crate::palw_attn_dissect::PALW_ATTN_DISSECT_OBJECT_VERSION_V1
+                && phase.turn() == PalwBisectTurnV1::AwaitDisclosure
+                && round.children.len() == phase.child_ranges().len()
+        }),
+        // Move 3 is the challenger's, at the round the phase is actually at.
+        PalwConsensusObjectV2::CourtAttnChildChosen { choice, .. } => session.dissection.as_ref().is_some_and(|phase| {
+            choice.version == crate::palw_attn_court_v1::PALW_ATTN_COURT_OBJECT_VERSION_V1
+                && choice.session_id == *session_id
+                && phase.turn() == PalwBisectTurnV1::AwaitVerdict
+                && choice.round == phase.round()
+                && (choice.child as usize) < phase.child_ranges().len()
+        }),
+        _ => false,
+    }
 }
 
 /// **Will this object complete a declared close, and therefore be assembled, decoded and
@@ -3493,8 +3556,16 @@ pub fn palw_court_close_completes_a_group_v1(state: &PalwChainStateV2, object: &
 /// **What that costs, measured rather than waved at.** A live group at the ruleset's 27 chunks is
 /// up to 2.7 MB inside `collection_root`, which re-serializes and re-hashes every entry of every
 /// collection on every `state_root` — the same cost `pending_chunks` already pays at 800 KB. The
-/// bound is the number of live groups, which is two per open session, and the assembly window
-/// (`4 × count`, at most 108 DAA) is what keeps it short-lived.
+/// bound is the number of live groups, which is two per open session.
+///
+/// **And the assembly window is what keeps it short-lived — since audit H-2c, in code.** That
+/// sentence stood here while nothing swept a group at `assembly_deadline_daa`: the row was deleted
+/// when the SESSION ended, so the bytes were priced for `4 × count` DAA (at most 108) and actually
+/// held for `window_court` (3,000 on the RC). `sweep_court_close_deadlines` now ends the group at
+/// its own deadline, through the same `convict_close_declarer_v1` the backstop used, and
+/// `court_close_deadlines` is the index that makes it a sweep rather than a scan. A declaration is
+/// also legal only at `Terminal` (audit H-2a), so the window cannot be opened at round 0 and held
+/// under a ladder that has not finished.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwCourtCloseGroupV2 {
     /// The bond on `side` — read from the session (challenger) or the claim (executor) at
@@ -3800,6 +3871,12 @@ pub enum PalwStateV2Error {
     CourtCloseCannotAssemble { session: Hash64, count: u8, needed: u64, deadline: u64 },
     #[error("the declared close of session {session} is past its assembly deadline")]
     CourtCloseGroupExpired { session: Hash64 },
+    #[error(
+        "session {session} is at {turn:?}, not Terminal — a close is legal only where the ladder has narrowed to one \
+         index, so a declaration before it names a step nobody chose and holds the row for the whole backstop \
+         (audit H-2a)"
+    )]
+    CourtCloseNotTerminal { session: Hash64, turn: crate::palw_bisect::PalwBisectTurnV1 },
     // ADR-0078: derived artifacts.
     #[error("the derived artifact's shape is refused: {0}")]
     DerivedShapeRefused(&'static str),
@@ -3982,6 +4059,15 @@ pub struct PalwChainStateV2 {
     /// `(deadline_daa, session)` — the court backstop sweep queue. Exactly rebuildable from the
     /// session records (each carries its deadline), so never serialized, never hashed.
     court_deadlines: BTreeSet<(u64, Hash64)>,
+    /// `((assembly_deadline_daa, (session, side))` — the DECLARED CLOSE sweep queue (audit H-2c).
+    ///
+    /// [`PalwCourtCloseGroupV2`]'s own doc priced the row against "the assembly window (`4 x
+    /// count`, at most 108 DAA)", and nothing swept a group at it: `court_deadlines` is keyed on
+    /// `court_next_deadline_v2`, which never reads the group, so the bytes actually left state
+    /// when the SESSION ended — up to `window_court` later. Indexed exactly like the sessions,
+    /// rebuildable from the group records (each carries `assembly_deadline_daa`), so never
+    /// serialized and never hashed.
+    court_close_deadlines: BTreeSet<(u64, (Hash64, PalwCourtSideV1))>,
 }
 
 impl PalwChainStateV2 {
@@ -4022,6 +4108,7 @@ impl PalwChainStateV2 {
             work_ids: BTreeMap::new(),
             open_courts_by_claim: BTreeMap::new(),
             court_deadlines: BTreeSet::new(),
+            court_close_deadlines: BTreeSet::new(),
         }
     }
 
@@ -4605,6 +4692,13 @@ impl PalwChainStateV2 {
         if court_deadlines != self.court_deadlines {
             return Err(PalwStateV2Error::CarriageInconsistent("court-deadline index differs from the sessions".into()));
         }
+        // The declared closes' own queue, checked the same way and against the same primary data
+        // (audit H-2c). A stale one is a group whose bytes nothing sweeps.
+        let court_close_deadlines: BTreeSet<(u64, (Hash64, PalwCourtSideV1))> =
+            self.court_close_groups.iter().map(|(key, group)| (group.assembly_deadline_daa, *key)).collect();
+        if court_close_deadlines != self.court_close_deadlines {
+            return Err(PalwStateV2Error::CarriageInconsistent("close-assembly deadline index differs from the groups".into()));
+        }
         // Every deadline belongs to a live, non-terminal claim in the phase its kind implies —
         // and every non-terminal claim without an open court has exactly one deadline.
         let mut expected_deadlines: BTreeSet<(u64, Hash64)> = BTreeSet::new();
@@ -5024,6 +5118,29 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_derived_v1::PalwDerivedRowV1>,
         new: Option<crate::palw_derived_v1::PalwDerivedRowV1>,
     },
+    /// **One chunk arriving into a group that already exists** (audit H-3), rather than a whole
+    /// `CourtCloseGroup { old, new }` swap of the record it lands in.
+    ///
+    /// The swap form is what every other row uses and it is right for every other row, because
+    /// every other row is O(1). A close group is not: it accumulates up to
+    /// `PALW_COURT_CLOSE_CHUNK_MAX_BYTES` per chunk, so journalling `old` and `new` on each
+    /// arrival wrote `Sum(2k-1)` chunk-sized copies for a `count`-chunk assembly — **27 x 100 KB
+    /// of block space became ~73 MB of persisted, reorg-retained delta rows**, an amplification no
+    /// fee, rent or deposit sees and one `palw_close_assembly_deposit_v1` prices linearly in
+    /// `count`. As an arrival the delta is O(1) in the group: the index and the bytes, which are
+    /// exactly what a revert has to put back.
+    ///
+    /// The OPENING and the REMOVAL stay `CourtCloseGroup` swaps — one each per group, so both are
+    /// O(count) once rather than O(count) per chunk — and the completing chunk is not journalled
+    /// at all, because W7 never writes the completed record back.
+    ///
+    /// Appended at the END: the enum's Borsh discriminant is positional and these rows are
+    /// persisted.
+    CourtCloseChunkArrived {
+        key: (Hash64, PalwCourtSideV1),
+        index: u8,
+        bytes: Vec<u8>,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -5296,6 +5413,16 @@ impl<'a> TransitionBuilder<'a> {
             Some(record) => self.state.court_close_groups.insert(key, record.clone()),
             None => self.state.court_close_groups.remove(&key),
         };
+        // The assembly-window queue, maintained where the row is (audit H-2c). `assembly_deadline_daa`
+        // never moves after the declaration writes it, so this is a write-once insert and a
+        // remove — but it is spelled as a full re-index anyway, because an index that is correct
+        // only while a field happens not to move is an index the next editor breaks silently.
+        if let Some(previous) = &old {
+            self.state.court_close_deadlines.remove(&(previous.assembly_deadline_daa, key));
+        }
+        if let Some(record) = &new {
+            self.state.court_close_deadlines.insert((record.assembly_deadline_daa, key));
+        }
         self.entries.push(PalwDeltaEntryV2::CourtCloseGroup { key, old, new });
     }
 
@@ -5399,7 +5526,7 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::Panel { key, old, new });
     }
 
-    fn write_court(&mut self, key: Hash64, new: Option<PalwCourtSessionStateV2>) {
+    fn write_court(&mut self, key: Hash64, new: Option<PalwCourtSessionStateV2>) -> Result<(), PalwStateV2Error> {
         let old = match &new {
             Some(record) => self.state.court_sessions.insert(key, record.clone()),
             None => self.state.court_sessions.remove(&key),
@@ -5444,13 +5571,59 @@ impl<'a> TransitionBuilder<'a> {
         // eventually will not, and an orphaned group is a row nothing sweeps whose bytes stay in
         // the state root forever. `assert_internal_consistency` refuses such a state, so the
         // failure would be a node refusing its own tip.
+        //
+        // **W10 as audit H-2 and L-9 corrected it: the deposit is collected HERE, on every
+        // ending.** It used to be taken on two of five — the backstop sweep's own
+        // `failed_declarer_side` and an undecodable completion — while `write_court(id, None)`
+        // deleted the row on all the others (a real verdict, a rung no-show either way, an
+        // unanswered opening, a retirement) with the deposit uncollected. So a declarer that
+        // opened a 27-chunk row and never assembled it paid nothing whenever the session ended by
+        // any route but its own lapse, which is the free option "junk pays; honesty is refunded"
+        // exists to remove. With two live rows it was worse: `failed_declarer_side` finds the
+        // CHALLENGER first, convicts, and the executor's row was deleted here for free (L-9) —
+        // making an unassembled executor declaration strictly better than no declaration at all.
+        //
+        // The rule needs no `is_complete()` test and deliberately does not make one: **a group
+        // still in the table when its session ends did not deliver the close it pinned.** W7's
+        // honest path removes its own row before the decoded `CourtClosed` reaches this function
+        // (`end_close_group_delivered`), so the only rows left here are rows nothing was filed
+        // against.
         if removed {
             for side in [PalwCourtSideV1::Challenger, PalwCourtSideV1::Executor] {
                 if self.state.court_close_groups.contains_key(&(key, side)) {
+                    forfeit_close_deposit_v1(self, key, side)?;
                     self.write_court_close_group((key, side), None);
                 }
             }
         }
+        Ok(())
+    }
+
+    /// **A chunk arriving into a group that already exists** (audit H-3): the bit and the bytes,
+    /// journalled as themselves.
+    ///
+    /// Not `write_court_close_group(key, Some(grown_record))`, which is how it was written and
+    /// which put the whole accumulated group into the delta twice per arrival. The row's
+    /// `assembly_deadline_daa` never moves on an arrival, so the deadline index needs no touch
+    /// here — the invariant that makes that true is asserted by `assert_internal_consistency`,
+    /// which recomputes the index from the records.
+    fn write_court_close_chunk(&mut self, key: (Hash64, PalwCourtSideV1), index: u8, bytes: Vec<u8>) {
+        let group = self.state.court_close_groups.get_mut(&key).expect("a chunk only arrives into a group the caller just read");
+        group.present |= 1u64 << index;
+        group.chunks.insert(index, bytes.clone());
+        self.entries.push(PalwDeltaEntryV2::CourtCloseChunkArrived { key, index, bytes });
+    }
+
+    /// **The one removal that owes nothing** (ADR-0080 W7): the group whose last chunk assembled,
+    /// hashed to its own `close_digest` and decoded to this session's `CourtClosed`.
+    ///
+    /// Called immediately before that close is applied, so by the time [`Self::write_court`]
+    /// removes the session there is no row of this side left to charge. Its own name rather than a
+    /// bare `write_court_close_group(key, None)` because the DIFFERENCE between this and every
+    /// other removal is the whole of W10's "junk pays; honesty is refunded", and a difference that
+    /// lives in which line happens to run is a difference the next editor deletes.
+    fn end_close_group_delivered(&mut self, key: (Hash64, PalwCourtSideV1)) {
+        self.write_court_close_group(key, None);
     }
 
     fn write_epoch(&mut self, key: Hash64, new: Option<PalwEpochCounterV2>) {
@@ -5904,7 +6077,7 @@ impl<'a> TransitionBuilder<'a> {
         let orphans: Vec<Hash64> =
             self.state.court_sessions.iter().filter(|(_, session)| session.claim == id).map(|(session_id, _)| *session_id).collect();
         for session_id in orphans {
-            self.write_court(session_id, None);
+            self.write_court(session_id, None)?;
         }
         self.write_claim(id, None);
         if self.state.panels.contains_key(&id) {
@@ -6165,6 +6338,12 @@ pub fn apply_palw_transition_v6(
     //    (A deadline equal to ctx.daa_score is still actionable by this block's objects.) Claims
     //    first, then the court backstop: the order is fixed, and fixed IS the requirement.
     sweep_deadlines(&mut builder, ctx)?;
+    // A declared close is swept at ITS OWN window before the session's backstop is read (audit
+    // H-2c). Before the backstop, because the two can coincide — `assembly_deadline_daa` is never
+    // above `session.deadline_daa` — and the group's window is the tighter statement: the party
+    // that announced a close and did not file it defaulted when its own window ran out, not when
+    // the whole prosecution did.
+    sweep_court_close_deadlines(&mut builder, ctx)?;
     sweep_court_deadlines(&mut builder, ctx)?;
 
     // 2b. Per-class retarget (PR-09): crossing a global epoch boundary closes the previous
@@ -6621,6 +6800,51 @@ pub(crate) fn court_next_deadline_v2(session: &PalwCourtSessionStateV2) -> u64 {
     }
 }
 
+/// **A declared close is judged by its OWN window** (ADR-0080 design A W10, as audit H-2c
+/// corrected it).
+///
+/// [`PalwCourtCloseGroupV2`]'s doc bounded what a live group costs the network by "the assembly
+/// window (`4 x count`, at most 108 DAA) ... what keeps it short-lived", and no code deleted a
+/// group at that deadline: `court_deadlines` is keyed on `court_next_deadline_v2`, which never
+/// reads a group, so up to `2 x 27 x 100 KB` per session stayed inside `collection_root` — hashed
+/// into every `state_root` and written whole into every tip snapshot — until the SESSION ended,
+/// which is `window_court` (3,000 DAA on the RC) rather than 108.
+///
+/// **Through `convict_close_declarer_v1`, which is the same spelling the backstop used**, and for
+/// the reason W5 gave it: "a failed declaration loses on its OWN side". Removing the bytes and
+/// letting the session run to its backstop would take the conviction away — the backstop's own
+/// direction charges the CHALLENGER (`rearm_after_challenger_side_close`), so an executor that
+/// declared a close it never filed would end the session against its own prosecutor, which is the
+/// inversion W5 exists to prevent. This fires the same conviction, earlier, at the window the
+/// declaration itself named. A close is legal only at `Terminal` (the declaration arm refuses
+/// anything else), so there is no rung left for the earlier ending to cut short.
+///
+/// The backstop's `failed_declarer_side` block stays where it is and is now a belt: a group can
+/// only reach it if its window and the backstop are the same DAA and this sweep did not run first.
+fn sweep_court_close_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    while let Some(&(deadline, key)) = builder.state.court_close_deadlines.iter().next() {
+        if deadline >= ctx.daa_score {
+            break;
+        }
+        let (session_id, side) = key;
+        // **A session or a claim the chain no longer holds drops the row; it does not fail the
+        // block.** `write_court` removes a session's groups with it and `retire_claim` closes a
+        // claim's sessions, so this should be unreachable — and it is written to be survivable
+        // anyway, for the reason the court sweep gives: the alternative failure mode is a chain
+        // that stops forever on a state nothing can repair. The deposit still goes, because the
+        // row still held the room it was priced for.
+        let convictable =
+            builder.state.court_sessions.get(&session_id).is_some_and(|session| builder.state.claims.contains_key(&session.claim));
+        if !convictable {
+            forfeit_close_deposit_v1(builder, session_id, side)?;
+            builder.write_court_close_group(key, None);
+            continue;
+        }
+        convict_close_declarer_v1(builder, ctx, session_id, side)?;
+    }
+    Ok(())
+}
+
 fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     while let Some(&(deadline, session_id)) = builder.state.court_deadlines.iter().next() {
         if deadline >= ctx.daa_score {
@@ -6633,7 +6857,7 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         // a state nothing can repair. Dropping is also the correct answer on its own terms: a
         // session about a claim the chain no longer holds can decide nothing.
         let Some(claim) = builder.state.claims.get(&session.claim).cloned() else {
-            builder.write_court(session_id, None);
+            builder.write_court(session_id, None)?;
             continue;
         };
 
@@ -6711,7 +6935,7 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                 // existed. Spelling it a third time by hand is what let the ADR claim "one helper"
                 // while three call sites each held their own copy of the question.
                 let class_holds_weight = palw_class_bears_weight_v2(&builder.state.class_shares, &claim.class_id, true);
-                builder.write_court(session_id, None);
+                builder.write_court(session_id, None)?;
                 match no_show.silent_party {
                     // **A silence at the OPENING rung is not a conviction** (audit M2-5).
                     //
@@ -6769,7 +6993,7 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
             // moves forward instead of spinning on a deadline nothing consumes.
             if session.deadline_daa >= ctx.daa_score {
                 let refreshed = session.clone();
-                builder.write_court(session_id, Some(refreshed));
+                builder.write_court(session_id, Some(refreshed))?;
                 continue;
             }
         }
@@ -6791,6 +7015,13 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         // carries the last chunk — the group is gone by the time the session ends, whichever way it
         // went — so "incomplete" is the only state a group can be in when the backstop fires, and
         // it is exactly the offence this arm exists for.
+        //
+        // **A BELT since audit H-2c**, not the strap: `sweep_court_close_deadlines` runs first and
+        // convicts at the group's own `assembly_deadline_daa`, which is never above this backstop.
+        // The one case that still reaches here is the two being the same DAA. Kept rather than
+        // deleted because deleting it would make the direction of this ending depend on which of
+        // two sweeps happened to fire, and L-9 is closed either way: `write_court` charges every
+        // group standing at the removal, not just the side this conviction routes to.
         let failed_declarer_side = [PalwCourtSideV1::Challenger, PalwCourtSideV1::Executor]
             .into_iter()
             .find(|side| builder.state.court_close_groups.get(&(session_id, *side)).is_some_and(|group| !group.is_complete()));
@@ -6801,7 +7032,7 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
             convict_close_declarer_v1(builder, ctx, session_id, side)?;
             continue;
         }
-        builder.write_court(session_id, None);
+        builder.write_court(session_id, None)?;
         // The backstop's own direction, unchanged for a session that declared no close at all.
         rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond)?;
     }
@@ -8525,7 +8756,7 @@ fn apply_object(
             // the record is written, so the deadline index is built from the capped value and one
             // write is one write.
             cap_session_rung_deadline_v2(&mut opened, builder.params);
-            builder.write_court(*session_id, Some(opened));
+            builder.write_court(*session_id, Some(opened))?;
             // An open court freezes the path to Final: the claim keeps no deadline while any
             // session is open (void-by-timeout of the COURT is PR-07's deadline system).
             //
@@ -8543,7 +8774,7 @@ fn apply_object(
         }
         PalwConsensusObjectV2::CourtClosed { session_id, verdict, proof: _ } => {
             let session = builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
-            builder.write_court(*session_id, None);
+            builder.write_court(*session_id, None)?;
             let claim_id = session.claim;
             let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
             match verdict {
@@ -8571,7 +8802,7 @@ fn apply_object(
                 .apply_disclosure(disclosure, ctx.daa_score, builder.params.turn_deadline_daa)
                 .map_err(|e| PalwStateV2Error::LadderRefused(*session_id, e.to_string()))?;
             cap_session_rung_deadline_v2(&mut session, builder.params);
-            builder.write_court(*session_id, Some(session));
+            builder.write_court(*session_id, Some(session))?;
         }
         PalwConsensusObjectV2::CourtVerdictPosted { session_id, verdict, signature: _ } => {
             let mut session =
@@ -8581,7 +8812,7 @@ fn apply_object(
                 .apply_verdict(verdict, ctx.daa_score, builder.params.turn_deadline_daa)
                 .map_err(|e| PalwStateV2Error::LadderRefused(*session_id, e.to_string()))?;
             cap_session_rung_deadline_v2(&mut session, builder.params);
-            builder.write_court(*session_id, Some(session));
+            builder.write_court(*session_id, Some(session))?;
         }
         PalwConsensusObjectV2::CourtCloseDeclared { session_id, side, count, chunk_digests, close_digest, verdict, signature: _ } => {
             let session = builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
@@ -8597,6 +8828,27 @@ fn apply_object(
             };
             if !builder.state.bonds.contains_key(&declarer) {
                 return Err(PalwStateV2Error::CourtCloseSideNotBound { session: *session_id });
+            }
+            // **A close is legal only at `Terminal`, and until audit H-2 nothing said so** — the
+            // sentence was written in this arm's own comment ten lines below and enforced nowhere,
+            // so the row could be opened at round 0.
+            //
+            // Two things follow from opening early, and both are the declarer's free option. The
+            // row is priced for `4 x count` DAA of assembly and is deleted only when the SESSION
+            // ends, so a declaration at round 0 holds up to 2.7 MB inside `collection_root` — and
+            // therefore inside every `state_root` and every tip snapshot — for the whole
+            // `window_court` while the ladder plays out beneath it. And the deposit it risks is
+            // collected only where the group ends without the close it pinned, which a declarer
+            // that never files the last chunk can arrange to happen after everything it cares
+            // about is already decided.
+            //
+            // The turn is read through `court_turn_and_rung_deadline_v2`, the same helper
+            // `court_next_deadline_v2` reads it through, so the dissection phase answers for a
+            // session that has one and the ladder answers for a session that does not: one
+            // spelling of "whose move is it", not two.
+            let turn = court_turn_and_rung_deadline_v2(&session).0;
+            if turn != crate::palw_bisect::PalwBisectTurnV1::Terminal {
+                return Err(PalwStateV2Error::CourtCloseNotTerminal { session: *session_id, turn });
             }
             // One declaration per `(session, side)`, ever. It is what makes the interlock's
             // single-assembly term true, and what stops either party buying rung after rung of
@@ -8698,7 +8950,11 @@ fn apply_object(
             group.present |= 1u64 << index;
             group.chunks.insert(*index, bytes.clone());
             if !group.is_complete() {
-                builder.write_court_close_group((*session_id, *side), Some(group));
+                // O(1) in the group (audit H-3): the arrival is journalled as an arrival, not as a
+                // swap of the whole accumulated record. `group` here is the local clone the checks
+                // above were made against; the writer applies the same bit and bytes to the row in
+                // state, which is why nothing but the delta shape changes.
+                builder.write_court_close_chunk((*session_id, *side), *index, bytes.clone());
                 return Ok(());
             }
             // **W7: the chunk that COMPLETES a group assembles it, and the close happens here.**
@@ -8747,6 +9003,12 @@ fn apply_object(
             let Some(close) = decoded else {
                 return convict_close_declarer_v1(builder, ctx, *session_id, *side);
             };
+            // **The row DELIVERED, and it has to say so before the close ends the session** (audit
+            // H-2b). `write_court` collects the assembly deposit of every group still standing at
+            // a session's removal, and the `CourtClosed` applied on the next line removes this
+            // one — so an honest assembly that stayed in the table would be charged for the row it
+            // just filed. This is the single ending that owes nothing.
+            builder.end_close_group_delivered((*session_id, *side));
             // **Through the arm, never beside it.** The decoded object is a `CourtClosed` and is
             // applied by re-entering this function, so a split close and a whole close are the same
             // state machine by construction rather than by two authors agreeing: a change to the
@@ -8815,7 +9077,7 @@ fn apply_object(
             .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
             session.dissection = Some(phase);
             cap_session_rung_deadline_v2(&mut session, builder.params);
-            builder.write_court(*session_id, Some(session));
+            builder.write_court(*session_id, Some(session))?;
         }
         PalwConsensusObjectV2::CourtAttnDissected { session_id, round, signature: _ } => {
             let mut session =
@@ -8825,7 +9087,7 @@ fn apply_object(
                 .apply_round(round, ctx.daa_score, builder.params.turn_deadline_daa())
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
             cap_session_rung_deadline_v2(&mut session, builder.params);
-            builder.write_court(*session_id, Some(session));
+            builder.write_court(*session_id, Some(session))?;
         }
         PalwConsensusObjectV2::CourtAttnChildChosen { session_id, choice, signature: _ } => {
             let mut session =
@@ -8835,7 +9097,7 @@ fn apply_object(
                 .apply_choice(choice, ctx.daa_score, builder.params.turn_deadline_daa())
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
             cap_session_rung_deadline_v2(&mut session, builder.params);
-            builder.write_court(*session_id, Some(session));
+            builder.write_court(*session_id, Some(session))?;
         }
         PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts } => {
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
@@ -9054,7 +9316,9 @@ fn apply_object(
             executor_pubkey,
             work_leaves,
             prompt_token_ids_hash,
-            decode_tokens_executed,
+            // Audit H-4: the committed length is a field of the JOB and therefore of the claim id;
+            // it is no longer part of the work identity, because a prefix of a run is that run.
+            decode_tokens_executed: _,
             trace_root,
             output_root,
             execution_root,
@@ -9132,8 +9396,10 @@ fn apply_object(
             if *execution_root == Hash64::default() {
                 return Err(PalwStateV2Error::UnadjudicableCommitment(*claim_id));
             }
-            // **One inference, one claim** (ADR-0074 Decision 4).
-            let work_id = crate::palw_freeprompt_v3::fp_work_id_v1(class_id, prompt_token_ids_hash, *decode_tokens_executed, &bond.0);
+            // **One inference, one claim** (ADR-0074 Decision 4) — and since audit H-4 the identity
+            // is the PROMPT's, not the prompt's plus a length the executor picks: one run
+            // committed at every nested decode limit was D truthful claims for one inference.
+            let work_id = crate::palw_freeprompt_v3::fp_work_id_v1(class_id, prompt_token_ids_hash, &bond.0);
             if let Some(holder) = builder.state.work_ids.get(&work_id) {
                 return Err(PalwStateV2Error::DuplicateWork { work_id, claim: *holder });
             }
@@ -9482,6 +9748,28 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         }
         PalwDeltaEntryV2::PendingChunks { key, old, new } => swap_write!(state.pending_chunks, key, old, new),
         PalwDeltaEntryV2::CourtCloseGroup { key, old, new } => swap_write!(state.court_close_groups, key, old, new),
+        // **A bit-clear plus a map removal** (audit H-3), and the same "verify what you replace"
+        // discipline `swap_write!` has: forward, the index must be absent and becomes these bytes;
+        // in revert it must be present AND be these bytes before it goes. A delta that disagrees
+        // with the state it is applied to is a corrupted reorg, not a recoverable one.
+        PalwDeltaEntryV2::CourtCloseChunkArrived { key, index, bytes } => {
+            let Some(group) = state.court_close_groups.get_mut(key) else {
+                return Err(PalwStateV2Error::DeltaMismatch("a close chunk arrived into a group that is not there"));
+            };
+            if revert {
+                if !group.has(*index) || group.chunks.get(index) != Some(bytes) {
+                    return Err(PalwStateV2Error::DeltaMismatch("the close chunk being reverted is not the one the delta recorded"));
+                }
+                group.present &= !(1u64 << index);
+                group.chunks.remove(index);
+            } else {
+                if group.has(*index) {
+                    return Err(PalwStateV2Error::DeltaMismatch("a close chunk arrived at an index the group already holds"));
+                }
+                group.present |= 1u64 << index;
+                group.chunks.insert(*index, bytes.clone());
+            }
+        }
         PalwDeltaEntryV2::DerivedArtifact { key, old, new } => swap_write!(state.derived_artifacts, key, old, new),
         // Launch blockers §8: the retired-claims accumulator. Its own entry rather than a third
         // component of `Weights`, because it moves on a different event (a retirement sweep) than
@@ -9537,6 +9825,7 @@ fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
         *state.open_courts_by_claim.entry(session.claim).or_insert(0) += 1;
         state.court_deadlines.insert((court_next_deadline_v2(session), *id));
     }
+    state.court_close_deadlines = state.court_close_groups.iter().map(|(key, group)| (group.assembly_deadline_daa, *key)).collect();
 }
 
 /// Rebuild ALL indices from primary data. The deadline index needs params (window arithmetic);
@@ -9787,6 +10076,7 @@ impl PalwStateCarriageV2 {
             work_ids: BTreeMap::new(),
             open_courts_by_claim: BTreeMap::new(),
             court_deadlines: BTreeSet::new(),
+            court_close_deadlines: BTreeSet::new(),
         };
         rebuild_deadline_free_indices(&mut state);
         rebuild_deadline_index_v2(&mut state, params)?;
@@ -15509,10 +15799,168 @@ pub(crate) mod tests {
             None,
         );
         // Executor is bond 1 (the attempt's), challenger is bond 2.
+        //
+        // **The ladder is played to `Terminal` inside the opening block** (audit H-2a): a close is
+        // legal only there, and every test below declares one. In ONE block, at the opening
+        // block's own `ctx`, so that every DAA these tests assert on is where it was — the
+        // assembly window is measured from the DECLARATION, not from the rung the ladder stopped
+        // at, and blue score must strictly increase along a chain so the moves cannot be spread
+        // over blocks without pushing the fixture past the scores the tests use.
+        //
+        // `[0,16)` with the challenger disagreeing every time: 8, 4, 2, 1 and the interval is
+        // `[0,1)`.
+        let session_id = court_session_of(claim_id, h64(31), bond_key(1), bond_key(2));
+        let mut opening = vec![court_open(claim_id, h64(31), bond_key(1), bond_key(2))];
+        for (round, midpoint) in [(0u32, 8u64), (1, 4), (2, 2), (3, 1)] {
+            opening.push(disclose(session_id, round, midpoint, 0xD15C + round as u64));
+            opening.push(rung_verdict(session_id, round, false));
+        }
+        let (s5, _) = apply(&s4, &p, &ctx(5, 104, 5), &opening, None);
+        assert_eq!(s5.court_sessions_for_claim(&claim_id), 1, "the fixture must actually open a court");
+        assert_eq!(
+            s5.court_session(&session_id).expect("open").ladder.terminal_index(),
+            Some(0),
+            "a close is legal only at Terminal, so the fixture has to get there"
+        );
+        (p, s5, claim_id, session_id)
+    }
+
+    /// **A chunk's delta is O(1) in the group** (audit H-3), measured on a full 27-chunk assembly
+    /// at the ruleset's own chunk size.
+    ///
+    /// The swap form journalled `old` and `new` whole on every arrival, so a `count`-chunk
+    /// assembly wrote `Sum(2k-1)` chunk-sized copies — quadratic persisted, reorg-retained delta
+    /// for block space that is linear, and for a deposit
+    /// (`palw_close_assembly_deposit_v1`) that is linear. Both totals are computed here from the
+    /// same records, so the comparison is a measurement rather than an argument.
+    #[test]
+    fn a_split_close_journals_its_chunks_and_not_its_whole_group() {
+        const COUNT: u8 = 27;
+        fn big_chunk(index: u8) -> Vec<u8> {
+            vec![0xA0u8.wrapping_add(index); PALW_COURT_CLOSE_CHUNK_MAX_BYTES]
+        }
+        let (p, s5, _claim_id, session_id) = split_close_fixture();
+        let side = PalwCourtSideV1::Executor;
+        let declaration = PalwConsensusObjectV2::CourtCloseDeclared {
+            session_id,
+            side,
+            count: COUNT,
+            chunk_digests: (0..COUNT).map(|i| palw_court_close_chunk_digest_v1(&big_chunk(i))).collect(),
+            close_digest: h64(0xC105E),
+            verdict: PalwCourtVerdictV2::ExecutorGuilty,
+            signature: vec![1; 8],
+        };
+        let (mut state, declare_delta) = apply(&s5, &p, &ctx(6, 200, 6), &[declaration], None);
+        let opening = borsh::to_vec(&declare_delta).expect("the delta serializes").len();
+        let (mut journalled, mut swap_form) = (opening, opening);
+        // The 27th chunk COMPLETES the group, and W7 never writes a completed record back — so the
+        // assembly this measures is the 26 arrivals that are journalled at all.
+        for index in 0..COUNT - 1 {
+            let before = state.court_close_group(&session_id, side).expect("the row").clone();
+            let object = PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index, bytes: big_chunk(index) };
+            let at = 7 + index as u64;
+            let (next, delta) = apply(&state, &p, &ctx(at, 200 + at, at), &[object], None);
+            journalled += borsh::to_vec(&delta).expect("the delta serializes").len();
+            // What the swap form wrote for the SAME arrival: the record before and the record
+            // after, both whole.
+            let after = next.court_close_group(&session_id, side).expect("the row").clone();
+            swap_form +=
+                borsh::to_vec(&PalwDeltaEntryV2::CourtCloseGroup { key: (session_id, side), old: Some(before), new: Some(after) })
+                    .expect("the swap entry serializes")
+                    .len();
+            state = next;
+        }
+        let block_space = (COUNT as usize - 1) * PALW_COURT_CLOSE_CHUNK_MAX_BYTES;
+        println!(
+            "[H-3] {} arrivals of {} B: journalled {journalled} B of delta ({:.2}x the block space); the swap form was \
+             {swap_form} B ({:.2}x)",
+            COUNT - 1,
+            PALW_COURT_CLOSE_CHUNK_MAX_BYTES,
+            journalled as f64 / block_space as f64,
+            swap_form as f64 / block_space as f64
+        );
+        assert!(
+            journalled < block_space + block_space / 10,
+            "a chunk's delta is no longer O(1) in the group: {journalled} B of delta for {block_space} B of chunks"
+        );
+        assert!(
+            swap_form > journalled * 10,
+            "the swap form is not the quadratic this test exists to have removed ({swap_form} vs {journalled})"
+        );
+        // And the bit and the bytes still revert by the delta alone, which is the property the
+        // entry shape had to keep.
+        let before_last = state.clone();
+        let last = PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index: COUNT - 2, bytes: big_chunk(COUNT - 2) };
+        let _ = last;
+        let (with_more, chunk_delta) = apply(
+            &state,
+            &p,
+            &ctx(40, 240, 40),
+            &[PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index: COUNT - 1, bytes: big_chunk(COUNT - 1) }],
+            None,
+        );
+        // That one completed the group: `close_digest` is `h64(0xC105E)`, which these bytes are
+        // not, so the declarer is convicted and the row is gone.
+        assert!(with_more.court_close_group(&session_id, side).is_none(), "the completing chunk left the group behind");
+        let reverted = revert_delta_v2(&with_more, &chunk_delta, &p).expect("the completing block reverts");
+        assert_eq!(reverted.state_root(), before_last.state_root(), "the reorg did not restore the parent's root");
+    }
+
+    /// **A close declared before the ladder narrowed is refused** (audit H-2a).
+    ///
+    /// The arm's own comment said "a close is legal only at `Terminal`" and nothing asked. At
+    /// round 0 the row can be opened and then held — priced for `4 x count` DAA of assembly,
+    /// deleted only when the SESSION ends — for the whole `window_court` while the ladder plays
+    /// out beneath it, and the deposit is collected only where the group ends without the close it
+    /// pinned, which the declarer chooses.
+    #[test]
+    fn a_close_may_not_be_declared_before_the_ladder_is_terminal() {
+        let p = params();
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(2),
+            pubkey: vec![8; 4],
+            operator_pubkey: op_key(22),
+            collateral: 1_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A22),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        });
+        let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+        let (s3, _) =
+            apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        let (s4, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
         let (s5, _) = apply(&s4, &p, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(2))], None);
         let session_id = court_session_of(claim_id, h64(31), bond_key(1), bond_key(2));
-        assert_eq!(s5.court_sessions_for_claim(&claim_id), 1, "the fixture must actually open a court");
-        (p, s5, claim_id, session_id)
+
+        // Round 0: the responder owes the opening disclosure, and a close is not a move.
+        assert_eq!(
+            apply_palw_transition_v2(&s5, &p, &ctx(6, 200, 6), &[declare_close(session_id, PalwCourtSideV1::Executor, 3)], None)
+                .unwrap_err(),
+            PalwStateV2Error::CourtCloseNotTerminal {
+                session: session_id,
+                turn: crate::palw_bisect::PalwBisectTurnV1::AwaitDisclosure
+            }
+        );
+        // Mid-ladder, with the challenger's move outstanding, it is still not a move.
+        let (s6, _) = apply(&s5, &p, &ctx(6, 105, 6), &[disclose(session_id, 0, 8, 0xD0)], None);
+        assert_eq!(
+            apply_palw_transition_v2(&s6, &p, &ctx(7, 200, 7), &[declare_close(session_id, PalwCourtSideV1::Executor, 3)], None)
+                .unwrap_err(),
+            PalwStateV2Error::CourtCloseNotTerminal { session: session_id, turn: crate::palw_bisect::PalwBisectTurnV1::AwaitVerdict }
+        );
+        // And nothing was written on either refusal.
+        assert_eq!(s6.court_close_groups_iter().count(), 0);
     }
 
     fn close_chunk_bytes(index: u8, count: u8) -> Vec<u8> {
@@ -15837,6 +16285,103 @@ pub(crate) mod tests {
         );
     }
 
+    /// A dissection move nobody signed, for a session that does not exist — the cheapest object
+    /// audit C-1's attacker could put first in a block.
+    fn forged_root_claim(session_id: Hash64) -> PalwConsensusObjectV2 {
+        let skeleton = crate::palw_step_refute::tests::skeleton_refutation();
+        PalwConsensusObjectV2::CourtAttnRootClaimed {
+            session_id,
+            root: crate::palw_attn_dissect::PalwAttnRootClaimV1 {
+                version: crate::palw_attn_dissect::PALW_ATTN_DISSECT_OBJECT_VERSION_V1,
+                head: 0,
+                lane_first: 0,
+                lane_count: 1,
+                history_positions: 1,
+                claim: crate::palw_attn_dissect::PalwAttnRangeClaimV1 { max: 0, exp_sum: 0, v_acc: vec![0] },
+            },
+            arity: 4,
+            binding: Box::new(skeleton.binding),
+            out_tile: crate::palw_attn_court_v1::PalwAttnRowOpeningV1 {
+                leaf: skeleton.output_preimage,
+                opening: skeleton.output_opening,
+            },
+            operand_openings: Vec::new(),
+            // The lifecycle band asks only that this is non-empty; the signature is verified at
+            // acceptance, which is exactly why the SLOT must not be spent before acceptance runs.
+            signature: vec![1],
+        }
+    }
+
+    /// **A dissection move nobody could have made does not spend the block's only court slot**
+    /// (audit C-1, the critical).
+    ///
+    /// The predecessor of [`palw_court_move_spends_the_slot_v1`] matched the enum VARIANT and
+    /// nothing else. Admission on the lifecycle band is stateless — a `CourtAttnRootClaimed` is
+    /// admitted on `!signature.is_empty()` — so one minimum-fee transaction per block, placed
+    /// first in the transaction order, took `PALW_COURT_CLOSE_MAX_PER_BLOCK` on the variant alone
+    /// and every completing `CourtCloseChunk` behind it was dropped. Held for the `4 x count` DAA
+    /// of a victim's assembly window that is not a delay: the sweep finds the group incomplete and
+    /// [`convict_close_declarer_v1`] convicts the party that filed it.
+    ///
+    /// Two halves, both asserted here: the forged move spends nothing, and the completion behind
+    /// it still spends its slot.
+    #[test]
+    fn an_unauthenticated_dissection_move_does_not_deny_a_close_completion() {
+        let (p, s5, _claim_id, session_id) = split_close_fixture();
+        assert_eq!(PALW_COURT_CLOSE_MAX_PER_BLOCK, 1, "the per-block close cap moved without this test being read");
+        let side = PalwCourtSideV1::Executor;
+        let (s6, _) = apply(&s5, &p, &ctx(6, 200, 6), &[declare_close(session_id, side, 3)], None);
+        let (s7, _) = apply(&s6, &p, &ctx(7, 201, 7), &[close_chunk(session_id, side, 0, 3)], None);
+        let (s8, _) = apply(&s7, &p, &ctx(8, 202, 8), &[close_chunk(session_id, side, 1, 3)], None);
+
+        // The attacker's object, on a session id the chain never opened.
+        assert!(
+            !palw_court_move_spends_the_slot_v1(&s8, &forged_root_claim(h64(0xDEAD_BEEF))),
+            "a root claim for a session that does not exist bought the network's only court slot"
+        );
+        // A root claim whose declared object version is not the one this build plays — refused by
+        // `open_with_arity`'s first line, so it costs nothing and may not buy the slot.
+        let mut wrong_version = forged_root_claim(session_id);
+        if let PalwConsensusObjectV2::CourtAttnRootClaimed { root, .. } = &mut wrong_version {
+            root.version = crate::palw_attn_dissect::PALW_ATTN_DISSECT_OBJECT_VERSION_V1 + 1;
+        }
+        assert!(!palw_court_move_spends_the_slot_v1(&s8, &wrong_version), "a root claim of another object version bought the slot");
+        // **And the half that must stay true.** On the real session the ladder IS terminal and no
+        // dissection is open, so this move is one the fold will play: it spends the slot, exactly
+        // as the predecessor did, and that is the property this fix must not have removed.
+        assert!(
+            palw_court_move_spends_the_slot_v1(&s8, &forged_root_claim(session_id)),
+            "a root claim the fold would open a phase from stopped spending the slot"
+        );
+        // A round for a session with no dissection phase open is not a turn anybody owes.
+        let round = PalwConsensusObjectV2::CourtAttnDissected {
+            session_id,
+            round: crate::palw_attn_dissect::PalwAttnDissectRoundV1 {
+                version: crate::palw_attn_dissect::PALW_ATTN_DISSECT_OBJECT_VERSION_V1,
+                children: Vec::new(),
+            },
+            signature: vec![1],
+        };
+        assert!(!palw_court_move_spends_the_slot_v1(&s8, &round), "a round with no phase open bought the slot");
+        let choice = PalwConsensusObjectV2::CourtAttnChildChosen {
+            session_id,
+            choice: crate::palw_attn_court_v1::PalwAttnDissectChoiceV1 {
+                version: crate::palw_attn_court_v1::PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                session_id,
+                round: 0,
+                child: 0,
+            },
+            signature: vec![1],
+        };
+        assert!(!palw_court_move_spends_the_slot_v1(&s8, &choice), "a choice with no phase open bought the slot");
+
+        // The half that must still be true: the completion behind it spends the slot it is for.
+        assert!(
+            palw_court_close_completes_a_group_v1(&s8, &close_chunk(session_id, side, 2, 3)),
+            "the honest completion stopped spending the slot"
+        );
+    }
+
     /// The structural bound is the ROW's, and it is asked here rather than trusted to the layer
     /// that holds the ruleset: `present` is a `u64`, so a count it cannot address is not a count.
     #[test]
@@ -15909,8 +16454,15 @@ pub(crate) mod tests {
             &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
             None,
         );
-        let (s5, _) = apply(&s4, &p, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(2))], None);
+        // The ladder to `Terminal` in the opening block, for [`split_close_fixture`]'s reason
+        // (audit H-2a: a close is legal only there).
         let session_id = court_session_of(claim_id, h64(31), bond_key(1), bond_key(2));
+        let mut opening = vec![court_open(claim_id, h64(31), bond_key(1), bond_key(2))];
+        for (round, midpoint) in [(0u32, 8u64), (1, 4), (2, 2), (3, 1)] {
+            opening.push(disclose(session_id, round, midpoint, 0xD15C + round as u64));
+            opening.push(rung_verdict(session_id, round, false));
+        }
+        let (s5, _) = apply(&s4, &p, &ctx(5, 104, 5), &opening, None);
         (p, s5, claim_id, session_id)
     }
 
@@ -16564,9 +17116,9 @@ pub(crate) mod tests {
         );
     }
 
-    /// **One inference, one claim** (ADR-0074 Decision 4): the same work — class, prompt, decode
-    /// count, bond — under a second claim id is refused while the first claim lives; another
-    /// prompt is other work and is admitted beside it.
+    /// **One inference, one claim** (ADR-0074 Decision 4): the same work — class, prompt, bond —
+    /// under a second claim id is refused while the first claim lives; another prompt is other
+    /// work and is admitted beside it.
     #[test]
     fn fp_the_same_work_is_claimable_once_while_its_claim_lives() {
         let p = params();
@@ -16584,7 +17136,53 @@ pub(crate) mod tests {
         assert_eq!(s3.claims_iter().count(), 2, "another prompt is other work");
         assert_eq!(
             s3.claim(&h64(0xFD)).unwrap().work_id,
-            Some(crate::palw_freeprompt_v3::fp_work_id_v1(&h64(1), &h64(0x7E00 ^ 0xFD), 3, &bond_key(1).0))
+            Some(crate::palw_freeprompt_v3::fp_work_id_v1(&h64(1), &h64(0x7E00 ^ 0xFD), &bond_key(1).0))
+        );
+    }
+
+    /// **One prompt run once is one claim, whatever length the executor commits it at** (audit
+    /// H-4).
+    ///
+    /// `fp_work_id_v1` keyed on `decode_tokens_executed`, so an executor that ran one `D`-token
+    /// answer could file `D` commitments at limits `1, 2, ..., D` — each a truthful, replayable
+    /// execution whose leaves it already held, each with a distinct work id, so `DuplicateWork`
+    /// never fired. It bought up to `64 D` tickets for one inference and imposed `D` full panels
+    /// of five seats each replaying a PREFIX of the same job. The prefixes are what ADR-0082
+    /// Decision 10 prices at zero: a subsidy on them is a subsidy on replay.
+    #[test]
+    fn fp_a_nested_decode_length_is_the_same_work_as_the_run_it_is_a_prefix_of() {
+        let p = params();
+        let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        // The full run: 3 decode tokens.
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+
+        // The same prompt, the same bond, the same class — committed at a SHORTER decode limit.
+        // It is a prefix of the execution already claimed, so it is not other work.
+        for shorter in [1u32, 2] {
+            let mut nested = fp_commit(0xFD, 60, shorter);
+            if let PalwConsensusObjectV2::FreePromptCommitted { prompt_token_ids_hash, .. } = &mut nested {
+                *prompt_token_ids_hash = h64(0x7E00 ^ 0xFC);
+            }
+            let refused = apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[nested], None);
+            assert!(
+                matches!(refused, Err(PalwStateV2Error::DuplicateWork { claim, .. }) if claim == h64(0xFC)),
+                "a {shorter}-token prefix of the claimed run was admitted as new work: {refused:?}"
+            );
+        }
+        // And a LONGER one is refused for the same reason and in the same direction: the identity
+        // is the prompt's, so the executor cannot choose a length that makes a second entry.
+        let mut longer = fp_commit(0xFD, 60, 8);
+        if let PalwConsensusObjectV2::FreePromptCommitted { prompt_token_ids_hash, .. } = &mut longer {
+            *prompt_token_ids_hash = h64(0x7E00 ^ 0xFC);
+        }
+        assert!(matches!(
+            apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[longer], None),
+            Err(PalwStateV2Error::DuplicateWork { .. })
+        ));
+        // The work id itself no longer moves with the length — one identity, one live claim.
+        assert_eq!(
+            crate::palw_freeprompt_v3::fp_work_id_v1(&h64(1), &h64(0x7E00 ^ 0xFC), &bond_key(1).0),
+            s2.claim(&h64(0xFC)).unwrap().work_id.expect("a free-prompt claim carries its work id")
         );
     }
 
@@ -16825,6 +17423,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::PendingChunks { .. } => "pending_chunks",
                     PalwDeltaEntryV2::CourtCloseGroup { .. } => "court_close_group",
                     PalwDeltaEntryV2::DerivedArtifact { .. } => "derived_artifact",
+                    PalwDeltaEntryV2::CourtCloseChunkArrived { .. } => "court_close_chunk_arrived",
                 });
             }
         }
