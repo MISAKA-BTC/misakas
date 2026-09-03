@@ -5,9 +5,10 @@ use crate::ids::{artifact_hash_v1, dsl_hash_v1, grammar_id_v1, transformer_id};
 use crate::registry::{grammar_by_id, transformer_by_id};
 use crate::{Artifact, DeriveError, Grammar, Transformer};
 use kaspa_consensus_core::palw_derived_v1::{PALW_DERIVED_V1_VERSION, PalwDerivedArtifactV1, derived_id_v1};
-use kaspa_consensus_core::palw_v2::{output_commitment_v2, rendered_output_hash_v2};
+use kaspa_consensus_core::palw_v2::{PalwJobContextV2, output_commitment_v2, rendered_output_hash_v2};
 use kaspa_hashes::Hash64;
 use misaka_palw_base0::e2e_drill::PalwRcFamilyV1;
+use misaka_palw_base0::tokenizer::QwenTokenizer;
 
 /// What binds a derivation to a claim — the chain-side facts the executor holds when the
 /// inference finishes (ADR-0077 Decision 4's handoff).
@@ -297,6 +298,154 @@ pub fn verify(object: &PalwDerivedArtifactV1, answer: &[u8]) -> Result<Verificat
 /// only the JSON): the artifact's hash and size against the object.
 pub fn verify_artifact_bytes(object: &PalwDerivedArtifactV1, artifact: &[u8]) -> bool {
     artifact_hash_v1(artifact) == object.artifact_hash && artifact.len() as u64 == object.artifact_bytes
+}
+
+// -------------------------------------------------------------------------------------------
+// THE JOIN — the sentence "this artifact came from that inference", and what it takes to say it
+// -------------------------------------------------------------------------------------------
+//
+// **[`verify`] and [`verify_output_root`] do not touch each other, and ANDing them proves
+// nothing about the pair.** Read them side by side:
+//
+//   * `verify` recomputes `dsl_hash` and `artifact_hash` from the ANSWER BYTES the caller passed.
+//   * `verify_output_root` recomputes `output_root` from the TOKEN IDS the caller passed.
+//
+// Both can be true of inputs that have nothing to do with each other, because no function in
+// either path takes the other's input. `rendered_output_hash_v1` looks like the missing link and
+// is not: on every shipped family it is a keyed hash of the IDS, so the whole `output_root` leg
+// stays inside id-space and never reaches a byte of text. So an executor who holds one honest
+// claim can attach ANY artifact of ANY kind to it — derive a mesh from some other answer, file the
+// object against this claim, and hand a verifier the answer the mesh really came from together
+// with the ids the claim really committed. Two independent true statements; a `consistent` that
+// reads as "this artifact came from that inference"; and nothing anywhere that checked it.
+//
+// The join is the RENDERING. ADR-0077 Decision 2 says the answer's bytes are every token's bytes
+// concatenated — [`render_answer_v1`] — so the ids and the answer are not two facts, they are one
+// fact spelled twice, and a derivation belongs to a claim exactly when the DSL it canonicalizes
+// is the rendering of that claim's ids. That is a pure function of things the consumer already
+// has, which is why it belongs here and not in a court: ids, a tokenizer, and the object.
+//
+// Which tokenizer is not the consumer's choice either. An id is only a token because some
+// tokenizer says so (`Base0ArtifactV1::tokenizer_commitment`), so a verifier that rendered under
+// a tokenizer the executor picked would be back where it started — the executor would choose the
+// table that spells its ids into the DSL it wants. The claim pins one:
+// `PalwJobContextV2::tokenizer_id`, inside `context_hash`, inside `output_root`. So the pin is
+// checked against the file the consumer opened, and a disagreement is refused BY NAME rather than
+// rendered under anyway.
+
+/// **The one spelling of "what those ids ARE"** — re-exported, never re-implemented, because a
+/// second concatenation of `token_bytes` in this crate would be a second answer to the question
+/// the whole join rests on. See [`misaka_palw_base0::fp_worker::render_answer_v1`] for why it
+/// cannot fail: an id the table cannot spell contributes no bytes, which is what the streamed
+/// pieces do too, so the rendering here and the gateway's are the same bytes by construction.
+pub use misaka_palw_base0::fp_worker::render_answer_v1;
+
+/// The id a job publishes for the tokenizer FILE a consumer opened.
+///
+/// **There are two lineages and only one of them is computable from a `tokenizer.json`.** A class
+/// converted from a standalone tokenizer file publishes
+/// [`Base0ArtifactV1::tokenizer_commitment_of`] over that file's bytes — this function — and that
+/// is the value [`misaka_palw_base0::artifact::TokenizerBindingV1::tokenizer_id`] calls "the
+/// commitment to publish as a job's `tokenizer_id`". A class whose tokenizer is embedded in a
+/// pinned GGUF publishes `kaspa_consensus_core::palw_v2::tokenizer_id_v2_for_gguf` over the GGUF's
+/// SHA-256 instead, which no `tokenizer.json` can reproduce. So a pin that does not match is not
+/// automatically a lie, and [`check_tokenizer_pin_v1`]'s refusal says so.
+pub fn opened_tokenizer_id_v1(tokenizer_bytes: &[u8]) -> Hash64 {
+    misaka_palw_base0::artifact::Base0ArtifactV1::tokenizer_commitment_of(tokenizer_bytes)
+}
+
+/// **Is the file the consumer opened the tokenizer this claim was executed under?** The pinned
+/// side comes from the job context and nowhere else — a caller who could pass the pin separately
+/// could pass the one that matches.
+pub fn check_tokenizer_pin_v1(job_context: &PalwJobContextV2, opened_tokenizer_id: Hash64) -> Result<(), DeriveError> {
+    if job_context.tokenizer_id == opened_tokenizer_id {
+        return Ok(());
+    }
+    Err(DeriveError::Mismatch(format!(
+        "the tokenizer file is not the one this claim pins: the job context names tokenizer_id {}, the file opened here \
+         commits to {opened_tokenizer_id}. Rendering the ids under it would produce an answer the claim never gave, so \
+         nothing is rendered. Two things this can mean: the wrong tokenizer.json (open the one the class was converted \
+         from), or a class whose tokenizer is embedded in a pinned GGUF — that lineage publishes \
+         tokenizer_id_v2_for_gguf(<gguf sha256>) and no tokenizer.json reproduces it, so the binding cannot be checked \
+         from a file at all",
+        job_context.tokenizer_id
+    )))
+}
+
+/// A verification that also answers the question a bare [`Verification`] is READ as answering:
+/// did this artifact come from that inference?
+///
+/// Every field here is computed from the claim's ids — never from an answer the caller chose —
+/// so `all_match()` is the sentence "the object's DSL is the rendering of the ids whose commitment
+/// this claim carries, and the artifact is what the named transformer makes of it".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoundVerification {
+    /// [`verify`], run over the RENDERED answer rather than over bytes the caller supplied.
+    pub verification: Verification,
+    /// The tokenizer both the job context and the opened file agree on (they must, or this
+    /// struct does not exist — see [`check_tokenizer_pin_v1`]).
+    pub tokenizer_id: Hash64,
+    /// How many bytes the ids rendered to. A zero here with a non-empty id list means every id
+    /// was past the tokenizer's table, which is the shape of "the wrong tokenizer passed the pin".
+    pub rendered_answer_bytes: usize,
+    pub output_root_matches: bool,
+    pub recomputed_output_root: Hash64,
+    /// Only when the caller ALSO passed an answer file: whether those bytes are the rendering.
+    /// `Some(false)` is the defect this whole section exists for, caught in the act — the caller
+    /// was handed an answer that is not this claim's answer.
+    pub supplied_answer_is_the_rendering: Option<bool>,
+}
+
+impl BoundVerification {
+    pub fn all_match(&self) -> bool {
+        self.verification.all_match() && self.output_root_matches && self.supplied_answer_is_the_rendering != Some(false)
+    }
+
+    /// Which fields disagreed, BY NAME, including the two only a bound verification can name.
+    pub fn mismatches(&self) -> Vec<&'static str> {
+        let mut out = self.verification.mismatches();
+        if !self.output_root_matches {
+            out.push("output_root");
+        }
+        if self.supplied_answer_is_the_rendering == Some(false) {
+            out.push("supplied_answer_is_the_rendering");
+        }
+        out
+    }
+}
+
+/// **The verification that binds.** Renders the claim's ids under the tokenizer the claim pins,
+/// re-runs the derivation over THOSE bytes, and recomputes `output_root` from the same ids and the
+/// same job context — so the two halves of X6 share an input and a `consistent` from here is a
+/// sentence about one inference.
+///
+/// `job_context_hash` is derived rather than taken: [`PalwJobContextV2::context_hash`] is the only
+/// value `output_root` was built from, and a caller who could pass the hash beside the context
+/// could pass a hash that belongs to a different context than the `tokenizer_id` they pinned with.
+///
+/// `Err` is the same sentence [`verify`]'s is — the object names a computation these bytes do not
+/// admit — plus [`DeriveError::Mismatch`] when the tokenizer file is not the pinned one.
+pub fn verify_bound(
+    object: &PalwDerivedArtifactV1,
+    family: PalwRcFamilyV1,
+    job_context: &PalwJobContextV2,
+    tokenizer: &QwenTokenizer,
+    opened_tokenizer_id: Hash64,
+    output_token_ids: &[u32],
+    supplied_answer: Option<&[u8]>,
+) -> Result<BoundVerification, DeriveError> {
+    check_tokenizer_pin_v1(job_context, opened_tokenizer_id)?;
+    let rendered = render_answer_v1(tokenizer, output_token_ids);
+    let verification = verify(object, &rendered)?;
+    let recomputed_output_root = recompute_output_root(family, &job_context.context_hash(), output_token_ids);
+    Ok(BoundVerification {
+        verification,
+        tokenizer_id: opened_tokenizer_id,
+        rendered_answer_bytes: rendered.len(),
+        output_root_matches: recomputed_output_root == object.output_root,
+        recomputed_output_root,
+        supplied_answer_is_the_rendering: supplied_answer.map(|a| a == rendered.as_slice()),
+    })
 }
 
 // -------------------------------------------------------------------------------------------

@@ -36,9 +36,10 @@ pub mod source_tree;
 pub mod zlib;
 
 pub use derive::{
-    ClaimBinding, Derivation, NamedInput, Verification, check_declared_bounds, check_named_inputs, check_offered_named_input,
-    derive_named, derive_with, named_input_hash_v1, recompute_output_root, rendered_output_hash_for_family, verify,
-    verify_artifact_bytes, verify_output_root,
+    BoundVerification, ClaimBinding, Derivation, NamedInput, Verification, check_declared_bounds, check_named_inputs,
+    check_offered_named_input, check_tokenizer_pin_v1, derive_named, derive_with, named_input_hash_v1, opened_tokenizer_id_v1,
+    recompute_output_root, render_answer_v1, rendered_output_hash_for_family, verify, verify_artifact_bytes, verify_bound,
+    verify_output_root,
 };
 
 use thiserror::Error;
