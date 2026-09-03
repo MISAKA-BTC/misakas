@@ -1997,10 +1997,10 @@ mod tests {
             let pid = std::process::id().to_string();
             let handle = std::thread::spawn(move || {
                 while !s.load(std::sync::atomic::Ordering::Relaxed) {
-                    if let Ok(out) = std::process::Command::new("ps").args(["-o", "rss=", "-p", &pid]).output() {
-                        if let Ok(kb) = String::from_utf8_lossy(&out.stdout).trim().parse::<u64>() {
-                            p.fetch_max(kb * 1024, std::sync::atomic::Ordering::Relaxed);
-                        }
+                    if let Ok(out) = std::process::Command::new("ps").args(["-o", "rss=", "-p", &pid]).output()
+                        && let Ok(kb) = String::from_utf8_lossy(&out.stdout).trim().parse::<u64>()
+                    {
+                        p.fetch_max(kb * 1024, std::sync::atomic::Ordering::Relaxed);
                     }
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }

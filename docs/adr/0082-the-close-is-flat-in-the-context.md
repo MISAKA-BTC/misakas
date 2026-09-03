@@ -235,7 +235,10 @@ Decision 12 was sized against: `~43,000` dense and `~14,000` hybrid positions un
 (measured by U-04 at the fence's ladder: dense 41,695, hybrid 13,105). **A width clears the close
 AND the ladder, and the two are different caps**: the RC bundle the 5f genesis freezes carries a
 `2^26` ladder, not the fence's `2^32`, and at `2^26` the widest admissible dense graph-v5 row is
-**574** positions (the release branch's own gate) — 512 fits with about twelve per cent of margin,
+**574** positions — which is the code's measurement for the graph-**v2** row
+(`palw_step.rs`'s `palw_a16_context_row_profile_v1` sweep), quoted here for the v5 row it was not
+measured on; no v5 sweep exists, and §9's own rule says a figure is quoted under the configuration
+it was measured in. 512 fits with about twelve per cent of margin,
 and 1,024 is not the next rung on the ladder side but a different cap (`2^28`). So on the close
 side 1,024 costs 64 bytes more than 512; on the ladder side it needs a re-genesis. Every figure in
 this ADR that quotes a 32-element Merkle path is the fence's number; the ruleset's is read from the

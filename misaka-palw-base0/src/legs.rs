@@ -2127,7 +2127,7 @@ mod a16_row_tests {
         assert_eq!((layers, row_bytes), (28, 1024), "the shape the report's number is derived over");
         let ctx = {
             let mut ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, n - 1, 2);
-            ctx.job_id = Hash64::from_u64_word(0x0082_43);
+            ctx.job_id = Hash64::from_u64_word(0x0000_8243);
             ctx
         };
         assert_eq!(

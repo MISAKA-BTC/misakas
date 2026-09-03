@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
-use kaspa_consensus_core::palw_class_admission_v2::palw_post_genesis_registration_v1;
+use kaspa_consensus_core::palw_class_admission_v2::palw_post_genesis_registration_capped_v1;
 use kaspa_consensus_core::palw_mode_v2::{PalwClassCatalogEntryV2, PalwConsensusParamsV2, PalwCourtParamsV2};
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, PalwRegistrationTermsV2};
 use kaspa_hashes::Hash64;
@@ -450,11 +450,17 @@ impl PalwClassSdk {
             ));
         }
         if let Some(artifact) = crate::lineages::dense::dense_artifact_by_registered_root(holdings, artifact_root, profile) {
-            let backend = misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile(
+            // **The CHAIN lane** (audit D M-6). The tokenizer refusal is waived only for the
+            // seeded floor, and no dense class the chain registers is that — so a chain-registered
+            // row is refused whatever `derived_seed` the file on disk carries, which neither
+            // `artifact_digest` nor the inventory root covers and which an operator or a fleet
+            // image can therefore flip without moving the root this arm just matched.
+            let backend = misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile_in_lane_v1(
                 artifact,
                 self.network_id.clone(),
                 profile.clone(),
                 (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
+                misaka_palw_base0::classes::ArtifactSourceV1::ConvertedA16,
             )?;
             return Ok(Box::new(backend));
         }
@@ -525,7 +531,12 @@ impl PalwClassSdk {
         } else {
             0
         };
-        let probe = palw_post_genesis_registration_v1(
+        // **Counted against the RULESET's ladder** (audit D H-5b): the uncapped helper counts at
+        // the executor's `2^22`, so the graph-v5 512 row could not even be EXPRESSED as an object
+        // — "the canonical job does not count against this profile: job shape yields 4223328 step
+        // leaves, exceeding the 4194304 cap" — while the gate this probe feeds recounts at the
+        // bundle's `2^26`. The preflight has the bundle in hand, so it uses it.
+        let probe = palw_post_genesis_registration_capped_v1(
             entry.profile.clone(),
             canonical.clone(),
             artifact_root,
@@ -535,8 +546,17 @@ impl PalwClassSdk {
             0,
             PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::default(), 0)),
             Vec::new(),
+            bundle.court.max_step_leaf_count(),
         )
-        .map_err(|e| format!("this build cannot express a registration for {}: {e}", entry.model_id))?;
+        .map_err(|e| {
+            // A canonical job that does not count against this ruleset's ladder is a class this
+            // ruleset would refuse, so it is the gate's answer in substance and says so in the
+            // gate's words — nothing here is signed or funded either way.
+            format!(
+                "the {} registration cannot be expressed against this ruleset, so nothing was signed or funded: {e}",
+                entry.model_id
+            )
+        })?;
         kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v3(
             bundle,
             &entry.profile,
@@ -585,7 +605,10 @@ impl PalwClassSdk {
         )
         .map_err(|e| format!("this node cannot price a registration for {}: {e}", candidate.entry.model_id))?
         .is_some();
-        palw_post_genesis_registration_v1(
+        // The ruleset's ladder, for the reason `preflight_admission_with_chain` gives: the object a
+        // registrant signs and the object the gate recounts must be counted by one number, and that
+        // number is the bundle's, never the executor's constant (audit D H-5b).
+        palw_post_genesis_registration_capped_v1(
             candidate.entry.profile.clone(),
             candidate.entry.canonical_context(),
             candidate.artifact_root,
@@ -595,6 +618,7 @@ impl PalwClassSdk {
             activation_daa,
             registrant_bond,
             signature,
+            bundle.court.max_step_leaf_count(),
         )
         .map_err(|e| format!("this node cannot build a registration for {}: {e}", candidate.entry.model_id))
     }
@@ -631,10 +655,16 @@ mod chain_arm_tests {
             ln_theta_gen_q: LN_THETA_10000_GEN_Q,
             eps_q: 1,
         };
+        // **It declares a tokenizer, because a CHAIN-REGISTERED class must** (audit D M-6). The
+        // exemption `check_tokenizer_declared_v1` grants is a property of the lane the resolver
+        // decided, not of the artifact's `derived_seed` — a flag neither `artifact_digest` nor the
+        // operand inventory covers — so a fixture standing in for a registered class has to carry
+        // what a registered class carries.
         let artifact = Base0ArtifactV1::derive_deterministic(shape, 0x0067)
             .expect("a valid shape")
             .with_a16_params(derived_a16_store(&shape))
-            .expect("sorted and unique");
+            .expect("sorted and unique")
+            .with_tokenizer_commitment(Base0ArtifactV1::tokenizer_commitment_of(b"{\"model\":\"misaka-palw-sdk-test\"}"));
         (std::sync::Arc::new(artifact), qwen25_a16_profile_v2(small_geometry()).expect("the corrected profile builds"))
     }
 

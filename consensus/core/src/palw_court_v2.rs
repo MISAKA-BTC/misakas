@@ -1022,6 +1022,9 @@ pub fn palw_court_params_at_v2(
         crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4,
         court.terminal_rounds(),
         widest_lane_count,
+        // The reserve is the window's, so the search that chooses the shape the window must hold
+        // reads the same chunk count the admission bound does (audit D H-2c).
+        court.max_close_chunks(),
     )
     .ok_or(PalwCourtV2Error::NoAdmissibleArity { window_court: bundle.state.window_court() })?;
     court.with_dissection_arity(arity).map_err(|e| PalwCourtV2Error::BindingInvalid(e.to_string()))
@@ -1186,9 +1189,8 @@ pub fn palw_attn_dispute_site_v2(
     // The court's tile is the CLASS's map's tile, not the tiled map's assumed: a fused class that
     // registered a map addressing no attention cache is refused by name rather than dissected at
     // a tile its map cannot open.
-    let tile_positions = u32::try_from(history_positions)
-        .ok()
-        .and_then(|positions| crate::palw_state_chunk_map::palw_map_history_tile_positions_v1(profile, positions))
+    // (`history_positions` is already `u32`; clippy 1.93.0 refuses the conversion that said so.)
+    let tile_positions = crate::palw_state_chunk_map::palw_map_history_tile_positions_v1(profile, history_positions)
         .ok_or(PalwCourtV2Error::FusedGeometryUnservable("this class's map addresses no attention cache"))?;
 
     // The anchor's layout, only when one is in evidence. `anchor_positions` is the checkpoint's
@@ -2631,6 +2633,7 @@ mod tests {
                 crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4,
                 bundle.court.terminal_rounds(),
                 lanes,
+                bundle.court.max_close_chunks(),
             );
             match (palw_court_params_at_v2(&bundle, true), expected) {
                 (Ok(court), Some(k)) => {
