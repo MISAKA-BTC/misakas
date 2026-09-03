@@ -63,6 +63,7 @@ def check_midi(b, dsl=None):
     need(fmt in (0, 1, 2), f"format {fmt} is not 0, 1 or 2")
     need(div != 0, "division is zero")
     off, tracks, notes = 14, 0, 0
+    programs, tempos = [], []
 
     def vlq(p):
         v = 0
@@ -99,6 +100,8 @@ def check_midi(b, dsl=None):
                 if mt == 0x2F:
                     need(p == end, f"end-of-track lands at {p}, the chunk ends at {end}")
                     saw_eot = True
+                elif mt == 0x51 and l == 3:
+                    tempos.append(int.from_bytes(b[p - 3:p], "big"))
             elif s in (0xF0, 0xF7):
                 l, p = vlq(p)
                 p += l
@@ -108,6 +111,8 @@ def check_midi(b, dsl=None):
                 need(p + n <= end, "a channel event ran off the track")
                 if hi == 0x90 and b[p + 1] > 0:
                     notes += 1
+                elif hi == 0xC0:
+                    programs.append((s & 0x0F, b[p]))
                 p += n
         need(p == end, f"track overran its own length: {p} vs {end}")
         need(saw_eot, "a track has no end-of-track meta event")
@@ -118,7 +123,19 @@ def check_midi(b, dsl=None):
     if dsl is not None:
         want = sum(len(t["notes"]) for t in dsl["tracks"])
         need(notes == want, f"{notes} note-ons in the file, {want} in the DSL it was made from")
-        detail += " == DSL"
+        # The same class as glTF's alphaMode, in this format's own terms. A channel with no Program
+        # Change plays program 0 — a piano — whatever instrument the DSL asked for, and a file with
+        # no Set Tempo plays at 120 BPM whatever tempo it declares. Both are silently correct files
+        # that disagree with their input, and only a player notices.
+        want_progs = sorted((t["channel"], t["program"]) for t in dsl["tracks"])
+        need(sorted(programs) == want_progs,
+             f"the DSL declares programs {want_progs} and the file carries {sorted(programs)}: "
+             f"a channel with no Program Change plays program 0 whatever the DSL asked for")
+        if "tempo_us_per_quarter" in dsl:
+            need(dsl["tempo_us_per_quarter"] in tempos,
+                 f"the DSL declares {dsl['tempo_us_per_quarter']} us/quarter and the file carries {tempos}: "
+                 f"a file with no Set Tempo plays at 120 BPM (500000) whatever it declares")
+        detail += " == DSL (notes, programs, tempo)"
     return detail
 
 
@@ -171,6 +188,20 @@ def check_glb(b):
             need(ia["max"][0] < nv if "max" in ia else True, "an index is past the last vertex")
     scene = js["scenes"][js.get("scene", 0)]
     need(scene["nodes"], "scene 0 has no nodes")
+    # **The default that means "ignore what you wrote".** glTF 2.0 SS3.9.4: `alphaMode` defaults to
+    # OPAQUE, and OPAQUE does not mean "alpha is 1" — it means the alpha channel is IGNORED. So a
+    # material carrying baseColorFactor[3] = 0.5 and no alphaMode is a fully conformant file that
+    # renders solid, matches its golden, and disagrees with the DSL only in a renderer. Found by
+    # pygltflib on 02-hierarchy's half-transparent blue; every byte-comparison check in the tree
+    # passed it. This is the class, not the instance: a value the writer emitted that a default it
+    # did not emit causes a reader to discard.
+    for i, m in enumerate(js.get("materials", [])):
+        a = m.get("pbrMetallicRoughness", {}).get("baseColorFactor", [1, 1, 1, 1])[3]
+        if a < 1.0:
+            mode = m.get("alphaMode", "OPAQUE")
+            need(mode in ("BLEND", "MASK"),
+                 f"material {i} ({m.get('name','unnamed')}) has baseColorFactor alpha {a} and alphaMode {mode}: "
+                 f"OPAQUE means the alpha channel is IGNORED (glTF 2.0 SS3.9.4), so this renders solid")
     attrs = sorted({k for pr in prims for k in pr["attributes"]})
     return f"{len(js['meshes'])} mesh(es), {len(js['nodes'])} node(s), {len(js['accessors'])} accessor(s), attrs {attrs}"
 
@@ -253,6 +284,24 @@ def cmd_selftest():
     cases.append(("glb: declared total length is 4 bytes over", ".glb", glb))
     # STL: a count that promises more triangles than the file carries.
     cases.append(("stl: count says 3, file holds 1", ".stl", b"\x00" * 80 + struct.pack("<I", 3) + b"\x00" * 50))
+    # **The one no byte comparison can catch**: a fully conformant GLB whose half-transparent
+    # material renders solid, because alphaMode was left to its OPAQUE default. This is the real
+    # defect pygltflib found, reduced to its smallest form.
+    doc = {"asset": {"version": "2.0"},
+           "buffers": [{"byteLength": 4}],
+           "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 4}],
+           "accessors": [{"bufferView": 0, "componentType": 5126, "count": 1, "type": "SCALAR"}],
+           "materials": [{"name": "half-transparent blue",
+                          "pbrMetallicRoughness": {"baseColorFactor": [0, 0, 1, 0.5]}}],
+           "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "material": 0, "mode": 4}]}],
+           "nodes": [{"mesh": 0}], "scenes": [{"nodes": [0]}]}
+    j = json.dumps(doc).encode()
+    j += b" " * ((4 - len(j) % 4) % 4)
+    bb = b"\x00\x00\x00\x00"
+    cases.append(("glb: alpha 0.5 with the OPAQUE default — conformant, and renders solid", ".glb",
+                  struct.pack("<III", 0x46546C67, 2, 12 + 8 + len(j) + 8 + len(bb))
+                  + struct.pack("<II", len(j), 0x4E4F534A) + j
+                  + struct.pack("<II", len(bb), 0x004E4942) + bb))
     ok = True
     with tempfile.TemporaryDirectory() as d:
         for name, ext, blob in cases:
