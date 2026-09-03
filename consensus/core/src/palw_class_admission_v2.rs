@@ -2128,10 +2128,41 @@ mod tests {
         // All three clear.
         admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, RC_TURN_DEADLINE), court)
             .expect("the dense graph-v5 512 row clears the close, the ladder and the window");
-        // The CLOSE alone refuses, and says so: the row needs two carriers (its bottom is charged
-        // at the cache-write route) and one is what the ruleset pays for.
-        let err = admit(court_at(1, RC_TURN_DEADLINE), court).expect_err("one carrier does not carry this row");
-        assert!(format!("{err}").contains("court close chunks"), "the close must name itself: {err}");
+        // **The dense row now clears ONE carrier, and that is ADR-0082 Decision 4's amendment.**
+        //
+        // This assertion was `expect_err("one carrier does not carry this row")`: the row's bottom
+        // was charged at the CACHE-WRITE route, because under the per-decode-call cadence a dispute
+        // at a prefill position had no checkpoint to anchor on at all. Its close was 216,019 bytes
+        // — three chunks — and a ruleset paying for one refused it by name.
+        //
+        // A class whose map addresses history tiles now commits a checkpoint after every position
+        // and anchors a dispute at position `p` on the one at `p + 1`, which holds exactly the
+        // `0..=p` rows the attention at `p` reads. The bottom is one chunk opening per kind with an
+        // empty residue, the close is 82,719 at the row's own canonical job (81,759 at this test's
+        // 510/2 job), and one carrier carries it. The rule that moved this golden is
+        // `palw_checkpoint_cadence_v1`; the graph, the map and the arithmetic are untouched.
+        let entry = admit(court_at(1, RC_TURN_DEADLINE), court).expect("one carrier now carries the dense graph-v5 row");
+        assert!(
+            entry.court_cost.max_close_bytes <= crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(1),
+            "the row was admitted at a close of {} against one carrier",
+            entry.court_cost.max_close_bytes
+        );
+        // The CLOSE still refuses when it must, and still says so — on the HYBRID row, whose
+        // binding term is its recurrence rather than its attention and which the amendment does not
+        // touch.
+        {
+            let hybrid = crate::palw_context_ladder::palw_qwen36_context_row_profile_v5(512).expect("projects");
+            let hybrid_rules =
+                crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&hybrid, Some(court)).expect("mapped");
+            let hybrid_job = context(&hybrid, 510, 2);
+            let counted = crate::palw_step::step_leaf_count_capped_v1(&hybrid, &hybrid_job, hybrid_rules.ladder).expect("counts");
+            let reg = weightless_registration(hybrid.shape_profile_id(), counted);
+            let mut bundle = conforming_bundle();
+            bundle.court = court_at(1, RC_TURN_DEADLINE);
+            let err = verify_class_admission_v5(&bundle, &hybrid, &hybrid_job, &reg, &[], &[], Some(hybrid_rules), Some(court))
+                .expect_err("one carrier does not carry the hybrid row");
+            assert!(format!("{err}").contains("court close chunks"), "the close must name itself: {err}");
+        }
         // The WINDOW alone refuses, and says so.
         let err = admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, RC_TURN_DEADLINE), PalwKaryCourtV1 {
             window_court_daa: 100,
