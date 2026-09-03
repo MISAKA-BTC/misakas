@@ -5445,3 +5445,21 @@ class will be red by construction; the announcement says "produced and merged as
 (`node.sh.pre-5f-qwen36` kept); listening after 229 s, fingerprint `2222e054…`, Qwen3.6 mapped, connected to node0,
 node1, seat4 and the pool slot, 0 panics, ALIVE; rss 8.2 GB with 5 GB free on the host (seat4 + node + pool share the
 33 GiB file through the page cache). Every panel seat now holds all three class artifacts.
+
+**6i, continued — the instrument for "is a red claim live?" (19:08 UTC, 3e's reading of `palw_producer.rs:466/477`):**
+the producer's `palw weight=… live_total=… final_claims=… unresolved=…` line prints the `PalwProducerFactsV2` computed
+**before** the attempt — the state at the job's start, the template's point of view — so `live_total=0` after both
+blocks says only that neither block was in the other's past when its job started (job #2's template was taken
+18:18:31Z, the second block #1 was produced). It says nothing about red. `getPalwProducerFacts` over the wire maps a
+subset of the internal facts (no `liveTotal`, `unresolvedClaims`, `finalClaims`, `safeWeight` keys), so the reading
+is the facts line at node0's **next** produced block: job #3 began 18:44Z, after #1 was merged red at daa 82 and
+before #2 was merged at daa 127. `unresolved=1, live_total>0` → red claims are live and the seats' silence is replay
+speed; `unresolved=1, live_total=0` → a maturity condition the reds have not met; `unresolved=0` → the fold did not
+admit it (though `bondReservedExposure = 2 × 13,426,800` says the carriage reserved for both). A watch is on that line.
+Reference from 3e's drill (blue claims, v5): `live_total` +663,054 per claim one job later, `unresolved 15` after #9,
+`final_claims 0` throughout run 1 — Final needs receipts + quorum + ReceiptLicensed, run 2's stage 6.
+
+**Post-cut list additions:** expose `liveTotal` / `unresolvedClaims` / `finalClaims` / `safeWeight` in
+`GetPalwProducerFactsResponse` (the operator's only liveness view without a log); the explorer's filler must store the
+header's `pow_algo_id` or the REST must not show one; the producer should log job start/finish/draw at INFO; the seat
+runbook carries per-host inference time for every registered class.
