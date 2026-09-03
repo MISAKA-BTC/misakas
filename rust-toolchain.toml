@@ -14,12 +14,13 @@
 # ## Why 1.93.0 and not 1.98.0, measured rather than preferred
 #
 # `cargo clippy --tests --benches --examples` — the exact Lints-job command — run over this tree
-# on both toolchains, counted by unique (lint, file:line:col):
+# on both toolchains, counted by unique (lint, file:line:col). Re-measured after the merge of
+# `palw-testnet-5f` at bd0e38bb, on the SAME tree for both, 886 compiler-artifact units each:
 #
-#     1.93.0    40 findings  (52 diagnostic messages; a finding is reported once per target)
-#     1.98.0   192 findings (310 diagnostic messages)
+#     1.93.0    11 findings  (18 diagnostic messages; a finding is reported once per target)
+#     1.98.0   163 findings (276 diagnostic messages)
 #     only on 1.93.0:    0
-#     only on 1.98.0:  152, from 14 lints that did not exist or did not fire in 1.93 —
+#     only on 1.98.0:  152, from 15 lints that did not exist or did not fire in 1.93 —
 #                      chunks_exact_to_as_chunks (58), unnecessary_sort_by (33),
 #                      useless_borrows_in_formatting (22), manual_checked_ops (8),
 #                      unneeded_wildcard_pattern (7), needless_return_with_question_mark (6),
@@ -27,11 +28,16 @@
 #                      byte_char_slices (2), collapsible_match (2), unnecessary_cast (1),
 #                      unused_format_specs (1), useless_format (1), while_let_loop (1).
 #
+# The 1.93.0 figure was 38 findings / 50 messages when this file was written; 27 of them were
+# fixed (see the `fix(clippy)` commit) and the remaining 11 are listed there with the reason each
+# needs a decision rather than an edit. CI runs `-D warnings`, so those 11 still fail the Lints
+# job: they are outstanding work, not an accepted baseline.
+#
 # 1.93.0's finding set is a strict SUBSET of 1.98.0's, so pinning 1.93.0 loses no signal that the
 # gate was already giving, and pinning 1.98.0 would add 152 findings to a gate that already has
-# 40 outstanding. The tree compiles clean on 1.93.0: that clippy run finished all 724 crates with
-# no errors. `cargo fmt --all -- --check` is byte-identically clean on BOTH versions, so the fmt
-# gate is indifferent to this choice. The workspace's `rust-version = "1.88.0"` is satisfied.
+# 11 outstanding. The tree compiles clean on 1.93.0 and on 1.98.0. `cargo fmt --all -- --check`
+# is byte-identically clean on BOTH versions, so the fmt gate is indifferent to this choice. The
+# workspace's `rust-version = "1.88.0"` is satisfied.
 #
 # Raising this is a deliberate act with a measured cost, which is the point of writing the number
 # down: whoever moves it to 1.98.0 owes the tree those 152 findings first.
