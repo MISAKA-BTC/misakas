@@ -807,6 +807,52 @@ impl Base0CheckpointCaptureV1 {
         capture.finish(count)
     }
 
+    /// **Re-derive the whole leg from its LEAVES alone** — the fold's entry, and the half that
+    /// makes a per-position class checkable without one byte of state (ADR-0082 Decision 4,
+    /// amended; audit B, C-1).
+    ///
+    /// [`Self::from_chunks_v1`] rebuilds a leg from the bytes its leaves are hashes of. A
+    /// per-position class has no such bytes to hand anyone — retaining a chunk per position is the
+    /// `Θ(n²)` term the amendment removes — and it does not need them for THIS question: a leaf is
+    /// `(index, covered, prev, chunk_count, state_chunks_root)`, and whether a vector of leaves is
+    /// the leg the binding committed is decided by chaining and hashing them. What the leaves
+    /// cannot establish is that `state_chunks_root` is the root of a state the job actually
+    /// reaches — no served bytes can, because that is arithmetic — and under Decision 9 that is
+    /// exactly what the seat's own recompute answers instead.
+    ///
+    /// Every structural rule the court's own `checkpoint_fault` recomputes is applied here rather
+    /// than trusted: the index is its position, the counter is the cadence's canonical value, and
+    /// the chain is the previous leaf's hash. A leaf that fails one is refused, so this can never
+    /// "rebuild" a leg the producer could not have filed.
+    pub fn from_leaves_v1(
+        ctx: &PalwJobContextV2,
+        profile: &PalwShapeProfileV3,
+        checkpoint_profile: &kaspa_consensus_core::palw_legs::PalwCheckpointProfileV1,
+        leaves: &[kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2],
+    ) -> Result<Base0CheckpointsV1, LegError> {
+        let mut capture = Self::new(ctx, profile, checkpoint_profile);
+        for (index, leaf) in leaves.iter().enumerate() {
+            if leaf.checkpoint_index as usize != index
+                || leaf.covered_decode_call != capture.next_covered_decode_call()
+                || leaf.prev_checkpoint_leaf_hash != capture.prev
+                || leaf.state_chunk_count == 0
+            {
+                return Err(LegError::CheckpointCaptureIncomplete { got: index as u32, expected: leaves.len() as u32 });
+            }
+            let hash = kaspa_consensus_core::palw_step_leg::checkpoint_leaf_hash_v2(
+                &capture.ctx_hash,
+                &capture.checkpoint_profile_hash,
+                &capture.state_chunk_map_id,
+                leaf,
+            );
+            capture.prev = hash;
+            capture.leaves.push(leaf.clone());
+            capture.leaf_hashes.push(hash);
+        }
+        let count = leaves.len() as u32;
+        capture.finish(count)
+    }
+
     /// **Seal the capture at the count the CLASS's cadence says the job has** — the count
     /// `palw_step_leg`'s shape pass recomputes, derived rather than passed in.
     ///
@@ -1140,15 +1186,24 @@ pub fn base0_kv_anchor_for_call_v1(
 /// court will demand. On a per-position class this answers for a PREFILL position too, which is
 /// the whole point: before the amendment a prefill dispute had no anchor and its bottom was three
 /// chunks that no carrier can file.
-pub fn base0_kv_anchor_for_step_v1(
+/// **The chunks come from the LIVE CACHE when the leg retained none** (audit B, C-1). `chunk` is
+/// the executor's own serializer — the cache it is holding to run, which is prefix-stable, so it
+/// answers for an earlier checkpoint byte-identically ([`base0_checkpoint_chunks_at_v1`]). A
+/// retaining leg ignores it and serves what it kept, so the two retentions produce the same
+/// operand and the caller does not have to know which one it has.
+pub fn base0_kv_anchor_for_step_v1<F>(
     checkpoints: &Base0CheckpointsV1,
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     call_index: u32,
     position: u32,
-) -> Option<kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1> {
+    chunk: F,
+) -> Option<kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1>
+where
+    F: FnMut(&kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>>,
+{
     let want = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_covered_for_step_v1(profile, ctx, call_index, position)?;
-    base0_kv_anchor_at_covered_v1(checkpoints, want)
+    base0_kv_anchor_at_covered_with_v1(checkpoints, profile, ctx, want, chunk)
 }
 
 fn base0_kv_anchor_at_covered_v1(
@@ -1161,6 +1216,30 @@ fn base0_kv_anchor_at_covered_v1(
         leaf: checkpoints.leaves[at].clone(),
         opening,
         chunks: checkpoints.chunks.get(at)?.clone(),
+    })
+}
+
+/// The same anchor, with a chunk source for the leg that folded its bytes away.
+fn base0_kv_anchor_at_covered_with_v1<F>(
+    checkpoints: &Base0CheckpointsV1,
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    want: u32,
+    chunk: F,
+) -> Option<kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1>
+where
+    F: FnMut(&kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>>,
+{
+    let at = checkpoints.leaves.iter().position(|l| l.covered_decode_call == want)?;
+    let opening = kaspa_consensus_core::palw_step_leg::step_opening_v1(&checkpoints.leaf_hashes, at as u64).ok()?;
+    let chunks = match checkpoints.chunks.get(at) {
+        Some(kept) => kept.clone(),
+        None => base0_checkpoint_chunks_at_v1(profile, ctx, want, chunk).ok()?,
+    };
+    Some(kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1 {
+        leaf: checkpoints.leaves[at].clone(),
+        opening,
+        chunks,
     })
 }
 

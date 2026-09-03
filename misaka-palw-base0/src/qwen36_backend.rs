@@ -1269,7 +1269,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
         prompt_token_ids: &[u32],
         output_token_ids: &[u32],
-        decode_calls: u32,
+        covered: u32,
     ) -> Result<Hash64, String> {
         use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
         self.artifact_read_probe_v1()?;
@@ -1299,11 +1299,24 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             &ctx,
             prompt_token_ids,
             output_token_ids,
-            decode_calls,
+            covered,
             &mut kernels,
         )
         .map(|state| state.state_chunks_root)
         .map_err(|e| e.to_string())
+    }
+
+    /// **The largest `covered` this class's leg carries, in the class's own cadence unit**
+    /// (audit B, C-2). Per decode call: `decode_calls`. Per position (what the graph-v5 hybrid
+    /// row's composed map registers): `prefill + decode_calls`, every row the cache ever holds.
+    /// A backend with no registered graph has no cadence to read and answers the seam's default.
+    fn fp_checkpoint_covered_bound_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3) -> u32 {
+        use kaspa_consensus_core::palw_context_ladder::{PalwCheckpointCadenceV1, palw_checkpoint_cadence_v1};
+        let decode_calls = job.decode_token_limit.saturating_sub(1);
+        match self.profile.as_ref().map(palw_checkpoint_cadence_v1) {
+            Some(PalwCheckpointCadenceV1::PerPosition) => job.prompt_tokens.saturating_add(decode_calls),
+            _ => decode_calls,
+        }
     }
 
     fn operand_openings_for(

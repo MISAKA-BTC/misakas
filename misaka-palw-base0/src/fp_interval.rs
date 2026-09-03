@@ -123,6 +123,12 @@ pub enum Base0FpIntervalError {
     NoCheckpointAt {
         covered: u32,
     },
+    /// The DENSE retention (`Base0RetainedMaterialV1`) carries checkpoint CHUNKS and no leaves,
+    /// and a class whose map addresses history tiles folds its chunks away — so a dense tuple of
+    /// such a class holds nothing an anchor can be built from. Refused by name rather than read as
+    /// an empty leg: the fold's own retention (`Base0FpMaterialV2`) carries the leaves, and that
+    /// is the retention a free-prompt executor of that class keeps.
+    DenseRetentionCarriesNoCheckpointLeaves,
     Sparse(crate::fp_capture::Base0SparseCaptureError),
     Leg(String),
     Replay(String),
@@ -159,6 +165,11 @@ impl std::fmt::Display for Base0FpIntervalError {
             }
             Self::PromptIdsAreNotTheJobs => write!(f, "the served ids do not hash to the binding's prompt_token_ids_hash"),
             Self::NoCheckpointAt { covered } => write!(f, "the capture holds no checkpoint covering decode call {covered}"),
+            Self::DenseRetentionCarriesNoCheckpointLeaves => write!(
+                f,
+                "this class folds its checkpoint chunks away, so its interval opens from the folded retention (which carries the \
+                 leg's leaves) and not from a dense tuple (which carries chunks that do not exist)"
+            ),
             Self::Sparse(e) => write!(f, "the sparse tree refused the opening: {e}"),
             Self::Leg(why) => write!(f, "the step leg refused the opening: {why}"),
             Self::Replay(why) => write!(f, "the class's kernels could not replay the interval: {why}"),
@@ -196,6 +207,15 @@ pub struct Base0FpIntervalGeometryV1 {
     pub decode_calls: u32,
     pub checkpoint_interval: u32,
     pub interval_count: u32,
+    /// **The unit the CLASS's checkpoint leaves count in** (ADR-0082 Decision 4, amended).
+    ///
+    /// The intervals themselves are a partition of the decode CALLS and do not move with it — but
+    /// which checkpoint anchors interval `j`, and what number that leaf carries, does:
+    /// `PerDecodeCall` counts calls and `PerPosition` counts positions, and the two differ by
+    /// `declared_prefill_tokens`. Carried here rather than re-derived at each use, because the
+    /// derivation is `palw_checkpoint_cadence_v1` of the class's registered map and a caller that
+    /// forgot it would compare a 403-position state against a 3-position root.
+    pub cadence: kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1,
 }
 
 impl Base0FpIntervalGeometryV1 {
@@ -203,17 +223,21 @@ impl Base0FpIntervalGeometryV1 {
     /// count, both on the accepted 0x4a payload, and the family's own checkpoint interval for the
     /// class. This is the form a seat must use: an executor that could shrink the count could
     /// predict which intervals the seat's draw would land on.
+    ///
+    /// The cadence is the CLASS's and is passed in rather than assumed: the chain facts do not
+    /// name the registered state chunk map, and a geometry that guessed would name the wrong leaf.
     pub fn from_chain_facts_v1(
         prompt_tokens: u32,
         decode_tokens_executed: u32,
         checkpoint_interval: u32,
+        cadence: kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1,
     ) -> Result<Self, Base0FpIntervalError> {
         if checkpoint_interval == 0 {
             return Err(Base0FpIntervalError::CheckpointIntervalIsZero);
         }
         let decode_calls = decode_tokens_executed.saturating_sub(1);
         let interval_count = decode_calls.div_ceil(checkpoint_interval).max(1);
-        Ok(Self { prompt_tokens, decode_calls, checkpoint_interval, interval_count })
+        Ok(Self { prompt_tokens, decode_calls, checkpoint_interval, interval_count, cadence })
     }
 
     /// The same geometry read off a capture's own binding — the executor's side. It must agree
@@ -236,7 +260,12 @@ impl Base0FpIntervalGeometryV1 {
         if derived != binding.step_leaf_count {
             return Err(Base0FpIntervalError::PriceIsNotTheGeometrys { declared: binding.step_leaf_count, derived });
         }
-        Self::from_chain_facts_v1(binding.job_context.declared_prefill_tokens, binding.job_context.exact_decode_tokens, committed)
+        Self::from_chain_facts_v1(
+            binding.job_context.declared_prefill_tokens,
+            binding.job_context.exact_decode_tokens,
+            committed,
+            kaspa_consensus_core::palw_context_ladder::palw_checkpoint_cadence_v1(&binding.shape_profile),
+        )
     }
 
     /// `(first_call, last_call)` inclusive, in the capture's call numbering — call 0 is the
@@ -253,13 +282,48 @@ impl Base0FpIntervalGeometryV1 {
         Some((first, last))
     }
 
-    /// The decode call the interval's anchoring checkpoint covers, or `None` for interval 0 (which
-    /// has no checkpoint before it — it starts at the prompt).
-    pub fn anchor_covered_call(&self, index: u32) -> Option<u32> {
+    /// **The decode CALL interval `index` resumes after** — the last call of the interval below
+    /// it, whose committed logits row seeds this one. `None` for interval 0, which starts at the
+    /// prompt.
+    ///
+    /// Cadence-free by construction: the intervals partition the decode calls and every cadence
+    /// partitions them the same way. This is the number that indexes `logits_rows`,
+    /// `generated_token_ids` and a step COORDINATE's `call_index`; the checkpoint that anchors the
+    /// same boundary is named by [`Self::anchor_covered_call`], and conflating the two is
+    /// audit B's C-2 — under `PerPosition` they differ by `declared_prefill_tokens`.
+    pub fn anchor_seed_call_v1(&self, index: u32) -> Option<u32> {
         if index == 0 || index >= self.interval_count {
             return None;
         }
         index.checked_mul(self.checkpoint_interval)
+    }
+
+    /// **What the anchoring checkpoint's `covered_decode_call` field CARRIES**, in the unit the
+    /// class's cadence counts in — `None` for interval 0, which has no checkpoint before it.
+    ///
+    /// `PerDecodeCall`: `index × interval`, the decode call the state is after — the shipped rule
+    /// verbatim. `PerPosition`: `prefill + index × interval`, because the leaf's counter IS a
+    /// position count there and the state after that many calls is that many rows of cache.
+    ///
+    /// The two arms name the SAME state; [`Self::anchor_covered_positions_v1`] is that state's
+    /// position count and `palw_checkpoint_positions_at_v1` of this value is the same number,
+    /// which is what `the_anchors_two_units_name_one_state` pins.
+    pub fn anchor_covered_call(&self, index: u32) -> Option<u32> {
+        use kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1;
+        let calls = self.anchor_seed_call_v1(index)?;
+        match self.cadence {
+            PalwCheckpointCadenceV1::PerDecodeCall => Some(calls),
+            PalwCheckpointCadenceV1::PerPosition => self.prompt_tokens.checked_add(calls),
+        }
+    }
+
+    /// **How many cache rows the anchoring checkpoint's state holds** — the unit a seat's own
+    /// recompute stops in ([`crate::fp_recompute::base0_fp_recompute_state_at_position_v1`]), and
+    /// the one geometry both sides take the chunking at.
+    ///
+    /// `prefill + index × interval` under either cadence, because the prefill always ran.
+    pub fn anchor_covered_positions_v1(&self, index: u32) -> Option<u32> {
+        self.prompt_tokens.checked_add(self.anchor_seed_call_v1(index)?)
     }
 }
 
@@ -272,9 +336,20 @@ impl Base0FpIntervalGeometryV1 {
 /// could predict which intervals a seat's draw lands on, and the draw is the whole sampling
 /// argument.
 pub fn base0_fp_interval_count_for_v1(prompt_tokens: u32, decode_tokens_executed: u32, checkpoint_interval: u32) -> Option<u32> {
-    Base0FpIntervalGeometryV1::from_chain_facts_v1(prompt_tokens, decode_tokens_executed, checkpoint_interval)
-        .ok()
-        .map(|g| g.interval_count)
+    // **The cadence named here is a DECLARED choice, not a default this forgot to make.** The
+    // count is `decode_calls / interval` under either one — the intervals partition the decode
+    // calls and every cadence partitions them the same way — and this asker (the seam's
+    // `fp_interval_count_for`, three families deep) holds chain numbers and no profile. The
+    // cadence-dependent question is which LEAF anchors an interval, and nothing here asks it.
+    // `the_interval_count_does_not_depend_on_the_cadence` is what makes that sentence checkable.
+    Base0FpIntervalGeometryV1::from_chain_facts_v1(
+        prompt_tokens,
+        decode_tokens_executed,
+        checkpoint_interval,
+        kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1::PerDecodeCall,
+    )
+    .ok()
+    .map(|g| g.interval_count)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -340,7 +415,9 @@ pub fn base0_fp_interval_leaves_v1(
         geometry.calls_for(index).ok_or(Base0FpIntervalError::IntervalOutOfRange { index, count: geometry.interval_count })?;
     let interval_first = first_leaf_of_call_v1(profile, ctx, first_call)?;
     let range_end = first_leaf_of_call_v1(profile, ctx, last_call + 1)?;
-    let range_first = match geometry.anchor_covered_call(index) {
+    // The seed row is a step COORDINATE, so it is named by the anchor's CALL and never by the
+    // checkpoint leaf's counter — the two are the same number only under `PerDecodeCall`.
+    let range_first = match geometry.anchor_seed_call_v1(index) {
         None => interval_first,
         Some(anchor_call) => canonical_step_leaf_index(
             profile,
@@ -551,6 +628,11 @@ pub fn base0_fp_interval_opening_seat_state_v1(
         Base0FpIntervalOpeningAnyV1::Recomputed(o) => o.interval_index,
     };
     let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, family_checkpoint_interval).ok()?;
+    // The memo is keyed by the LEAF's counter, which is the unit the recompute was ordered in
+    // (`PalwBackend::fp_recompute_checkpoint_root`) and the unit the row check compares against.
+    // Keying it in calls while the class counts positions is audit B's C-2 on the lookup side: the
+    // seat holds the right state and cannot find it, so every honest graph-v5 opening is
+    // `Unverifiable`.
     let covered = geometry.anchor_covered_call(index)?;
     crate::fp_recompute::base0_fp_seat_state_held_v1(&binding.shape_profile, &binding.job_context, prompt_token_ids, covered)
 }
@@ -655,6 +737,9 @@ pub fn base0_open_fp_interval_v1(
     if profile.state_chunk_map_id == Hash64::default() && index > 0 {
         return Err(Base0FpIntervalError::NoStateChunkMapRegistered { index });
     }
+    if base0_fp_class_requires_flat_openings_v1(profile) && index > 0 {
+        return Err(Base0FpIntervalError::DenseRetentionCarriesNoCheckpointLeaves);
+    }
     let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, family_checkpoint_interval)?;
     let leaves_geometry = base0_fp_interval_leaves_v1(profile, ctx, &geometry, index)?;
 
@@ -693,7 +778,7 @@ pub fn base0_open_fp_interval_v1(
 
     let anchor = match geometry.anchor_covered_call(index) {
         None => None,
-        Some(covered) => Some(base0_checkpoint_operands_v1(binding, chunks, covered)?),
+        Some(covered) => Some(base0_checkpoint_operands_v1(binding, chunks, &[], covered)?),
     };
 
     base0_assemble_fp_interval_opening_v1(
@@ -735,7 +820,20 @@ fn base0_assemble_fp_interval_opening_v1(
     if step_range_opening_root_v1(binding.step_leaf_count, &range).ok() != Some(binding.step_merkle_root) {
         return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
     }
-    Base0FpIntervalOpeningV1 {
+    // **The class's declaration decides which FORM is served, here, once** (ADR-0082 Decision 9;
+    // audit B, C-1). A class whose map addresses history tiles folds its checkpoints away and is
+    // served the NAMED anchor — there are no chunks to carry and Decision 9 forbids carrying them
+    // anyway. Emitting it here rather than assembling the chunked form and stripping it after is
+    // what keeps a chunkless `Base0FpIntervalOpeningV1` — an object whose anchor cannot build its
+    // own state root — from existing at all.
+    let flat = base0_fp_class_requires_flat_openings_v1(&binding.shape_profile);
+    if let Some(a) = anchor.as_ref()
+        && !flat
+        && a.chunks.len() as u32 != a.leaf.state_chunk_count
+    {
+        return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
+    }
+    let opening = Base0FpIntervalOpeningV1 {
         version: PALW_BASE0_FP_INTERVAL_VERSION_V1,
         interval_index: index,
         binding: binding.clone(),
@@ -743,8 +841,11 @@ fn base0_assemble_fp_interval_opening_v1(
         seed_row_leaf_count: leaves_geometry.seed_row_leaves as u32,
         seed_row_tiles,
         anchor,
+    };
+    if flat {
+        return Base0FpIntervalOpeningV2::from_chunked_v1(&opening).encode_v1();
     }
-    .encode_v1()
+    opening.encode_v1()
 }
 
 /// **Open interval `index` WITHOUT its history** (ADR-0082 Decision 9, executor half).
@@ -773,7 +874,13 @@ pub fn base0_open_fp_interval_chunkless_v1(
 /// ([`base0_open_fp_interval_sparse_v1`]) and a graph-v5 seat wants it WITHOUT the anchor's chunks
 /// ([`Base0FpIntervalOpeningV2`]). One strip for both retention forms, so the two routes cannot
 /// disagree about what a flat opening is.
+/// **Idempotent**: bytes that are already the flat form come back unchanged. The assembler emits
+/// the flat form directly for a class that folds (there is no history to strip), and a caller that
+/// then asked for a strip would otherwise be told its own opening "is not this family's bytes".
 pub fn base0_strip_fp_interval_history_v1(chunked_bytes: &[u8]) -> Result<Vec<u8>, Base0FpIntervalError> {
+    if chunked_bytes.starts_with(&PALW_BASE0_FP_INTERVAL_MAGIC_V2) {
+        return Ok(chunked_bytes.to_vec());
+    }
     let chunked = Base0FpIntervalOpeningV1::decode_v1(chunked_bytes)?;
     Base0FpIntervalOpeningV2::from_chunked_v1(&chunked).encode_v1()
 }
@@ -820,9 +927,15 @@ fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
         .ok_or(Base0FpIntervalError::IntervalOutOfRange { index: interval, count: geometry.interval_count })?;
 
     let prompt_usize: Vec<usize> = prompt_token_ids.iter().map(|t| *t as usize).collect();
-    let operands = match geometry.anchor_covered_call(interval) {
-        None => None,
-        Some(covered) => Some(base0_checkpoint_operands_v1(binding, chunks, covered)?),
+    // **A fold that retained no state resumes from the prompt** (ADR-0082 Decision 4, amended).
+    // A per-position class keeps ZERO bytes of cache per checkpoint, so there is no chunk to
+    // restore and the executor pays what Decision 9 prices a seat at: one forward pass of the
+    // prefix. The alternative — retaining a chunk per position — is the `Θ(n²)` term the
+    // amendment exists to remove.
+    let anchored = !chunks.is_empty();
+    let (operands, first_call) = match geometry.anchor_covered_call(interval).filter(|_| anchored) {
+        None => (None, 0),
+        Some(covered) => (Some(base0_checkpoint_operands_v1(binding, chunks, &[], covered)?), first_call),
     };
     let start = match (&operands, geometry.anchor_covered_call(interval)) {
         (None, _) => Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt_usize },
@@ -831,9 +944,15 @@ fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
             // the executor is the party that produced it. A seat derives the same id from the
             // committed row instead of being told it (the module doc's rule); here the two are the
             // same value, and the range opening's root check below is what says so.
+            //
+            // Indexed by the anchor's CALL, never by the leaf's counter: `generated` is one id per
+            // call and a per-position leaf's counter is a position.
+            let seed_call = geometry
+                .anchor_seed_call_v1(interval)
+                .ok_or(Base0FpIntervalError::NoCheckpointAt { covered })?;
             let seed_token = *generated
-                .get(covered as usize)
-                .ok_or_else(|| Base0FpIntervalError::Replay(format!("the retention has no id for call {covered}")))?;
+                .get(seed_call as usize)
+                .ok_or_else(|| Base0FpIntervalError::Replay(format!("the retention has no id for call {seed_call}")))?;
             Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: &anchor.chunks, seed_token }
         }
         (Some(_), None) => return Err(Base0FpIntervalError::NoCheckpointAt { covered: 0 }),
@@ -922,7 +1041,9 @@ pub fn base0_open_fp_interval_sparse_v1<K: Base0FpIntervalKernelsV1>(
 
     let anchor = match geometry.anchor_covered_call(index) {
         None => None,
-        Some(covered) => Some(base0_checkpoint_operands_v1(binding, &material.checkpoint_chunks, covered)?),
+        Some(covered) => {
+            Some(base0_checkpoint_operands_v1(binding, &material.checkpoint_chunks, &material.checkpoint_leaves, covered)?)
+        }
     };
     base0_assemble_fp_interval_opening_v1(binding, tree, &leaves_geometry, index, span_first, &span_leaves, seed_row_tiles, anchor)
 }
@@ -939,7 +1060,7 @@ fn base0_seed_row_tiles_from_rows_v1(
     geometry: &Base0FpIntervalGeometryV1,
     index: u32,
 ) -> Result<Vec<PalwStepTileLeafV1>, Base0FpIntervalError> {
-    let Some(anchor_call) = geometry.anchor_covered_call(index) else {
+    let Some(anchor_call) = geometry.anchor_seed_call_v1(index) else {
         return Ok(Vec::new()); // interval 0 resumes from the prompt and carries no seed row
     };
     let profile = &binding.shape_profile;
@@ -981,14 +1102,34 @@ fn base0_seed_row_tiles_from_rows_v1(
 pub fn base0_checkpoint_operands_v1(
     binding: &PalwStepBindingV2,
     chunks: &[Vec<Vec<u8>>],
+    leaves: &[kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2],
     covered: u32,
 ) -> Result<PalwCheckpointKvOperandsV1, Base0FpIntervalError> {
-    let checkpoints = crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(
-        &binding.job_context,
-        &binding.shape_profile,
-        &binding.checkpoint_profile,
-        chunks,
-    )
+    use kaspa_consensus_core::palw_context_ladder::{PalwCheckpointCadenceV1, palw_checkpoint_cadence_v1};
+    // **Which retention this leg has is the CADENCE's answer** (ADR-0082 Decision 4, amended;
+    // audit B, C-1). A per-call class kept its chunks and the leg is re-derived from them. A
+    // per-position class kept none — a chunk per position is `Θ(n²)` — and re-derives the leg from
+    // its LEAVES, which decide every structural question an operand needs (which leaf covers this
+    // state, what it hashes to, whether it opens against `checkpoint_merkle_root`) without one
+    // byte of history. The operand it returns names the checkpoint and carries no state, which is
+    // the only form such a class may serve anyway
+    // ([`base0_fp_class_requires_flat_openings_v1`]).
+    let per_position = palw_checkpoint_cadence_v1(&binding.shape_profile) == PalwCheckpointCadenceV1::PerPosition;
+    let checkpoints = if per_position {
+        crate::legs::Base0CheckpointCaptureV1::from_leaves_v1(
+            &binding.job_context,
+            &binding.shape_profile,
+            &binding.checkpoint_profile,
+            leaves,
+        )
+    } else {
+        crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(
+            &binding.job_context,
+            &binding.shape_profile,
+            &binding.checkpoint_profile,
+            chunks,
+        )
+    }
     .map_err(|e| Base0FpIntervalError::Leg(format!("{e:?}")))?;
     // The leg the chunks re-derive must be the one the CLAIM committed, checked before anything
     // resumes: resuming from unchecked state would let a producer that lied about a step hand over
@@ -1006,7 +1147,14 @@ pub fn base0_checkpoint_operands_v1(
     Ok(PalwCheckpointKvOperandsV1 {
         leaf: checkpoints.leaves[at].clone(),
         opening,
-        chunks: checkpoints.chunks.get(at).cloned().ok_or(Base0FpIntervalError::NoCheckpointAt { covered })?,
+        // Empty on the folded route, and it stays empty: the assembler below emits the NAMED form
+        // for exactly the classes that fold, so no opening is ever served with an anchor whose
+        // chunks do not build its own state root.
+        chunks: if per_position {
+            Vec::new()
+        } else {
+            checkpoints.chunks.get(at).cloned().ok_or(Base0FpIntervalError::NoCheckpointAt { covered })?
+        },
     })
 }
 
@@ -1085,7 +1233,19 @@ where
             kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits)
         }
         Base0FpIntervalStartV1::Checkpoint { covered_decode_call, seed_token, .. } => {
-            if first_call != covered_decode_call + 1 {
+            // **The guard is a statement about CALLS and the leaf's counter may not be one**
+            // (audit B, C-2). `covered_decode_call` is whatever the class's cadence counts —
+            // decode calls on a per-call class, cache POSITIONS on a per-position one — so it is
+            // converted to a position count by the one function that answers that
+            // (`palw_checkpoint_positions_at_v1`) and back to the call the position implies. On
+            // every shipped class the two conversions cancel and this is `covered + 1` verbatim.
+            let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(
+                profile,
+                ctx,
+                *covered_decode_call,
+            );
+            let anchored_call = (positions as usize).saturating_sub(prefill);
+            if first_call as usize != anchored_call + 1 {
                 return Err("the checkpoint does not cover the call before this interval".to_string());
             }
             *seed_token as usize
@@ -1297,12 +1457,18 @@ pub fn base0_verify_fp_interval_opening_with_state_v1<K: Base0FpIntervalKernelsV
     let start = match geometry.anchor_covered_call(index) {
         None => Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt_usize },
         Some(covered) => {
+            // The seed row is a step coordinate and is named by the anchor's CALL; `covered` is
+            // the checkpoint LEAF's counter and is what the leaf is matched on. Under
+            // `PerPosition` they differ by the prefill, which is audit B's C-2.
+            let Some(seed_call) = geometry.anchor_seed_call_v1(index) else {
+                return Base0FpIntervalSeatVerdictV1::Mismatch;
+            };
             let Some(seed_token) = seed_token_from_opened_row_v1(
                 profile,
                 ctx,
                 &opening.seed_row_tiles,
                 &opening.range,
-                covered,
+                seed_call,
                 leaves_geometry.range_first,
             ) else {
                 return Base0FpIntervalSeatVerdictV1::Mismatch;
@@ -1496,7 +1662,13 @@ mod tests {
     fn every_call_is_in_exactly_one_interval() {
         for interval in [1u32, 2, 3, 8] {
             for decode_tokens in 1u32..=20 {
-                let geometry = Base0FpIntervalGeometryV1::from_chain_facts_v1(4, decode_tokens, interval).expect("a geometry");
+                let geometry = Base0FpIntervalGeometryV1::from_chain_facts_v1(
+                    4,
+                    decode_tokens,
+                    interval,
+                    kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1::PerDecodeCall,
+                )
+                .expect("a geometry");
                 let mut covered: Vec<u32> = Vec::new();
                 for index in 0..geometry.interval_count {
                     let (first, last) = geometry.calls_for(index).expect("in range");
@@ -1518,7 +1690,13 @@ mod tests {
     #[test]
     fn a_zero_cadence_is_refused_by_name() {
         assert_eq!(
-            Base0FpIntervalGeometryV1::from_chain_facts_v1(4, 4, 0).unwrap_err(),
+            Base0FpIntervalGeometryV1::from_chain_facts_v1(
+                4,
+                4,
+                0,
+                kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1::PerDecodeCall
+            )
+            .unwrap_err(),
             Base0FpIntervalError::CheckpointIntervalIsZero
         );
     }
@@ -1909,7 +2087,7 @@ mod tests {
             .find(|c| c.call_index == call && reads_kv(c.node_slot))
             .expect("the class has a step that reads its own KV history");
 
-        let anchor = base0_checkpoint_operands_v1(&run.binding, &run.checkpoints.chunks, call - 1).expect("the committed checkpoint");
+        let anchor = base0_checkpoint_operands_v1(&run.binding, &run.checkpoints.chunks, &run.checkpoints.leaves, call - 1).expect("the committed checkpoint");
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::Base0V1(
             kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1 {

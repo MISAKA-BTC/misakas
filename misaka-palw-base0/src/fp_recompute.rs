@@ -113,10 +113,15 @@ impl std::error::Error for Base0FpRecomputeError {}
 /// are never compared against an executor's chunks, because no executor chunk is ever fetched.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Base0FpSeatStateV1 {
-    /// The decode call this state is the state after — `index × checkpoint_interval` for the
-    /// interval a seat drew.
+    /// **The checkpoint leaf's own counter for this state**, in the unit the class's cadence
+    /// counts in: `index × checkpoint_interval` decode calls on a per-call class,
+    /// `prefill + index × checkpoint_interval` POSITIONS on a per-position one. The name is the
+    /// leaf field's and is kept so the comparison against an opening is field against field.
     pub covered_decode_call: u32,
-    /// Positions folded into it: `declared_prefill_tokens + covered_decode_call`.
+    /// Positions folded into it —
+    /// `palw_checkpoint_positions_at_v1(profile, ctx, covered_decode_call)`, which is
+    /// `declared_prefill_tokens + covered_decode_call` on a per-call class and
+    /// `covered_decode_call` itself on a per-position one.
     pub positions: u32,
     /// The committed root of those bytes under the class's map — the 64 bytes that replace the
     /// history on the wire.
@@ -257,6 +262,32 @@ pub fn base0_fp_recompute_state_at_position_v1<K: Base0FpRecomputeKernelsV1 + ?S
         kernels.forward_no_capture(token as usize, position)?;
     }
     seat_state_here_v1(profile, decode_calls, positions, kernels)
+}
+
+/// **The state the checkpoint carrying `covered` is the state of** (ADR-0082 Decision 4, amended;
+/// audit B, C-2) — the entry every SEAT takes, because `covered` is the only number an opening
+/// carries.
+///
+/// One conversion, in one place: `palw_checkpoint_positions_at_v1` is what turns the class's own
+/// counter into cache rows, and the walk stops after that many. On a per-call class it is
+/// `prefill + covered` and this is [`base0_fp_recompute_state_v1`] verbatim; on a per-position
+/// class the counter already IS the row count and the walk can stop inside the prefill — the case
+/// the per-call entry cannot express at all, and the case audit B measured as a guaranteed
+/// state-root mismatch (a 403-position state compared against a 3-position root).
+///
+/// The returned `covered_decode_call` is the LEAF's counter, not the decode call, so a caller
+/// comparing it against the checkpoint an opening names compares like with like.
+pub fn base0_fp_recompute_state_at_covered_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    prompt_token_ids: &[u32],
+    output_token_ids: &[u32],
+    covered: u32,
+    kernels: &mut K,
+) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
+    let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, ctx, covered);
+    let state = base0_fp_recompute_state_at_position_v1(profile, ctx, prompt_token_ids, output_token_ids, positions, kernels)?;
+    Ok(Base0FpSeatStateV1 { covered_decode_call: covered, ..state })
 }
 
 /// The state serialisation both entries share — one spelling of "chunk what the kernels hold and
@@ -556,7 +587,12 @@ struct SeatStateKeyV1 {
     class_id: Hash64,
     context_hash: Hash64,
     prompt_ids_hash: Hash64,
-    decode_calls: u32,
+    /// **The checkpoint LEAF's own counter**, not a decode call — the unit the class's cadence
+    /// counts in (`palw_checkpoint_covered_at_index_v1`). Both askers name a checkpoint and both
+    /// name it by this number, so the key holds it verbatim; keying it in calls while the class
+    /// counts positions is why a graph-v5 seat could hold the right state and never find it.
+    /// `class_id` carries the registered map, so one number cannot mean two things under one key.
+    covered: u32,
 }
 
 static SEAT_STATE_MEMO: std::sync::Mutex<Option<(SeatStateKeyV1, Hash64, Base0FpSeatStateV1)>> = std::sync::Mutex::new(None);
@@ -565,17 +601,21 @@ fn seat_state_key_v1(
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     prompt_token_ids: &[u32],
-    decode_calls: u32,
+    covered: u32,
 ) -> SeatStateKeyV1 {
     SeatStateKeyV1 {
         class_id: profile.shape_profile_id(),
         context_hash: ctx.context_hash(),
         prompt_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids),
-        decode_calls,
+        covered,
     }
 }
 
-/// [`base0_fp_recompute_state_v1`], with the state kept for the row check that follows it.
+/// [`base0_fp_recompute_state_at_covered_v1`], with the state kept for the row check that follows
+/// it.
+///
+/// `covered` is the checkpoint leaf's own counter — the class's cadence unit — because that is the
+/// number an opening carries and the number the row check will look the state up by.
 ///
 /// `kernels` is built by the caller and only used on a miss, so a family pays for its engine setup
 /// once per real recompute.
@@ -584,10 +624,10 @@ pub fn base0_fp_seat_state_memoized_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
     ctx: &PalwJobContextV2,
     prompt_token_ids: &[u32],
     output_token_ids: &[u32],
-    decode_calls: u32,
+    covered: u32,
     kernels: &mut K,
 ) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
-    let key = seat_state_key_v1(profile, ctx, prompt_token_ids, decode_calls);
+    let key = seat_state_key_v1(profile, ctx, prompt_token_ids, covered);
     let ids = kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(output_token_ids);
     if let Ok(guard) = SEAT_STATE_MEMO.lock()
         && let Some((held, held_ids, state)) = guard.as_ref()
@@ -596,7 +636,7 @@ pub fn base0_fp_seat_state_memoized_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
     {
         return Ok(state.clone());
     }
-    let state = base0_fp_recompute_state_v1(profile, ctx, prompt_token_ids, output_token_ids, decode_calls, kernels)?;
+    let state = base0_fp_recompute_state_at_covered_v1(profile, ctx, prompt_token_ids, output_token_ids, covered, kernels)?;
     if let Ok(mut guard) = SEAT_STATE_MEMO.lock() {
         *guard = Some((key, ids, state.clone()));
     }
@@ -615,9 +655,9 @@ pub fn base0_fp_seat_state_held_v1(
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     prompt_token_ids: &[u32],
-    decode_calls: u32,
+    covered: u32,
 ) -> Option<Base0FpSeatStateV1> {
-    let key = seat_state_key_v1(profile, ctx, prompt_token_ids, decode_calls);
+    let key = seat_state_key_v1(profile, ctx, prompt_token_ids, covered);
     let guard = SEAT_STATE_MEMO.lock().ok()?;
     let (held, _ids, state) = guard.as_ref()?;
     (*held == key).then(|| state.clone())
