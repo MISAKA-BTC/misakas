@@ -89,7 +89,7 @@ use kaspa_consensus_core::palw_freeprompt_v3::{
     PalwFpWorkerRequestV3, PalwFpWorkerResultV3, PalwFreePromptJobV3, fp_job_id_v3, fp_worker_request_hash_v3,
 };
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
-use kaspa_consensus_core::palw_v2::{PALW_V2_MAX_FRAME_BYTES, prompt_token_ids_hash_v2, read_framed, write_framed};
+use kaspa_consensus_core::palw_v2::{PALW_V2_MAX_FRAME_BYTES, PalwJobContextV2, prompt_token_ids_hash_v2, read_framed, write_framed};
 use kaspa_hashes::Hash64;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -100,6 +100,15 @@ use crate::tokenizer::QwenTokenizer;
 pub fn hex(h: Hash64) -> String {
     faster_hex::hex_string(h.as_byte_slice())
 }
+
+/// **The retention manifest's field for the whole job context, named once.**
+///
+/// [`retain_v1`] writes it and the gateway's `read_worker_manifest` reads it, and a field a
+/// producer writes under one name and a consumer looks for under another is a binding that is
+/// silently never checked — which is the exact shape of the defect this field was added to close.
+/// The writer's literal is held to this constant by
+/// `the_retention_manifest_carries_the_job_context_and_the_hash_is_derived_from_it`.
+pub const RETENTION_JOB_CONTEXT_FIELD_V1: &str = "job_context_borsh_hex";
 
 /// **The control tokens at which a Qwen-family generation ENDS, by name.**
 ///
@@ -797,7 +806,7 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
         run.facts.decode_tokens_executed,
     );
 
-    retain_v1(rt, trace_out, binding, &run, context.context_hash())?;
+    retain_v1(rt, trace_out, binding, &run, &context)?;
 
     let rendered = render_answer_v1(&rt.tokenizer, &run.output_token_ids);
 
@@ -890,12 +899,15 @@ fn retain_v1<B: PalwExecutionBackendV1>(
     trace_out: &Path,
     binding: Hash64,
     run: &PalwFpRunV1,
-    job_context_hash: Hash64,
+    context: &PalwJobContextV2,
 ) -> Result<(), String> {
     let retain_dir = trace_out.join(hex(binding));
     std::fs::create_dir_all(&retain_dir).map_err(|e| format!("cannot create the retention dir {}: {e}", retain_dir.display()))?;
     let material_path = retain_dir.join("material.bin");
     std::fs::write(&material_path, &run.outcome.material).map_err(|e| format!("cannot retain {}: {e}", material_path.display()))?;
+    // The CONTEXT, not only its hash. Written from the same value the hash is derived from, one
+    // line below, so the two cannot come from different contexts — see the field comment.
+    let context_borsh = borsh::to_vec(context).map_err(|e| format!("cannot serialize the job context: {e}"))?;
     let manifest_doc = serde_json::json!({
         "schema": rt.retention_schema,
         "trace_binding": hex(binding),
@@ -907,7 +919,19 @@ fn retain_v1<B: PalwExecutionBackendV1>(
         // ADR-0078 X6: the one input a consumer cannot derive from the answer alone — the job's
         // context hash — so that `output_root` is recomputable from (ids, this, the family's
         // rendered-hash rule) by anyone the answer is handed to.
-        "job_context_hash": hex(job_context_hash),
+        "job_context_hash": hex(context.context_hash()),
+        // **X6's binding leg: the whole context, because a hash cannot be asked a question.**
+        // `output_root` needs the hash and nothing else, but the binding — "is this artifact's
+        // DSL the rendering of this claim's ids?" — needs to know WHICH TOKENIZER the run was
+        // executed under, and that is `tokenizer_id`, a FIELD of the context. Until this line the
+        // gateway published only the hash, so `palw-derive verify --job-context` and
+        // `misaka palw derived-verify --tokenizer` had no way to reach a production job and
+        // `binding_checked: true` was unreachable outside a test.
+        //
+        // Beside the hash rather than instead of it: the hash is what `output_root` is built from
+        // and every existing reader takes it by that name. A consumer recomputes `context_hash()`
+        // from these bytes and refuses the pair if the two disagree.
+        "job_context_borsh_hex": faster_hex::hex_string(&context_borsh),
         "output_root": hex(run.outcome.output_root),
         "family": rt.retention_family,
     });
@@ -1288,6 +1312,79 @@ mod tests {
             std::fs::read(job_dir.join(&binding).join("material.bin")).expect("the one-shot mode retained its capture"),
             std::fs::read(serve_dir.join(&binding).join("material.bin")).expect("the serve mode retained its capture"),
         );
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// **The retention manifest carries the job CONTEXT, and its hash is DERIVED from it**
+    /// (ADR-0078 X6's binding leg).
+    ///
+    /// Until this field existed a worker published `job_context_hash` and nothing else, so the
+    /// gateway had only a hash to hand a consumer — and the question a hash cannot be asked is
+    /// "which tokenizer may render these ids", which is `tokenizer_id`, a FIELD of the context.
+    /// `palw-derive verify --job-context` and `misaka palw derived-verify --tokenizer` were
+    /// therefore unreachable against a real job, and `binding_checked: true` could only be
+    /// produced by a test that built its own context.
+    ///
+    /// The ROUND TRIP is the assertion: the hex borsh decodes to a `PalwJobContextV2` whose
+    /// `context_hash()` IS the manifest's `job_context_hash`, so a reader that recomputes the hash
+    /// from these bytes reaches the value `output_root` was built from and the two can never be
+    /// two different contexts. The key set is pinned as well, because the value of this manifest
+    /// to a stranger is every field it had before plus one.
+    #[test]
+    fn the_retention_manifest_carries_the_job_context_and_the_hash_is_derived_from_it() {
+        let temp = std::env::temp_dir().join(format!("palw-fp-worker-ctx-{}", std::process::id()));
+        let manifest = fixture_runtime_v1().manifest().clone();
+        let request = fixture_request_v1(&manifest, PalwFpWorkerInputV3::TokenIds(vec![3, 5, 8, 13, 21]));
+        let frame = framed(&request);
+        let mut out = Vec::new();
+        run_v3_job_v1(&mut frame.as_slice(), &mut out, &temp, fixture_runtime_v1).expect("the one-shot job runs");
+        let result: PalwFpWorkerResultV3 = borsh::from_slice(
+            &read_framed_stream(&mut out.as_slice(), PALW_V2_MAX_FRAME_BYTES).expect("the frame reads").expect("a frame was written"),
+        )
+        .expect("the result decodes");
+
+        let path = temp.join(hex(fp_job_id_v3(&result.job))).join("manifest.json");
+        let doc: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).expect("the manifest was retained")).expect("JSON");
+        let object = doc.as_object().expect("a JSON object");
+        let keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "chunk_count",
+                "execution_root",
+                "family",
+                "job_context_borsh_hex",
+                "job_context_hash",
+                "material_bytes",
+                "output_root",
+                "schema",
+                "trace_binding",
+                "trace_manifest_root",
+                "trace_root",
+            ],
+            "the manifest gained a field and lost none"
+        );
+
+        // The writer's literal, held to the constant the gateway's reader uses.
+        assert!(object.contains_key(RETENTION_JOB_CONTEXT_FIELD_V1), "the field the gateway looks for is the field written");
+        let hexed = object[RETENTION_JOB_CONTEXT_FIELD_V1].as_str().expect("the context is published as hex");
+        let mut raw = vec![0u8; hexed.len() / 2];
+        faster_hex::hex_decode(hexed.as_bytes(), &mut raw).expect("the field is hex");
+        let context: PalwJobContextV2 = borsh::from_slice(&raw).expect("the field is a borsh PalwJobContextV2");
+        assert_eq!(
+            hex(context.context_hash()),
+            object["job_context_hash"].as_str().expect("the hash is published"),
+            "a consumer recomputing the hash from the published context must reach the value output_root was built from"
+        );
+        // The field the binding actually needs, reachable at last: a hash could not have carried
+        // it. (`tokenizer_id` is `rt.manifest.tokenizer_id` on the job, which the fixture class
+        // leaves at the default, so the pair below is what proves these bytes are THIS job's
+        // context and not a zeroed stand-in that happens to decode.)
+        assert_eq!(context.tokenizer_id, manifest.tokenizer_id, "the context names the tokenizer this class publishes");
+        assert_eq!(context.exact_decode_tokens, result.decode_tokens_executed, "the context is this run's, not a default");
+        assert_eq!(context.declared_prefill_tokens, result.job.prompt_tokens);
+        assert_eq!(context.job_id, fp_job_id_v3(&result.job));
+        assert_eq!(hex(result.output_root), object["output_root"].as_str().expect("the root is published"));
         let _ = std::fs::remove_dir_all(&temp);
     }
 

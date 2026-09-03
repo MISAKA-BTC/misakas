@@ -966,7 +966,7 @@ fn handle_chat(
         )),
         _ => None,
     };
-    let (job_context_hash, family) = derive::read_worker_manifest(&config.outbox.join("traces").join(hex(job_id)));
+    let (job_context_hash, family, job_context) = derive::read_worker_manifest(&config.outbox.join("traces").join(hex(job_id)));
     let summary = serde_json::json!({
         "schema": "misaka.palw.fp-v3-gateway-artifact.v1",
         "fp_job_id": hex(job_id),
@@ -988,6 +988,11 @@ fn handle_chat(
         "quanta_at_configured_quantum": quanta,
         "answer_untrimmed": rendered_string,
         "job_context_hash": job_context_hash,
+        // ADR-0078 X6's binding leg: the whole `PalwJobContextV2` as borsh hex, beside its hash.
+        // `output_root` needs only the hash; the binding needs `tokenizer_id`, which is a FIELD
+        // and is not recoverable from a hash. `null` here is a job whose worker predates the
+        // field, and a verifier then says the binding was not checked rather than passing.
+        "job_context": job_context,
         "family": family,
         "derivation": derivation.as_ref().map(|d| d.to_json(0)),
         "not_derived_because": derive_refusal,
@@ -1034,6 +1039,13 @@ fn handle_chat(
         "fp_claim_id": hex(claim_id),
         "output_token_ids": result.output_token_ids,
         "job_context_hash": job_context_hash,
+        // And what X6's BINDING leg needs on top of that: the context itself (borsh hex), whose
+        // `tokenizer_id` says which tokenizer may render those ids into the derivation's DSL. A
+        // consumer derives the hash above from these bytes rather than trusting the pair, so the
+        // tokenizer it renders under and the root it checks cannot come from two contexts:
+        // `misaka palw derived-verify --tokenizer <tokenizer.json>` then reports
+        // `binding_checked: true`, which without this field no production job could reach.
+        "job_context": job_context,
         "family": family,
         "executor_pubkey": faster_hex::hex_string(&identity.executor_pubkey),
         "derivation": derivation.as_ref().map(|d| d.to_json(config.artifact_inline_max)),
@@ -1558,6 +1570,34 @@ mod tests {
         for line in responses {
             assert!(!line.to_lowercase().contains(&needle), "a response head writes a CORS header: {line}");
         }
+    }
+
+    /// **Every response that publishes `job_context_hash` publishes the CONTEXT beside it**
+    /// (ADR-0078 X6's binding leg).
+    ///
+    /// The two response builders — the outbox summary and the `misaka` block of the chat
+    /// completion — are assembled inside the request path, which needs a worker, an identity and
+    /// a chain to reach; so the pin is on the source that builds them, the way
+    /// [`responses_carry_no_cors_header_at_all`] pins the response head. What it is worth pinning:
+    /// a consumer can recompute `output_root` from the hash alone, but the BINDING — is this
+    /// artifact's DSL the rendering of this claim's ids? — needs `tokenizer_id`, a field of the
+    /// context, and a response that published only the hash left `binding_checked: true`
+    /// unreachable for every real job. A builder that grows a third `job_context_hash` site
+    /// without the context fails here.
+    #[test]
+    fn every_response_that_publishes_the_context_hash_publishes_the_context() {
+        // Assembled at run time so these assertions do not match their own source lines.
+        let hash_field = format!("\"job_{0}_hash\": job_{0}_hash", "context");
+        let context_field = format!("\"job_{0}\": job_{0}", "context");
+        let source = std::include_str!("main.rs");
+        let hashes = source.lines().filter(|l| l.contains(&hash_field)).count();
+        let contexts = source.lines().filter(|l| l.contains(&context_field)).count();
+        assert_eq!(hashes, 2, "the two response builders are the outbox summary and the `misaka` block");
+        assert_eq!(contexts, hashes, "a response publishes the job context wherever it publishes the context hash");
+        // And the reader that supplies them returns three values, not two: the third is the
+        // context, and a call site that ignored it would not compile.
+        let (hash, family, context) = derive::read_worker_manifest(std::path::Path::new("/nonexistent/traces/job"));
+        assert_eq!((hash, family, context), (None, None, None), "no manifest is three absences, never a guess");
     }
 
     /// **ADR-0077 SA-1 / SA-8.** The binding limits are the single slot, the bounded queue and the
