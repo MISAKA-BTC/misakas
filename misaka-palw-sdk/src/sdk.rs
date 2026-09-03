@@ -1083,28 +1083,47 @@ mod chain_only_lattice_tests {
         assert!(matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the chain-only claim certifies");
 
         // ---- the receipt block: the producer's envelope, fully admitted -------------------
-        let beacon = kaspa_consensus_core::palw_freeprompt_v3::PalwBeaconFactV3 {
-            beacon_block: h(0xBEAC),
-            beacon_daa: 131,
-            prev_attempt_daa: 121,
-        };
+        //
+        // **The beacon is SEARCHED, not chosen.** A quantum's ticket is
+        // `H(network ‖ beacon ‖ claim ‖ q)` compared against the class's receipt target, which the
+        // RC seeds at `u128::MAX / 2` — a coin flip — and `claim_id` is one of its inputs. A
+        // hard-coded beacon therefore makes this test pass or fail by luck about a lottery it is
+        // not testing, and it came up tails the moment ADR-0082 Decision 11's two job fields moved
+        // the claim id. Searching is what the shape asks for: a producer hunting a spendable
+        // quantum does exactly this (`PalwFpSpendableQuantumV3`). Anything that is NOT the ticket
+        // is re-raised on the spot, so the loop cannot hide a real refusal.
         let (pph, ts, nonce) = (h(0xB0), 1_700u64, 9u64);
-        let envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, h(0xBEAC));
-        let admitted = kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
-            &state,
-            &at(7, 132, 7),
-            h(999),
-            pph,
-            ts,
-            nonce,
-            MATURITY,
-            USE_WINDOW,
-            &beacon,
-            &envelope,
-            |pk: &[u8], m: &[u8], c: &[u8], sig: &[u8]| kaspa_txscript::verify_mldsa87_with_context(pk, m, c, sig).unwrap_or(false),
-        )
-        .expect("the chain admits a receipt block for a class no binary ever tabled");
-        assert_ne!(admitted, Hash64::default());
+        let mut admitted = None;
+        for i in 0..64u64 {
+            let beacon_block = h(0xBEAC + i);
+            let beacon =
+                kaspa_consensus_core::palw_freeprompt_v3::PalwBeaconFactV3 { beacon_block, beacon_daa: 131, prev_attempt_daa: 121 };
+            let envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, beacon_block);
+            match kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
+                &state,
+                &at(7, 132, 7),
+                h(999),
+                pph,
+                ts,
+                nonce,
+                MATURITY,
+                USE_WINDOW,
+                &beacon,
+                &envelope,
+                |pk: &[u8], m: &[u8], c: &[u8], sig: &[u8]| {
+                    kaspa_txscript::verify_mldsa87_with_context(pk, m, c, sig).unwrap_or(false)
+                },
+            ) {
+                Ok(id) => {
+                    admitted = Some(id);
+                    break;
+                }
+                Err(kaspa_consensus_core::palw_fp_admission_v3::PalwFpAdmissionV3Error::TicketRejected { .. }) => continue,
+                Err(e) => panic!("the chain refused the spend for a reason that is not the lottery: {e:?}"),
+            }
+        }
+        let admitted = admitted.expect("no beacon in 64 tries won a one-in-two draw — the target or the ticket moved");
+        assert_ne!(admitted, Hash64::default(), "the chain admits a receipt block for a class no binary ever tabled");
     }
 }
 
