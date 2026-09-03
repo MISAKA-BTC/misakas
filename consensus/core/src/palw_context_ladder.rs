@@ -2309,6 +2309,18 @@ mod u00_tiled_attention_measurement {
 
     const LADDER: u64 = PALW_CONTEXT_LADDER_MAX_STEP_LEAVES;
 
+    /// **The carrier every figure in this module was measured against**, and it is not
+    /// `DEFAULT_MAX_CLOSE_BYTES` any more.
+    ///
+    /// U-00 swept "the widest dense row inside 81,920" (ADR-0082 §1.2's table: 21 / 30 / 223) —
+    /// one close in one transaction, the pre-ADR-0080 ceiling. On this branch design A's chunk
+    /// group has raised the shipped constant to 2,250,000, and three tests here read the CONSTANT
+    /// while their pins describe the CARRIER, so the merge turned all three red without a single
+    /// number moving. Named here so the two readings can be stated side by side rather than one
+    /// silently standing in for the other: `the_close_the_chunk_group_admits` below is the same
+    /// sweep at the shipped ceiling.
+    const CARRIER_80K: u64 = 80 * 1024;
+
     /// The dense ladder row declaring the graph-v4 tiled attention map. A DIFFERENT class from the
     /// v2-mapped one — `state_chunk_map_id` is inside `shape_profile_id` — which is why this is a
     /// projection and not a mutation of anything registered.
@@ -2539,7 +2551,7 @@ mod u00_tiled_attention_measurement {
     /// Command: `palw-tile-measure` §3.
     #[test]
     fn the_tile_moves_the_widest_dense_row_from_thirty_to_two_hundred_and_twenty_three() {
-        let budget = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+        let budget = CARRIER_80K;
         let widest = |price: &dyn Fn(u32) -> Option<u64>| {
             let mut best = 0u32;
             for n_ctx in 1..=512u32 {
@@ -2563,44 +2575,18 @@ mod u00_tiled_attention_measurement {
         assert_eq!(armed_v3, 223, "the tiled dense row moved — re-run palw-tile-measure and re-pin");
         // A constant factor, not a change of shape: 7.4x on a term that is still linear.
         assert!(armed_v3 > armed_v2 * 7 && armed_v3 < armed_v2 * 8);
-    }
 
-    /// **The v3 map is not priced by the ladder rule** — a class that registers it is charged the
-    /// v2 map's opening, 28.6x what its evidence will carry.
-    ///
-    /// `palw_class_ladder_rules_v1` sets `kv_checkpoint_bytes` from
-    /// [`palw_kv_checkpoint_opening_bytes_v1`] UNCONDITIONALLY. The recurrence half has a
-    /// `…_for_map_v1` twin for exactly this reason and its comment states the rule — "the map the
-    /// class REGISTERED, never gdn v1 unconditionally" — and the cache half never got one, because
-    /// until graph v4 there was only one cache map whose price could differ.
-    ///
-    /// Over-charging is the safe direction, so this is a gate that refuses a class it could admit
-    /// rather than one that admits a class it could not try. It is still a defect, and it is the
-    /// reason every number in this module builds its own shape.
-    #[test]
-    fn the_v3_map_is_not_priced_by_the_ladder_rule() {
-        let profile = dense_v3(512);
-        let rules = palw_class_ladder_rules_v1(&profile).expect("a mapped class has rules");
-        let charged = rules.cost_shape.kv_checkpoint_bytes;
-        let honest = v3_kv_checkpoint_bytes(&profile);
-        assert_eq!(charged, 526_336, "the ladder rule's KV charge moved");
-        assert_eq!(honest, 18_432);
-        assert_eq!(
-            charged,
-            palw_kv_checkpoint_opening_bytes_v1(&profile, LADDER).expect("derives"),
-            "the ladder rule stopped reading the v2 opening for a v3 class — if it now reads the class's own map, \
-             delete this test and re-pin the ones above at the cheaper price"
-        );
-        assert!(charged > honest * 28, "the overcharge shrank — re-read the ladder rule");
-
-        // **And this is what the overcharge COSTS, so "30 → 223" is not inherited as a shipped
-        // fact.** `the_tile_moves_the_widest_dense_row_from_thirty_to_two_hundred_and_twenty_three`
-        // prices the v3 class at the honest opening, because no shipped function answers it. Under
-        // the rule as it actually stands, a class that registers the tiled map is charged the v2
-        // map's whole-history opening and is admitted at exactly the width it had before: the tile
-        // buys the dense tier NOTHING until this gap is closed. Whoever closes it inherits the 223.
-        let budget = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
-        let shipped_widest = |map: fn() -> crate::Hash64| {
+        // **And 223 is now what the SHIPPED route answers** (ADR-0082 Decision 4, U-04).
+        //
+        // `armed_v3` above prices the v3 class through `v3_shape`, a shape this test builds,
+        // because until U-04 no shipped function answered "what does a tiled class's cache anchor
+        // cost" — `palw_class_ladder_rules_v1` charged it the v2 map's whole-history opening,
+        // 526,336 against 18,432, and admitted it at exactly the 30 it had before the tile
+        // existed. `the_v3_map_is_not_priced_by_the_ladder_rule` was that gap, and its own text
+        // said what to do when it closed: delete it, and re-pin these at the cheaper price. The
+        // gap is closed by `palw_kv_checkpoint_opening_bytes_for_map_v1`, so the two readings are
+        // one number and the 223 is a property of the gate rather than of this test.
+        let shipped = |map: fn() -> crate::Hash64| {
             let mut best = 0u32;
             for n_ctx in 1..=512u32 {
                 let mut row = palw_a16_context_row_profile_v1(n_ctx).expect("projects");
@@ -2612,14 +2598,66 @@ mod u00_tiled_attention_measurement {
             }
             best
         };
-        assert_eq!(shipped_widest(integer_kv_state_chunk_map_id_v2), 30);
+        assert_eq!(shipped(integer_kv_state_chunk_map_id_v2), armed_v2, "the v2 class's shipped price moved");
         assert_eq!(
-            shipped_widest(tiled_kv_state_chunk_map_id_v3),
-            30,
-            "a v3 class is priced by its own map now — the tile finally buys the width it derives, \
-             so re-read this test and the 223 it qualifies"
+            shipped(tiled_kv_state_chunk_map_id_v3),
+            armed_v3,
+            "the ladder rule stopped pricing a v3 class by its own map — the tile buys the dense tier nothing again"
+        );
+        // The two openings the gate now distinguishes, from the gate's own function.
+        let v3 = dense_v3(512);
+        assert_eq!(palw_kv_checkpoint_opening_bytes_for_map_v1(&v3, LADDER), Some(18_432), "the honest tiled opening moved");
+        assert_eq!(palw_kv_checkpoint_opening_bytes_v1(&v3, LADDER), Some(526_336), "the whole-history opening moved");
+        assert_eq!(palw_class_ladder_rules_v1(&v3).expect("mapped").cost_shape.kv_checkpoint_bytes, 18_432);
+        assert_eq!(
+            palw_class_ladder_rules_v1(&dense_v2(512)).expect("mapped").cost_shape.kv_checkpoint_bytes,
+            526_336,
+            "a v2 class must still be charged the history its evidence carries"
         );
     }
+
+    /// **The same sweep at the ceiling ADR-0080 design A actually froze**, so the two budgets are
+    /// two numbers rather than one number that quietly changed meaning.
+    ///
+    /// At 2,250,000 counted bytes the close stops being the dense tier's binding gate entirely:
+    /// the shipped `2^22` ladder refuses the row at 40 before any price does
+    /// (`the_carrier_binds_fifty_times_before_the_ladder_does` measures the same wall from the
+    /// leaf side). That is ADR-0080's whole content for this family, and it is why the numbers
+    /// above are stated against the carrier they were measured at.
+    #[test]
+    fn the_close_the_chunk_group_admits() {
+        let budget = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+        let widest = |price: &dyn Fn(u32) -> Option<u64>| {
+            let mut best = 0u32;
+            for n_ctx in 1..=512u32 {
+                match price(n_ctx) {
+                    Some(bytes) if bytes <= budget => best = n_ctx,
+                    _ => break,
+                }
+            }
+            best
+        };
+        let unfenced = widest(&|n| derive_court_cost_v1(&dense_v2(n)).ok().map(|c| c.max_close_bytes));
+        assert_eq!(unfenced, 39, "the unfenced dense row is bound by the 2^22 ladder, not by the chunk group");
+        assert!(
+            worst_case_step_leaf_count_capped_v1(&dense_v2(40), PALW_STEP_MAX_LEAVES).is_err(),
+            "40 is refused by the ladder — if it is the PRICE that refuses, the close became the gate again"
+        );
+    }
+
+    /// **`the_v3_map_is_not_priced_by_the_ladder_rule` lived here, and ADR-0082 U-04 closed the gap
+    /// it measured.**
+    ///
+    /// It asserted that `palw_class_ladder_rules_v1` charged a tiled class the v2 map's
+    /// whole-history opening — 526,336 bytes against the 18,432 its evidence carries, 28.6x — and
+    /// its own message said what to do when that stopped being true: *"if it now reads the class's
+    /// own map, delete this test and re-pin the ones above at the cheaper price."* The cache half
+    /// has its `_for_map_v1` twin now
+    /// ([`palw_kv_checkpoint_opening_bytes_for_map_v1`], Decision 4), the ladder rule reads it, and
+    /// both halves of what this test pinned are asserted from the gate's own functions at the end
+    /// of `the_tile_moves_the_widest_dense_row_from_thirty_to_two_hundred_and_twenty_three`. The
+    /// note is kept rather than the test because the next reader of "30 → 223" needs to know that
+    /// the 223 was once a measurement no shipped function could reproduce.
 
     /// **And the graph-v4 HYBRID composition is priced with NO recurrence anchor at all** — the
     /// same defect in the direction that is not safe.
@@ -2665,10 +2703,13 @@ mod u00_tiled_attention_measurement {
             "the ladder rule now charges the v4 composition a recurrence anchor — re-read this test"
         );
 
-        // What the zero hides: with the anchor priced honestly the hybrid is over the carrier at
-        // EVERY context, so the tile buys the hybrid tier nothing at all. Without it, a sweep
-        // reports a 12-token row that the class could not actually be prosecuted at.
-        let budget = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+        // What the zero hides: with the anchor priced honestly the hybrid is over the CARRIER at
+        // EVERY context, so the tile buys the hybrid tier nothing at all inside one transaction.
+        // Without it, a sweep reports a 12-token row that the class could not actually be
+        // prosecuted at. (Against design A's 27-chunk GROUP the same 90,632 bytes is one carrier
+        // of twenty-seven — which is ADR-0080's answer to this paragraph and not a refutation of
+        // it: the dispatch still returns `None` and the ladder rule still turns that into a zero.)
+        let budget = CARRIER_80K;
         let mut hybrid_v3 = palw_qwen36_context_row_profile_v1(1).expect("projects");
         hybrid_v3.state_chunk_map_id = hybrid_state_chunk_map_id_v3();
         let priced = derive_court_cost_shaped_v1(&hybrid_v3, v3_shape(&hybrid_v3, 1, true)).expect("derives");
