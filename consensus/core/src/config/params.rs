@@ -9584,19 +9584,18 @@ mod consensus_params_id_tests {
             assert!(shipped.palw_kary_court.is_none(), "{name} must leave ADR-0082 Decision 3's fence dormant");
             assert!(!shipped.palw_kary_court_active_at(u64::MAX), "{name}: a dormant fence is never active");
         }
-        let shipped = DEVNET_PARAMS;
+        // The BUNDLED devnet, not the preset literal: `DEVNET_PARAMS` carries
+        // `PalwConsensusMode::Disabled`, and the mode condition is folded into every fence
+        // accessor, so a fence armed on the literal answers nothing and asserts nothing.
+        let shipped = devnet_shipped_params();
+        assert!(matches!(shipped.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)));
+        assert!(!shipped.palw_kary_court_active_at(u64::MAX), "the shipped devnet leaves the fence dormant");
         let mut armed = shipped.clone();
         armed.palw_kary_court = Some(ForkActivation::new(9_000_000));
         assert_ne!(shipped.consensus_params_id(), armed.consensus_params_id(), "arming the k-ary court must move the fingerprint");
         assert_ne!(shipped.consensus_schedule_id(), armed.consensus_schedule_id(), "the operator log must name it");
-        // The preset LITERALS carry `Disabled`; the V2 bundle is installed by the shipped card. The
-        // mode condition is folded into the accessor, so activity is asserted on a V2 network.
-        let mut rc = palw_rc_shipped_params();
-        assert!(matches!(rc.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)));
-        assert!(!rc.palw_kary_court_active_at(u64::MAX), "the RC ships the fence dormant");
-        rc.palw_kary_court = Some(ForkActivation::new(9_000_000));
-        assert!(rc.palw_kary_court_active_at(9_000_000));
-        assert!(!rc.palw_kary_court_active_at(8_999_999));
+        assert!(armed.palw_kary_court_active_at(9_000_000));
+        assert!(!armed.palw_kary_court_active_at(8_999_999));
         // A never-arming fence collapses to absence in the IDENTITY (the normalised commitment),
         // like every bare fence beside it; the raw params id is the un-normalised preimage.
         let mut never_armed = shipped.clone();
