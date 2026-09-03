@@ -281,6 +281,50 @@ would name the machine to attack for a panel quorum.
 
 ---
 
+## 4b. RELAUNCHING over a network that already exists
+
+§§1–4 describe a first launch. A relaunch is a different procedure with one hazard that has bitten
+this fleet before, and it is not a variation on "restart the nodes".
+
+**A relaunch whose genesis moves is not an upgrade.** Adding premine or community entries changes
+the genesis UTXO set, so the genesis hash moves, and then **no earlier appdir and no earlier binary
+can join at all** — the failure is at handshake, not at a rule, which is strictly less legible than
+a ruleset mismatch. Everything below assumes that case.
+
+### The ordering hazard: stop EVERY host before wiping ANY
+
+Wiping hosts one at a time does not work, and the reason is not obvious: **an un-wiped peer
+re-supplies the old chain by IBD to a host that has just been wiped.** The wiped node syncs the
+chain it was wiped to escape, the operator sees a working node, and the network is the old one. It
+has happened here.
+
+    1. stop the service on EVERY host          # all of them, before step 2 anywhere
+    2. verify none is running                  # a host that failed to stop is a host that will re-seed
+    3. wipe each appdir                        # only now
+    4. install the new binary on every host
+    5. start the producer FIRST (see below)
+    6. start the rest
+
+### The producer starts first, and it is not a preference
+
+The floor class must have a producer or **DAA does not advance and the chain cannot leave that
+state by itself.** A network of seats with no producer looks healthy in every log line and produces
+nothing. Start the producing node, confirm `[palw-producer] produced block #N`, and only then bring
+up the seats.
+
+### Before declaring it up
+
+| check | how | what a bad answer means |
+|---|---|---|
+| **this is the new chain** | the genesis hash in the startup log equals the card's | a host was not wiped, or the binary is the old one |
+| **every host agrees** | `consensus_params_id` identical across all startup logs | a host has the old binary — it will reject or be rejected |
+| the old chains are refused, not absent | genesis-mismatch warnings for foreign peers | **this is expected and healthy.** At least four chains answer to this network name; a node that sees none of them may not be reachable at all |
+| a peer actually connected | `P2P Connected to incoming peer` / `Registering p2p flows` | zero of these AND zero mismatches means nothing is dialling you |
+
+**That third row is the one to read carefully.** Genesis-mismatch warnings after a relaunch are not
+a problem to fix; they are other people's chains being correctly refused. A log full of them and a
+node with peers is the healthy state. What is NOT healthy is silence in both columns.
+
 ## 5. Verify the network is what you think it is
 
 | check | how | what a bad answer means |
