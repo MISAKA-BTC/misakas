@@ -827,22 +827,7 @@ run_tier() {
   #     is how three validators ended up carrying FamilyCertified and none carrying the binding.
   baseline_of "PALW lifecycle carried.*FamilyCertified"
   submit_object "$WORK_DIR/obj/$tag-fp.obj" >>"$WORK_DIR/certify-$tag.log" 2>&1 || true
-  # **A chunked family waits per CARRIER, not per object.** The a16-v5 family's evidence is 409,069
-  # bytes — 28 drill vectors, each carrying two refutations — so it ships as five ObjectChunk
-  # carriers and applies only in the block that completes the group. At devnet's cadence four of
-  # five landed in 9m38s and the fifth needed another block, against a flat 600s wait: the stage
-  # reported "the family's evidence never reached a block" for an object that was four fifths of
-  # the way there. A wait sized for one carrier is a wait that fails on any object big enough to
-  # need several, which is exactly the objects worth waiting for.
-  # (5e's T4, ported by hand onto 5f: the hunk at run_tier:827 had moved; the two anchor lines
-  # were located by content and asserted unique and adjacent before this block was inserted.)
-  local parts
-  parts=$(grep -oE 'part [0-9]+ of ([0-9]+)' "$WORK_DIR/certify-$tag.log" 2>/dev/null | tail -1 | awk '{print $4}')
-  [ -n "$parts" ] || parts=1
-  if [ "$parts" -gt 1 ]; then
-    log "the $family family ships as $parts carriers — waiting $((STEP_WAIT * parts))s rather than ${STEP_WAIT}s"
-  fi
-  if ! STEP_WAIT=$((STEP_WAIT * parts)) all_nodes_gained "PALW lifecycle carried.*FamilyCertified"; then
+  if ! all_nodes_gained "PALW lifecycle carried.*FamilyCertified"; then
     record "stage 3 [$tag] FAIL — the $family family's evidence never reached a block on every validator, so there is nothing to bind a class to"
     worse_than 2; return 0
   fi
