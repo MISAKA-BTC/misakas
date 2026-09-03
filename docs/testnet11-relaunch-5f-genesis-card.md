@@ -981,6 +981,36 @@ trial merge — not the conflict count, which expires.
 
 ---
 
+### The artifact binding, verified by running — and the WALL CLOCK is what proves it ran
+
+FH closes the hole the audit found. Verified here, not read: `misaka-palw-derive/tests/answer_binding.rs`,
+**10 passed / 0 failed / 0 ignored / 0 filtered out, finished in 18.40s**, with
+`instruct-bound.palwart` (1,795,427,276 B) at the path the fixtures name and `qwen25-tokenizer.json`
+where they expect it.
+
+**The 18.40s is the evidence, and the dot count was not.** These fixtures decode a 1.79 GB artifact;
+a skipped test is milliseconds. A green suite whose artifact-dependent cases quietly skipped would
+print the same ten dots and the same `ok`. *So the instrument for "did the expensive check actually
+run" is the wall clock, not the pass count* — and it is worth reaching for whenever a suite depends
+on a file that may not be there. (5b measured 16.8s independently on their machine.)
+
+What it now does, from the reproduction that produced `verdict: consistent` this morning:
+
+    unbound   consistent-given-the-supplied-answer — binding_checked: false;
+              NOT a statement that this artifact came from that inference
+    bound     binding_checked: true, verdict: consistent — dsl_hash, artifact_hash and
+              artifact_bytes recomputed over the bytes this claim's ids RENDER to under the
+              tokenizer it pins, and output_root over those same ids
+    refused   a DSL that is not the rendering of its ids; a tokenizer the claim does not pin
+              (naming both hashes, never called a forgery); a missing artifact file
+
+**Still open, and the announcement waits on it:** `binding_checked: true` is unreachable from the
+shipped gateway, because nothing emits the `PalwJobContextV2` — only its hash. **The check exists
+and the operator path cannot reach it**, which is the live-site-versus-search-order defect landing on
+the fix for that defect. FH2 carries the context through the worker manifest and the gateway
+response. *A disclosure saying "we check this" while no operator path reaches the check is worse than
+silence — it is the same false assurance, in the security section.*
+
 ### The isolated boot has teeth — rehearsed on ibm, and it refused
 
 Run against the `5f + impl` release binary on a throwaway appdir, unused ports, `--nodnsseed`, no
