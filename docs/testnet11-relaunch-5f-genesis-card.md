@@ -2653,3 +2653,55 @@ rewritten to state the new truth, which is the right way for a guard to change.*
 
 *Recorded because it is the third time today that the thing being validated and the thing being
 shipped were configured differently, and the first two were only found by looking.*
+
+## ANSWERED: binding a tokenizer does not move the registered root
+
+Run on ibm against the two real 1.79 GB artifacts, `88.55 s`, `1 passed`, **`0 filtered out`**:
+
+```
+[shipped] artifact_digest       c00faa480f2344d4a737e5b2e87ab606…
+[bound]   artifact_digest       158314b58843430efebe343d61d1078c…    <- DIFFERS
+[shipped] inventory_root(v5)    1a7457f100d9fb0f3406d882b4b5bcd7…
+[bound]   inventory_root(v5)    1a7457f100d9fb0f3406d882b4b5bcd7…    <- IDENTICAL
+shipped inventory(v5) == bound inventory(v5)   true
+v5 == the v2 genesis pin                       true  (both files)
+v5 profile class id  4277d84f7d91528c…    v2 profile class id  71bbb75513cf3d47…
+```
+
+**`bound-candidate.palwart` is registrable against the genesis being cut.** The worker's refusal
+text — *"binding a tokenizer moves `artifact_digest`, so this is a new artifact and a genesis
+decision, not an upgrade"* — is **false for this row**, confirmed on the two real artifacts
+rather than on a synthetic `with_tokenizer_commitment`.
+
+**Stated precisely, because two equalities print adjacent and only one is being claimed:**
+`v5==v2 inventory` is `true` for both files, so the inventory root does not distinguish the
+graphs. The claim is *"binding a tokenizer does not move the **v5** inventory root"* — the same
+profile across two files. **It says nothing about v5 versus v2.**
+
+`c00faa48…` now agrees three ways: the trailing 64 bytes read directly out of the file, the
+digest the worker printed in its refusal, and this probe recomputing it. Three routes, three
+machines, one value.
+
+### The run before this one said `ok` in 0.00 s
+
+Both invocations are in this card and the pair is the lesson:
+
+```
+0.00s   ok. 0 passed; 0 failed; 2 filtered out    RC=0   <- nothing ran
+88.55s  ok. 1 passed; 0 failed; 0 filtered out    RC=0   <- read 3.6 GB
+```
+
+**Same word, same exit code.** `0 filtered out` and the wall clock are the entire difference.
+*A targeted test invocation must state how many tests it expected to run*, because
+`0 passed, 0 failed` is the one result meaning the **command** was wrong rather than the code —
+and `cargo test` spells it with the word `ok`. (`cargo nextest` refuses it by default.)
+
+### Getting the probe to a machine that had the artifacts
+
+ibm's `origin` is GitHub and `palw-adr0082-impl` has never been pushed, so ibm could not fetch
+the tree. Instead: **check that all five of the probe's dependencies exist on `8923b354`**
+(`palw_a16_context_row_profile_v5`, `qwen25_a16_profile_v2`, `decode_artifact_file_v1`,
+`a16_inventory_v1`, `PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT`) — they do — copy the file, watch
+it fail to compile because **three other tests in it** want impl-only symbols, trim to the 55
+lines that are the probe, run that. **12 KB of network against the 1.79 GB that copying the
+artifact would have cost.** The copied file was removed afterwards; ibm's checkout is clean.
