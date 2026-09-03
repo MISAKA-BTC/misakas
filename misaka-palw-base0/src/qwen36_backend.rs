@@ -1342,7 +1342,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         // this is a producer whose roots disagree with its material — which any seat catches
         // without a court, and which is therefore not the fraud under test.
         let checkpoint_profile = qwen36_checkpoint_profile_v1(profile);
-        let binding = crate::legs::base0_binding_from_capture_with_profile_v1(
+        let binding = crate::legs::base0_binding_from_capture_with_profile_capped_v1(
             profile,
             job,
             &run.tiles,
@@ -1350,6 +1350,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             &checkpoint_profile,
             run.trace_root,
             crate::produce::base0_activation_leg_root_v1(job),
+            self.step_ladder_cap,
         )
         .map_err(|e| format!("{e:?}"))?;
         run.execution_root = binding.committed_execution_root;

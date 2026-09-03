@@ -1289,13 +1289,17 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // **Re-derive, do not patch.** The commitment must be the corrupted capture's OWN, or this
         // is a producer whose roots disagree with its material — which any seat catches without a
         // court, and which is therefore not the fraud under test.
-        let binding = crate::legs::base0_binding_from_capture_v1(
+        let binding = crate::legs::base0_binding_from_capture_with_profile_capped_v1(
             &self.profile,
             job,
             &run.tiles,
             &run.checkpoints,
+            &kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
+                kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+            ),
             run.trace_root,
             crate::produce::base0_activation_leg_root_v1(job),
+            self.step_ladder_cap,
         )
         .map_err(|e| format!("{e:?}"))?;
         run.execution_root = binding.committed_execution_root;
@@ -1909,5 +1913,190 @@ mod free_prompt_tests {
                 nodes * 64
             );
         }
+    }
+
+    // -- W1b: the EXECUTOR's own ladder -------------------------------------------------------
+
+    /// **The decode budget a fixed prefill buys is the RULESET's number, and it was a constant.**
+    ///
+    /// `a16_execute_for_attempt_streaming_v1` priced every job through `step_leaf_count`, which
+    /// hardcodes `PALW_STEP_MAX_LEAVES = 2^22`. So every width the court gained at ADR-0080's
+    /// close ceiling — dense A16 admitted out to `n_ctx` 39 against the shipped ladder and 1002
+    /// against `2^32` — bought a user nothing: the executor refused the job, or truncated its
+    /// budget, before the first forward pass.
+    ///
+    /// Measured here on the SHIPPED dense geometry (`QWEN25_1_5B`, `tile_len` 128) through the
+    /// very call the capture path makes. The two prefills are the ones the launch brief measured
+    /// on the real artifact, and the leaf counts are why: 26 prefill tokens leave room for 12
+    /// decode tokens and 4,074,040 of the 4,194,304 leaves. **38 total positions is what the
+    /// shipped committed path admits — a prompt, and a sentence of answer.**
+    ///
+    /// At `2^32` the same prefill buys 4,070, and the number that bounds it is no longer the
+    /// ladder at all: it is the declared context (4,096 − 26). That is the whole point of the
+    /// thread — the ladder stops being what decides what a user gets.
+    #[test]
+    fn the_decode_budget_a_fixed_prefill_buys_moves_with_the_ruleset() {
+        use kaspa_consensus_core::palw_step::step_leaf_count_capped_v1;
+
+        let geometry = PalwQwen25GeometryV1 { n_ctx: 4_096, ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B };
+        let profile = qwen25_a16_profile_v2(geometry).expect("the dense class's registered graph");
+
+        // The widest decode budget a ladder admits at this prefill: the job's own leaf count,
+        // counted the way the executor counts it, walked up until it refuses.
+        let widest = |prefill: u32, cap: u64| -> (u32, u64) {
+            let mut best = (0u32, 0u64);
+            for decode in 1..=(geometry.n_ctx - prefill) {
+                let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prefill, decode);
+                match step_leaf_count_capped_v1(&profile, &ctx, cap) {
+                    Ok(leaves) => best = (decode, leaves),
+                    Err(_) => break,
+                }
+            }
+            best
+        };
+
+        const SHIPPED: u64 = kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES;
+        const DEEP: u64 = 1 << 32;
+        assert_eq!(SHIPPED, 4_194_304, "the shipped ladder moved without a fence");
+
+        assert_eq!(widest(26, SHIPPED), (12, 4_074_040), "the shipped ladder's budget at prefill 26");
+        assert_eq!(widest(24, SHIPPED), (14, 4_112_072), "the shipped ladder's budget at prefill 24");
+
+        let (deep_26, _) = widest(26, DEEP);
+        let (deep_24, _) = widest(24, DEEP);
+        assert_eq!((deep_26, deep_24), (4_070, 4_072), "at 2^32 the DECLARED CONTEXT binds, not the ladder");
+        assert!(deep_26 > 300 * 12, "the budget must move by orders of magnitude, not by rounding: {deep_26}");
+    }
+
+    /// **The executor reads the ladder it is HANDED — the whole of W1b in one assertion.**
+    ///
+    /// The capped entry point is given one leaf less than the job needs and must refuse; given
+    /// exactly what the job needs it must run. Before this change the argument did not exist and
+    /// the module constant decided both answers, so the first half of this test passed a job the
+    /// caller's ruleset had no room for.
+    ///
+    /// It is stated as `TooManyLeaves` on the way in rather than a failure three layers down: the
+    /// leaf count is the first line of the capture, and the 268 MB the leaf vector costs at the
+    /// shipped ladder is exactly what must not be allocated for a job that cannot be committed.
+    #[test]
+    fn the_a16_executor_prices_its_capture_at_the_ladder_the_caller_states() {
+        let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
+        let prompt: Vec<usize> = vec![3, 9, 17, 33];
+        let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prompt.len() as u32, 3);
+        let needed = kaspa_consensus_core::palw_step::step_leaf_count(&profile, &ctx).expect("the job has a step space");
+        assert!(needed > 1, "a one-leaf job could not tell the two ladders apart");
+
+        // A ladder one leaf short of this job. **Refused, and named.**
+        let refused = a16_execute_for_attempt_capped_v1(&artifact, &profile, None, &ctx, &prompt, needed - 1);
+        let message = refused.err().expect("a job the caller's ladder has no room for must be refused");
+        assert!(message.contains("TooManyLeaves"), "the refusal must name the ladder, not something downstream: {message}");
+
+        // The same job, at the ladder it actually needs. **Runs, and commits.**
+        let run = a16_execute_for_attempt_capped_v1(&artifact, &profile, None, &ctx, &prompt, needed)
+            .expect("the same job runs under a ladder that admits it");
+        assert_eq!(run.binding.step_leaf_count, needed);
+        assert_ne!(run.execution_root, Hash64::default());
+
+        // **And the budget the executor ACTUALLY grants is the arithmetic one, at two different
+        // ladders.** This is the half `the_decode_budget_a_fixed_prefill_buys_moves_with_the_ruleset`
+        // computes and cannot run: there, the class is the real 1.5B geometry and a forward pass
+        // needs the artifact; here the class is small enough to execute, so the two ladders can be
+        // walked end to end. A budget that came from a constant would grant the same number twice.
+        let prefill = prompt.len() as u32;
+        let arithmetic_budget = |cap: u64| -> u32 {
+            let mut best = 0;
+            for decode in 1..=8u32 {
+                let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prefill, decode);
+                match kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &ctx, cap) {
+                    Ok(_) => best = decode,
+                    Err(_) => break,
+                }
+            }
+            best
+        };
+        let leaves_for = |decode: u32| -> u64 {
+            let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prefill, decode);
+            kaspa_consensus_core::palw_step::step_leaf_count(&profile, &ctx).expect("the job has a step space")
+        };
+        let (shallow, deep) = (leaves_for(2), leaves_for(5));
+        assert!(shallow < deep, "two ladders that admit the same budget prove nothing");
+        assert_eq!((arithmetic_budget(shallow), arithmetic_budget(deep)), (2, 5));
+
+        for (cap, budget) in [(shallow, 2u32), (deep, 5u32)] {
+            let admitted = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prefill, budget);
+            assert!(
+                a16_execute_for_attempt_capped_v1(&artifact, &profile, None, &admitted, &prompt, cap).is_ok(),
+                "the executor must grant the whole budget its ladder pays for ({budget} decode tokens at cap {cap})"
+            );
+            let one_more = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prefill, budget + 1);
+            assert!(
+                a16_execute_for_attempt_capped_v1(&artifact, &profile, None, &one_more, &prompt, cap).is_err(),
+                "the executor must stop exactly where its ladder does ({} decode tokens at cap {cap})",
+                budget + 1
+            );
+        }
+    }
+
+    /// **The dormant default is byte-identical, proven by measurement rather than by argument.**
+    ///
+    /// Every shipped construction site passes the leg's own constant, so nothing on any live
+    /// network moves: the uncapped names delegate with `PALW_STEP_LEG_MAX_LEAVES` and must return
+    /// the same commitment, leaf for leaf and root for root, as the capped name given that value.
+    /// The whole retained material is compared, not just the execution root — a capture that
+    /// agreed on the root and differed in a tile would be a producer that cannot answer a
+    /// challenge it has already been convicted by.
+    #[test]
+    fn the_uncapped_executor_is_the_capped_one_at_the_shipped_ladder() {
+        let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
+        let prompt: Vec<usize> = vec![3, 9, 17, 33];
+        let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prompt.len() as u32, 3);
+
+        let plain = a16_execute_for_attempt_v1(&artifact, &profile, None, &ctx, &prompt).expect("the default path runs");
+        let capped = a16_execute_for_attempt_capped_v1(
+            &artifact,
+            &profile,
+            None,
+            &ctx,
+            &prompt,
+            kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+        )
+        .expect("the capped path at the default runs");
+
+        assert_eq!(plain.execution_root, capped.execution_root);
+        assert_eq!(plain.trace_root, capped.trace_root);
+        assert_eq!(plain.output_root, capped.output_root);
+        assert_eq!(plain.trace_manifest_root, capped.trace_manifest_root);
+        assert_eq!(
+            crate::produce::base0_material_encode_v1(&plain).expect("encodes"),
+            crate::produce::base0_material_encode_v1(&capped).expect("encodes"),
+            "the retained material must be the same bytes, or the default was not dormant"
+        );
+
+        // And the backend's own default is that same constant, so an instance nobody told about a
+        // ruleset behaves exactly as it did.
+        let backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile, (4, 2));
+        assert_eq!(backend.step_ladder_cap(), kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES);
+    }
+
+    /// **An instance TOLD a shallower ladder refuses the job its default would have run** — the
+    /// field is wired to the executor, not merely stored beside it.
+    ///
+    /// `with_step_ladder_cap` is the seam a caller holding `PalwCourtParamsV2` uses. It already
+    /// bounded the served-capture guards (`bisect_prefix_state`, `refutation_with_prompt`); it did
+    /// not reach the run, which is the half that decides what gets produced in the first place.
+    #[test]
+    fn an_instance_told_a_ladder_produces_against_it() {
+        let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
+        let prompt: Vec<usize> = vec![3, 9, 17, 33];
+        let fp = job(&profile, prompt.len() as u32, 3);
+        let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prompt.len() as u32, 3);
+        let needed = kaspa_consensus_core::palw_step::step_leaf_count(&profile, &ctx).expect("the job has a step space");
+
+        let default = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 2));
+        assert!(default.execute_free_prompt(&fp, &prompt).is_ok(), "the shipped ladder admits this job");
+
+        let shallow = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile, (4, 2)).with_step_ladder_cap(needed - 1);
+        let message = shallow.execute_free_prompt(&fp, &prompt).err().expect("a shallower ruleset must refuse it");
+        assert!(message.contains("TooManyLeaves"), "the refusal must name the ladder: {message}");
     }
 }

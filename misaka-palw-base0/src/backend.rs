@@ -227,6 +227,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
     }
 
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
+        // **The ruleset's ladder, through the same field the served-capture guards read.**
         let run = base0_execute_for_attempt_capped_v1(&self.artifact, &self.profile, job, prompt, self.step_ladder_cap)
             .map_err(|e| e.to_string())?;
         // Encoded HERE, while the run is in hand. The producer used to reach into `run.tiles` to
@@ -307,8 +308,15 @@ impl PalwExecutionBackendV1 for Base0Backend {
         // roots belong to the execution root derived from it afterwards.
         let ctx = palw_fp_job_context_v3(job, &class, &shape, RC_NETWORK_ID).map_err(|e| format!("{e:?}"))?;
 
-        let run = crate::produce::base0_execute_for_attempt_streaming_v1(&self.artifact, &self.profile, &ctx, prompt_tokens, on_token)
-            .map_err(|e| e.to_string())?;
+        let run = crate::produce::base0_execute_for_attempt_streaming_capped_v1(
+            &self.artifact,
+            &self.profile,
+            &ctx,
+            prompt_tokens,
+            self.step_ladder_cap,
+            on_token,
+        )
+        .map_err(|e| e.to_string())?;
 
         // The four legs, measured. They exist on every attempt this family makes — it is what makes
         // its claims adjudicable — and this is the first caller that needed them by name.
@@ -389,13 +397,17 @@ impl PalwExecutionBackendV1 for Base0Backend {
         // **Re-derive, do not patch.** The commitment must be the corrupted capture's OWN, or this
         // is a producer whose roots disagree with its material — which any seat catches without a
         // court, and which is therefore not the fraud under test.
-        let binding = crate::legs::base0_binding_from_capture_v1(
+        let binding = crate::legs::base0_binding_from_capture_with_profile_capped_v1(
             &self.profile,
             job,
             &run.tiles,
             &run.checkpoints,
+            &kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
+                kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+            ),
             run.trace_root,
             crate::produce::base0_activation_leg_root_v1(job),
+            self.step_ladder_cap,
         )
         .map_err(|e| format!("{e:?}"))?;
         run.execution_root = binding.committed_execution_root;
