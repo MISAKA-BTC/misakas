@@ -607,10 +607,17 @@ is a finding from the audit wave rather than a precaution.
       `Qwen25A16Backend::new` refuses, and chain-registered classes go through
       `from_registered_profile`, which plans. Until it lands, a `FamilyCertified` would cover a
       kernel nothing has executed on the row the genesis registers.
-- [ ] **`(v − max) << up` wraps i64 before the clamp** in `softmax_shifted` and `a16_attn_exp_one`
-      for `up_bits ≥ 47` — a key 40,000 below the maximum receives full weight. It moves committed
-      values only for classes at that width, so **the fix is free exactly now and not after a v5 row
-      is registered.** Confirm the shipped artifact's `up_bits` either way.
+- [x] **`(v − max) << up` wraps i64 before the clamp** in `softmax_shifted` and `a16_attn_exp_one`
+      for `up_bits ≥ 47` — a key 40,000 below the maximum receives full weight. **MEASURED on the
+      shipped artifact: the maximum across all 28 layers is 25.**
+
+          layers 28    values {14, 15, 16, 18, 21, 25}    max 25    threshold 47
+
+      Read out of the artifact's own `attn_softmax_up` entries, one byte per layer, on the bound
+      file. **So the fix moves no committed value for the class being registered** and is free
+      whenever it lands, rather than free only before the cut. It still belongs in the arming set —
+      a class at a higher `up_bits` would be silently wrong — but it stops being an ordering
+      constraint on the freeze.
 - [ ] **The window must fit a dispute a session actually PLAYS.** The derivation prices a k-ary LEAF
       ladder no session plays — the ladder is binary and only the history search is k-ary. At RC
       numbers the played dispute is **60 moves × 51 + 216 reserve = 3,276 against a 3,000 window**,
