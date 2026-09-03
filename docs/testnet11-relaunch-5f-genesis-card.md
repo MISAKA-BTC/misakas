@@ -70,8 +70,21 @@ Two consequences for the announcement, neither optional:
 
 ## 1. Fences to arm at genesis
 
-All eleven `Option<ForkActivation>` fences are `None` on every shipped preset today. Two are armed
-at genesis and the rest stay `None`.
+There are **fourteen** `Option<ForkActivation>` fences, not eleven, and "None on every shipped
+preset" is true only of **testnet-11**. Measured:
+
+    testnet-11   0 armed
+    devnet       5 armed — palw_heartbeat, palw_attempt_work, palw_context_ladder,
+                           palw_uncertified_weightless, palw_kary_court
+
+**That is not merely a correction to a count — devnet already runs the exact configuration §1 tells
+the operator to arm.** `palw_context_ladder`, `palw_uncertified_weightless` and `palw_kary_court`
+are all `Some(ForkActivation::always())` there today. So the arming below is not an untried
+combination being attempted for the first time on a public network: it is the devnet preset's
+standing configuration, and `DEVNET_PARAMS` is the worked example to diff against when §7b's
+checklist disagrees with what a build does.
+
+Three are armed at genesis on testnet-11 and the rest stay `None`.
 
 | fence | at genesis | why |
 |---|---|---|
@@ -931,13 +944,19 @@ no gate; a branch with reds nobody wrote down has a worse one, because the next 
 | `shipped_presets_have_pinned_fingerprints` | §4's single re-pin, after the freeze. Owned here. |
 | `the_shipped_ruleset_admits_the_row_the_genesis_registers` | the ruleset's `COURT_MAX_STEP_LEAVES` moves to a cap that admits n_ctx 512 — **2^26 is the smallest**. Owned by whoever makes that change; it goes green by measurement, not by assertion. |
 
-**The second red is the whole width story and it deserves its own sentence.** W1b made the executor
-read the ruleset's ladder instead of a hardcoded constant — and the ruleset's field is *set to that
-same constant*, `COURT_MAX_STEP_LEAVES = PALW_STEP_MAX_LEAVES`. So **W1b moved no width at all.** It
-converted a constant nobody could choose into a value somebody has to choose, which is exactly the
-half it was supposed to do. "W1b landed" and "the width moved" are two claims and only the first is
-true today. Until the second is, the registered class is capped at **39 positions** — below `cad`'s
-38-token floor once any prefill is counted, and nowhere near music 60 or scene 104.
+**The second red WAS the whole width story, and the move has since happened — this paragraph is kept
+because its correction is the point.** It read: *"the ruleset's field is set to that same constant,
+`COURT_MAX_STEP_LEAVES = PALW_STEP_MAX_LEAVES`, so W1b moved no width at all … the registered class
+is capped at 39 positions."* That was true when written and is now false:
+
+    consensus/core/src/palw_fp_devnet_v3.rs:367
+    pub const COURT_MAX_STEP_LEAVES: u64 = PALW_RC_COURT_MAX_STEP_LEAF_COUNT;   // 2^26
+
+The ladder moved to 2^26, `the_shipped_ruleset_admits_the_row_the_genesis_registers` is green, and
+the 512 row clears it with 21.4% margin. **W1b's second half landed and this card went on saying it
+had not**, for the ordinary reason: nobody re-reads a paragraph whose conclusion still feels right.
+*A "known open" that has quietly closed is the same defect as a claim that has quietly broken — both
+are the document disagreeing with the tree, and only one of them looks like good news.*
 
 Measured, and reproduced independently from two crates by two sessions:
 
