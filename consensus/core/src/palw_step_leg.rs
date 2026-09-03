@@ -2552,10 +2552,7 @@ mod state_chunk_opening_tests {
         let mut long = path.clone();
         long.push(Hash64::from_bytes([9; 64]));
         assert_eq!(state_chunk_opening_root_v1(count, 5, &hashes[5], &long), Err(PalwStepLegError::OpeningPathTooLong { extra: 1 }));
-        assert_eq!(
-            state_chunk_path_v1(&hashes, 13),
-            Err(PalwStepLegError::LeafIndexOutOfRange { index: 13, count: 13 })
-        );
+        assert_eq!(state_chunk_path_v1(&hashes, 13), Err(PalwStepLegError::LeafIndexOutOfRange { index: 13, count: 13 }));
         assert_eq!(
             state_chunk_path_v1(&[], 0),
             Err(PalwStepLegError::StateChunksOutOfRange { got: 0, max: PALW_STEP_LEG_MAX_STATE_CHUNKS })
