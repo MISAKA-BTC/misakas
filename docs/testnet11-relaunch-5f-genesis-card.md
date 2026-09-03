@@ -5043,3 +5043,59 @@ devnet, ~11 h at its cadence), and `unwrap_or(0)` renders "never granted" as "al
 epoch 0; the wall belongs to later permissionless additions.** And the distinction this card keeps:
 tonight's STL and MIDI were committed **locally** by the offline gateway and verified bound (D5) —
 never submitted, never budgeted; 5e's stage 5 is the first real job to reach the chain's budget gate.
+
+## Step 5 — executed 2026-09-03 17:14 UTC (2026-09-04 02:14 JST): stop, verify, wipe, install
+
+**5a stop (`relaunch-fleet-wipe.sh stop --execute`)** — every listed unit on the three hosts stopped *and disabled*
+(a unit that restarts on boot un-wipes its host): ibm's producer/seat/drill/ibd-join/liveness units; `.113`'s
+dnsseeder, minerpool, mtp, pool-slot@01, t11-node, t11-seat4; 5.104's kaspad-tn, dnsseeder, miner-c, t11-seat2/3,
+validator-c, drill-attest/watch, liveness-watch. 5.104's dnsseeder and miner-c are testnet-10 leftovers and stay
+down. ibm's stray `kaspad.candidate (deleted)` (pid 1156471, `--appdir=/tmp/fpchk`, no unit) was killed **by
+executable path** — `pgrep -f` would have matched the asker. `.113`'s node took the SIGTERM slowly; nothing was
+forced.
+
+**5b verify** — measured `kaspad=0 p2p-sockets=0` on all three hosts and printed **NOT CLEAN**. The counts arrived as
+two lines: `pgrep -c … || echo 0` and `grep -c … || echo 0` both *print* `0` and *exit 1* on no match, so the
+fallback printed a second `0` and the comparison read `"0\n0"`. A check that had only ever seen live hosts had never
+had the chance to be wrong in this direction. Fixed at the fallback (`|| true`, `${n:-0}`) in `bb754d12`; an
+independent census (exe path + `ss`) agreed: 0 chain processes, 0 listening chain ports. The one remaining
+kaspad-family process on ibm is the **Aug-31 offline free-prompt gateway** (`misaka-palw-gateway (deleted)`,
+`--anchor` form, no chain, no p2p) — not a node; it holds a port a step-7 gateway may want.
+
+**5c wipe** — the **dry run** (the script's default) would have moved a directory literally named `[^` on every host:
+the wipe enumerated appdirs of *running* nodes with `pgrep -af kaspad | grep -oE "appdir=[^ ]+"`, which matches the
+remote shell running it (its own cmdline holds the pattern), returned `[^`, and — being non-empty — masked the
+static fallback. Under `--execute` that is a wipe that moves nothing and prints nothing, and the old chain is still
+on disk when the nodes restart. The rule's location: `wipe` runs only after `verify` proved nothing runs, so "the
+appdirs of running nodes" is empty by construction; the list is now the census's static set (`b1b98c63`). The dry
+run then listed exactly the census's six, and `--execute` moved them:
+
+    ibm    /root/.t11  /root/.t11b
+    .113   /root/.t11  /root/.t11c  /var/lib/misaka-minerpool/slots/slot-01/appdir
+    5.104  /root/.t11
+    -> <dir>.old-08e9c8a4…16934a-20260903-1714     originals after: 0 / 0 / 0    backups: 2 / 3 / 1
+
+The seeder state dirs the script checks were absent on every host (seeders are stopped+disabled; their state is an
+address list, not chain data). `/tmp/fpchk` (my rehearsal scratch on ibm, holds the *new* genesis) was excluded on
+purpose — naming it with the old genesis would mislabel it.
+
+Two instrument defects in one step, opposite directions: verify said "not clean" over clean (the safe error), wipe
+would have said nothing over nothing (the unsafe one). Only the dry run, read before the real run, saw the second.
+
+**5d install** — `kaspad.6e01ba07` (sha256 `14065c93…`, 53,913,240 B) and `misaka.6e01ba07` (`5fd49aca…`) were
+staged on all three hosts under sha-named paths before the wipe (independent of it), sha-checked against ibm's
+build, then copied to `/root/t11/kaspad` and `/root/t11/misaka`; the 5e binaries are kept beside them as
+`kaspad.old-5e` (52,295,128 B) / `misaka.old-5e`. x86_64 / glibc 2.39 / Ubuntu 24.04 on all three.
+
+**Outpoints across the re-pin** — the wrappers' `--palw-fee-outpoint` tx id is the constant `misaka-premine`
+(`6d6973616b612d7072656d696e65…`), not a hash of the outputs, so only the *index layout* could move them.
+`MAIN_PREMINE_INDEX = 40` on both 5e's tree and the cut, the eight bond cards are byte-identical (indices 0–7,
+floats 41–48), and the community rows live under their own `TESTNET11_COMMUNITY_TXID` (now 13 rows: Nusi 100M and
+The Witch King 1M appended, tetsu31's address replaced in place, 648M total). Every wrapper's `:41`–`:47` names the
+same output on the cut as on 5e. The producer's own refusal remains the last check.
+
+**Shared loss, in 5e's sentence:** with the 512 row in devnet genesis, no live drill exercises post-genesis
+registration end to end; the admission decision is covered by route-agreement, `palw_rc_admission_shape` and SDK
+tests, and the live evidence for the path itself is 5e's drill stages 2–4 on the floor-only card — registered →
+certified → served → refused at the budget gate as `palw_admission_v2.rs:1408` documents. t11's three classes are
+genesis classes and hold budget from epoch 0; the wall belongs to later additions.
