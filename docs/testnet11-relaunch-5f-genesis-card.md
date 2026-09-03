@@ -808,6 +808,28 @@ Landing the registration without the eps replacement leaves 489‰ on an unexecu
 the eps fix without the registration leaves the worker pointed at nothing. *Written as one item
 because two items are how half of it ships.*
 
+### RED-COUNT IS NOT RE-PIN-COUNT, and two tests print left/right in opposite senses
+
+**Five re-pin tests. Four re-pin values.** Anyone checking their work by "did the number of reds go
+down by one" after each paste will over-count and go looking for a fifth value that does not exist.
+
+The premine value alone accounts for **three** observations, all of the same pair:
+
+    kaspa-consensus       utxo_set_override::all_networks_genesis_constants_match_premine
+                          left  ba2612417e7e0817…  (BUILT)     right 2d882275…  (PINNED)
+    kaspa-consensus-core  every_genesis_commits_to_the_premine_this_build_mints
+                          "pinned 2d882275…, premine BUILDS ba2612417e7e0817…"
+    the isolated boot     utxo_set_override.rs:60 — the node refuses to start on the same pair
+
+**And the two tests print the pair in OPPOSITE senses.** One puts the built value on the left, the
+other names the pinned one first. A reader holding both messages side by side sees `ba26…` on the
+left in one and on the right in the other, and the natural reading is *the two tests disagree*.
+**They agree exactly.** That is a five-second panic at the worst possible moment and it is free to
+know about now.
+
+*Both are the same underlying thing: a count and a sense are properties of the REPORTING, not of the
+work, and at 3am the reporting is all anyone has.*
+
 ### THREE REDS CLOSE WITH ONE PASTE — and one gate breaks the script's own rule
 
 Full `ci-gates.sh` on the merged content: **15 passed, 4 FAILED**, and every failure is a re-pin this
