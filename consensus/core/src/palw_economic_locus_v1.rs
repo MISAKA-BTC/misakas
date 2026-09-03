@@ -456,6 +456,7 @@ mod tests {
             status: PalwClassStatusV2::Active,
             registered_daa: 0,
             registrant_bond: None,
+            fused_attention: false,
         }
     }
 

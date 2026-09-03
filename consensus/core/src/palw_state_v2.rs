@@ -221,7 +221,19 @@ use std::collections::{BTreeMap, BTreeSet};
 /// under it; but a session record is inside the state root and an 18 build would neither decode
 /// this one nor root it identically, so the number moves and the ADR-0043 golden vectors move
 /// with it.
-pub const PALW_STATE_V2_VERSION: u16 = 19;
+///
+/// **Version 20 (2026-09-03, ADR-0082 Decision 2, audit A C-5).** A class record gains ONE
+/// additive field — [`PalwClassStateV2::fused_attention`] — because the clock at the ladder's
+/// `Terminal` is a different clock for a fused leaf, and the chain held nothing that could tell
+/// the two apart: a court session's state carries no profile, no job context and no binding, so
+/// the sweep could not know whether the terminal move was a CLOSE (nobody owes it) or the
+/// responder's ROOT CLAIM (the responder owes it). It is `false` on every class a shipped preset
+/// can register — `verify_class_admission_v5` refuses a fused profile while `palw_kary_court` is
+/// dormant, and a genesis row that is fused is refused at boot — so nothing a shipped preset
+/// folds moves except the version itself; but a class record is inside the state root and a 19
+/// build would neither decode this one nor root it identically, so the number moves and the
+/// ADR-0043 golden vectors move with it.
+pub const PALW_STATE_V2_VERSION: u16 = 20;
 
 /// **Where a class's receipt-lane target starts** (ADR-0074 follow-up): one draw in two per
 /// quantum, whatever the class's attempt-lane `initial_target` says. See the `ClassRegistered`
@@ -1508,6 +1520,36 @@ pub struct PalwClassStateV2 {
     /// a reservation whose owner is only known to the transaction that made it is a reservation
     /// nothing can ever return.
     pub registrant_bond: Option<PalwBondKeyV2>,
+    /// **Does this class's graph carry an `AttnFused` node** (ADR-0082 Decision 2, audit A C-5).
+    ///
+    /// The chain needs this and holds nothing else that answers it. A court session is clocked by
+    /// [`court_turn_and_rung_deadline_v2`], which runs on the state alone — no profile, no job
+    /// context, no binding — and at the ladder's `Terminal` the question "does the responder still
+    /// owe a move?" has two opposite answers depending on the leaf: for every other op the
+    /// terminal move is a CLOSE, which the accused has no reason to file against itself, so the
+    /// rung clock is off by design; for a fused leaf the terminal move is the responder's ROOT
+    /// CLAIM, and with the clock off a guilty executor's dominant strategy is silence — it plays
+    /// the ladder honestly to the forged leaf, files nothing, and the session backstop closes on
+    /// the CHALLENGER's side and slashes the accuser (C-5).
+    ///
+    /// **It is also the record that `palw_kary_court` was armed**, which is why no fence is
+    /// resolved a second time here. `verify_class_admission_v5` refuses a profile carrying
+    /// `AttnFused` unless its `court` argument is `Some` — and that argument is
+    /// `palw_kary_court_active_at(daa)` read by the acceptance layer — so a `true` here cannot
+    /// exist on a chain whose fence was dormant when the class registered, and a fence never
+    /// disarms. This is the same idiom `PalwCourtSessionStateV2::dissection` uses: `Some` is
+    /// itself the record that the fence WAS active, so the fold never re-resolves it at another
+    /// DAA and the sync walker cannot resolve it differently.
+    ///
+    /// Written at the single construction site from the registration's own carriage
+    /// (`palw_profile_has_fused_attention_v1`). A registration that carries NO carriage folds
+    /// `false`, because the fold holds no catalog and cannot resolve a graph it was never given —
+    /// so `verify_palw_genesis_v2` refuses by name a genesis row whose committed catalog entry
+    /// reaches the fused kernel and which carries no profile
+    /// (`GenesisFusedRowCarriesNoProfile`), and refuses a carriage whose answer disagrees with
+    /// that catalog in either direction. A fused row on a shipped card therefore carries its
+    /// graph, which is the form ADR-0049 Decision H already gives every checkable registration.
+    pub fused_attention: bool,
 }
 
 /// **ADR-0056 Decision 5: one class's silence, counted.**
@@ -3240,7 +3282,41 @@ pub const PALW_COURT_CLOSE_INCLUSION_MARGIN: u64 = 4;
 /// block" and "court CPU in this block" were the SAME number, and the block's own byte limit
 /// bounded both. A split close decouples them — the bytes were spent in earlier blocks and the
 /// completing carrier can be a few hundred bytes — so nothing else puts a bound back.
+///
+/// **And it is a THROUGHPUT, so it bounds how many disputes may run at once** (audit A M-1). This
+/// number is the numerator of a rate: `PALW_COURT_CLOSE_MAX_PER_BLOCK` court moves per block, one
+/// block per DAA. Every party in a dispute owes its move inside `turn_deadline_daa` DAA and a
+/// missed rung is not a delay but a conviction ([`sweep_court_deadlines`]), so a session needs one
+/// slot inside its own rung window — and `turn_deadline_daa x PALW_COURT_CLOSE_MAX_PER_BLOCK` is
+/// exactly how many slots that window contains. Above that many live sessions the slot is
+/// oversubscribed and an attacker can starve an honest mover into a default by opening sessions on
+/// claims of its own and emitting one cheap move a block. So the two quantities this is the
+/// quotient of are **the rung window (`turn_deadline_daa`, in blocks) and the block's own court
+/// budget (this constant, in moves)**, and their product
+/// ([`palw_max_concurrent_court_sessions_v1`]) is what `CourtOpened` refuses above — a pure state
+/// fact, not a second budget, because two budgets for one resource is two answers to "how much
+/// court may one block ask for".
+///
+/// **Unfenced, because the contention is.** The dissection moves that made the audit notice this
+/// only exist past `palw_kary_court`, but the slot's other consumer does not: a completing close
+/// chunk spends it on every network this branch ships, and a close that misses its assembly window
+/// is not delayed but CONVICTED ([`convict_close_declarer_v1`]). So a chain holding more sessions
+/// than the window has slots can starve a close as well as a rung, with or without the fence, and
+/// the bound belongs where the sessions are counted rather than behind a fence that describes only
+/// half of what fills the slot.
 pub const PALW_COURT_CLOSE_MAX_PER_BLOCK: usize = 1;
+
+/// **How many court sessions may be open at once** (audit A M-1): the rung window measured in
+/// blocks, times the court moves one block admits.
+///
+/// Derived, never typed — see [`PALW_COURT_CLOSE_MAX_PER_BLOCK`] for the two quantities. On the RC
+/// (`turn_deadline_daa` 42, one move a block) that is 42 concurrent sessions; at the 45 the ADR
+/// drafted against, 45. Below one it is one: a network is always allowed to run a single dispute,
+/// or a `turn_deadline_daa` this rule cannot serve would make the court unopenable rather than
+/// merely contended.
+pub fn palw_max_concurrent_court_sessions_v1(turn_deadline_daa: u64) -> u64 {
+    turn_deadline_daa.saturating_mul(PALW_COURT_CLOSE_MAX_PER_BLOCK as u64).max(1)
+}
 
 /// The assembly window a declaration of `count` chunks opens: [`PALW_COURT_CLOSE_INCLUSION_MARGIN`]
 /// DAA per chunk, from the block that carried the declaration.
@@ -3659,6 +3735,12 @@ pub enum PalwStateV2Error {
     MissingSession(Hash64),
     #[error("court session {0} already exists")]
     DuplicateSession(Hash64),
+    #[error(
+        "the chain already holds {open} open court sessions and the ceiling is {max} — the rung window \
+         ({turn_deadline_daa} blocks) times the court moves one block admits ({per_block}); one more \
+         session would starve an honest mover into a default"
+    )]
+    CourtSessionsAtCapacity { open: u64, max: u64, turn_deadline_daa: u64, per_block: u64 },
     #[error("arithmetic overflow in {0} — an overflowing chain is invalid, not saturated")]
     Overflow(&'static str),
     #[error("panel has no seats")]
@@ -4688,7 +4770,7 @@ impl PalwChainStateV2 {
         // runs out first. Recomputing it any other way here would make the checker disagree with
         // the index it is checking, which is how a ladder move looked like corruption.
         let court_deadlines: BTreeSet<(u64, Hash64)> =
-            self.court_sessions.iter().map(|(id, s)| (court_next_deadline_v2(s), *id)).collect();
+            self.court_sessions.iter().map(|(id, s)| (court_next_deadline_v2(self, s), *id)).collect();
         if court_deadlines != self.court_deadlines {
             return Err(PalwStateV2Error::CarriageInconsistent("court-deadline index differs from the sessions".into()));
         }
@@ -5537,7 +5619,16 @@ impl<'a> TransitionBuilder<'a> {
             if *count == 0 {
                 self.state.open_courts_by_claim.remove(&previous.claim);
             }
-            self.state.court_deadlines.remove(&(court_next_deadline_v2(previous), key));
+            // **By SESSION, not by the key this call would recompute.** The index holds at most
+            // one entry per session, and since ADR-0082 C-5 the key is a function of state OUTSIDE
+            // the session record (the class's `fused_attention`, reached through the claim) — so a
+            // removal that recomputed the key would miss the entry on any path where that state
+            // has moved since the insert. There is one such path today, the sweep's defensive
+            // "the claim is gone, drop the session" branch, and the failure it produces is not a
+            // stale row but `MissingSession` on every later block: a chain halt. Removing by
+            // session id cannot miss, and the scan is over the open sessions, which
+            // `CourtSessionsAtCapacity` bounds.
+            self.state.court_deadlines.retain(|(_, session_id)| *session_id != key);
             // **The challenger's stake comes back HERE**, so reserve and release are one pair in
             // one place. Opening a court charges the challenger the claim's own `reserved`; five
             // different sites remove a session — two sweeps, a close, a retirement, a re-open —
@@ -5560,7 +5651,8 @@ impl<'a> TransitionBuilder<'a> {
         }
         if let Some(record) = &new {
             *self.state.open_courts_by_claim.entry(record.claim).or_insert(0) += 1;
-            self.state.court_deadlines.insert((court_next_deadline_v2(record), key));
+            let next = court_next_deadline_v2(&self.state, record);
+            self.state.court_deadlines.insert((next, key));
         }
         let removed = new.is_none();
         self.entries.push(PalwDeltaEntryV2::Court { key, old, new });
@@ -6776,16 +6868,56 @@ fn cap_session_rung_deadline_v2(session: &mut PalwCourtSessionStateV2, params: &
     }
 }
 
-fn court_turn_and_rung_deadline_v2(session: &PalwCourtSessionStateV2) -> (crate::palw_bisect::PalwBisectTurnV1, u64) {
+/// **Is the class this session disputes one whose terminal leaf can be `AttnFused`?** — a pure
+/// state fact, asked through one helper so the fold, the deadline index, the rebuild, the
+/// consistency checker and the sweep cannot hold five answers to it (ADR-0082 Decision 2, C-5).
+///
+/// A session whose claim or class has already been retired answers `false`: the record that would
+/// say otherwise is gone, and a clock nothing can serve must not convict anyone.
+pub(crate) fn court_session_class_is_fused_v2(state: &PalwChainStateV2, session: &PalwCourtSessionStateV2) -> bool {
+    state.claims.get(&session.claim).and_then(|claim| state.classes.get(&claim.class_id)).is_some_and(|class| class.fused_attention)
+}
+
+fn court_turn_and_rung_deadline_v2(
+    session: &PalwCourtSessionStateV2,
+    class_is_fused: bool,
+) -> (crate::palw_bisect::PalwBisectTurnV1, u64) {
+    use crate::palw_bisect::PalwBisectTurnV1;
     match &session.dissection {
         Some(phase) => (phase.turn(), phase.last_deadline_daa()),
+        // **The one turn at which `Terminal` is still somebody's move** (audit A C-5).
+        //
+        // For every op but `AttnFused` the terminal move is a `CourtClosed { Arithmetic }` — a
+        // close, which the accused has no reason and no software to file against itself — so the
+        // rung clock is off and the backstop decides, challenger-side. A FUSED leaf inverts that:
+        // its terminal move is the responder's own `CourtAttnRootClaimed`, the only object that
+        // can create `session.dissection`, and the challenger cannot file it (the whole-row
+        // `Arithmetic` close carries the entire K and V history and `check_close_cost_v2` refuses
+        // it at every width the ADR targets, while an `AttnDissection` close is refused
+        // `NoDissection`). With the clock off, silence at that leaf was the guilty executor's
+        // dominant strategy: play the ladder honestly to the forged row, file nothing, and the
+        // backstop slashes the ACCUSER.
+        //
+        // So while no phase is open on a fused class the responder owes the root claim, at the
+        // deadline `PalwBisectLadderV1::apply_verdict` already stamped — `last_deadline_daa =
+        // accepted + w_round`, written BEFORE the ladder was set `Terminal`, and pulled inside the
+        // session's assembly reserve by `cap_session_rung_deadline_v2` like every other rung. No
+        // new clock field: the ladder is already holding this one, and `declare_no_show` at
+        // `Terminal` already charges the `Responder`, so silence here loses on the responder's own
+        // side through `void_and_slash`.
+        //
+        // `class_is_fused` is also the record that `palw_kary_court` was armed — see
+        // [`PalwClassStateV2::fused_attention`] — so nothing re-resolves a fence at another DAA.
+        None if class_is_fused && session.ladder.turn() == PalwBisectTurnV1::Terminal => {
+            (PalwBisectTurnV1::AwaitDisclosure, session.ladder.last_deadline_daa())
+        }
         None => (session.ladder.turn(), session.ladder.last_deadline_daa()),
     }
 }
 
-pub(crate) fn court_next_deadline_v2(session: &PalwCourtSessionStateV2) -> u64 {
+pub(crate) fn court_next_deadline_v2(state: &PalwChainStateV2, session: &PalwCourtSessionStateV2) -> u64 {
     use crate::palw_bisect::PalwBisectTurnV1;
-    let (turn, rung_deadline) = court_turn_and_rung_deadline_v2(session);
+    let (turn, rung_deadline) = court_turn_and_rung_deadline_v2(session, court_session_class_is_fused_v2(state, session));
     match turn {
         PalwBisectTurnV1::AwaitDisclosure | PalwBisectTurnV1::AwaitVerdict => session.deadline_daa.min(rung_deadline),
         // **`Terminal` has no move the responder can make, so it may not be clocked as if it did.**
@@ -6895,7 +7027,8 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         // index uses. Asking the LADDER here would read `Terminal` on every session that had
         // reached its dissection and hand the whole exchange to the backstop, which closes
         // challenger-side: a responder could simply stop answering rounds and win.
-        let (turn, rung_deadline) = court_turn_and_rung_deadline_v2(&session);
+        let (turn, rung_deadline) =
+            court_turn_and_rung_deadline_v2(&session, court_session_class_is_fused_v2(&builder.state, &session));
         let turn_can_still_move =
             !matches!(turn, crate::palw_bisect::PalwBisectTurnV1::Terminal | crate::palw_bisect::PalwBisectTurnV1::Abandoned);
         let rung_fired = turn_can_still_move && rung_deadline < ctx.daa_score && rung_deadline < session.deadline_daa;
@@ -8306,6 +8439,25 @@ fn apply_object(
                     // post-genesis form and names its registrant; a genesis registration has none,
                     // and pays nothing, because the network itself decided it.
                     registrant_bond: admission.as_ref().map(|carriage| carriage.registrant_bond),
+                    // **ADR-0082 Decision 2 / audit A C-5: does this class's terminal leaf owe a
+                    // root claim?** Read off the graph the registration CARRIES, by the one
+                    // predicate the court and the admission gate both ask
+                    // (`palw_profile_has_fused_attention_v1`) — never declared, because a class
+                    // that declared its own adjudication rule would be choosing its own court.
+                    //
+                    // A registration with no carriage (the genesis form, "the catalog IS the
+                    // profile in committed form") folds `false`: the fold holds no catalog and
+                    // there is nothing here to read. What makes that honest is the boot gate,
+                    // where the catalog IS in hand — `verify_palw_genesis_v2` refuses a genesis
+                    // row whose catalogued graph reaches the fused kernel and carries no profile,
+                    // and refuses a carriage that disagrees with the catalog either way. Deriving
+                    // it here from a table of the rows THIS BUILD ships would be worse than a gap:
+                    // the fold's answer would be a function of the binary rather than of the
+                    // chain, and two builds shipping different row sets would root the same
+                    // genesis differently.
+                    fused_attention: admission.as_ref().is_some_and(|carriage| {
+                        crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&carriage.profile)
+                    }),
                 }),
             );
             // **Decision 3: the registry's price, taken now and held while the class lives.** A
@@ -8628,6 +8780,32 @@ fn apply_object(
             if builder.state.court_sessions.contains_key(session_id) {
                 return Err(PalwStateV2Error::DuplicateSession(*session_id));
             }
+            // **How many disputes may run at once, and why that is a number at all** (audit A M-1).
+            //
+            // Every dissection move is graded in the block that carries it and counts against the
+            // network's single per-block court slot (`palw_court_move_spends_the_slot_v1`), while
+            // every party owes its move inside one `turn_deadline_daa` and a missed rung is a
+            // CONVICTION, not a delay. So the slot is a rate and the rung window is a budget of
+            // it: with more live sessions than the window has slots, an attacker opens sessions on
+            // claims of its own, emits one cheap `CourtAttnChildChosen` a block, and honest movers
+            // are dropped at the acceptance layer until their rung lapses — the responder losing
+            // its whole stake, the challenger losing `claim.reserved`.
+            //
+            // Bounding CONCURRENCY rather than adding a second per-block budget is the fix that
+            // keeps one answer to "how much court may one block ask for": the slot stays exactly
+            // as wide as it is, and this makes the promise it implies — every session reaches it
+            // inside its own rung — true by construction. It is a pure state fact, so the fold,
+            // the acceptance rehearsal and the sync walk all answer it the same way.
+            let open_sessions = builder.state.court_sessions.len() as u64;
+            let max_sessions = palw_max_concurrent_court_sessions_v1(builder.params.turn_deadline_daa());
+            if open_sessions >= max_sessions {
+                return Err(PalwStateV2Error::CourtSessionsAtCapacity {
+                    open: open_sessions,
+                    max: max_sessions,
+                    turn_deadline_daa: builder.params.turn_deadline_daa(),
+                    per_block: PALW_COURT_CLOSE_MAX_PER_BLOCK as u64,
+                });
+            }
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
             if claim.phase.is_terminal() {
                 return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "CourtOpened" });
@@ -8846,7 +9024,10 @@ fn apply_object(
             // `court_next_deadline_v2` reads it through, so the dissection phase answers for a
             // session that has one and the ladder answers for a session that does not: one
             // spelling of "whose move is it", not two.
-            let turn = court_turn_and_rung_deadline_v2(&session).0;
+            // A fused class with no phase open is not at `Terminal` for this purpose — its
+            // terminal move is the responder's root claim (ADR-0082 C-5), which is exactly the
+            // move a close would be declared INSTEAD of. The same helper answers both questions.
+            let turn = court_turn_and_rung_deadline_v2(&session, court_session_class_is_fused_v2(&builder.state, &session)).0;
             if turn != crate::palw_bisect::PalwBisectTurnV1::Terminal {
                 return Err(PalwStateV2Error::CourtCloseNotTerminal { session: *session_id, turn });
             }
@@ -9819,12 +10000,17 @@ fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
         .map(|(id, claim)| (claim.accepted_blue_score, *id))
         .collect();
     state.work_ids = state.claims.iter().filter_map(|(id, claim)| claim.work_id.map(|w| (w, *id))).collect();
-    state.open_courts_by_claim = BTreeMap::new();
-    state.court_deadlines = BTreeSet::new();
-    for (id, session) in &state.court_sessions {
-        *state.open_courts_by_claim.entry(session.claim).or_insert(0) += 1;
-        state.court_deadlines.insert((court_next_deadline_v2(session), *id));
+    // Both built into locals first: the deadline key is a function of the WHOLE state since
+    // ADR-0082 C-5 (a session's class decides whether its terminal ladder still owes a root
+    // claim), so it cannot be computed into `state.court_deadlines` while `state` is borrowed.
+    let court_deadlines: BTreeSet<(u64, Hash64)> =
+        state.court_sessions.iter().map(|(id, session)| (court_next_deadline_v2(state, session), *id)).collect();
+    let mut open_courts: BTreeMap<Hash64, u32> = BTreeMap::new();
+    for session in state.court_sessions.values() {
+        *open_courts.entry(session.claim).or_insert(0) += 1;
     }
+    state.court_deadlines = court_deadlines;
+    state.open_courts_by_claim = open_courts;
     state.court_close_deadlines = state.court_close_groups.iter().map(|(key, group)| (group.assembly_deadline_daa, *key)).collect();
 }
 
@@ -17651,7 +17837,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&19u16.to_le_bytes()); // version_le(2) = 19, restated from the ADR (ADR-0082: the court session's dissection phase)
+            s.update(&20u16.to_le_bytes()); // version_le(2) = 20, restated from the ADR (ADR-0082 C-5: the class record's `fused_attention`)
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -17741,6 +17927,7 @@ pub(crate) mod tests {
                 status: PalwClassStatusV2::Active,
                 registered_daa: 0,
                 registrant_bond: Some(bond_key(1)),
+                fused_attention: false,
             },
         );
         state.classes.insert(
@@ -17751,7 +17938,12 @@ pub(crate) mod tests {
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(100),
                 status: PalwClassStatusV2::Registered { activation_daa: 900, pending_share_permille: 1 },
                 registered_daa: 2,
+                // One class each way, so the inhabited golden pins the field's VALUE and not only
+                // its presence: a record whose every instance carried the same byte would move the
+                // root if the field were added and not if its meaning were inverted. No session
+                // disputes this class, so the deadline index is untouched by it.
                 registrant_bond: Some(bond_key(1)),
+                fused_attention: true,
             },
         );
         state.class_targets.insert(h64(0xC1), PalwClassTargetV2 { target: 1 << 100 });
@@ -18041,15 +18233,20 @@ pub(crate) mod tests {
     /// half (heartbeat lane, zero-seat gate) changes validity rules with an unchanged root
     /// schema and rides the same number. The empty root moves for the version alone, which is
     /// exactly the pair of signals these two constants exist to separate.
+    /// An eighth, for ADR-0082 audit A C-5: `PALW_STATE_V2_VERSION` 19 -> 20 because a CLASS
+    /// record gains `fused_attention`, the one fact that tells the sweep whether a terminal ladder
+    /// still owes a root claim. The empty root moves for the version alone; the inhabited root
+    /// moves for the version and for the class record's own new byte, with one class each way so
+    /// the value is pinned as well as the field.
     #[test]
-    fn the_version_19_state_root_golden_vectors() {
+    fn the_version_20_state_root_golden_vectors() {
         let empty = PalwChainStateV2::genesis().state_root().to_string();
         let full = m02_populated_state().state_root().to_string();
-        let want_empty = "db89973498cc72eaa3e3a021ba452c3bd4744fde816b4ca737bbb5e7d1e23b6d8d8de08f893a7ab1ea91e5ed2573e7bbe95fb6a11de017ad9056362503771097";
-        let want_full = "1fdc85eaa34b7515c9d9f0119f6c2239cc98137e09e3091acd57c1a23ffb3adc8c3f3dfb28164d2132f21e4b094474e8bbacccc0fa21c37942d1fc558d9fc86f";
+        let want_empty = "966bae0706de192840d5a9697764071a065570cb2996d49c82ab6fe1a836afc99ab3fe725bc4387462c8e42bdfa242553f3c10cc435656e7fc2cccdbc52401d3";
+        let want_full = "a0b711e172687e0787d9d6f8307f306493749394caff80d5e24d4324453eea66f7a21c69892b5f9898c07c743601c1a9b86a496ee135f24e8829276566402315";
         assert!(
             empty == want_empty && full == want_full,
-            "a version-19 root moved: empty {empty} (want {want_empty}); inhabited {full} (want {want_full})"
+            "a version-20 root moved: empty {empty} (want {want_empty}); inhabited {full} (want {want_full})"
         );
     }
 
@@ -19655,6 +19852,23 @@ pub(crate) mod tests {
         /// Open a court over a space wide enough to contain the fused leaf, and narrow it to that leaf
         /// with real rung objects — the same moves a chain carries, not a constructed ladder.
         fn court_at_the_fused_leaf(p: &PalwStateParamsV2, drill: &Drill) -> (PalwChainStateV2, Hash64, Hash64, u64) {
+            court_at_the_fused_leaf_with(p, drill, true)
+        }
+
+        /// [`court_at_the_fused_leaf`], with the one variable audit A's C-5 turns on: whether the
+        /// drill's class entered through the CARRIAGE door (so the fold saw its graph and recorded
+        /// `fused_attention`) or as a genesis row (so it did not).
+        ///
+        /// The row, the binding, the claim, the ladder and the narrowed leaf are identical in both
+        /// arms — the class id is the profile id and the profile does not move — so a difference
+        /// between the two is a difference the flag made and nothing else. `carriage: false` is
+        /// also the state of EVERY class on a chain whose `palw_kary_court` is dormant, because
+        /// `verify_class_admission_v5` refuses a fused profile there.
+        fn court_at_the_fused_leaf_with(
+            p: &PalwStateParamsV2,
+            drill: &Drill,
+            carriage: bool,
+        ) -> (PalwChainStateV2, Hash64, Hash64, u64) {
             const SPACE: crate::palw_bisect::PalwBisectSpaceV1 = crate::palw_bisect::PalwBisectSpaceV1::StepLeaves;
             let size = drill.binding.step_leaf_count;
             let genesis = PalwChainStateV2::genesis();
@@ -19673,16 +19887,6 @@ pub(crate) mod tests {
                     activation_daa: 0,
                     admission: None,
                 },
-                PalwConsensusObjectV2::ClassRegistered {
-                    class_id,
-                    artifact_root: drill.artifact_root,
-                    slash_value_per_pwu: 5,
-                    pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
-                    initial_target: u128::MAX / 2,
-                    share_permille: 100,
-                    activation_daa: 0,
-                    admission: None,
-                },
                 PalwConsensusObjectV2::BondRegistered {
                     bond: bond_key(1),
                     pubkey: vec![7; 4],
@@ -19691,6 +19895,31 @@ pub(crate) mod tests {
                     payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
                     capable_classes: Default::default(),
                     signature: Vec::new(),
+                },
+                // **Through the CARRIAGE door, because that is the only door a fused class has**
+                // (ADR-0082 C-5). A genesis registration carries no graph, so the fold cannot see
+                // that this row's terminal leaf is `AttnFused` and would clock its `Terminal` like
+                // any other op's — which is the very defect this drill now pins. On a running
+                // chain a graph-v5 row arrives exactly like this: profile, canonical job, and the
+                // bond that paid for it.
+                PalwConsensusObjectV2::ClassRegistered {
+                    class_id,
+                    artifact_root: drill.artifact_root,
+                    slash_value_per_pwu: 5,
+                    pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                    initial_target: u128::MAX / 2,
+                    share_permille: 100,
+                    activation_daa: 0,
+                    admission: carriage.then(|| {
+                        Box::new(PalwClassAdmissionCarriageV2 {
+                            profile: drill.profile.clone(),
+                            canonical: drill.context.clone(),
+                            registrant_bond: bond_key(1),
+                            // The acceptance layer's to check, not the fold's — the same split
+                            // every signed object in this module's fixtures uses.
+                            signature: Vec::new(),
+                        })
+                    }),
                 },
             ];
             let (s1, _) = apply(&genesis, p, &ctx(1, 100, 1), &register, None);
@@ -19931,16 +20160,176 @@ pub(crate) mod tests {
                 cap,
                 "a ladder rung is pulled back to the backstop less the assembly reserve"
             );
-            // The ladder here is `Terminal`, where the rung clock is off by design (audit M2-4),
-            // so the sweep indexes the backstop — the cap is on the FIELD, and it is the phase
-            // below that shows the sweep reading a capped value.
-            assert_eq!(court_next_deadline_v2(session), session.deadline_daa, "a terminal ladder is clocked by the backstop alone");
+            // The ladder here is `Terminal` on a FUSED class, where the terminal move is the
+            // responder's own root claim (audit A C-5) — so the sweep indexes the capped ladder
+            // rung, not the backstop. That sentence used to read the other way and pinned the
+            // hole: "a terminal ladder is clocked by the backstop alone" is still true, and is
+            // pinned, for a class whose terminal move is a close nobody owes —
+            // `a_non_fused_class_is_not_charged_for_a_root_claim_it_cannot_file` is where.
+            assert_eq!(
+                court_next_deadline_v2(&state, session),
+                cap,
+                "a fused class's terminal ladder is clocked by the rung the responder owes"
+            );
 
             // The dissection's moves take the same cap through the same helper.
             let (opened, _) = apply(&state, &p, &ctx(daa, daa, daa), &[root_claimed(sid, &drill, 2)], None);
             let phase = opened.court_session(&sid).unwrap().dissection.as_ref().unwrap();
             assert_eq!(phase.last_deadline_daa(), cap, "a dissection rung is capped exactly as a ladder rung is");
-            assert_eq!(court_next_deadline_v2(opened.court_session(&sid).unwrap()), cap);
+            assert_eq!(court_next_deadline_v2(&opened, opened.court_session(&sid).unwrap()), cap);
+        }
+
+        /// **Audit A C-5: a responder that never files the root claim loses on its OWN side.**
+        ///
+        /// The failure this pins is the report's, exactly: an executor that forged one fused row
+        /// plays the ladder honestly — it must, silence at a rung is `void_and_slash` — until the
+        /// ladder narrows to the forged leaf, and then files nothing. `CourtAttnRootClaimed` is the
+        /// responder's move and the only object that can create `session.dissection`; the
+        /// challenger's alternatives are an `AttnDissection` close (refused `NoDissection`) and a
+        /// whole-row `Arithmetic` close (refused by `check_close_cost_v2` at every width the ADR
+        /// targets). So with the rung clock off at `Terminal` the session ran to the backstop,
+        /// which closes CHALLENGER-side and slashes the accuser: silence was the guilty party's
+        /// dominant strategy on every fused leaf.
+        ///
+        /// The fix carries no new clock. `PalwBisectLadderV1::apply_verdict` already stamped
+        /// `last_deadline_daa = accepted + w_round` before it set `Terminal`, and `declare_no_show`
+        /// at `Terminal` already returns `Responder` — the only thing missing was the chain knowing
+        /// that THIS leaf's terminal move is the responder's, which is what
+        /// `PalwClassStateV2::fused_attention` says.
+        #[test]
+        fn a_responder_that_never_files_the_root_claim_loses_on_its_own_side() {
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+            let (state, claim_id, sid, _daa) = court_at_the_fused_leaf(&p, &drill);
+            let class_id = drill.profile.shape_profile_id();
+            assert!(
+                state.class(&class_id).expect("the drill's class is registered").fused_attention,
+                "the class entered through the carriage door, so the fold saw the fused node"
+            );
+            let session = state.court_session(&sid).expect("the session lives");
+            assert!(session.dissection.is_none(), "nobody has filed a root claim — that is the whole scenario");
+            assert_eq!(session.ladder.turn(), PalwBisectTurnV1::Terminal, "the ladder has finished narrowing");
+
+            // The clock the responder owes is the ladder's own last stamp, not the backstop.
+            let rung = session.ladder.last_deadline_daa();
+            assert_eq!(
+                court_next_deadline_v2(&state, session),
+                rung,
+                "the sweep visits at the rung the responder owes the root claim by"
+            );
+            let after = rung + 1;
+            assert!(
+                after < session.deadline_daa,
+                "the backstop must not be what fires — it closes on the CHALLENGER's side, which is the defect"
+            );
+
+            let (swept, _) = apply(&state, &p, &ctx(after, after, after), &[], None);
+            assert!(swept.court_session(&sid).is_none(), "the silent terminal rung ended the session");
+            assert!(
+                matches!(
+                    swept.claim(&claim_id).expect("the claim is still a record").phase,
+                    PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }
+                ),
+                "an executor that will not open the only defence available to it defaults, and the default is on ITS side"
+            );
+        }
+
+        /// **The mirror, and the reason the flag has to exist at all.**
+        ///
+        /// The SAME row, the same ladder, the same narrowed leaf — entered as a genesis
+        /// registration, so the fold never saw a graph and the class record says
+        /// `fused_attention: false`. That is the state of every class on a chain whose
+        /// `palw_kary_court` is dormant, and of every non-fused class on one that armed it: the
+        /// terminal move is a `CourtClosed { Arithmetic }`, which the accused has no reason to file
+        /// against itself, so nobody owes a move and the backstop is the only clock. Charging that
+        /// silence would convict honest producers for a close their prosecutor never filed —
+        /// audit M2-4's finding, which this keeps true.
+        #[test]
+        fn a_non_fused_class_is_not_charged_for_a_root_claim_it_cannot_file() {
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+            let (state, claim_id, sid, _daa) = court_at_the_fused_leaf_with(&p, &drill, false);
+            let class_id = drill.profile.shape_profile_id();
+            assert!(
+                !state.class(&class_id).expect("the drill's class is registered").fused_attention,
+                "a genesis registration carries no graph, so the fold has nothing to read"
+            );
+            let session = state.court_session(&sid).expect("the session lives");
+            assert_eq!(session.ladder.turn(), PalwBisectTurnV1::Terminal);
+            assert_eq!(
+                court_next_deadline_v2(&state, session),
+                session.deadline_daa,
+                "a terminal ladder is clocked by the backstop alone"
+            );
+
+            // Past the ladder's spent rung and nowhere near the backstop: the sweep does not even
+            // visit, so the session stands and nobody is convicted.
+            let after = session.ladder.last_deadline_daa() + 1;
+            assert!(after < session.deadline_daa);
+            let (swept, _) = apply(&state, &p, &ctx(after, after, after), &[], None);
+            assert!(swept.court_session(&sid).is_some(), "silence past a spent rung is not an offence when nobody owes a move");
+            assert!(
+                !matches!(swept.claim(&claim_id).expect("the claim lives").phase, PalwClaimPhaseV2::Voided { .. }),
+                "and the claim is untouched"
+            );
+        }
+
+        /// **Audit A M-1: how many disputes may run at once, and the refusal that says so by name.**
+        ///
+        /// Every dissection move spends the network's single per-block court slot, and every party
+        /// owes its move inside one `turn_deadline_daa` — so the number of sessions the chain may
+        /// hold open is the number of slots that window contains. Above it an attacker starves an
+        /// honest mover into a conviction by opening sessions of its own and emitting one cheap
+        /// move a block.
+        #[test]
+        fn the_court_admits_only_as_many_sessions_as_the_rung_window_has_slots() {
+            // The two quantities the ceiling is the product of, named where they are read.
+            assert_eq!(
+                palw_max_concurrent_court_sessions_v1(45),
+                45 * PALW_COURT_CLOSE_MAX_PER_BLOCK as u64,
+                "the ceiling is the rung window in blocks times the court moves one block admits"
+            );
+            assert_eq!(palw_max_concurrent_court_sessions_v1(42), 42, "the RC's 42-DAA rung window admits 42 sessions");
+            assert_eq!(palw_max_concurrent_court_sessions_v1(0), 1, "a network is always allowed to run one dispute");
+
+            // And the refusal is a named one, from the fold, on a chain that is at the ceiling.
+            let p = params_with_ladder();
+            let ceiling = palw_max_concurrent_court_sessions_v1(p.turn_deadline_daa());
+            let drill = Drill::new(false);
+            let (state, _claim_id, sid, daa) = court_at_the_fused_leaf(&p, &drill);
+            let mut state = state;
+            // One session is already open; fill the rest with copies of the same record, which is
+            // what the ceiling counts — `court_sessions.len()`, a pure state fact.
+            let template = state.court_session(&sid).expect("the session lives").clone();
+            for n in 1..ceiling {
+                let id = h64(0xC0_0000 + n);
+                state.court_sessions.insert(id, template.clone());
+                *state.open_courts_by_claim.entry(template.claim).or_insert(0) += 1;
+                let next = court_next_deadline_v2(&state, &template);
+                state.court_deadlines.insert((next, id));
+            }
+            assert_eq!(state.court_sessions.len() as u64, ceiling, "the chain is exactly at the ceiling");
+
+            let claim_id = template.claim;
+            let trace_root = drill.binding.full_logits_trace_root;
+            let space = crate::palw_bisect::PalwBisectSpaceV1::StepLeaves;
+            // A space one wider than the open session's, so this is a genuinely NEW session id and
+            // the capacity refusal is what answers it rather than `DuplicateSession`.
+            let size = drill.binding.step_leaf_count + 1;
+            let one_more = PalwConsensusObjectV2::CourtOpened {
+                session_id: crate::palw_court_v2::court_session_id_v2(&claim_id, &trace_root, &bond_key(1), &bond_key(1), space, size),
+                claim: claim_id,
+                challenger_bond: bond_key(1),
+                space,
+                space_size: size,
+                signature: Vec::new(),
+            };
+            let err = apply_palw_transition_v2(&state, &p, &ctx(daa, daa, daa), &[one_more], None)
+                .expect_err("the ceiling refuses one more session");
+            assert!(
+                matches!(err, PalwStateV2Error::CourtSessionsAtCapacity { open, max, .. } if open == ceiling && max == ceiling),
+                "the refusal names the bound and both of its quantities: {err}"
+            );
         }
 
         /// **Z4 through the clock: a lapsed dissection move loses on the mover's side.**
@@ -19960,7 +20349,7 @@ pub(crate) mod tests {
             let rung = phase.last_deadline_daa();
             assert_eq!(rung, daa + p.turn_deadline_daa(), "the phase's rung is one turn window past the block that opened it");
             assert!(
-                court_next_deadline_v2(opened.court_session(&sid).unwrap()) == rung,
+                court_next_deadline_v2(&opened, opened.court_session(&sid).unwrap()) == rung,
                 "the sweep indexes the PHASE's rung, not the ladder's spent one"
             );
 
