@@ -2564,7 +2564,7 @@ mod tests {
             .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
             .expect("the derived store is sorted and unique");
         let (ctx, prompt) =
-            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x0082_C1), geometry.vocab_size as usize, 3, 4);
+            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x0000_82C1), geometry.vocab_size as usize, 3, 4);
         let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
         let plan = engine.plan_from_profile(&profile).expect("the v5 declaration is this engine's program");
         let run = crate::qwen25_a16_backend::a16_execute_free_prompt_streaming_v1(

@@ -183,15 +183,16 @@ mod a16_family {
     /// Three facts the class ledger (`misaka_palw_base0::classes`) builds on, pinned here where
     /// the geometry lives: n_ctx 16 IS the genesis-registered dense class (its id is asserted
     /// byte-for-byte — a drift here would mean the ledger can no longer name the class the chain
-    /// already runs); n_ctx 17..=20 are admissible under the RC court, which is the room the
-    /// family has for sibling models before it needs a second axis; and everything past 20 is
-    /// refused by the close budget or the ladder, so a sibling CANNOT be given a bigger context
-    /// instead of a place in line.
+    /// already runs); the family has room above it under the RC court, which is what a sibling
+    /// model uses before it needs a second axis; and there is a CEILING, which the sweep measures
+    /// rather than recites — 574 under the RC's `2^26` ladder, refused at 576 by
+    /// `DeeperThanTheLadder` and by nothing else, so a sibling still cannot be given an unbounded
+    /// context instead of a place in line.
     #[test]
     fn a16_context_ladder_against_the_shipped_bundle() {
         let p = crate::config::params::palw_rc_shipped_params();
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &p.palw_consensus_mode else { panic!() };
-        for nctx in [15u32, 16, 17, 18, 20, 24, 32, 48, 64, 90, 128] {
+        for nctx in [15u32, 16, 17, 18, 20, 24, 32, 48, 64, 90, 128, 256, 512, 574, 576, 640] {
             let g = PalwQwen25GeometryV1 { n_ctx: nctx, ..QWEN25_1_5B };
             let profile = match qwen25_a16_profile_v1(g) {
                 Ok(pr) => pr,
@@ -236,12 +237,23 @@ mod a16_family {
                 // from {15..21} to {15..39} and the REASON changed with it — see
                 // `palw_class_admission_v2::tests::the_widest_context_each_family_admits`, which
                 // measures both gates for both families.
-                15 | 17 | 18 | 20 | 24 | 32 => {
+                // **The room this family has, and what bounds it** — re-measured after audit D H-5.
+                //
+                // Under the 80 KiB one-transaction ceiling the widest admitted context was 21 and
+                // the COST refused 24; under ADR-0080 design A's 27-chunk group the cost stopped
+                // binding and the ceiling became 39 — which was the EXECUTOR's `PALW_STEP_MAX_LEAVES`
+                // (`2^22`) leaking into the gate through `genesis_anchored_v1`'s ladder field and
+                // through the canonical count, on a ruleset whose own ladder is `2^26`. With that
+                // corrected the bound is the RULESET's ladder, and the ceiling is **574** —
+                // `DeeperThanTheLadder { worst: 67,235,200, ladder: 67,108,864 }` at 576. That is
+                // the same 574 ADR-0082 Decision 1 quotes as "the release branch's own gate", which
+                // is the number this gate was supposed to be producing all along.
+                15 | 17 | 18 | 20 | 24 | 32 | 48 | 64 | 90 | 128 | 256 | 512 | 574 => {
                     assert!(verdict.is_ok(), "n_ctx {nctx} fell out of the family's room: {verdict:?}")
                 }
                 _ => assert!(
-                    verdict.is_err(),
-                    "n_ctx {nctx} was admitted — the family's ceiling moved, revisit the ledger comment: {verdict:?}"
+                    matches!(verdict, Err(crate::palw_class_admission_v2::PalwClassAdmissionError::DeeperThanTheLadder { .. })),
+                    "n_ctx {nctx} must be refused by the RULESET's ladder and nothing else: {verdict:?}"
                 ),
             }
         }

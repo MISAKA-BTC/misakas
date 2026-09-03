@@ -396,6 +396,17 @@ executor for a long prompt — the requester, in what unit, through what market 
 decision outside consensus and this rule does not make it. While the fence is dormant the lane
 prices the whole capture, as it does today.
 
+**The fence cannot be armed by this build, and a node refuses to start if you set it.** Neither
+half of it exists on the path that would apply it: the state transition has no decode-leaf
+enumeration (it answers `FreePromptDecodeLeavesUnavailable`, so an armed chain would refuse *every*
+free-prompt claim rather than crediting the answer), and no engine implements
+`decode_token_select_v2`, so every temperature job would be refused `SamplingNotArmed` after a full
+inference. `Params::validate_palw_v2` therefore refuses a ruleset that arms
+`palw_fp_decode_rules` at any height — the fence is a record of a decision, not a switch, until a
+build carries both. The same is true of `palw_prompt_ids_merkle` (ADR-0081 Decision 3 / ADR-0082
+Decision 5): every writer and every checker in the tree still commits the flat prompt-ids digest,
+so arming it would move the network's identity and nothing else.
+
 **And the answer is chosen, not just taken** (ADR-0082 Decision 11, the same fence). Under it the
 committed token at each position is a *seeded* argmax — `argmax_j (logit_j × 2²⁴ + T_q × G_j)`
 with `G` a Gumbel variate from a pinned table — so `/v1/chat/completions` may carry `temperature`
@@ -403,7 +414,8 @@ and `seed` and the answer is a real sample rather than the one repetition greedy
 Temperature `0` is the shipped rule byte for byte. **The gateway refuses a temperature or a seed
 while its node reports the fence dormant**, by name, before the model is loaded: a job carrying
 them would be refused by the transition as `SamplingNotArmed` after you had already paid for the
-inference.
+inference. Since the fence cannot be armed on this build (above), that refusal is the only
+behaviour there is today.
 
 ### 7.1 The three processes
 

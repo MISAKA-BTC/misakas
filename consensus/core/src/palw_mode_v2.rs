@@ -565,6 +565,7 @@ impl PalwCourtParamsV2 {
 /// ladder no chain runs (audit D H-2).
 pub const PALW_COURT_LEAF_LADDER_ARITY_V1: u8 = 2;
 
+#[allow(clippy::too_many_arguments)]
 pub fn palw_court_arity_v1(
     window_court: u64,
     turn_deadline: u64,
@@ -573,6 +574,7 @@ pub fn palw_court_arity_v1(
     tile: u32,
     terminal_moves: u32,
     widest_lane_count: usize,
+    max_close_chunks: u64,
 ) -> Option<u8> {
     use crate::palw_attn_dissect::{
         PALW_ATTN_DISSECT_MAX_ARITY, PALW_ATTN_DISSECT_MIN_ARITY, palw_attn_dissect_arity_fits_carrier_v1,
@@ -594,7 +596,14 @@ pub fn palw_court_arity_v1(
         // And the root claim is a move (audit A M-2), wherever there is a dissection to open.
         let root_claim = u64::from(history_positions_max != 0);
         let moves = ladder.checked_add(history)?.checked_mul(2)?.checked_add(u64::from(terminal_moves))?.checked_add(root_claim)?;
-        if moves.checked_mul(turn_deadline)? <= window_court {
+        // **On the SAME inequality admission applies** (audit A H-2 / audit D H-2c). This selected
+        // on `moves · deadline <= window_court` while `palw_attn_court_admits_row_v1` admits on
+        // `moves · deadline + assembly_reserve < window_court` — so the derivation could return an
+        // arity the admission gate then refuses, and a wider arity that WOULD have fitted was never
+        // reached. The reserve is a property of the window (both sides' closes occupy blocks that
+        // carry no move), so it belongs in the search that chooses the shape the window has to hold.
+        let reserve = crate::palw_context_ladder::palw_close_assembly_daa_v1(max_close_chunks);
+        if moves.checked_mul(turn_deadline)?.checked_add(reserve)? < window_court {
             // The clock admits this arity. The carrier is the other half of the same question,
             // and it answers for the PAIR: a wider arity would only weigh more, so a round that
             // does not fit here is a refusal and never a reason to keep searching upward.

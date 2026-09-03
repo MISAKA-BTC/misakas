@@ -541,28 +541,6 @@ pub(crate) fn build_carrier_v1(
     build_carrier_priced_v1(key, nv, object, funding_outpoint, funding_entry).map(|(tx, _, fee)| (tx, fee))
 }
 
-#[cfg(test)]
-mod rent_tests {
-    /// **The rent the chain charges is the relay rate this tool pays** (ADR-0075 SA-1/SA-2).
-    ///
-    /// `kaspa_consensus_core::palw_state_v2::palw_relay_fee_for_mass_v1` is a MIRROR of
-    /// `kaspa_pq_validator_core::relay_fee_for_compute_mass`: the validator-core crate depends on
-    /// consensus-core, so the consensus side cannot import the original and the two are one rate
-    /// spelled twice. A mirrored rate drifts silently and the drift is invisible until a live
-    /// carrier is dropped for underpaying a price its own submitter computed — so it is asserted
-    /// here, in the one crate that sees both spellings.
-    #[test]
-    fn the_rent_the_chain_charges_is_the_relay_rate_this_tool_pays() {
-        for mass in [0u64, 1, 999, 1_000, 20_000, 100_000, 800_000, 1 << 20, u64::MAX / 20_000] {
-            assert_eq!(
-                kaspa_consensus_core::palw_state_v2::palw_relay_fee_for_mass_v1(mass),
-                kaspa_pq_validator_core::relay_fee_for_compute_mass(mass),
-                "the two spellings of the relay rate disagree at mass {mass}"
-            );
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------------------------
 // `misaka palw certified` — the two lane facts a builder must know BEFORE it builds
 // ---------------------------------------------------------------------------------------------
@@ -645,4 +623,27 @@ pub async fn certified(ctx: &Ctx, class_id: &str, json: bool) -> Result<(), CliE
         return Err(CliError::new(exit::GENERIC, format!("this chain holds no class {class}")));
     }
     Ok(())
+}
+
+
+#[cfg(test)]
+mod rent_tests {
+    /// **The rent the chain charges is the relay rate this tool pays** (ADR-0075 SA-1/SA-2).
+    ///
+    /// `kaspa_consensus_core::palw_state_v2::palw_relay_fee_for_mass_v1` is a MIRROR of
+    /// `kaspa_pq_validator_core::relay_fee_for_compute_mass`: the validator-core crate depends on
+    /// consensus-core, so the consensus side cannot import the original and the two are one rate
+    /// spelled twice. A mirrored rate drifts silently and the drift is invisible until a live
+    /// carrier is dropped for underpaying a price its own submitter computed — so it is asserted
+    /// here, in the one crate that sees both spellings.
+    #[test]
+    fn the_rent_the_chain_charges_is_the_relay_rate_this_tool_pays() {
+        for mass in [0u64, 1, 999, 1_000, 20_000, 100_000, 800_000, 1 << 20, u64::MAX / 20_000] {
+            assert_eq!(
+                kaspa_consensus_core::palw_state_v2::palw_relay_fee_for_mass_v1(mass),
+                kaspa_pq_validator_core::relay_fee_for_compute_mass(mass),
+                "the two spellings of the relay rate disagree at mass {mass}"
+            );
+        }
+    }
 }

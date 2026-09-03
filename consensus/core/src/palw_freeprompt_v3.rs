@@ -2144,9 +2144,11 @@ pub const PALW_FP_MATERIAL_V1_MAGIC: [u8; 4] = *b"FPM1";
 ///   carried less than the whole prompt would make withholding *representable as a well-formed
 ///   response*, which is precisely the failure Decision 16's disclosure rule exists to prevent.
 ///
-/// So the encoding below is deliberately NOT optimised, and `palw_fp_prompt_ids_admit_v1` keeps
-/// re-deriving the commitment over the whole list. Past the fence it re-derives the Merkle root
-/// over the whole list instead of the flat digest; the LIST is what is carried either way.
+/// So the encoding below is deliberately NOT optimised, and [`palw_fp_prompt_ids_admit_v1`] keeps
+/// re-deriving the commitment over the whole list — the FLAT digest, on every height and under
+/// every fence this build can be started with (audit D M-2: `Params::palw_prompt_ids_merkle`
+/// cannot be armed, because no writer or checker here reads it). Should the form ever move, the
+/// LIST is what is carried either way.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwFpMaterialV1 {
     pub job: PalwFreePromptJobV3,
@@ -2167,6 +2169,13 @@ pub struct PalwFpMaterialV1 {
 /// refusal rather than a bool for the same reason: a seat that files nothing must be able to say
 /// which of "nothing was served" and "what was served is not this claim's" happened, because the
 /// first is the producer's default arm and the second is a producer serving somebody else's work.
+/// **The commitment is FLAT, here and in every writer** (audit D M-2). ADR-0081 Decision 3 /
+/// ADR-0082 Decision 5 would re-form it as a Merkle root over the ids, and
+/// `Params::palw_prompt_ids_merkle` is the fence for that move — but nothing in this tree reads
+/// the fence: this function, the seat and both payload decoders re-derive
+/// `crate::palw_v2::prompt_token_ids_hash_v2` unconditionally, and so does every producer.
+/// `Params::validate_palw_v2` therefore REFUSES a ruleset that arms it, rather than letting a
+/// network believe its close is Merkle-shaped while every id list on it is still hashed flat.
 pub fn palw_fp_prompt_ids_admit_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[u32]) -> Result<(), PalwFpV3Error> {
     if prompt_token_ids.len() != job.prompt_tokens as usize {
         return Err(PalwFpV3Error::PromptIdsCountMismatch { got: prompt_token_ids.len(), declared: job.prompt_tokens });

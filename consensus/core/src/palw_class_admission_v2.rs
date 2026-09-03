@@ -49,7 +49,7 @@ use kaspa_hashes::Hash64;
 use crate::palw_catalog_coverage::{PalwReachableKernelSetV1, verify_catalog_coverage_v1};
 use crate::palw_mode_v2::{PalwClassCatalogEntryV2, PalwConsensusParamsV2};
 use crate::palw_state_v2::{PalwConsensusObjectV2, PalwPwuRuleV2};
-use crate::palw_step::{PalwShapeProfileV3, step_leaf_count};
+use crate::palw_step::PalwShapeProfileV3;
 use crate::palw_step_refute::catalogued_kernel_ids_v1;
 use crate::palw_v2::PalwJobContextV2;
 
@@ -291,7 +291,7 @@ fn decode_pin_price_v1(profile: &PalwShapeProfileV3, decode: u64) -> Option<u64>
 /// attempt more for a longer job — `pwu_per_inference` is per inference — so the longest job the
 /// class admits is a job the class must be prosecutable at.
 pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCostV1, PalwClassAdmissionError> {
-    derive_court_cost_shaped_v1(profile, PalwCourtCostShapeV1::genesis_anchored_v1(profile))
+    derive_court_cost_shaped_v1(profile, PalwCourtCostShapeV1::genesis_anchored_v1(profile, crate::palw_step::PALW_STEP_MAX_LEAVES))
 }
 
 /// **Which court a cost is being derived FOR** (ADR-0077 Decision 11).
@@ -396,11 +396,20 @@ pub struct PalwKaryCourtV1 {
 }
 
 impl PalwCourtCostShapeV1 {
-    /// The shipped court: the whole context as history, the shipped ladder, no anchor.
-    pub fn genesis_anchored_v1(profile: &PalwShapeProfileV3) -> Self {
+    /// The shipped court: the whole context as history, no anchor, against the RULESET's ladder.
+    ///
+    /// **`ladder` is an argument and not the module constant** (audit D H-5). It was
+    /// `crate::palw_step::PALW_STEP_MAX_LEAVES` — the EXECUTOR's `2^22` — and
+    /// [`derive_court_cost_walk_v1`] uses this field as the CAP of the leaf enumeration, not
+    /// merely as a path depth. On a ruleset whose `max_step_leaf_count` is `2^26` the gate then
+    /// cleared `DeeperThanTheLadder` at the ruleset's number and was refused two lines later by
+    /// `Profile("TooManyLeaves { max: 4194304 }")` — a refusal naming neither the ladder nor the
+    /// ruleset, on exactly the row the ladder had been raised for. The caller holds the bundle;
+    /// `bundle.court.max_step_leaf_count()` is what it passes.
+    pub fn genesis_anchored_v1(profile: &PalwShapeProfileV3, ladder: u64) -> Self {
         Self {
             history_positions: profile.n_ctx as u64,
-            ladder: crate::palw_step::PALW_STEP_MAX_LEAVES,
+            ladder,
             kv_checkpoint_bytes: 0,
             gdn_checkpoint_bytes: 0,
             path_from_ladder: false,
@@ -1017,11 +1026,16 @@ pub enum PalwClassAdmissionError {
     /// must not admit the class that produces one.**
     ///
     /// An `AttnFused` node's terminal adjudication is not a recompute — it is the history
-    /// dissection (ADR-0082 Decision 2), and `palw_step_refute`'s execution arm says so by
-    /// returning `Unadjudicable` until U-03 lands the court's side. A ruleset whose
-    /// `Params::palw_kary_court` is unset has no dissection at all, so every dispute over such a
-    /// class ends rejected-but-unslashed: unfalsifiable work on a chain where bonds are supposed
-    /// to be at risk, which is the exact failure the coverage gates exist to refuse. Refused BY
+    /// dissection (ADR-0082 Decision 2).
+    ///
+    /// **The reason is the PRICE, not unadjudicability** (audit D L-1). This said the refusal
+    /// stood because `palw_step_refute`'s execution arm returns `Unadjudicable` "until U-03 lands
+    /// the court's side": U-03 landed, and the whole-row `AttnFused` arm recomputes, so a fused
+    /// class under a dormant court IS prosecutable — at design A's width, the whole query row plus
+    /// the K and V series over `n_ctx`. What it is not is prosecutable at the price it was
+    /// admitted for: the class is priced for a court that can play the short protocol, and a
+    /// ruleset with no dissection cannot. Admitting it would put a class on the chain whose worst
+    /// close no carrier holds, which is the same fail-open the coverage gates refuse. Refused BY
     /// NAME rather than through the coverage gate because the graph is perfectly catalogued — what
     /// is missing is the COURT, and a refusal that said "coverage gap" would send the reader to
     /// the adjudicator instead of to the fence.
@@ -1551,18 +1565,29 @@ pub fn verify_class_admission_v6(
     // Ordered after the ladder because the two answer different halves of one question — the ladder
     // bounds how many rounds a dispute takes, these bound what a round costs — and a class that
     // fails both should be told about the deeper problem first.
-    let shape = ladder.map_or_else(|| PalwCourtCostShapeV1::genesis_anchored_v1(profile), |r| r.cost_shape);
-    // **One court, priced once.** The shape arrives from the caller (it is the ladder rule's, built
-    // from the same `PalwKaryCourtV1` this gate holds), so the arity it prices a fused site at must
-    // be the arity the ruleset froze. Checked rather than overwritten: a gate that silently
-    // corrected the shape would admit a class at a price no caller could reproduce, which is the
-    // same defect as pricing it twice.
-    if fused && let Some(k) = court {
-        let arity = bundle.court.dissection_arity();
-        if shape.dissection != Some(arity) {
-            return Err(PalwClassAdmissionError::PricedForADifferentCourt { priced: shape.dissection, court: arity });
-        }
-        let _ = k;
+    let shape = ladder.map_or_else(|| PalwCourtCostShapeV1::genesis_anchored_v1(profile, bundle_ladder), |r| r.cost_shape);
+    // **One court, priced once — and ONE spelling of which court it is** (audit D H-1).
+    //
+    // The shape arrives from the caller (it is the ladder rule's, built from the same
+    // `PalwKaryCourtV1` this gate holds), so the arity it prices a fused site at must be the arity
+    // the ruleset's court will PLAY. That value is `PalwKaryCourtV1::dissection_arity` — the
+    // caller's reading of `palw_court_params_at_v2`, which under an armed fence OVERWRITES
+    // `bundle.court.dissection_arity()` with `palw_court_arity_v1`'s derived value.
+    //
+    // This read `bundle.court.dissection_arity()`, the value the ruleset FROZE (2 on every preset
+    // and on every bundle any shipped builder can produce). The two are the same rule with two
+    // spellings, and they disagree exactly where it matters: a caller following this function's
+    // documented contract prices at the derived arity and every fused row is refused
+    // `PricedForADifferentCourt`, while a caller passing the stored 2 admits a class priced for a
+    // 2-child move against a court that deals `k` children every round — under-priced disclosure
+    // on a close ceiling the class was admitted under. `Params::validate_palw_v2` refuses a bundle
+    // whose stored arity is not the derived one, so past an armed fence the two cannot differ;
+    // this reads the one the court plays so that the gate is right even before that refusal runs.
+    if fused
+        && let Some(k) = court
+        && shape.dissection != Some(k.dissection_arity)
+    {
+        return Err(PalwClassAdmissionError::PricedForADifferentCourt { priced: shape.dissection, court: k.dissection_arity });
     }
     let cost = derive_court_cost_shaped_v1(profile, shape)?;
     // **In chunks, not bytes** (ADR-0080 design A). A close rides an `ObjectChunk` group, so what
@@ -1609,7 +1634,18 @@ pub fn verify_class_admission_v6(
         // The rule lives beside the protocol whose cost it is (stream E), and it counts the
         // ruleset's own assembly reserve — a window that is exactly full leaves no DAA to file the
         // close in.
-        crate::palw_attn_court_v1::palw_attn_court_admits_row_v1(&bundle.court, history, tile, k.window_court_daa).map_err(|e| {
+        // **The court the WINDOW bound measures is the court that will play** (audit D H-1, the
+        // second half). This passed `bundle.court` — whose `dissection_arity` is the frozen 2 on
+        // every bundle a shipped builder produces — so the move count it checked against
+        // `window_court` was the binary one while the dispute would be dealt at `k`. The stored
+        // field is what `Params::validate_palw_v2` keeps equal to the derivation on a live
+        // ruleset; here the caller's reading is the authority, so the bound and the price are
+        // measured against one court.
+        let played = bundle
+            .court
+            .with_dissection_arity(k.dissection_arity)
+            .map_err(|e| PalwClassAdmissionError::Profile(format!("the caller's dissection arity is not legal: {e}")))?;
+        crate::palw_attn_court_v1::palw_attn_court_admits_row_v1(&played, history, tile, k.window_court_daa).map_err(|e| {
             match e {
                 crate::palw_attn_court_v1::PalwAttnCourtError::OverrunsWindow { moves, deadline, reserve, window_court } => {
                     PalwClassAdmissionError::CourtWindowTooShort {
@@ -1622,9 +1658,16 @@ pub fn verify_class_admission_v6(
         })?;
     }
 
+    // **And the canonical count against the RULESET's ladder too** (audit D H-5). The `None` arm
+    // called `step_leaf_count`, which caps at `PALW_STEP_MAX_LEAVES` — the executor's constant —
+    // so a class whose WORST case cleared the ruleset's `2^26` ladder two checks above was then
+    // refused `Profile("TooManyLeaves { max: 4194304 }")` on its canonical job, by a number the
+    // bundle does not contain. Same correction, same reason, same ladder: `worst` and `counted`
+    // are two enumerations of one class and must be bounded by one number, or the comparison
+    // between them below is between two different rulesets.
     let counted = match ladder {
         Some(rules) => crate::palw_step::step_leaf_count_capped_v1(profile, canonical, rules.ladder),
-        None => step_leaf_count(profile, canonical),
+        None => crate::palw_step::step_leaf_count_capped_v1(profile, canonical, bundle_ladder),
     }
     .map_err(|e| PalwClassAdmissionError::Profile(format!("{e:?}")))?;
     if counted > worst {
@@ -1688,11 +1731,53 @@ pub fn palw_post_genesis_registration_v1(
     registrant_bond: crate::palw_state_v2::PalwBondKeyV2,
     signature: Vec<u8>,
 ) -> Result<PalwConsensusObjectV2, PalwClassAdmissionError> {
+    palw_post_genesis_registration_capped_v1(
+        profile,
+        canonical,
+        artifact_root,
+        min_grantable_share_permille,
+        initial_target,
+        slash_value_per_pwu,
+        activation_daa,
+        registrant_bond,
+        signature,
+        crate::palw_step::PALW_STEP_MAX_LEAVES,
+    )
+}
+
+/// [`palw_post_genesis_registration_v1`] against the RULESET's ladder (audit D H-5b).
+///
+/// The helper counted `pwu_per_inference` with `step_leaf_count`, which caps at
+/// [`crate::palw_step::PALW_STEP_MAX_LEAVES`] — the EXECUTOR's `2^22` — while the gate it feeds
+/// recounts against `bundle.court.max_step_leaf_count()`. On the graph-v5 512 row the honest count
+/// is 6,630,544 and the helper answered
+/// `"the canonical job does not count against this profile: job shape yields 4223328 step leaves,
+/// exceeding the 4194304 cap"`, so the object could not be BUILT at all: no chain could register
+/// the row, on the only path a stranger has, for a reason that names a constant the ruleset does
+/// not contain. This is the third place the executor's constant was found standing against a `2^26`
+/// network, after the executor's own ladder (ADR-0080 W1b) and this file's cost walk (H-5).
+///
+/// `ladder` is the bundle's. The count is still made HERE rather than by the caller, for the reason
+/// the wrapper's own comment gives: the object the gate reads and the number it recounts must come
+/// from one value.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_post_genesis_registration_capped_v1(
+    profile: PalwShapeProfileV3,
+    canonical: PalwJobContextV2,
+    artifact_root: Hash64,
+    min_grantable_share_permille: u16,
+    initial_target: u128,
+    slash_value_per_pwu: u64,
+    activation_daa: u64,
+    registrant_bond: crate::palw_state_v2::PalwBondKeyV2,
+    signature: Vec<u8>,
+    ladder: u64,
+) -> Result<PalwConsensusObjectV2, PalwClassAdmissionError> {
     let class_id = profile.shape_profile_id();
     // Counted here, from the same canonical job the carriage carries, so the object the gate reads
     // and the number it recounts come from one value. A caller that computed the count separately
     // could hand the gate two statements about one class.
-    let counted = crate::palw_step::step_leaf_count(&profile, &canonical)
+    let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, ladder)
         .map_err(|e| PalwClassAdmissionError::Profile(format!("the canonical job does not count against this profile: {e}")))?;
     Ok(PalwConsensusObjectV2::ClassRegistered {
         class_id,
@@ -1720,7 +1805,7 @@ mod tests {
     // `worst_case_step_leaf_count_v1` is used only from this module, so the import lives here:
     // at the top of the file it was dead in the non-test build (`-D warnings` refused it)
     // while the `--tests` target needed it -- one name, two targets, opposite answers.
-    use crate::palw_step::{PALW_STEP_MAX_LEAVES, worst_case_step_leaf_count_v1};
+    use crate::palw_step::{PALW_STEP_MAX_LEAVES, step_leaf_count, worst_case_step_leaf_count_v1};
     use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, trace_scheme_id_v2};
 
     /// The measured Qwen2.5-1.5B graph, at the `tile_len` that actually admits its own declared
@@ -2041,12 +2126,12 @@ mod tests {
         let v5 = |build: fn(u32) -> Result<PalwShapeProfileV3, crate::palw_step::PalwStepError>, n_ctx: u32| -> Result<(), String> {
             let profile = build(n_ctx).map_err(|e| format!("the profile does not project: {e:?}"))?;
             let court = kary_court_v1();
-            let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&profile, Some(court))
+            let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&profile, Some(court), crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
                 .ok_or_else(|| "the row registers no state chunk map".to_string())?;
             let mut bundle = conforming_bundle();
             bundle.court = PalwCourtParamsV2::with_cost_ceilings(
                 crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
-                RC_TURN_DEADLINE,
+                rc_turn_deadline(),
                 2,
                 now,
                 crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
@@ -2119,11 +2204,24 @@ mod tests {
         }
     }
 
-    /// The move clock `palw_court_turn_deadline_v1` derives for the RC's 3,000-DAA court window at
-    /// the `2^32` ladder — asserted against the derivation in
-    /// `the_rc_derives_its_own_arity_and_the_moves_it_buys`, restated here as the constant this
-    /// harness builds its court at.
-    const RC_TURN_DEADLINE: u64 = 42;
+    /// The move clock the RC's 3,000-DAA window derives at the `2^32` ladder for a row with the
+    /// 512-position history these tests use — the JOINT derivation (audit A H-2 / audit D H-2b),
+    /// which counts the dissection rounds and the root claim the old form left out of the divisor.
+    /// Derived here rather than typed: `palw_court_turn_deadline_for_history_v1` is the one place
+    /// the number is computed, and a harness that carried its own copy is how a court comes to be
+    /// judged at a clock its ruleset never chose.
+    fn rc_turn_deadline() -> u64 {
+        crate::palw_context_ladder::palw_court_turn_deadline_for_history_v1(
+            crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.window_court,
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_TERMINAL_MOVES,
+            crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS,
+            512,
+            crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4,
+        )
+        .expect("the RC window holds its own dispute")
+        .1
+    }
 
     /// **Z10: a court that cannot try the leaf must not admit the class** (ADR-0082 Decision 1,
     /// under ADR-0049 Decision C), and the refusal names the COURT rather than the graph.
@@ -2134,7 +2232,7 @@ mod tests {
         let mut bundle = conforming_bundle();
         bundle.court = PalwCourtParamsV2::with_cost_ceilings(
             crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
-            RC_TURN_DEADLINE,
+            rc_turn_deadline(),
             2,
             crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
             crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
@@ -2167,7 +2265,7 @@ mod tests {
     fn a_v5_row_clears_the_close_the_ladder_and_the_window_or_names_the_one_it_does_not() {
         let court = kary_court_v1();
         let profile = crate::palw_context_ladder::palw_a16_context_row_profile_v5(512).expect("projects");
-        let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&profile, Some(court)).expect("mapped");
+        let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&profile, Some(court), crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("mapped");
         let canonical = context(&profile, 510, 2);
         let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, rules.ladder).expect("counts");
         let registration = weightless_registration(profile.shape_profile_id(), counted);
@@ -2181,16 +2279,26 @@ mod tests {
                 crate::palw_mode_v2::DEFAULT_MAX_OPERAND_COUNT,
             )
             .expect("legal")
-            .with_dissection_arity(court.dissection_arity)
-            .expect("legal")
         };
+        // **The bundle's stored arity stays the DEFAULT, which is what a chain bundle carries**
+        // (audit D H-1). This wrote `court.dissection_arity` (4) into the bundle, and the gate then
+        // read the arity back out of the bundle — so the fixture and the gate agreed by
+        // construction and the two spellings of the rule could not disagree here. No preset literal
+        // and no genesis builder writes a derived arity in; `verify_class_admission_v6` now reads
+        // the CALLER's ruleset reading, and `Params::validate_palw_v2` is what keeps the stored
+        // field equal to it on a live ruleset.
+        assert_eq!(
+            court_at(1, rc_turn_deadline()).dissection_arity(),
+            crate::palw_mode_v2::PALW_COURT_BINARY_ARITY_V1,
+            "the fixture bundle must carry what a chain bundle carries"
+        );
         let admit = |bundle_court: PalwCourtParamsV2, k: PalwKaryCourtV1| {
             let mut bundle = conforming_bundle();
             bundle.court = bundle_court;
             verify_class_admission_v5(&bundle, &profile, &canonical, &registration, &[], &[], Some(rules), Some(k))
         };
         // All three clear.
-        admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, RC_TURN_DEADLINE), court)
+        admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, rc_turn_deadline()), court)
             .expect("the dense graph-v5 512 row clears the close, the ladder and the window");
         // **The dense row now clears ONE carrier, and that is ADR-0082 Decision 4's amendment.**
         //
@@ -2205,7 +2313,7 @@ mod tests {
         // empty residue, the close is 82,719 at the row's own canonical job (81,759 at this test's
         // 510/2 job), and one carrier carries it. The rule that moved this golden is
         // `palw_checkpoint_cadence_v1`; the graph, the map and the arithmetic are untouched.
-        let entry = admit(court_at(1, RC_TURN_DEADLINE), court).expect("one carrier now carries the dense graph-v5 row");
+        let entry = admit(court_at(1, rc_turn_deadline()), court).expect("one carrier now carries the dense graph-v5 row");
         assert!(
             entry.court_cost.max_close_bytes <= crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(1),
             "the row was admitted at a close of {} against one carrier",
@@ -2217,18 +2325,18 @@ mod tests {
         {
             let hybrid = crate::palw_context_ladder::palw_qwen36_context_row_profile_v5(512).expect("projects");
             let hybrid_rules =
-                crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&hybrid, Some(court)).expect("mapped");
+                crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&hybrid, Some(court), crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("mapped");
             let hybrid_job = context(&hybrid, 510, 2);
             let counted = crate::palw_step::step_leaf_count_capped_v1(&hybrid, &hybrid_job, hybrid_rules.ladder).expect("counts");
             let reg = weightless_registration(hybrid.shape_profile_id(), counted);
             let mut bundle = conforming_bundle();
-            bundle.court = court_at(1, RC_TURN_DEADLINE);
+            bundle.court = court_at(1, rc_turn_deadline());
             let err = verify_class_admission_v5(&bundle, &hybrid, &hybrid_job, &reg, &[], &[], Some(hybrid_rules), Some(court))
                 .expect_err("one carrier does not carry the hybrid row");
             assert!(format!("{err}").contains("court close chunks"), "the close must name itself: {err}");
         }
         // The WINDOW alone refuses, and says so.
-        let err = admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, RC_TURN_DEADLINE), PalwKaryCourtV1 {
+        let err = admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, rc_turn_deadline()), PalwKaryCourtV1 {
             window_court_daa: 100,
             ..court
         })
@@ -2238,10 +2346,128 @@ mod tests {
         let mut mispriced = rules;
         mispriced.cost_shape.dissection = Some(64);
         let mut bundle = conforming_bundle();
-        bundle.court = court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, RC_TURN_DEADLINE);
+        bundle.court = court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, rc_turn_deadline());
         let err = verify_class_admission_v5(&bundle, &profile, &canonical, &registration, &[], &[], Some(mispriced), Some(court))
             .expect_err("a class priced at an arity the court does not play must not be admitted");
         assert!(matches!(err, PalwClassAdmissionError::PricedForADifferentCourt { priced: Some(64), court: 4 }), "got {err}");
+    }
+
+    /// **Audit D H-1: the gate prices against the arity the ruleset DERIVES, never the one it
+    /// froze.**
+    ///
+    /// `palw_court_params_at_v2` overwrites `PalwCourtParamsV2::dissection_arity` with
+    /// `palw_court_arity_v1`'s answer at activation, so under an armed fence the stored field and
+    /// the arity the court deals are two spellings of one rule — and the gate read the STORED one
+    /// while its own documented contract tells the caller to price at the DERIVED one. On every
+    /// bundle any shipped builder can produce the stored value is `PALW_COURT_BINARY_ARITY_V1`, so
+    /// a caller that followed the contract had every fused row refused
+    /// `PricedForADifferentCourt { priced: Some(k), court: 2 }` — no graph-v5 class admissible at
+    /// all — and a caller that passed the stored 2 admitted a class priced for a 2-child move
+    /// against a court dealing `k`.
+    ///
+    /// The bundle here carries the default, which is what a chain bundle carries; the caller's
+    /// `PalwKaryCourtV1` carries a different arity, which is what an armed ruleset derives. The
+    /// gate must follow the caller.
+    #[test]
+    fn the_gate_reads_the_arity_the_court_will_play_not_the_one_the_bundle_stores() {
+        let profile = crate::palw_context_ladder::palw_a16_context_row_profile_v5(512).expect("projects");
+        let canonical = context(&profile, 510, 2);
+        let mut bundle = conforming_bundle();
+        bundle.court = PalwCourtParamsV2::with_cost_ceilings(
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            rc_turn_deadline(),
+            2,
+            crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
+            crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
+            crate::palw_mode_v2::DEFAULT_MAX_OPERAND_COUNT,
+        )
+        .expect("legal");
+        assert_eq!(
+            bundle.court.dissection_arity(),
+            crate::palw_mode_v2::PALW_COURT_BINARY_ARITY_V1,
+            "the premise: no shipped builder writes a derived arity into a bundle"
+        );
+        let court = kary_court_v1();
+        assert_ne!(court.dissection_arity, bundle.court.dissection_arity(), "the two spellings must actually differ here");
+        let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+            &profile,
+            Some(court),
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+        )
+        .expect("mapped");
+        assert_eq!(rules.cost_shape.dissection, Some(court.dissection_arity), "the rule prices for the court it was given");
+        let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, rules.ladder).expect("counts");
+        let registration = weightless_registration(profile.shape_profile_id(), counted);
+
+        verify_class_admission_v5(&bundle, &profile, &canonical, &registration, &[], &[], Some(rules), Some(court))
+            .expect("a row priced for the court the ruleset derives is admissible on a bundle storing the default");
+
+        // And the refusal still fires when the registrant really did price for another court — and
+        // it names the CALLER's arity, which is the one the dispute will be played at.
+        let mut mispriced = rules;
+        mispriced.cost_shape.dissection = Some(64);
+        let err = verify_class_admission_v5(&bundle, &profile, &canonical, &registration, &[], &[], Some(mispriced), Some(court))
+            .expect_err("a class priced at an arity the court does not play must not be admitted");
+        assert_eq!(
+            err,
+            PalwClassAdmissionError::PricedForADifferentCourt { priced: Some(64), court: court.dissection_arity },
+            "got {err}"
+        );
+    }
+
+    /// **Audit D H-5: the cost walk's leaf cap is the RULESET's ladder, not the executor's
+    /// constant.**
+    ///
+    /// `genesis_anchored_v1` carried `PALW_STEP_MAX_LEAVES` (2^22) in its `ladder` field, and
+    /// `derive_court_cost_walk_v1` uses that field as the CAP of the leaf enumeration and not
+    /// merely as a path depth. On a `2^26` ruleset the dense 512 row — 59,000,848 leaves worst
+    /// case — therefore cleared `DeeperThanTheLadder` at the ruleset's number and was refused two
+    /// lines later by `Profile("TooManyLeaves { max: 4194304 }")`: a refusal naming neither the
+    /// ladder nor the ruleset, on exactly the row the ladder had been raised for.
+    #[test]
+    fn the_cost_walk_counts_against_the_rulesets_ladder_and_not_the_executors_constant() {
+        let profile = crate::palw_context_ladder::palw_a16_context_row_profile_v1(512).expect("projects");
+        let worst =
+            crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, PALW_RC_COURT_MAX_STEP_LEAF_COUNT).expect("inside 2^26");
+        assert!(worst > PALW_STEP_MAX_LEAVES, "the premise: this row is past the executor's constant ({worst} leaves)");
+        assert!(worst <= PALW_RC_COURT_MAX_STEP_LEAF_COUNT, "and inside the RC ruleset's ladder");
+
+        // At the constant the walk refuses by the number the bundle does not contain…
+        let at_the_constant =
+            derive_court_cost_shaped_v1(&profile, PalwCourtCostShapeV1::genesis_anchored_v1(&profile, PALW_STEP_MAX_LEAVES))
+                .expect_err("the executor's constant cannot enumerate this row");
+        assert!(
+            format!("{at_the_constant}").contains("TooManyLeaves"),
+            "the old shape must still refuse, or this test is measuring nothing: {at_the_constant}"
+        );
+        // …and at the ruleset's ladder it PRICES.
+        derive_court_cost_shaped_v1(&profile, PalwCourtCostShapeV1::genesis_anchored_v1(&profile, PALW_RC_COURT_MAX_STEP_LEAF_COUNT))
+            .expect("the 512 row prices against the ruleset ladder it is admitted under");
+
+        // The gate itself, on the acceptance path's own arguments (`ladder: None`): whatever it
+        // answers, it must not be the executor's constant complaining.
+        let canonical = context(&profile, 510, 2);
+        let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, PALW_RC_COURT_MAX_STEP_LEAF_COUNT)
+            .expect("the canonical job counts");
+        let registration = weightless_registration(profile.shape_profile_id(), counted);
+        let mut bundle = conforming_bundle();
+        bundle.court = PalwCourtParamsV2::with_cost_ceilings(
+            PALW_RC_COURT_MAX_STEP_LEAF_COUNT,
+            rc_turn_deadline(),
+            2,
+            crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
+            crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
+            crate::palw_mode_v2::DEFAULT_MAX_OPERAND_COUNT,
+        )
+        .expect("legal");
+        if let Err(e) = verify_class_admission_v3(&bundle, &profile, &canonical, &registration, &[], &[]) {
+            let text = format!("{e}");
+            println!("the 512 row on a 2^26 bundle: {text}");
+            assert!(
+                !text.contains(&format!("{PALW_STEP_MAX_LEAVES}")),
+                "the gate refused by the executor's constant on a ruleset that does not contain it: {text}"
+            );
+        }
     }
 
     /// **The two graph-v5 class ids, pinned.** They are NEW ids — the fused graph and the tiled map
@@ -3018,7 +3244,7 @@ mod tests {
             geometry.n_ctx = n_ctx;
             let profile = base0_profile_v1(geometry).expect("the floor's graph is expressible at any context");
             // The over-provisioned ladder, so only the id term can differ between the two readings.
-            let mut shape = PalwCourtCostShapeV1::genesis_anchored_v1(&profile);
+            let mut shape = PalwCourtCostShapeV1::genesis_anchored_v1(&profile, PALW_STEP_MAX_LEAVES);
             shape.ladder = crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES;
             let flat = derive_court_cost_shaped_v1(&profile, shape).expect("the flat reading derives");
             let merkle = derive_court_cost_shaped_v1(&profile, shape.with_prompt_ids_form_v1(PalwPromptIdsFormV1::MerkleV1))
@@ -3053,7 +3279,7 @@ mod tests {
             let mut geometry = PALW_RC_BASE0_GEOMETRY;
             geometry.n_ctx = *n_ctx;
             let profile = base0_profile_v1(geometry).expect("expressible");
-            let mut shape = PalwCourtCostShapeV1::genesis_anchored_v1(&profile);
+            let mut shape = PalwCourtCostShapeV1::genesis_anchored_v1(&profile, PALW_STEP_MAX_LEAVES);
             shape.ladder = crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES;
             // **The CARRIER, not the chunk-group ceiling.** This paragraph was written when a
             // close weighed in one transaction and `DEFAULT_MAX_CLOSE_BYTES` WAS the carrier;
@@ -3120,7 +3346,7 @@ mod tests {
     fn the_shipped_court_cost_reads_the_prompt_ids_flat() {
         use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
         let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor derives");
-        assert_eq!(PalwCourtCostShapeV1::genesis_anchored_v1(&profile).prompt_ids_form, PalwPromptIdsFormV1::Flat);
+        assert_eq!(PalwCourtCostShapeV1::genesis_anchored_v1(&profile, PALW_STEP_MAX_LEAVES).prompt_ids_form, PalwPromptIdsFormV1::Flat);
         assert_eq!(
             PalwCourtCostShapeV1::checkpoint_anchored_v1(&profile, 16, PALW_STEP_MAX_LEAVES, 0).prompt_ids_form,
             PalwPromptIdsFormV1::Flat
@@ -3130,7 +3356,7 @@ mod tests {
         let shipped = derive_court_cost_v1(&profile).expect("the floor's cost derives");
         let explicit = derive_court_cost_shaped_v1(
             &profile,
-            PalwCourtCostShapeV1::genesis_anchored_v1(&profile).with_prompt_ids_form_v1(PalwPromptIdsFormV1::Flat),
+            PalwCourtCostShapeV1::genesis_anchored_v1(&profile, PALW_STEP_MAX_LEAVES).with_prompt_ids_form_v1(PalwPromptIdsFormV1::Flat),
         )
         .expect("the explicit flat reading derives");
         assert_eq!(shipped, explicit);
