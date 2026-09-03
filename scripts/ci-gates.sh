@@ -130,6 +130,7 @@ run_gate() {
     fi
 
     gate_coverage "$id" "$log"
+    missing_tool_hint "$log"
 
     if [ "$rc" -eq 0 ]; then
         PASSED=$((PASSED + 1))
@@ -143,6 +144,21 @@ run_gate() {
     fi
     SUMMARY="$SUMMARY$(printf '\n  %-22s %s' "$id" "$verdict")"
     return $rc
+}
+
+# A gate that fails because a TOOL is absent is still a failure -- "skipped" is how a gate goes
+# quiet -- but it should say so in one line instead of leaving a cargo error to be decoded. CI
+# installs these with `taiki-e/install-action`; a laptop usually has not.
+missing_tool_hint() {
+    local log="$1"
+    if grep -q "no such command: \`\?nextest" "$log" 2>/dev/null || grep -q "no such command: .nextest" "$log" 2>/dev/null; then
+        printf '    missing tool: cargo-nextest. Install it with `cargo install cargo-nextest --locked`\n'
+        printf '                  (CI installs it with taiki-e/install-action). This is a FAILED gate, not a skip.\n'
+    fi
+    if grep -q "no such command: .deny" "$log" 2>/dev/null; then
+        printf '    missing tool: cargo-deny. Install it with `cargo install cargo-deny --locked`\n'
+        printf '                  (CI installs it with taiki-e/install-action). This is a FAILED gate, not a skip.\n'
+    fi
 }
 
 # Rule 2: say what was covered, from the log, for every gate — passing or failing.
@@ -162,6 +178,14 @@ gate_coverage() {
             ;;
         check)
             printf '    coverage: %s crate(s) checked\n' "$(grep -cE '^ +(Checking|Compiling) ' "$log" 2>/dev/null || echo 0)"
+            ;;
+        pq-guard)
+            # This one already names each of its six sub-gates; echo them rather than reducing
+            # six answers to one word.
+            grep -E '^(== \[|OK:|advisories |PQ CI guard)' "$log" 2>/dev/null | sed 's/^/    /' || true
+            ;;
+        doc)
+            printf '    coverage: %s crate(s) documented\n' "$(grep -cE '^ +(Documenting|Compiling|Checking) ' "$log" 2>/dev/null || echo 0)"
             ;;
         nextest|hashes-no-asm)
             grep -E '^ +Summary ' "$log" 2>/dev/null | sed 's/^ */    coverage: /' || true
