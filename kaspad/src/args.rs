@@ -845,7 +845,7 @@ pub fn cli() -> Command {
         )
         .arg(arg!(--"enable-validator" "kaspa-pq: run the in-process DNS-overlay validator service (ADR-0010). Default off.").env("KASPAD_ENABLE_VALIDATOR"))
         .arg(
-            arg!(--"palw-produce" "PALW ADR-0042: run the in-process PALW-RC block producer. Needs --palw-producer-key, --palw-producer-bond and --palw-producer-pay-address. Only a ConsensusV2 network can use it. Default off.")
+            arg!(--"palw-produce" "PALW ADR-0042: run the in-process PALW-RC block producer. Needs --palw-producer-key and --palw-producer-bond; --palw-producer-pay-address defaults to the key's own address. Only a ConsensusV2 network can use it. Default off.")
                 .env("KASPAD_PALW_PRODUCE"),
         )
         .arg(

@@ -1241,6 +1241,31 @@ Do you confirm? (y/n)";
     // from the operator — a key it did not generate, the bond that key signs for, and where the
     // reward goes. A missing one is a startup refusal rather than a producer that runs and cannot
     // publish; a hash-only network is a refusal for a different reason, and both say which.
+    // **The pay address defaults to the key's own** (2026-09-04, for MISAKA Studio's own-node
+    // path). A bond is registered under the ML-DSA-87 verification key the seed derives, and
+    // the panel funds its carriers from outputs under that key's P2PKH — so the only pay
+    // address that works without a second tool deriving it is the key's own
+    // (`ValidatorKey::funding_address`). An explicit `--palw-producer-pay-address` still wins,
+    // for an operator who wants rewards elsewhere and knows the carriers then cannot be funded
+    // from them. Derived ONCE here, before the two consumers, and printed, so an operator can
+    // read the address to fund off the same log line the rest of the setup already reads.
+    let palw_producer_pay_address: Option<String> = match (&args.palw_producer_pay_address, &args.palw_producer_key) {
+        (Some(explicit), _) => Some(explicit.clone()),
+        (None, Some(key_path)) => match kaspa_pq_validator_core::load_validator_seed(key_path) {
+            Ok(seed) => {
+                let address = kaspa_pq_validator_core::ValidatorKey::from_seed(seed).funding_address(config.prefix()).to_string();
+                info!(
+                    "[palw] producer pay address {address} (derived from --palw-producer-key; pass --palw-producer-pay-address to override)"
+                );
+                Some(address)
+            }
+            Err(e) => {
+                warn!("[palw] --palw-producer-pay-address not given and the producer key could not be read to derive it: {e}");
+                None
+            }
+        },
+        (None, None) => None,
+    };
     let palw_producer_service = if args.palw_produce {
         // **A producer with no way to carry a lifecycle object must not start** (audit M2-10).
         //
@@ -1316,7 +1341,7 @@ Do you confirm? (y/n)";
             }
             (None, base) => base,
         };
-        match (base_class_id, &args.palw_producer_key, &args.palw_producer_bond, &args.palw_producer_pay_address) {
+        match (base_class_id, &args.palw_producer_key, &args.palw_producer_bond, &palw_producer_pay_address) {
             (Some(class_id), Some(key_path), Some(bond), Some(pay_address)) => {
                 Some(Arc::new(crate::palw_producer::PalwProducerService::new(
                     crate::palw_producer::PalwProducerConfig {
@@ -1546,7 +1571,7 @@ Do you confirm? (y/n)";
                         chain_classes: args.palw_chain_classes,
                         register_bond: args.palw_register_bond,
                         bond_collateral: args.palw_bond_collateral,
-                        pay_address: args.palw_producer_pay_address.clone(),
+                        pay_address: palw_producer_pay_address.clone(),
                         key_path: key_path.clone(),
                         bond: bond.clone().unwrap_or_default(),
                         fee_outpoint: args.palw_fee_outpoint.clone(),
