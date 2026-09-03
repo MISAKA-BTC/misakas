@@ -3520,3 +3520,68 @@ reader sees the failure. **The dangerous half of this list is the half that exit
 > *The row asserting foreign software opens these files could not open them; the row asserting a
 > corpus fits a width measured no width.* **A document's claims and its commands drift apart
 > silently, because nothing runs a document.** The gate is one hour old and is 4-for-4.
+
+## A false alarm I chased to the end, and the two real things in it
+
+The `cargo test … the_registered_row_names_the_ladder_it_needs` run printed the same test **twice**
+and a compiler warning, `duplicated attribute` at `palw_step.rs:1623`. On 5f:
+
+```
+1595   /// **A close cannot buy a four-billion-position walk on every validating node.**
+1596-1607  … the doc for a DoS guard: a stranger's court close hands canonical_step_coordinates
+           two u32 fields nothing compares, and a declared four billion prefill tokens buys a
+           four-billion-iteration walk on EVERY validating node, in virtual processing …
+1608   #[test]                       <- no fn follows
+1609-1622  /// doc for the NEXT test
+1623   #[test]
+1624   fn the_registered_row_names_the_ladder_it_needs()
+```
+
+**I was two steps from reporting that a security-critical test is missing from the tree being
+cut.** The doc is complete, detailed, names the attack precisely, and has no function under it.
+
+**It is not missing.** `a_context_wider_than_the_profile_is_refused_before_it_is_walked` exists on
+**both** trees and asserts exactly what the doc describes:
+
+```
+hostile.declared_prefill_tokens = u32::MAX;
+assert_eq!(canonical_step_coordinates(&profile, &hostile, u64::MAX), None);
+assert_eq!(canonical_step_coordinates(&profile, &hostile_decode, u64::MAX), None);
+assert_eq!(canonical_step_coordinates(&profile, &over, 0), None, "one position past … is refused");
+```
+
+**And the guard itself is in the code and is thorough** — `profile.validate_shape().ok()?` plus a
+context bound, under a comment naming the same attack. Impl's copy has a single `#[test]` at 1820;
+the duplicate is 5f-only and **the merge fixes it.** Cosmetic, and the compiler already says so.
+
+> *"No `fn` under the doc, therefore the test is missing"* is the arrow again, and this time I
+> checked it before speaking rather than after. **The cost of checking was four commands. The cost
+> of not checking would have been a false security alarm on a launch night.**
+
+### Real thing 1 — the meta-test has a blind spot, in the direction this fell
+
+`every_test_in_this_module_still_carries_its_attribute()` scans the source for `fn name() {` and
+requires an attribute within the two lines above. **Someone already built a guard for this class.**
+
+```
+fn WITHOUT an attribute      caught
+attribute WITHOUT a fn       NOT caught      <- exactly what happened here
+```
+
+An orphaned `#[test]` does not fail the meta-test; it silently attaches to the next function, so
+**the count says two and the reality is one test run twice.** Worth the mirrored check, post-cut:
+an `#[test]` whose next non-comment line is not `fn` is an orphan.
+
+### Real thing 2 — announcement defect 5
+
+```
+cargo test -p misaka-palw-base0 --lib -- the_graph_v5_row_is_admitted_by_the_kary_court_and_refused_without_it
+running 0 tests
+test result: ok. 0 passed; 0 failed; 276 filtered out; finished in 0.00s          exit 0
+```
+
+**That test name does not exist on 5f** — it is impl-only, like `--family a16-v5`. Fifth defect,
+third of the five that exits 0 while doing nothing.
+
+And the one command that *does* work, `the_registered_row_names_the_ladder_it_needs`, **does not
+print the `512` its row cites** — 2 passed in 0.06 s, no `512` anywhere in the output. *Sixth.*
