@@ -2447,3 +2447,95 @@ my `sed` when it found 1 occurrence instead of 2, and `strings | grep -c pow-age
 *The guard that stopped the bad `sed` is the smallest and the most instructive: it cost one
 line, it fired within seconds, and what it caught was that my own pattern did not match my own
 text.*
+
+## The artifact the free-prompt lane needs, and two traps around it
+
+On the merged tree the worker resolves the genesis class — `4277d84f7d91528c…`, n_ctx 512, from
+the artifact header — so the width wall is gone and stopper (1) is closed. It then refuses at
+boot for a new reason:
+
+```
+this artifact declares no tokenizer: `tokenizer_commitment` is all zeros, so every job this
+class produces would publish `tokenizer_id` 0 and no replay could prove it read the ids this
+class means. Re-convert it with a tokenizer bound … binding a tokenizer moves
+`artifact_digest`, so this is a NEW ARTIFACT AND A GENESIS DECISION, not an upgrade
+```
+
+**The final clause is false for this row**, and the tree says so in two places:
+
+```
+misaka-palw-base0/src/classes.rs:1331
+  assert_eq!(v5.artifact_root(&bound), v5_root,
+    "a court-capable row registers the operand inventory, which the tokenizer is not in — so
+     binding one is NOT a genesis input for this row and the registered root does not move")
+ecc7cefb  "the inventory root is invariant under the graph and the binding (1a7457f1… for both)"
+```
+
+A court-capable row registers the **inventory root**, not the container digest. The remediation
+text is right for a digest-rooted v1 row and **was never narrowed when court-capable rows
+arrived**. Read literally it says the free-prompt answer path needs a genesis change, which
+tonight means *not before launch*; read correctly it needs a conversion run and nothing else.
+
+> **An error message that overstates the cost of its own fix**, on the one path that decides
+> which sentence the launch document can carry. A limit rendered as a verdict — pointed at the
+> operator rather than at us.
+
+### Trap 1: the checkpoint on the build machine is the WRONG MODEL and looks right
+
+```
+Mac  models/qwen2.5-1.5b/model.safetensors   sha a961db72…  HF Qwen/Qwen2.5-1.5B  (BASE)   config 684 B
+shipped qwen25-1.5b-a16.palwart              from Qwen2.5-1.5B-INSTRUCT dd924a11…          config 660 B
+```
+
+**Same file size (3,087,467,144 B) and the same `tokenizer.json` — commitment `fa9a4352…a649bb`
+identical for both.** Size and tokenizer cannot tell them apart. A re-conversion from the Mac
+checkpoint lands ~484,183,979 bytes different and produces a different class. **This was once
+diagnosed as "the build cannot reproduce the shipped artifact"; the converter is deterministic
+and innocent, and the input was the difference.** `qwen25-convert` on this machine is the one
+command that must not be run.
+
+### Trap 2: a file whose NAME asserts what its digest denies
+
+Four files on ibm, measured:
+
+```
+qwen25-1.5b-a16.palwart          1795427276 B  sha a8c4e53e…  2026-08-27   <- shipped
+qwen25-1.5b-a16.rebound.palwart  1795427276 B  sha a8c4e53e…  2026-09-03   <- BYTE-IDENTICAL
+bound-candidate.palwart          1795427276 B  sha 3f8fc506…  2026-09-03 08:45
+```
+
+**`rebound` is a copy.** Its name says a rebind happened; its digest says one did not. It sits
+beside the artifact it claims to derive from, and anyone reaching for the obviously-named file
+gets the unbound artifact and the same all-zeros refusal — twice, because the second failure
+looks like the first.
+
+> **A name is a claim, and nothing verifies it.** Same shape as `#[ignore = "passes"]`, as a
+> group of three tests named after the one file that holds one of them, and as a `--report`
+> whose field set implies a verdict it does not carry. **This project's most durable defect is
+> not a wrong value; it is a true-sounding name attached to something nobody re-derived.**
+
+### What `bound-candidate` actually is — measured, and not what I assumed
+
+```
+cmp -l shipped bound-candidate
+  differing bytes  128
+  first offset     1,777,209,033      98.985% through the file
+  last offset      1,795,427,276      = EOF
+  span             18,218,244 bytes   = 17.4 MiB
+```
+
+**The 1.777 GB of weights are byte-identical**, so this is not a re-conversion from another
+checkpoint — that would differ by ~484 million bytes. But the 128 differing bytes are **not
+contiguous**: they are scattered across the final 17.4 MiB. A tokenizer commitment is 32 or 64
+contiguous bytes. **A count and a location answer different questions and I had only asked for
+the count.**
+
+So the byte diff is *encouraging and insufficient*. The decisive measure is
+`a16_root_probe::print_a16_v5_root_forms` over the two real files — `artifact_digest` must move
+and `inventory_root(v5)` must not. **A small diff says how different; only the inventory root
+says whether the class moves**, which is the property that decides whether this artifact can be
+registered against the genesis being cut. Running on ibm (`8923b354`, not the cut tree).
+
+*The probe is the third instrument the 62-ignored set has supplied tonight* — after the IBD
+participation trio and the drill goldens. **The enumeration has now paid for itself more times
+than it cost**, which is worth saying given it began as a risk about what a skip hides.
