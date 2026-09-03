@@ -336,7 +336,13 @@ pub struct FpWorkerFamilyV1 {
     /// The id ceiling a prompt token is checked against — the model's, not the tokenizer's, which
     /// is padded differently.
     pub vocab: u32,
-    /// `schema` of the per-job retention manifest, e.g. `misaka.palw.fp-v3-a16-retention.v1`.
+    /// `schema` of the per-job retention manifest, e.g. `misaka.palw.fp-v3-a16-retention.v2`.
+    ///
+    /// **It names the bytes in `material.bin`, so it moves when they do.** Both shipped workers
+    /// say `.v2` since ADR-0082 Decision 7: the free-prompt retention is the FOLD
+    /// (`base0_fp_material_encode_v2`), not the dense tile tuple, and a manifest that still
+    /// claimed `.v1` would be telling a reader the one thing about the file it cannot see from
+    /// the outside.
     pub retention_schema: &'static str,
     /// The `family` field of that manifest, e.g. `qwen25-a16`.
     pub retention_family: &'static str,

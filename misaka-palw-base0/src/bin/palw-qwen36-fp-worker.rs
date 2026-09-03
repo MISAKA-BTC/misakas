@@ -158,7 +158,7 @@ fn load() -> FpWorkerRuntime<Qwen36Backend> {
             // The row's shape check above already pins the artifact's vocab to the row's, so the
             // profile is the one place this is read from.
             vocab: profile.vocab_size,
-            retention_schema: "misaka.palw.fp-v3-qwen36-retention.v1",
+            retention_schema: "misaka.palw.fp-v3-qwen36-retention.v2",
             retention_family: "qwen36",
             eog_token_names: QWEN_EOG_TOKEN_NAMES,
             artifact: Some(guard),

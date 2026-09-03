@@ -146,7 +146,7 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
             // when it declares none.
             tokenizer_id: tokenizer_commitment,
             vocab: entry.profile.vocab_size,
-            retention_schema: "misaka.palw.fp-v3-a16-retention.v1",
+            retention_schema: "misaka.palw.fp-v3-a16-retention.v2",
             retention_family: "qwen25-a16",
             eog_token_names: QWEN_EOG_TOKEN_NAMES,
             artifact: Some(guard),
