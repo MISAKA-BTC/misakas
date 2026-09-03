@@ -774,10 +774,29 @@ pub fn state_chunks_root_v1(chunk_hashes: &[Hash64]) -> Result<Hash64, PalwStepL
 
 /// A v2 checkpoint leaf: the v1 chain discipline with the flat state root replaced by the
 /// chunked one.
+///
+/// # `covered_decode_call` counts what the CLASS's map says it counts (ADR-0082 Decision 4)
+///
+/// There is no v3 leaf and there does not need to be one. Under
+/// [`crate::palw_context_ladder::PalwCheckpointCadenceV1::PerDecodeCall`] — every shipped class —
+/// the field is decode calls, `(index + 1) × interval`. Under `PerPosition`, which a class
+/// registering the tiled attention map runs at, it is POSITIONS of the cache, `index + 1`, prefill
+/// positions included.
+///
+/// The two are told apart without a second field because [`checkpoint_leaf_hash_v2`] already binds
+/// `state_chunk_map_id` into the preimage beside the counter, and the map id is what chooses the
+/// cadence: the same numbers under two maps are two different leaf hashes. A version field would
+/// be a second name for a fact the first one already fixes, and two names for one fact is how a
+/// producer commits at one cadence and a court judges at another.
+///
+/// The wire form is byte-for-byte the shipped one, so every shipped row's checkpoint leg is the
+/// leg it files today — `the_shipped_cadence_is_per_call_and_its_leaves_do_not_move`.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwCheckpointLeafV2 {
     pub version: u16,
     pub checkpoint_index: u32,
+    /// Decode calls covered, or — for a class whose map addresses history tiles — POSITIONS
+    /// covered. [`crate::palw_context_ladder::palw_checkpoint_covered_at_index_v1`] is the rule.
     pub covered_decode_call: u32,
     pub prev_checkpoint_leaf_hash: Hash64,
     pub state_chunk_count: u32,
@@ -1330,8 +1349,16 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
         {
             return Some(PalwStepFaultV1::CheckpointProfileNotCanonical);
         }
-        let decode_calls = binding.job_context.exact_decode_tokens.saturating_sub(1);
-        let canonical_ckpts = decode_calls / binding.checkpoint_profile.checkpoint_interval;
+        // **How many checkpoints this job canonically has, at the cadence its map runs**
+        // (ADR-0082 Decision 4). `decode_calls / interval` for every shipped class; `prefill +
+        // decode_calls` for a class whose map addresses history tiles, which is every position the
+        // cache ever holds. A leg short of that is a producer that opted out of the positions it
+        // did not commit, which is the whole reason this count is recomputed rather than trusted.
+        let canonical_ckpts = crate::palw_context_ladder::palw_checkpoint_count_v1(
+            &binding.shape_profile,
+            &binding.job_context,
+            binding.checkpoint_profile.checkpoint_interval,
+        );
         if binding.checkpoint_count != canonical_ckpts {
             return Some(PalwStepFaultV1::CheckpointCountNotCanonical);
         }
@@ -1549,8 +1576,12 @@ fn checkpoint_fault(
     if preimage.checkpoint_index as u64 != opening.leaf_index {
         return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
     }
+    // **The counter's canonical value at this index, at the cadence the CLASS's map runs**
+    // (ADR-0082 Decision 4). On every shipped class this is `(index + 1) × interval` verbatim.
     let interval = binding.checkpoint_profile.checkpoint_interval;
-    if preimage.covered_decode_call != (preimage.checkpoint_index + 1) * interval {
+    let canonical =
+        crate::palw_context_ladder::palw_checkpoint_covered_at_index_v1(&binding.shape_profile, preimage.checkpoint_index, interval);
+    if canonical != Some(preimage.covered_decode_call) {
         return Some(PalwStepFaultV1::CheckpointCoveredCallNotCanonical);
     }
     if preimage.checkpoint_index == 0 && preimage.prev_checkpoint_leaf_hash != checkpoint_genesis_prev_v2(context_hash) {

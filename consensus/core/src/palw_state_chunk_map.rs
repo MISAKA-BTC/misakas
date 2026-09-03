@@ -335,7 +335,44 @@ pub fn hybrid_state_geometry_v3(
     profile: &PalwShapeProfileV3,
     positions: u32,
 ) -> Result<PalwHybridStateGeometryV1, PalwStateChunkMapError> {
+    hybrid_state_geometry_at_v3(profile, positions, true)
+}
+
+/// **The composition at one checkpoint of a leg whose two halves run at two cadences** (ADR-0082
+/// Decision 4, amended).
+///
+/// The attention cache is prefix-stable, so a class registering the tiled map commits it at EVERY
+/// position and every complete tile's chunk hash is the value it already had. A recurrence state is
+/// not: `heads × k_dim × v_dim × 4` bytes that no prefix makes free — 2 MiB a position on the
+/// shipped hybrid geometry — so committing one per position would be a hash of the whole state at
+/// every token. The recurrence keeps the derived spacing
+/// ([`crate::palw_context_ladder::palw_anchored_interval_for_profile_v1`]), which is exactly the
+/// window `gdn_anchored_positions_v1` replays after an anchor, so every recurrence dispute still
+/// stands on a checkpoint at most one window back.
+///
+/// `with_recurrence` is not a caller's choice: it is
+/// [`crate::palw_context_ladder::palw_checkpoint_leaf_carries_recurrence_v1`] of the position count
+/// this checkpoint covers, and [`hybrid_state_geometry_for_covered_v1`] is the form that reads it
+/// so no caller can pass a different answer.
+pub fn hybrid_state_geometry_at_v3(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+    with_recurrence: bool,
+) -> Result<PalwHybridStateGeometryV1, PalwStateChunkMapError> {
     let attn = tiled_kv_state_geometry_v3(profile, positions)?;
+    if !with_recurrence {
+        // The attention half alone. Not an empty recurrence enumerated at zero heads — an absent
+        // one: `gdn_chunk_count` is `2 × layers × heads`, so an empty layer list IS the absence,
+        // and the entry enumeration past the attention half returns `None` exactly as it does past
+        // the end of a whole composition.
+        return Ok(PalwHybridStateGeometryV1 {
+            attn,
+            gdn_layers: Vec::new(),
+            gdn_heads: profile.gdn_heads,
+            delta_head_bytes: 0,
+            conv_head_bytes: 0,
+        });
+    }
     let gdn_layers: Vec<u16> =
         (0..profile.layer_count).filter(|&l| profile.layer_kind(l) == PalwLayerKindV1::GatedDeltaNet).collect();
     let delta_head_bytes = gdn_delta_head_slice_bytes_v1(profile).ok_or(PalwStateChunkMapError::ZeroRowWidth {
@@ -360,6 +397,21 @@ pub fn hybrid_state_geometry_v3(
         return Err(PalwStateChunkMapError::TooManyChunks { got: chunk_count, max: PALW_STEP_LEG_MAX_STATE_CHUNKS });
     }
     Ok(geometry)
+}
+
+/// **The composition at the checkpoint covering `positions`** — the form a capture and a court
+/// both take, so neither can enumerate a section the other does not.
+///
+/// The section question is answered by the cadence rule and by nothing else
+/// ([`crate::palw_context_ladder::palw_checkpoint_leaf_carries_recurrence_v1`]): under the per-call
+/// cadence every leaf is the whole composition, and under the per-position one the recurrence rides
+/// the leaves at its derived spacing.
+pub fn hybrid_state_geometry_for_covered_v1(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+) -> Result<PalwHybridStateGeometryV1, PalwStateChunkMapError> {
+    let with_recurrence = crate::palw_context_ladder::palw_checkpoint_leaf_carries_recurrence_v1(profile, positions);
+    hybrid_state_geometry_at_v3(profile, positions, with_recurrence)
 }
 
 /// **The entry at `chunk_index`, or `None` past the end** — the composition's own
