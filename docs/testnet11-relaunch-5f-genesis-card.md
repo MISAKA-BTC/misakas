@@ -5,6 +5,24 @@
 This is the card the cut is made from. Every number here is derived or measured; where a value is
 someone's decision rather than an arithmetic consequence, it says so and says whose.
 
+> **Every `file.rs:NNNN` citation below resolves against `palw-adr0082-impl` at `aa049f96`, not
+> against this branch.** The card describes the POST-MERGE cut, so it necessarily cites code 5f does
+> not have yet — `palw_attn_court_v1.rs` does not exist here at all, and `prompt_ids_merkle` appears
+> zero times in this branch's `params.rs`. That is legitimate and it is also exactly how six wrong
+> citations got written in one sitting: read from one tree, committed to another, and wrong in a way
+> no test suite can see. **`scripts/check-doc-citations.sh <doc> <tree>` resolves every citation and
+> prints the line it lands on**; run it against the merged tree at the freeze and read the output,
+> because a citation that resolves is not the same as a citation that is right. Caught by the
+> session verifying this card, not by the one writing it.
+>
+> **And relabelling is not a null operation.** Declaring the card impl-relative fixed those six and
+> silently INVERTED one that had been right against 5f — `golden_vector_ids_are_frozen` in
+> `palw_freeprompt_v3.rs`, 1521 on this branch and **1643** on impl — inside the very sentence
+> warning that the function has two homes. So the freeze check is the TWO-tree form:
+> `check-doc-citations.sh <doc> <tree-a> <tree-b>` lists only the citations that resolve
+> DIFFERENTLY, and those are the only ones any tree label can hurt. Seven of this card's citations
+> are tree-dependent; everything it does not list is immune to the label.
+
 ---
 
 ## 0. This is a RE-GENESIS, not an upgrade
@@ -18,6 +36,36 @@ Stating it as a rule and not as history matters, because the previous page said 
 "has not moved since 5c, only the ruleset over it" — true as history, and read as a promise it was
 never making.
 
+### The name is already contested, and the relaunch adds one more claimant
+
+Measured on the live fleet, six hours of `misaka-t11-node0`'s own log:
+
+    over 24.3 h on the public entry node (.t11, port 26311)
+    genesis mismatches           18,034   from 10 distinct peers
+    consensus params mismatches   3,074
+    distinct FOREIGN genesis hashes    THREE — the fourth value in the log is ours
+      4b619a1a…  8,352    8d2002cc…  6,377  (Relaunch 4's, still dialling)
+      c664a224…  3,311    08e9c8a4…  18,040 as `local`, once per rejection line
+    successful inbound connections    67, from 9 distinct peers; 6 connected now
+
+The three foreign counts sum to 18,040 exactly, so they account for every line and there is no
+fourth. **Ten stuck peers retrying every ~48 seconds produce eighteen thousand rejections** — which
+is the figure to give a joiner, because "18,034 mismatches" reads like a swarm and ten misconfigured
+nodes on a retry loop is what it is.
+
+So the node is **not** isolated — it has working peers — and at the same time it is rejecting
+thousands of dials from nodes that answer to `misaka-testnet-11` and build on something else. **At
+least four chains share this network name right now**, and 5f will be the fifth.
+
+Two consequences for the announcement, neither optional:
+
+1. **A joiner must wipe.** Not "should" — an old appdir cannot handshake, and the failure it prints
+   is a genesis or params mismatch, which reads like a bug in the new build rather than the expected
+   result of not wiping.
+2. **The old chains keep answering.** Somebody who points an old node at a seed will keep syncing
+   something, and it will not be this network. The genesis hash is the only thing that tells them
+   apart, so it belongs in the announcement as a value to check, not as trivia.
+
 ---
 
 ## 1. Fences to arm at genesis
@@ -30,7 +78,7 @@ at genesis and the rest stay `None`.
 | `palw_context_ladder` | **ARM** | without it the registered class cannot price a wide row; the ladder is the whole point of the 512 registration |
 | `palw_uncertified_weightless` | **ARM, `ForkActivation::always()`** | genesis is the ONLY moment this can be armed — `validate_palw_v2` refuses any other height |
 | `palw_kary_court` | **ARM, `ForkActivation::always()`** | **ADR-0082's, does not exist yet.** Without it the registered row is admitted and UNPROSECUTABLE — see §3. A bare fence: no companion value, no bundle field. `dissection_arity` stays 2 on every preset and the fence overrides it with the derived arity. |
-| `palw_prompt_ids_merkle` | `None` | ADR-0082's. Not needed at the registered width — flat ids are 82,080 against a budget of 83,333 — and arming it moves every free-prompt job id. **It becomes REQUIRED above about n_ctx 1,024**, so it is the fence to arm the day a wider row is registered, not before. |
+| `palw_prompt_ids_merkle` | `None` — **and it cannot be armed** | ADR-0082's. Not needed at the registered width: flat ids are 82,080 against a budget of 83,333. It becomes REQUIRED above about n_ctx 1,024 — but as of FD it is no longer a fence anyone may arm at that point: **`validate_palw_v2` REFUSES a ruleset that arms it** (`config/params.rs:1595`, on impl; 2310 is only the doc comment about it), because the commitment form it selects does not ship. Registering a wider row is therefore blocked on implementing the form, not on flipping the fence. |
 | `palw_fp_decode_rules` | `None` | ADR-0082 stream H's (decode leaves earn, seeded argmax). Not a prosecutability condition and not on the acceptance path; deferred so the cut arms only what it must. |
 | the other nine | `None` | nothing in this cut needs them; a fence armed without a shipping thing to obey it is the ADR-0065 D1 mistake |
 
@@ -41,6 +89,15 @@ discovered at cut time.
 **Arming the ladder is TWO moves, not one.** `Params::palw_context_ladder` AND the bundle's
 `PalwCourtParamsV2::max_step_leaf_count`. Setting one and not the other produces a build that
 looks armed and prices the old row.
+
+**And it is armed to `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` = 2^26 — not to 2^32.** Naming the field
+without naming its value is the same defect one level down. 2^32 is not available at this cut and
+the refusal is arithmetic, not policy: at 2^32 the RC admits **no arity at all**, because the
+cheapest honest exchange is 73 moves (at arity 32 or 64) and `73 × 42 = 3,066` is already past the
+3,000-DAA window before the 216-DAA assembly reserve is added. `palw_court_arity_v1` returns `None`
+there, which is ADR-0082 Z4's refusal working. Going deeper than 2^26 needs the window to grow, the
+clock to shrink, or the leaf ladder to become k-ary for real — all three are genesis decisions, and
+none of them is in this cut.
 
 ---
 
@@ -77,7 +134,8 @@ Three different numbers are all "tokens for a kind", and this card quoted the wr
 
 | quantity | value | what it actually answers |
 |---|---|---|
-| grammar floor | cad 38, music 60, scene 104 | the shortest legal non-degenerate answer — fits at n_ctx **128** |
+| grammar floor | cad 38, music 60, scene 104 | the shortest legal non-degenerate answer. **NOT "fits at n_ctx 128"** — see the prompt row |
+| **the prompt itself** | **134 tokens**, ChatML, measured on the live gateway | added to every floor: cad **172**, music **194**, scene **238**. Nothing fits at 128 |
 | what the model gates needed | 256, both tiers | the width at which a checkpoint's own answers parsed |
 | **what the shipped corpus costs** | cad 66, **music 261, scene 286** | **the answers a demonstration actually publishes** |
 
@@ -101,6 +159,24 @@ the `9x-*` entries exist to be refused.
 **Two ceilings, and the card quoted only one of them.** On the CLOSE side the flatness makes width
 nearly free: 80,440 bytes at 256 against 80,504 at 512, one carrier either way, sixty-four bytes
 apart. That is what this card said, and it said it as though 1,024 were simply the next rung.
+
+**And a third confirmation arrived from the chain itself, not from a corpus.** Stage 4 of the
+end-to-end drill PASSED — the panel registered the class, every validator carried `FamilyCertified`
+and `ClassLaneCertified`, the chain graded both, and `/health` reported `fp_certified` true and the
+lane open. Stage 5 then refused a **one-token** job:
+
+    prompt 134 + decode ceiling 1 exceeds max_context_tokens 16
+
+That is the whole certification path working and the width being the only thing left — and it is
+what turns the 134 into a measurement rather than an estimate. It also says the first row of the
+table above was quoted wrong wherever it appeared: a grammar floor is what the ANSWER costs, and no
+job is only its answer. `scene`'s 104 needs 238 positions to be asked for at all.
+
+**So "why 512" has a measured answer in three independent directions**: 238 is the floor once the
+prompt is counted, 286 is what the shipped `scene` corpus actually costs, and 574 is the widest row
+the 2^26 ladder admits. 512 is the first artifact-stated width above the first two and inside the
+third. It is not a round number anybody liked. (2^24's 156 would not have covered even `scene`'s
+238, which confirms the ladder choice from the same direction.)
 
 **It is not, on the LADDER side.** At the chosen 2^26 the widest admissible row is **574** — so 512
 fits with about twelve per cent of margin and **1,024 does not fit at all.** 1,024 needs 2^28. So
@@ -147,12 +223,65 @@ three sessions.
 Carrier is `PALW_OBJECT_CHUNK_MAX_BYTES` = 100,000 bytes. The `PalwStepBindingV2` the mempool
 charges for but the court does not is 13,996 at its widest.
 
+> **Every close figure on this card carries its ARITY, because two of them looked like a
+> disagreement and were one measurement at two arities.** `82,719 − 81,599 = 1,120` is exactly the
+> arity-16 move disclosure, and the difference was already named in a test's own comment. **The
+> genesis derives arity 2** from the v5 row in `genesis_objects`, on both the RC and devnet bundles
+> — not the 4 a brief assumed, not the 16 an early sweep measured at. A byte count without its arity
+> is a number from a court nobody is running.
+
 **Every graph-v5 figure below is UNDER THE DISSECTION COURT.** This is not a footnote: under the
 shipped BINARY court a fused leaf's terminal check opens the whole history it reads — about 1 MB at
 n_ctx 512, twelve to thirteen carriers — which §5 shuts. So a graph-v5 row registered with only the
 ladder and weightless fences armed is admitted and **unprosecutable**, and the number that says
 otherwise was measured under a court the build would not be running. `palw_kary_court` is what
 makes the table true, which is why §1 arms it.
+
+**§3's central claim is now MEASURED, not argued** — priced at the ruleset's own 2^26 ladder on
+`5f + impl(4ffb2b26)`, which is the first time the "precondition, not optimisation" line has had a
+number under it:
+
+    RC ceiling                        2,250,000 B = 27 chunks
+    graph-v2/v3 @ 512                 1,999,729 B = 24 chunks   FITS
+    graph-v5    @ 512, no dissection  3,446,708 B = 42 chunks   OVER THE CEILING
+    graph-v5    @ 512, dissection     (FD's derivation)  4 chunks
+
+So "a graph-v5 row registered with only the ladder and weightless fences armed is admitted and
+unprosecutable" is **42 against 27** — refused at acceptance, by fifteen carriers. The dissection
+court is what takes it to 4. That is the whole of §1's reason for arming `palw_kary_court`, in one
+line, and it can now be re-derived by anyone rather than believed.
+
+**The certification vector cap does not bind either row, and v5 is the cheaper of the two.** Measured
+as an upper bound from the profile alone (`2 × |distinct (table, kernel) pairs|`, the 2 being prefill
+and decode; the drill's real count can only be lower, since a leaf whose capture the material does
+not hold is skipped):
+
+    graph-v2/v3 @ 512   12 kernels, 16 (table,kernel) pairs, vectors <= 32   cap 32  FITS
+    graph-v5    @ 512   10 kernels, 14 (table,kernel) pairs, vectors <= 28   cap 32  FITS
+
+Fusing the four-node attention site into one **removes two distinct kernels**, so the row this
+genesis registers needs fewer vectors than the graph-v2 row that sits exactly at the cap. An upper
+bound is the right instrument here: at or below the cap it cannot bind, and only a number above
+would have needed the full drill. So `PALW_CERTIFICATION_MAX_VECTORS` stays 32 and the hybrid's 74
+is deferred with its refusal asserted by name — see §5.
+
+*(That deferral is load-bearing rather than lazy: `PALW_CERTIFICATION_MASS_PER_VECTOR` is
+`(CHUNK_MAX_BYTES × CHUNK_MAX_COUNT) / MAX_VECTORS`, so the per-vector price is DERIVED FROM THE
+CAP. Raising the cap does not raise the fee — it lowers the price of each re-execution and leaves
+the total identical, buying validators 2.31× the grading work for the same payment. Any future raise
+must decouple the mass rule in the same change, or it is a fee cut wearing a bound's clothes.)*
+
+**And the same table answers a real strategic question, which is why it is worth having.** A
+graph-v2/v3 row at 512 **fits without ADR-0082 at all** — 24 chunks against 27, no fused site, no
+court arming, and its 12 kernels are already covered by the shipped A16 family. So 0082 is not a
+precondition for *a 512 class*; it is a precondition for *the v5 512 class*. The card said the
+former and meant the latter, and the distinction is only visible once both rows are priced.
+
+**We stay with graph-v5, and the reason is the close, not the fusion.** 24 carriers is a 0.3375 MSK
+assembly deposit and a 192-DAA reserve on every close, against 4 carriers and 32 DAA — and that
+reserve is charged to the court window whether or not anyone ever files, which is what compressed
+the turn deadline in the first place. A v2 row would ship a class every honest dispute of which
+costs six times what it needs to.
 
 *(This correction is the same defect class as everything else on this card: a figure measured under
 one configuration, quoted as if it held under another. It was caught by the session that derived
@@ -176,12 +305,22 @@ last checkpoint, is the three-chunk close, which §5 cannot file.
 route happens to cover, and that is not "prosecutable".** The honest sentence until this closes is:
 *three carriers on the cache-write route, one on the checkpoint route.*
 
-The fix is structural and cheap because the attention cache is prefix-stable: a tiled-map class
-commits a checkpoint at EVERY position, prefill included, and then every bottom opens at most one
-chunk per kind plus the disputed position's own two rows — about 48 KB, one carrier, at every
-position. That is ADR-0082 stream K, started; it moves the checkpoint leg's leaf version, the
-anchored replay's rule, the cost arm and the fold's capture. **Stream K joins §7's must-land list**
-— without it, §3's central claim holds only for a subset of positions nobody chooses.
+**Stream K has landed and the claim is now unconditional.** With a checkpoint at every position the
+bottom opening is **40,461 bytes = 0.49 carriers at EVERY position class** — prefill, first decode,
+tile-aligned, straddling a tile boundary, and last — measured per class rather than averaged. The
+close falls from 216,019 (3 chunks) to **82,719 = ONE chunk**, binding `attn[7] AttnFused`, and
+82,911 at n_ctx 4,096. Per-position retention is **zero**: the fold keeps no chunk bytes, where a
+chunk-retaining capture at 16 positions would have held 1,114,112.
+
+**And the cache-write route was not merely expensive — it was unsound.** K found a K/V series swap
+admissible on it, which convicts an honest executor. It is REFUSED now for any class that
+checkpoints every position, so the route that could not be carried is also the route that could not
+be trusted, and removing it closes the arming blocker for `palw_kary_court` rather than working
+around it.
+
+One design fact to carry: the anchor sits at **p+1** — the checkpoint written once position p's own
+K/V rows exist — not at p−1 plus a residue. That single change took the dense close from 93,367
+(2 chunks) to 82,719 (1).
 
 Hybrid graph-v5 is 274,460 = 4 chunks on the same derivation, bound by the recurrence replay
 evidence. It is unregistered at genesis (§2) and will need W6/W7's split acceptance regardless.
@@ -190,7 +329,8 @@ evidence. It is unregistered at genesis (§2) and will need W6/W7's split accept
 |---|---|---|---|---|
 | graph-v2/v3 dense @ 512, binary court (today) | 1,154,673 | 1,168,669 | 14 | **no** |
 | graph-v5 dense @ 512, **binary** court | ~1,000,000 | — | 12–13 | **no** |
-| graph-v5 dense @ 512, **dissection** court | 80,504 | **94,500** | **1** | **yes** |
+| graph-v5 dense @ 512, **dissection** court, **arity 16** | 80,504 | **94,500** | **1** | **yes** |
+| graph-v5 dense @ 512, **dissection** court, **arity 2 — what genesis derives** | **81,599** | 95,595 | **1** | **yes** |
 | graph-v5 hybrid @ 512, dissection court | 200,732 | — | 3 | no |
 
 **How flat "flat" is, swept rather than interpolated** — graph-v5 dense, every registrable width:
@@ -225,9 +365,77 @@ landed on the same integers): dense A16 @ 512 = 1,154,673 binding `attn[10]`; hy
 2,240,241 binding `attn[15]`; the set gives **27 = `DEFAULT_MAX_CLOSE_CHUNKS`**. The shipped
 constant IS the derivation — nothing on this card corrects it.
 
-`dissection_arity` stays **2** on every preset until its fence arms. The court's arity derivation
-at the RC selects **4** by the move budget (48 moves, 2,160 of 3,000 DAA at the 45 clock), not the
-ADR's worked 16.
+`dissection_arity` stays **2** on every preset until its fence arms. **The court's arity derivation
+at the RC selects 2** — not the 4 an earlier draft of this card recorded, and not the ADR's worked
+16. Verified by running on `palw-adr0082-impl` at `aa049f96`
+(`the_rcs_derived_deadline_selects_an_arity_for_its_own_row_and_none_for_the_fences`):
+
+| quantity | value |
+|---|---|
+| window / clock | 3,000 DAA / **42** |
+| ladder | 2^26 |
+| RC 512 row | arity **2** — 26 binary ladder rounds + 5 history rounds |
+| moves | `2 × (26 + 5) + 2 + 1` = **65** |
+| worst-case duration | 65 × 42 = **2,730** |
+| assembly reserve | **216** (27 carriers) |
+| total against the window | 2,730 + 216 = **2,946** < 3,000 |
+
+The dense graph-v5 512 row — the row this genesis registers — derives arity **2** as well, at the
+8-lane count it actually disputes. *The four numbers this table replaces (arity 4, 48 moves, 2,160
+DAA, a 45 clock) were each correct when written and none of them survived FD; a figure is only as
+current as the tree it was last read from.*
+
+### Two derivations the cut deliberately does NOT take
+
+Both were raised by fixer FD with the work already done and correct, and both are refused for the
+cut. Recording them here because a derivation that exists and is not used looks like an oversight
+to the next reader, and it is not one.
+
+**M-5 — `court_max_close_bytes` keeps its literals.** FD built the derivation behind the assembler
+(`palw_derived_court_max_close_bytes_v1`) and touched no shipped constant. Measured on `aa049f96`:
+
+| set | derived | shipped |
+|---|---|---|
+| t11, graph-v2/v3 @ 512 | 2,250,000 B = 27 chunks | 2,250,000 B = 27 chunks |
+| devnet, the shipped rows | widest close 78,688 B = 1 chunk → ceiling 83,333 B | 81,920 B = 1 chunk |
+| graph-v5 @ 512, dissection court | 333,333 B = **4 chunks** | — |
+
+The literals stay, for three reasons in order of weight:
+
+1. `with_derived_court_close_v1` takes `families` and `rows` as arguments, and
+   `PALW_LADDER_FAMILIES_V1` / `_V5` have **zero non-test callers** in the tree. An assembler that
+   called it would have to hand it a families constant — the same free choice as a literal, one
+   indirection deeper. That is priced-≠-pinned (ADR-0072 D8) wearing a derivation's clothes.
+2. The ceiling is load-bearing in two OPPOSITE directions: `palw_mode_v2.rs:1211` refuses admission
+   above it, and `palw_attn_court_v1.rs:1186` charges the assembly reserve from it. Tightening to
+   the v5 pair's 4 chunks would buy ~184 DAA of window — the clock goes 42 → ~44, and both are
+   ≥21× the hybrid's 2-DAA worst rung, so neither convicts an honest responder — and would
+   **permanently refuse every class whose close exceeds 333,333 bytes on this network**. Admission
+   is permissionless (ADR-0054). 5f is the first network to carry the dissection court; it is not
+   also going to be the network that can only ever admit dissection-court shapes. That door is
+   worth more than 2 DAA of move budget.
+3. Devnet's 81,920 against a derived 83,333 is the same chunk count, so neither the reserve nor the
+   clock moves. Only the literal would — a fingerprint move that buys nothing.
+
+The builder and its reporting test stay in the tree, unwired: they are the falsifiable record that
+the two numbers agree today and will say so when they stop. **After 5f**, the right shape is to
+wire the derivation to `palw_shipped_court_rows_v1()` — the walk FD's own devnet arm already uses —
+so its input is the registered set rather than a hand-supplied constant. Post-freeze, not at it.
+
+**Decision 3's arity stays "smallest k that fits".** The alternative on the table was "maximise the
+deadline", which would move the RC's clock from 42 to 48. Refused, and *not* because 42 is the
+shipped number — reproducing 42 is the check, not the argument. Two reasons:
+
+- The clock has ~21× headroom over the thing it must cover, while bytes-per-move has a hard carrier
+  ceiling that arity 64 already breaches at the hybrid's 256-lane head
+  (`palw_attn_dissect_arity_fits_carrier_v1`). Spend the abundant resource, conserve the scarce one.
+- **"Maximise the deadline" is not a derivation.** It needs a second number — how much deadline is
+  enough — and that number is chosen. Decision 3 is "the arity a ruleset DERIVES, never writes";
+  the alternative reintroduces exactly the free field the rule exists to close.
+
+*Revisit condition, so this is falsifiable rather than a preference:* if a measured replay floor for
+any graph-v5 row ever comes within half the derived deadline, the trade flips and `k` should buy
+rounds back.
 
 ---
 
@@ -243,6 +451,32 @@ thing done before the cut and it is done ONCE.
    inside the hashed bytes.
 2. Run `cargo +<pinned> fmt --all` LAST among source-changing steps — formatting is inside the hash.
 3. Then re-pin `transformer_id_pin` and `shipped_presets_have_pinned_fingerprints`, in one commit.
+3b. **"Frozen" is a sweep, not a recollection** — `scripts/check-derive-freeze.sh`. Re-run it after
+   every merge until it prints nothing. As of this writing **four** branches still move the crate:
+
+       MOVES IT   palw-artifact-names-genesis-row  -> 10b7eac25bab
+       MOVES IT   palw-launch-consolidated         -> defa73b60943
+       MOVES IT   palw-launch-derived-proof        -> 79305dbfe5f1
+       MOVES IT   palw-launch-qwen36-demo          -> 3f5996e60331
+
+   **Three sweeps were written for this and only the third asks the right question**, which is worth
+   knowing because the first two look authoritative and disagree:
+
+   | sweep | asks | answer |
+   |---|---|---|
+   | `git diff <rel> <b> -- <path>` | do the END STATES differ | **11** — mostly abandoned branches that merely predate the work |
+   | `git log <rel>..<b> -- <path>` | are there COMMITS touching it | **23** — includes `palw-adr0082-impl`, whose `derive/src` is byte-identical to 5f's |
+   | merge-tree, compare the subtree hash | would the MERGE move it | **4** — the only count that predicts a stale pin |
+
+   All three are honest counts of different things. The pin depends on the third.
+
+   *This step exists because the pin was taken early and reverted.* The claim was "the merge cannot
+   move `transformer_id`, checked rather than assumed", and what had been checked was
+   `palw-adr0082-impl` and two in-flight fixers. **That claim about impl was true** — impl really
+   does not move the tree. What was false was generalising it to the merge, when three launch
+   branches and 1c's do. Two sessions reached the same wrong shape independently and by the same
+   route: measure the thing in front of you, assert the conclusion for the population.
+
 4. Nothing under `misaka-palw-derive/src/` may be touched after step 3, for any reason, including a
    typo in a comment.
 
@@ -253,9 +487,74 @@ thing done before the cut and it is done ONCE.
 | `transformer_id_pin` | `misaka-palw-derive/tests/` | here, at the cut |
 | `shipped_presets_have_pinned_fingerprints` | `consensus/core/src/config/params.rs` | here, at the cut |
 | `golden_vector_ids_are_frozen` | `consensus/core/src/palw_freeprompt_v3.rs` — ADR-0082 stream H gave the job two fields | here, at the cut |
+| **genesis `utxo_commitment`** | `all_networks_genesis_constants_match_premine` | here, **FIRST OF ALL** — via the `config::premine` CEREMONY tool, not a hand edit |
+| `PALW_RC_COURT_E2E_ROOT_BYTES` | `consensus/core/src/palw_e2e_adjudicability.rs` | here, second — see the ordering below |
 | state version 18 → 19, ADR-0043 goldens | `palw-adr0082-impl` | 5b, on that branch |
 
-**Careful with the third**: `golden_vector_ids_are_frozen` exists TWICE — `palw_freeprompt_v3.rs:1521`
+### The certified-set root is regenerated TWICE, and that is correct
+
+It is not a freeze-time chore. With the covering type change in, **no node can register a class at
+all**: the registration pricing path compares the supplied certified set against the network's
+commitment before it prices anything, so a stale root stops an acceptance drill at stage 2 and
+nothing downstream can be measured. Found by running a chain, not by a suite.
+
+    now, on the owning branch    provisional, tree sha in the commit message, so the drill can measure
+    at the freeze, here          once, from the final tree
+
+**The pair is a measurement of the interval between them.** If the freeze's value matches the
+provisional one, nothing that landed in between touched a family digest; if it differs, the
+difference names exactly what did. Two regenerations handle staleness better than one at a moment
+nobody can identify in advance — and there is no re-pin hazard here, because the hazard in a re-pin
+is JUDGEMENT and a derived value carries none.
+
+**The regeneration must come from the DRILL, not from the profile.** Writing
+`drilled_kernel_ids = profile.reachable_kernel_ids_v1()` would compile, would be green, and would be
+a set that was typed rather than drilled — the exact defect the field exists to close. If the two
+turn out equal, that is a result to be observed, not a shortcut to be taken.
+
+### The tell for "is this a chain change?"
+
+**A change that moves a value the chain commits to is a chain change, and its cost is measured on a
+chain.** But the useful half is the tell, because knowing the rule did not prevent this one:
+
+> **It is not "did something move". It is "does anything OUTSIDE this crate compare it to
+> something".**
+
+The value that moved was nameable — `palw_court_e2e_root_v1` — and the cost was still reported in
+tests, because the comparison that makes it expensive lives in the registration pricing path against
+a genesis commitment, and one side of that comparison is a chain. No suite can hold it.
+
+**The premine commitment is re-pinned before everything, because it is what makes this a
+re-genesis.** `premine_is_the_expected_split` PASSES — the premine itself is right and only the
+commitment pin is stale — but that pin is the genesis UTXO set's identity, so the genesis hash and
+every value downstream of it move with it. It is also the only one of the seven that needs a
+ceremony tool rather than an edit.
+
+**The e2e root is re-pinned BEFORE the fingerprint, because it is INSIDE it.** `consensus_params_id`
+reads the pinned `PALW_RC_COURT_E2E_ROOT_BYTES`, so re-pinning the fingerprint first produces a
+value computed from a stale root — correct-looking, self-consistent, and wrong. Order: e2e root,
+then fingerprint, then everything else.
+
+**And the trap that ordering hides, which cost a measurement today.** "Does adding a fourth
+certified family move `consensus_params_id`?" was measured as **no** — byte-identical on both
+networks, with the change and with it stashed. The measurement was correct and the conclusion was
+false: the fingerprint was unchanged *because the build was not yet self-consistent*. Updating the
+root pin, which the build requires anyway, moves it:
+
+    testnet-11  a090885af5856071…  ->  404c624568360b22…
+    devnet      7acb81ebd3c8d942…  ->  67b0e2ebcb02c7e5…
+
+**Measuring whether a change moves a derived value, while a pin that value is derived FROM is
+stale, measures a build nobody will ever run.** The constant's own doc said the root is inside every
+RC network's params id; it was read after the measurement rather than before.
+
+**The fingerprint moves under you, so re-pin LAST and never early.** Measured twice a few hours
+apart on this branch: `a7baab79…` was the pin, one reading gave `d201a54f…`, and the next gave
+`4e0fe90b…` (devnet `84153175…` → `b84ea8cf…` → `6dbad795…`). Nothing was wrong either time — the
+value is a function of the consensus parameters and every merge moves it. A re-pin taken before the
+last merge lands is a value that was true when it was read and false when it shipped.
+
+**Careful with the third**: `golden_vector_ids_are_frozen` exists TWICE — `palw_freeprompt_v3.rs:1643`
 and `palw_derived_v1.rs:441`. One name, two homes, in the same crate. Only the free-prompt one moved.
 Re-pinning by name rather than by module is how the wrong one gets rewritten, and this is the same
 one-thing-two-homes shape that produced the two ladder caps and the class root spelled two ways.
@@ -270,27 +569,121 @@ bases produce a third value, and this project has done exactly that before.
 Anything quoting the old scene goldens is stale: `02-hierarchy` is **2736** (was 2716) and
 `05-tetrahedral-rotations` is **17748** (was 17728).
 
+### The merge surface, measured ahead of the freeze — FIVE conflicts, one already decided
+
+Trial-merged in a throwaway worktree so the conflict set is known before the cut rather than
+discovered during it.
+
+**The first version of this section said "one conflict" and was wrong, from two correct
+measurements.** Each branch conflicts with 5f in exactly one file — and that says nothing about the
+merge actually being done, because the remaining four conflicts are between the two BRANCHES, and
+neither pairwise merge contains both:
+
+    5f + palw-adr0082-impl                 -> 1   misaka-palw-base0/src/fuzz_a16.rs
+    5f + palw-artifact-names-genesis-row   -> 1   misaka-palw-base0/src/fuzz_a16.rs
+
+    5f + impl, THEN + artifact-names       -> 5   fuzz_a16.rs (as above), plus
+                                                 consensus/core/src/palw_class_admission_v2.rs
+                                                 consensus/core/src/palw_state_v2.rs
+                                                 misaka-palw-base0/src/classes.rs
+                                                 misaka-palw-base0/src/fp_recompute.rs
+
+Order does not help: five either way. *`5f + A` and `5f + B` do not predict `5f + A + B`* — and the
+whole point of a trial merge is to trial the merge you are going to do, which this card asserted
+while not doing.
+
+**A merge surface is a measurement with a timestamp.** An earlier three-way run had
+`palw-a16-fp-worker.rs` in the set and today's does not; 5f moved thirty-odd commits between them.
+This set is against `2af2e5c5` and will move again with the next fixer. Re-run before the cut; the
+count is not the deliverable, the *rehearsed resolution* is.
+
+**The conflict, and its resolution, are already ruled.** 5f has `pub fn next(&mut self) -> u64` with
+an `#[allow(clippy::should_implement_trait)]`; impl and 1c's branch both have `pub fn next_u64` with
+no allow. **Take `next_u64`.** The justification written beside that `allow` was false — it claimed
+`next` is what every RNG calls this step, in a file that already spelled it both ways twice over,
+and `rand_core`'s own name for it is `next_u64`. The half of that doc comment worth keeping is the
+Iterator argument, which is true: this is an infinite deterministic sequence, and implementing
+`Iterator` would offer combinators that are meaningless on it and let a `for` loop run forever while
+reading as ordinary code. Keep that sentence, drop the lint apologia, take the rename.
+
+*Recording it here because a one-line conflict resolved under time pressure at a cut is exactly how
+a retracted argument gets re-adopted: the `#[allow]` side reads as the more thoroughly justified one,
+and it is the wrong one.*
+
+**The other four, and who owns them.** `classes.rs`, `palw_class_admission_v2.rs` and
+`palw_state_v2.rs` are where the fourth certified family, the artifact-route change and the
+`canonical_leaves` field meet ADR-0082's court — 1c's to resolve, and they are resolving them.
+`fp_recompute.rs` is impl-against-J and is mine. **Verified state of the two-way merge**, so the
+three-way starts from something known: `misaka-palw-base0` 327 passed / 0 failed (the crate the
+`fuzz_a16` resolution is in), `kaspa-consensus-core` 1,808 passed / **3 failed, and all three are
+re-pins this cut performs anyway**:
+
+    config::genesis::tests::every_genesis_commits_to_the_premine_this_build_mints   re-pin 1
+    config::params::…::shipped_presets_have_pinned_fingerprints                     re-pin 3
+    palw_freeprompt_v3::tests::golden_vector_ids_are_frozen                         re-pin 6
+
+No fourth red, and no red that is not on the re-pin list. That is the result worth having from a
+trial merge — not the conflict count, which expires.
+
 ---
 
 ## 5. Known-open, shipping anyway, stated so no page claims otherwise
 
-**The split close is shut at the acceptance layer.** W5 built the state machine;
-`palw_v2_validate_objects` refuses every `CourtCloseDeclared` unconditionally — *"no layer yet
-verifies the declaring side's signature (ADR-0080 W6) — refused rather than trusted"*. There is
-also nothing to sign (`PALW_COURT_V2_ALL_DOMAINS` carries no close context) and `close_digest` is
-written and never read until W7. A refused lifecycle object is dropped **with the block standing**,
-so filing spends the fee and opens nothing.
+### The split close is OPEN, and this is what it costs
 
-This is acceptable at genesis **only because** the registered class's close fits one carrier under
-ADR-0082 and takes the single-carrier `CourtClosed` path, which is fully open and adjudicating. It
-is the reason the hybrid row is not registered. `misaka-cli palw court-close` refuses the split
-path before spending anything and names which limit stopped the operator.
+Superseding this card's earlier paragraph, which described the release branch before the ADR-0082
+merge and was marked stale rather than deleted so the two states stayed distinguishable.
+
+| | |
+|---|---|
+| `max_close_chunks` | **27** on the RC preset, **1** on devnet; a wider declaration is refused at acceptance |
+| when a declaration is legal | **only at Terminal** — the row cannot be opened at round 0 and held under an unfinished ladder |
+| assembly deposit | `count × relay fee for 100,000 B` = **33,750,000 sompi (0.3375 MSK)** at 27 chunks |
+| when the deposit is collected | on **every ending that is not the close it pinned**, both sides, all five endings — and on no ending that is |
+| what it is charged against | **posted collateral, not an escrow.** A poor bond may declare and is charged what it has |
+| when a group is swept | its own `assembly_deadline_daa` = declared + 4 × count, at most **108 DAA**, through the same conviction the backstop uses, before the backstop |
+| declaration fee | `palw_certification_rent` is `None` on every preset, so the 28,125,000-sompi fee is **not charged**; a declarer pays 28 carrier fees plus the deposit only if it lapses |
+| chunk journalling | O(1) deltas — 26 arrivals are **2,611,201 B** against 67,709,897 B in the whole-group form |
+
+**The critical that made "open" dangerous is closed.** The per-block adjudication slot
+(`PALW_COURT_CLOSE_MAX_PER_BLOCK = 1`) is now spent only by a move acceptance that was **admitted** —
+the counter increments inside the `Ok` arm, after the fence, the signature and the folded state. So
+one minimum-fee transaction per block carrying a forged `CourtAttnRootClaimed` can no longer deny
+every chunk completion network-wide. That mattered more than a denial usually does: **a close denied
+through its assembly window is not a delay but a conviction of the declarer.**
+
+**The hybrid row is still not registered, and the reason has changed.** It is no longer "the split
+path cannot be filed" — it can. It is that the hybrid's close is three carriers at every context
+width, because it binds a recurrence rather than attention, and there is no width at which that
+stops.
+
+*One risk the fixer flagged and I am accepting: a good-faith declarer on the OTHER side is charged
+when a verdict ends the session before its own assembly window closes. That is the right call — the
+row held the room and will never deliver — and the alternative is one `if` if it proves wrong in
+practice.*
 
 **Faucet stays 0.5 tMSK.** The docs carry the real numbers instead: floor 11.2 MSK, A16 2,290,
 QWEN36 3,868, plus an 8,333,316-sompi change floor. The faucet does not fund a bond and the pages
 say so rather than implying it might.
 
 ---
+
+### The ADR names a replay source the shipping code does not have
+
+ADR-0082 Decision 7 says an opening asked for later is *"re-derived by replay from the checkpoint
+chunks (`fp_interval`)"*. The fold retains **zero chunk bytes per position** — correct, measured, and
+the thing that makes the capture affordable — so an executor serving a folded interval **replays
+from the PROMPT**: one forward pass per opening served, not from retained chunks.
+
+The verdicts do not change. The executor's cost per opening does, and by the ADR's own argument that
+ratio is the practical lane's first number, so this is not cosmetic.
+
+Closing it needs a retention shape — a live cache held across a claim's life — at one seam, and that
+is not in this cut. **So the ADR's sentence is corrected rather than the code.** A document that
+describes a stronger system than the one shipping mis-budgets the reader's suspicion: they stop
+looking where the doc says the work is done. Fourth instance today, after the court's stale gap
+list, the seed reader's format comment, and the free-prompt `tokenizer_id` cross-check that does not
+exist.
 
 ## 6. Verification gates — every one must be green, and each must have been SEEN to fail
 
@@ -307,12 +700,54 @@ green except the known pin" said this week was a statement about jobs that never
 | derive | `cargo test -p misaka-palw-derive` | **NOT `--lib`** — `--lib` builds no binaries, `palw-evm-runner` is absent, and ADR-0079's confinement gate refuses rather than falling back in-process. Those seven reds are the gate HOLDING. |
 | cli | `cargo test -p misaka-cli` | 73/0 |
 | artifact selftest | `scripts/misaka-palw-artifact-conformance.py selftest` | five damaged artifacts, each refused BY NAME — a test on the exit code alone would call four-of-five a pass |
-| stranger | `scripts/misaka-palw-derive-stranger.py` | recomputes the bytes in Python, independently of the Rust |
+| doc citations | `scripts/check-doc-citations.sh docs/…-genesis-card.md <merged-tree> palw-testnet-5f`, then the same without the second tree | **the two-tree form first**: it lists only citations that resolve differently on the two trees — the only ones a tree label can change the meaning of. Then the one-tree form against the merged tree, and READ the lines. A REPORT, not a verdict: it exits non-zero only on a missing file or line, because a citation that resolves to the WRONG line still resolves. |
+| stranger | `scripts/misaka-palw-derive-stranger.py selftest` | recomputes the bytes in Python, independently of the Rust. **RED right now, and correctly so — read its two halves separately** (below). |
 | third party | `scripts/misaka-palw-artifact-thirdparty.py --require` | mido / pygltflib / numpy-stl; compares MEANING (enclosed volume, playback duration) against the DSL |
 | model gate, dense | `palw-model-gate` | A16 lane only — declared in advance |
 | model gate, QWEN36 | `palw-qwen36-model-gate` | needs the ChatML fix (§7) to pass through the production assembly |
 | fused-attention guard | `verify_class_admission_v5` | Refuses an `AttnFused` profile unless `palw_kary_court_active_at` — `FusedAttentionNeedsTheKaryCourt`, *"the class carries a fused attention site and this ruleset's court has no dissection to try it with"*; and `PricedForADifferentCourt { priced, court }` when the registered cost shape's arity is not the court's. **A guard on the way in, beside the drill and not instead of it.** |
+| the split close is open | `check_court_close_declaration_acceptance_v2` (W6's signature), `check_close_declared_chunk_count_v2` (the ruleset's own `max_close_chunks`, so devnet's 1 refuses the path rather than engaging it), `palw_court_close_min_fee_v1` (an under-rented declaration is dropped with the block standing) | **Named so a reader can falsify §5 in ten seconds** rather than trust it. Every number here carries where it came from; a behaviour should too. |
 | **prosecutability** | ADR-0082 stream I's end-to-end court drill | **This is the gate, and admission is not.** A graph-v5 leaf disputed to the bottom under the ARMED fence set, through `apply_object`: honest acquitted, forged convicted. F's admission arm refusing an unfenced `AttnFused` profile by name is a guard on the way in — useful, and not the property. The property is that a dispute can be carried to a verdict, and only the drill asserts it. |
+
+**The stranger gate's red is a STALE PIN, and its summary line does not say so.** It prints
+`SELFTEST FAILED — 3 of 18 checks disagree with the shipped tree`, which reads like a verifier that
+disagrees with the build. It is not. The 18 checks are two different kinds and they must be read
+apart:
+
+- **Oracles 1–4 — all GREEN.** Every corpus file's `dsl_hash`+`artifact_hash` MATCH, every refusal
+  refused for the same reason as the shipped tree, every corpus file has a golden entry, and a
+  tampered `artifact_hash` is caught with exit 2. *This* is the property the gate exists for: an
+  independent Python implementation reproduces the Rust byte for byte.
+- **The 3 reds are all `recomputed X, pinned Y`** — `source_tree_sha256` and the two
+  `transformer_id`s. Nothing is disagreeing with anything except a frozen constant, and it is stale
+  for a reason the tree can name: two commits have touched `misaka-palw-derive/src/` since the pin
+  was last set at `d16fb54e` — `a87cc282` (a formatting pass; formatting is inside the hash) and
+  `81c1ca1d` (the alphaMode fix). This is re-pin #5, on schedule.
+
+**So the failure mode to guard against is reading the summary line instead of the split.** A red
+ORACLE would be disqualifying — it would mean the second implementation and the shipped one produce
+different bytes, and the gate says so itself: *"a second implementation that is wrong proves nothing
+and accuses the innocent."* A red PIN is a chore. Both print under one `SELFTEST FAILED`. Before the
+cut this gate must be green outright; before then, check that the reds are exactly three and all of
+them of the `recomputed/pinned` shape.
+
+*(The pins live in `misaka-palw-derive/tests/`, outside the `src/` tree the hash covers, so writing
+the new pin does not move the hash it pins. That is why §4 step 3 can be a single commit.)*
+
+**On the MERGED tree** (`5f + adr0082-impl + the family branch`), measured by a session that wrote
+none of the pins: `kaspa-consensus-core --lib` is **1,790 passed / 3 failed**, and the same three
+with that session's own changes stashed — so nothing in the merge caused any of them. The three are
+the premine commitment, the shipped fingerprints, and `palw_freeprompt_v3::tests::golden_vector_ids_are_frozen`.
+The gate run there is **15 passed / 4 red, and all four are pins on the ordering above.** Nothing on
+that tree is red for a reason the freeze will not clear.
+
+**On this branch alone: 3,809 tests run, 3,807 passed, 2 failed** —
+`cargo nextest run --no-fail-fast`, 720 seconds. Both failures are the pins below.
+
+**Run it with `--no-fail-fast` or do not quote it.** The default run reported *"353/3809 tests run:
+352 passed, 1 failed"* and stopped at the first pin. "One red" was true and said nothing about the
+other 3,456 tests, which had not executed. A count of failures among tests that ran is not a count
+of failures, and the gap between the two was three and a half thousand.
 
 **The two expected reds, and the condition that closes each.** A branch with unexplained reds has
 no gate; a branch with reds nobody wrote down has a worse one, because the next person greens them.
@@ -360,6 +795,52 @@ gate above is the one that would have caught all three.
   `palw_kary_court` fence itself (§1), and stream E's court wiring: the dissection phase on the
   court session, the `AttnDissection` close-proof arm, the deadline read, and a **state version bump
   18 → 19** because the session record gains a field.
+- **THE 512 ROW HAS NO GENESIS BUILDER, AND §2 SAYS IT IS REGISTERED.** Checked by looking rather
+  than assumed: the class this entire card is about appears in **zero** `.rs` files on
+  `palw-testnet-5f`, `palw-adr0082-impl` or `palw-artifact-names-genesis-row` — no constant, no
+  `ClassRegistered`, no builder. §2's table lists it as registered at genesis and nothing registers
+  it. The three that DO exist live in the profile modules, not `params.rs`, and that is where the
+  fourth belongs:
+
+      consensus/core/src/palw_qwen25_profile.rs:616   qwen25_a16_registration_v2   <- params.rs:4796
+      consensus/core/src/palw_qwen36_profile.rs:1411  qwen36_registration_v3       <- params.rs:4789
+      consensus/core/src/palw_base0_profile.rs:764    palw_rc_base0_registration_v1
+
+  **It must carry a carriage**, because `verify_palw_genesis_v2` now refuses a fused row minted at
+  genesis whose `ClassRegistered` has `admission: None` — `GenesisFusedRowCarriesNoProfile`,
+  `GenesisCarriageIsNotTheClass`, `GenesisFusedDisagreesWithCatalog`. **Its signature is empty and
+  that is correct, not a concession**: genesis verification never reads `.signature` (the only
+  verifier is the acceptance layer at `consensus/src/pipeline/virtual_processor/processor.rs:6099`),
+  a signature authenticates *who moved a permille from every incumbent* and at genesis nobody did,
+  and it would anyway be checked against a `registrant_bond` key that the same genesis object list
+  is creating.
+
+  **The class id must be DERIVED and reported, never quoted into the builder.** `shape_profile_id`
+  is `keyed64` over the borsh of the profile, so the id is whatever the profile derives to — and
+  three adjacent ids are loose in this project's notes for three different things: `4277d84f…` from
+  the registration/certification/artifact chain, `71bbb755…` which is what the panel actually
+  registered at n_ctx 16, and `8d2e6f16…` which `palw-certify bind` produced from the artifact's own
+  512 row. Reconcile the derived value against the artifact and the certification path before the
+  freeze. *A class id quoted from a summary is what burned `n_ctx 17` on 2026-08-28.*
+- **The 2^22 sweep (fixer FD2).** The ladder went to 2^26, but `2^22` survives as a bare literal at
+  a set of sites the ladder change did not reach — and the 512 row's canonical job is **6,630,544
+  leaves**, so until they move, *every honest claim of the class this genesis registers is refused
+  by the transition*. `palw_freeprompt_v3.rs:1030` (`WorkLeavesAboveCap`) is the one that refuses on
+  the acceptance path; the others are the E2E certificate's declared count, the genesis catalog
+  entry's counts, the schedule's leaves, and `PALW_STEP_LEG_MAX_LEAVES` — if the leg shape pass
+  bounds at 2^22 the row's leg cannot be committed at all. **Plus one the first sweep did not
+  name:** `derive_court_cost_v1` (`palw_class_admission_v2.rs:293-295`) anchors `genesis_anchored_v1`
+  at `PALW_STEP_MAX_LEAVES` = 2^22 while the RC ruleset ships 2^26, and three of its six production
+  callers build the `court_cost` field of a `PalwClassCatalogEntryV2` — the registration row itself
+  (`palw_qwen36_profile.rs:1422`, `:1502`; `palw_base0_profile.rs:805`). Either the catalog row and
+  the v6 gate derive at different ladders and every genesis row is refused by its own cost field, or
+  nothing compares them and the catalog publishes a cost for a court that will not play. The gate
+  for this bullet is one end-to-end test: a 6,630,544-leaf v5 commitment passes every layer under
+  the RC bundle, is refused **by name** under a 2^22 one, and the v5 row's catalog `court_cost`
+  equals what the v6 gate derives under the RC bundle.
+
+  *Why it was found this late: J's drill never reached stage 5, so no v5 claim had been executed
+  through the chain. A cap nothing has yet exceeded is a cap nobody has yet seen refuse.*
 - **NOBODY MAY APPEND A VARIANT TO `PalwConsensusObjectV2` ON 5f** until E's wiring lands. The Borsh
   discriminants are positional; W5 already appended two, and E appends three more. A fourth appended
   in parallel collides by number, and the collision is silent until two builds disagree about what
@@ -369,9 +850,6 @@ gate above is the one that would have caught all three.
   `assistant\n`. Under the shipped assembly **4 of 8 correct answers were refused at column 1** and
   2 more burned their budget on an open reasoning trace. The preamble must be `Special(id)` — as
   text it becomes BPE pieces through ADR-0079 D7's `encode_without_specials`.
-- **ADR-0082 stream K — per-position checkpoints.** Without it the registered row is prosecutable
-  only at positions the checkpoint route covers; a dispute at any prefill position is a three-chunk
-  close and §5 cannot file it. See §3.
 - **A way to certify the 512 row.** The A16 catalog is a fixed three-row table — `Qwen/Qwen2.5-1.5B`
   at n_ctx 16, `Qwen/Qwen2.5-Coder-1.5B-Instruct` at 18, `Qwen/Qwen2.5-1.5B/graph-v2` at 16 — and
   `palw-certify bind` takes only `--model-id`, with no `--n-ctx`, no `--class-id` and no
@@ -392,7 +870,60 @@ gate above is the one that would have caught all three.
   one class root spelled two ways — from the artifact's inventory and from a constant — with nothing
   forcing them equal, which is the A16 genesis root defect again.
 
+  **Both ends now measured, not inferred:**
+
+      registered by the panel   71bbb755…   the catalog's graph-v2 row at n_ctx 16
+      certified by bind         8d2e6f16…   the artifact's own row at 512
+
+  **And `--artifact` alone does NOT fix it — that prescription was wrong.** All four ids derived and
+  printed on the merged tree, which is what turned a suspicion into a defect:
+
+      a16 graph-v2/v3  n_ctx  16   7a76d29b…  fused false
+      a16 graph-v5     n_ctx  16   1ae17978…  fused true
+      a16 graph-v2/v3  n_ctx 512   8d2e6f16…  fused false   <- what `bind` produces
+      a16 graph-v5     n_ctx 512   4277d84f…  fused true    <- what genesis registers
+
+  `8d2e6f16…` is **graph-v2 at 512**. So `bind` is not merely binding the wrong WIDTH, which is what
+  this section assumed — it binds the wrong GRAPH, at the right width, differing only by the fused
+  site. Deriving from the artifact does not help by itself: the artifact header declares geometry
+  (family, width, eps) and **no graph**, so `bind --artifact` projects it through
+  `a16_row_for_artifact_shape_v1` → `palw_a16_context_row_profile_v1` and lands on v2 again.
+
+  **The correct derivation already exists and is already tested.** J shipped
+  `classes::a16_artifact_row_v1`, which projects the same header through
+  `palw_fuse_attention_site_v5` over the graph-v3 dense row with the artifact's own epsilon and the
+  tiled v3 map — **with an equality test pinning that it derives the same `shape_profile_id` as the
+  genesis row.** The fix is that `bind` calls the other one. *The forcing test existed and the
+  production path took the other spelling anyway*, which is this project's fourth instance of one
+  class root spelled twice with nothing making them equal.
+
+  **The test to add is not "the two derivations agree" — J has that and it did not help.** It is
+  that `bind --artifact` over `instruct-bound.palwart`, through the binary's own argument parsing,
+  prints `4277d84f…`. A unit test that builds both ends from one source of truth checks nothing.
+
+  The registered value is printed by the panel that computed it rather than scraped from a log —
+  an earlier reading came from `grep -oE '[0-9a-f]{128}' | tail -1` and was returning block hashes.
+  **A value an operator is asked to match against a certificate has to be printed by the thing that
+  computed it.**
+
   *It is in no test because no test registers a class it did not also define.* A rehearsal found it.
+
+- **A drill fixture for the fused attention kernel, and it must land BEFORE the family's union.**
+  `graph-v5@512` reaches ten kernels; nine are covered by the certified dense family and
+  `09b81d17ed5a73ef…` is in none. So no `FamilyCertified` can be produced for the row and both lanes
+  ship closed.
+
+  §2's union ruling puts that kernel in the family's declared set. **A family that declares a kernel
+  it has no fixture to drill is a certificate asserting an adjudication nobody has performed** —
+  strictly worse than the honest refusal, because today the class cannot be certified and says so,
+  and with the union alone it would be certified and the assertion would be empty. The first person
+  to discover it would be a challenger unable to open a dispute over a kernel nobody had proven the
+  court can score.
+
+  And the fixture has to be judged by what it PROVES, not by existing: **a fault vector the court
+  scores identically to a correct execution certifies nothing, and that failure looks exactly like
+  success.** If it cannot be authored in this cut, the choice — register the row uncertified, or do
+  not register it — is a genesis decision and belongs here, not in a declaration.
 
   *Two things this is NOT, both checked in the source rather than reasoned about:* it is not the
   court — `shape_profile_id` hashes the profile's borsh and no court field is in that struct, and
@@ -436,10 +967,99 @@ gate above is the one that would have caught all three.
   swap — it hashes the PROFILE, and no weight is in the profile — so `bind --artifact` reports the
   same class for the wrong model. Only a weight-derived value, or the checkpoint's own sha256,
   tells them apart.*
+- ~~Re-bind the dense artifact's tokenizer~~ — **DONE, and characterised to the byte.**
+
+  | | value |
+  |---|---|
+  | input | `Qwen2.5-1.5B-Instruct`, `sha256 dd924a11…` verified on this machine after transfer |
+  | tokenizer commitment | was 64 zero bytes at offset 1,777,209,032; now `fa9a4352…` |
+  | container digest | `c00faa48…` → **`158314b5…`** (a genesis input) |
+  | everything else | **byte-identical** — 128 bytes differ in a 1,795,427,276-byte file, and they are those two 64-byte fields |
+  | faithfulness | 45/57 top-1, unchanged — the same weights |
+
+  **And the reproducibility claim is now proven rather than argued.** Running the ORIGINAL converter
+  on ibm against the same checkpoint reproduced the shipped artifact with **zero differing bytes**.
+  So `qwen25-convert`'s own doc — *"a verifier re-runs this and compares the class id, which is why
+  the conversion has to be bit-reproducible"* — is a property this build has, demonstrated on two
+  machines with two binaries.
+
+  **The swap is verified, not assumed.** The bound file was put through `palw-certify bind
+  --artifact` and it decodes — 1,795,427,276 bytes, declared digest recomputed over every byte —
+  and **names the same class as the shipped one**, with the same twelve reachable kernels covered by
+  the same family. So binding the tokenizer does not move the class the artifact names, which is
+  exactly what the replacement needed in order to be safe.
+
+  The bound artifact must replace the shipped one at the cut; `from_registered_profile` refuses the
+  unbound file, so the dense SDK path does not work until it does.
+
+  **Distributing it costs 128 bytes, not 1.8 GB.** Every host already holds the shipped artifact,
+  and the bound one differs from it in exactly two 64-byte fields. Writing those two fields in place
+  and checking the result's sha256 against the converted file's is a complete verification — the
+  hash covers every byte, so a wrong patch cannot produce a right hash, and there is no partial
+  state between "identical" and "not". Done and confirmed on the fleet's first host:
+
+      sha256(bound artifact, converted here)   3f8fc5066bafae28d81b2360227a08e43fdb961ee6355938c56d32edf19d7623
+      sha256(shipped artifact, patched there)  3f8fc5066bafae28d81b2360227a08e43fdb961ee6355938c56d32edf19d7623
+
+      offset 1,777,209,032   fa9a4352…a649bb   (tokenizer commitment, was 64 zero bytes)
+      offset 1,795,427,212   158314b5…bf6450   (container digest)
+
+  The alternative — transferring 1.79 GB per host over a link measured at 2 MB/s — costs half an
+  hour each and is not more trustworthy, because it would be verified by the same hash.
 - **Toolchain pinned** and the CI gates runnable in one local command
 - **The single re-pin**, in the order of §4
 
 ---
+
+## 7b. Arming `palw_kary_court` — a checklist, not a sentence
+
+§1 arms this fence at genesis. It must not be armed until every line here is closed, and each one
+is a finding from the audit wave rather than a precaution.
+
+- [ ] **Five criticals in the dissection court's bindings.** All one shape — *a derived value
+      computed and not compared*: the root claim's `history_positions` taken from the wire; `S*`
+      unvalidated, giving an i64 overflow panic **inside block validation**; bottom openings unbound
+      to coordinates; the anchor unbound to the derived checkpoint; and no clock on the responder's
+      root claim, so silence at Terminal wins challenger-side.
+- [ ] **The engine executes the real fused node on the registered artifact, not only synthetic
+      material.** The refusal — "per-layer declares 24 against 27 recorded" — is
+      `profile.attn_nodes.len()` of a graph-v5 layer table (**27 − 3, the fusion's net removal**)
+      against a hard-coded 27-row v4 program in the plan-LESS route. The PLANNED route already
+      executes the fused site and is bit-equal to the reference on real geometry; only
+      `Qwen25A16Backend::new` refuses, and chain-registered classes go through
+      `from_registered_profile`, which plans. Until it lands, a `FamilyCertified` would cover a
+      kernel nothing has executed on the row the genesis registers.
+- [x] **`(v − max) << up` wraps i64 before the clamp** in `softmax_shifted` and `a16_attn_exp_one`
+      for `up_bits ≥ 47` — a key 40,000 below the maximum receives full weight. **MEASURED on the
+      shipped artifact: the maximum across all 28 layers is 25.**
+
+          layers 28    values {14, 15, 16, 18, 21, 25}    max 25    threshold 47
+
+      Read out of the artifact's own `attn_softmax_up` entries, one byte per layer, on the bound
+      file. **So the fix moves no committed value for the class being registered** and is free
+      whenever it lands, rather than free only before the cut. It still belongs in the arming set —
+      a class at a higher `up_bits` would be silently wrong — but it stops being an ordering
+      constraint on the freeze.
+- [ ] **The window must fit a dispute a session actually PLAYS.** The derivation prices a k-ary LEAF
+      ladder no session plays — the ladder is binary and only the history search is k-ary. At RC
+      numbers the played dispute is **60 moves × 51 + 216 reserve = 3,276 against a 3,000 window**,
+      so Z4 is violated and **an honest prosecution times out.** Being re-derived; **if no arity fits
+      the 512 row inside the RC window, that is a genesis decision and comes back here.**
+- [ ] **The arity has two spellings** — a bundle literal of 2 against a derived 4, with admission
+      comparing the wrong one and nothing asserting they agree. Fourth instance of one-thing-two-homes.
+- [ ] **The cost walk caps at 2^22** (`genesis_anchored_v1`), so the 512 row is refused with
+      `TooManyLeaves` on a 2^26 network — the same 2^22-against-2^26 mismatch as the executor's
+      ladder, in the cost arm.
+- [ ] **Post-genesis registration calls `verify_class_admission_v3`** — no court, no ladder — so no
+      graph-v5 class can ever register post-genesis; and **genesis minting runs no admission gate at
+      all.**
+- [ ] **A second pinned cross-machine determinism digest for the v5 base** (ADR-0067 D5 is pinned
+      only for the v2 fuzz corpus). A new pin produced by a run, not a moved one.
+
+*The 27 − 3 above also settles §2's family ruling by measurement: the fusion removes four kernels
+and adds one, so a family derived from the v5 row alone would drop `ATTN_SCORES` and `ATTN_VALUES`
+and stop covering the rows already on chain. The family's `kernel_ids` are the UNION over every row
+the lineage ships.*
 
 ## 8. Announcement wording — the claims the evidence actually carries
 

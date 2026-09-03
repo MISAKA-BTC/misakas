@@ -388,8 +388,14 @@ pub enum A16ArtifactRowError {
     /// The width asked for is wider than the artifact's own rotary table. The file cannot serve
     /// that row, so a certificate for it would be about weights that cannot execute it.
     WiderThanTheArtifact { asked: u64, span: u64 },
-    /// The width projects no graph, so no class id exists for it.
-    Projection(kaspa_consensus_core::palw_step::PalwStepError),
+    /// The width matches MORE THAN ONE row, so the caller has not named a class. Two
+    /// rows can be the same width and different classes — a class IS its graph — and picking one
+    /// is how a wrong graph binds silently. Carries every row that matched, so the caller can say
+    /// which with `--model-id`, whose names carry the graph.
+    AmbiguousAtWidth { asked: u32, model_ids: Vec<&'static str> },
+    /// No row is offered at this width. Carries what the catalog
+    /// does offer, because "no" without the alternatives is a refusal a reader cannot act on.
+    NoRowAtWidth { asked: u32, offered: Vec<(&'static str, u32)> },
 }
 
 impl std::fmt::Display for A16ArtifactRowError {
@@ -402,7 +408,19 @@ impl std::fmt::Display for A16ArtifactRowError {
                 f,
                 "n_ctx {asked} is wider than the artifact's own rotary span ({span} positions) — these weights cannot serve that row"
             ),
-            Self::Projection(e) => write!(f, "the width projects no dense A16 graph: {e:?}"),
+            Self::AmbiguousAtWidth { asked, model_ids } => write!(
+                f,
+                "n_ctx {asked} names {} rows, not one: [{}]. They are different CLASSES at the same width — a class \
+                 is its graph — so pass --model-id to say which; the names carry the graph",
+                model_ids.len(),
+                model_ids.join(", ")
+            ),
+            Self::NoRowAtWidth { asked, offered } => write!(
+                f,
+                "no A16 dense row is offered at n_ctx {asked}. This build offers [{}]. A width no row spells is a \
+                 class nothing registers, so it is refused here rather than projected",
+                offered.iter().map(|(m, n)| format!("{m} @ {n}")).collect::<Vec<_>>().join(", ")
+            ),
         }
     }
 }
@@ -421,6 +439,9 @@ pub struct A16ArtifactRowV1 {
     pub artifact_span: u32,
     /// Whether `n_ctx` came from the header (`false`) or from the caller narrowing it (`true`).
     pub narrowed: bool,
+    /// The catalog row this resolved to. The profile above is ITS profile, not a projection — so
+    /// a caller can name what it bound and a reader can find it in the registry.
+    pub model_id: &'static str,
     /// The A16 rows whose declared artifact shape this header matches. These are the FAMILY, not
     /// the class: every row of the family declares the same artifact shape, which is precisely
     /// why a model id cannot name a width.
@@ -465,8 +486,40 @@ pub fn a16_artifact_row_v1(
     court: &PalwCourtParamsV2,
     artifact: &Base0ArtifactV1,
     n_ctx: Option<u32>,
+    model_id: Option<&str>,
 ) -> Result<A16ArtifactRowV1, A16ArtifactRowError> {
-    a16_row_for_artifact_shape_v1(court, &artifact.shape, n_ctx)
+    a16_row_for_artifact_shape_v1(court, &artifact.shape, n_ctx, model_id)
+}
+
+/// **The one width→row choice both bind forms make**, so `--artifact` and `--n-ctx` cannot
+/// disagree about which class a width names. `candidates` is what the caller was able to confirm:
+/// the rows a header paired with, or — when no artifact is on this machine — every A16 row.
+///
+/// It never projects. A width no row spells is refused with what the catalog does offer, and a
+/// width two rows spell is refused with both names, because two rows at one width are two
+/// CLASSES (`n_ctx` is inside `shape_profile_id`) and picking one is how a wrong graph binds in
+/// silence.
+fn pick_a16_row_at_width_v1<'a>(
+    candidates: &[&'a CanonicalClassV1],
+    width: u32,
+    model_id: Option<&str>,
+) -> Result<&'a CanonicalClassV1, A16ArtifactRowError> {
+    let mut at_width: Vec<&CanonicalClassV1> = candidates.iter().copied().filter(|c| c.profile.n_ctx == width).collect();
+    if let Some(wanted) = model_id.filter(|m| !m.is_empty()) {
+        at_width.retain(|c| c.model_id == wanted);
+    }
+    match at_width.len() {
+        1 => Ok(at_width[0]),
+        // **Refusing on ambiguity is the whole point.** Two rows can be the same width and
+        // different classes; picking one is the original defect with a better input.
+        n if n > 1 => {
+            Err(A16ArtifactRowError::AmbiguousAtWidth { asked: width, model_ids: at_width.iter().map(|c| c.model_id).collect() })
+        }
+        _ => Err(A16ArtifactRowError::NoRowAtWidth {
+            asked: width,
+            offered: candidates.iter().map(|c| (c.model_id, c.profile.n_ctx)).collect(),
+        }),
+    }
 }
 
 /// [`a16_artifact_row_v1`] over the header alone — every check the derivation makes reads the
@@ -476,6 +529,7 @@ pub fn a16_row_for_artifact_shape_v1(
     court: &PalwCourtParamsV2,
     shape: &Base0ShapeV1,
     n_ctx: Option<u32>,
+    model_id: Option<&str>,
 ) -> Result<A16ArtifactRowV1, A16ArtifactRowError> {
     let rows: Vec<CanonicalClassV1> =
         canonical_classes_v1(court).into_iter().filter(|c| matches!(c.source, ArtifactSourceV1::ConvertedA16)).collect();
@@ -483,19 +537,18 @@ pub fn a16_row_for_artifact_shape_v1(
         return Err(A16ArtifactRowError::NoA16Rows);
     }
     // The panel's own pairing check, per row, so the refusal names the field that disagrees
-    // rather than saying only "no". Every A16 row declares the same artifact shape, so this
-    // either matches all of them or none — the assertion below is that fact, not an assumption.
-    let mut family_rows = Vec::new();
+    // rather than saying only "no".
+    let mut family: Vec<&CanonicalClassV1> = Vec::new();
     let mut first_mismatch: Option<ClassResolveError> = None;
     for row in &rows {
         match row.shape_matches_shape_v1(shape) {
-            Ok(()) => family_rows.push(row.model_id),
+            Ok(()) => family.push(row),
             Err(e) => {
                 let _ = first_mismatch.get_or_insert(e);
             }
         }
     }
-    if family_rows.is_empty() {
+    if family.is_empty() {
         return Err(A16ArtifactRowError::NotThisFamily(first_mismatch.expect("a non-empty row set that matched nothing errored")));
     }
 
@@ -508,30 +561,66 @@ pub fn a16_row_for_artifact_shape_v1(
         return Err(A16ArtifactRowError::WiderThanTheArtifact { asked, span });
     }
     let width = u32::try_from(asked).map_err(|_| A16ArtifactRowError::WiderThanTheArtifact { asked, span })?;
-    let profile =
-        kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v1(width).map_err(A16ArtifactRowError::Projection)?;
+
+    // **The row is MATCHED, never projected.** Projecting a graph here was a second spelling of a
+    // class root, which is the defect the doc above says this function avoids — and it did not:
+    // it projected `palw_a16_context_row_profile_v1` while the registry supplies
+    // `palw_a16_context_row_profile_v5` at 512, so a 512-position artifact named class
+    // 8d2e6f16… and the genesis registered 4277d84f…. Same width, different graph, different
+    // class, and a `ClassLaneCertified` for a class the chain would never hold.
+    let picked = pick_a16_row_at_width_v1(&family, width, model_id)?;
+
     Ok(A16ArtifactRowV1 {
-        profile,
+        profile: picked.profile.clone(),
         n_ctx: width,
         artifact_span: u32::try_from(span).unwrap_or(u32::MAX),
         narrowed: asked != span,
-        family_rows,
+        model_id: picked.model_id,
+        family_rows: family.iter().map(|c| c.model_id).collect(),
     })
 }
 
 /// **The dense A16 row at a width nothing on this machine states** — the lighter form, for an
 /// operator who has no artifact where the certificate is being cut.
 ///
-/// The same projection [`a16_artifact_row_v1`] ends at, with the artifact's two contributions
-/// removed: nothing confirms the family and nothing bounds the width. That is exactly the
-/// difference the doc on [`a16_artifact_row_v1`] argues about — a width taken on the operator's
-/// word can be wrong in a way a file's own header cannot — so the artifact form is the primary
-/// one and this exists for the case where the 1.7 GiB file is somewhere else.
-pub fn a16_ladder_row_v1(n_ctx: u32) -> Result<PalwShapeProfileV3, A16ArtifactRowError> {
+/// The same MATCH [`a16_artifact_row_v1`] ends at, with the artifact's two contributions removed:
+/// nothing confirms the family and nothing bounds the width. That is exactly the difference the
+/// doc on [`a16_artifact_row_v1`] argues about — a width taken on the operator's word can be wrong
+/// in a way a file's own header cannot — so the artifact form is the primary one and this exists
+/// for the case where the 1.7 GiB file is somewhere else.
+///
+/// **This used to PROJECT `palw_a16_context_row_profile_v1`, and that made it the last route in
+/// this build that could name a class the chain does not hold.** The artifact route was rewritten
+/// to match a catalog row precisely because projecting was a second spelling of the class root;
+/// leaving the width-only route projecting kept the defect alive one flag over, where it is
+/// hardest to see — `bind --n-ctx 512` printed a class id, every check below it passed (a
+/// graph-v2 projection at 512 reaches kernels the graph-v2 family covers), and the certificate
+/// named `8d2e6f16…` while genesis registers `4277d84f…`. Same width, different graph, different
+/// class, no error anywhere.
+///
+/// So this matches too, and a width no row spells now FAILS TO BIND instead of projecting. That
+/// is the falsifiability the artifact route's doc argues for, applied to the form that has no
+/// artifact to fall back on: the operator's word can still be wrong, but it can no longer be
+/// wrong quietly.
+pub fn a16_ladder_row_v1(
+    court: &PalwCourtParamsV2,
+    n_ctx: u32,
+    model_id: Option<&str>,
+) -> Result<(PalwShapeProfileV3, &'static str), A16ArtifactRowError> {
     if n_ctx == 0 {
         return Err(A16ArtifactRowError::ZeroWidth);
     }
-    kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v1(n_ctx).map_err(A16ArtifactRowError::Projection)
+    let rows: Vec<CanonicalClassV1> =
+        canonical_classes_v1(court).into_iter().filter(|c| matches!(c.source, ArtifactSourceV1::ConvertedA16)).collect();
+    if rows.is_empty() {
+        return Err(A16ArtifactRowError::NoA16Rows);
+    }
+    // No artifact, so nothing narrows the candidates: every A16 row this build tables is in scope,
+    // and the width is the only thing choosing. A header would have cut this set down first, which
+    // is the whole of what `--artifact` buys.
+    let candidates: Vec<&CanonicalClassV1> = rows.iter().collect();
+    let picked = pick_a16_row_at_width_v1(&candidates, n_ctx, model_id)?;
+    Ok((picked.profile.clone(), picked.model_id))
 }
 
 /// **One class of the qwen36 lineage this build knows the canonical form of.**
@@ -1638,13 +1727,23 @@ mod tests {
                 binding.op_kind,
                 binding.weight_name
             );
-            assert_eq!(chunks, 1, "{name}: the registered row must be ONE carrier — {} B", binding.close_bytes);
+            assert_eq!(
+                chunks, 1,
+                "{name}: the registered row must be ONE carrier — {} B is {chunks} chunks, and a class whose close needs \
+                 more than one carrier cannot be prosecuted on a shipped build",
+                binding.close_bytes
+            );
+
             // **Pinned, with the configuration in the message.** `palw_context_ladder`'s own sweep
-            // states 82,719 B for this row at arity 16 — the arity stream E measured with a
-            // 128-lane site. The derivation here reads the ruleset that registers THIS row and
-            // returns 2 (window 3,000, turn deadline 42, ladder 2^26, history 512 positions at a
-            // 16-position tile, 8 lanes); the whole difference is the per-move disclosure, 1,120
-            // bytes. A moved arity moves this number and this test says by how much.
+            // states 82,719 for this row at arity 16 — the arity stream E measured with a 128-lane
+            // site. The derivation here reads the ruleset that registers THIS row and returns 2
+            // (window 3,000, turn deadline 42, ladder 2^26, history 512 positions at a 16-position
+            // tile, 8 lanes), and the whole difference is the per-move disclosure: 1,120 bytes, so
+            // 81,599 + 1,120 = 82,719 and the two sweeps agree. A moved arity moves this number and
+            // this test says by how much.
+            //
+            // This pinned `(214_899, 81_599)` before stream K — the cache-write close beside the
+            // checkpoint one. There is one route now and therefore one number.
             assert_eq!(binding.close_bytes, 81_599, "{name}: the graph-v5 512 row's close moved at arity {}", kary.dissection_arity);
 
             // And WITHOUT the fence: the guard refuses the same row by name.

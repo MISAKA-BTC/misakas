@@ -33,7 +33,9 @@ use kaspa_consensus_core::palw_class_admission_v2::derive_court_cost_v1;
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwCourtParamsV2};
 use kaspa_consensus_core::palw_pwu::palw_pwu_v1;
 use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_profile_v1};
-use kaspa_consensus_core::palw_step::{PALW_STEP_MAX_TILE_LEN, PalwShapeProfileV3, step_leaf_count, worst_case_step_leaf_count_v1};
+use kaspa_consensus_core::palw_step::{
+    PALW_STEP_MAX_LEAVES, PALW_STEP_MAX_TILE_LEN, PalwShapeProfileV3, step_leaf_count_capped_v1, worst_case_step_leaf_count_capped_v1,
+};
 use kaspa_consensus_core::palw_step_refute::catalogued_kernel_ids_v1;
 use kaspa_hashes::Hash64;
 use misaka_palw_base0::artifact::Base0ArtifactV1;
@@ -51,7 +53,10 @@ fn short(h: &Hash64) -> String {
 /// Which ceiling refuses `(tile, n_ctx)`, in the order the admission gate applies them.
 fn refusal(g: PalwQwen25GeometryV1, court: &PalwCourtParamsV2) -> Option<&'static str> {
     let Ok(profile) = qwen25_profile_v1(g) else { return Some("not expressible") };
-    match worst_case_step_leaf_count_v1(&profile) {
+    // Counted at the LADDER THIS NETWORK FROZE, which is the number the admission gate applies.
+    // It was the executor's `PALW_STEP_MAX_LEAVES` constant, so on a network whose court is wider
+    // this column refused geometries the chain admits.
+    match worst_case_step_leaf_count_capped_v1(&profile, court.max_step_leaf_count()) {
         Err(_) => return Some("no step space"),
         Ok(w) if w > court.max_step_leaf_count() => return Some("ladder (max_step_leaf_count)"),
         Ok(_) => {}
@@ -156,6 +161,7 @@ fn main() {
     println!("| ceiling | value |");
     println!("| --- | ---: |");
     println!("| max_step_leaf_count (the ladder) | {} |", court.max_step_leaf_count());
+    println!("| PALW_STEP_MAX_LEAVES (the EXECUTOR's constant, not a ceiling here) | {PALW_STEP_MAX_LEAVES} |");
     println!("| max_close_bytes | {} |", court.max_close_bytes());
     println!("| max_terminal_macs | {} |", court.max_terminal_macs());
     println!("| max_operand_count | {} |", court.max_operand_count());
@@ -195,8 +201,8 @@ fn main() {
     // --- the integer family: the floor, and every Qwen the court admits -------------------------
     for class in canonical_classes_v1(&court) {
         let canonical = rc_job_context(&class.profile, class.canonical_job.0, class.canonical_job.1);
-        let pwu = step_leaf_count(&class.profile, &canonical).unwrap_or(0);
-        let worst = worst_case_step_leaf_count_v1(&class.profile).unwrap_or(0);
+        let pwu = step_leaf_count_capped_v1(&class.profile, &canonical, court.max_step_leaf_count()).unwrap_or(0);
+        let worst = worst_case_step_leaf_count_capped_v1(&class.profile, court.max_step_leaf_count()).unwrap_or(0);
         let kernels = reachable_kernels(&class.profile);
         let coverage = verify_catalog_coverage_v1(&PalwReachableKernelSetV1 {
             execution_class_id: class.profile.shape_profile_id(),
@@ -307,7 +313,8 @@ fn main() {
     println!("class that wants them cannot be registered onto a chain that declared less.");
     println!();
     println!(
-        "| tile_len | n_ctx | worst-case leaves (`≥` = the walk stopped at PALW_STEP_MAX_LEAVES, a CODE constant) | max_close_bytes | max_terminal_macs | operands | vs shipped |"
+        "| tile_len | n_ctx | worst-case leaves (`≥` = the count stopped at {}, the widest ladder any ruleset may freeze) | max_close_bytes | max_terminal_macs | operands | vs shipped |",
+        kaspa_consensus_core::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES
     );
     println!("| ---: | ---: | ---: | ---: | ---: | ---: | --- |");
     for (tile, n_ctx) in [(64u32, 90u32), (64, 512), (128, 512), (512, 2048), (2048, 2048), (2048, 4096)] {
@@ -323,7 +330,14 @@ fn main() {
         // The refused number is a LOWER BOUND, not the geometry's real worst case: the walk stops
         // the moment the running total crosses the cap, which is why two different contexts can
         // report the same figure. It answers "does this fit", never "by how much does it miss".
-        let (leaves, leaves_over_code_cap) = match worst_case_step_leaf_count_v1(&profile) {
+        // **Counted at the STRUCTURAL top, not at any shipped ladder.** This table answers "what
+        // would a ruleset have had to declare", so truncating it at what some ruleset did declare
+        // is the question begging its own answer — and truncating it at the EXECUTOR's constant,
+        // which is what it did, answered a ruleset question with a code constant.
+        let (leaves, leaves_over_code_cap) = match worst_case_step_leaf_count_capped_v1(
+            &profile,
+            kaspa_consensus_core::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+        ) {
             Ok(n) => (n, false),
             Err(kaspa_consensus_core::palw_step::PalwStepError::TooManyLeaves { got, .. }) => (got, true),
             Err(_) => (0, false),
@@ -342,7 +356,7 @@ fn main() {
             cost.max_close_bytes,
             cost.max_terminal_macs,
             cost.max_operand_count,
-            if leaves_over_code_cap { "OVER".to_string() } else { over(leaves, court.max_step_leaf_count()) },
+            if leaves_over_code_cap { "OVER any ladder".to_string() } else { over(leaves, court.max_step_leaf_count()) },
             over(cost.max_close_bytes, court.max_close_bytes()),
             over(cost.max_terminal_macs, court.max_terminal_macs()),
             over(u64::from(cost.max_operand_count), u64::from(court.max_operand_count())),

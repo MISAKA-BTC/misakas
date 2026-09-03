@@ -165,9 +165,25 @@ palw-derive verify --object <derived-object.borsh> --answer <the DSL or the raw 
 
 The tool re-runs the grammar and the transformer and compares `dsl_hash`, `artifact_hash` and
 `artifact_bytes`; with the ids, the job's context hash and the family it recomputes the claim's
-`output_root`. A mismatch exits 2 — a publicly demonstrable false object. Nothing on chain
-convicts the executor for it (Decision 5 says so plainly); what it costs is the executor's name
-on a provenance anyone can show is wrong.
+`output_root`.
+
+**Exit 2 carries two different verdicts, and the word says which.** `MISMATCH — a demonstrable
+false object (ADR-0078 Decision 5)` is the refutation: re-running the named grammar and
+transformer over this answer gives something else. Nothing on chain convicts the executor for it
+(Decision 5 says so plainly); what it costs is the executor's name on a provenance anyone can show
+is wrong. `UNVERIFIABLE — this build does not publish that manifest (ADR-0078 SA-5)` is *not* an
+accusation: `transformer_id` covers `misaka-palw-derive/src/`, so any build whose derive crate
+differs by a byte publishes different ids and simply cannot re-run the derivation — run
+`palw-derive manifest --all` to see the ids the build in your hand does have. Both exit 2, because
+a reader who could not check an object must not treat it as checked; only one of them means
+somebody lied.
+
+**What this command does not check: the signature.** It re-runs the *derivation*. The output
+reports `signature_bytes` (a length) and a `signature_verified` note, and deliberately not a
+boolean — Decision 4's ML-DSA-87 signature is verified by the chain's acceptance layer under
+`PALW_DERIVED_V1_MLDSA87_CONTEXT` before an object is ever recorded, so a derivation read back
+from a chain is signed by definition, while a `.derived-object.borsh` handed to you out of band
+carries no proof of its signer. `misaka palw derived-verify` below is the path that covers it.
 
 ## Verifying from the chain (Decision 5, the read path)
 
@@ -225,9 +241,12 @@ rebuilds the object from what the chain returned, then checks, in this order:
 
 Exit 0 and `consistent`, or exit 1 with the first mismatching field named and both values printed.
 An object whose `transformer_id` this build does not publish is reported `UNVERIFIABLE` rather than
-passed — SA-5's promise is that an unverifiable statement can be SAID to be unverifiable. A pass
-also states which of the three recomputations it covered, because "consistent" over one of them is
-not the same sentence as "consistent" over all three.
+passed — SA-5's promise is that an unverifiable statement can be SAID to be unverifiable — **and
+the document's own summary line says `UNVERIFIABLE` too when that is all that happened.** A claim
+every row of which this build cannot re-run must not end with a forgery accusation underneath
+them; a single refuted row still reads `MISMATCH`, whatever else could not be checked. A pass also
+states which of the three recomputations it covered, because "consistent" over one of them is not
+the same sentence as "consistent" over all three.
 
 ## The two-architecture drill (X3)
 
@@ -239,13 +258,21 @@ palw-derive drill --check x86.json                          # on either: byte-id
 ```
 
 The corpus lives in `misaka-palw-derive/corpus/<kind>/`, with each kind's `golden.json` pinned by
-its tests. The drill checks three things and says which failed:
+its tests. The drill checks four things and says which failed. **The exit code is the finding —
+a job that treats "nonzero" as one meaning cannot act on any of them:**
 
 | check | what it compares | exit |
 |---|---|---|
 | the goldens | every corpus sample, derived or refused, against its kind's `golden.json` (a sample named `-refused-` must refuse, and the pinned message says which wall it hit) | 4 |
 | the bounds | an answer one byte over each transformer's declared `max_dsl_bytes`, generated rather than stored, which must be refused with a message naming the ceiling | 5 |
+| the coverage | every REGISTERED transformer contributed at least one row or one refusal; the ones that did not are listed in `uncovered` by name | 6 |
 | `--check` | `rows`, `refused` (message for message) and the source-tree hash of two reports | 3 |
+
+The coverage check exists because a transformer nobody drilled agrees with itself on every
+architecture. A corpus is laid out by KIND, and two transformers can share one grammar while
+filing under different kinds — `code/evm/v1` and `contract/evm/v1` are that pair, and there is no
+`corpus/contract/` directory — so the lookup falls back to the grammar's directory, and anything
+still unexercised is named rather than counted as held.
 
 The goldens are the half that makes a second architecture checkable without shipping a file
 between hosts: run the drill there and the pins either hold or they do not. Locally on Apple

@@ -381,11 +381,39 @@ gate_artifact_thirdparty() {
     # Name the versions: an oracle whose version is unknown reports an unknown opinion. (`mido`
     # has no `__version__` attribute -- the distribution metadata is the only spelling that
     # works for both of these.)
+    # **The gate provisions its own oracles, or says the check did not run.**
+    #
+    # These three libraries are deliberately NOT workspace dependencies -- the whole value of this
+    # gate is that they were written by people who have never seen this repository. That made the
+    # gate depend on whoever happened to have installed them, so it was green on one machine and a
+    # FAILURE everywhere else, which reads as a defect in the tree rather than an absent oracle.
+    #
+    # So: build a venv beside the target dir and install them. If that cannot be done -- no network,
+    # no pip, a locked-down runner -- the gate SKIPS and says so, because a machine that cannot
+    # fetch a parser has learned nothing about these artifacts either way, and reporting that as a
+    # red sends a reader into code that is fine. A skip here is never a pass: it prints what did not
+    # run, and `run_gate`'s evidence patterns will not match, so it cannot be mistaken for coverage.
+    if ! "$py" -c 'import mido, stl' 2>/dev/null; then
+        local venv="$REPO_ROOT/target/ci-gates/thirdparty-venv"
+        if [ ! -x "$venv/bin/python" ]; then
+            echo "provisioning the foreign parsers (they are not workspace dependencies, by design)"
+            python3 -m venv "$venv" >/dev/null 2>&1 || {
+                echo "SKIPPED: no venv could be created; the third-party check did NOT run"
+                return 0
+            }
+            "$venv/bin/pip" install --quiet mido numpy-stl pygltflib >/dev/null 2>&1 || {
+                echo "SKIPPED: the foreign parsers could not be installed; the check did NOT run"
+                echo "  (offline runner? install them yourself: pip install mido numpy-stl pygltflib)"
+                return 0
+            }
+        fi
+        py="$venv/bin/python"
+        echo "interpreter: $py (provisioned)"
+    fi
     "$py" -c 'import importlib.metadata as md, mido, stl
 print("libraries: mido", md.version("mido"), "/ numpy-stl", md.version("numpy-stl"))' || {
-        echo "install them first:  python3 -m pip install mido numpy-stl pygltflib"
-        echo "or point CI_GATES_THIRDPARTY_PYTHON at an interpreter that has them"
-        return 1
+        echo "SKIPPED: the foreign parsers are not importable; the check did NOT run"
+        return 0
     }
     "$py" "$REPO_ROOT/scripts/misaka-palw-artifact-thirdparty.py" --require "$ARTIFACT_DIR"
 }

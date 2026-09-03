@@ -541,10 +541,30 @@ if ! ls "$ARTIFACT_STEM".commitment-unsigned.borsh >/dev/null 2>&1; then
 import json, sys
 try: h = json.load(open(sys.argv[1]))
 except Exception: sys.exit(0)
-why = h.get("commit_refusal")
-if why: print(f"  the gateway queued nothing because the chain refuses the commitment: {why}")
-else:  print("  /health names no chain-side refusal, so the cause is on the gateway's own side "
-             "(its per-epoch commit budget, or the worker refused the request) — read gateway.log")
+chain = h.get("chain", {})
+# **Read every field that can carry the reason, in the order they become specific.** This looked at
+# `commit_refusal` alone, found None on a real run, and printed an `ls` of the outbox — while
+# `chain.bond_not_ready_reason` held "this class's epoch budget is already spent" the whole time.
+# `commit_refusal` is `facts.commit_refusal()`, which is empty when the gateway declined for a
+# reason the chain has not been asked about yet; the per-field reasons below are where the cause
+# actually lives.
+for label, why in [
+    ("the chain refuses the commitment", h.get("commit_refusal")),
+    ("the executor bond is not producible", chain.get("bond_not_ready_reason")),
+]:
+    if why:
+        print(f"  {label}: {why}")
+        break
+else:
+    room = chain.get("exposure_room")
+    if isinstance(room, int) and room <= 0:
+        print(f"  the bond has no exposure room ({room}) — it cannot back another claim's lifetime.")
+    elif chain.get("fp_certified") is not True:
+        print("  this class is not certified on the free-prompt lane, so no commitment may be written.")
+    else:
+        print("  no field of /health names a refusal, so the cause is the gateway's own per-epoch "
+              "commit budget or a worker-side refusal — read gateway.log. /health is: "
+              + json.dumps({k: chain.get(k) for k in ("registered", "fp_certified", "bond_active", "exposure_room")}))
 PY
   die "the gateway queued no commitment for job ${JOB_ID:0:16} — there is nothing for the rail to sign"
 fi
@@ -647,10 +667,17 @@ open(sys.argv[2], "w").write(p["choices"][0]["message"]["content"])' "$WORK_DIR/
        --out "$WORK_DIR/derived" --claim "$CLAIM_ID" --network-domain "$NETWORK_DOMAIN" \
        --executor-pubkey "$EXEC_PUBKEY" >"$WORK_DIR/derived/derive.log" 2>&1; then
     log "  the answer PARSED under music/smf/v1 — this is the real leg, from a real inference"
-    obj=$(ls "$WORK_DIR"/derived/*derived*.borsh 2>/dev/null | head -1 || true)
-    if [ -n "$obj" ] && "$RAIL_BIN" --derive-artifact "$obj" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
+    obj=$(ls "$WORK_DIR"/derived/*.derived-unsigned.borsh 2>/dev/null | head -1 || true)
+    # **The rail takes a STEM and the chain takes the SIGNED file** — two things this stage had
+    # wrong, both invisible until an answer actually parsed. `--derive-artifact` appends
+    # `.derived-unsigned.borsh` itself (`rail.rs`), so passing the unsigned FILE made it look for
+    # `….derived-unsigned.borsh.derived-unsigned.borsh`; and the object that rides is
+    # `<stem>.derived-object.borsh`, the signed `PalwConsensusObjectV2`, not the bare unsigned
+    # derivation. Submitting the latter would have been refused as unparseable carriage.
+    stem="${obj%.derived-unsigned.borsh}"
+    if [ -n "$obj" ] && "$RAIL_BIN" --derive-artifact "$stem" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
          >>"$WORK_DIR/derived/derive.log" 2>&1; then
-      submit "$obj" >>"$WORK_DIR/derived/derive.log" 2>&1 || true
+      submit "$stem.derived-object.borsh" >>"$WORK_DIR/derived/derive.log" 2>&1 || true
       if all_nodes_logged "DerivedArtifact"; then
         derived_note="ON CHAIN from a real inference — every node carried the derivation"
       else

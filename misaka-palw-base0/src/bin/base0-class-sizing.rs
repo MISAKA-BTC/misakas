@@ -6,8 +6,13 @@
 //!   the bundle is what `palw_ruleset_id_v2` hashes. A class deeper than the ladder cannot join a
 //!   running chain at all — it needs a new ruleset, which is a flag day;
 //! * a class is admissible only if its **longest** job — the whole context as prefill, which is
-//!   what `worst_case_step_leaf_count_v1` counts — fits `PALW_STEP_MAX_LEAVES`. Checking the
+//!   what `worst_case_step_leaf_count_capped_v1` counts — fits THE RULESET'S LADDER. Checking the
 //!   typical job instead would admit a class an attacker picks the job length for.
+//!
+//! The ladder is `--ladder <n>`, defaulting to the RC ruleset's `COURT_MAX_STEP_LEAVES` (2^26) and
+//! never to the executor's `PALW_STEP_MAX_LEAVES` (2^22): counting an admission question at the
+//! executor's constant printed `INADMISSIBLE` for classes the chain admits, and every row below
+//! now says which ladder it was counted at.
 //!
 //! The Qwen geometries are the MEASURED ones from `palw_qwen25_profile`, not a sketch: the second
 //! class's graph is that module's and this binary only prices it.
@@ -17,10 +22,24 @@ use kaspa_consensus_core::palw_base0_profile::{
 };
 use kaspa_consensus_core::palw_catalog_coverage::{PalwReachableKernelSetV1, verify_catalog_coverage_v1};
 use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, QWEN25_3B, qwen25_profile_v1};
-use kaspa_consensus_core::palw_step::{PALW_STEP_MAX_LEAVES, PalwShapeProfileV3, step_leaf_count, worst_case_step_leaf_count_v1};
+use kaspa_consensus_core::palw_step::{
+    PALW_STEP_MAX_LEAVES, PalwShapeProfileV3, step_leaf_count_capped_v1, worst_case_step_leaf_count_capped_v1,
+};
 use kaspa_consensus_core::palw_step_refute::catalogued_kernel_ids_v1;
 use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
 use kaspa_hashes::Hash64;
+
+/// The ladder every count in this report is taken against — `--ladder <n>`, else the RC ruleset's.
+fn ladder() -> u64 {
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        let v = if a == "--ladder" { args.next() } else { a.strip_prefix("--ladder=").map(str::to_string) };
+        if let Some(v) = v {
+            return v.parse().unwrap_or_else(|e| panic!("--ladder: {e}"));
+        }
+    }
+    kaspa_consensus_core::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES
+}
 
 fn job_context(profile: &PalwShapeProfileV3, prefill: u32, decode: u32) -> PalwJobContextV2 {
     let mut ctx = PalwJobContextV2 {
@@ -70,15 +89,22 @@ fn report(name: &str, profile: &PalwShapeProfileV3, jobs: &[(u32, u32)]) {
         catalogued_kernel_ids_v1().len(),
         if covered.is_ok() { "PASS" } else { "FAIL" }
     );
-    match worst_case_step_leaf_count_v1(profile) {
-        Ok(w) => println!("- longest job (whole context as prefill): **{w}** leaves, {} rounds — ADMISSIBLE", bisection_rounds(w)),
-        Err(e) => println!("- longest job: **INADMISSIBLE** — {e:?}"),
+    match worst_case_step_leaf_count_capped_v1(profile, ladder()) {
+        Ok(w) => println!(
+            "- longest job (whole context as prefill — a what-if over the GEOMETRY, not a registered class): **{w}** leaves, {} rounds — ADMISSIBLE at ladder {}",
+            bisection_rounds(w),
+            ladder()
+        ),
+        Err(e) => println!(
+            "- longest job (a what-if over the GEOMETRY, not a registered class): **INADMISSIBLE at ladder {}** — {e:?}",
+            ladder()
+        ),
     }
     println!();
     println!("| job (prefill/decode) | step leaves | rounds |");
     println!("|---|---|---|");
     for (prefill, decode) in jobs {
-        match step_leaf_count(profile, &job_context(profile, *prefill, *decode)) {
+        match step_leaf_count_capped_v1(profile, &job_context(profile, *prefill, *decode), ladder()) {
             Ok(leaves) => println!("| {prefill}/{decode} | {leaves} | {} |", bisection_rounds(leaves)),
             Err(e) => println!("| {prefill}/{decode} | refused: {e:?} | — |"),
         }
@@ -89,7 +115,7 @@ fn report(name: &str, profile: &PalwShapeProfileV3, jobs: &[(u32, u32)]) {
 /// The largest `n_ctx` at which a geometry is still admissible, by binary search on the monotone
 /// whole-context count.
 fn max_adjudicable_ctx(build: &dyn Fn(u32, u32) -> Option<PalwShapeProfileV3>, tile_len: u32) -> u32 {
-    let fits = |n_ctx: u32| build(n_ctx, tile_len).and_then(|p| worst_case_step_leaf_count_v1(&p).ok()).is_some();
+    let fits = |n_ctx: u32| build(n_ctx, tile_len).and_then(|p| worst_case_step_leaf_count_capped_v1(&p, ladder()).ok()).is_some();
     if !fits(2) {
         return 0;
     }
@@ -103,10 +129,18 @@ fn max_adjudicable_ctx(build: &dyn Fn(u32, u32) -> Option<PalwShapeProfileV3>, t
 
 fn main() {
     println!("# What a second class costs the ruleset\n");
+    println!(
+        "Every count below is taken at ladder **{}** (executor constant {PALW_STEP_MAX_LEAVES}, RC ruleset {}).\n",
+        ladder(),
+        kaspa_consensus_core::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES
+    );
 
     let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor geometry is expressible");
     report("PALW-BASE-0, the RC liveness floor", &floor, &[PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_WORST_CASE]);
 
+    // Synthetic provisioning jobs (prefill/decode) over the full geometry — what-ifs for the
+    // ruleset, NOT catalog rows: the registered A16 rows are at n_ctx 16/18/512 and every one
+    // fits the RC ladder (measured 2026-09-04: v2/v3@512 59,000,848, v5@512 52,778,128).
     let jobs = [(64u32, 64u32), (512, 128), (2048, 512)];
     let q15 = qwen25_profile_v1(QWEN25_1_5B).expect("the measured 1.5B geometry is expressible");
     report("Qwen2.5-1.5B (measured, as shipped in `palw_qwen25_profile`)", &q15, &jobs);
@@ -118,9 +152,10 @@ fn main() {
     println!("## The provisioning question\n");
     println!("| ladder provisioned for | max_step_leaf_count | rounds |");
     println!("|---|---|---|");
-    let floor_worst = worst_case_step_leaf_count_v1(&floor).expect("the floor is admissible");
+    let floor_worst = worst_case_step_leaf_count_capped_v1(&floor, ladder()).expect("the floor is admissible");
     println!("| the floor alone | {floor_worst} | {} |", bisection_rounds(floor_worst));
-    println!("| the whole step space | {PALW_STEP_MAX_LEAVES} | {} |", bisection_rounds(PALW_STEP_MAX_LEAVES));
+    println!("| the executor's constant | {PALW_STEP_MAX_LEAVES} | {} |", bisection_rounds(PALW_STEP_MAX_LEAVES));
+    println!("| this report's ladder | {} | {} |", ladder(), bisection_rounds(ladder()));
     println!();
 
     // ---------------------------------------------------------------------------------------
@@ -200,7 +235,7 @@ fn main() {
     ] {
         let found = [128u32, 256, 512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536]
             .into_iter()
-            .find(|tile| build(ctx, *tile).and_then(|p| worst_case_step_leaf_count_v1(&p).ok()).is_some());
+            .find(|tile| build(ctx, *tile).and_then(|p| worst_case_step_leaf_count_capped_v1(&p, ladder()).ok()).is_some());
         println!(
             "| {name} | {ctx} | {shipped} | {} |",
             found.map(|t| t.to_string()).unwrap_or_else(|| "**none up to MAX_TILE_LEN**".into())

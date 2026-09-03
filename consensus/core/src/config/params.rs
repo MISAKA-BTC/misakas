@@ -11349,7 +11349,17 @@ mod consensus_params_id_tests {
             Some(&certified),
             "the genesis free-prompt gate on mainnet is the drilled, coverage-derived set — and it is present, not absent"
         );
-        assert_eq!(bundle.court_e2e_root, palw_rc_court_e2e_root_v1(), "the attempt-lane genesis set is the one this build certifies");
+        // This compares the bundle's root with the function the assembler set it FROM, so it
+        // pins only that the assembler installs the pinned root and no caller can name another.
+        // Whether THIS BUILD's court certifies the family set that pin names has two sources and
+        // lives where the registry is: `misaka-palw-base0::e2e_drill::tests::
+        // the_pinned_rc_e2e_root_is_what_this_build_certifies` (computed root vs the pin).
+        assert_eq!(
+            bundle.court_e2e_root,
+            palw_rc_court_e2e_root_v1(),
+            "the assembler installs the pinned attempt-lane e2e root and no caller names another (the build-vs-pin \
+             gate is misaka-palw-base0's the_pinned_rc_e2e_root_is_what_this_build_certifies)"
+        );
         assert!(
             crate::palw_state_v2::PalwChainStateV2::genesis()
                 .chain_certified_families(crate::palw_state_v2::PalwCertifiedLaneV1::Attempt)

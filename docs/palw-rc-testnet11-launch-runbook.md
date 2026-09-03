@@ -281,6 +281,153 @@ would name the machine to attack for a panel quorum.
 
 ---
 
+## 4b. RELAUNCHING over a network that already exists
+
+§§1–4 describe a first launch. A relaunch is a different procedure with one hazard that has bitten
+this fleet before, and it is not a variation on "restart the nodes".
+
+**A relaunch whose genesis moves is not an upgrade.** Adding premine or community entries changes
+the genesis UTXO set, so the genesis hash moves, and then **no earlier appdir and no earlier binary
+can join at all** — the failure is at handshake, not at a rule, which is strictly less legible than
+a ruleset mismatch. Everything below assumes that case.
+
+### The wipe list is what the RUNNING NODE connects to — and the journal does NOT tell you that
+
+Before stopping anything, ask the node. An ssh config, a systemd unit and a launch script all record
+intent; only the live connection set records fact, and a relaunch is only as complete as the set of
+hosts that actually carry the chain.
+
+**An earlier version of this runbook prescribed a journal scrape, and it undercounts. Measured
+2026-09-03 on the live fleet, the two methods disagree badly:**
+
+    journalctl 'Connected to (incoming|outgoing) peer', 3h window  ->  3 addresses
+    ss -tnp state established, on the p2p ports                    ->  9 addresses
+
+The journal line is emitted at connection ESTABLISHMENT. A peer that connected before the window
+opened and has stayed connected since never appears in it again. The scrape measures the shape of
+the log, not the thing the log describes — and the single most-connected peer on this fleet
+(`169.58.232.113`, which we dial OUTBOUND four times, and which runs three kaspad of its own) had
+**zero journal lines in three hours**. A wipe driven by the journal list would have left it running,
+and an unwiped peer re-feeds the old chain by IBD to every host you just cleaned.
+
+**Ask the sockets, in both directions:**
+
+    ss -tnp state established | grep -E '263[0-9][0-9]' \
+      | awk '{split($3,l,":"); split($4,r,":"); \
+             print (l[2] ~ /^263/ ? "INBOUND " : "outbound"), r[1]}' | sort -u
+
+Then split that list in two, because the halves need opposite treatment:
+
+| | how to tell | what to do |
+|---|---|---|
+| **ours** | **answers a key you hold, today**: `ssh -i ~/.ssh/claude_key root@<ip> hostname` | stop, then wipe — every appdir, not "the" appdir |
+| **not ours** | does not | cannot be wiped, and does not need to be — see below |
+
+**The ownership test is the ssh, and only the ssh.** `known_hosts` is useful for building the
+CANDIDATE list and is worthless as the test, for two independent reasons and both of them bit
+someone today:
+
+- **It is per-machine and per-user.** It records what THAT account has SSH'd to, which is not fleet
+  membership. Run the rule while logged into a node and you may conclude nothing is yours, wipe
+  nothing, and hand the old chain back to every host you just cleaned by IBD.
+- **`grep` cannot read it.** With `HashKnownHosts yes` — the default on most distributions, and the
+  case on every entry of ibm's file — every line is `|1|<salt>|<hash>` and a plain `grep <ip>`
+  returns **zero for hosts that are present**. Use `ssh-keygen -F <ip> [-f <file>]`, which hashes
+  the query before comparing. Measured on ibm: `grep` 0, `ssh-keygen -F` 1, same host, same file.
+
+That second one is the same failure shape as everything else in this section — a tool that reports
+ABSENCE when it merely cannot see — and it is the more dangerous of the two, because the per-machine
+problem at least gives you a suspiciously empty list, while the hashing problem gives you a
+confidently wrong one on the machine you trust most.
+
+### "Connected" is three different numbers, and only one of them is peers
+
+A reader who counts `ss` output and compares it to `/health` will get a disagreement and conclude
+something is broken. Nothing is. Measured on the public entry, all three at once:
+
+    10  established TCP sockets on the p2p ports
+     6  handshake-complete peers
+    10  distinct dialers presenting a foreign genesis
+
+A peer can hold an ESTABLISHED socket and never complete a handshake — a foreign-genesis dialer is
+refused at the handshake and keeps the socket. So the TCP list is the right instrument for the WIPE
+list (it is the set of machines that could re-feed a chain) and the wrong one for "how many peers do
+we have". The loudest talker on this fleet, `111.67.115.228`, holds an established socket and is
+being refused ~3,000 times a day: it is foreign, we cannot wipe it, and it is not feeding anyone the
+old chain — it is being turned away by us.
+
+**Wipe by ENUMERATING each host's kaspad processes, never by naming an appdir.** The fleet does not
+hold one appdir per host:
+
+    169.58.39.220  (ibm)  /root/.t11  /root/.t11b
+    169.58.232.113        /root/.t11  /root/.t11c  /var/lib/misaka-minerpool/slots/slot-01/appdir
+    5.104.81.23           /root/.t11
+
+The miner-pool slot on `.113` carries a full appdir under `/var/lib/`, nowhere near the others, and
+is invisible to anything that greps for `.t11`. Get the list from the processes themselves:
+
+    pgrep -af kaspad | grep -oE 'appdir=[^ ]+' | sort -u
+
+**And the seeders are part of the wipe.** Two hosts run `misaka-dnsseeder` (`.113` and
+`5.104.81.23`). A seeder that survives the relaunch keeps handing out old-genesis peers to every new
+joiner, so the first thing a newcomer meets is the dead chain — with a handshake failure that looks
+like the joiner's fault. Stop both, and clear their peer databases, before the producer starts.
+
+**The units are what restart them.** Stopping a process without masking its unit is not stopping it:
+
+    ibm    misaka-t11-node0  misaka-t11-node1  misaka-faucet  palw-drill-attest  palw-drill-watch
+    .113   misaka-t11-node   misaka-t11-seat4  misaka-minerpool  misaka-pool-slot@01  misaka-dnsseeder
+    .23    misaka-t11-seat2  misaka-miner-c    misaka-validator-c  misaka-dnsseeder
+
+**`5.104.81.228` looks like ours and is not — settled, not assumed.** It connects INBOUND to both
+of ibm's ports and it IS in `known_hosts`, which is how it got onto the candidate list. But port 22
+is open and refuses `claude_key` for both `root` and `ubuntu` (port 2222 is filtered). We hold no
+credential for it. A `known_hosts` entry records that we once accepted a host key, not that we can
+log in — so it is evidence of contact, never of control, and it is exactly the kind of entry that
+makes a candidate list longer than the wipe list. **It cannot be wiped, so it is external**, and the
+paragraph below covers it. The general rule: an address is "ours" only if it answers a key you hold
+*today*; anything else is a stranger with a familiar address, and the check is one ssh, not a memory.
+
+**And the converse is the part that cannot be fixed by wiping:** the five external peers
+(`60.114.127.4`, `183.176.36.141`, `121.81.248.189`, `111.67.115.228`, `5.104.81.228`) are not ours
+and cannot be stopped. They will keep answering to this network name on their own genesis after the relaunch,
+which is exactly the state §"the name is already contested" describes. That is not a fault to
+resolve before launching; it is the reason the genesis hash is the value a joiner checks.
+
+### The ordering hazard: stop EVERY host before wiping ANY
+
+Wiping hosts one at a time does not work, and the reason is not obvious: **an un-wiped peer
+re-supplies the old chain by IBD to a host that has just been wiped.** The wiped node syncs the
+chain it was wiped to escape, the operator sees a working node, and the network is the old one. It
+has happened here.
+
+    1. stop the service on EVERY host          # all of them, before step 2 anywhere
+    2. verify none is running                  # a host that failed to stop is a host that will re-seed
+    3. wipe each appdir                        # only now
+    4. install the new binary on every host
+    5. start the producer FIRST (see below)
+    6. start the rest
+
+### The producer starts first, and it is not a preference
+
+The floor class must have a producer or **DAA does not advance and the chain cannot leave that
+state by itself.** A network of seats with no producer looks healthy in every log line and produces
+nothing. Start the producing node, confirm `[palw-producer] produced block #N`, and only then bring
+up the seats.
+
+### Before declaring it up
+
+| check | how | what a bad answer means |
+|---|---|---|
+| **this is the new chain** | the genesis hash in the startup log equals the card's | a host was not wiped, or the binary is the old one |
+| **every host agrees** | `consensus_params_id` identical across all startup logs | a host has the old binary — it will reject or be rejected |
+| the old chains are refused, not absent | genesis-mismatch warnings for foreign peers | **this is expected and healthy.** At least four chains answer to this network name; a node that sees none of them may not be reachable at all |
+| a peer actually connected | `P2P Connected to incoming peer` / `Registering p2p flows` | zero of these AND zero mismatches means nothing is dialling you |
+
+**That third row is the one to read carefully.** Genesis-mismatch warnings after a relaunch are not
+a problem to fix; they are other people's chains being correctly refused. A log full of them and a
+node with peers is the healthy state. What is NOT healthy is silence in both columns.
+
 ## 5. Verify the network is what you think it is
 
 | check | how | what a bad answer means |

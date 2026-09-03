@@ -10679,8 +10679,8 @@ async fn palw_v2_a_funded_carrier_is_priced_by_the_fee_the_utxo_walk_read() {
             .expect("virtual merges the carrier block it was just built on")
             .total_fees;
         // One more block, so the carrier block is a settled chain block and the PALW state tip is
-        // the one its own object walk wrote.
-        drop(vp);
+        // the one its own object walk wrote. (`vp` is a borrow of `ctx`; its last use is above, so
+        // the borrow ends before `mine` takes `ctx` mutably — no `drop` of a reference needed.)
         mine(&mut ctx, new_miner_data(), vec![]).await;
         let vp = ctx.consensus.virtual_processor();
         let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");

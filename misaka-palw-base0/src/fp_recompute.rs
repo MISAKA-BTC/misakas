@@ -241,10 +241,7 @@ pub fn base0_fp_recompute_state_at_position_v1<K: Base0FpRecomputeKernelsV1 + ?S
     let job_decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
     let job_positions = ctx.declared_prefill_tokens.saturating_add(job_decode_calls);
     if positions > job_positions || positions == 0 {
-        return Err(Base0FpRecomputeError::DecodeCallsBeyondTheJob {
-            asked: positions,
-            job: job_positions,
-        });
+        return Err(Base0FpRecomputeError::DecodeCallsBeyondTheJob { asked: positions, job: job_positions });
     }
     if profile.state_chunk_map_id == Hash64::default() {
         return Err(Base0FpRecomputeError::NoStateChunkMapRegistered);
