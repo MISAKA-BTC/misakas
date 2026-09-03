@@ -248,13 +248,39 @@ def cmd_check(argv):
         else:
             files.append(argv[i])
             i += 1
-    bad = 0
+    # **A directory is walked, not crashed on.** `check <dir>` used to reach `open(dir,'rb')` and
+    # die with an unhandled `IsADirectoryError` traceback — the sibling third-party gate takes a
+    # directory, so the natural invocation was the one that broke. A tool the cut runs must fail
+    # with a sentence, never a stack trace.
+    #
+    # Only extensions this script has a reader for are collected, so pointing it at an output
+    # directory full of `.dsl` and `.borsh` siblings checks the artifacts and stays quiet about the
+    # rest, rather than failing them all as "no conformance reader".
+    expanded = []
     for f in files:
+        if os.path.isdir(f):
+            for root, _, names in os.walk(f):
+                expanded.extend(
+                    os.path.join(root, n) for n in sorted(names) if os.path.splitext(n)[1].lower() in CHECKS
+                )
+        else:
+            expanded.append(f)
+    if files and not expanded:
+        print("nothing to check: no file with a known artifact extension "
+              f"({', '.join(sorted(CHECKS))}) under {', '.join(files)}", file=sys.stderr)
+        return 2
+    bad = 0
+    for f in expanded:
         try:
             print(f"  OK   {os.path.basename(f):<24} {len(open(f,'rb').read()):>8,} B  {check_file(f, dsl)}")
         except NotConformant as e:
             print(f"  FAIL {os.path.basename(f):<24} {e}", file=sys.stderr)
             bad += 1
+        except OSError as e:
+            # An unreadable path is a failure of the CHECK, not a conformant file.
+            print(f"  FAIL {os.path.basename(f):<24} unreadable: {e}", file=sys.stderr)
+            bad += 1
+    print(f"\n{len(expanded) - bad} conformant, {bad} refused, {len(expanded)} checked")
     return 2 if bad else 0
 
 
