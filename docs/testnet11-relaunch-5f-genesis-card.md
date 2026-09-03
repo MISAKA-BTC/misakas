@@ -3148,3 +3148,51 @@ palw-adr0082-impl   derive/src 4969f8dc051cac31…   source_tree_sha256 637858db
 **Two different trees produce two different values, and neither is a coincidence** — which is the
 mechanism the whole prediction rests on, demonstrated rather than assumed. *The best evidence
 that a pin tracks its input is watching it move when the input does.*
+
+## The free prompt answered — on devnet, and the stage after it failed for a script reason
+
+The devnet e2e on `e5651de0` reached **stages 1–5**: the class registered on chain, the family
+certified, the gateway healthy, and **one chat answered.** Then 5b:
+
+```
+the gateway queued no commitment … this class is not seated on the free-prompt lane
+(fp_certified false)
+node logs: ClassLaneCertified binding 0b8a6c35… DROPPED on all three nodes —
+           "no family certified on this chain for the free-prompt lane covers every kernel
+            class 4277d84f…"
+```
+
+**The chain refused correctly.** Stage 3 of `scripts/misaka-palw-fp-devnet-e2e.sh` ran
+`palw-certify drill --family a16` — the **graph-v2** family `PALW-QWEN25-A16` — while the row
+under test is **graph-v5@512**, whose kernels are `PALW-QWEN25-A16-V5`'s. The `bind` output says
+so in as many words: *"covered by the PALW-QWEN25-A16-V5 RC family."*
+
+> **A script naming a family by hand where the catalog row already names it** — one spelling
+> against the row's — and the chain caught the difference by refusing a binding whose coverage
+> did not reach the class. Fixed at `21a34935` by deriving the family from the model id *the way
+> `bind` does*. **This project's most-repeated defect, now at seven instances**, and the only one
+> so far where the chain itself was the thing that noticed.
+
+### `drill exit 0` while the script had died at stage 5b
+
+5b's launcher reported success for a run that failed. **The verdict was in the log and not in
+the exit code** — the same shape as `test result: ok` over zero tests, and the same shape as a
+`--report` that carries ids without carrying whether the run was valid.
+
+```
+tonight's exit-code-and-verdict disagreements, all three found by reading the log:
+   cargo test  "ok" in 0.00s, 2 filtered out, RC=0      nothing ran
+   palw-derive drill --report                            file has no verdict at all
+   the devnet e2e launcher   "drill exit 0"              the script died at 5b
+```
+
+**Three different tools, three different mechanisms, one habit that catches all of them:** read
+the log, and check the wall clock against what the work should have cost.
+
+### What this does and does not say about the goal's free-prompt item
+
+**It answered a chat.** That is the first time the free-prompt path has produced an answer end to
+end in this cut's lineage, and it is worth stating plainly — **on devnet, on `e5651de0`, with the
+ladder armed.** It is not the t11 shape, it is not the cut tree, and the stage that binds the
+answer to the chain is the one that failed. **The announcement's sentence still has to come from
+a run on the preset that ships.**
