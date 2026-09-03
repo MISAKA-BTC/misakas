@@ -337,44 +337,68 @@ fn the_pinned_token_counts_are_the_shipped_tokenizers_own() {
     }
 }
 
-/// **No context width anyone has proposed short of ADR-0080 can spell any of these floors.**
+/// **No width whose court actually works can spell any of these floors.**
 ///
 /// The comparison is against the DECODE budget and not against `n_ctx`, because the prompt is
 /// spent from the same context (`fp_worker::run_one_job_v1`: `prefill + decode_token_limit <=
-/// max_context_tokens <= n_ctx`). The budget used here is the most generous one that exists: the
-/// widest row the court carrier admits, minus the chat template's own 8 tokens, minus one token
-/// for a request that is a single character. A real request costs more and the budget is smaller.
+/// max_context_tokens <= n_ctx`).
 ///
-/// Stated as an assertion rather than a comment so that the day a grammar gets small enough — or a
-/// class wide enough — to make the demonstration possible, this test is what says so.
+/// **The width is derived, and which bound it is derived FROM is the whole content of this test.**
+/// It was typed — 30, from a sweep against an 81,920-byte carrier — and I replaced that with a
+/// sweep against the ruleset's 27-carrier ceiling, got 512 with a 503-token budget, and concluded
+/// the floors now fit. That was wrong in this test's own subject: admission PRICING a row at 27
+/// carriers does not mean a close can be FILED on 27. The acceptance layer refuses every
+/// `CourtCloseDeclared` outright pending ADR-0080 W6, so exactly one carrier can be filed and a
+/// 512 row's 14-carrier close never reaches the chain. Two ceilings govern and only the smaller
+/// one is a fact about what can happen.
+///
+/// Swept against `PALW_COURT_CLOSE_FILABLE_CHUNKS_V1` instead:
+///
+///     n_ctx 30 -> 81,849 bytes = 1 carrier   prosecutable
+///     n_ctx 32 -> 85,953 bytes = 2 carriers  admissible, and its disputes cannot be defended
+///
+/// So 30 is still the answer and 21 tokens is still the budget — the original constant was right
+/// for the right reason and could not say why. Deriving it means the day ADR-0082's flat close
+/// makes a wide row prosecutable, this test FAILS and says so, which is what its own doc promised
+/// and a typed number could never deliver.
+///
+/// **What this does NOT say** is that any model emits these tokens; that instrument is
+/// `palw-model-gate`. This is arithmetic about what a class may declare AND have its court survive.
 #[test]
-fn no_context_width_short_of_adr_0080_can_spell_any_grammars_floor() {
-    /// The widest context any class registered on testnet-11 declares
-    /// (`palw_qwen25_profile::QWEN25_1_5B_A16`). The MoE class is narrower: `n_ctx` 9.
-    const WIDEST_REGISTERED_N_CTX: usize = 16;
-    /// The widest dense row the 81,920-byte court carrier admits, measured elsewhere in this batch.
-    const WIDEST_CARRIER_ADMISSIBLE_N_CTX: usize = 30;
+fn no_prosecutable_width_can_spell_any_grammars_floor() {
+    use kaspa_consensus_core::palw_class_admission_v2::{PALW_COURT_CLOSE_FILABLE_CHUNKS_V1, derive_court_cost_shaped_v1};
+    use kaspa_consensus_core::palw_context_ladder::{palw_a16_context_row_profile_v1, palw_class_ladder_rules_v1};
+    use kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1;
+
     /// `qwen_chat_prompt(None, &[("user", "")])`, encoded: the template's own cost before a byte of
     /// the request. Measured, not assumed.
     const CHAT_TEMPLATE_TOKENS: usize = 8;
-    /// A request cannot be empty (`prompt_ids_for_input_v1` refuses zero bytes), so one token is
-    /// the floor of a request.
+    /// A request cannot be empty (`prompt_ids_for_input_v1` refuses zero bytes).
     const SHORTEST_POSSIBLE_REQUEST_TOKENS: usize = 1;
 
-    let budget = WIDEST_CARRIER_ADMISSIBLE_N_CTX - CHAT_TEMPLATE_TOKENS - SHORTEST_POSSIBLE_REQUEST_TOKENS;
+    let mut widest = 0u32;
+    for n in [16u32, 24, 30, 32, 40, 64, 128, 512] {
+        let Ok(profile) = palw_a16_context_row_profile_v1(n) else { continue };
+        let Some(rules) = palw_class_ladder_rules_v1(&profile) else { continue };
+        let Ok(cost) = derive_court_cost_shaped_v1(&profile, rules.cost_shape) else { continue };
+        if palw_close_chunks_for_bytes_v1(cost.max_close_bytes) <= PALW_COURT_CLOSE_FILABLE_CHUNKS_V1 {
+            widest = n;
+        }
+    }
+    assert!(widest > 0, "no dense row at all has a filable close, which is a larger problem than this test");
+    let budget = widest as usize - CHAT_TEMPLATE_TOKENS - SHORTEST_POSSIBLE_REQUEST_TOKENS;
     for case in &CASES {
         assert!(
             case.floor_tokens > budget,
-            "{}'s {}-token floor now fits in the {budget}-token decode budget of the \
-             {WIDEST_CARRIER_ADMISSIBLE_N_CTX}-position dense row the court carrier admits (registered classes are \
-             narrower still, at {WIDEST_REGISTERED_N_CTX} and 9). That is a CHANGE IN THE ANSWER: the demonstration \
-             this crate exists for may now be reachable without widening a class, and the launch owner has to be told.",
+            "{}'s {}-token floor now FITS the {budget}-token decode budget of the widest PROSECUTABLE row \
+             (n_ctx {widest}). That is a change in the answer: the demonstration may be reachable on a class \
+             whose court works, and the launch owner has to be told.",
             case.transformer,
             case.floor_tokens
         );
     }
     println!(
-        "decode budget at the widest admissible width: {budget} tokens; floors are {}",
+        "widest prosecutable dense row: n_ctx {widest} -> {budget} decode tokens; floors {} — none fit",
         CASES.iter().map(|c| format!("{} {}", c.transformer, c.floor_tokens)).collect::<Vec<_>>().join(", ")
     );
 }

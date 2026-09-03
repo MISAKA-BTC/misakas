@@ -2197,11 +2197,22 @@ mod tests {
 
 /// **The most carriers a court close can actually be filed on.**
 ///
-/// A close too large for one carrier rides [`PalwConsensusObjectV2::CourtCloseDeclared`] and its
-/// [`PalwConsensusObjectV2::CourtCloseChunk`]s in the session's own rooted table — NOT the generic
-/// `ObjectChunk` group, whose arm still admits `FamilyCertified` alone. So the number here is
-/// `PALW_COURT_CLOSE_MAX_CHUNKS`, the structural bound the transition enforces from the `u64`
-/// arrival bitmap, and the ruleset's `PalwCourtParamsV2::max_close_chunks()` sits under it.
+/// A close too large for one carrier must ride [`PalwConsensusObjectV2::CourtCloseDeclared`] and
+/// its [`PalwConsensusObjectV2::CourtCloseChunk`]s. **The acceptance layer refuses that
+/// declaration unconditionally** — `virtual_processor/processor.rs`: "no layer yet verifies the
+/// declaring side's signature (ADR-0080 W6) — refused rather than trusted" — so today a close
+/// that does not fit ONE carrier cannot be filed by anyone, and the number here is 1.
+///
+/// **This constant read 32 for an hour and that was wrong in the exact way it exists to catch.**
+/// It was derived from `PALW_COURT_CLOSE_MAX_CHUNKS`, the STATE layer's bound, by an author who
+/// had verified the state machine and never opened the acceptance layer. A guard that derives its
+/// answer from one of two layers that must agree is a guard with the defect it was built against,
+/// one level up. The refusal is unconditional and easy to read; nothing but not looking produced
+/// the 32.
+///
+/// A refused lifecycle object is dropped WITH THE BLOCK STANDING, so filing a split close today
+/// spends the carrier fee, opens no group, and every chunk behind it pays for
+/// `MissingCourtCloseGroup` in turn.
 ///
 /// **This constant was 1, and it was right when it was written.** Before the close had its own
 /// carriage, a split close was refused in the block that completed it — `ChunkedObjectKindNotAllowed`,
@@ -2218,7 +2229,21 @@ mod tests {
 /// which is the failure this file keeps recording in other forms. Reading it as success would have
 /// left the next widening of the price unmatched by the transport all over again. It is now bound to
 /// the path a close actually takes.
-pub const PALW_COURT_CLOSE_FILABLE_CHUNKS_V1: u64 = crate::palw_state_v2::PALW_COURT_CLOSE_MAX_CHUNKS as u64;
+pub const PALW_COURT_CLOSE_FILABLE_CHUNKS_V1: u64 = 1;
+
+/// **What the STATE layer would carry if the acceptance layer let a split close through.**
+///
+/// Kept beside [`PALW_COURT_CLOSE_FILABLE_CHUNKS_V1`] and deliberately not equal to it. W5 built
+/// the state machine — `CourtCloseDeclared`, `CourtCloseChunk`, the rooted table, this bound from
+/// the `u64` arrival bitmap — and it is complete. The acceptance layer refuses the declaration
+/// unconditionally (`virtual_processor/processor.rs`, "no layer yet verifies the declaring side's
+/// signature (ADR-0080 W6) — refused rather than trusted"), so nothing reaches the state machine
+/// to be carried. Two halves are open behind it: `PALW_COURT_V2_ALL_DOMAINS` carries no close
+/// context, so there is nothing for a side to SIGN, and `close_digest` is written and never read
+/// until W7.
+///
+/// When W6 and W7 land, `PALW_COURT_CLOSE_FILABLE_CHUNKS_V1` becomes this, in one edit.
+pub const PALW_COURT_CLOSE_STATE_LAYER_CHUNKS_V1: u64 = crate::palw_state_v2::PALW_COURT_CLOSE_MAX_CHUNKS as u64;
 
 #[cfg(test)]
 mod the_close_must_be_filable {
@@ -2259,12 +2284,19 @@ mod the_close_must_be_filable {
     fn the_priced_ceiling_is_inside_the_filable_one() {
         let priced = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS;
         assert_eq!(priced, 27, "design A's ceiling moved — re-check the close table's bound before following it");
-        assert_eq!(PALW_COURT_CLOSE_FILABLE_CHUNKS_V1, 32);
+        assert_eq!(PALW_COURT_CLOSE_FILABLE_CHUNKS_V1, 1, "the acceptance layer admits a split close now — see W6/W7");
+        assert_eq!(PALW_COURT_CLOSE_STATE_LAYER_CHUNKS_V1, 32, "the state layer's bitmap reach moved");
+        // **The gap is open and this states its size rather than hiding it.** Admission prices 27
+        // carriers; exactly one can be filed. Every class between them is admissible and
+        // unprosecutable — the 512 dense row is 14 carriers and sits squarely inside that gap.
         assert!(
-            priced <= PALW_COURT_CLOSE_FILABLE_CHUNKS_V1,
-            "admission prices {priced} carriers and the close table files {}: every class between them is \
-             admissible and unprosecutable",
-            PALW_COURT_CLOSE_FILABLE_CHUNKS_V1
+            priced > PALW_COURT_CLOSE_FILABLE_CHUNKS_V1,
+            "the gap closed: if the acceptance layer now files what admission prices, delete this assertion \
+             rather than relaxing it, and raise PALW_COURT_CLOSE_FILABLE_CHUNKS_V1 to the state layer's bound"
+        );
+        assert!(
+            PALW_COURT_CLOSE_FILABLE_CHUNKS_V1 <= PALW_COURT_CLOSE_STATE_LAYER_CHUNKS_V1,
+            "the acceptance layer files more than the state machine can carry, which is the dangerous direction"
         );
         // The generic group is NOT the close's road, and a change that sent it back down this one
         // would restore the original hole silently. `FamilyCertified` keeps its own 8.
@@ -2275,21 +2307,27 @@ mod the_close_must_be_filable {
         );
     }
 
-    /// **The row the launch is waiting on, asserted rather than assumed.**
+    /// **The row the launch wants is admissible and cannot be prosecuted, and that gap is the
+    /// launch's actual gate.**
     ///
     /// A dense 512-token context is what makes a model's own answer wide enough to be an artifact
-    /// DSL — at `n_ctx` 16 the cheapest artifact of any registered kind costs 35 tokens and nothing
-    /// can be produced at all. This is the arithmetic that says the row is now registrable: it
-    /// prices inside the ruleset's ceiling AND inside what the close table can file. It was true of
-    /// neither before the close got its own carriage.
+    /// DSL: at `n_ctx` 16 the cheapest artifact of any registered kind costs 35 tokens and nothing
+    /// can be produced. Admission ACCEPTS the row — 14 carriers against a priced 27 — so a genesis
+    /// that seats it produces an Active class holding share and making blocks. Its worst close
+    /// needs 14 carriers and exactly one can be filed, so the first time anyone disputes it the
+    /// honest party cannot answer and loses by deadline.
     ///
-    /// The hybrid row is measured beside it deliberately. It is inside both too, at 27 of 27 priced
-    /// carriers — 9,759 bytes of margin on a 2,250,000 ceiling, 0.43 % — so any geometry change,
-    /// added term or tile move puts it over, and the failure surfaces at registration on a live
-    /// chain. That is a fact about the margin, not a reason to register or refuse it; this test
-    /// exists so the number is read rather than rediscovered.
+    /// **This test asserted the opposite for an hour.** It was
+    /// `the_512_rows_are_filable_and_the_hybrid_has_almost_no_margin`, and it compared 14 against
+    /// the STATE layer's 32 while the acceptance layer refuses every split close outright. The
+    /// arithmetic was right and the layer was wrong, which is why the numbers below are unchanged
+    /// and the verdict is reversed.
+    ///
+    /// So ADR-0082's flat close is not a cost optimisation for this row. It is what makes the
+    /// row's court operable: graph-v5 dense at 512 is 80,504 bytes, one carrier, and the direct
+    /// `CourtClosed` path is open and adjudicating today.
     #[test]
-    fn the_512_rows_are_filable_and_the_hybrid_has_almost_no_margin() {
+    fn the_512_rows_are_admissible_and_cannot_be_prosecuted() {
         for (label, profile, want_carriers) in [
             ("A16 dense 512", crate::palw_context_ladder::palw_a16_context_row_profile_v1(512).expect("projects"), 14u64),
             ("QWEN36 hybrid 512", crate::palw_context_ladder::palw_qwen36_context_row_profile_v1(512).expect("projects"), 27u64),
@@ -2298,12 +2336,41 @@ mod the_close_must_be_filable {
             let close = derive_court_cost_shaped_v1(&profile, shape).expect("derives").max_close_bytes;
             let carriers = crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(close);
             assert_eq!(carriers, want_carriers, "{label}: {close} bytes is {carriers} carriers, not {want_carriers}");
-            assert!(carriers <= PALW_COURT_CLOSE_FILABLE_CHUNKS_V1, "{label}: the close table cannot file {carriers} carriers");
+            // Admission says yes.
             assert!(
                 carriers <= crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS,
-                "{label}: admission prices {} carriers and this row needs {carriers}",
-                crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS
+                "{label} stopped being admissible, which changes the shape of this gap"
+            );
+            // And the chain cannot carry the close. Both halves, so a fix to either one fails here
+            // and has to be read.
+            assert!(
+                carriers > PALW_COURT_CLOSE_FILABLE_CHUNKS_V1,
+                "{label}: its close is filable now — the launch's gate moved, re-read what opened before celebrating"
             );
         }
+    }
+
+    /// **What a class CAN be registered with today, if its court has to work.**
+    ///
+    /// The number a genesis card needs, and it is not the admissible one. Swept rather than
+    /// asserted: `n_ctx` 30 closes at 81,849 bytes in one carrier and 32 closes at 85,953 in two,
+    /// so 30 is the widest graph-v2 dense row whose disputes can actually be defended. Its decode
+    /// budget is 21 tokens against grammar floors of 38, 60 and 104 — which is why the
+    /// demonstration waits for ADR-0082 rather than for a fence.
+    #[test]
+    fn the_widest_prosecutable_dense_row_today_is_narrower_than_every_grammar_floor() {
+        let mut widest = 0u32;
+        for n in [16u32, 24, 30, 32, 40, 64, 128, 512] {
+            let Ok(profile) = crate::palw_context_ladder::palw_a16_context_row_profile_v1(n) else { continue };
+            let Some(rules) = crate::palw_context_ladder::palw_class_ladder_rules_v1(&profile) else { continue };
+            let Ok(cost) = derive_court_cost_shaped_v1(&profile, rules.cost_shape) else { continue };
+            if crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes) <= PALW_COURT_CLOSE_FILABLE_CHUNKS_V1 {
+                widest = n;
+            }
+        }
+        assert_eq!(widest, 30, "the widest prosecutable dense row moved — the genesis card's width follows this number");
+        // 8 for the chat template, 1 for the shortest possible request (`misaka-palw-derive`'s
+        // grammar_floor states both), so this is the tokens an ANSWER may have.
+        assert_eq!(widest as usize - 9, 21);
     }
 }
