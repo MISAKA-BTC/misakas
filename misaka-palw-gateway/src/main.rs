@@ -1160,11 +1160,7 @@ fn main() {
         &hex(worker.manifest().runtime_manifest_hash)[..16],
         &hex(identity.class_id)[..16],
         worker.manifest().n_ctx,
-        if wire::special_id(worker.manifest(), "<|im_start|>").is_some() {
-            wire::TEMPLATE_ID_CHAT_SEGMENTS_V1
-        } else {
-            wire::TEMPLATE_ID_PLAIN_SEGMENTS_V1
-        },
+        wire::template_id_for(worker.manifest()),
     );
     let boot_facts = chain_source.read();
     eprintln!(
@@ -1269,11 +1265,7 @@ fn serve_connection(
                 &serde_json::json!({
                     "status": "ok",
                     "runtime_manifest_hash": hex(worker.manifest().runtime_manifest_hash),
-                    "template_id": if wire::special_id(worker.manifest(), "<|im_start|>").is_some() {
-                        wire::TEMPLATE_ID_CHAT_SEGMENTS_V1
-                    } else {
-                        wire::TEMPLATE_ID_PLAIN_SEGMENTS_V1
-                    },
+                    "template_id": wire::template_id_for(worker.manifest()),
                     "n_ctx": worker.manifest().n_ctx,
                     "class_id": hex(identity.class_id),
                     "network_domain": hex(identity.network_domain),

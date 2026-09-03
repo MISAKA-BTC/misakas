@@ -71,6 +71,23 @@ fn chatml_user_segments(tokenizer: &QwenTokenizer, content: &str) -> (Vec<PalwFp
 
     let shipped = misaka_palw_base0::tokenizer::qwen_chat_prompt(None, &[("user", content)]);
     assert_eq!(displayed, shipped, "the harness's template is not this tree's Qwen chat template");
+
+    // …and against the assembly the GATEWAY now builds prompts with. The reproduction above is
+    // kept byte for byte so this file's landed result stays re-runnable; this assertion is what
+    // makes "the dense lane did not move" a fact the gate itself checks, on the real tokenizer,
+    // rather than a claim about a table copied into a unit test.
+    let specials: Vec<(String, u32)> = tokenizer.added_tokens().iter().map(|a| (a.content.clone(), a.id)).collect();
+    let production = misaka_palw_base0::chat_template::qwen_chat_prompt_plan_v1(&specials, &[("user", content)])
+        .unwrap_or_else(|e| die(format!("the shipped chat template refused this prompt: {e}")))
+        .unwrap_or_else(|| die("this tokenizer declares no ChatML markers".into()));
+    assert_eq!(
+        production.template_id,
+        misaka_palw_base0::chat_template::TEMPLATE_ID_CHAT_SEGMENTS_V1,
+        "the dense tier must select the transform its SMF and STL evidence was measured under, and it selected {}",
+        production.template_id
+    );
+    assert_eq!(production.segments, segments, "the shipped assembly no longer builds the dense tier's segments");
+    assert_eq!(production.displayed, displayed);
     (segments, displayed)
 }
 

@@ -32,8 +32,10 @@ use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpPromptSegmentV1, PalwFpWork
 /// A distinct id from the original `…/plain-markers/v1` because that one rode the `Text` arm with
 /// specials ENABLED: same rendered string, different ids, and ids are what consensus sees.
 pub const TEMPLATE_ID_PLAIN_SEGMENTS_V1: &str = "misaka-palw/fp-gateway-template/plain-markers-segments/v1";
-/// ADR-0077 Decision 6: the model's own control tokens, segment-wise.
-pub const TEMPLATE_ID_CHAT_SEGMENTS_V1: &str = "misaka-palw/fp-gateway-template/chat-segments/v1";
+/// ADR-0077 Decision 6: the model's own control tokens, segment-wise. Re-exported rather than
+/// re-spelled — the ChatML transforms and the rule that picks between them live in ONE place, and
+/// two constants with the same value in two crates is how they stop having the same value.
+pub use misaka_palw_base0::chat_template::{TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_V1, TEMPLATE_ID_CHAT_SEGMENTS_V1};
 
 pub const MARKER_SYSTEM: &str = "### System:\n";
 pub const MARKER_USER: &str = "### User:\n";
@@ -42,11 +44,6 @@ pub const TURN_SEPARATOR: &str = "\n\n";
 /// The display-layer stop guard for the plain-marker template: the first fresh marker line ends
 /// the SHOWN answer. Presentation only — the commitment covers every executed token.
 pub const STOP_GUARD: &str = "\n###";
-
-/// The ChatML control tokens Decision 6 needs, by NAME. A gateway looks them up in the manifest
-/// and never guesses an id: the worker refuses a `Special` that is not a declared control token.
-const CHATML_START: &str = "<|im_start|>";
-const CHATML_END: &str = "<|im_end|>";
 
 /// One chat turn, as this surface accepts it.
 #[derive(Clone, Debug)]
@@ -103,6 +100,19 @@ pub fn special_id(manifest: &PalwFpWorkerManifestV1, name: &str) -> Option<u32> 
     manifest.special_tokens.iter().find(|(n, _)| n == name).map(|(_, id)| *id)
 }
 
+/// **The template id this manifest's model selects**, without building a prompt.
+///
+/// The boot line and `/health` advertise the transform an answer will actually run under, so they
+/// have to ASK the renderer rather than re-derive the rule. They used to re-derive it — "is
+/// `<|im_start|>` declared?" — which was a second and third copy of a rule that has since grown a
+/// branch, and a copy of a rule is a way for the advertised id to stop being the executed one.
+pub fn template_id_for(manifest: &PalwFpWorkerManifestV1) -> &'static str {
+    match misaka_palw_base0::chat_template::qwen_chat_variant_v1(&manifest.special_tokens) {
+        Some(variant) => variant.template_id(),
+        None => TEMPLATE_ID_PLAIN_SEGMENTS_V1,
+    }
+}
+
 /// **Build the prompt** (ADR-0077 Decision 6).
 ///
 /// ChatML when the worker's manifest declares both markers — the model then sees the template it
@@ -110,11 +120,29 @@ pub fn special_id(manifest: &PalwFpWorkerManifestV1, name: &str) -> Option<u32> 
 /// plain-marker form otherwise, still as a segment so the user's text is encoded with specials
 /// disabled either way: untrusted text can never smuggle a control token, which is the property
 /// SA-3 then checks was actually kept.
+///
+/// **Which ChatML transform** is the model's own choice and not this file's: a tokenizer that
+/// declares `<think>`/`</think>` is a reasoning model whose generation prompt carries a closed
+/// think block, and one that does not gets exactly the bytes it always got. That rule, the
+/// segments and the two template ids all live in
+/// [`misaka_palw_base0::chat_template`] — this gateway has no tokenizer, and the model gates have
+/// no gateway, so the ONE place both can reach is the family crate. What stays here is the
+/// entrance: the role vocabulary, the plain-marker fallback, and the `PromptPlan` the SA-3 check
+/// is written against.
 pub fn build_prompt(manifest: &PalwFpWorkerManifestV1, messages: &[Turn]) -> Result<PromptPlan, String> {
     if !messages.iter().any(|m| m.role == "user") {
         return Err("the request carries no user message".into());
     }
-    let (Some(start), Some(end)) = (special_id(manifest, CHATML_START), special_id(manifest, CHATML_END)) else {
+    for message in messages {
+        match message.role.as_str() {
+            "system" | "user" | "assistant" => {}
+            other => return Err(format!("unsupported role {other:?} (system|user|assistant)")),
+        }
+    }
+    let turns: Vec<(&str, &str)> = messages.iter().map(|m| (m.role.as_str(), m.content.as_str())).collect();
+    let plan = misaka_palw_base0::chat_template::qwen_chat_prompt_plan_v1(&manifest.special_tokens, &turns)
+        .map_err(|e| format!("the chat template refused this prompt: {e}"))?;
+    let Some(plan) = plan else {
         let rendered = render_plain_markers(messages)?;
         return Ok(PromptPlan {
             template_id: TEMPLATE_ID_PLAIN_SEGMENTS_V1,
@@ -123,40 +151,12 @@ pub fn build_prompt(manifest: &PalwFpWorkerManifestV1, messages: &[Turn]) -> Res
             displayed: rendered,
         });
     };
-
-    let mut segments = Vec::new();
-    let mut declared_specials = Vec::new();
-    let mut displayed = String::new();
-    let push_special = |id: u32, name: &str, segments: &mut Vec<PalwFpPromptSegmentV1>, displayed: &mut String| {
-        segments.push(PalwFpPromptSegmentV1::Special(id));
-        displayed.push_str(name);
-        id
-    };
-    let push_text = |text: &str, segments: &mut Vec<PalwFpPromptSegmentV1>, displayed: &mut String| {
-        if !text.is_empty() {
-            segments.push(PalwFpPromptSegmentV1::Text(text.as_bytes().to_vec()));
-            displayed.push_str(text);
-        }
-    };
-
-    for message in messages {
-        match message.role.as_str() {
-            "system" | "user" | "assistant" => {}
-            other => return Err(format!("unsupported role {other:?} (system|user|assistant)")),
-        }
-        declared_specials.push(push_special(start, CHATML_START, &mut segments, &mut displayed));
-        // The role name and the newline ride with the user's text in ONE text segment: they are
-        // ordinary tokens in this template, and splitting them would only add segments a reader
-        // has to reassemble. The control tokens are the only `Special`s here, which is exactly
-        // what SA-3's subsequence check then asserts about the committed ids.
-        push_text(&format!("{}\n{}", message.role, message.content), &mut segments, &mut displayed);
-        declared_specials.push(push_special(end, CHATML_END, &mut segments, &mut displayed));
-        push_text("\n", &mut segments, &mut displayed);
-    }
-    declared_specials.push(push_special(start, CHATML_START, &mut segments, &mut displayed));
-    push_text("assistant\n", &mut segments, &mut displayed);
-
-    Ok(PromptPlan { template_id: TEMPLATE_ID_CHAT_SEGMENTS_V1, segments, declared_specials, displayed })
+    Ok(PromptPlan {
+        template_id: plan.template_id,
+        segments: plan.segments,
+        declared_specials: plan.declared_specials,
+        displayed: plan.displayed,
+    })
 }
 
 /// Every id the worker's manifest calls a control token — the set no `Text` segment may ever
@@ -419,6 +419,154 @@ mod tests {
         pairs.iter().map(|(r, c)| Turn { role: (*r).into(), content: (*c).into() }).collect()
     }
 
+    /// A reasoning model's manifest: the QWEN36 lane's own table, MEASURED from
+    /// `Qwen3.5-2B-Q4_K_M.gguf` — the two ChatML markers plus the two think markers, at the ids
+    /// that file declares.
+    fn think_manifest() -> PalwFpWorkerManifestV1 {
+        PalwFpWorkerManifestV1 {
+            model_id: "Qwen/Qwen3.5-2B/graph-v3".into(),
+            vocab: 248_320,
+            special_tokens: vec![
+                ("<|endoftext|>".into(), 248_044),
+                ("<|im_start|>".into(), 248_045),
+                ("<|im_end|>".into(), 248_046),
+                ("<think>".into(), 248_068),
+                ("</think>".into(), 248_069),
+            ],
+            eog_token_ids: vec![248_046, 248_044],
+            ..manifest(true)
+        }
+    }
+
+    /// **The QWEN36 lane's generation prompt is the model's own** — and the id says so.
+    ///
+    /// The defect this closes: the shipped assembly stopped at `assistant\n`, which no branch of
+    /// `Qwen3.5-2B-Q4_K_M.gguf`'s `tokenizer.chat_template` does, so the model emitted the think
+    /// block into the ANSWER and `grammar.canonicalize` refused at column 1.
+    #[test]
+    fn a_reasoning_models_prompt_carries_its_closed_think_block() {
+        let m = think_manifest();
+        let plan = build_prompt(&m, &turns(&[("user", "hi")])).unwrap();
+        assert_eq!(plan.template_id, TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_V1);
+        assert_eq!(plan.template_id, template_id_for(&m), "the id /health advertises is the id build_prompt used");
+        assert_ne!(plan.template_id, TEMPLATE_ID_CHAT_SEGMENTS_V1, "an old and a new prompt must never carry the same id");
+        assert_eq!(plan.displayed, "<|im_start|>user\nhi<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n");
+        assert_eq!(plan.declared_specials, vec![248_045, 248_046, 248_045, 248_068, 248_069]);
+        // The think markers are ids, not text: spelled as text they are a MISSPELLED think block
+        // (ADR-0079 Decision 7 encodes every `Text` segment with specials disabled).
+        assert!(plan.segments.contains(&PalwFpPromptSegmentV1::Special(248_068)));
+        assert!(plan.segments.contains(&PalwFpPromptSegmentV1::Special(248_069)));
+        for segment in &plan.segments {
+            if let PalwFpPromptSegmentV1::Text(bytes) = segment {
+                let text = String::from_utf8(bytes.clone()).unwrap();
+                assert!(!text.contains("think"), "a think marker rode inside a text segment: {text:?}");
+            }
+        }
+        // SA-3 still holds over the longer declaration: the five ids this plan placed, in order.
+        let control = control_token_ids(&m);
+        let honest: Vec<u32> = vec![248_045, 10, 11, 248_046, 12, 248_045, 13, 248_068, 14, 248_069, 15];
+        check_committed_prompt_ids(&plan, &honest, &control).expect("the plan's own specials, in order");
+        let missing_preamble: Vec<u32> = vec![248_045, 10, 11, 248_046, 12, 248_045, 13];
+        assert!(
+            check_committed_prompt_ids(&plan, &missing_preamble, &control).is_err(),
+            "a worker that dropped the preamble is a worker that ran a different prompt"
+        );
+    }
+
+    /// **The dense/A16 lane does not move.** Not a claim about the variant — the whole plan, and
+    /// against the table the dense tier actually declares: all 22 added tokens of the shipped
+    /// `models/qwen2.5-1.5b/tokenizer.json`, of which NEITHER is a think marker. Prompt ids are a
+    /// function of (segments, tokenizer); the tokenizer did not change, so identical segments are
+    /// identical ids, and the tier whose SMF and STL evidence was measured under this exact
+    /// assembly keeps it.
+    #[test]
+    fn the_dense_lane_is_byte_for_byte_the_transform_it_was_measured_under() {
+        let dense_names = [
+            ("<|endoftext|>", 151_643u32),
+            ("<|im_start|>", 151_644),
+            ("<|im_end|>", 151_645),
+            ("<|object_ref_start|>", 151_646),
+            ("<|object_ref_end|>", 151_647),
+            ("<|box_start|>", 151_648),
+            ("<|box_end|>", 151_649),
+            ("<|quad_start|>", 151_650),
+            ("<|quad_end|>", 151_651),
+            ("<|vision_start|>", 151_652),
+            ("<|vision_end|>", 151_653),
+            ("<|vision_pad|>", 151_654),
+            ("<|image_pad|>", 151_655),
+            ("<|video_pad|>", 151_656),
+            ("<tool_call>", 151_657),
+            ("</tool_call>", 151_658),
+            ("<|fim_prefix|>", 151_659),
+            ("<|fim_middle|>", 151_660),
+            ("<|fim_suffix|>", 151_661),
+            ("<|fim_pad|>", 151_662),
+            ("<|repo_name|>", 151_663),
+            ("<|file_sep|>", 151_664),
+        ];
+        assert_eq!(dense_names.len(), 22, "the dense tokenizer.json declares 22 added tokens; this list is that list");
+        assert!(
+            !dense_names.iter().any(|(n, _)| *n == "<think>" || *n == "</think>"),
+            "checked: the dense table declares neither think marker, which is why it cannot select the reasoning transform"
+        );
+        let m = PalwFpWorkerManifestV1 {
+            model_id: "Qwen/Qwen2.5-1.5B/graph-v2".into(),
+            vocab: 151_936,
+            special_tokens: dense_names.iter().map(|(n, id)| ((*n).to_string(), *id)).collect(),
+            eog_token_ids: vec![151_645, 151_643],
+            ..manifest(true)
+        };
+        assert_eq!(template_id_for(&m), TEMPLATE_ID_CHAT_SEGMENTS_V1);
+        let plan = build_prompt(&m, &turns(&[("user", "Emit the minimal cad/v1 DSL for a box. Output only JSON.")])).unwrap();
+        assert_eq!(plan.template_id, TEMPLATE_ID_CHAT_SEGMENTS_V1);
+        assert_eq!(plan.declared_specials, vec![151_644, 151_645, 151_644]);
+        assert_eq!(
+            plan.segments,
+            vec![
+                PalwFpPromptSegmentV1::Special(151_644),
+                PalwFpPromptSegmentV1::Text(b"user\nEmit the minimal cad/v1 DSL for a box. Output only JSON.".to_vec()),
+                PalwFpPromptSegmentV1::Special(151_645),
+                PalwFpPromptSegmentV1::Text(b"\n".to_vec()),
+                PalwFpPromptSegmentV1::Special(151_644),
+                PalwFpPromptSegmentV1::Text(b"assistant\n".to_vec()),
+            ],
+            "the dense lane's segments must be the ones its evidence was measured against"
+        );
+        assert_eq!(
+            plan.displayed,
+            "<|im_start|>user\nEmit the minimal cad/v1 DSL for a box. Output only JSON.<|im_end|>\n<|im_start|>assistant\n"
+        );
+        assert!(!plan.displayed.contains("think"));
+    }
+
+    /// **The two spellings of this template cannot drift.** The gateway's assembly and
+    /// `misaka_palw_base0::tokenizer::qwen_chat_prompt` are built by unrelated code, and the
+    /// builder compares them on every call — this test is the one that names the corpus that
+    /// comparison ran over, so the check's coverage is readable and not merely asserted.
+    #[test]
+    fn the_gateways_assembly_is_this_trees_other_spelling_of_the_same_template() {
+        use misaka_palw_base0::chat_template::qwen35_chat_prompt;
+        use misaka_palw_base0::tokenizer::qwen_chat_prompt;
+        let corpus: [&[(&str, &str)]; 5] = [
+            &[("user", "")],
+            &[("user", "hi")],
+            &[("system", "You are helpful."), ("user", "Hi")],
+            &[("user", "字 — a multi-byte turn")],
+            &[("user", "hi"), ("assistant", "hello"), ("user", "bye")],
+        ];
+        let mut checked = 0usize;
+        for pairs in corpus {
+            let dense = build_prompt(&manifest(true), &turns(pairs)).unwrap();
+            assert_eq!(dense.displayed, qwen_chat_prompt(None, pairs), "dense spelling diverged on {pairs:?}");
+            let think = build_prompt(&think_manifest(), &turns(pairs)).unwrap();
+            assert_eq!(think.displayed, qwen35_chat_prompt(None, pairs), "reasoning spelling diverged on {pairs:?}");
+            assert_eq!(think.displayed, format!("{}<think>\n\n</think>\n\n", dense.displayed));
+            checked += 1;
+        }
+        assert_eq!(checked, 5, "the corpus this check covered: 5 message lists, both lanes each");
+    }
+
     /// **The plain-marker transform is frozen** (its id names this exact transform).
     #[test]
     fn the_plain_marker_render_is_frozen() {
@@ -438,6 +586,7 @@ mod tests {
     fn the_prompt_is_segments_and_the_markers_are_never_user_text() {
         let plan = build_prompt(&manifest(true), &turns(&[("user", "hi")])).unwrap();
         assert_eq!(plan.template_id, TEMPLATE_ID_CHAT_SEGMENTS_V1);
+        assert_eq!(plan.template_id, template_id_for(&manifest(true)), "the advertised id is the executed one");
         assert_eq!(plan.declared_specials, vec![151_644, 151_645, 151_644]);
         assert_eq!(plan.displayed, "<|im_start|>user\nhi<|im_end|>\n<|im_start|>assistant\n");
         // Every marker is a Special; nothing that renders a marker is inside a Text segment.
@@ -450,6 +599,7 @@ mod tests {
 
         let plain = build_prompt(&manifest(false), &turns(&[("user", "hi")])).unwrap();
         assert_eq!(plain.template_id, TEMPLATE_ID_PLAIN_SEGMENTS_V1);
+        assert_eq!(plain.template_id, template_id_for(&manifest(false)), "the advertised id is the executed one");
         assert!(plain.declared_specials.is_empty(), "a model whose control tokens are unknown gets none placed");
         assert_eq!(plain.segments.len(), 1);
         assert_eq!(plain.displayed, "### User:\nhi\n\n### Assistant:\n");
