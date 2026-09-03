@@ -417,6 +417,23 @@ say so rather than implying it might.
 
 ---
 
+### The ADR names a replay source the shipping code does not have
+
+ADR-0082 Decision 7 says an opening asked for later is *"re-derived by replay from the checkpoint
+chunks (`fp_interval`)"*. The fold retains **zero chunk bytes per position** — correct, measured, and
+the thing that makes the capture affordable — so an executor serving a folded interval **replays
+from the PROMPT**: one forward pass per opening served, not from retained chunks.
+
+The verdicts do not change. The executor's cost per opening does, and by the ADR's own argument that
+ratio is the practical lane's first number, so this is not cosmetic.
+
+Closing it needs a retention shape — a live cache held across a claim's life — at one seam, and that
+is not in this cut. **So the ADR's sentence is corrected rather than the code.** A document that
+describes a stronger system than the one shipping mis-budgets the reader's suspicion: they stop
+looking where the doc says the work is done. Fourth instance today, after the court's stale gap
+list, the seed reader's format comment, and the free-prompt `tokenizer_id` cross-check that does not
+exist.
+
 ## 6. Verification gates — every one must be green, and each must have been SEEN to fail
 
 The rule earned today: **the gate you never ran locally is the gate you have never seen fail.**
