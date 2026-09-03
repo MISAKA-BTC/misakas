@@ -3296,6 +3296,14 @@ pub const PALW_COURT_CLOSE_INCLUSION_MARGIN: u64 = 4;
 /// ([`palw_max_concurrent_court_sessions_v1`]) is what `CourtOpened` refuses above — a pure state
 /// fact, not a second budget, because two budgets for one resource is two answers to "how much
 /// court may one block ask for".
+///
+/// **Unfenced, because the contention is.** The dissection moves that made the audit notice this
+/// only exist past `palw_kary_court`, but the slot's other consumer does not: a completing close
+/// chunk spends it on every network this branch ships, and a close that misses its assembly window
+/// is not delayed but CONVICTED ([`convict_close_declarer_v1`]). So a chain holding more sessions
+/// than the window has slots can starve a close as well as a rung, with or without the fence, and
+/// the bound belongs where the sessions are counted rather than behind a fence that describes only
+/// half of what fills the slot.
 pub const PALW_COURT_CLOSE_MAX_PER_BLOCK: usize = 1;
 
 /// **How many court sessions may be open at once** (audit A M-1): the rung window measured in
