@@ -18,6 +18,7 @@
 //! that commits what it cannot produce mints and then makes no blocks.
 
 use crate::artifact::Base0ArtifactV1;
+use crate::classes::ArtifactSourceV1;
 use crate::engine_a16::{A16Cache, A16Engine, A16PlanErrorV1};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_step::{PALW_STEP_MAX_LEAVES, PalwShapeProfileV3};
@@ -586,13 +587,24 @@ impl Qwen25A16Backend {
     /// constructor is the lane's entrance: the chain-registered path every producer, panel and
     /// court replay of a dense class goes through.
     ///
-    /// **A DERIVED artifact is exempt, and that exemption is not a loophole.** `is_derived()` is
-    /// already load-bearing for exactly this distinction — "a derived artifact must never be
-    /// reported as a registered class" — so a fixture minted from a seed carries no tokenizer by
-    /// construction and no chain row can name it. Real weights are the only thing this refuses,
-    /// which is the only thing that can be re-converted.
-    pub fn check_tokenizer_declared_v1(artifact: &Base0ArtifactV1) -> Result<(), String> {
-        if artifact.is_derived() || artifact.tokenizer_commitment != Hash64::default() {
+    /// **The exemption is a property of the LANE, not of a byte inside the artifact** (audit D
+    /// M-6). It was `artifact.is_derived()`, on the stated ground that "a derived artifact must
+    /// never be reported as a registered class" — and nothing enforces either half of that.
+    /// `derived_seed` is absent from `artifact_digest()` AND from the operand inventory, so the
+    /// same bytes with the seed tag set have exactly the same `artifact_root`, a chain row still
+    /// resolves to them, and `resolve_class_v1` / `dense_artifact_by_registered_root` match on
+    /// that root alone. One flipped byte in a real dense artifact whose `tokenizer_commitment` is
+    /// zero therefore bought a pass through this guard — and the floor class is itself
+    /// `ArtifactSourceV1::Derived(..)` AND a registered class, so the invariant was already false
+    /// on its face.
+    ///
+    /// `lane` is what the CALLER resolved the class as. Only [`ArtifactSourceV1::Derived`] — the
+    /// seeded floor and the drill fixtures minted the same way — is exempt, and that is a fact
+    /// about how the backend was reached, which no artifact byte can change. The chain-registered
+    /// resolution path (`PalwClassSdk::resolve_chain_registered`) resolves `ConvertedA16` and is
+    /// refused whatever the file says.
+    pub fn check_tokenizer_declared_v1(artifact: &Base0ArtifactV1, lane: ArtifactSourceV1) -> Result<(), String> {
+        if matches!(lane, ArtifactSourceV1::Derived(_)) || artifact.tokenizer_commitment != Hash64::default() {
             return Ok(());
         }
         Err(format!(
@@ -616,7 +628,30 @@ impl Qwen25A16Backend {
         profile: PalwShapeProfileV3,
         canonical_job: (u32, u32),
     ) -> Result<Self, String> {
-        Self::check_tokenizer_declared_v1(&artifact)?;
+        // The lane a caller that did NOT resolve a class is in: a drill, a gate binary or a
+        // fixture. It is the artifact's own answer, which is the reading audit D M-6 found is not
+        // enforceable — so it is confined to this entry point, and every caller that resolved a
+        // CLASS uses `from_registered_profile_in_lane_v1` and says which lane it resolved.
+        let lane =
+            artifact.derived_seed().map_or(ArtifactSourceV1::ConvertedA16, ArtifactSourceV1::Derived);
+        Self::from_registered_profile_in_lane_v1(artifact, network_id, profile, canonical_job, lane)
+    }
+
+    /// [`Self::from_registered_profile`] with the lane the caller RESOLVED the class in
+    /// (audit D M-6).
+    ///
+    /// The chain-registered path passes [`ArtifactSourceV1::ConvertedA16`]: no dense class the
+    /// chain registers is the seeded floor, so no chain-registered row is ever exempt from the
+    /// tokenizer refusal — whatever `derived_seed` a file carries, since neither the digest nor
+    /// the inventory root covers it.
+    pub fn from_registered_profile_in_lane_v1(
+        artifact: std::sync::Arc<Base0ArtifactV1>,
+        network_id: Vec<u8>,
+        profile: PalwShapeProfileV3,
+        canonical_job: (u32, u32),
+        lane: ArtifactSourceV1,
+    ) -> Result<Self, String> {
+        Self::check_tokenizer_declared_v1(&artifact, lane)?;
         let engine = A16Engine::new(&artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
         // **Two different facts must not wear the same words** (round-3 defect I-3). "This build
         // cannot serve the registered graph" is true of a kernel this build does not carry, and an
@@ -2292,8 +2327,11 @@ mod free_prompt_tests {
     /// producer is defaulted for work it performed correctly. `Undeclared` was reported and
     /// stepped over; here it is a refusal.
     ///
-    /// The exemption is `is_derived()`, which is already the "never a registered class" flag, so
-    /// every fixture in this module keeps working and only real weights are refused.
+    /// The exemption is the LANE the caller resolved (audit D M-6): `from_registered_profile` is
+    /// the fixture/drill door and reads the artifact's own seed tag, so every fixture in this
+    /// module keeps working, while the chain-registered door
+    /// (`from_registered_profile_in_lane_v1(.., ConvertedA16)`, what `resolve_chain_registered`
+    /// calls) has no exemption at all — see the test below it.
     #[test]
     fn an_artifact_that_declares_no_tokenizer_cannot_serve_a_registered_dense_class() {
         use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5;
@@ -2342,5 +2380,74 @@ mod free_prompt_tests {
         let (ctx, _) = backend.job_for_anchor(Hash64::from_u64_word(0x70CE_9155)).expect("the anchor implies a job");
         assert_eq!(ctx.tokenizer_id, bound.tokenizer_commitment, "the job publishes the artifact's own tokenizer identity");
         assert_ne!(ctx.tokenizer_id, Hash64::default(), "and it is not the zero that pinned nothing");
+    }
+
+    /// **Audit D M-6: the tokenizer exemption is a property of the LANE, and flipping
+    /// `derived_seed` alone moves nothing.**
+    ///
+    /// The guard waived the refusal for `artifact.is_derived()`, on the ground that "a derived
+    /// artifact must never be reported as a registered class". Nothing enforces that:
+    /// `derived_seed` is absent from `artifact_digest()` AND from the operand inventory, so the
+    /// same bytes with and without the seed tag have the same `artifact_root`, a chain row
+    /// resolves to either, and `dense_artifact_by_registered_root` matches on that root alone. One
+    /// flipped byte therefore bought a pass, and every job the node then produced published
+    /// `tokenizer_id` 0 — the un-pinned state the guard exists to make unrepresentable.
+    ///
+    /// This asserts the two halves the finding rests on (the roots do not move) and the fix (the
+    /// chain lane's answer does not move either).
+    #[test]
+    fn flipping_the_derived_seed_does_not_move_the_root_or_the_chain_lanes_tokenizer_refusal() {
+        use crate::classes::ArtifactSourceV1;
+        use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5;
+
+        let geometry = v5_geometry();
+        let profile = qwen25_a16_artifact_row_profile_v5(geometry).expect("the v5 projection is a valid profile");
+        let seeded = v5_artifact(geometry);
+        assert!(seeded.is_derived(), "the fixture carries the seed tag");
+        assert_eq!(seeded.tokenizer_commitment, Hash64::default(), "and declares no tokenizer");
+
+        // The same bytes with the tag gone — one field, nothing else.
+        let cleared = Base0ArtifactV1::from_parts(
+            seeded.shape,
+            seeded.embed.clone(),
+            seeded.unembed.clone(),
+            seeded.layers.clone(),
+            seeded.norm_requant,
+            seeded.residual_requant,
+        )
+        .expect("the parts of a valid artifact rebuild one")
+        .with_a16_params(derived_a16_store(&seeded.shape))
+        .expect("the derived store is sorted and unique");
+        assert!(!cleared.is_derived());
+
+        // **The finding's premise, measured**: neither root the chain can name moves with the tag.
+        assert_eq!(seeded.artifact_digest(), cleared.artifact_digest(), "the digest does not cover derived_seed");
+        assert_eq!(
+            crate::inventory::a16_inventory_v1(&seeded, &profile).expect("roots").root(),
+            crate::inventory::a16_inventory_v1(&cleared, &profile).expect("roots").root(),
+            "the operand inventory does not cover derived_seed either"
+        );
+
+        // **The fix**: on the CHAIN lane the refusal is the same on both, so the tag buys nothing.
+        for (what, artifact) in [("seeded", seeded.as_ref()), ("cleared", &cleared)] {
+            let err = Qwen25A16Backend::check_tokenizer_declared_v1(artifact, ArtifactSourceV1::ConvertedA16)
+                .expect_err("{what}: a chain-registered dense class must declare its tokenizer");
+            assert!(err.contains("tokenizer_commitment"), "{what}: the refusal names the field: {err}");
+        }
+        let err = Qwen25A16Backend::from_registered_profile_in_lane_v1(
+            seeded.clone(),
+            NETWORK.to_vec(),
+            profile,
+            (4, 2),
+            ArtifactSourceV1::ConvertedA16,
+        )
+        .err()
+        .expect("the chain lane refuses the seeded artifact exactly as it refuses the cleared one");
+        assert!(err.contains("qwen25-convert"), "and names the command that fixes it: {err}");
+
+        // The seeded FLOOR is what the exemption is for, and it still passes — the lane says so,
+        // not the file.
+        Qwen25A16Backend::check_tokenizer_declared_v1(&seeded, ArtifactSourceV1::Derived(0x5A16))
+            .expect("the derived floor declares no tokenizer and may");
     }
 }

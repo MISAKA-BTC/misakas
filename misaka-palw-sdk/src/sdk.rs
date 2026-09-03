@@ -450,11 +450,17 @@ impl PalwClassSdk {
             ));
         }
         if let Some(artifact) = crate::lineages::dense::dense_artifact_by_registered_root(holdings, artifact_root, profile) {
-            let backend = misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile(
+            // **The CHAIN lane** (audit D M-6). The tokenizer refusal is waived only for the
+            // seeded floor, and no dense class the chain registers is that — so a chain-registered
+            // row is refused whatever `derived_seed` the file on disk carries, which neither
+            // `artifact_digest` nor the inventory root covers and which an operator or a fleet
+            // image can therefore flip without moving the root this arm just matched.
+            let backend = misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile_in_lane_v1(
                 artifact,
                 self.network_id.clone(),
                 profile.clone(),
                 (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
+                misaka_palw_base0::classes::ArtifactSourceV1::ConvertedA16,
             )?;
             return Ok(Box::new(backend));
         }
