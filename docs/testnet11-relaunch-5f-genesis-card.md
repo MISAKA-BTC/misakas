@@ -2952,3 +2952,33 @@ patched `palw_admission_shape_at_v1` alone. **Checked, not assumed** — `97bdbf
 
 That is the function `processor.rs:6161` calls, so the acceptance path moves with it.
 **Any later candidate fix gets the same check before it is believed.**
+
+### 4,223,328 is not a stale figure — it is a quoted failure, read as a fact
+
+The graph-v5@512 row's canonical count at the ruleset's `2^26` ladder is **6,630,544 leaves**.
+An earlier assertion used **4,223,328** and the gate corrected it. That was reported to me as *"an
+old SDK comment says 4,223,328 — that figure is stale."* **It is not stale.** Both places that
+carry it label it as the wrong answer, and one of them prints the right one three lines above:
+
+```
+consensus/core/src/palw_class_admission_v2.rs:1891
+    /// On the graph-v5 512 row the honest count is 6,630,544 and the helper answered
+    /// `"the canonical job does not count against this profile: job shape yields 4223328 step
+    /// leaves, exceeding the 4194304 cap"`, so the object could not be BUILT at all
+```
+
+The comment is **correct, complete, and adjacent to the truth**. The number was taken out of a
+sentence whose subject is *that this number is wrong.*
+
+> **This is the same near-miss as pasting the eight transformer ids out of a drill whose verdict
+> was `FAILS`** — a value read from a context that says the value is wrong. **The context was not
+> missing and it was not misleading. It was simply not part of what got copied**, and a hex string
+> or a leaf count carries no trace of the sentence it came from.
+>
+> The defect is not a stale comment. **It is that quoting is lossy in exactly the direction that
+> matters**: the number survives the copy and the word *"wrong"* does not.
+
+*Recorded because "the comment is stale" and "the comment says this is the wrong answer" call for
+opposite repairs.* The first would have someone edit or delete a correct comment — deleting the
+only place the failure mode is written down, which is the precise repair that makes the next
+occurrence unfindable. **Nothing here needs fixing except how the number was read.**
