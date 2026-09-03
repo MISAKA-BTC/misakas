@@ -212,7 +212,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// this carriage and would not root it the same way if it could, so the number moves; the
 /// ruleset id moves with it through the preset fingerprint (a testnet-11 relaunch; mainnet
 /// ships PALW off and is untouched, ADR-0078 §4).
-pub const PALW_STATE_V2_VERSION: u16 = 17;
+pub const PALW_STATE_V2_VERSION: u16 = 18;
 
 /// **Where a class's receipt-lane target starts** (ADR-0074 follow-up): one draw in two per
 /// quantum, whatever the class's attempt-lane `initial_target` says. See the `ClassRegistered`
@@ -398,6 +398,13 @@ pub const PALW_STATE_V2_DOMAIN_CARRIAGE: &[u8] = b"misaka-palw/state-v2/carriage
 pub const PALW_STATE_V2_DOMAIN_OBJECT_CHUNK_GROUP: &[u8] = b"misaka-palw/state-v2/object-chunk-group/v1";
 /// ADR-0071 SA-3: the key a `(class, bond)` production fact is recorded under in `capabilities`.
 pub const PALW_STATE_V2_DOMAIN_CAPABILITY_FACT: &[u8] = b"misaka-palw/state-v2/capability-fact/v1";
+/// **ADR-0080 design A: the digest one chunk of a declared close is pinned by.**
+///
+/// Its OWN domain rather than [`PALW_STATE_V2_DOMAIN_OBJECT_CHUNK_GROUP`]: that one hashes a
+/// WHOLE object and answers "which group is this", while this one hashes one PART and answers
+/// "is this the part the declaration already named at this index". A digest that could be read
+/// as either is a digest a mover could re-present under the other rule.
+pub const PALW_STATE_V2_DOMAIN_COURT_CLOSE_CHUNK: &[u8] = b"misaka-palw/state-v2/court-close-chunk/v1";
 
 /// Every domain this module keys, so the cross-family uniqueness test can see them.
 pub const PALW_STATE_V2_ALL_DOMAINS: &[&[u8]] = &[
@@ -406,6 +413,7 @@ pub const PALW_STATE_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_STATE_V2_DOMAIN_CARRIAGE,
     PALW_STATE_V2_DOMAIN_OBJECT_CHUNK_GROUP,
     PALW_STATE_V2_DOMAIN_CAPABILITY_FACT,
+    PALW_STATE_V2_DOMAIN_COURT_CLOSE_CHUNK,
     // The two authorisation domains in this module. A signing domain that no sweep can see is a
     // domain nothing stops another family from reusing, and a reused domain is a signature made
     // for one purpose accepted for another.
@@ -1459,6 +1467,16 @@ pub struct PalwClassRowV2 {
     pub share_permille: Option<u16>,
     /// This epoch's cap, as `palw_producer_facts_v2` reads it (`unwrap_or(0)`).
     pub budget_blocks: u64,
+    /// The class's canonical job in step leaves — `PalwPwuRuleV2::canonical_leaves_v1`, which for a
+    /// derived class IS its `pwu_per_inference`.
+    ///
+    /// It is here because every off-chain half that prices a claim needs it and nothing published
+    /// it: the gateway's `--class-leaves` and the rail's `--class-leaves` both default to the
+    /// FLOOR's 7,708, so a drill or an operator running any other class silently priced its quanta
+    /// as the floor's unless they knew the number and passed it twice. A quantity the chain owns
+    /// (ADR-0074 Decision 5) should be read off the chain, not carried in two operator flags that
+    /// can disagree with it and with each other.
+    pub canonical_leaves: u64,
     pub is_base_class: bool,
 }
 
@@ -2666,6 +2684,47 @@ pub enum PalwConsensusObjectV2 {
         /// key. Unsigned, a third party could bind the producer to material it never published.
         signature: Vec<u8>,
     },
+    /// **ADR-0080 design A: the court move IS the declaration; its body rides behind it.**
+    ///
+    /// A close wide enough for a class that emits a MIDI or CAD DSL does not fit one carrier —
+    /// W3 derived `max_close_bytes` to 2,250,000 from a 27-chunk group, and nothing could carry
+    /// more than ~100,000 bytes of it. This object is what gives that ceiling its transport: it
+    /// is small, it is signed, and it PINS every byte that will follow, so the block that carries
+    /// it stops the mover's rung clock while the bytes ride behind it one chunk per block.
+    ///
+    /// `CourtClosed` deliberately stays: a close that fits one carrier should not pay two
+    /// transactions and a suspended rung.
+    ///
+    /// Appended after `MaterialDisclosed` because the enum's Borsh discriminant is positional —
+    /// the same rule `DerivedArtifactV1` was appended under.
+    CourtCloseDeclared {
+        session_id: Hash64,
+        /// Which of the two bonds the session id already binds is closing. Checked against the
+        /// session record and the claim, never trusted.
+        side: PalwCourtSideV1,
+        count: u8,
+        /// Exactly `count` digests, index-ordered — `palw_court_close_chunk_digest_v1` of each part.
+        chunk_digests: Vec<Hash64>,
+        /// The keyed hash of the concatenation.
+        close_digest: Hash64,
+        /// What the mover says its evidence proves; W7 compares it with what the assembled proof
+        /// actually adjudicates, exactly as the direct `CourtClosed` arm already does.
+        verdict: PalwCourtVerdictV2,
+        /// The ML-DSA-87 signature of the bond on `side`. The acceptance layer verifies it against
+        /// that bond's registered key — the construction `check_court_disclosure_acceptance_v2`
+        /// uses, for the P0-9 reason: either party could otherwise write the other's move.
+        signature: Vec<u8>,
+    },
+    /// **One chunk of a declared close.** No signature and no group id the sender chose: the
+    /// declaration already pinned these bytes at this index, so a chunk is either the pinned
+    /// preimage or it is nothing — refused at ARRIVAL, which is strictly earlier than the
+    /// certification lane's `ChunkGroupHashMismatch` at assembly.
+    CourtCloseChunk {
+        session_id: Hash64,
+        side: PalwCourtSideV1,
+        index: u8,
+        bytes: Vec<u8>,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -2924,6 +2983,32 @@ pub fn palw_object_chunk_group_id_v1(object_bytes: &[u8]) -> Hash64 {
     finish(state)
 }
 
+/// **Which object kinds ADR-0075 D14's chunk group may assemble into — the ONE spelling.**
+///
+/// # The gap this names, and why it is closed by a NEW path rather than by widening this one
+///
+/// A `CourtClosed` cut with [`palw_object_chunks_v1`] pays every carrier's fee, holds one of the
+/// eight [`PALW_OBJECT_CHUNK_MAX_GROUPS`] slots for its whole [`PALW_OBJECT_CHUNK_TTL_DAA`], and
+/// then fails in the block that completes it — dormant only while no close needed splitting, and
+/// W3's 2,250,000-byte ceiling is what arms it.
+///
+/// **Admitting `CourtClosed` here is the fix this deliberately does not make.** It would put the
+/// court's carriage in the certification lane's table, whose `TooManyPendingChunkGroups` is a
+/// delay for a drill and a DISPUTE LOST for a court: the mover's rung clock runs while it cannot
+/// open, so anyone able to hold eight slots — 3.2 MSK of rent, for the whole TTL — could defeat
+/// every prosecution on the network. Raising the count instead would re-price
+/// [`PALW_OBJECT_CHUNK_SLOT_MASS`], [`PALW_CERTIFICATION_MASS_PER_VECTOR`] and the SA-1 slot rent,
+/// which bound a different lane.
+///
+/// So the close gets its OWN group, keyed to one of the two bonds the session already binds and
+/// therefore unsquattable: [`PalwConsensusObjectV2::CourtCloseDeclared`] and
+/// [`PalwConsensusObjectV2::CourtCloseChunk`]. This predicate stays the certification lane's, and
+/// it is a function so the splitter, the completion gate and the acceptance filter cannot each
+/// hold their own copy of the answer.
+pub fn palw_chunked_object_kind_admitted_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(object, PalwConsensusObjectV2::FamilyCertified { .. })
+}
+
 /// Cut an object into the chunks that carry it, `None` when it fits one carrier as it is.
 pub fn palw_object_chunks_v1(object: &PalwConsensusObjectV2) -> Result<Option<Vec<PalwConsensusObjectV2>>, PalwStateV2Error> {
     palw_object_chunks_with_cap_v1(object, PALW_OBJECT_CHUNK_MAX_BYTES)
@@ -2958,6 +3043,184 @@ pub struct PalwPendingChunksV2 {
     pub count: u8,
     pub opened_daa: u64,
     pub parts: BTreeMap<u8, Vec<u8>>,
+}
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0080 design A: the split court close
+// ---------------------------------------------------------------------------------------------
+
+/// **Which of the two bonds a dispute binds is moving** (ADR-0080 design A).
+///
+/// A close group is keyed by `(session_id, side)`, and the side is the reason the court does not
+/// share ADR-0075 D14's `pending_chunks`: that table's group id is a free digest, so its rows are
+/// mintable in unbounded quantity and its `PALW_OBJECT_CHUNK_MAX_GROUPS` refusal is a delay for a
+/// certification and a DISPUTE LOST for a court — the mover's rung clock runs while it cannot
+/// open. Here a row exists only for one of the two bonds the session id already names, so there
+/// is nothing to squat and no cap to exhaust.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwCourtSideV1 {
+    /// The bond that opened the session — `PalwCourtSessionStateV2::challenger_bond`.
+    Challenger,
+    /// The bond that produced the disputed claim — `PalwClaimStateV2::bond`.
+    Executor,
+}
+
+impl PalwCourtSideV1 {
+    /// The ladder party this side plays, so a routing decision can be made in one place rather
+    /// than re-derived from a session at every arm that needs it.
+    pub fn party(self) -> crate::palw_bisect::PalwBisectPartyV1 {
+        match self {
+            PalwCourtSideV1::Challenger => crate::palw_bisect::PalwBisectPartyV1::Challenger,
+            PalwCourtSideV1::Executor => crate::palw_bisect::PalwBisectPartyV1::Responder,
+        }
+    }
+}
+
+/// **The most chunks one close may be declared in, structurally.**
+///
+/// This is not the ruleset's ceiling — that is `PalwCourtParamsV2::max_close_chunks()`, 27 on the
+/// 5f bundle, and it is compared where the bundle is in hand. This is what the ROW can address:
+/// `present` is a `u64` bitmap, so a count above 64 could not be represented at all, and 32 is the
+/// design's own headroom over the ruleset number. A transition that trusted the ruleset alone
+/// would be a transition whose refusal lives in another layer.
+pub const PALW_COURT_CLOSE_MAX_CHUNKS: u8 = 32;
+
+/// One chunk of a close is one carrier, so it is bounded by exactly what one carrier holds — the
+/// same [`PALW_OBJECT_CHUNK_MAX_BYTES`] the certification lane rides at, which the ADR-0080
+/// measurement found is already the largest round number that relays (120,000 standard bytes less
+/// the worst-case carrier and the header).
+pub const PALW_COURT_CLOSE_CHUNK_MAX_BYTES: usize = PALW_OBJECT_CHUNK_MAX_BYTES;
+
+/// **Blocks budgeted per declared chunk** (ADR-0080 design A §2.5). One block carries one chunk —
+/// a block's whole transaction body is `max_block_mass / TRANSIENT_BYTE_TO_MASS_FACTOR` = 125,000
+/// bytes and a chunk carrier is ~107,500 — so the margin is "one block per chunk plus three
+/// misses": the mover may lose three of every four blocks to other traffic and still assemble.
+pub const PALW_COURT_CLOSE_INCLUSION_MARGIN: u64 = 4;
+
+/// **How many close groups one block may complete and adjudicate** (ADR-0080 design A, W9).
+///
+/// Mirrors [`PALW_CERTIFICATION_MAX_PER_BLOCK`] and exists for the same reason, at the moment
+/// that reason stops being automatic: while a close was one transaction, "close bytes in this
+/// block" and "court CPU in this block" were the SAME number, and the block's own byte limit
+/// bounded both. A split close decouples them — the bytes were spent in earlier blocks and the
+/// completing carrier can be a few hundred bytes — so nothing else puts a bound back.
+pub const PALW_COURT_CLOSE_MAX_PER_BLOCK: usize = 1;
+
+/// The assembly window a declaration of `count` chunks opens: [`PALW_COURT_CLOSE_INCLUSION_MARGIN`]
+/// DAA per chunk, from the block that carried the declaration.
+pub fn palw_close_assembly_daa_v1(count: u8) -> u64 {
+    PALW_COURT_CLOSE_INCLUSION_MARGIN.saturating_mul(count as u64)
+}
+
+/// The digest a declaration pins one chunk's bytes by — checked at ARRIVAL, so a substituted
+/// chunk is refused by the block that carries it rather than discovered at assembly.
+pub fn palw_court_close_chunk_digest_v1(bytes: &[u8]) -> Hash64 {
+    let mut state = keyed(PALW_STATE_V2_DOMAIN_COURT_CLOSE_CHUNK);
+    state.update(&(bytes.len() as u64).to_le_bytes());
+    state.update(bytes);
+    finish(state)
+}
+
+/// **Will this object complete a declared close, and therefore be assembled, decoded and
+/// adjudicated in the block that carries it?** (ADR-0080 design A, W9.)
+///
+/// The court lane's analogue of `palw_v2_graded_vector_count`, and it exists for the same reason,
+/// at the moment that reason stops being automatic: while a close was one transaction, "close
+/// bytes in this block" and "court CPU in this block" were the SAME number and the block's own
+/// byte limit bounded both. A split close breaks that coupling — the bytes were spent in earlier
+/// blocks and the completing carrier is a few hundred bytes — so the per-block slot
+/// ([`PALW_COURT_CLOSE_MAX_PER_BLOCK`]) is counted on this predicate rather than on the bytes.
+///
+/// It lives HERE rather than in the acceptance filter that reads it, so the filter and the
+/// transition cannot hold two answers to one question: every refusal below is one the
+/// `CourtCloseChunk` arm makes, in the same order, so nothing the transition rejects on its face
+/// can burn the block's slot — the exact hole a one-byte tail opened in the certification lane's
+/// cap before `palw_v2_graded_vector_count` replaced "completes a group" there.
+///
+/// **W7 tightens it.** Once the completing transition assembles, checks `close_digest`, decodes a
+/// `PalwCourtVerdictProofV2` and adjudicates, this gains "and the assembled bytes adjudicate".
+pub fn palw_court_close_completes_a_group_v1(state: &PalwChainStateV2, object: &PalwConsensusObjectV2) -> bool {
+    let PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index, bytes } = object else {
+        return false;
+    };
+    let Some(group) = state.court_close_group(session_id, *side) else {
+        return false;
+    };
+    if *index >= group.count || group.has(*index) {
+        return false;
+    }
+    if bytes.is_empty() || bytes.len() > PALW_COURT_CLOSE_CHUNK_MAX_BYTES {
+        return false;
+    }
+    if palw_court_close_chunk_digest_v1(bytes) != group.chunk_digests[*index as usize] {
+        return false;
+    }
+    group.present | (1u64 << index) == PalwCourtCloseGroupV2::full_mask(group.count)
+}
+
+/// **A declared close, mid-assembly** (ADR-0080 design A §2.2), keyed `(session_id, side)`.
+///
+/// # The one field the design's field list does not have, and why it is here
+///
+/// The design specified `{ declarer, count, chunk_digests, close_digest, verdict, declared_daa,
+/// assembly_deadline_daa, present, deposit_outpoint, deposit }` — digests, never bytes — and put
+/// the bytes in a node-local, content-addressed side store re-derivable from block bodies. That
+/// buys back a large state root, and it is not available here: a side store makes the COMPLETING
+/// transition a function of which blocks a node happens to hold, which is a state-root split
+/// between an archival node and a pruned one, and `PalwStateCarriageV2` is exactly the mechanism
+/// that exists so a pruned node continues where an archival node stands. So `chunks` holds the
+/// bytes, in rooted state, carried like `pending_chunks` — and `present` is kept beside it as the
+/// design named it, cross-checked against the keys of `chunks` by
+/// [`PalwChainStateV2::assert_internal_consistency`] so the two can never say different things.
+///
+/// **What that costs, measured rather than waved at.** A live group at the ruleset's 27 chunks is
+/// up to 2.7 MB inside `collection_root`, which re-serializes and re-hashes every entry of every
+/// collection on every `state_root` — the same cost `pending_chunks` already pays at 800 KB. The
+/// bound is the number of live groups, which is two per open session, and the assembly window
+/// (`4 × count`, at most 108 DAA) is what keeps it short-lived.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwCourtCloseGroupV2 {
+    /// The bond on `side` — read from the session (challenger) or the claim (executor) at
+    /// declaration, so a group can never name a third party.
+    pub declarer: PalwBondKeyV2,
+    pub count: u8,
+    /// Exactly `count` digests, index-ordered: what each chunk's bytes must hash to.
+    pub chunk_digests: Vec<Hash64>,
+    /// The keyed hash of the concatenation — the belt to the per-chunk braces, so a declaration
+    /// that pins consistent parts of an inconsistent whole is still refused at completion.
+    pub close_digest: Hash64,
+    /// What the mover says its evidence proves. Declared, and therefore checkable against what
+    /// the assembled proof actually adjudicates (W7).
+    pub verdict: PalwCourtVerdictV2,
+    pub declared_daa: u64,
+    /// `declared_daa + palw_close_assembly_daa_v1(count)`. **Never above the session's backstop**
+    /// — the declaration gate refuses a group that could not finish inside it, and nothing here
+    /// ever advances `PalwCourtSessionStateV2::deadline_daa`.
+    pub assembly_deadline_daa: u64,
+    /// One bit per index; `count <= PALW_COURT_CLOSE_MAX_CHUNKS` so a `u64` is generous.
+    pub present: u64,
+    /// The outpoint backing [`Self::deposit`] — the field ADR-0075 SA-1 named as the reason its
+    /// own deposit could not be built ("the chain to REMEMBER which outpoint backs which group").
+    /// Written here; the lock and the burn are W10's.
+    pub deposit_outpoint: TransactionOutpoint,
+    pub deposit: u64,
+    /// The chunk bytes that have arrived, by index. See the type doc for why they are here.
+    pub chunks: BTreeMap<u8, Vec<u8>>,
+}
+
+impl PalwCourtCloseGroupV2 {
+    /// The bitmap of a complete group of `count` chunks.
+    pub fn full_mask(count: u8) -> u64 {
+        if count >= 64 { u64::MAX } else { (1u64 << count) - 1 }
+    }
+
+    pub fn has(&self, index: u8) -> bool {
+        index < 64 && self.present & (1u64 << index) != 0
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.present == Self::full_mask(self.count)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3185,6 +3448,32 @@ pub enum PalwStateV2Error {
     ChunkedObjectUndecodable(String),
     #[error("only a FamilyCertified may ride in chunks; every other object fits one carrier")]
     ChunkedObjectKindNotAllowed,
+    // ADR-0080 design A: the split court close.
+    #[error("session {session} holds no declared close on this side")]
+    MissingCourtCloseGroup { session: Hash64 },
+    #[error("session {session} already holds a declared close on this side; one declaration per side, ever")]
+    DuplicateCourtCloseGroup { session: Hash64 },
+    #[error("a close may be declared in 1..={max} chunks, not {count}")]
+    CourtCloseCountOutOfRange { count: u8, max: u8 },
+    #[error("the declaration for session {session} does not carry exactly one digest per declared chunk")]
+    CourtCloseDigestsIncoherent { session: Hash64 },
+    #[error("chunk {index} is outside a close declared in {count} chunks")]
+    CourtCloseIndexOutOfRange { index: u8, count: u8 },
+    #[error("the declared close of session {session} already holds chunk {index}")]
+    CourtCloseChunkDuplicate { session: Hash64, index: u8 },
+    #[error("a close chunk carries {bytes} bytes, more than the {max} one carrier holds")]
+    CourtCloseChunkTooLarge { bytes: usize, max: usize },
+    #[error("chunk {index} of session {session} is not the bytes the declaration pinned at that index")]
+    CourtCloseChunkDigestMismatch { session: Hash64, index: u8 },
+    #[error("the declared side is not a bond session {session} binds")]
+    CourtCloseSideNotBound { session: Hash64 },
+    #[error(
+        "a close declared in {count} chunks needs until {needed} to assemble and session {session}'s backstop is {deadline} — a \
+         declaration may never extend the backstop, so one that cannot finish inside it is refused at the rung it would suspend"
+    )]
+    CourtCloseCannotAssemble { session: Hash64, count: u8, needed: u64, deadline: u64 },
+    #[error("the declared close of session {session} is past its assembly deadline")]
+    CourtCloseGroupExpired { session: Hash64 },
     // ADR-0078: derived artifacts.
     #[error("the derived artifact's shape is refused: {0}")]
     DerivedShapeRefused(&'static str),
@@ -3314,6 +3603,16 @@ pub struct PalwChainStateV2 {
     fp_certified_classes: BTreeMap<Hash64, PalwClassLaneCertificationV2>,
     /// ADR-0075 Decision 14: objects half-assembled from chunks, by group digest.
     pending_chunks: BTreeMap<Hash64, PalwPendingChunksV2>,
+    /// **ADR-0080 design A: closes half-assembled from chunks, by `(session, side)`.**
+    ///
+    /// Deliberately NOT `pending_chunks`: that table bounds the CERTIFICATION lane, its
+    /// `PALW_OBJECT_CHUNK_MAX_COUNT` is 8, and raising it would re-price
+    /// `PALW_OBJECT_CHUNK_SLOT_MASS`, `PALW_CERTIFICATION_MASS_PER_VECTOR` and the SA-1 slot rent.
+    /// A shared table would also hand anybody able to hold its eight slots the power to defeat
+    /// every prosecution on the network for the whole TTL, because a mover that cannot open a
+    /// group loses its rung. Here the key is a side of a session that already exists, so the row
+    /// is reserved rather than claimed.
+    court_close_groups: BTreeMap<(Hash64, PalwCourtSideV1), PalwCourtCloseGroupV2>,
     /// **ADR-0078 Decision 4: the derivations of free-prompt claims, keyed `(claim, transformer)`.**
     /// One bounded table beside the claim table, at most `PALW_DERIVED_MAX_PER_CLAIM` rows per
     /// claim, retired with the claim (`retire_claim`). A row is names and hashes — never DSL
@@ -3384,6 +3683,7 @@ impl PalwChainStateV2 {
             fp_certified_families: BTreeMap::new(),
             fp_certified_classes: BTreeMap::new(),
             pending_chunks: BTreeMap::new(),
+            court_close_groups: BTreeMap::new(),
             derived_artifacts: BTreeMap::new(),
             safe_weight: 0,
             bounded_immature: 0,
@@ -3467,6 +3767,15 @@ impl PalwChainStateV2 {
     /// ADR-0075 Decision 14: the parts of a chunked object that have arrived so far.
     pub fn pending_chunk_group(&self, group: &Hash64) -> Option<&PalwPendingChunksV2> {
         self.pending_chunks.get(group)
+    }
+
+    /// ADR-0080 design A: the declared close on one side of one session, if there is one.
+    pub fn court_close_group(&self, session: &Hash64, side: PalwCourtSideV1) -> Option<&PalwCourtCloseGroupV2> {
+        self.court_close_groups.get(&(*session, side))
+    }
+
+    pub fn court_close_groups_iter(&self) -> impl Iterator<Item = (&(Hash64, PalwCourtSideV1), &PalwCourtCloseGroupV2)> {
+        self.court_close_groups.iter()
     }
 
     /// ADR-0078 Decision 4: the derivation of `claim` under `transformer`, if the chain holds one.
@@ -3675,6 +3984,8 @@ impl PalwChainStateV2 {
         state.update(collection_root(b"fp_certified_families", &self.fp_certified_families).as_byte_slice());
         state.update(collection_root(b"fp_certified_classes", &self.fp_certified_classes).as_byte_slice());
         state.update(collection_root(b"pending_chunks", &self.pending_chunks).as_byte_slice());
+        // ADR-0080 design A, rooted immediately after the chunk table it deliberately is not.
+        state.update(collection_root(b"court_close_groups", &self.court_close_groups).as_byte_slice());
         // ADR-0078 Decision 4, rooted after the certification tables it is the layer above.
         state.update(collection_root(b"derived_artifacts", &self.derived_artifacts).as_byte_slice());
         state.update(collection_root(b"panels", &self.panels).as_byte_slice());
@@ -4026,6 +4337,69 @@ impl PalwChainStateV2 {
                 crate::palw_derived_v1::PALW_DERIVED_MAX_PER_CLAIM
             )));
         }
+        // **ADR-0080 design A: a close group is a row ABOUT a session, and it says three things
+        // twice.** `present` and the keys of `chunks` are the same fact in two encodings — the
+        // design named the bitmap and the carriage has to hold the bytes — and a carriage is a
+        // state somebody else wrote, so the two are compared here rather than believed. So is the
+        // session: a group whose session the state does not hold is a row nothing will ever sweep,
+        // which is exactly the orphan class the derived table above pays for.
+        for ((session, side), group) in &self.court_close_groups {
+            if !self.court_sessions.contains_key(session) {
+                return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                    "a close group names session {session}, which the state does not hold — the row would never be swept"
+                )));
+            }
+            if group.count == 0 || group.count > PALW_COURT_CLOSE_MAX_CHUNKS {
+                return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                    "the close group of session {session} declares {} chunks, outside 1..={PALW_COURT_CLOSE_MAX_CHUNKS}",
+                    group.count
+                )));
+            }
+            if group.chunk_digests.len() != group.count as usize {
+                return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                    "the close group of session {session} declares {} chunks and pins {} digests",
+                    group.count,
+                    group.chunk_digests.len()
+                )));
+            }
+            let mut mask = 0u64;
+            for (index, bytes) in &group.chunks {
+                if *index >= group.count {
+                    return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                        "the close group of session {session} holds chunk {index} of a {}-chunk close",
+                        group.count
+                    )));
+                }
+                if bytes.is_empty() || bytes.len() > PALW_COURT_CLOSE_CHUNK_MAX_BYTES {
+                    return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                        "chunk {index} of session {session}'s close carries {} bytes",
+                        bytes.len()
+                    )));
+                }
+                if palw_court_close_chunk_digest_v1(bytes) != group.chunk_digests[*index as usize] {
+                    return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                        "chunk {index} of session {session}'s close is not the bytes its declaration pinned"
+                    )));
+                }
+                mask |= 1u64 << index;
+            }
+            if mask != group.present {
+                return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                    "the close group of session {session} claims presence {:#x} and holds {mask:#x}",
+                    group.present
+                )));
+            }
+            // The declaration's own gate, re-asked of the row: it may never sit past the backstop,
+            // because a declaration that could not finish inside it is a rung suspended for free.
+            let backstop = self.court_sessions[session].deadline_daa;
+            if group.assembly_deadline_daa > backstop {
+                return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                    "the close group of session {session} assembles until {} and the backstop is {backstop}",
+                    group.assembly_deadline_daa
+                )));
+            }
+            let _ = side;
+        }
         Ok(())
     }
 
@@ -4311,6 +4685,13 @@ pub enum PalwDeltaEntryV2 {
         old: Option<PalwPendingChunksV2>,
         new: Option<PalwPendingChunksV2>,
     },
+    /// ADR-0080 design A. Journalled like every other write, which is what makes a reorg of the
+    /// block that carried chunk 3 of 8 revert the bit and the deadline by the delta alone.
+    CourtCloseGroup {
+        key: (Hash64, PalwCourtSideV1),
+        old: Option<PalwCourtCloseGroupV2>,
+        new: Option<PalwCourtCloseGroupV2>,
+    },
     /// ADR-0078 Decision 4. Journalled like every other write so a delta replays exactly.
     DerivedArtifact {
         key: crate::palw_derived_v1::PalwDerivedKeyV1,
@@ -4584,6 +4965,14 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::PendingChunks { key, old, new });
     }
 
+    fn write_court_close_group(&mut self, key: (Hash64, PalwCourtSideV1), new: Option<PalwCourtCloseGroupV2>) {
+        let old = match &new {
+            Some(record) => self.state.court_close_groups.insert(key, record.clone()),
+            None => self.state.court_close_groups.remove(&key),
+        };
+        self.entries.push(PalwDeltaEntryV2::CourtCloseGroup { key, old, new });
+    }
+
     fn write_derived_artifact(
         &mut self,
         key: crate::palw_derived_v1::PalwDerivedKeyV1,
@@ -4720,7 +5109,22 @@ impl<'a> TransitionBuilder<'a> {
             *self.state.open_courts_by_claim.entry(record.claim).or_insert(0) += 1;
             self.state.court_deadlines.insert((court_next_deadline_v2(record), key));
         }
+        let removed = new.is_none();
         self.entries.push(PalwDeltaEntryV2::Court { key, old, new });
+        // **ADR-0080 design A: a close group is a row ABOUT a session, so it dies with it.**
+        //
+        // Here rather than at each of the five removal sites, for the reason written above the
+        // exposure release: a cleanup each of them has to remember is a cleanup one of them
+        // eventually will not, and an orphaned group is a row nothing sweeps whose bytes stay in
+        // the state root forever. `assert_internal_consistency` refuses such a state, so the
+        // failure would be a node refusing its own tip.
+        if removed {
+            for side in [PalwCourtSideV1::Challenger, PalwCourtSideV1::Executor] {
+                if self.state.court_close_groups.contains_key(&(key, side)) {
+                    self.write_court_close_group((key, side), None);
+                }
+            }
+        }
     }
 
     fn write_epoch(&mut self, key: Hash64, new: Option<PalwEpochCounterV2>) {
@@ -5956,10 +6360,39 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                 continue;
             }
         }
-        // The backstop (or an abandoned ladder whose session budget is also spent): closed
-        // challenger-side, because an unfinished challenge must not freeze an honest claim.
+        // **ADR-0080 design A: a failed declaration loses on its OWN side.**
+        //
+        // A close is legal only at `Terminal`, where the rung clock is off and the backstop is the
+        // only thing that fires — and the backstop closes CHALLENGER-side. So an EXECUTOR that
+        // declares a close and then does not assemble it would end the session against its own
+        // prosecutor: it could suspend nothing, spend nothing, and win. That is not a residual, it
+        // is the mechanism inverted into a weapon, and it is the one thing the declaration must
+        // not make possible.
+        //
+        // So a live, INCOMPLETE group decides the direction: the declarer defaulted on a close it
+        // announced and pinned every byte of, which is the `Responder` treatment the rung sweep
+        // already gives an executor that will not stand behind its own root. A CHALLENGER that
+        // fails the same way lands on the challenger-side close it would have landed on anyway.
+        //
+        // **A COMPLETE group is deliberately not convicted here.** Assembling and adjudicating it
+        // is W7; until that lands, a group that has all its bytes has done everything this branch
+        // asks of it, and the sweep falls through to exactly the behaviour that shipped. The arm
+        // decides whether to DESTROY collateral, and the direction to be wrong in is the one that
+        // does not.
+        let failed_declarer_side = [PalwCourtSideV1::Challenger, PalwCourtSideV1::Executor]
+            .into_iter()
+            .find(|side| builder.state.court_close_groups.get(&(session_id, *side)).is_some_and(|group| !group.is_complete()));
         builder.write_court(session_id, None);
-        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond)?;
+        match failed_declarer_side {
+            Some(PalwCourtSideV1::Executor) => {
+                if !claim.phase.is_terminal() {
+                    builder.void_and_slash(session.claim, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
+                }
+            }
+            // The backstop's own direction, and a challenger's failed declaration is the same
+            // unproven accusation it was before the declaration existed.
+            _ => rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond)?,
+        }
     }
     Ok(())
 }
@@ -7466,7 +7899,7 @@ fn apply_object(
                 }
                 let inner: PalwConsensusObjectV2 =
                     borsh::from_slice(&whole).map_err(|e| PalwStateV2Error::ChunkedObjectUndecodable(e.to_string()))?;
-                if !matches!(inner, PalwConsensusObjectV2::FamilyCertified { .. }) {
+                if !palw_chunked_object_kind_admitted_v1(&inner) {
                     return Err(PalwStateV2Error::ChunkedObjectKindNotAllowed);
                 }
                 builder.write_pending_chunks(*group, None);
@@ -7730,6 +8163,112 @@ fn apply_object(
                 .apply_verdict(verdict, ctx.daa_score, builder.params.turn_deadline_daa)
                 .map_err(|e| PalwStateV2Error::LadderRefused(*session_id, e.to_string()))?;
             builder.write_court(*session_id, Some(session));
+        }
+        PalwConsensusObjectV2::CourtCloseDeclared { session_id, side, count, chunk_digests, close_digest, verdict, signature: _ } => {
+            let session = builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
+            let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
+            // **The declarer is READ from the two bonds the session id already binds** — the
+            // challenger from the session record, the executor from the claim — so a declaration
+            // can never name a third party and the row can never be squatted. Whether the
+            // signature is that bond's is the acceptance layer's, where the registry is in hand:
+            // the same split `CourtDisclosed` and `CourtVerdictPosted` already use.
+            let declarer = match side {
+                PalwCourtSideV1::Challenger => session.challenger_bond,
+                PalwCourtSideV1::Executor => claim.bond,
+            };
+            if !builder.state.bonds.contains_key(&declarer) {
+                return Err(PalwStateV2Error::CourtCloseSideNotBound { session: *session_id });
+            }
+            // One declaration per `(session, side)`, ever. It is what makes the interlock's
+            // single-assembly term true, and what stops either party buying rung after rung of
+            // free window by re-declaring.
+            if builder.state.court_close_groups.contains_key(&(*session_id, *side)) {
+                return Err(PalwStateV2Error::DuplicateCourtCloseGroup { session: *session_id });
+            }
+            if *count == 0 || *count > PALW_COURT_CLOSE_MAX_CHUNKS {
+                return Err(PalwStateV2Error::CourtCloseCountOutOfRange { count: *count, max: PALW_COURT_CLOSE_MAX_CHUNKS });
+            }
+            if chunk_digests.len() != *count as usize {
+                return Err(PalwStateV2Error::CourtCloseDigestsIncoherent { session: *session_id });
+            }
+            // **The declaration's clock is the BACKSTOP, and the backstop never moves.**
+            //
+            // A close is legal only at `Terminal`, and `court_next_deadline_v2` returns
+            // `session.deadline_daa` alone there — "Terminal has no move the responder can make"
+            // (audit M2-4). So the only clock that can still end this session is the whole-session
+            // backstop, which closes on the CHALLENGER's side. A declaration that cannot assemble
+            // inside it is therefore not a slow close, it is a rung suspended for nothing, and
+            // extending the backstop to fit it would hand either party a free window for the price
+            // of a declaration. Refused here instead, at the block that carries it, where the
+            // mover can still make a smaller one.
+            let needed = ctx
+                .daa_score
+                .checked_add(palw_close_assembly_daa_v1(*count))
+                .ok_or(PalwStateV2Error::Overflow("close assembly deadline"))?;
+            if needed > session.deadline_daa {
+                return Err(PalwStateV2Error::CourtCloseCannotAssemble {
+                    session: *session_id,
+                    count: *count,
+                    needed,
+                    deadline: session.deadline_daa,
+                });
+            }
+            builder.write_court_close_group(
+                (*session_id, *side),
+                Some(PalwCourtCloseGroupV2 {
+                    declarer,
+                    count: *count,
+                    chunk_digests: chunk_digests.clone(),
+                    close_digest: *close_digest,
+                    verdict: *verdict,
+                    declared_daa: ctx.daa_score,
+                    assembly_deadline_daa: needed,
+                    present: 0,
+                    // W10 writes the backing outpoint and the amount; the FIELDS are what this
+                    // state-version bump exists to afford, and ADR-0075 SA-1's own note names
+                    // their absence as the reason its deposit could not be built.
+                    deposit_outpoint: TransactionOutpoint::default(),
+                    deposit: 0,
+                    chunks: BTreeMap::new(),
+                }),
+            );
+        }
+        PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index, bytes } => {
+            let mut group = builder
+                .state
+                .court_close_groups
+                .get(&(*session_id, *side))
+                .ok_or(PalwStateV2Error::MissingCourtCloseGroup { session: *session_id })?
+                .clone();
+            if ctx.daa_score > group.assembly_deadline_daa {
+                return Err(PalwStateV2Error::CourtCloseGroupExpired { session: *session_id });
+            }
+            if *index >= group.count {
+                return Err(PalwStateV2Error::CourtCloseIndexOutOfRange { index: *index, count: group.count });
+            }
+            if group.has(*index) {
+                return Err(PalwStateV2Error::CourtCloseChunkDuplicate { session: *session_id, index: *index });
+            }
+            if bytes.is_empty() || bytes.len() > PALW_COURT_CLOSE_CHUNK_MAX_BYTES {
+                return Err(PalwStateV2Error::CourtCloseChunkTooLarge { bytes: bytes.len(), max: PALW_COURT_CLOSE_CHUNK_MAX_BYTES });
+            }
+            // **Refused at ARRIVAL, not at assembly.** The declaration already pinned this index's
+            // bytes, so a chunk is either the pinned preimage or it is nothing — strictly earlier
+            // than ADR-0075 D14, where a substituted part is only discovered at
+            // `ChunkGroupHashMismatch` after the table has carried it for the whole TTL.
+            if palw_court_close_chunk_digest_v1(bytes) != group.chunk_digests[*index as usize] {
+                return Err(PalwStateV2Error::CourtCloseChunkDigestMismatch { session: *session_id, index: *index });
+            }
+            group.present |= 1u64 << index;
+            group.chunks.insert(*index, bytes.clone());
+            builder.write_court_close_group((*session_id, *side), Some(group));
+            // **What does NOT happen here, named rather than implied.** The completing chunk does
+            // not assemble, decode, check `close_digest`, run `check_close_cost_v2` /
+            // `adjudicate_court_close_v2` or apply the `CourtClosed` state machine: that is W7,
+            // and it is the only reason this branch's `close_digest` and `verdict` are written and
+            // not yet read. A group that completes here therefore sits complete until its session
+            // ends, and the sweep below deliberately does NOT convict a declarer whose group is
+            // complete — the direction to be wrong in is the one that does not destroy collateral.
         }
         PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts } => {
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
@@ -8375,6 +8914,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             swap_write!(state.fp_certified_classes, key, old, new)
         }
         PalwDeltaEntryV2::PendingChunks { key, old, new } => swap_write!(state.pending_chunks, key, old, new),
+        PalwDeltaEntryV2::CourtCloseGroup { key, old, new } => swap_write!(state.court_close_groups, key, old, new),
         PalwDeltaEntryV2::DerivedArtifact { key, old, new } => swap_write!(state.derived_artifacts, key, old, new),
         // Launch blockers §8: the retired-claims accumulator. Its own entry rather than a third
         // component of `Weights`, because it moves on a different event (a retirement sweep) than
@@ -8540,6 +9080,12 @@ pub struct PalwStateCarriageV2 {
     pub fp_certified_families: BTreeMap<Hash64, PalwCertifiedFamilyStateV2>,
     pub fp_certified_classes: BTreeMap<Hash64, PalwClassLaneCertificationV2>,
     pub pending_chunks: BTreeMap<Hash64, PalwPendingChunksV2>,
+    /// **ADR-0080 design A: the declared closes, carried with their BYTES.**
+    ///
+    /// A pruned node that could not complete a group a declaration already pinned would compute
+    /// a different state root from an archival one at the completing block, which is the split
+    /// this snapshot exists to prevent — the same argument `pending_chunks` is carried under.
+    pub court_close_groups: BTreeMap<(Hash64, PalwCourtSideV1), PalwCourtCloseGroupV2>,
     /// ADR-0078 Decision 4: the derivation table, carried because the root hashes it.
     pub derived_artifacts: BTreeMap<crate::palw_derived_v1::PalwDerivedKeyV1, crate::palw_derived_v1::PalwDerivedRowV1>,
     pub panels: BTreeMap<Hash64, PalwPanelStateV2>,
@@ -8584,6 +9130,7 @@ impl PalwStateCarriageV2 {
             fp_certified_families: state.fp_certified_families.clone(),
             fp_certified_classes: state.fp_certified_classes.clone(),
             pending_chunks: state.pending_chunks.clone(),
+            court_close_groups: state.court_close_groups.clone(),
             derived_artifacts: state.derived_artifacts.clone(),
             panels: state.panels.clone(),
             court_sessions: state.court_sessions.clone(),
@@ -8656,6 +9203,7 @@ impl PalwStateCarriageV2 {
             fp_certified_families: self.fp_certified_families,
             fp_certified_classes: self.fp_certified_classes,
             pending_chunks: self.pending_chunks,
+            court_close_groups: self.court_close_groups,
             derived_artifacts: self.derived_artifacts,
             panels: self.panels,
             court_sessions: self.court_sessions,
@@ -14360,6 +14908,401 @@ pub(crate) mod tests {
         assert!(s4.pending_chunk_group(&group).is_none(), "the oldest group expired and was evicted to make room");
     }
 
+    // =============================================================================================
+    // ADR-0080 design A — the split close: the table, the objects, the version
+    // =============================================================================================
+
+    /// A licensed claim with an OPEN court whose challenger is a different bond from the executor.
+    ///
+    /// The other court fixtures open with `court_open(..., bond_key(1), bond_key(1))` — one bond
+    /// playing both sides — which is exactly the shape a side test cannot use: with one bond,
+    /// "the declarer's side lost" and "the other side lost" are the same sentence.
+    fn split_close_fixture() -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Hash64) {
+        let p = params();
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(2),
+            pubkey: vec![8; 4],
+            operator_pubkey: op_key(22),
+            collateral: 1_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A22),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        });
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &objects, None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+        let (s3, _) =
+            apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        let (s4, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
+        // Executor is bond 1 (the attempt's), challenger is bond 2.
+        let (s5, _) = apply(&s4, &p, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(2))], None);
+        let session_id = court_session_of(claim_id, h64(31), bond_key(1), bond_key(2));
+        assert_eq!(s5.court_sessions_for_claim(&claim_id), 1, "the fixture must actually open a court");
+        (p, s5, claim_id, session_id)
+    }
+
+    fn close_chunk_bytes(index: u8, count: u8) -> Vec<u8> {
+        vec![0xA0 + index; 100 + count as usize]
+    }
+
+    fn declare_close(session_id: Hash64, side: PalwCourtSideV1, count: u8) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::CourtCloseDeclared {
+            session_id,
+            side,
+            count,
+            chunk_digests: (0..count).map(|i| palw_court_close_chunk_digest_v1(&close_chunk_bytes(i, count))).collect(),
+            close_digest: h64(0xC105E),
+            verdict: PalwCourtVerdictV2::ExecutorGuilty,
+            signature: vec![1; 8],
+        }
+    }
+
+    fn close_chunk(session_id: Hash64, side: PalwCourtSideV1, index: u8, count: u8) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index, bytes: close_chunk_bytes(index, count) }
+    }
+
+    /// **The declaration's clock is the BACKSTOP, and the backstop never moves** (ADR-0080 §2.5).
+    ///
+    /// A close is legal only at `Terminal`, where `court_next_deadline_v2` returns
+    /// `session.deadline_daa` alone (audit M2-4: "Terminal has no move the responder can make").
+    /// So the assembly window has to fit inside the backstop or the declaration is a rung
+    /// suspended for nothing — and extending the backstop to make it fit would sell a free window
+    /// for the price of a declaration.
+    #[test]
+    fn a_declaration_that_cannot_assemble_inside_the_backstop_is_refused() {
+        let (p, s5, _claim_id, session_id) = split_close_fixture();
+        let backstop = s5.court_session(&session_id).expect("the session is open").deadline_daa;
+        assert_eq!(backstop, 104 + 500, "the fixture's backstop is opening + window_court");
+
+        // 2 chunks need 8 DAA. At `backstop - 4` that is one past the backstop.
+        let late = backstop - 4;
+        let err =
+            apply_palw_transition_v2(&s5, &p, &ctx(6, late, 6), &[declare_close(session_id, PalwCourtSideV1::Executor, 2)], None)
+                .expect_err("a declaration that cannot finish inside the backstop must be refused");
+        assert_eq!(
+            err,
+            PalwStateV2Error::CourtCloseCannotAssemble { session: session_id, count: 2, needed: late + 8, deadline: backstop },
+            "the refusal does not name the arithmetic that produced it"
+        );
+
+        // One chunk needs 4, which lands exactly ON the backstop — admitted, because the group's
+        // own deadline may equal it; what it may never do is exceed it.
+        let (s6, _) = apply(&s5, &p, &ctx(6, late, 6), &[declare_close(session_id, PalwCourtSideV1::Executor, 1)], None);
+        let group = s6.court_close_group(&session_id, PalwCourtSideV1::Executor).expect("the declaration wrote a row");
+        assert_eq!(group.assembly_deadline_daa, backstop);
+        assert_eq!(group.count, 1);
+        assert_eq!(group.present, 0, "a declaration carries no bytes");
+        assert_eq!(group.declarer, bond_key(1), "the executor's bond is the claim's, read from state and not from the object");
+        // **And the backstop did not move.** This is the whole reason the gate above exists.
+        assert_eq!(
+            s6.court_session(&session_id).expect("still open").deadline_daa,
+            backstop,
+            "a declaration extended the session's backstop"
+        );
+    }
+
+    /// One declaration per `(session, side)`, ever — what makes the interlock's single-assembly
+    /// term true and stops either party buying rung after rung of free window.
+    #[test]
+    fn a_side_may_declare_once_and_the_two_sides_are_separate_rows() {
+        let (p, s5, _claim_id, session_id) = split_close_fixture();
+        let (s6, _) = apply(&s5, &p, &ctx(6, 200, 6), &[declare_close(session_id, PalwCourtSideV1::Executor, 2)], None);
+        assert_eq!(
+            apply_palw_transition_v2(&s6, &p, &ctx(7, 201, 7), &[declare_close(session_id, PalwCourtSideV1::Executor, 2)], None)
+                .unwrap_err(),
+            PalwStateV2Error::DuplicateCourtCloseGroup { session: session_id }
+        );
+        // The other side is a different row, and it names the other bond.
+        let (s7, _) = apply(&s6, &p, &ctx(7, 201, 7), &[declare_close(session_id, PalwCourtSideV1::Challenger, 2)], None);
+        assert_eq!(s7.court_close_group(&session_id, PalwCourtSideV1::Challenger).unwrap().declarer, bond_key(2));
+        assert_eq!(s7.court_close_group(&session_id, PalwCourtSideV1::Executor).unwrap().declarer, bond_key(1));
+        assert_eq!(s7.court_close_groups_iter().count(), 2);
+    }
+
+    /// **A chunk is either the pinned preimage or it is nothing, and it is refused at ARRIVAL.**
+    /// Strictly earlier than ADR-0075 D14, where a substituted part is discovered only at
+    /// `ChunkGroupHashMismatch` after the table has carried it for the whole TTL.
+    #[test]
+    fn a_substituted_chunk_is_refused_by_the_block_that_carries_it() {
+        let (p, s5, _claim_id, session_id) = split_close_fixture();
+        let (s6, _) = apply(&s5, &p, &ctx(6, 200, 6), &[declare_close(session_id, PalwCourtSideV1::Executor, 3)], None);
+        let forged = PalwConsensusObjectV2::CourtCloseChunk {
+            session_id,
+            side: PalwCourtSideV1::Executor,
+            index: 1,
+            bytes: b"not what the declaration pinned".to_vec(),
+        };
+        assert_eq!(
+            apply_palw_transition_v2(&s6, &p, &ctx(7, 201, 7), &[forged], None).unwrap_err(),
+            PalwStateV2Error::CourtCloseChunkDigestMismatch { session: session_id, index: 1 }
+        );
+        // The honest one lands, and a second copy of it does not.
+        let (s7, _) = apply(&s6, &p, &ctx(7, 201, 7), &[close_chunk(session_id, PalwCourtSideV1::Executor, 1, 3)], None);
+        assert!(s7.court_close_group(&session_id, PalwCourtSideV1::Executor).unwrap().has(1));
+        assert_eq!(
+            apply_palw_transition_v2(&s7, &p, &ctx(8, 202, 8), &[close_chunk(session_id, PalwCourtSideV1::Executor, 1, 3)], None)
+                .unwrap_err(),
+            PalwStateV2Error::CourtCloseChunkDuplicate { session: session_id, index: 1 }
+        );
+        // And an index the declaration never named is not a chunk of this close.
+        assert_eq!(
+            apply_palw_transition_v2(&s7, &p, &ctx(8, 202, 8), &[close_chunk(session_id, PalwCourtSideV1::Executor, 3, 3)], None)
+                .unwrap_err(),
+            PalwStateV2Error::CourtCloseIndexOutOfRange { index: 3, count: 3 }
+        );
+    }
+
+    /// **The prompt's exact reorg case: the block carrying chunk 3 of 8 is reorged out.**
+    ///
+    /// The bit and the row revert BY THE DELTA ALONE — no special code, no new reorg surface —
+    /// which is the property that made D14's journalled table the right SHAPE to reuse even
+    /// though its table was the wrong home.
+    #[test]
+    fn a_reorg_of_the_block_carrying_chunk_three_of_eight_reverts_the_bit_by_the_delta_alone() {
+        let (p, s5, _claim_id, session_id) = split_close_fixture();
+        let (mut state, declare_delta) =
+            apply(&s5, &p, &ctx(6, 200, 6), &[declare_close(session_id, PalwCourtSideV1::Executor, 8)], None);
+        let after_declaration = state.clone();
+        for index in 0u8..3 {
+            let (next, _) = apply(
+                &state,
+                &p,
+                &ctx(7 + index as u64, 201 + index as u64, 7 + index as u64),
+                &[close_chunk(session_id, PalwCourtSideV1::Executor, index, 8)],
+                None,
+            );
+            state = next;
+        }
+        let before_chunk_three = state.clone();
+        let (with_three, chunk_three_delta) =
+            apply(&state, &p, &ctx(10, 204, 10), &[close_chunk(session_id, PalwCourtSideV1::Executor, 3, 8)], None);
+        let group = with_three.court_close_group(&session_id, PalwCourtSideV1::Executor).unwrap();
+        assert!(group.has(3) && group.present == 0b1111, "chunk 3 of 8 did not set its bit");
+        assert_eq!(group.chunks.len(), 4);
+
+        // Revert the block that carried it.
+        let reverted = revert_delta_v2(&with_three, &chunk_three_delta, &p).expect("the delta reverts");
+        assert_eq!(reverted.state_root(), before_chunk_three.state_root(), "the reorg did not restore the parent's root");
+        let group = reverted.court_close_group(&session_id, PalwCourtSideV1::Executor).unwrap();
+        assert!(!group.has(3) && group.present == 0b111, "the bit survived the reorg of the block that set it");
+        assert_eq!(group.chunks.len(), 3, "the bytes survived the reorg of the block that carried them");
+        assert_eq!(group.assembly_deadline_daa, 200 + 32, "the deadline is the declaration's and did not move with a chunk");
+        reverted.assert_internal_consistency(&p).expect("a reverted group is still a consistent state");
+
+        // And reverting the DECLARATION's own block takes the row, the deadline and all of it.
+        let back_to_five = revert_delta_v2(&after_declaration, &declare_delta, &p).expect("the declaration's delta reverts");
+        assert!(back_to_five.court_close_group(&session_id, PalwCourtSideV1::Executor).is_none());
+        assert_eq!(back_to_five.state_root(), s5.state_root());
+    }
+
+    /// **`assert_carriage_consistency` over a live group, and a pruning-point round trip that
+    /// COMPLETES it.**
+    ///
+    /// The bytes are in rooted state precisely so this holds: a pruned node that could not finish
+    /// a group an archival node can finish would compute a different state root at the completing
+    /// block, which is the split the carriage exists to prevent.
+    #[test]
+    fn a_pruning_point_carriage_round_trip_completes_the_group() {
+        let (p, s5, _claim_id, session_id) = split_close_fixture();
+        let (s6, _) = apply(&s5, &p, &ctx(6, 200, 6), &[declare_close(session_id, PalwCourtSideV1::Executor, 3)], None);
+        let (s7, _) = apply(&s6, &p, &ctx(7, 201, 7), &[close_chunk(session_id, PalwCourtSideV1::Executor, 0, 3)], None);
+        let (archival, _) = apply(&s7, &p, &ctx(8, 202, 8), &[close_chunk(session_id, PalwCourtSideV1::Executor, 1, 3)], None);
+
+        // The snapshot round-trips, root and all — which is what makes the group primary data.
+        let carriage = PalwStateCarriageV2::from_state(&archival);
+        assert_eq!(carriage.court_close_groups.len(), 1, "the group is not in the carriage, so a pruned node would not have it");
+        let pruned = carriage.clone().into_state(&p, Some(archival.state_root())).expect("the carriage loads against its own root");
+        assert_eq!(pruned.state_root(), archival.state_root());
+
+        // The completing chunk lands on BOTH and produces the same root.
+        let last = close_chunk(session_id, PalwCourtSideV1::Executor, 2, 3);
+        let (archival_done, _) = apply(&archival, &p, &ctx(9, 203, 9), std::slice::from_ref(&last), None);
+        let (pruned_done, _) = apply(&pruned, &p, &ctx(9, 203, 9), std::slice::from_ref(&last), None);
+        assert_eq!(pruned_done.state_root(), archival_done.state_root(), "a pruned node completed the group to a different root");
+        let group = pruned_done.court_close_group(&session_id, PalwCourtSideV1::Executor).unwrap();
+        assert!(group.is_complete(), "the group is not complete after its last index arrived");
+        assert_eq!(group.present, 0b111);
+
+        // A carriage whose bitmap and bytes disagree is refused when it is READ, not believed.
+        let mut tampered = carriage.clone();
+        tampered.court_close_groups.get_mut(&(session_id, PalwCourtSideV1::Executor)).unwrap().present = 0b111;
+        assert!(
+            tampered.into_state(&p, None).is_err(),
+            "a carriage claiming presence it does not hold was accepted — `present` and `chunks` must be one fact"
+        );
+        let mut tampered = carriage;
+        tampered.court_close_groups.get_mut(&(session_id, PalwCourtSideV1::Executor)).unwrap().chunks.insert(2, vec![0xFF; 8]);
+        assert!(tampered.into_state(&p, None).is_err(), "a carriage carrying bytes the declaration never pinned was accepted");
+    }
+
+    /// **A failed declaration loses on its OWN side** (ADR-0080 W8).
+    ///
+    /// At `Terminal` the only clock is the backstop, and the backstop closes CHALLENGER-side. So
+    /// an executor that declares a close and never assembles it would end the session against its
+    /// own prosecutor — the mechanism inverted into a weapon. It is convicted instead, and the
+    /// challenger's bond is untouched.
+    #[test]
+    fn a_declaring_executor_that_never_assembles_loses_on_its_own_side() {
+        let (p, s5, claim_id, session_id) = split_close_fixture();
+        let backstop = s5.court_session(&session_id).unwrap().deadline_daa;
+        let (declared, _) = apply(&s5, &p, &ctx(6, 200, 6), &[declare_close(session_id, PalwCourtSideV1::Executor, 8)], None);
+        let challenger_collateral = declared.bond(&bond_key(2)).unwrap().collateral;
+
+        // Nothing else happens; the backstop fires.
+        let (swept, _) = apply(&declared, &p, &ctx(7, backstop + 1, 7), &[], None);
+        assert!(swept.court_session(&session_id).is_none(), "the backstop did not close the session");
+        assert!(swept.court_close_group(&session_id, PalwCourtSideV1::Executor).is_none(), "the group outlived its session");
+        assert!(
+            matches!(
+                swept.claim(&claim_id).map(|c| &c.phase),
+                Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. })
+            ),
+            "a declaring executor that assembled nothing was not convicted: {:?}",
+            swept.claim(&claim_id).map(|c| c.phase.clone())
+        );
+        assert_eq!(
+            swept.bond(&bond_key(2)).unwrap().collateral,
+            challenger_collateral,
+            "the challenger paid for the executor's failed declaration"
+        );
+
+        // The control: the SAME sweep with no declaration is the challenger-side close that
+        // shipped — so the new direction is the declaration's, not the sweep's.
+        let (control, _) = apply(&s5, &p, &ctx(7, backstop + 1, 7), &[], None);
+        assert!(
+            !matches!(
+                control.claim(&claim_id).map(|c| &c.phase),
+                Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. })
+            ),
+            "the backstop convicts the executor even without a declaration — the fixture proves nothing"
+        );
+    }
+
+    /// A CHALLENGER's failed declaration is the unproven accusation it always was: the
+    /// challenger-side close, unchanged.
+    #[test]
+    fn a_declaring_challenger_that_never_assembles_still_loses_challenger_side() {
+        let (p, s5, claim_id, session_id) = split_close_fixture();
+        let backstop = s5.court_session(&session_id).unwrap().deadline_daa;
+        let (declared, _) = apply(&s5, &p, &ctx(6, 200, 6), &[declare_close(session_id, PalwCourtSideV1::Challenger, 8)], None);
+        let (swept, _) = apply(&declared, &p, &ctx(7, backstop + 1, 7), &[], None);
+        assert!(
+            !matches!(
+                swept.claim(&claim_id).map(|c| &c.phase),
+                Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. })
+            ),
+            "a challenger's failed declaration convicted the executor"
+        );
+        assert!(swept.court_close_group(&session_id, PalwCourtSideV1::Challenger).is_none());
+    }
+
+    /// A group is a row ABOUT a session, so it dies with it — at every one of the five sites a
+    /// session is removed, because the drop lives in `write_court` rather than at each of them.
+    #[test]
+    fn a_close_group_dies_with_the_claim_that_retires_under_it() {
+        let (p, s5, claim_id, session_id) = split_close_fixture();
+        let p = p.with_claim_retirement_daa(30).expect("retirement is representable");
+        let (declared, _) = apply(&s5, &p, &ctx(6, 200, 6), &[declare_close(session_id, PalwCourtSideV1::Executor, 4)], None);
+        assert_eq!(declared.court_close_groups_iter().count(), 1);
+        // Void the claim out from under the live session and let retirement sweep it.
+        let (voided, _) = apply(
+            &declared,
+            &p,
+            &ctx(7, 201, 7),
+            &[PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts: seat_says(false) }],
+            None,
+        );
+        let (retired, _) = apply(&voided, &p, &ctx(8, 240, 8), &[], None);
+        assert!(retired.claim(&claim_id).is_none(), "the fixture must actually retire the claim");
+        assert_eq!(retired.court_close_groups_iter().count(), 0, "the group outlived the session its key names");
+        retired.assert_internal_consistency(&p).expect("no orphan row is left behind");
+    }
+
+    /// **The per-block close cap counts what will actually be adjudicated** (ADR-0080 W9).
+    ///
+    /// `PALW_COURT_CLOSE_MAX_PER_BLOCK` is spent on the chunk that COMPLETES a group, and the
+    /// predicate the acceptance filter counts on has to answer exactly what the transition will
+    /// do — otherwise a chunk the transition refuses on its face burns the block's slot, which is
+    /// the hole a one-byte tail opened in the certification lane's identical cap.
+    #[test]
+    fn only_a_chunk_that_will_be_adjudicated_spends_the_blocks_close_slot() {
+        let (p, s5, _claim_id, session_id) = split_close_fixture();
+        assert_eq!(PALW_COURT_CLOSE_MAX_PER_BLOCK, 1, "the per-block close cap moved without this test being read");
+        let (s6, _) = apply(&s5, &p, &ctx(6, 200, 6), &[declare_close(session_id, PalwCourtSideV1::Executor, 3)], None);
+        let side = PalwCourtSideV1::Executor;
+        // Nothing completes a group that is missing two more parts.
+        assert!(!palw_court_close_completes_a_group_v1(&s6, &close_chunk(session_id, side, 0, 3)));
+        // A chunk for a group that does not exist completes nothing.
+        assert!(!palw_court_close_completes_a_group_v1(&s6, &close_chunk(session_id, PalwCourtSideV1::Challenger, 0, 3)));
+        let (s7, _) = apply(&s6, &p, &ctx(7, 201, 7), &[close_chunk(session_id, side, 0, 3)], None);
+        let (s8, _) = apply(&s7, &p, &ctx(8, 202, 8), &[close_chunk(session_id, side, 1, 3)], None);
+        // The last index does.
+        assert!(palw_court_close_completes_a_group_v1(&s8, &close_chunk(session_id, side, 2, 3)));
+        // And none of the things the transition refuses on their face do — each of these would
+        // otherwise have bought the block's only close slot for a few hundred bytes.
+        assert!(!palw_court_close_completes_a_group_v1(&s8, &close_chunk(session_id, side, 0, 3)), "a duplicate index");
+        assert!(!palw_court_close_completes_a_group_v1(&s8, &close_chunk(session_id, side, 7, 3)), "an index out of range");
+        assert!(
+            !palw_court_close_completes_a_group_v1(
+                &s8,
+                &PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index: 2, bytes: vec![0xFF] }
+            ),
+            "bytes the declaration never pinned"
+        );
+        assert!(
+            !palw_court_close_completes_a_group_v1(
+                &s8,
+                &PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index: 2, bytes: Vec::new() }
+            ),
+            "an empty chunk"
+        );
+    }
+
+    /// The structural bound is the ROW's, and it is asked here rather than trusted to the layer
+    /// that holds the ruleset: `present` is a `u64`, so a count it cannot address is not a count.
+    #[test]
+    fn the_declared_count_is_bounded_by_what_the_row_can_address() {
+        let (p, s5, _claim_id, session_id) = split_close_fixture();
+        for bad in [0u8, PALW_COURT_CLOSE_MAX_CHUNKS + 1] {
+            let object = declare_close(session_id, PalwCourtSideV1::Executor, bad);
+            assert_eq!(
+                apply_palw_transition_v2(&s5, &p, &ctx(6, 200, 6), &[object], None).unwrap_err(),
+                PalwStateV2Error::CourtCloseCountOutOfRange { count: bad, max: PALW_COURT_CLOSE_MAX_CHUNKS }
+            );
+        }
+        // A declaration whose digest list does not match its own count pins nothing.
+        let PalwConsensusObjectV2::CourtCloseDeclared { session_id: sid, side, count, close_digest, verdict, signature, .. } =
+            declare_close(session_id, PalwCourtSideV1::Executor, 3)
+        else {
+            unreachable!()
+        };
+        let short = PalwConsensusObjectV2::CourtCloseDeclared {
+            session_id: sid,
+            side,
+            count,
+            chunk_digests: vec![h64(1), h64(2)],
+            close_digest,
+            verdict,
+            signature,
+        };
+        assert_eq!(
+            apply_palw_transition_v2(&s5, &p, &ctx(6, 200, 6), &[short], None).unwrap_err(),
+            PalwStateV2Error::CourtCloseDigestsIncoherent { session: session_id }
+        );
+        assert_eq!(PALW_COURT_CLOSE_MAX_CHUNKS, 32, "the structural bound moved; the row's bitmap and this test must agree");
+        assert_eq!(palw_close_assembly_daa_v1(8), 32, "the assembly window is 4 DAA per declared chunk");
+    }
+
     /// **ADR-0075 SA-1/SA-2: the rent rate is the one `misaka palw submit-object` already pays.**
     ///
     /// [`palw_relay_fee_for_mass_v1`] mirrors `kaspa_pq_validator_core::relay_fee_for_compute_mass`
@@ -14736,6 +15679,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::CertifiedFamily { .. } => "certified_family",
                     PalwDeltaEntryV2::FpCertifiedClass { .. } => "fp_certified_class",
                     PalwDeltaEntryV2::PendingChunks { .. } => "pending_chunks",
+                    PalwDeltaEntryV2::CourtCloseGroup { .. } => "court_close_group",
                     PalwDeltaEntryV2::DerivedArtifact { .. } => "derived_artifact",
                 });
             }
@@ -14964,7 +15908,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&17u16.to_le_bytes()); // version_le(2) = 17, restated from the ADR (ADR-0078: the derivation table beside the claims)
+            s.update(&18u16.to_le_bytes()); // version_le(2) = 18, restated from the ADR (ADR-0080: the court's close-group table)
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -14990,6 +15934,7 @@ pub(crate) mod tests {
             s.update(spec_collection_root(b"fp_certified_families", &c.fp_certified_families).as_byte_slice());
             s.update(spec_collection_root(b"fp_certified_classes", &c.fp_certified_classes).as_byte_slice());
             s.update(spec_collection_root(b"pending_chunks", &c.pending_chunks).as_byte_slice());
+            s.update(spec_collection_root(b"court_close_groups", &c.court_close_groups).as_byte_slice());
             s.update(spec_collection_root(b"derived_artifacts", &c.derived_artifacts).as_byte_slice());
             s.update(spec_collection_root(b"panels", &c.panels).as_byte_slice());
             s.update(spec_collection_root(b"court_sessions", &c.court_sessions).as_byte_slice());
@@ -15160,6 +16105,24 @@ pub(crate) mod tests {
                 .unwrap(),
             },
         );
+        // ADR-0080 design A: a live close group on the session above — one chunk of two present,
+        // so the inhabited root covers a `chunks`/`present` pair that is neither empty nor full.
+        state.court_close_groups.insert(
+            (h64(0xD1), PalwCourtSideV1::Executor),
+            PalwCourtCloseGroupV2 {
+                declarer: bond_key(1),
+                count: 2,
+                chunk_digests: vec![palw_court_close_chunk_digest_v1(&[7u8; 16]), palw_court_close_chunk_digest_v1(&[8u8; 16])],
+                close_digest: h64(0xDC),
+                verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                declared_daa: 100,
+                assembly_deadline_daa: 108,
+                present: 0b01,
+                deposit_outpoint: TransactionOutpoint::default(),
+                deposit: 0,
+                chunks: [(0u8, vec![7u8; 16])].into_iter().collect(),
+            },
+        );
         state.epoch_counters.insert(h64(0xC1), PalwEpochCounterV2 { epoch_index: 3, produced_pwu: 15_800, produced_blocks: 1 });
         state
             .receipt_epoch_counters
@@ -15223,6 +16186,7 @@ pub(crate) mod tests {
             fp_certified_families: _,
             fp_certified_classes: _,
             pending_chunks: _,
+            court_close_groups: _,
             derived_artifacts: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
@@ -15262,6 +16226,10 @@ pub(crate) mod tests {
                         .unwrap()
                         .artifact_bytes += 1
                 }),
+            ),
+            (
+                "court_close_groups",
+                Box::new(|s| s.court_close_groups.get_mut(&(h64(0xD1), PalwCourtSideV1::Executor)).unwrap().declared_daa += 1),
             ),
             ("safe_weight", Box::new(|s| s.safe_weight += 1)),
             ("retired_safe_weight", Box::new(|s| s.retired_safe_weight += 1)),
@@ -15307,6 +16275,12 @@ pub(crate) mod tests {
     /// excluded from a panel draw, which is a validity rule as well as a schema, and both ride
     /// this number.
     ///
+    /// A sixth, for ADR-0080 design A: `PALW_STATE_V2_VERSION` 17 → 18 because the split close is
+    /// a new rooted collection (`court_close_groups`) and two new object variants. The empty root
+    /// moves for the version and for the collection's own empty line; the inhabited root moves for
+    /// both. **This is the ONE constant pair in this repo that a version bump is SUPPOSED to move**
+    /// — unlike a preset fingerprint, which is re-pinned once by the integrator at the cut.
+    ///
     /// A fourth, for the UNION 13 (bond economics + ADR-0060/0061, merged 2026-08-30): the
     /// bond-economics half DID change the schema — `PalwClaimStateV2` gained `rebound_daa`, so
     /// the inhabited root moves for the record shape as well as for the version; the liveness
@@ -15314,14 +16288,14 @@ pub(crate) mod tests {
     /// schema and rides the same number. The empty root moves for the version alone, which is
     /// exactly the pair of signals these two constants exist to separate.
     #[test]
-    fn the_version_17_state_root_golden_vectors() {
+    fn the_version_18_state_root_golden_vectors() {
         let empty = PalwChainStateV2::genesis().state_root().to_string();
         let full = m02_populated_state().state_root().to_string();
-        let want_empty = "afc6a8d11445a84a049b3f0c5cef648e4bb9dcc037883ff48d81cb1fe318aba273b7b91fb8455b6bb31c45789f0e03b9e86ff8b1e3dba778fd774cb31a862fdf";
-        let want_full = "b9cdaa3dcb154db9909f3df1e0e2b508b8a4130aea2483160ec878342fa1b78364e09496397884f989a0065fed12bbef8731544de28c66755afa18b78fdd05c2";
+        let want_empty = "506a0f756875af5063aa0f90a4b4be555d59e372d87fb86ce8dfbd2b9e2dfc21345b80e12667262f47935e2dd3a263d974cf3ecacde90b0f64da1a61e4b7de23";
+        let want_full = "3e2c706c5554bfd215daeebc4249b8335487150180326c89b9b4381af3abe44acfd5f44588d95f6f0427c622293de07c910356888e20b7162d4a81ba17f09158";
         assert!(
             empty == want_empty && full == want_full,
-            "a version-17 root moved: empty {empty} (want {want_empty}); inhabited {full} (want {want_full})"
+            "a version-18 root moved: empty {empty} (want {want_empty}); inhabited {full} (want {want_full})"
         );
     }
 

@@ -272,7 +272,10 @@ window, and Decision 2 adds rounds. A k-ary round discloses the `k` subtree root
 node — `log₂ k` binary levels at once, authenticated by hashing them back up — so
 `rounds = ⌈log₂ space / log₂ k⌉`, at `k × 64` bytes a move for the leaf space and
 `k × (4 + 8 + 8 × tile_len)` for the history (a max, a sum and `tile_len` partial sums per child).
-Worked at `k = 16`, the value the derivation below selects for the RC windows:
+Worked at `k = 16`, the band the ADR was drafted against; the derivation below selects the
+SMALLEST legal arity that fits, which at the RC windows is **4** (measured by U-03's pin:
+`2^32` in 16 rounds plus 131,072 positions in 7, `(2 × 23 + 2) × 45 = 2,160` DAA — sixteen is the
+band above it, and a smaller arity is a smaller move):
 
 | space | binary rounds | 16-ary rounds |
 |---|---|---|
@@ -312,9 +315,15 @@ per-checkpoint copy of the history exists to retain or to serve.
 **Decision 5 — the prompt ids ride as a Merkle root, armed with the first graph-v5 row.**
 ADR-0081 Decision 3 as implemented (`palw_prompt_ids_v1.rs`), no longer optional: at 131,072 ids the
 flat term is 524,288 bytes on EVERY close, and Decisions 1–4 leave it as the only context-linear
-term. The fence `palw_prompt_ids_merkle` is armed in the same ruleset move as the rows, every
-moved id is re-pinned and listed, and `PalwFpMaterialV1` keeps carrying the ids whole for the
-seats (ADR-0081 Y7).
+term of the PROMPT. The fence `palw_prompt_ids_merkle` is armed in the same ruleset move as the
+rows, every moved id is re-pinned and listed, and `PalwFpMaterialV1` keeps carrying the ids whole
+for the seats (ADR-0081 Y7). **Measured limit (U-04, Z0):** with the prompt ids Merkle-ized a
+graph-v5 dense close is flat only to about `n_ctx` 4,096; at 32,768 the binding node becomes the
+embedding gather, whose GENERATED-token ids (`decode × 4` bytes, the decode pin's flat id list)
+are a second linear term this decision does not anchor. It is linear in the ANSWER's length, not
+the prompt's, so "thousands of tokens" holds and "tens of thousands" does not until the output ids
+ride the same tiled Merkle idiom — one more fence, the symmetric half of ADR-0081 Decision 3,
+recorded in §8 as not decided here and not claimed.
 
 **Decision 6 — the close ceiling is re-derived from the FLAT terms, and the chunk arm is a
 prerequisite, not a hope.** With attention refuted by dissection, the widest term of a close is a
@@ -328,9 +337,18 @@ sets, because two of them are on the table: for the graph-v2/v3 context rows des
 for, the widest term is still the context-linear attention close, and the derivation returns
 design A's own numbers — **14** for `{floor, A16 dense 512}` (`ceil(1,154,673 × 1.2 / 100,000)`),
 **27** with the QWEN36-v3 512 row, 1 for the floor alone; for graph-v5 rows (Decisions 1–5) the
-widest term is a MODEL width and the derivation returns one to three carriers (dense one; the
-hybrid two to three, its recurrence's `interval × 5 refs` replay evidence being the widest flat
-term). Whatever it evaluates to, a row is admitted at a chunk count only when the transport
+widest term is a MODEL width and the derivation returns — measured by U-04's test
+`the_close_ceiling_is_the_derivation_over_the_genesis_set` at `n_ctx` 512 under the dissection
+court with Merkle prompt ids — **80,504 bytes = 1 chunk** on the dense tier (binding node
+`ffn_down`; 82,080 with flat ids) and **200,732 bytes = 3 chunks** on the hybrid (binding node the
+recurrence `GatedDeltaNet`: its `interval × 5 refs` replay evidence, not attention), the set → 3;
+the fused dispute's bottom opening is 25,120 bytes dense and 42,016 hybrid on the checkpoint-tile
+route (derived), 37,982 and 55,390 on the cache-write route (measured by borsh on the real object,
+34 rows with their paths), flat at 512 / 4,096 / 32,768. "Flat" as a measurement rather than an
+adjective (verified independently by a second session on a detached checkout): the dense graph-v5
+close is **80,504 bytes at `n_ctx` 512 and 80,696 at 4,096 — 192 bytes for eight times the
+context**; at 32,768 it is 303,640 with the binding node moved to `EmbedLookup` (Decision 5's
+measured limit). Whatever it evaluates to, a row is admitted at a chunk count only when the transport
 carries it — W5's own table (§1.4), never the certification lane's `pending_chunks` and its 8. The
 CODE CONDITION, not a schedule: until W5 is in the ruleset, `max_close_chunks` is ONE and the
 admission gate says so; an admitted row whose worst close no carrier can file is the 5f state §1.4
@@ -345,8 +363,15 @@ engine produces it (`Base0SparseStepAccumulatorV1`), retains the tree at
 `PALW_BASE0_SPARSE_RETAIN_LEVEL_V1` and throws every tile away; an opening asked for later is
 re-derived by replay from the checkpoint chunks (`fp_interval`). The executor's per-position cost
 becomes the forward pass plus the hashing of the rows it commits, and that ratio — not a context
-width — is the practical lane's first number: U-01 measures it on the same host and the same job
-that produced the 94× (§1.5), and the ADR records it. Under Decision 1 the rows to hash per
+width — is the practical lane's first number. **Measured (U-01, the real dense artifact, §1.5's own
+job of 26 prefill + 12 decode = 4,074,040 leaves, the host shared at load ~20):** the un-captured
+forward 0.2138 s a token; the dense capture 5.806 s a token (27.2×; 13.46 MB a position retained —
+§1.5's 5.66 reproduced at 5.81, so §1.5's 94× and this 27× are one measurement over a forward
+that was 3.5× slower here); **the fold 0.491 s a token — 2.3× the forward, 11.8× faster than the
+capture, 0.74 MB a position retained, 18.1× less.** What the fold leaves above the forward is
+0.82 µs a leaf, the hashing the step leg commits, as §4 predicted; nothing is attributable to
+tiles, allocation or I/O. Of what the fold retains, 73% is checkpoint chunks — the term Decision 4
+and Decision 9 remove. Under Decision 1 the rows to hash per
 position are the base count; the fold's retained set at `2^32` is 64 MiB, and a deeper ladder
 raises the retained level by the same derivation (`retain_level = ⌈log₂ leaves⌉ − 20` keeps it at
 64 MiB). What the executor RETAINS for the claim's life is the KV cache (Decision 4) and, for a
@@ -453,10 +478,14 @@ the dissection.
 * **Court moves.** `2 × (⌈log_k L⌉ + ⌈log_k (n / 16)⌉) + 2`: 26 at `k = 16`, `L = 2^32`,
   `n = 131,072`; 1,170 DAA at the 45-DAA deadline against 3,000. A dispute at 131,072 positions
   costs the court FEWER moves than a dispute at 512 costs it today.
-* **The bottom opening.** `4 × d_head` (the query slice) + `2 × 16 × 4 × d_head` (one K tile, one V
-  tile) + `4 × tile_len` (the output tile) + paths at the ladder's depth (`64 × 32` each, four of
-  them): ~25 KB on the dense tier (`d_head` 128), ~42 KB on the hybrid (`d_head` 256). Inside one
-  carrier at every context.
+* **The bottom opening.** `4 × d_head` (the query slice) + `2 × 16 × 4 × kv_dim` (one K tile, one V
+  tile — a checkpoint chunk holds the whole cache ROW, `attn_kv_heads × attn_head_dim`, because the
+  map addresses `(kind, layer, position)` and not the head; the ADR's first draft priced one head's
+  slice, which under-bounds the object by `kv_heads`) + `4 × tile_len` (the output tile) + paths at
+  the ladder's depth. Measured on the real objects (U-03, borsh, `kv_heads` 1, 64-position history):
+  the checkpoint route 19,027 bytes at `d_head` 128 and 36,435 at 256; the cache-write route
+  (one leaf per row, for the rows after the last checkpoint) 37,985 and 55,393. Inside one carrier
+  at every context on both routes; the derivation prices the larger.
 * **Executor time.** The forward pass plus hashing the base leaf count — `~1.3 × 10¹⁰` leaf hashes
   for a 131,072-position dense job, the same order as the forward's own work. U-01 gives the ratio.
 * **Executor retention.** The KV cache for the claim's life (`claim_retirement`, 3,000 DAA on the

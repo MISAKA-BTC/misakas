@@ -19,6 +19,18 @@
 //! chunks when an opening is asked for (`fp_interval`), which is the whole point of the checkpoint
 //! leg existing.
 //!
+//! # U-01, measured — what the fold costs against what the forward costs (ADR-0082 Decision 7)
+//!
+//! One job of ADR-0082 §1.5's own shape on the real dense artifact (`qwen25-1.5b-a16.palwart`,
+//! prefill 26, decode 12, 4,074,040 leaves, 37 forward calls), three phases in one process on one
+//! host: **forward 0.0693 s/position (no capture) · dense capture 1.8831 s/position, 27.2x, 498 MB
+//! retained · the fold 0.1592 s/position, 2.3x, 27.5 MB retained** — the fold is 11.8x faster than
+//! the capture it replaces and retains 18.1x less, and what is left above the forward is the
+//! 0.82 us/leaf of hashing the commitment itself requires. (The host was shared, load ~20; the
+//! captured figure reproduces §1.5's 5.66 s/token at 5.81, so §1.5's 94x and this 27.2x are the
+//! same measurement over a forward that is 3.5x slower here.) Reproduce with
+//! `MISAKA_PALW_U01_ARTIFACT=<artifact> cargo test --release -p misaka-palw-base0 --lib -- u01 --nocapture`.
+//!
 //! # The one property this module owes
 //!
 //! **The accumulator's root is `step_merkle_root_v1`'s root, for every leaf count.** The step tree
@@ -102,6 +114,39 @@ pub enum Base0SparseCaptureError {
         got: usize,
         max: usize,
     },
+    /// **The fold was handed a call it was not expecting.** A cursor is only the canonical index
+    /// while the terms arrive in the canonical order; the dense capture could take them in any
+    /// order because it addressed every leaf, and this cannot.
+    CallOutOfOrder {
+        expected: (u32, u32),
+        got: (u32, u32),
+    },
+    /// A captured row whose `(table, layer, index)` is not a slot of the class's graph.
+    RowIsNotThisGraphs {
+        layer: u16,
+        index: usize,
+    },
+    /// Two rows for one global slot — one execution, two answers about the same node.
+    TwoRowsForOneSlot,
+    /// The position's enumeration reaches a slot the caller supplied no row for. The dense
+    /// capture's own refusal is the short capture its `finish` rejects, one call later.
+    MissingRowForSlot {
+        slot: u32,
+    },
+    /// A row for a slot this position does not have — a post row where no token is selected, or a
+    /// slot past the graph. `NotACanonicalCoordinate` on the dense path.
+    RowForASlotThePositionDoesNotHave {
+        slot: u32,
+    },
+    /// A row whose width is not the one its node's `out_len` implies at this position's `kv_len`.
+    /// The dense capture places such a row's overflow tiles at coordinates
+    /// `canonical_step_leaf_index` refuses; the fold has no coordinate to refuse, so it compares
+    /// the width itself.
+    RowIsNotTheGraphsWidth {
+        slot: u32,
+        got: u64,
+        tiles: u64,
+    },
     /// A deserialized tree whose retained vector is not the width its own `(leaf_count,
     /// retain_level)` implies. It describes no tree, so it has no root — and saying so is the
     /// difference between a refusal and an index past the end of a vector.
@@ -133,6 +178,24 @@ impl std::fmt::Display for Base0SparseCaptureError {
             }
             Self::OpeningTooDeep { got, max } => {
                 write!(f, "the range opening would carry {got} siblings, past the leg's cap of {max}")
+            }
+            Self::CallOutOfOrder { expected, got } => write!(
+                f,
+                "the fold expected call {} position {} and was handed call {} position {}",
+                expected.0, expected.1, got.0, got.1
+            ),
+            Self::RowIsNotThisGraphs { layer, index } => {
+                write!(f, "a captured row at layer {layer} index {index} is not a slot of this class's graph")
+            }
+            Self::TwoRowsForOneSlot => write!(f, "two captured rows name one global node slot"),
+            Self::MissingRowForSlot { slot } => {
+                write!(f, "this position's enumeration reaches slot {slot} and no row was captured for it")
+            }
+            Self::RowForASlotThePositionDoesNotHave { slot } => {
+                write!(f, "a row was captured for slot {slot}, which this position's enumeration does not reach")
+            }
+            Self::RowIsNotTheGraphsWidth { slot, got, tiles } => {
+                write!(f, "slot {slot} committed {got} values, which is not the {tiles} tile(s) its declared width implies")
             }
             Self::TreeIsNotItsOwnShape { retained, expected } => {
                 write!(f, "the retained vector holds {retained} nodes and this tree's shape implies {expected}")
@@ -200,8 +263,16 @@ pub struct Base0SparseStepAccumulatorV1 {
 
 impl Base0SparseStepAccumulatorV1 {
     pub fn new(leaf_count: u64, retain_level: u32) -> Result<Self, Base0SparseCaptureError> {
-        if leaf_count == 0 || leaf_count > PALW_STEP_LEG_MAX_LEAVES {
-            return Err(Base0SparseCaptureError::LeafCountOutOfRange { got: leaf_count, max: PALW_STEP_LEG_MAX_LEAVES });
+        Self::new_capped_v1(leaf_count, retain_level, PALW_STEP_LEG_MAX_LEAVES)
+    }
+
+    /// **The same fold against the ladder top the RULESET froze** — W1b's threading
+    /// (`bb4f145b`) applied to the retention side. The leg's own constant is a DEFAULT, and a job
+    /// priced against a deeper ruleset must be foldable or the executor commits a leg it cannot
+    /// retain. A caller with no ruleset in scope passes the default and nothing moves.
+    pub fn new_capped_v1(leaf_count: u64, retain_level: u32, max_step_leaf_count: u64) -> Result<Self, Base0SparseCaptureError> {
+        if leaf_count == 0 || leaf_count > max_step_leaf_count {
+            return Err(Base0SparseCaptureError::LeafCountOutOfRange { got: leaf_count, max: max_step_leaf_count });
         }
         if retain_level > PALW_BASE0_SPARSE_MAX_RETAIN_LEVEL_V1 {
             return Err(Base0SparseCaptureError::RetainLevelOutOfRange {
@@ -283,7 +354,17 @@ impl Base0SparseStepTreeV1 {
     /// leaves — the retention file as it is written today, and the tests — and it goes through the
     /// same accumulator so the two cannot be two rules.
     pub fn from_leaves_v1(leaves: &[Hash64], retain_level: u32) -> Result<Self, Base0SparseCaptureError> {
-        let mut acc = Base0SparseStepAccumulatorV1::new(leaves.len() as u64, retain_level)?;
+        Self::from_leaves_capped_v1(leaves, retain_level, PALW_STEP_LEG_MAX_LEAVES)
+    }
+
+    /// [`Self::from_leaves_v1`] against the ruleset's ladder — the same threading, for the same
+    /// reason ([`Base0SparseStepAccumulatorV1::new_capped_v1`]).
+    pub fn from_leaves_capped_v1(
+        leaves: &[Hash64],
+        retain_level: u32,
+        max_step_leaf_count: u64,
+    ) -> Result<Self, Base0SparseCaptureError> {
+        let mut acc = Base0SparseStepAccumulatorV1::new_capped_v1(leaves.len() as u64, retain_level, max_step_leaf_count)?;
         for leaf in leaves {
             acc.push(*leaf)?;
         }
@@ -299,7 +380,14 @@ impl Base0SparseStepTreeV1 {
     /// answer, it is an index past the end. Checked once, by name, and every derivation goes
     /// through it.
     pub fn validate_v1(&self) -> Result<(), Base0SparseCaptureError> {
-        if self.leaf_count == 0 || self.leaf_count > PALW_STEP_LEG_MAX_LEAVES {
+        // **No ladder bound here, deliberately.** The bound on the accumulator's `leaf_count` is
+        // an ALLOCATION guard — the dense forms size a `Hash64` vector from the field, and a
+        // stranger's blob asking for `2^48` leaves is a process abort. Nothing in this type is
+        // sized from `leaf_count`: the retained vector's width is checked against it below, the
+        // level walks are `O(64)`, and every leaf-hash slice an opening reads is the caller's own.
+        // Bounding it here by the leg's DEFAULT ladder would refuse a tree a deeper ruleset made
+        // legal, which is the w1b defect in the retention path.
+        if self.leaf_count == 0 {
             return Err(Base0SparseCaptureError::LeafCountOutOfRange { got: self.leaf_count, max: PALW_STEP_LEG_MAX_LEAVES });
         }
         if self.retain_level > PALW_BASE0_SPARSE_MAX_RETAIN_LEVEL_V1 {
@@ -521,6 +609,239 @@ fn level_width(leaf_count: u64, level: u32) -> u64 {
         }
     }
     width.max(1)
+}
+
+// =============================================================================================
+// The retained level, derived from the ruleset's ladder
+// =============================================================================================
+
+/// **What the retained set is allowed to weigh: 64 MiB, at any ladder** (ADR-0082 Decision 7).
+///
+/// The budget is the quantity the level is derived FROM; the level is not a number anyone types.
+pub const PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES: u64 = 64 << 20;
+
+/// `⌈log₂(budget / node bytes)⌉` — how many retained nodes the budget buys, as a level. A
+/// `Hash64` is 64 bytes, so 64 MiB is `2^20` of them.
+const fn sparse_retained_nodes_log2_v1() -> u32 {
+    (PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES / 64).trailing_zeros()
+}
+
+/// **The retained level a ladder of `max_step_leaf_count` leaves implies**:
+/// `retain_level = ⌈log₂ leaves⌉ − log₂(budget / 64)` — ADR-0082 Decision 7's own rule, which is
+/// the smallest level whose retained vector fits [`PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES`].
+///
+/// The argument is the RULESET's `PalwCourtParamsV2::max_step_leaf_count`, which is what the
+/// executor has priced its job against since W1b (`bb4f145b`) — never a constant here. At the
+/// `2^32` ladder ADR-0077 Decision 12 moves to it returns 12, which is what
+/// [`PALW_BASE0_SPARSE_RETAIN_LEVEL_V1`] is; at any deeper ladder it returns more, and the
+/// retained set does not grow past the budget.
+pub fn palw_base0_sparse_retain_level_for_ladder_v1(max_step_leaf_count: u64) -> u32 {
+    let ladder_level = max_step_leaf_count.next_power_of_two().trailing_zeros();
+    ladder_level.saturating_sub(sparse_retained_nodes_log2_v1())
+}
+
+/// **The level a capture folds at, for a ruleset whose ladder is `max_step_leaf_count`.**
+///
+/// The ladder's own derivation, floored at [`PALW_BASE0_SPARSE_RETAIN_LEVEL_V1`]. The floor is not
+/// a second rule about bytes — a level BELOW it retains more nodes, and it buys nothing, because
+/// the thing an opening re-derives is a whole CALL of the enumeration (~99 k leaves on the dense
+/// tier, ~298 k on the hybrid) and every level below `2^12` is already far inside one call. So
+/// under the shipped `2^22` ladder a claim's retained tree is 64 KiB rather than the 64 MiB the
+/// budget would allow, and at `2^32` the two rules agree on 12.
+pub fn palw_base0_sparse_retain_level_v1(max_step_leaf_count: u64) -> u32 {
+    palw_base0_sparse_retain_level_for_ladder_v1(max_step_leaf_count).max(PALW_BASE0_SPARSE_RETAIN_LEVEL_V1)
+}
+
+// =============================================================================================
+// The capture: a job's rows folded as they are produced
+// =============================================================================================
+
+/// The number of leaves one node of the graph commits at a position whose cache holds `kv_len`
+/// rows — `tiles_for(node_out_len(node, kv_len), node.tile_len)`, which `palw_step` keeps private
+/// to its own enumeration.
+///
+/// Restating it here is a second spelling of a consensus rule, and the way it is kept honest is
+/// the way the fold itself is: `the_fold_places_every_leaf_where_the_canonical_enumeration_does`
+/// compares this capture's whole index→hash map against the dense one's, which is built out of
+/// `canonical_step_leaf_index` and nothing else. A drift in either direction fails there rather
+/// than at a producer nobody can pay.
+fn node_leaf_count_v1(node: &kaspa_consensus_core::palw_step::PalwStepNodeV1, kv_len: u64) -> u64 {
+    use kaspa_consensus_core::palw_step::PalwStepOutLenV1;
+    let elements = match node.out_len {
+        PalwStepOutLenV1::Fixed { elements } => elements as u64,
+        PalwStepOutLenV1::KvScaled { multiplier } => multiplier as u64 * kv_len,
+    };
+    if node.tile_len == 0 { 0 } else { elements.div_ceil(node.tile_len as u64) }
+}
+
+/// **The free-prompt capture: every leaf hashed the moment the engine produces it, folded, and
+/// thrown away** (ADR-0082 Decision 7).
+///
+/// The dense twin ([`crate::legs::Base0StepCaptureV1`]) holds a `Hash64` for every leaf of the
+/// step space AND a `PalwStepTileLeafV1` — the tile's own bytes — for every one of them: ~50 MB a
+/// position on the dense tier, and it asks `canonical_step_leaf_index` where each of the ~110 k
+/// tiles of a position goes, a walk that is itself linear in the calls already captured. This
+/// holds one retained node per `2^retain_level` leaves and walks the enumeration ONCE per
+/// position, as a cursor: the canonical order is call-major, position-major, slot-major,
+/// tile-major, so the leaf a row's tile lands on is the one after the leaf before it.
+///
+/// **What it therefore requires of its caller, and refuses by name when it does not get it:**
+/// calls in ascending order from 0, positions in ascending order from 0 inside the prefill call,
+/// and every row of the position the class's graph declares — no more, no fewer, each the width
+/// its node's `out_len` implies at that position's `kv_len`. The dense capture could take rows in
+/// any order because it addressed every leaf; this one is a fold, and a fold cannot be given its
+/// terms out of order. Every one of those refusals is a case the dense capture also refused (as
+/// `NotACanonicalCoordinate`, or as the short capture its `finish` rejects) — the fold names them
+/// where they happen instead.
+pub struct Base0SparseStepCaptureV1 {
+    ctx_hash: Hash64,
+    profile_hash: Hash64,
+    prefill: u32,
+    decode_calls: u32,
+    acc: Base0SparseStepAccumulatorV1,
+    /// The next canonical leaf index the fold expects — the cursor that replaces a lookup per tile.
+    cursor: u64,
+    next_call: u32,
+    next_position: u32,
+}
+
+impl Base0SparseStepCaptureV1 {
+    /// `leaf_count` is the class's own step-leaf count for this job, priced against the ruleset's
+    /// ladder (`step_leaf_count_capped_v1`); `retain_level` is
+    /// [`palw_base0_sparse_retain_level_v1`] of that same ladder.
+    pub fn new(
+        profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        ctx: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        leaf_count: u64,
+        retain_level: u32,
+    ) -> Result<Self, Base0SparseCaptureError> {
+        Self::new_capped_v1(profile, ctx, leaf_count, retain_level, PALW_STEP_LEG_MAX_LEAVES)
+    }
+
+    /// The same capture against the ruleset's ladder.
+    pub fn new_capped_v1(
+        profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        ctx: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        leaf_count: u64,
+        retain_level: u32,
+        max_step_leaf_count: u64,
+    ) -> Result<Self, Base0SparseCaptureError> {
+        Ok(Self {
+            ctx_hash: ctx.context_hash(),
+            profile_hash: profile.shape_profile_id(),
+            prefill: ctx.declared_prefill_tokens,
+            decode_calls: ctx.exact_decode_tokens.saturating_sub(1),
+            acc: Base0SparseStepAccumulatorV1::new_capped_v1(leaf_count, retain_level, max_step_leaf_count)?,
+            cursor: 0,
+            next_call: 0,
+            next_position: 0,
+        })
+    }
+
+    /// How much of the step space this capture has folded — the sparse twin of
+    /// [`crate::legs::Base0StepCaptureV1::progress`].
+    pub fn progress(&self) -> (u64, u64) {
+        self.acc.progress()
+    }
+
+    /// **One forward call's committed rows, folded in canonical order.**
+    ///
+    /// `rows` are the family's own flattening ([`crate::legs::a16_captured_rows_v1`] and its two
+    /// siblings); they may arrive in any order within the call, because the slot walk below places
+    /// them, but the SET must be the position's own.
+    pub fn push_call(
+        &mut self,
+        profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        call_index: u32,
+        position: u32,
+        rows: &[crate::legs::Base0CapturedRowV1],
+    ) -> Result<(), Base0SparseCaptureError> {
+        use kaspa_consensus_core::palw_step::PalwStepCoordinateV1;
+        use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1};
+        if call_index != self.next_call || position != self.next_position {
+            return Err(Base0SparseCaptureError::CallOutOfOrder {
+                expected: (self.next_call, self.next_position),
+                got: (call_index, position),
+            });
+        }
+        // The enumeration's own two facts about a position (`canonical_step_leaf_index`): what the
+        // cache holds when it runs, and whether the logits table exists at it.
+        let (kv_len, with_logits) = if call_index == 0 {
+            (position as u64 + 1, position + 1 == self.prefill)
+        } else {
+            (self.prefill as u64 + call_index as u64, true)
+        };
+
+        // Rows by global slot: one `global_node_slot` per ROW, never one per tile.
+        let slot_count = profile.global_node_count();
+        let first_post_slot = slot_count.saturating_sub(profile.post_nodes.len() as u32);
+        let mut by_slot: Vec<(u32, usize)> = Vec::with_capacity(rows.len());
+        for (at, row) in rows.iter().enumerate() {
+            let slot = profile
+                .global_node_slot(row.table, row.layer, row.index)
+                .ok_or(Base0SparseCaptureError::RowIsNotThisGraphs { layer: row.layer, index: row.index })?;
+            by_slot.push((slot, at));
+        }
+        by_slot.sort_unstable_by_key(|(slot, _)| *slot);
+        if by_slot.windows(2).any(|w| w[0].0 == w[1].0) {
+            return Err(Base0SparseCaptureError::TwoRowsForOneSlot);
+        }
+
+        // The position's slots, in the order the enumeration walks them, against the rows in hand.
+        let mut supplied = by_slot.iter().peekable();
+        for slot in 0..slot_count {
+            if slot >= first_post_slot && !with_logits {
+                continue; // post nodes do not exist at a position that selects no token
+            }
+            let (node, _) = profile.resolve_node_slot(slot).ok_or(Base0SparseCaptureError::MissingRowForSlot { slot })?;
+            let expected = node_leaf_count_v1(node, kv_len);
+            let Some((_, at)) = supplied.next_if(|(s, _)| *s == slot).copied() else {
+                return Err(Base0SparseCaptureError::MissingRowForSlot { slot });
+            };
+            let row = &rows[at];
+            let tile_len = node.tile_len as usize;
+            if tile_len == 0 || row.row.len().div_ceil(tile_len) as u64 != expected {
+                return Err(Base0SparseCaptureError::RowIsNotTheGraphsWidth { slot, got: row.row.len() as u64, tiles: expected });
+            }
+            for (tile_index, chunk) in row.row.chunks(tile_len).enumerate() {
+                let leaf = PalwStepTileLeafV1 {
+                    version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                    coord: PalwStepCoordinateV1 { call_index, node_slot: slot, position, tile_index: tile_index as u32 },
+                    value_count: chunk.len() as u32,
+                    values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
+                };
+                self.acc.push(kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(
+                    &self.ctx_hash,
+                    &self.profile_hash,
+                    &leaf,
+                ))?;
+                self.cursor += 1;
+            }
+        }
+        // A row for a slot the walk did not reach — a post row at a non-selecting position, or a
+        // slot past the graph — is a row about a different execution.
+        if let Some((slot, _)) = supplied.next() {
+            return Err(Base0SparseCaptureError::RowForASlotThePositionDoesNotHave { slot: *slot });
+        }
+
+        if call_index == 0 && position + 1 < self.prefill {
+            self.next_position = position + 1;
+        } else {
+            self.next_call = call_index + 1;
+            self.next_position = 0;
+        }
+        Ok(())
+    }
+
+    /// Seal the fold: the retained tree, and nothing else. A short capture is refused for the
+    /// reason [`crate::legs::Base0StepCaptureV1::finish`] refuses one — a commitment over a
+    /// partial space says "computed zero" about every leaf nobody filled.
+    pub fn finish(self) -> Result<Base0SparseStepTreeV1, Base0SparseCaptureError> {
+        if self.next_call <= self.decode_calls {
+            return Err(Base0SparseCaptureError::CaptureIncomplete { pushed: self.cursor, expected: self.acc.progress().1 });
+        }
+        self.acc.finish()
+    }
 }
 
 // =============================================================================================
@@ -1595,5 +1916,289 @@ mod tests {
                 "{map}: the anchored form costs the positions since the checkpoint"
             );
         }
+    }
+
+    /// **The retained level is the ladder's, and the budget is what derives it** (ADR-0082
+    /// Decision 7's `retain_level = ⌈log₂ leaves⌉ − 20`).
+    ///
+    /// Two things are pinned, and the shipped constant is the SECOND of them rather than an
+    /// independent number: that the level the derivation returns is the smallest one whose
+    /// retained vector fits [`PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES`] — one lower would exceed it
+    /// — and that at the `2^32` ladder ADR-0077 Decision 12 moves to, that level is
+    /// [`PALW_BASE0_SPARSE_RETAIN_LEVEL_V1`].
+    #[test]
+    fn the_retained_level_is_the_ladders_and_the_budget_is_what_bounds_it() {
+        let node_bytes = 64u64;
+        for ladder_log2 in 10..=48u32 {
+            let ladder = 1u64 << ladder_log2;
+            let level = palw_base0_sparse_retain_level_for_ladder_v1(ladder);
+            let retained = |level: u32| -> u64 { ladder.div_ceil(1u64 << level) * node_bytes };
+            assert!(
+                retained(level) <= PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES,
+                "a 2^{ladder_log2} ladder retains {} bytes at level {level}, past the budget",
+                retained(level)
+            );
+            if level > 0 {
+                assert!(
+                    retained(level - 1) > PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES,
+                    "level {level} is not the smallest that fits at 2^{ladder_log2}"
+                );
+            }
+        }
+        assert_eq!(
+            palw_base0_sparse_retain_level_for_ladder_v1(1 << 32),
+            PALW_BASE0_SPARSE_RETAIN_LEVEL_V1,
+            "the shipped constant is what the 2^32 ladder derives to — 2^20 retained nodes, 64 MiB"
+        );
+        // And the level a capture actually folds at never goes below it, because an opening
+        // re-derives a whole CALL and every level under 2^12 is already inside one.
+        assert_eq!(palw_base0_sparse_retain_level_v1(PALW_STEP_LEG_MAX_LEAVES), PALW_BASE0_SPARSE_RETAIN_LEVEL_V1);
+        assert_eq!(palw_base0_sparse_retain_level_v1(1 << 40), palw_base0_sparse_retain_level_for_ladder_v1(1 << 40));
+    }
+
+    // =========================================================================================
+    // U-01 — the capture, measured against the forward (ADR-0082 Decision 7)
+    // =========================================================================================
+
+    /// The largest `exact_decode_tokens` this profile's job of `prefill` tokens fits under `cap`.
+    /// The width the registered row ALLOWS, derived rather than typed: the same
+    /// `step_leaf_count_capped_v1` the executor prices with.
+    fn u01_decode_budget(profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3, prefill: u32, cap: u64) -> (u32, u64) {
+        let price = |decode: u32| -> Option<u64> {
+            let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, prefill, decode);
+            kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, &ctx, cap).ok()
+        };
+        let mut best = (0u32, 0u64);
+        let mut decode = 1u32;
+        while let Some(leaves) = price(decode) {
+            best = (decode, leaves);
+            decode += 1;
+            if decode > 100_000 {
+                break;
+            }
+        }
+        best
+    }
+
+    /// Peak RSS of this process while a phase runs, in bytes — sampled with `ps`, which is the
+    /// one number available on this host without a new dependency. `0` when `ps` cannot answer.
+    struct U01Rss {
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        peak: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl U01Rss {
+        fn start() -> Self {
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let peak = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let (s, p) = (stop.clone(), peak.clone());
+            let pid = std::process::id().to_string();
+            let handle = std::thread::spawn(move || {
+                while !s.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Ok(out) = std::process::Command::new("ps").args(["-o", "rss=", "-p", &pid]).output() {
+                        if let Ok(kb) = String::from_utf8_lossy(&out.stdout).trim().parse::<u64>() {
+                            p.fetch_max(kb * 1024, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            });
+            Self { stop, peak, handle: Some(handle) }
+        }
+
+        fn finish(mut self) -> u64 {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(h) = self.handle.take() {
+                let _ = h.join();
+            }
+            self.peak.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    /// **U-01: what the capture costs, against what the forward costs** (ADR-0082 §1.5, Decision 7).
+    ///
+    /// Off unless `MISAKA_PALW_U01_ARTIFACT` names a converted dense artifact: 1.7 GiB of weights
+    /// and a minute of arithmetic are not a unit test's inputs, and a measurement that ran on
+    /// derived toy weights would be a number about nothing. Run it as
+    ///
+    /// ```text
+    /// MISAKA_PALW_U01_ARTIFACT=/path/qwen25-1.5b-a16.palwart \
+    ///   cargo test --release -p misaka-palw-base0 --lib -- u01_the_capture --nocapture
+    /// ```
+    ///
+    /// The job is the §1.5 one: the registered dense row, a 26-token prefill and the decode the
+    /// ruleset's ladder allows. Three phases, one process, one artifact: the engine's own forward
+    /// with nothing captured, then the shipped capture path, then whatever the executor's capture
+    /// costs after Decision 7.
+    #[test]
+    fn u01_the_capture_is_priced_against_the_forward() {
+        use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
+
+        let Ok(path) = std::env::var("MISAKA_PALW_U01_ARTIFACT") else {
+            eprintln!("U-01: skipped — set MISAKA_PALW_U01_ARTIFACT to the dense .palwart to measure");
+            return;
+        };
+        let prefill: u32 = std::env::var("MISAKA_PALW_U01_PREFILL").ok().and_then(|v| v.parse().ok()).unwrap_or(26);
+
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let artifact = crate::artifact::decode_artifact_file_v1(&bytes).unwrap_or_else(|e| panic!("{path}: {e}"));
+        drop(bytes);
+        let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court");
+        let entry = crate::classes::canonical_class_by_model_id_v1(&court, "Qwen/Qwen2.5-1.5B/graph-v2")
+            .expect("this build's catalog has the dense row");
+        let profile = entry.profile.clone();
+        let (mut decode, mut leaves) = u01_decode_budget(&profile, prefill, court.max_step_leaf_count());
+        assert!(decode >= 2, "a {prefill}-token prefill leaves no decode budget under this ladder");
+        // **A shorter job than the ladder allows**, for the one phase that cannot be run at full
+        // size on a shared host: the DENSE capture holds ~50 MB a position and its borsh encoding
+        // holds it again, so the §1.5 job is ~5 GB above the artifact. The fold has no such
+        // ceiling, which is the point — so the fold is measured at the full job and the dense
+        // capture at whatever this host can hold, with the difference stated rather than hidden.
+        if let Some(asked) = std::env::var("MISAKA_PALW_U01_DECODE").ok().and_then(|v| v.parse::<u32>().ok()) {
+            assert!(asked >= 2 && asked <= decode, "the ladder admits 2..={decode} decode tokens at this prefill");
+            decode = asked;
+            leaves = {
+                let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prefill, decode);
+                kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &ctx, court.max_step_leaf_count())
+                    .expect("a shorter job is inside the ladder its longer form fit")
+            };
+        }
+        let positions = prefill as u64 + decode as u64 - 1;
+        eprintln!(
+            "U-01 job: prefill {prefill}, decode {decode}, {leaves} leaves of {} ladder, {positions} forward calls",
+            court.max_step_leaf_count()
+        );
+
+        // Deterministic in-vocabulary ids. The measurement is of arithmetic whose cost does not
+        // depend on WHICH ids they are, and a tokenizer here would only add a file to the recipe.
+        let vocab = artifact.shape.vocab;
+        let prompt: Vec<usize> = (0..prefill as usize).map(|i| (i * 7919 + 1013) % vocab).collect();
+
+        // ---- phase A: the engine's forward, nothing captured -------------------------------
+        let rss = U01Rss::start();
+        let started = std::time::Instant::now();
+        {
+            let engine = crate::engine_a16::A16Engine::new(&artifact).expect("the artifact is an A16 class");
+            let mut cache = crate::engine_a16::A16Cache::new(artifact.shape.n_layers);
+            let mut last = Vec::new();
+            for (position, token) in prompt.iter().enumerate() {
+                last = engine.forward_token(&mut cache, *token, position).expect("a prefill position runs");
+            }
+            let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last);
+            for call in 1..decode as usize {
+                let logits = engine.forward_token(&mut cache, next, prefill as usize + call - 1).expect("a decode call runs");
+                next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits);
+            }
+        }
+        let forward = started.elapsed();
+        let forward_rss = rss.finish();
+
+        // ---- phase B: the DENSE capture — every tile of every node of every position ---------
+        //
+        // The shipped path until ADR-0082 Decision 7, and the thing §1.5's 94x was measured on.
+        // Skippable (`MISAKA_PALW_U01_SKIP_DENSE=1`) because it is also the thing that does not
+        // fit in memory at a real context, which is the other half of what is being measured.
+        let ctx = {
+            let mut ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prefill, decode);
+            ctx.job_id = Hash64::from_u64_word(0x0082_0001);
+            ctx.prompt_token_ids_hash =
+                kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&prompt.iter().map(|t| *t as u32).collect::<Vec<_>>());
+            ctx
+        };
+        let cap = court.max_step_leaf_count();
+        let dense = if std::env::var("MISAKA_PALW_U01_SKIP_DENSE").is_ok() {
+            None
+        } else {
+            let rss = U01Rss::start();
+            let started = std::time::Instant::now();
+            let run = crate::qwen25_a16_backend::a16_execute_for_attempt_streaming_capped_v1(
+                &artifact,
+                &profile,
+                None,
+                &ctx,
+                &prompt,
+                cap,
+                &mut |_| {},
+            )
+            .expect("the dense capture runs this job");
+            let took = started.elapsed();
+            let bytes = crate::produce::base0_material_encode_v1(&run).expect("the dense retention encodes").len();
+            Some((took, rss.finish(), bytes))
+        };
+
+        // ---- phase C: the FOLD — Decision 7's capture -----------------------------------------
+        let rss = U01Rss::start();
+        let started = std::time::Instant::now();
+        let folded = crate::qwen25_a16_backend::a16_execute_free_prompt_streaming_v1(
+            &artifact,
+            &profile,
+            None,
+            &ctx,
+            &prompt,
+            cap,
+            &mut |_| {},
+        )
+        .expect("the folded capture runs this job");
+        let fold_took = started.elapsed();
+        let fold_rss = rss.finish();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let fold_bytes = crate::produce::base0_fp_material_encode_v2(&folded, &ids).expect("the fold retains").len();
+        let tree = folded.step_tree.as_ref().expect("a folded run keeps its tree");
+        if let Some((_, _, _)) = &dense {
+            // The measurement is only a measurement if both phases committed the same thing.
+            assert_eq!(tree.root().expect("the tree is its own shape"), folded.binding.step_merkle_root);
+        }
+
+        let per = |d: std::time::Duration| d.as_secs_f64() / decode as f64;
+        let per_position = |d: std::time::Duration| d.as_secs_f64() / positions as f64;
+        let line = |what: &str, took: std::time::Duration, rss: u64, bytes: Option<usize>| {
+            eprintln!(
+                "U-01 {what:<9}: {:>8.3} s total, {:>7.4} s/token, {:>7.4} s/position, peak RSS {:>5.2} GiB{}",
+                took.as_secs_f64(),
+                per(took),
+                per_position(took),
+                rss as f64 / (1 << 30) as f64,
+                match bytes {
+                    Some(b) => format!(", retention {b} bytes ({:.2} MB/position)", b as f64 / positions as f64 / 1e6),
+                    None => String::new(),
+                }
+            );
+        };
+        line("forward", forward, forward_rss, None);
+        if let Some((took, rss, bytes)) = &dense {
+            line("captured", *took, *rss, Some(*bytes));
+            eprintln!("U-01 captured/forward : {:.1}x", took.as_secs_f64() / forward.as_secs_f64().max(f64::MIN_POSITIVE));
+        }
+        line("folded", fold_took, fold_rss, Some(fold_bytes));
+        eprintln!("U-01 folded/forward   : {:.1}x", fold_took.as_secs_f64() / forward.as_secs_f64().max(f64::MIN_POSITIVE));
+        if let Some((took, _, bytes)) = &dense {
+            eprintln!(
+                "U-01 fold vs dense    : {:.1}x faster, {:.1}x smaller retention",
+                took.as_secs_f64() / fold_took.as_secs_f64().max(f64::MIN_POSITIVE),
+                *bytes as f64 / fold_bytes.max(1) as f64
+            );
+        }
+        eprintln!(
+            "U-01 retained tree    : {} nodes at level {} ({} bytes)",
+            tree.retained_nodes().len(),
+            tree.retain_level(),
+            tree.retained_nodes().len() * 64
+        );
+        // **What the fold's retention is actually made of** — the number ADR-0082 Decision 4 is
+        // about. The tree is the part this unit made small; the checkpoint chunks are the part
+        // that still grows with the job, because a checkpoint is a copy of the cache and the
+        // cache is prefix-stable but not yet retained as one.
+        let chunk_bytes: usize = folded.checkpoints.chunks.iter().flatten().map(Vec::len).sum();
+        let rows_bytes: usize = folded.logits_rows.iter().map(|r| r.len() * 4).sum();
+        eprintln!(
+            "U-01 retention split  : tree {} B, logits rows {} B, checkpoint chunks {} B ({} checkpoints), ids {} B",
+            tree.retained_nodes().len() * 64,
+            rows_bytes,
+            chunk_bytes,
+            folded.checkpoints.chunks.len(),
+            (folded.generated_token_ids.len() + ids.len()) * 4
+        );
+        eprintln!("U-01 step leaves: {leaves}, {} per position", leaves / positions.max(1));
     }
 }

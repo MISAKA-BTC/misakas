@@ -2408,7 +2408,35 @@ impl PalwPanelService {
                     // them off the duty) but so the common garbage fails before the expensive
                     // step.
                     if duty.free_prompt {
-                        let pooled = materials.get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
+                        // **The interval seat comes FIRST** (ADR-0077 Decision 8, ADR-0082
+                        // Decision 9). It replays `k` drawn intervals against state this node
+                        // recomputed for itself and fetches neither the history nor the capture;
+                        // the whole-capture arms below are what a seat does when the class, the
+                        // executor or this build cannot do that, and they are unchanged.
+                        let held = materials.get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
+                        if let Some(material) =
+                            self.fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, &held)
+                            && let Ok(resolved) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
+                            && let Some(prompt_ids) = Self::fp_prompt_for_job(resolved.as_ref(), &material)
+                            && let Some(output_ids) = self.fp_committed_output_ids_v1(&duty.claim_id, &held)
+                            && let Some(verdict) = self
+                                .fp_interval_seat_outcome_v1(
+                                    &session,
+                                    duty,
+                                    network_domain,
+                                    current_daa,
+                                    &material.job,
+                                    &prompt_ids,
+                                    &output_ids,
+                                    &interval_openings,
+                                )
+                                .await
+                        {
+                            break 'verdict Some(verdict);
+                        }
+                        // The same pooled payloads the interval path was offered, handed on rather
+                        // than cloned a second time: a claim's pool is megabytes.
+                        let pooled = held;
                         let disk = [
                             self.config.retention_dir.join(format!(
                                 "{}{}",
@@ -3194,6 +3222,9 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::DerivedArtifactV1 { .. } => "DerivedArtifactV1",
         PalwConsensusObjectV2::DefaultAccused { .. } => "DefaultAccused",
         PalwConsensusObjectV2::MaterialDisclosed { .. } => "MaterialDisclosed",
+        // ADR-0080 design A: the split close's two objects.
+        PalwConsensusObjectV2::CourtCloseDeclared { .. } => "CourtCloseDeclared",
+        PalwConsensusObjectV2::CourtCloseChunk { .. } => "CourtCloseChunk",
     }
 }
 
@@ -3400,6 +3431,198 @@ impl PalwPanelService {
             return;
         }
         slot.push(bytes);
+    }
+
+    /// **The answer's ids, as the claim committed them** — what ADR-0082 Decision 9's recompute
+    /// teacher-forces on.
+    ///
+    /// A seat needs the ids and nothing else about the answer: they are `4 × decode_tokens`
+    /// bytes, flat in the CONTEXT, which is the axis Z5 measures. Today the only place a seat can
+    /// read them is a served `FPC1` payload's capture, and this reads exactly that field out of
+    /// it — the pooled copies first, then this node's own retention, the same two sources every
+    /// other arm of the seat reads.
+    ///
+    /// **This is the one place the panel names a family's decoder**, and it should not stay that
+    /// way: the ids belong on the seam
+    /// (`PalwBackend::fp_committed_output_ids`) or in a small served object of their own, so a
+    /// seat that fetches no capture does not have to hold one to get them. Until then a claim
+    /// whose capture nobody served falls through to the whole-capture arms, which is what the
+    /// seat did before this path existed.
+    fn fp_committed_output_ids_v1(&self, claim: &Hash64, pooled: &[Vec<u8>]) -> Option<Vec<u32>> {
+        let disk = [
+            crate::palw_producer::palw_retained_material_path(&self.config.retention_dir, claim),
+            self.config.retention_dir.join("foreign").join(format!("{claim}.material")),
+        ]
+        .into_iter()
+        .filter_map(|path| std::fs::read(path).ok());
+        pooled.iter().cloned().chain(disk).find_map(|bytes| {
+            let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes)?;
+            let (_binding, _tiles, _logits, generated, _chunks) =
+                misaka_palw_base0::produce::base0_material_decode_v1(&payload.capture).ok()?;
+            (!generated.is_empty()).then_some(generated)
+        })
+    }
+
+    /// **The seat's duty under ADR-0082 Decision 9: recompute the cache, fetch only the rows.**
+    ///
+    /// The order is the whole mechanism, and every step of it exists because the step before it
+    /// would otherwise be something the executor gets to choose:
+    ///
+    /// 1. The intervals come from the claim's BEACON and this seat's index
+    ///    ([`crate::palw_fp_seat::palw_fp_seat_draw_v1`]), and the COUNT they are drawn inside
+    ///    comes from chain facts. An executor that could shrink the count could predict the draw.
+    /// 2. For each drawn interval the seat reads which checkpoint the opening says it resumes from
+    ///    and RECOMPUTES the job's prefix to that call on its own kernels — the prompt it already
+    ///    holds and the committed output ids, teacher-forced. It then compares 64 bytes: the tiled
+    ///    root of the state it computed against the root the claim committed. The history is never
+    ///    fetched, which at 131,072 positions is 7.5 GB not moved per seat per claim.
+    /// 3. A mismatch is NAMED — the checkpoint, the call it covers, and both roots — and the seat
+    ///    files NOTHING. It is not a conviction and not an accusation: a seat convicts nobody
+    ///    (ADR-0028), and a bonded challenger may open a court holding exactly what this seat now
+    ///    holds.
+    /// 4. Only then does the seat replay the interval, from its OWN state, comparing every
+    ///    committed row exactly.
+    ///
+    /// `None` means this seat has not concluded anything about the claim — no openings yet, an
+    /// opening that binds to nothing, or a fault that is the court's question — and the caller's
+    /// existing tail (the whole-capture arms, then the half-window `Unavailable`) applies
+    /// unchanged. `Some(Incapable)` is the honest answer of a seat that cannot run the class at
+    /// all: a row nobody can seat certifies nothing (ADR-0075), and it is free.
+    ///
+    /// **Logging** (ADR-0077 SA-5): claim ids, interval indices, checkpoint indices, leaf indices
+    /// and roots are chain facts and are logged; no prompt id, no output id and no rendered byte
+    /// ever is.
+    #[allow(clippy::too_many_arguments)]
+    async fn fp_interval_seat_outcome_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
+        network_domain: Hash64,
+        current_daa: u64,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_ids: &[u32],
+        output_ids: &[u32],
+        openings: &HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+    ) -> Option<PalwReceiptVerdictV2> {
+        use crate::palw_fp_seat::PalwFpChainCountsV1;
+        use kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1;
+
+        let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else {
+            return Some(PalwReceiptVerdictV2::Incapable);
+        };
+        // **Nothing this claim's replay resumes from was computed for another claim.** The state
+        // the row check reads is keyed by the class, the context, the prompt and the covered call
+        // — the four things an opening can name — and the answer's ids are not among them, because
+        // the check is handed an opening and no ids. Dropping the held state at the claim
+        // boundary is what makes that safe: the only state this claim's row check can find is the
+        // one this claim's own recompute put there, seconds earlier and from this claim's ids.
+        misaka_palw_base0::fp_recompute::base0_fp_seat_state_forget_v1();
+        // Both counts are the job's own, and the job is hash-bound to the claim through
+        // `fp_job_id_v3` — never read off a capture, which is the executor's to shape.
+        let counts = PalwFpChainCountsV1 { prompt_tokens: job.prompt_tokens, decode_tokens_executed: job.decode_token_limit };
+        let draw = crate::palw_fp_seat::palw_fp_seat_draw_v1(backend.as_ref(), network_domain, duty, counts)?;
+        let roots = PalwClaimRootsV1 {
+            execution_root: duty.execution_root,
+            trace_root: duty.trace_root,
+            anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job),
+        };
+        let job_decode_calls = job.decode_token_limit.saturating_sub(1);
+        let mut unanswered: Vec<u32> = Vec::new();
+
+        for index in &draw.intervals {
+            let candidates = openings.get(&(duty.claim_id, *index)).cloned().unwrap_or_default();
+            if candidates.is_empty() {
+                unanswered.push(*index);
+                continue;
+            }
+            let mut answered = false;
+            for bytes in candidates {
+                // What this opening says it resumes from. Every field of it is checked by the
+                // replay below; reading it first is only how the seat learns how far to run.
+                if let Some((checkpoint_index, covered, committed)) =
+                    misaka_palw_base0::fp_interval::base0_fp_interval_opening_anchor_v1(&bytes)
+                {
+                    if covered == 0 || covered > job_decode_calls {
+                        // An anchor outside the job's own decode count. Refused before a forward
+                        // pass is spent on it: the cheap half of the guard the replay does anyway.
+                        continue;
+                    }
+                    let (job_owned, prompt_owned, output_owned) = (job.clone(), prompt_ids.to_vec(), output_ids.to_vec());
+                    let Ok((returned, recomputed)) =
+                        offload(backend, move |b| b.fp_recompute_checkpoint_root(&job_owned, &prompt_owned, &output_owned, covered))
+                            .await
+                    else {
+                        return None;
+                    };
+                    backend = returned;
+                    let recomputed = match recomputed {
+                        Ok(root) => root,
+                        Err(why) => {
+                            // A seat that cannot recompute the class's state cannot judge the
+                            // claim, and says so rather than filing an accusation. Free, and
+                            // counting toward neither side of the quorum.
+                            info!(
+                                "[{PALW_PANEL}] claim {}: this node cannot recompute the state at checkpoint {checkpoint_index} \
+                                 ({why}) — filing Incapable",
+                                duty.claim_id
+                            );
+                            return Some(PalwReceiptVerdictV2::Incapable);
+                        }
+                    };
+                    if recomputed != committed {
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: checkpoint {checkpoint_index} (covering decode call {covered}) commits state \
+                             root {committed} and this seat's own recompute reaches {recomputed} — filing nothing; the fault is the \
+                             court's question, and this node holds the refutation's inputs",
+                            duty.claim_id
+                        );
+                        return None;
+                    }
+                }
+                let (candidate, prompt_owned) = (bytes.clone(), prompt_ids.to_vec());
+                let work_leaves = duty.work_leaves;
+                let interval = *index;
+                let Ok((returned, verdict)) =
+                    offload(backend, move |b| b.verify_fp_interval_opening(&candidate, roots, interval, &prompt_owned, work_leaves))
+                        .await
+                else {
+                    return None;
+                };
+                backend = returned;
+                match verdict {
+                    PalwFpIntervalVerdictV1::Valid => {
+                        answered = true;
+                        break;
+                    }
+                    PalwFpIntervalVerdictV1::Fault { leaf_index } => {
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: interval {index} does not replay at leaf {leaf_index} — filing nothing; a \
+                             sampled verdict never slashes and the court's bisection is what convicts",
+                            duty.claim_id
+                        );
+                        return None;
+                    }
+                    PalwFpIntervalVerdictV1::Mismatch | PalwFpIntervalVerdictV1::Unverifiable => continue,
+                }
+            }
+            if !answered {
+                unanswered.push(*index);
+            }
+        }
+
+        if unanswered.is_empty() {
+            info!(
+                "[{PALW_PANEL}] claim {}: {} interval(s) replayed against this seat's own recomputed state — no history fetched",
+                duty.claim_id,
+                draw.intervals.len()
+            );
+            return Some(PalwReceiptVerdictV2::Valid);
+        }
+        // Ask for what is missing and conclude nothing this round. The caller's tail is unchanged:
+        // an interval that never arrives ends in the two-sided quorum's `Unavailable` arm at the
+        // half-window, exactly as capture withholding does today.
+        self.request_fp_interval_openings(network_domain, duty.claim_id, &unanswered, current_daa).await;
+        None
     }
 
     /// **Ask the network for the openings this seat's draw names** (ADR-0077 Decision 8, the seat

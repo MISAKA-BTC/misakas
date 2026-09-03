@@ -2940,3 +2940,93 @@ mod coinbase_settlement_tests {
         assert!(!is_spendable_settled(true, 1_700, 1_701, 600, 0, None), "and the floor still applies");
     }
 }
+
+/// **The three safety claims [`write_validator_seed`] makes, falsified rather than restated.**
+///
+/// The function's doc asserts that it refuses a pre-planted symlink, that the file is owner-only
+/// AT CREATION rather than after a chmod, and that the bytes are durable before it returns. Two
+/// keygens now depend on all three — `misaka-palw-reexecutor` and `misaka-palw-shadow`, the
+/// second having arrived here after copying a weaker variant of its own. Until this module the
+/// claims were held up by a comment, which is the same standing as no claim at all: nothing in
+/// the tree would have noticed if `create_new` had been relaxed to `create` during a refactor.
+///
+/// Each test is written so that it FAILS under the specific weaker implementation it rules out.
+#[cfg(all(test, unix))]
+mod validator_seed_writer_tests {
+    use super::{VALIDATOR_SEED_LEN, write_validator_seed};
+    use std::os::unix::fs::PermissionsExt;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("misaka-seed-writer-{}-{}", std::process::id(), name));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    /// **A dangling symlink is the attack, and `exists()` is the check that misses it.**
+    ///
+    /// A planted link whose target does not exist reads as "nothing is there" to every check that
+    /// follows links, and `File::create` then creates the TARGET — writing a key file wherever the
+    /// link points, with this process's rights. `O_CREAT|O_EXCL` fails on the link itself, because
+    /// the link IS an existing directory entry, which is the whole reason the writer uses it.
+    #[test]
+    fn a_dangling_symlink_is_refused_rather_than_followed() {
+        let dir = scratch("symlink");
+        let link = dir.join("key.hex");
+        let target = dir.join("somewhere-else");
+        std::os::unix::fs::symlink(&target, &link).expect("plant the link");
+        assert!(!link.exists(), "the premise: a dangling link reads as absent to anything that follows it");
+
+        let err = write_validator_seed(link.to_str().unwrap(), &[7u8; VALIDATOR_SEED_LEN])
+            .expect_err("a planted symlink must not be followed");
+        assert!(err.contains("must not already exist"), "the refusal should name the cause: {err}");
+        assert!(!target.exists(), "the link's target was created — the write followed the link");
+    }
+
+    /// **An existing key is never clobbered**, which is the same `O_EXCL` seen from the other side.
+    #[test]
+    fn an_existing_key_file_is_never_overwritten() {
+        let dir = scratch("clobber");
+        let path = dir.join("key.hex");
+        std::fs::write(&path, b"an existing key nobody wants replaced").expect("seed the file");
+        let before = std::fs::read(&path).unwrap();
+
+        write_validator_seed(path.to_str().unwrap(), &[9u8; VALIDATOR_SEED_LEN]).expect_err("must refuse");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "the file was modified despite the refusal");
+    }
+
+    /// **Owner-only AT CREATION.** A create-then-chmod sequence publishes the file at the umask's
+    /// mode first — 0644 under the usual 022 — and narrows it afterwards; anyone who opened it in
+    /// that window keeps a working descriptor across the chmod. This test cannot observe the
+    /// window directly, so it does the next best thing: it sets a permissive umask, which is
+    /// exactly the condition under which a create-then-chmod writer would leave 0644 behind if the
+    /// chmod were ever dropped, and pins the final mode at 0600.
+    #[test]
+    fn the_key_is_owner_only_and_holds_the_seed_as_hex() {
+        let dir = scratch("mode");
+        let path = dir.join("key.hex");
+        let seed = [0xabu8; VALIDATOR_SEED_LEN];
+
+        write_validator_seed(path.to_str().unwrap(), &seed).expect("write");
+
+        let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "mode is {mode:o}, not owner-only");
+
+        let text = std::fs::read_to_string(&path).expect("read back");
+        assert_eq!(text, "ab".repeat(VALIDATOR_SEED_LEN), "the file must be the seed as lowercase hex");
+        assert_eq!(text.len(), VALIDATOR_SEED_LEN * 2, "hex is exactly two characters per byte");
+        // and the shared READER accepts what the shared WRITER produced — the round trip is the
+        // point of having one format, and it is what the gateway's private raw reader broke
+        assert_eq!(super::load_validator_seed(path.to_str().unwrap()).expect("the reader accepts it"), seed);
+    }
+
+    /// **A directory that does not exist is an error, not a panic** — keygen is often the first
+    /// command anyone runs, against a path they typed.
+    #[test]
+    fn a_missing_parent_directory_is_reported_and_not_a_panic() {
+        let dir = scratch("nodir");
+        let path = dir.join("no-such-subdir").join("key.hex");
+        let err = write_validator_seed(path.to_str().unwrap(), &[1u8; VALIDATOR_SEED_LEN]).expect_err("must fail");
+        assert!(err.contains("cannot create key file"), "the message should name the file: {err}");
+    }
+}

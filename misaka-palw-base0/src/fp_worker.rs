@@ -281,6 +281,42 @@ fn digest_file_v1(path: &Path) -> Result<[u8; 32], String> {
 /// tier's runtime is its artifact (`artifact_digest()`), the hybrid's is the shape its backend
 /// serves (`shape_id()`). Both binaries already fill `model_profile_id` and `runtime_class_id`
 /// with that same value, so it is one field here rather than two that could disagree.
+/// **The court parameters the RULESET of `network_id` froze** (ADR-0082 Decision 8; W1b
+/// `bb4f145b` on the executor side).
+///
+/// A worker prices a job against a ladder — `step_leaf_count_capped_v1` is what decides how many
+/// tokens a user actually gets — and both binaries built that ladder out of
+/// `PALW_STEP_MAX_LEAVES`, the module DEFAULT. A node whose ruleset moved the ladder would serve
+/// a row its own workers refuse, or (worse, and the direction that costs a producer money) a row
+/// they execute past what the court can adjudicate.
+///
+/// The ruleset a worker can know is the one its network's binary ships: `Params::from(NetworkId)`
+/// is exactly what kaspad boots with, and the bundle's `court` is the same object
+/// `PalwCourtParamsV2` the class catalog and the step leg read. A network with PALW disabled has
+/// no ladder at all, and this says so rather than substituting a constant — the mistake this
+/// worker already made once with its network id, where the wrong default was silent.
+///
+/// It is not the LIVE ruleset: an activation moves the bundle and a worker cannot read chain
+/// state. That gap is named here rather than papered over; closing it means the gateway telling
+/// the worker, which is a change to `PalwFpWorkerRequestV3` and therefore a consensus-core change
+/// this stream does not make (see the report's patch notes).
+pub fn fp_worker_court_params_v1(network_id: &str) -> Result<kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2, String> {
+    use kaspa_consensus_core::config::params::Params;
+    use kaspa_consensus_core::network::NetworkId;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    let net: NetworkId = network_id.parse().map_err(|e| {
+        format!("{network_id} is not a network this build knows ({e}); it must be the string kaspad prints for params.net")
+    })?;
+    let params = Params::from(net);
+    match &params.palw_consensus_mode {
+        PalwConsensusMode::ConsensusV2(bundle) => Ok(bundle.court.clone()),
+        _ => Err(format!(
+            "{network_id} ships with PALW off, so it freezes no court and no step ladder — there is nothing for this worker to \
+             price a job against"
+        )),
+    }
+}
+
 pub struct FpWorkerFamilyV1 {
     /// The catalog row this worker embodies, e.g. `Qwen/Qwen2.5-1.5B/graph-v2`.
     pub model_id: String,
@@ -300,7 +336,13 @@ pub struct FpWorkerFamilyV1 {
     /// The id ceiling a prompt token is checked against — the model's, not the tokenizer's, which
     /// is padded differently.
     pub vocab: u32,
-    /// `schema` of the per-job retention manifest, e.g. `misaka.palw.fp-v3-a16-retention.v1`.
+    /// `schema` of the per-job retention manifest, e.g. `misaka.palw.fp-v3-a16-retention.v2`.
+    ///
+    /// **It names the bytes in `material.bin`, so it moves when they do.** Both shipped workers
+    /// say `.v2` since ADR-0082 Decision 7: the free-prompt retention is the FOLD
+    /// (`base0_fp_material_encode_v2`), not the dense tile tuple, and a manifest that still
+    /// claimed `.v1` would be telling a reader the one thing about the file it cannot see from
+    /// the outside.
     pub retention_schema: &'static str,
     /// The `family` field of that manifest, e.g. `qwen25-a16`.
     pub retention_family: &'static str,

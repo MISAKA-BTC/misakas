@@ -450,6 +450,56 @@ pub fn qwen36_execute_for_attempt_streaming_capped_v1(
     max_step_leaf_count: u64,
     on_token: &mut dyn FnMut(u32),
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
+    qwen36_execute_streaming_v1(
+        artifact,
+        profile,
+        plan,
+        ctx,
+        prompt,
+        max_step_leaf_count,
+        crate::legs::Base0CaptureKindV1::DenseTiles,
+        on_token,
+    )
+}
+
+/// **The same run, FOLDED** (ADR-0082 Decision 7) — the free-prompt lane's capture on the hybrid
+/// tier. The dense tier's `a16_execute_free_prompt_streaming_v1`, for its reasons: one loop, one
+/// enumeration, one set of roots, and a retention of one node per `2^retain_level` leaves instead
+/// of every tile of every node of every position (~298 k leaves a position here).
+#[allow(clippy::too_many_arguments)]
+pub fn qwen36_execute_free_prompt_streaming_v1(
+    artifact: &Qwen36ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    plan: &crate::qwen36_plan::Qwen36ProfilePlanV1,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
+    on_token: &mut dyn FnMut(u32),
+) -> Result<crate::produce::Base0ExecutionV1, String> {
+    qwen36_execute_streaming_v1(
+        artifact,
+        profile,
+        plan,
+        ctx,
+        prompt,
+        max_step_leaf_count,
+        crate::legs::Base0CaptureKindV1::Fold,
+        on_token,
+    )
+}
+
+/// **The one capture loop this family has**, over either sink.
+#[allow(clippy::too_many_arguments)]
+fn qwen36_execute_streaming_v1(
+    artifact: &Qwen36ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    plan: &crate::qwen36_plan::Qwen36ProfilePlanV1,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
+    capture_kind: crate::legs::Base0CaptureKindV1,
+    on_token: &mut dyn FnMut(u32),
+) -> Result<crate::produce::Base0ExecutionV1, String> {
     let prefill = ctx.declared_prefill_tokens as usize;
     let decode_tokens = ctx.exact_decode_tokens as usize;
     if prefill == 0 || decode_tokens == 0 {
@@ -466,7 +516,8 @@ pub fn qwen36_execute_for_attempt_streaming_capped_v1(
     let engine = Qwen36Engine::new(artifact);
     let leaf_count =
         kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, ctx, max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
-    let mut capture = crate::legs::Base0StepCaptureV1::new(leaf_count).map_err(|e| format!("{e:?}"))?;
+    let mut capture = crate::legs::Base0CaptureSinkV1::for_kind(capture_kind, profile, ctx, leaf_count, max_step_leaf_count)
+        .map_err(|e| format!("{e:?}"))?;
     let checkpoint_profile = qwen36_checkpoint_profile_v1(profile);
     let checkpoints = crate::legs::Base0CheckpointCaptureV1::new(ctx, profile, &checkpoint_profile);
     let mut cache = Qwen36Cache::new(&artifact.shape);
@@ -510,23 +561,25 @@ pub fn qwen36_execute_for_attempt_streaming_capped_v1(
 
     let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
     let checkpoints = checkpoints.finish(decode_calls / checkpoint_profile.checkpoint_interval).map_err(|e| format!("{e:?}"))?;
-    let tiles = capture.finish().map_err(|e| format!("{e:?}"))?;
+    let captured = capture.finish(max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
 
     // The retained rows ARE the selecting rows — row `r` is the one `generated[r]` was chosen
     // from — and the tiled root commits them directly.
     let trace_root = kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(ctx, &logits_rows, &generated)
         .ok_or_else(|| "the retained rows build no tree".to_string())?;
     let activation_leg_root = crate::produce::base0_activation_leg_root_v1(ctx);
-    let binding = crate::legs::base0_binding_from_capture_with_profile_v1(
+    let binding = crate::legs::base0_binding_from_step_root_v1(
         profile,
         ctx,
-        &tiles,
+        captured.step_leaf_count,
+        captured.step_merkle_root,
         &checkpoints,
         &checkpoint_profile,
         trace_root,
         activation_leg_root,
     )
     .map_err(|e| format!("{e:?}"))?;
+    let (tiles, step_tree) = captured.into_execution_parts();
 
     let context = ctx.context_hash();
     let rendered = rendered_output_hash_v1(&generated);
@@ -543,6 +596,7 @@ pub fn qwen36_execute_for_attempt_streaming_capped_v1(
         trace_chunk_count: 1,
         binding,
         tiles,
+        step_tree,
         checkpoints,
         logits_rows,
         generated_token_ids: generated,
@@ -664,6 +718,44 @@ pub fn qwen36_material_decode_v1(bytes: &[u8]) -> Option<Qwen36RunV1> {
 }
 
 impl Qwen36Backend {
+    /// **A folded retention, re-executed into the dense capture the court's assembly reads**
+    /// (ADR-0082 Decision 7) — the dense tier's `dense_capture_from_fold_v1`, for its reasons:
+    /// `base0_refutation_from_capture_capped_v1` needs the whole leaf vector, re-deriving exactly
+    /// the leaves a refutation reads is ADR-0082 U-03's work, and until then the party that wants
+    /// to prosecute pays for one re-execution of a job whose ids it holds.
+    fn dense_capture_from_fold_v1(
+        &self,
+        material: &crate::produce::Base0FpMaterialV2,
+    ) -> Result<crate::produce::Base0ExecutionV1, String> {
+        let (Some(plan), Some(_)) = (&self.plan, &self.profile) else {
+            return Err("this backend serves no registered graph, so it cannot re-execute a folded capture".to_string());
+        };
+        let prompt: Vec<usize> = material.prompt_token_ids.iter().map(|t| *t as usize).collect();
+        let run = qwen36_execute_for_attempt_streaming_capped_v1(
+            &self.artifact,
+            &material.binding.shape_profile,
+            plan,
+            &material.binding.job_context,
+            &prompt,
+            self.step_ladder_cap,
+            &mut |_| {},
+        )?;
+        if run.binding.committed_execution_root != material.binding.committed_execution_root {
+            return Err("the retained fold and its re-execution are not one execution".to_string());
+        }
+        Ok(run)
+    }
+
+    /// The dense tiles either retention can answer with.
+    fn tiles_from_material_v1(&self, retention: &crate::produce::Base0RetentionV1) -> Result<crate::legs::Base0StepTilesV1, String> {
+        match retention {
+            crate::produce::Base0RetentionV1::Dense((binding, tiles, ..)) => {
+                Ok(crate::legs::Base0StepTilesV1 { leaves: qwen36_leaves_by_position(binding, tiles), tiles: tiles.clone() })
+            }
+            crate::produce::Base0RetentionV1::Folded(material) => Ok(self.dense_capture_from_fold_v1(material)?.tiles),
+        }
+    }
+
     /// One refutation at `index`, with the prompt either CARRIED by the caller — a free-prompt
     /// lane's, whose tokens the user chose, checked against the capture's own commitment — or
     /// DERIVED from the anchor, the attempt lane's. The split A16 made in its
@@ -676,15 +768,17 @@ impl Qwen36Backend {
         index: u64,
         carried: Option<&[u32]>,
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
-        let (binding, tiles, logits_rows, generated, _chunks) =
-            crate::produce::base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        let retention =
+            crate::produce::base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        let binding = retention.binding().clone();
+        let logits_rows = retention.logits_rows().to_vec();
+        let generated = retention.generated_token_ids().to_vec();
         if binding.step_leaf_count == 0 || binding.step_leaf_count > self.step_ladder_cap {
             return Err("the binding's leaf count is outside the ruleset's ladder".to_string());
         }
         let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
             .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
-        let leaves = qwen36_leaves_by_position(&binding, &tiles);
-        let step_tiles = crate::legs::Base0StepTilesV1 { leaves, tiles };
+        let step_tiles = self.tiles_from_material_v1(&retention)?;
 
         let rows_root = kaspa_consensus_core::palw_step_refute::tiled_logits_rows_root_v1(&binding.job_context, &logits_rows)
             .ok_or_else(|| "the retained rows build no tree".to_string())?;
@@ -946,7 +1040,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         };
         let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
 
-        let run = qwen36_execute_for_attempt_streaming_capped_v1(
+        let run = qwen36_execute_free_prompt_streaming_v1(
             &self.artifact,
             profile,
             plan,
@@ -957,7 +1051,8 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         )?;
 
         let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
-        let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
+        let prompt_ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
+        let material = crate::produce::base0_fp_material_encode_v2(&run, &prompt_ids).map_err(|e| e.to_string())?;
         Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
             outcome: PalwExecutionOutcomeV1 {
                 trace_root: run.trace_root,
@@ -984,6 +1079,22 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         // The family codec first — a captured attempt's material carries its binding, and the
         // seat check rebuilds the legs from it. The legacy rows-and-ids decode stays for the
         // ledger-compiled path's claims.
+        // **The fold first** (ADR-0082 Decision 7): a free-prompt claim of this class retains v2,
+        // and its step root is read off the retained tree rather than rebuilt from tiles there are
+        // none of.
+        if let Ok(folded) = crate::produce::base0_fp_material_decode_v2(material) {
+            if claim.anchor != Hash64::default() && folded.binding.job_context.job_id != claim.anchor {
+                return PalwMaterialVerdictV1::Mismatch;
+            }
+            if folded.binding.shape_profile.shape_profile_id() != self.class_profile_id {
+                return PalwMaterialVerdictV1::Unverifiable;
+            }
+            return match crate::produce::base0_fp_material_matches_claim_v2(&folded, claim.execution_root, claim.trace_root) {
+                Ok(true) => PalwMaterialVerdictV1::Matches,
+                Ok(false) => PalwMaterialVerdictV1::Mismatch,
+                Err(_) => PalwMaterialVerdictV1::Unverifiable,
+            };
+        }
         if let Ok(decoded) = crate::produce::base0_material_decode_v1(material) {
             if claim.anchor != Hash64::default() && decoded.0.job_context.job_id != claim.anchor {
                 return PalwMaterialVerdictV1::Mismatch;
@@ -1032,7 +1143,8 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     }
 
     fn capture_shape(&self, material: &[u8]) -> Option<kaspa_consensus_core::palw_backend::PalwCaptureShapeV1> {
-        let (binding, ..) = crate::produce::base0_material_decode_v1(material).ok()?;
+        let retention = crate::produce::base0_material_decode_any_v1(material).ok()?;
+        let binding = retention.binding();
         Some(kaspa_consensus_core::palw_backend::PalwCaptureShapeV1 {
             job_context: binding.job_context.clone(),
             step_leaf_count: binding.step_leaf_count,
@@ -1040,14 +1152,17 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     }
 
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
-        let (binding, tiles, _, _, _) = crate::produce::base0_material_decode_v1(material).ok()?;
+        let retention = crate::produce::base0_material_decode_any_v1(material).ok()?;
+        let binding = retention.binding().clone();
         // The count arrived over gossip inside a borsh blob; bounding it BEFORE the allocation is
         // the lesson the seat check already wrote down.
         if binding.step_leaf_count == 0 || binding.step_leaf_count > self.step_ladder_cap {
             return None;
         }
-        let leaves = qwen36_leaves_by_position(&binding, &tiles);
-        Some(crate::legs::base0_bisect_prefix_state_v1(&binding.job_context, &leaves, index))
+        // A rung commits to the execution PREFIX — every leaf below the index — which a fold
+        // answers by re-deriving them and a dense retention answers from what it kept.
+        let tiles = self.tiles_from_material_v1(&retention).ok()?;
+        Some(crate::legs::base0_bisect_prefix_state_v1(&binding.job_context, &tiles.leaves, index))
     }
 
     fn refutation_for_index(
@@ -1076,8 +1191,8 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
 
     fn fp_interval_count(&self, capture: &[u8]) -> Option<u32> {
         let interval = self.checkpoint_interval()?;
-        let (binding, ..) = crate::produce::base0_material_decode_v1(capture).ok()?;
-        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&binding, interval).ok().map(|g| g.interval_count)
+        let retention = crate::produce::base0_material_decode_any_v1(capture).ok()?;
+        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(retention.binding(), interval).ok().map(|g| g.interval_count)
     }
 
     fn fp_interval_count_for(&self, prompt_tokens: u32, decode_tokens_executed: u32) -> Option<u32> {
@@ -1088,8 +1203,28 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let interval = self
             .checkpoint_interval()
             .ok_or_else(|| "this backend serves no registered graph, so it opens no interval".to_string())?;
-        let material = crate::produce::base0_material_decode_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
-        crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, interval).map_err(|e| e.to_string())
+        // Two retention forms, one opening, the class's map deciding whether the history travels —
+        // ADR-0082 Decisions 7 and 9, exactly as the dense tier composes them.
+        let chunked = match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
+            crate::produce::Base0RetentionV1::Folded(material) => {
+                let plan = self.plan.as_ref().ok_or_else(|| "this backend serves no registered graph".to_string())?;
+                crate::fp_interval::base0_open_fp_interval_sparse_v1(
+                    &material,
+                    index,
+                    prompt_token_ids,
+                    interval,
+                    &Qwen36IntervalKernels { artifact: &self.artifact, plan },
+                )
+                .map_err(|e| e.to_string())?
+            }
+            crate::produce::Base0RetentionV1::Dense(material) => {
+                crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, interval).map_err(|e| e.to_string())?
+            }
+        };
+        if self.profile.as_ref().is_some_and(crate::fp_interval::base0_fp_class_requires_flat_openings_v1) {
+            return crate::fp_interval::base0_strip_fp_interval_history_v1(&chunked).map_err(|e| e.to_string());
+        }
+        Ok(chunked)
     }
 
     fn verify_fp_interval_opening(
@@ -1103,15 +1238,68 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let (Some(interval), Some(plan)) = (self.checkpoint_interval(), self.plan.as_ref()) else {
             return kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1::Unverifiable;
         };
-        crate::fp_interval::base0_verify_fp_interval_opening_v1(
+        let state = crate::fp_interval::base0_fp_interval_opening_seat_state_v1(opening, prompt_token_ids, interval);
+        crate::fp_interval::base0_verify_fp_interval_opening_with_state_v1(
             opening,
             claim,
             index,
             prompt_token_ids,
             work_leaves,
             interval,
+            state.as_ref(),
             &Qwen36IntervalKernels { artifact: &self.artifact, plan },
         )
+        .to_consensus_v1()
+    }
+
+    /// **ADR-0082 Decision 9, the hybrid's half.**
+    ///
+    /// The forward is this class's own planned walk. Whether a root comes out of it is the
+    /// CLASS's answer: the shipped hybrid registers the checkpoint sentinel and commits no
+    /// checkpoint at all, so this refuses by name and a seat files `Incapable` — the honest
+    /// verdict for a row this family cannot seat (ADR-0075). A class that registers the recurrence
+    /// map gets a real root; the hybrid composition is refused by name until the side that
+    /// registers it spells the order its two halves compose in.
+    fn fp_recompute_checkpoint_root(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_token_ids: &[u32],
+        output_token_ids: &[u32],
+        decode_calls: u32,
+    ) -> Result<Hash64, String> {
+        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
+        self.artifact_read_probe_v1()?;
+        let (Some(profile), Some(plan)) = (self.profile.as_ref(), self.plan.as_ref()) else {
+            return Err("this backend serves no registered graph, so it recomputes no state".to_string());
+        };
+        let class = PalwFpClassFactsV3 {
+            model_profile_id: self.shape_id,
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: self.shape_id,
+            shape_profile_id: self.class_profile_id,
+            cu_ruleset_id: Hash64::default(),
+        };
+        let shape = PalwFpRunFactsV3 {
+            decode_tokens_executed: job.decode_token_limit,
+            stop_reason: kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached,
+            full_logits_trace_root: Hash64::default(),
+            activation_leg_root: Hash64::default(),
+            checkpoint_leg_root: Hash64::default(),
+            step_leg_root: Hash64::default(),
+            step_leaf_count: 0,
+        };
+        let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
+        let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan);
+        crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+            profile,
+            &ctx,
+            prompt_token_ids,
+            output_token_ids,
+            decode_calls,
+            &mut kernels,
+        )
+        .map(|state| state.state_chunks_root)
+        .map_err(|e| e.to_string())
     }
 
     fn operand_openings_for(
@@ -1586,5 +1774,57 @@ mod tests {
         let mut wider = four.shape.clone();
         wider.n_experts += 1;
         assert_ne!(qwen36_shape_id_v1(&four.shape), qwen36_shape_id_v1(&wider));
+    }
+
+    /// **The fold and the dense capture are ONE commitment on the hybrid tier too** (ADR-0082
+    /// Decision 7). The dense tier's `the_folded_capture_commits_the_dense_captures_roots`, on
+    /// this family's own engine, cache and checkpoint profile — because "the roots do not move"
+    /// is a claim about each family's capture loop, and this family has its own.
+    #[test]
+    fn the_folded_capture_commits_the_dense_captures_roots() {
+        let artifact = std::sync::Arc::new(crate::qwen36::test_fixture(4, 8));
+        let geometry = crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4);
+        let profile = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(geometry).expect("the fixture geometry projects");
+        let backend = Qwen36Backend::with_class_profile(
+            artifact.clone(),
+            "Qwen3.6-fixture",
+            (4, 2),
+            profile.clone(),
+            b"misaka-palw-test".to_vec(),
+        );
+        let plan = Qwen36Engine::new(&artifact).plan_from_profile(&profile).expect("the fixture graph compiles");
+        let (ctx, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0082_F01D)).expect("the anchor implies a job");
+        let cap = kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES;
+
+        let dense = qwen36_execute_for_attempt_streaming_capped_v1(&artifact, &profile, &plan, &ctx, &prompt, cap, &mut |_| {})
+            .expect("the dense sink runs the job");
+        let folded = qwen36_execute_free_prompt_streaming_v1(&artifact, &profile, &plan, &ctx, &prompt, cap, &mut |_| {})
+            .expect("the folded sink runs the job");
+
+        assert_eq!(dense.binding, folded.binding, "the two sinks commit the same binding, field for field");
+        assert_eq!(dense.execution_root, folded.execution_root);
+        assert_eq!(dense.trace_root, folded.trace_root);
+        assert_eq!(dense.output_root, folded.output_root);
+        assert_eq!(dense.trace_manifest_root, folded.trace_manifest_root);
+        assert_eq!(dense.generated_token_ids, folded.generated_token_ids, "one execution, one answer");
+
+        let tree = folded.step_tree.as_ref().expect("a folded run keeps its tree");
+        assert!(folded.tiles.tiles.is_empty() && folded.tiles.leaves.is_empty(), "the fold keeps no tiles");
+        assert_eq!(tree.leaf_count(), dense.tiles.leaves.len() as u64);
+        assert_eq!(tree.root().expect("the tree is its own shape"), dense.binding.step_merkle_root);
+        assert_eq!(tree.retain_level(), crate::fp_capture::palw_base0_sparse_retain_level_v1(cap));
+
+        // And the seat's first question is answered off the retained tree rather than off tiles.
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let bytes = crate::produce::base0_fp_material_encode_v2(&folded, &ids).expect("the fold retains");
+        let claim = PalwClaimRootsV1 { execution_root: folded.execution_root, trace_root: folded.trace_root, anchor: ctx.job_id };
+        assert_eq!(backend.verify_material(&bytes, claim), PalwMaterialVerdictV1::Matches);
+        let dense_bytes = crate::produce::base0_material_encode_v1(&dense).expect("the dense sink retains").len();
+        eprintln!(
+            "Decision 7 on the Qwen3.6 fixture: {} leaves, retention {} bytes folded against {dense_bytes} dense ({:.1}x)",
+            tree.leaf_count(),
+            bytes.len(),
+            dense_bytes as f64 / bytes.len().max(1) as f64
+        );
     }
 }
