@@ -966,6 +966,29 @@ pub fn base0_material_matches_claim_v1(
     committed_execution_root: Hash64,
     committed_trace_root: Hash64,
 ) -> Result<bool, ProduceError> {
+    base0_material_matches_claim_capped_v1(
+        material,
+        committed_execution_root,
+        committed_trace_root,
+        kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+    )
+}
+
+/// [`base0_material_matches_claim_v1`] against the ladder top the CALLER states — the ruleset's
+/// `PalwCourtParamsV2::max_step_leaf_count`, which a backend holds through `with_step_ladder_cap`
+/// (ADR-0080 W1b).
+///
+/// The bound below is an ALLOCATION guard and it stays; what moves is the ceiling. At the leg's
+/// default a seat answered `Ok(false)` — "the material does not match what was committed" — for
+/// every honest dense capture of a class registered against a deeper ladder, which is the same
+/// sentence said about an honest producer. `Ok(false)` is a verdict, not an error, so nothing
+/// downstream could tell the two apart.
+pub fn base0_material_matches_claim_capped_v1(
+    material: &Base0RetainedMaterialV1,
+    committed_execution_root: Hash64,
+    committed_trace_root: Hash64,
+    max_step_leaf_count: u64,
+) -> Result<bool, ProduceError> {
     let (binding, tiles, logits_rows, generated, checkpoint_chunks) = material;
     // **Bound the count BEFORE allocating from it.** `step_leaf_count` is a plain `u64` that
     // arrived over gossip inside a borsh blob, and `step_merkle_root_v1` — the only thing that ever
@@ -978,7 +1001,7 @@ pub fn base0_material_matches_claim_v1(
     //
     // The check is the same one `step_merkle_root_v1` makes; the defect was never the rule, it was
     // that the rule stood downstream of the memory it was supposed to protect.
-    if binding.step_leaf_count == 0 || binding.step_leaf_count > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES {
+    if binding.step_leaf_count == 0 || binding.step_leaf_count > max_step_leaf_count {
         return Ok(false);
     }
     let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];

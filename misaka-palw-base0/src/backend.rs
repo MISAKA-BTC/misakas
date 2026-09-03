@@ -13,7 +13,7 @@
 use crate::artifact::Base0ArtifactV1;
 use crate::classes::ResolvedClassV1;
 use crate::produce::{
-    base0_execute_for_attempt_capped_v1, base0_material_decode_v1, base0_material_encode_v1, base0_material_matches_claim_v1,
+    base0_execute_for_attempt_capped_v1, base0_material_decode_v1, base0_material_encode_v1, base0_material_matches_claim_capped_v1,
     base0_rc_job_v1,
 };
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
@@ -369,7 +369,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
         if claim.anchor != Hash64::default() && decoded.0.job_context.job_id != claim.anchor {
             return PalwMaterialVerdictV1::Mismatch;
         }
-        match base0_material_matches_claim_v1(&decoded, claim.execution_root, claim.trace_root) {
+        match base0_material_matches_claim_capped_v1(&decoded, claim.execution_root, claim.trace_root, self.step_ladder_cap) {
             Ok(true) => PalwMaterialVerdictV1::Matches,
             Ok(false) => PalwMaterialVerdictV1::Mismatch,
             Err(_) => PalwMaterialVerdictV1::Unverifiable,

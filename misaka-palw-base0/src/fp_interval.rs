@@ -857,7 +857,11 @@ pub fn base0_open_fp_interval_capped_v1(
 
     let leaves = leaves_from_tiles_v1(binding, tiles, max_step_leaf_count)?;
     let tree =
-        crate::fp_capture::Base0SparseStepTreeV1::from_leaves_v1(&leaves, crate::fp_capture::PALW_BASE0_SPARSE_RETAIN_LEVEL_V1)?;
+        crate::fp_capture::Base0SparseStepTreeV1::from_leaves_capped_v1(
+            &leaves,
+            crate::fp_capture::PALW_BASE0_SPARSE_RETAIN_LEVEL_V1,
+            max_step_leaf_count,
+        )?;
     // The capture must be the one the binding committed, checked before anything is served: an
     // opening assembled from a leaf vector that does not reproduce `step_merkle_root` is an
     // opening no seat can verify, and the executor would rather learn that here.

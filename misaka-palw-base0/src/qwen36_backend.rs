@@ -1165,7 +1165,12 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             if decoded.0.shape_profile.shape_profile_id() != self.class_profile_id {
                 return PalwMaterialVerdictV1::Unverifiable;
             }
-            return match crate::produce::base0_material_matches_claim_v1(&decoded, claim.execution_root, claim.trace_root) {
+            return match crate::produce::base0_material_matches_claim_capped_v1(
+                &decoded,
+                claim.execution_root,
+                claim.trace_root,
+                self.step_ladder_cap,
+            ) {
                 Ok(true) => PalwMaterialVerdictV1::Matches,
                 Ok(false) => PalwMaterialVerdictV1::Mismatch,
                 Err(_) => PalwMaterialVerdictV1::Unverifiable,
