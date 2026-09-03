@@ -2856,3 +2856,40 @@ not come back after a kill — which is convenient here and would be alarming an
 > noticing that `/tmp/fpchk` **disappeared between two runs** and asking why, rather than reading
 > the tidier output as the better one. *The output got cleaner and less true, and clean is what
 > a repair is supposed to look like.*
+
+### The ceremony's own guard grepped the tree for the answer
+
+`scripts/check-repin-predictions.sh`, first version, reported **all four values as DIFF** against
+`3f9526d3`. It read `<empty>` for every one, because none of the five predicted values appears
+anywhere in the tree's `.rs` files — and **they should not**:
+
+> **These values are what the re-pin WRITES. The tree legitimately holds the OLD pins until the
+> paste.** A guard that greps the source for the answer is asking the tree to already contain the
+> thing the ceremony exists to put there.
+
+It stopped, which was right, **and its reason was wrong** — it said *different* where the truth
+was *absent*. Safe exactly once, misleading every other time, and it would have said the same
+four DIFFs if the predictions had been perfect.
+
+Rewritten: `derive/src` is verified from the tree (it is a property of the tree, so that half was
+always sound and reads **OK** on `3f9526d3`), and the five values are compared against an
+**extraction table** — `<name> <value>` lines produced by the thing that computes them. With no
+table it prints what it cannot answer and exits, rather than manufacturing a verdict:
+
+```
+TABLE=/path/to/extracted-pins.txt scripts/check-repin-predictions.sh palw-adr0082-impl
+
+  source_tree_sha256  637858dba5ea5e34…
+  t11_fingerprint     71efa66480211731…
+  devnet_fingerprint  c0da0c9024d68b94…
+  fp_golden           c940b5c36ee40846…
+  premine_builds      ba2612417e7e0817
+```
+
+And it now distinguishes the two failures by name: **`<absent>` means the check did not run;
+a differing hex means it ran and disagreed.** Conflating those is what the first version did.
+
+*Four hours after writing "a rule earns its keep once it is attached to a mechanical trigger",
+the trigger I attached was broken in the way the prose version would not have been — a human
+following the checklist would have run the extractor first, because a human knows the pins are
+not there yet.* **Mechanising a rule can lose the context that made the rule obvious.**

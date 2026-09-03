@@ -52,22 +52,43 @@ check "derive/src tree" "$PREDICTED_DERIVE_SRC" "$actual_derive"
         so they are ALL stale — do not read them and do not paste them. Name the commit
         that touched misaka-palw-derive/src, re-derive, and re-predict."
 
-printf '%s\n' "-- values read from that tree ----------------------------------------------"
+printf '%s\n' "-- the predicted values, against an EXTRACTION table ----------------------"
 
-# `git grep <rev>` keeps the rev as its own argument: it cannot be eaten by zsh's history
-# modifier the way "$tree:path" can. (See zsh-colon-c-eats-consensus — `c` after `$var:` is one.)
-read_const() { # <pattern> -> the first 64-hex or 32-hex literal on the matching line
-  git grep -h -E "$1" "$tree" -- '*.rs' 2>/dev/null | grep -oE '[0-9a-f]{32,64}' | head -1 || true
-}
+# The first version of this script grepped the tree for the predicted values and reported all
+# four as DIFF because it found none of them. It was right to stop and wrong about why:
+# **these values are what the re-pin WRITES, not what the source currently holds.** The tree
+# legitimately contains the OLD pins until the paste. Grepping for the answer cannot work, and
+# a check that cannot read reports "different" when it means "absent" — which is safe exactly
+# once and misleading every other time.
+#
+# So the table comes from the extractor (5b's finalize prints it), passed as a file of
+#     <name> <value>
+# lines. No table, no verdict — and saying so is the point.
+table=${TABLE:-}
+if [ -z "$table" ] || [ ! -f "$table" ]; then
+  cat <<'NEED'
+  NO EXTRACTION TABLE. This script cannot answer the question from the tree alone.
 
-check "source_tree_sha256" "$PREDICTED_SOURCE_TREE_SHA" "$(read_const 'source_tree_sha256|SOURCE_TREE_SHA256')"
-check "t11 fingerprint"    "$PREDICTED_T11_FP"          "$(read_const 'PALW_RC_SHIPPED_FINGERPRINT|palw_rc_fingerprint')"
-check "devnet fingerprint" "$PREDICTED_DEVNET_FP"       "$(read_const 'DEVNET_SHIPPED_FINGERPRINT|devnet_fingerprint')"
-check "fp golden"          "$PREDICTED_FP_GOLDEN"       "$(read_const 'GOLDEN_VECTOR_IDS|golden_vector_ids')"
+  Run it as:   TABLE=/path/to/extracted-pins.txt scripts/check-repin-predictions.sh <tree>
+  where the file holds one `<name> <value>` per line, from the extractor that computes them.
+
+  What IS verified above, and is the precondition for the rest: derive/src equals the tree the
+  predictions were made from. If that had moved, every prediction would be stale and no table
+  would be worth comparing.
+NEED
+  exit 0
+fi
+
+get() { awk -v k="$1" '$1==k {print $2; found=1} END{ if(!found) print "<absent>" }' "$table"; }
+check "source_tree_sha256" "$PREDICTED_SOURCE_TREE_SHA" "$(get source_tree_sha256)"
+check "t11 fingerprint"    "$PREDICTED_T11_FP"          "$(get t11_fingerprint)"
+check "devnet fingerprint" "$PREDICTED_DEVNET_FP"       "$(get devnet_fingerprint)"
+check "fp golden"          "$PREDICTED_FP_GOLDEN"       "$(get fp_golden)"
+check "premine builds"     "$PREDICTED_PREMINE_BUILDS"  "$(get premine_builds)"
 
 printf '%s\n' "-- summary -----------------------------------------------------------------"
 if [ "$fail" -eq 0 ]; then
-  printf '  all predictions hold. The pin and the tree it pins are the same object.\n'
+  printf '  all five predictions hold, against a table computed from the frozen tree.\n'
 else
   die "$fail value(s) differ from the prediction.
 
@@ -75,5 +96,7 @@ else
         between the prediction and the paste, and the ceremony's whole claim is that
         nothing did. NAME THE CHANGE THAT MOVED IT, or stop.
 
+        And distinguish the two failures: <absent> means the table does not carry that
+        name — the check did not run. A hex value that differs means it ran and disagreed.
         'It is probably fine' is the sentence this script exists to interrupt."
 fi
