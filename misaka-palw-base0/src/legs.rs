@@ -1018,7 +1018,13 @@ pub fn base0_binding_from_step_root_v1(
     // no decode CALLS, so the leg is the empty one — and the shape pass refuses any other pairing
     // of count and root, which is why this is derived rather than chosen.
     let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
-    let checkpoint_count = decode_calls / checkpoint_profile.checkpoint_interval;
+    // **At the cadence the CLASS's map runs** (ADR-0082 Decision 4, amended). `decode_calls /
+    // interval` for every shipped class, verbatim; `prefill + decode_calls` for a class whose map
+    // addresses history tiles, because its leg commits after every position. The consensus side
+    // recomputes exactly this (`palw_step_leg`'s shape pass), so a binding built at the other
+    // cadence is a leg the court convicts on sight.
+    let checkpoint_count =
+        kaspa_consensus_core::palw_context_ladder::palw_checkpoint_count_v1(profile, ctx, checkpoint_profile.checkpoint_interval);
     // **The captured root, not a placeholder.** This line used to read
     //     if checkpoint_count == 0 { empty } else { Hash64::default() }
     // which committed a non-zero count under a ZERO tree root — three checkpoints nobody could
@@ -1453,6 +1459,181 @@ mod a16_row_tests {
             widest > i8::MAX as i32,
             "a KV value of {widest} fits in a byte, so this test's premise needs re-measuring rather than assuming"
         );
+    }
+
+    // =============================================================================================
+    // ADR-0082 Decision 4, amended — the per-position cadence, and the fold that pays for it
+    // =============================================================================================
+
+    /// A profile at the RC geometry with the map that puts the class on the per-position cadence.
+    #[cfg(test)]
+    fn per_position_profile() -> kaspa_consensus_core::palw_step::PalwShapeProfileV3 {
+        use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+        let mut profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the RC geometry is a profile");
+        profile.state_chunk_map_id = kaspa_consensus_core::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3();
+        profile
+    }
+
+    /// Deterministic bytes for a geometry's chunks, of exactly the lengths the map declares.
+    #[cfg(test)]
+    fn chunks_for(geometry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1, salt: u8) -> Vec<Vec<u8>> {
+        (0..geometry.chunk_count())
+            .map(|index| {
+                let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(geometry, index)
+                    .expect("the map has this chunk");
+                (0..entry.byte_len()).map(|b| (b as u8) ^ salt ^ (index as u8)).collect()
+            })
+            .collect()
+    }
+
+    /// **A tiled-map class files a checkpoint at every position, prefill included, and the counter
+    /// counts positions.**
+    ///
+    /// The leg's own arithmetic, without an engine: what the court recomputes is
+    /// `palw_checkpoint_count_v1` and `palw_checkpoint_covered_at_index_v1`, and this is the
+    /// producer answering them.
+    #[test]
+    fn a_tiled_map_class_checkpoints_every_position_and_a_shipped_one_does_not() {
+        use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
+        use kaspa_consensus_core::palw_context_ladder as ladder;
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+
+        let shipped = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("a profile");
+        let tiled = per_position_profile();
+        let ctx = rc_job_context(&shipped, 4, 4); // prefill 4, exact_decode 4 -> 3 decode calls
+        let cp = map::integer_kv_checkpoint_profile_v1(map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
+
+        // The shipped class: three checkpoints, one per decode call, none over the prefill.
+        let mut per_call = Base0CheckpointCaptureV1::new(&ctx, &shipped, &cp);
+        assert_eq!(per_call.retention(), Base0CheckpointRetentionV1::Chunks);
+        for call in 1..=3u32 {
+            assert!(!per_call.wants_checkpoint_after_v1(0, call), "the prefill is uncovered on the shipped cadence");
+            assert!(per_call.wants_checkpoint_after_v1(call, 0));
+            let g = per_call.next_geometry().expect("a geometry");
+            per_call.push_chunks(chunks_for(&g, 0x11)).expect("the chunks are the map's");
+        }
+        let shipped_leg = per_call.finish_canonical_v1().expect("sealed at the canonical count");
+        assert_eq!(shipped_leg.leaves.len(), 3, "decode_calls / interval, the shipped rule");
+        for (index, leaf) in shipped_leg.leaves.iter().enumerate() {
+            assert_eq!(leaf.covered_decode_call, index as u32 + 1, "(index + 1) x interval, and the interval is one");
+        }
+
+        // The tiled class: seven — every position the cache ever holds.
+        let mut per_position = Base0CheckpointCaptureV1::new(&ctx, &tiled, &cp);
+        assert_eq!(per_position.retention(), Base0CheckpointRetentionV1::Fold, "the retention is the cadence's");
+        let mut taken = 0u32;
+        for position in 0..ctx.declared_prefill_tokens {
+            assert!(per_position.wants_checkpoint_after_v1(0, position), "a PREFILL position is a checkpoint boundary now");
+            let g = per_position.next_geometry().expect("a geometry");
+            assert_eq!(g.positions, position + 1, "the geometry is taken at the positions the cache holds");
+            per_position.push_chunks(chunks_for(&g, 0x22)).expect("the chunks are the map's");
+            taken += 1;
+        }
+        for call in 1..=3u32 {
+            assert!(per_position.wants_checkpoint_after_v1(call, 0));
+            let g = per_position.next_geometry().expect("a geometry");
+            per_position.push_chunks(chunks_for(&g, 0x22)).expect("the chunks are the map's");
+            taken += 1;
+        }
+        assert_eq!(taken, ladder::palw_checkpoint_count_v1(&tiled, &ctx, 1));
+        let tiled_leg = per_position.finish_canonical_v1().expect("sealed at the canonical count");
+        assert_eq!(tiled_leg.leaves.len(), 7, "prefill 4 + 3 decode calls");
+        for (index, leaf) in tiled_leg.leaves.iter().enumerate() {
+            assert_eq!(leaf.covered_decode_call, index as u32 + 1, "index + 1 POSITIONS");
+        }
+        // The two legs are different objects, and the reason is the map id inside the leaf hash —
+        // not a version field, which is why `PalwCheckpointLeafV2`'s wire form did not have to move.
+        assert_ne!(shipped_leg.merkle_root, tiled_leg.merkle_root);
+        assert_eq!(shipped_leg.leaves[0].covered_decode_call, tiled_leg.leaves[0].covered_decode_call, "same number");
+        assert_ne!(shipped_leg.leaf_hashes[0], tiled_leg.leaf_hashes[0], "different leaf, because the map id is in the preimage");
+    }
+
+    /// **The fold retains nothing, and what a chunk-retaining capture would have retained is
+    /// QUADRATIC in the job's length.**
+    ///
+    /// The measurement Decision 4 rests on. Checkpoint `i` of a per-position leg holds `i + 1`
+    /// positions of the cache, so keeping every checkpoint's bytes is `Σ (i+1) = Θ(n²)` rows — and
+    /// the cache they came from is prefix-stable, so keeping the cache once answers all of them.
+    #[test]
+    fn the_folds_retention_is_constant_and_the_alternative_is_quadratic() {
+        use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+
+        let tiled = per_position_profile();
+        let cp = map::integer_kv_checkpoint_profile_v1(map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
+        let mut measured: Vec<(u32, u64, u64)> = Vec::new();
+        for prefill in [4u32, 8, 16] {
+            let ctx = rc_job_context(&base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("a profile"), prefill, 1);
+            let mut fold = Base0CheckpointCaptureV1::new(&ctx, &tiled, &cp);
+            let mut would_have_retained = 0u64;
+            for position in 0..prefill {
+                let g = fold.next_geometry().expect("a geometry");
+                let bytes = chunks_for(&g, 0x33);
+                would_have_retained += bytes.iter().map(|c| c.len() as u64).sum::<u64>();
+                assert!(fold.wants_checkpoint_after_v1(0, position));
+                fold.push_chunks(bytes).expect("pushes");
+            }
+            let leg = fold.finish_canonical_v1().expect("sealed");
+            let retained: u64 = leg.chunks.iter().flatten().map(|c| c.len() as u64).sum();
+            assert!(leg.chunks.is_empty(), "the fold keeps no chunk list at all");
+            assert_eq!(retained, 0, "and therefore no bytes");
+            assert_eq!(leg.leaves.len() as u32, prefill, "it still commits every one of them");
+            measured.push((prefill, retained, would_have_retained));
+        }
+        // Constant in the job's length — the property being asserted.
+        assert!(measured.iter().all(|(_, retained, _)| *retained == 0), "the fold's retention moved: {measured:?}");
+        // And the alternative is quadratic: doubling the job more than doubles it, twice over.
+        let (_, _, at4) = measured[0];
+        let (_, _, at8) = measured[1];
+        let (_, _, at16) = measured[2];
+        assert!(at8 > 2 * at4 && at16 > 2 * at8, "the chunk-retaining alternative is not superlinear: {measured:?}");
+        println!("chunk-retaining alternative at 4/8/16 positions: {at4} / {at8} / {at16} bytes; the fold retains 0 at all three");
+    }
+
+    /// **A checkpoint's chunks are re-derivable from a cache that has run PAST it, byte for byte.**
+    ///
+    /// This is the whole of what makes the fold sound, and it is a property of the CACHE rather
+    /// than of the leg: a K or V row written at position `j` is never revised, so an entry naming
+    /// `j` reads the same bytes out of every later cache. Measured on the real A16 cache with the
+    /// real serializer, at the four-byte width the tiled map declares.
+    #[test]
+    fn an_earlier_checkpoints_chunks_come_out_of_a_later_cache_unchanged() {
+        use kaspa_consensus_core::palw_state_chunk_map::{PalwStateChunkEntryV1, PalwStateChunkKindV1};
+
+        let artifact = artifact();
+        let engine = A16Engine::new(&artifact).expect("an A16 class");
+        let mut cache = A16Cache::new(artifact.shape.n_layers);
+        let row_len = {
+            engine.forward_token_traced(&mut cache, 5, 0).expect("one position runs");
+            cache.key_rows_for_test()[0].len()
+        };
+        let entry = |position_start: u32, position_count: u32| PalwStateChunkEntryV1 {
+            kind: PalwStateChunkKindV1::Key,
+            attn_layer: 0,
+            position_start,
+            position_count,
+            row_bytes: (row_len * 4) as u32,
+        };
+
+        // Snapshot every prefix's bytes as the cache grows, exactly as a per-position capture would.
+        let mut as_taken: Vec<Vec<u8>> = vec![cache.state_chunk_bytes_v1(&entry(0, 1)).expect("position 0")];
+        for position in 1..6u32 {
+            engine.forward_token_traced(&mut cache, (position as usize * 7 + 3) % artifact.shape.vocab, position as usize).expect("runs");
+            as_taken.push(cache.state_chunk_bytes_v1(&entry(0, position + 1)).expect("the prefix so far"));
+        }
+        // Now re-derive every one of them from the FINAL cache — which is what the fold does.
+        for (index, taken) in as_taken.iter().enumerate() {
+            let rederived = cache.state_chunk_bytes_v1(&entry(0, index as u32 + 1)).expect("the same entry, a later cache");
+            assert_eq!(
+                &rederived, taken,
+                "checkpoint {index}'s chunk changed once the cache ran on — the attention cache is not prefix-stable and the \
+                 fold is unsound"
+            );
+        }
+        // A tile in the MIDDLE of the history too, which is what the dissection's bottom opens.
+        let mid = cache.state_chunk_bytes_v1(&entry(2, 3)).expect("positions 2..5");
+        assert_eq!(mid.len(), 3 * row_len * 4);
+        assert_eq!(&mid[..row_len * 4], &as_taken[2][2 * row_len * 4..3 * row_len * 4], "and it is the same rows, at an offset");
     }
 
     /// **The converter must preserve the trace's own coordinates, not invent an ordering.**
