@@ -398,6 +398,36 @@ gate above is the one that would have caught all three.
   court — `shape_profile_id` hashes the profile's borsh and no court field is in that struct, and
   `canonical_classes_v1`'s second line is `let _ = court;`, so the court parameter is decorative
   with respect to class identity. W3's `max_close_chunks` is not implicated.
+- **Decide which dense artifact the genesis registers — the shipped one, or the one this build can
+  reproduce.** They are not the same file, and the difference is measured rather than suspected:
+
+  | | shipped `qwen25-1.5b-a16.palwart` | this build's `qwen25-convert --a16` |
+  |---|---|---|
+  | size | 1,795,427,276 | 1,795,427,276 |
+  | artifact digest | `c00faa48…` | `a24ee25b…` |
+  | **inventory root** (what the v5 row registers) | `1a7457f1…` | **`2246a380…`** |
+  | operands | 434,440 | 434,440 |
+  | class id via `bind --artifact` | `8d2e6f16…` | **`8d2e6f16…` — identical** |
+  | tokenizer commitment | 64 zero bytes | `fa9a4352…` |
+
+  **484,183,979 bytes differ**, across the whole weight body rather than in any field, and the
+  character of the difference is ±1 in int8 weights. **The converter is deterministic** — two runs
+  produce byte-identical output — so this is not noise: the shipped artifact was produced by
+  different code or different inputs, and the build being cut cannot reproduce it.
+
+  That breaks the property `qwen25-convert`'s own doc names: *"a verifier re-runs this and compares
+  the class id, which is why the conversion has to be bit-reproducible."* The class id survives —
+  it hashes the PROFILE, and no weight is in the profile, which is why `bind` gives the same
+  `8d2e6f16…` for both — but **nothing weight-derived survives, and the inventory root is
+  weight-derived.**
+
+  On a re-genesis, registering the reproducible artifact is free and is the only option consistent
+  with the launch's central claim. The cost is that the dense tier's model-gate evidence was
+  measured against the SHIPPED weights and would have to be re-measured against these.
+
+  *This also corrects a claim made from the other side: re-converting was expected to move neither
+  `class_id` nor `artifact_root`. The first is measured true; the second is measured false, because
+  the premise — that re-converting only binds the tokenizer — is false.*
 - **Toolchain pinned** and the CI gates runnable in one local command
 - **The single re-pin**, in the order of §4
 
