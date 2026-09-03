@@ -505,6 +505,27 @@ pub const fn base0_fp_seat_width_bound_v1(window_receipt: u64, milli_positions_p
     window_receipt.saturating_mul(milli_positions_per_daa) / 1_000
 }
 
+/// **The recompute, timed** — where `rate_seat_prefill` comes from on a host that actually ran it.
+///
+/// Returns the state and the milliseconds ONE position cost, over every position the recompute
+/// folded (the prefill and the teacher-forced decode calls). It is the same run
+/// [`base0_fp_recompute_state_v1`] performs, wall-clocked: a rate measured any other way would be
+/// a rate for some other work.
+pub fn base0_fp_seat_measure_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    prompt_token_ids: &[u32],
+    output_token_ids: &[u32],
+    decode_calls: u32,
+    kernels: &mut K,
+) -> Result<(Base0FpSeatStateV1, u64), Base0FpRecomputeError> {
+    let started = std::time::Instant::now();
+    let state = base0_fp_recompute_state_v1(profile, ctx, prompt_token_ids, output_token_ids, decode_calls, kernels)?;
+    let elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    let per_position = base0_fp_seat_ms_per_position_v1(elapsed_ms, state.positions);
+    Ok((state, per_position))
+}
+
 /// The milliseconds one prefilled position cost, from a measured wall clock over `positions`.
 /// Rounded UP: a rate rounded up is a bound rounded down, and the direction that is safe for a
 /// deadline is the one that admits fewer positions.
