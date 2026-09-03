@@ -50,8 +50,8 @@ solid.
 The class that produces these artifacts can be certified on both lanes, and each certification object
 fits one carrier — no chunking, so the split-carriage path is not on this row's critical path at all:
 
-    palw-certify drill  --family a16-v5 --lane attempt   # 6 fault vectors, 10 kernels, 76,873 B
-    palw-certify drill  --family a16-v5 --lane fp        #                              80,293 B
+    palw-certify drill --family a16-v5 --lane attempt --out attempt.json   # 6 vectors, 10 kernels, 76,873 B
+    palw-certify drill --family a16-v5 --lane fp      --out fp.json        #                        80,293 B
     palw-certify bind   --artifact <the .palwart> --lane fp
     palw-certify bind   --model-id "Qwen/Qwen2.5-1.5B/graph-v5@512" --lane fp
 
