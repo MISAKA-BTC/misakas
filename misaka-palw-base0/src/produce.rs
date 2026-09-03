@@ -335,6 +335,13 @@ pub fn base0_execute_for_attempt_streaming_capped_v1(
             rows.retain(|r| r.table != PalwStepTableV1::Post);
         }
         capture.push_call(profile, ctx, 0, p as u32, &rows).map_err(ProduceError::Leg)?;
+        // **The prefill arm the other two producers have** (ADR-0082 Decision 4, amended; audit
+        // B, M-1). `false` at every prefill position on the floor's own per-call map — and the
+        // moment any class routed through here registers a tiled one, this is where its
+        // checkpoints come from instead of nowhere.
+        if checkpoints.wants_checkpoint_after_v1(0, p as u32) {
+            checkpoints.push(&cache).map_err(ProduceError::Leg)?;
+        }
         last_logits = logits;
     }
     let mut next = argmax_lowest(&last_logits);
@@ -354,15 +361,20 @@ pub fn base0_execute_for_attempt_streaming_capped_v1(
         generated.push(next as u32);
         on_token(next as u32);
         logits_rows.push(logits);
-        // A checkpoint after this call if the cadence says so. `call` IS the covered decode call —
-        // the cache now holds `prefill + call` positions, which is what the map derives for it.
-        if call as u32 == checkpoints.next_covered_decode_call() {
+        // A checkpoint after this call if the cadence says so — the capture's OWN predicate, not a
+        // second spelling of the per-call rule (audit B, M-1). `call == next_covered_decode_call()`
+        // is that rule written out, and under a tiled map `next_covered_decode_call()` returns a
+        // POSITION: the test would then fire at the wrong coordinates and never during the prefill.
+        if checkpoints.wants_checkpoint_after_v1(call as u32, 0) {
             checkpoints.push(&cache).map_err(ProduceError::Leg)?;
         }
     }
 
-    let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
-    let checkpoints = checkpoints.finish(decode_calls / checkpoint_profile.checkpoint_interval).map_err(ProduceError::Leg)?;
+    // **Sealed at the count the CLASS's cadence says the job has** (audit B, M-1).
+    // `finish_canonical_v1` exists precisely to remove the `decode_calls / interval` spelling from
+    // the producers; the floor was the last one still carrying it, and it is the same number on
+    // the map the floor registers.
+    let checkpoints = checkpoints.finish_canonical_v1().map_err(ProduceError::Leg)?;
     let tiles = capture.finish().map_err(ProduceError::Leg)?;
     let trace_root = base0_logits_trace_root_v1(ctx, &logits_rows, &generated);
     let activation_leg_root = base0_activation_leg_root_v1(ctx);

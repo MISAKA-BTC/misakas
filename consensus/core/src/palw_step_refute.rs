@@ -3775,7 +3775,11 @@ fn verify_kv_anchor<'a>(
         return Err(PalwStepRefuteError::Unadjudicable);
     };
     let geometry = geometry.map_err(|_| PalwStepRefuteError::Unadjudicable)?;
-    let expected_chunks = expected_chunks.unwrap_or_else(|| geometry.chunk_count());
+    // One spelling of the count, shared with `palw_step_leg`'s shape pass (audit B, M-4), with the
+    // dispatch above as its fallback for a map that crate cannot enumerate.
+    let expected_chunks = map::palw_state_chunk_count_at_v1(&binding.shape_profile, positions)
+        .or(expected_chunks)
+        .unwrap_or_else(|| geometry.chunk_count());
     if expected_chunks as usize != ops.chunks.len() {
         return Err(PalwStepRefuteError::InputSetNotCanonical("the carried chunk count is not the map's for this state"));
     }
