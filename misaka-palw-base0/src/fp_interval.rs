@@ -506,6 +506,29 @@ impl Base0FpIntervalOpeningAnyV1 {
     }
 }
 
+/// **What an opening SAYS its interval resumes from** — the checkpoint index, the decode call it
+/// covers, and the state root committed for it (ADR-0082 Decision 9).
+///
+/// This is what a seat reads BEFORE it recomputes: the covered call says how far to run, and the
+/// root is what the recompute is compared against. `None` for interval 0, which starts at the
+/// prompt, and for bytes that are not an opening.
+///
+/// **Everything here is the executor's word until the replay checks it.** The covered call is
+/// re-derived from the geometry inside
+/// [`base0_verify_fp_interval_opening_with_state_v1`] and an opening that named another one is
+/// refused there — so a lie costs this seat one recompute and buys nothing. A caller that wants
+/// the cheap half of that guard bounds `covered_decode_call` by the job's own decode count before
+/// it spends the pass.
+pub fn base0_fp_interval_opening_anchor_v1(opening_bytes: &[u8]) -> Option<(u32, u32, Hash64)> {
+    let any = base0_fp_interval_opening_decode_any_v1(opening_bytes).ok()?;
+    let (index, root) = any.committed_checkpoint_v1()?;
+    let covered = match &any {
+        Base0FpIntervalOpeningAnyV1::WithHistory(o) => o.anchor.as_ref().map(|a| a.leaf.covered_decode_call),
+        Base0FpIntervalOpeningAnyV1::Recomputed(o) => o.anchor.as_ref().map(|a| a.leaf.covered_decode_call),
+    }?;
+    Some((index, covered, root))
+}
+
 /// **The state this seat already recomputed for the interval this opening is of**, if it has one
 /// (ADR-0082 Decision 9).
 ///
