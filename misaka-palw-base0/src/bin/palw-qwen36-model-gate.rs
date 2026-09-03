@@ -135,6 +135,9 @@ fn read_gguf_header(path: &str) -> Vec<u8> {
 /// `grammar.canonicalize(answer)` sees leading non-JSON and refuses. `--assistant-prefill`
 /// supplies it so the two assemblies can be compared on the same model.
 const QWEN35_NOTHINK_PREFILL: &str = "<think>\n\n</think>\n\n";
+/// Whether `--assistant-prefill nothink` was asked for. The bytes above are what it MEANS;
+/// the segments that carry it are built in [`chatml_user_segments`], because two of them
+/// must be `Special(id)` and not text.
 
 /// **The gateway's ChatML template, as segments** — the same reproduction `palw-model-gate` uses,
 /// checked against this tree's other spelling so a divergence in either is a failed assertion and
@@ -143,7 +146,7 @@ const QWEN35_NOTHINK_PREFILL: &str = "<think>\n\n</think>\n\n";
 fn chatml_user_segments(
     tokenizer: &QwenTokenizer,
     content: &str,
-    assistant_prefill: &str,
+    assistant_prefill: bool,
 ) -> (Vec<PalwFpPromptSegmentV1>, String) {
     let start = tokenizer.added_id("<|im_start|>").unwrap_or_else(|| die("this tokenizer has no <|im_start|>".into()));
     let end = tokenizer.added_id("<|im_end|>").unwrap_or_else(|| die("this tokenizer has no <|im_end|>".into()));
@@ -167,9 +170,24 @@ fn chatml_user_segments(
     let shipped = misaka_palw_base0::tokenizer::qwen_chat_prompt(None, &[("user", content)]);
     assert_eq!(displayed, shipped, "the harness's template is not this tree's Qwen chat template");
 
-    if !assistant_prefill.is_empty() {
-        segments.push(PalwFpPromptSegmentV1::Text(assistant_prefill.as_bytes().to_vec()));
-        displayed.push_str(assistant_prefill);
+    // **`<think>` has to be the ID, not the text.** ADR-0079 Decision 7 / S7: a `Text` segment is
+    // encoded with `encode_without_specials`, so a stranger's `<|im_start|>` stays ordinary text —
+    // and so does a template's `<think>`. Spelling the preamble as text produced the BPE pieces
+    // `[13314, 741, 29, 271, 510, 26003, 29, 271]` instead of `[248068, 271, 248069, 271]`, i.e. a
+    // MISSPELLED think block, and the model answered it with degenerate closing tags. The segment
+    // API's `Special(id)` is the documented way a template names a control token, and
+    // `prompt_ids_for_input_v1` refuses an id this tokenizer does not hold as one.
+    if assistant_prefill {
+        let open = tokenizer.added_id("<think>").unwrap_or_else(|| die("this tokenizer has no <think>".into()));
+        let close = tokenizer.added_id("</think>").unwrap_or_else(|| die("this tokenizer has no </think>".into()));
+        segments.push(PalwFpPromptSegmentV1::Special(open));
+        displayed.push_str("<think>");
+        segments.push(PalwFpPromptSegmentV1::Text(b"\n\n".to_vec()));
+        displayed.push_str("\n\n");
+        segments.push(PalwFpPromptSegmentV1::Special(close));
+        displayed.push_str("</think>");
+        segments.push(PalwFpPromptSegmentV1::Text(b"\n\n".to_vec()));
+        displayed.push_str("\n\n");
     }
     (segments, displayed)
 }
@@ -254,9 +272,9 @@ fn main() {
     // Empty by default: the SHIPPED assembly is what a gate measures unless it is told
     // otherwise. `--assistant-prefill nothink` is the model's own template's branch.
     let assistant_prefill = match flag("--assistant-prefill").as_deref() {
-        None | Some("") | Some("shipped") => String::new(),
-        Some("nothink") => QWEN35_NOTHINK_PREFILL.to_string(),
-        Some(other) => other.to_string(),
+        None | Some("") | Some("shipped") => false,
+        Some("nothink") => true,
+        Some(other) => die(format!("--assistant-prefill takes `shipped` or `nothink`, not {other:?}")),
     };
     std::fs::create_dir_all(&out).unwrap_or_else(|e| die(format!("{}: {e}", out.display())));
 
@@ -424,7 +442,7 @@ fn main() {
     // -------------------------------------------------------------------------------------
     // 4. The template's own cost, measured: the empty-content user turn.
     // -------------------------------------------------------------------------------------
-    let (empty_segments, empty_displayed) = chatml_user_segments(rt.tokenizer(), "", &assistant_prefill);
+    let (empty_segments, empty_displayed) = chatml_user_segments(rt.tokenizer(), "", assistant_prefill);
     let empty_ids = prompt_ids_for_input_v1(rt.tokenizer(), rt.manifest(), &PalwFpWorkerInputV3::Segments(empty_segments))
         .unwrap_or_else(|e| die(e));
     eprintln!(
@@ -434,7 +452,10 @@ fn main() {
         empty_ids
     );
 
-    eprintln!("[palw-qwen36-model-gate] assistant_prefill: {assistant_prefill:?}");
+    eprintln!(
+        "[palw-qwen36-model-gate] assistant_prefill: {}",
+        if assistant_prefill { QWEN35_NOTHINK_PREFILL } else { "<none — the shipped assembly>" }
+    );
     let eog: Vec<u32> = rt.manifest().eog_token_ids.clone();
     eprintln!("[palw-qwen36-model-gate] eog ids {eog:?}");
 
@@ -449,7 +470,7 @@ fn main() {
                 continue;
             }
         }
-        let (segments, displayed) = chatml_user_segments(rt.tokenizer(), &case.prompt, &assistant_prefill);
+        let (segments, displayed) = chatml_user_segments(rt.tokenizer(), &case.prompt, assistant_prefill);
         let prompt_ids = match prompt_ids_for_input_v1(rt.tokenizer(), rt.manifest(), &PalwFpWorkerInputV3::Segments(segments)) {
             Ok(ids) => ids,
             Err(e) => {
@@ -688,7 +709,7 @@ fn main() {
         }));
     }
 
-    let tag = if assistant_prefill.is_empty() { "shipped".to_string() } else { "nothink".to_string() };
+    let tag = if assistant_prefill { "nothink" } else { "shipped" };
     let report_path = out.join(format!("report-n{n_ctx}-{tag}.json"));
     std::fs::write(&report_path, serde_json::to_vec_pretty(&serde_json::json!(report)).unwrap())
         .unwrap_or_else(|e| die(format!("{}: {e}", report_path.display())));
