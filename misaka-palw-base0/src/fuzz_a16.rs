@@ -249,19 +249,31 @@ fn gate_accepts(
     // compares against the arity, and a base too small for the long-form rules is priced by the
     // anchored shape with the same dissection — `PricedForADifferentCourt` is the gate's answer
     // when a registrant prices a row for a court the ruleset does not play, not this harness's.
+    //
+    // **The arity is the one an ARMED CHAIN would play, not one written into the bundle** (audit D
+    // M-4). This read `bundle.court.dissection_arity()` while `fuzz_a16_profiles_from_v1` wrote
+    // the derived value into the bundle first — a configuration no chain has, because no genesis
+    // builder writes a derived arity in, and precisely the one in which H-1's stored-versus-derived
+    // mismatch is invisible. `palw_court_params_at_v2(bundle, true)` is what the court itself
+    // reads at activation, so the harness and the chain now answer the same question.
     let fused = kaspa_consensus_core::palw_class_admission_v2::palw_profile_has_fused_attention_v1(profile);
-    let arity = bundle.court.dissection_arity();
+    let arity = kaspa_consensus_core::palw_court_v2::palw_court_params_at_v2(bundle, fused)
+        .map(|c| c.dissection_arity())
+        .unwrap_or_else(|_| bundle.court.dissection_arity());
     let court = fused.then_some(kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
         dissection_arity: arity,
         prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
         window_court_daa: kaspa_consensus_core::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.window_court,
     });
     let ladder = fused.then(|| {
-        kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, court).unwrap_or_else(|| {
+        kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, court, bundle.court.max_step_leaf_count()).unwrap_or_else(|| {
             kaspa_consensus_core::palw_class_admission_v2::PalwClassLadderRulesV1 {
                 ladder: bundle.court.max_step_leaf_count(),
-                cost_shape: kaspa_consensus_core::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(profile)
-                    .with_dissection_v1(arity),
+                cost_shape: kaspa_consensus_core::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(
+                    profile,
+                    bundle.court.max_step_leaf_count(),
+                )
+                .with_dissection_v1(arity),
                 canonical_footprint_floor: 0,
             }
         })
@@ -287,7 +299,7 @@ pub fn fuzz_a16_profiles_v1(seed: u64, iterations: u64) -> FuzzTallyV1 {
 /// pinned; this is what lets a second base be driven without moving that pin.
 pub fn fuzz_a16_profiles_from_v1(seed: u64, iterations: u64, artifact: &Base0ArtifactV1, base: &PalwShapeProfileV3) -> FuzzTallyV1 {
     let engine = A16Engine::new(artifact).expect("the store resolves");
-    let mut bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+    let bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
         base.shape_profile_id(),
         kaspa_hashes::Hash64::from_u64_word(0xCA7),
         kaspa_hashes::Hash64::from_u64_word(0xC0757),
@@ -298,13 +310,12 @@ pub fn fuzz_a16_profiles_from_v1(seed: u64, iterations: u64, artifact: &Base0Art
         ),
     )
     .expect("the devnet bundle assembles");
-    // **A fused base is fuzzed under the court that can try it** (ADR-0082 Decision 6): the devnet
-    // bundle plays the binary court, and the gate refuses every graph-v5 row by name under it, so
-    // the corpus would never reach execution. The RC derives 4 (`palw_court_arity_v1`, the
-    // smallest legal arity inside the window); a v2 base leaves the bundle byte for byte.
-    if kaspa_consensus_core::palw_class_admission_v2::palw_profile_has_fused_attention_v1(base) {
-        bundle.court = bundle.court.with_dissection_arity(4).expect("4 is a legal dissection arity");
-    }
+    // **The bundle is the devnet's, unmutated** (audit D M-4). This wrote the derived arity into
+    // `bundle.court` for a fused base so that `gate_accepts` would read 4 back out of it. No chain
+    // bundle carries a derived arity — every preset literal and every genesis builder writes the
+    // binary 2 — so the harness was measuring a gate no network runs, and it was exactly the
+    // configuration in which H-1's stored-versus-derived mismatch cannot be seen. `gate_accepts`
+    // now asks `palw_court_params_at_v2`, which is what an armed chain asks.
     let root = artifact.artifact_digest();
 
     let mut rng = FuzzRng::new(seed);
