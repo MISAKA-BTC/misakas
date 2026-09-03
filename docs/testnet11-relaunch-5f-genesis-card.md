@@ -1158,6 +1158,26 @@ FH closes the hole the audit found. Verified here, not read: `misaka-palw-derive
 `instruct-bound.palwart` (1,795,427,276 B) at the path the fixtures name and `qwen25-tokenizer.json`
 where they expect it.
 
+**AND `--run-ignored all` IS THE MIRROR: the same missing fixture, the opposite verdict.**
+
+    a skip that returns early         counts as PASSED
+    an ignored test FORCED to run     counts as FAILED
+    same absent fixture — and NEITHER verdict is about the code
+
+Measured: the three `palw_agent_recovery` tests "failed" in **0.016s** each under `--run-ignored
+all`, panicking on `env::var("MISAKA_PALW_GGUF").expect(…)`. Nothing ran. **The duration is the tell
+again** — 16 ms cannot spawn a resident agent and a fresh process.
+
+**The `#[ignore]` reason string was the only honest part of the mechanism** — *"needs the real
+palw-worker and the 1.2 GB pinned model"* names exactly what is absent — and forcing the run
+discards it. *Reaching for more coverage produced less information*, and produced it in the shape of
+an alarm: three reds in the one subsystem a wipe stresses hardest, thirty seconds from being reported
+as a divergence. **A false alarm is harder to catch than a false green, because alarm feels like
+diligence.**
+
+The repair is the one already noted below: absence should have ONE meaning. Fail when the fixture is
+missing in CI, skip on an explicit opt-out — never a verdict that flips sign depending on the flag.
+
 **A LOUD SKIP STILL COUNTS AS PASSED, and `cargo test` captures the announcement.** Measured on the
 sibling suite the same evening:
 
