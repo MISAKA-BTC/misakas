@@ -346,7 +346,17 @@ dispatch() {
         doctest-hashes-no-asm) run_gate "$1" 'test result:'             -- gate_doctest_hashes_no_asm ;;
         doc)                  run_gate "$1" 'Finished|Generated|Documenting' -- gate_doc ;;
         example-kip10)        run_gate "$1" 'Finished|Running'          -- gate_example_kip10 ;;
-        *) echo "unknown gate '$1'; try --list" >&2; return 125 ;;
+        # Rule 1 again, one level up: an unknown id used to print a line to stderr and return
+        # 125, which NOTHING read -- the loop below ignored dispatch's status -- so `ci-gates.sh
+        # clipy` (one p) printed `GREEN -- 0 gate(s) passed` and exited 0. A wrapper that exits 0
+        # having run nothing is the exact failure this file was written against, and it was in
+        # this file. It is a counted failure now, with a name, like any other.
+        *)
+            FAILED=$((FAILED + 1))
+            SUMMARY="$SUMMARY$(printf '\n  %-22s %s' "$1" "FAILED: no such gate -- try --list")"
+            printf '\n=== gate %-20s FAILED: no such gate. `bash scripts/ci-gates.sh --list` names them all.\n' "$1" >&2
+            return 125
+            ;;
     esac
 }
 
@@ -384,8 +394,10 @@ echo "ci-gates: $REPO_ROOT"
 echo "ci-gates: toolchain $(rustc --version 2>/dev/null || echo '<no rustc>')"
 echo "ci-gates: gates ->$SELECTED"
 
+RAN=0
 for g in $SELECTED; do
     dispatch "$g"
+    RAN=$((RAN + 1))
 done
 
 # Rule 2 again: one line per gate with its own exit code, never a single aggregate word.
@@ -397,5 +409,14 @@ if [ "$FAILED" -ne 0 ]; then
     [ "$FAILED" -gt 120 ] && FAILED=120
     exit "$FAILED"
 fi
-printf 'ci-gates: GREEN -- %d gate(s) passed.\n' "$PASSED"
+# A run that judged NOTHING is not a pass. `PASSED` and `RAN` disagreeing means a gate neither
+# passed nor was counted as failed, which would be a bug in this script rather than in the tree --
+# say so instead of printing a colour.
+if [ "$PASSED" -eq 0 ] || [ "$PASSED" -ne "$RAN" ]; then
+    printf 'ci-gates: RED -- %d gate(s) selected, %d ran, %d passed, %d failed. A green over zero\n' \
+           "$(set -- $SELECTED; echo $#)" "$RAN" "$PASSED" "$FAILED"
+    printf '          judgements is not a green; this is a bug in ci-gates.sh, not a verdict on the tree.\n'
+    exit 124
+fi
+printf 'ci-gates: GREEN -- %d gate(s) passed, and %d were selected.\n' "$PASSED" "$RAN"
 exit 0

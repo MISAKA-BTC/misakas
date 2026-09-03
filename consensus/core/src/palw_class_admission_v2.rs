@@ -49,7 +49,7 @@ use kaspa_hashes::Hash64;
 use crate::palw_catalog_coverage::{PalwReachableKernelSetV1, verify_catalog_coverage_v1};
 use crate::palw_mode_v2::{PalwClassCatalogEntryV2, PalwConsensusParamsV2};
 use crate::palw_state_v2::{PalwConsensusObjectV2, PalwPwuRuleV2};
-use crate::palw_step::{PalwShapeProfileV3, step_leaf_count, worst_case_step_leaf_count_v1};
+use crate::palw_step::{PalwShapeProfileV3, step_leaf_count};
 use crate::palw_step_refute::catalogued_kernel_ids_v1;
 use crate::palw_v2::PalwJobContextV2;
 
@@ -1204,7 +1204,10 @@ mod tests {
     use crate::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
     use crate::palw_mode_v2::{PalwCourtParamsV2, tests::conforming_bundle};
     use crate::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, QWEN25_3B, qwen25_profile_v1};
-    use crate::palw_step::PALW_STEP_MAX_LEAVES;
+    // `worst_case_step_leaf_count_v1` is used only from this module, so the import lives here:
+    // at the top of the file it was dead in the non-test build (`-D warnings` refused it)
+    // while the `--tests` target needed it -- one name, two targets, opposite answers.
+    use crate::palw_step::{PALW_STEP_MAX_LEAVES, worst_case_step_leaf_count_v1};
     use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, trace_scheme_id_v2};
 
     /// The measured Qwen2.5-1.5B graph, at the `tile_len` that actually admits its own declared

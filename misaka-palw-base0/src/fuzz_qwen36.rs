@@ -220,15 +220,14 @@ pub fn fuzz_qwen36_profiles_v1(seed: u64, iterations: u64) -> FuzzTallyV1 {
         };
         // The court's side of the same profile: an admitted class whose worst dispute does not
         // fit the carrier executes, certifies, and can never be policed.
-        match kaspa_consensus_core::palw_class_admission_v2::derive_court_cost_v1(&profile) {
-            Ok(cost) => {
-                tally.court_costed += 1;
-                tally.max_close_bytes_seen = tally.max_close_bytes_seen.max(cost.max_close_bytes);
-                if cost.max_close_bytes > kaspa_consensus_core::palw_class_admission_v2::PALW_RC_COURT_MAX_CLOSE_BYTES {
-                    tally.closes_over_ceiling += 1;
-                }
+        // A cost the derivation refuses is a profile the gate would have refused too, so there is
+        // deliberately no `else` here.
+        if let Ok(cost) = kaspa_consensus_core::palw_class_admission_v2::derive_court_cost_v1(&profile) {
+            tally.court_costed += 1;
+            tally.max_close_bytes_seen = tally.max_close_bytes_seen.max(cost.max_close_bytes);
+            if cost.max_close_bytes > kaspa_consensus_core::palw_class_admission_v2::PALW_RC_COURT_MAX_CLOSE_BYTES {
+                tally.closes_over_ceiling += 1;
             }
-            Err(_) => {}
         }
 
         // A caller's prompt, twice; the bits must not care which run it was. The recurrent state
@@ -288,7 +287,7 @@ mod tests {
     /// zero findings, and every measurement column actually measured something.
     #[test]
     fn a_bounded_fuzz_run_finds_no_panic_and_no_nondeterminism() {
-        let tally = fuzz_qwen36_profiles_v1(0x0067_2026_09_01, 400);
+        let tally = fuzz_qwen36_profiles_v1(0x0067_2026_0901, 400);
         println!("qwen36 fuzz tally: {tally:?}");
         assert_eq!(tally.panics, 0, "a panic inside the interpreter is the fence staying down");
         assert_eq!(tally.nondeterminism, 0, "two runs of one plan must be one bitstream");
@@ -308,7 +307,7 @@ mod tests {
     /// commit that says which change moved it, never alongside other work.
     #[test]
     fn the_fuzz_corpus_digest_is_the_same_on_every_machine() {
-        let tally = fuzz_qwen36_profiles_v1(0x0067_2026_09_01, 400);
+        let tally = fuzz_qwen36_profiles_v1(0x0067_2026_0901, 400);
         assert_eq!(
             faster_hex::hex_string(&tally.corpus_digest),
             CORPUS_DIGEST_400,

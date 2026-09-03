@@ -299,8 +299,7 @@ mod tests {
         // left a simnet base running 10 bps DAG parameters and 10 bps DNS windows at 120 s,
         // which `validate_palw_v2` now refuses — as it should, since that is the shape of the
         // mainnet defect this helper was quietly modelling.
-        let p = p.with_two_minute_cadence();
-        p
+        p.with_two_minute_cadence()
     }
 
     /// **Gate 5: the RC cannot mint an identity that can never admit a second class.**

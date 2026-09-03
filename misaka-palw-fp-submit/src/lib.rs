@@ -947,7 +947,7 @@ mod tests {
     fn an_unreadable_locked_outpoint_is_never_silently_dropped() {
         let good = format!("{}:7", "aa".repeat(64));
         assert_eq!(parse_locked_outpoints(std::slice::from_ref(&good)).unwrap().len(), 1);
-        for bad in [format!("{}", "aa".repeat(64)), format!("{}:x", "aa".repeat(64)), "nonsense:0".to_string()] {
+        for bad in ["aa".repeat(64), format!("{}:x", "aa".repeat(64)), "nonsense:0".to_string()] {
             assert!(parse_locked_outpoints(&[good.clone(), bad.clone()]).is_err(), "{bad:?} must not shorten the set");
         }
     }
