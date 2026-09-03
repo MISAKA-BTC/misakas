@@ -104,6 +104,25 @@ carrier either way, both prosecutable, sixty-four bytes apart. There is no trade
 been measured against, and registering a width nobody has measured is how this card got the previous
 two answers wrong.
 
+**And the width is right for BOTH lanes, measured rather than assumed.** The QWEN36 lane uses a
+different tokenizer — the GGUF's own `tokenizer.ggml.*`, 248,320 tokens against the dense lane's
+151,936 — so its costs did not have to be the dense ones. They are, exactly:
+
+    cad/01-extrude-l-bracket     qwen36  66   dense  66   (+0)
+    music/03-overlapping-melody  qwen36 261   dense 261   (+0)
+    scene/02-hierarchy           qwen36 286   dense 286   (+0)
+
+The reason it is durable rather than lucky: **a canonical DSL is ASCII JSON, and the two
+vocabularies coincide over that range** — the larger one's extra 96,384 entries are elsewhere. A
+grammar that ever admits non-ASCII string content does not inherit this and must re-measure.
+
+*The agreement was only worth recording because the instrument was first shown capable of
+disagreeing:* a tokenizer built from unread merges degrades to something byte-ish, and two degraded
+tokenizers agree on everything — which would read exactly like a +0. The measurement asserts the
+vocabularies differ in size AND that probes actually diverge (`Ω≈ç√∫` is 6 tokens against 5; two
+musical-keyboard emoji, 6 against 2), so a degenerate load fails instead of producing a comfortable
++0.
+
 **Third confirmation, from the artifact itself:** `qwen25-1.5b-a16.palwart` declares
 `max_position = 512` in its own header. The registered row, the artifact on disk, and the
 demonstration corpus all agree at 512. *(Corpus token counts measured by 1c with the shipped Qwen2.5
@@ -269,10 +288,24 @@ gate above is the one that would have caught all three.
 - **A way to certify the 512 row.** The A16 catalog is a fixed three-row table — `Qwen/Qwen2.5-1.5B`
   at n_ctx 16, `Qwen/Qwen2.5-Coder-1.5B-Instruct` at 18, `Qwen/Qwen2.5-1.5B/graph-v2` at 16 — and
   `palw-certify bind` takes only `--model-id`, with no `--n-ctx`, no `--class-id` and no
-  `--artifact`. **So the certification tool cannot bind the class this card registers.** Under
-  ADR-0075 a class with no `ClassLaneCertified` has its free-prompt lane closed, which is the
-  `registered: false, fp_certified: false` an acceptance drill is already reporting. Needs either a
-  512 catalog row or a `bind` that can name a width.
+  `--artifact`. **So the certification tool cannot bind the class this card registers.**
+
+  This is not a missing feature. It is **an identifier that does not identify**: a model id does not
+  determine a width, `n_ctx` is inside the identity, and so everything downstream is a
+  `ClassLaneCertified` for the wrong class or none at all. Under ADR-0075 the lane then ships
+  CLOSED and the demonstration refuses on the first request — a refusal that reads to whoever runs
+  it exactly like the width wall, which is the failure this card exists to prevent.
+
+  **Fixed by naming the class, not by adding a row.** A 512 catalog row would make the drill green
+  and is unfalsifiable: a wrong width binds to the wrong class silently, where a named width fails
+  to bind. The table has already failed in that exact direction — its own comment marks
+  **n_ctx 17 BURNED** by a 2026-08-28 mispairing that registered a class on chain against the
+  genesis constant, past a green suite. So `bind` gains `--artifact`, deriving the profile by
+  calling what the panel calls rather than writing a second spelling of it. The underlying defect is
+  one class root spelled two ways — from the artifact's inventory and from a constant — with nothing
+  forcing them equal, which is the A16 genesis root defect again.
+
+  *It is in no test because no test registers a class it did not also define.* A rehearsal found it.
 
   *Two things this is NOT, both checked in the source rather than reasoned about:* it is not the
   court — `shape_profile_id` hashes the profile's borsh and no court field is in that struct, and
