@@ -469,6 +469,18 @@ pub struct VirtualStateProcessor {
     /// get the same answer for the same block, or one node's session has a phase another node's
     /// does not.
     pub(super) palw_kary_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0081 Decision 3 / ADR-0082 Decision 5's fence, `None` on every shipped preset** —
+    /// and un-armable on this build (`Params::validate_palw_v2` refuses it, audit D M-2). Held
+    /// here so the `ClassRegistered` arm reads the form from the ONE place that decides it
+    /// (`Params::palw_prompt_ids_form_at`) rather than spelling `Flat` at the application site.
+    pub(super) palw_prompt_ids_merkle: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0077 Phase B's fence, `None` on every shipped preset.** Past it a class registration
+    /// is judged against `palw_class_ladder_rules_*` — the ladder both leaf counts are enumerated
+    /// against, the court the close is priced for and Decision 14's canonical floor — instead of
+    /// against the genesis-anchored shape. It was carried in `Params` and read nowhere in this
+    /// crate (audit D H-3), so the rules the ADR wrote had no door on the only permissionless
+    /// registration path.
+    pub(super) palw_context_ladder: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0069 Decision 7's fence, `None` on every shipped preset. Past it a block whose class
     /// holds no granted share contributes zero pwu to both chain weights — see
     /// [`Self::palw_uncertified_weightless_at`], which is the ONE place this is resolved.
@@ -901,6 +913,8 @@ impl VirtualStateProcessor {
             palw_capability_bound: params.palw_capability_bound_fence(),
             palw_certification_rent: params.palw_certification_rent,
             palw_kary_court: params.palw_kary_court_fence(),
+            palw_prompt_ids_merkle: params.palw_prompt_ids_merkle_fence(),
+            palw_context_ladder: params.palw_context_ladder,
             palw_uncertified_weightless: params.palw_uncertified_weightless,
             palw_da_court: params.palw_da_court,
             palw_frontier_provenance: params.palw_frontier_provenance,
@@ -6100,7 +6114,45 @@ impl VirtualStateProcessor {
                     // here rather than quietly granting or refusing weight on its own authority.
                     // The set is filled by the node's boot drill; the boot gate is what makes sure
                     // it agrees with the network's pin before a block is ever validated.
-                    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v3(
+                    // **The gate is called with the fences this block runs under** (audit D H-3).
+                    //
+                    // This called `verify_class_admission_v3` — six arguments, `ladder: None` and
+                    // `court: None` — which is the gate as it stood before ADR-0077 Phase B and
+                    // ADR-0082 existed. Two consequences, on the ONLY permissionless registration
+                    // path there is: every graph-v5 profile was refused
+                    // `FusedAttentionNeedsTheKaryCourt` even on a chain whose `palw_kary_court` is
+                    // armed (ADR-0082's own U-08 route, closed), and the close-chunk, ladder and
+                    // `CourtWindowTooShort` bounds were never evaluated against the armed court at
+                    // all. Every one of the three reads a fence, and a fence resolved anywhere but
+                    // at the ONE accessor is a rule two nodes can answer differently — so all
+                    // three come from the accessors above, at this block's own DAA score.
+                    //
+                    // `decode_rules` is `false` and not a fence read: ADR-0082 Decision 10's
+                    // numerator is not in the transition, and `Params::validate_palw_v2` refuses to
+                    // start a node that armed `palw_fp_decode_rules` (audit D M-1), so there is no
+                    // configuration in which this may be anything else.
+                    let court = match self.palw_kary_court_active_at(point.daa_score) {
+                        false => None,
+                        true => {
+                            let derived = self
+                                .palw_court_params_at(point.daa_score)
+                                .ok_or_else(|| format!("class {class_id} is registered on a chain with no V2 ruleset"))?
+                                .map_err(|e| format!("class {class_id} is judged under a court with no shape: {e}"))?;
+                            Some(kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
+                                dissection_arity: derived.dissection_arity(),
+                                prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
+                                window_court_daa: bundle.state.window_court(),
+                            })
+                        }
+                    };
+                    let ladder = self.palw_context_ladder_at(point.daa_score).then(|| {
+                        kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+                            &carriage.profile,
+                            court,
+                            bundle.court.max_step_leaf_count(),
+                        )
+                    });
+                    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v6(
                         bundle,
                         &carriage.profile,
                         &carriage.canonical,
@@ -6109,6 +6161,9 @@ impl VirtualStateProcessor {
                         // consensus must not read the drilled registry — and the chain's own.
                         &certified,
                         &chain_certified,
+                        ladder.flatten(),
+                        court,
+                        false,
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                 }
@@ -6581,6 +6636,21 @@ impl VirtualStateProcessor {
     /// root claim its peers refused, or deal a different number of children from the same range.
     pub(super) fn palw_kary_court_active_at(&self, daa_score: u64) -> bool {
         self.palw_kary_court.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0081 Decision 3's form at this block, resolved in exactly one place.** `Flat` on every
+    /// shipped preset and on every configuration this build can be started with.
+    pub(super) fn palw_prompt_ids_form_at(&self, daa_score: u64) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
+        match self.palw_prompt_ids_merkle {
+            Some(fence) if fence.is_active(daa_score) => kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            _ => kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        }
+    }
+
+    /// **ADR-0077 Phase B's fence at this block, resolved in exactly one place.** `false` on every
+    /// shipped preset.
+    pub(super) fn palw_context_ladder_at(&self, daa_score: u64) -> bool {
+        self.palw_context_ladder.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **The court a session is judged under at this block** (ADR-0082 Decision 3, patch note 7).
