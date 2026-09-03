@@ -68,6 +68,7 @@ fn tiny_class() -> (Qwen36ArtifactV1, PalwShapeProfileV3) {
 /// attention node per attention layer instead of four. A second GRAPH over one model, which is
 /// what makes it worth fuzzing — the mutations reach a node whose arity, out width and operand
 /// naming rule differ from every other node in the table.
+#[cfg(test)]
 fn tiny_class_v5() -> (Qwen36ArtifactV1, PalwShapeProfileV3) {
     let (artifact, v2) = tiny_class();
     let geometry = PalwQwen36GeometryV1 {

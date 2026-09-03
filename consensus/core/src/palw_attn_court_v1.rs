@@ -940,10 +940,10 @@ pub fn check_attn_dissect_bottom_v1(
     // for both K and V would recompute a triple no execution produced — a conviction built out of
     // honest rows read twice. Two different committing nodes is the weakest true statement
     // available here; see `opened_series_v1` for the part that is still not pinned.
-    if let (Some(k), Some(v)) = (k_slot, v_slot) {
-        if k == v {
-            return Err(PalwAttnCourtError::KeyAndValueAreTheSameSeries);
-        }
+    if let (Some(k), Some(v)) = (k_slot, v_slot)
+        && k == v
+    {
+        return Err(PalwAttnCourtError::KeyAndValueAreTheSameSeries);
     }
 
     let (m_star, s_star) = phase.root_scale();
@@ -1509,7 +1509,7 @@ mod tests {
                 };
                 // The compensation only cancels when both tiles are in the same range, which they
                 // are at the root; below it the challenger follows whichever child moved.
-                let played = play(&fx, arity, &mut phase, &claims);
+                let played = play(fx, arity, &mut phase, &claims);
                 assert_eq!(played, Played::Convicted, "positions {positions} at arity {arity}: a forged child survived to acquittal");
             }
         }

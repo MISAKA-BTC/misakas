@@ -40,7 +40,7 @@ impl FuzzRng {
     pub fn new(seed: u64) -> Self {
         Self(seed.max(1))
     }
-    pub fn next(&mut self) -> u64 {
+    pub fn next_u64(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x >> 12;
         x ^= x << 25;
@@ -49,7 +49,7 @@ impl FuzzRng {
         x.wrapping_mul(0x2545F4914F6CDD1D)
     }
     pub(crate) fn below(&mut self, n: u64) -> u64 {
-        self.next() % n.max(1)
+        self.next_u64() % n.max(1)
     }
 }
 
@@ -122,6 +122,7 @@ fn tiny_class() -> (Base0ArtifactV1, PalwShapeProfileV3) {
 /// The SAME artifact and the same geometry as [`tiny_class`], projected as ADR-0082's graph v5:
 /// one fused attention node per layer instead of four. The artifact is unchanged, which is what
 /// makes this a second GRAPH over one model rather than a second fixture.
+#[cfg(test)]
 fn tiny_class_v5() -> (Base0ArtifactV1, PalwShapeProfileV3) {
     let (artifact, v2) = tiny_class();
     let geometry = PalwQwen25GeometryV1 {

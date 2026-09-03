@@ -35,7 +35,7 @@ use crate::artifact::Base0ArtifactV1;
 use crate::engine::{Base0Engine, EngineError, KvCache, argmax_lowest};
 use crate::legs::{Base0CapturedRowV1, Base0StepCaptureV1, Base0StepTilesV1, LegError, base0_captured_rows_v1};
 use kaspa_consensus_core::palw_step::{
-    PALW_STEP_MAX_LEAVES, PalwShapeProfileV3, PalwStepTableV1, step_leaf_count, step_leaf_count_capped_v1,
+    PALW_STEP_MAX_LEAVES, PalwShapeProfileV3, PalwStepTableV1, step_leaf_count_capped_v1,
 };
 use kaspa_consensus_core::palw_step_leg::PalwStepBindingV2;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;

@@ -309,7 +309,7 @@ pub fn fp_worker_court_params_v1(network_id: &str) -> Result<kaspa_consensus_cor
     })?;
     let params = Params::from(net);
     match &params.palw_consensus_mode {
-        PalwConsensusMode::ConsensusV2(bundle) => Ok(bundle.court.clone()),
+        PalwConsensusMode::ConsensusV2(bundle) => Ok(bundle.court),
         _ => Err(format!(
             "{network_id} ships with PALW off, so it freezes no court and no step ladder — there is nothing for this worker to \
              price a job against"
