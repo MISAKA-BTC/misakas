@@ -1535,10 +1535,10 @@ Measured, and reproduced independently from two crates by two sessions:
 
 | ruleset cap | widest admissible n_ctx (A16) | admits the registered 512 row |
 |---|---|---|
-| 2^22 (shipped today) | **39** | no — needs 59,000,848, has 4,194,304 |
+| 2^22 (shipped today) | **39** | no — the registered row needs **52,778,128**, has 4,194,304 |
 | 2^23 | 79 | no |
 | 2^24 | 156 | no — opens every grammar floor, at a class narrower than the registered one |
-| **2^26** | **574** | **yes**, with 12% headroom |
+| **2^26** | **574** | **yes**, with **21%** headroom (14,330,736 of 67,108,864) |
 | 2^28 | 1,833 | yes |
 
 2^24 is the trap: it opens cad 38, music 60 and scene 104 and still tops out at 156, so it would
@@ -3649,3 +3649,52 @@ this one                       shows as SURPLUS    (2 passed, where 1 test ran t
 
 *A defect that presents as extra coverage is not going to be found by anyone looking for missing
 coverage*, which is what the whole evening has trained us to look for.
+
+### The width table quoted the UNREGISTERED row's numbers under a header that says "registered"
+
+Two figures in §7's ladder table were the `graph-v2 @ 512` projection's, in a column headed
+*"admits the registered 512 row"*:
+
+```
+                     was              is                       measured
+  2^22 "needs"       59,000,848       52,778,128               v5(512) = 4277d84f… REGISTERED
+  2^26 headroom      12%              21% (14,330,736)         v1/v2(512) = 8d2e6f16… NOT registered
+```
+
+**The qualitative claim survives and the numbers did not.** Both rows refuse at 2^22 and both fit
+at 2^26, so *"the shipped ladder refuses it, 2^26 admits it"* is true of the registered row as
+well — which is why nothing looked wrong. §3's own table at line 307 has **both** rows listed
+correctly and distinguished by name; the §7 table quoted one and labelled it the other.
+
+**And the shipped test says it three times:**
+
+```rust
+let row = palw_a16_context_row_profile_v1(512).expect("the registered row");
+assert!(…is_err(), "2^{pow} must not admit the registered 512 row");
+assert_eq!(need, 59_000_848, "the registered row's worst case");
+```
+
+`palw_a16_context_row_profile_v1(512)` is `8d2e6f16…` — **the exact class the `bind` fix exists to
+stop the tool naming.** The citation is sound and the *subject* is wrong, which is a different
+defect from the one I retracted an hour ago and lives in the same test.
+
+> **Third class-identity confusion at width 512 tonight, all of them `v1(512)` standing in for the
+> registered row**: `bind --n-ctx 512` naming `8d2e6f16…`, the ladder module's tautology hiding a
+> third id, and now this. **The v1 projection at 512 is a magnet** — it is what you get by asking
+> the ladder for "the 512 row" without saying which graph, and three separate pieces of code have
+> now mistaken it for the registered one.
+
+### And the number travelled one hop and got *better* evidence
+
+I reported six announcement defects; the sixth was mine. **It came back to me sharpened** —
+*"the wall clock and the content both saying the row's number was never printed"* — a more
+persuasive statement of a wrong claim than I had made.
+
+```
+my  "the three palw_agent_recovery tests"   -> repeated into a peer's ledger as an address
+1c's restatement of my count                 -> repeated back to me with added rigour
+```
+
+**Both times the receiver added rigour downstream of an unchecked claim, and rigour applied there
+makes the claim harder to dislodge.** *A number does not look like it needs checking* — and the
+sharpening, not the repetition, is the dangerous half.
