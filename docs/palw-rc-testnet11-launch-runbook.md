@@ -395,9 +395,23 @@ hold one appdir per host:
     5.104.81.23           /root/.t11
 
 The miner-pool slot on `.113` carries a full appdir under `/var/lib/`, nowhere near the others, and
-is invisible to anything that greps for `.t11`. Get the list from the processes themselves:
+is invisible to anything that greps for `.t11`. Get the list from the processes themselves — and
+**not with the obvious command**, which this runbook carried until 2026-09-03:
 
+    # WRONG. `pgrep -f` matches the command ASKING: the remote shell's own argv holds both
+    # "kaspad" and the literal regex, so this prints `appdir=[^` as an appdir on every host.
+    # It also misses `kaspad.candidate`, which is a RUNNING NODE.
     pgrep -af kaspad | grep -oE 'appdir=[^ ]+' | sort -u
+
+    # RIGHT: walk /proc and match the EXECUTABLE's basename. The asking shell's exe is `bash`,
+    # so it cannot appear; any `kaspad*` build does, whatever it is called.
+    for d in /proc/[0-9]*; do
+        exe=$(readlink -f "$d/exe" 2>/dev/null) || continue
+        case "${exe##*/}" in kaspad*) ;; *) continue ;; esac
+        printf '%s  %s\n' "${exe##*/}" "$(tr '\0' '\n' < "$d/cmdline" | grep '^--appdir=')"
+    done | sort -u
+
+`scripts/relaunch-fleet-wipe.sh census` does exactly this across all three hosts.
 
 **And the seeders are part of the wipe.** Two hosts run `misaka-dnsseeder` (`.113` and
 `5.104.81.23`). A seeder that survives the relaunch keeps handing out old-genesis peers to every new
