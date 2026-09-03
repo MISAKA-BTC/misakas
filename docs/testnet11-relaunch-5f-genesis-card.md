@@ -709,6 +709,32 @@ green except the known pin" said this week was a statement about jobs that never
 | the split close is open | `check_court_close_declaration_acceptance_v2` (W6's signature), `check_close_declared_chunk_count_v2` (the ruleset's own `max_close_chunks`, so devnet's 1 refuses the path rather than engaging it), `palw_court_close_min_fee_v1` (an under-rented declaration is dropped with the block standing) | **Named so a reader can falsify §5 in ten seconds** rather than trust it. Every number here carries where it came from; a behaviour should too. |
 | **prosecutability** | ADR-0082 stream I's end-to-end court drill | **This is the gate, and admission is not.** A graph-v5 leaf disputed to the bottom under the ARMED fence set, through `apply_object`: honest acquitted, forged convicted. F's admission arm refusing an unfenced `AttnFused` profile by name is a guard on the way in — useful, and not the property. The property is that a dispute can be carried to a verdict, and only the drill asserts it. |
 
+**The stranger's two SKIPPED cases are the refusal cases, and the gap is structural.** Its per-file
+output includes:
+
+    91-over-max-steps.json          SKIPPED: cad op 'extrude' is outside this verifier's subset
+    92-over-max-artifact-bytes.json SKIPPED: cad op 'revolve' is outside this verifier's subset
+
+So `MAX_STEPS` (4,000,000) and `MAX_ARTIFACT_BYTES` (1 MiB) are confirmed **only by the
+implementation under test**. `MAX_DSL_BYTES` is fine — `90-over-max-dsl-bytes` refuses for the same
+reason on both sides, because a byte count is checked before any op runs.
+
+**And it cannot be closed with a cheaper fixture, which is worth knowing before someone tries.** The
+two limits are reachable only through the two high-amplification ops, and the kind's own doc says
+why: *"The boolean reaches none of them, because `BOOLEAN_LEAVES_MAX` is DERIVED from the artifact
+ceiling rather than declared: it is the largest leaf count whose worst-case lattice still fits. So a
+boolean the grammar admits is never refused by a bound."* A `box`/`boolean` fixture — the ops the
+verifier does implement — therefore **cannot** trip either ceiling by construction, and 64 KiB of
+DSL cannot describe enough boxes to reach 1 MiB of STL anyway; it would trip `MAX_DSL_BYTES` first
+and test the wrong limit.
+
+Closing it means implementing ear clipping and revolve in the Python verifier — which is precisely
+the `n³` work its refusal message declines. **Shipping with this open**, stated here rather than
+discovered: the two ceilings an attacker would push on are pinned by one implementation. The skip is
+loud, so it is a coverage gap and not a false green. *(That `BOOLEAN_LEAVES_MAX` is derived from the
+ceiling rather than declared is the same one-spelling rule this cut enforces everywhere else — the
+gap exists because the design is right, not because it is wrong.)*
+
 **The stranger gate's red is a STALE PIN, and its summary line does not say so.** It prints
 `SELFTEST FAILED — 3 of 18 checks disagree with the shipped tree`, which reads like a verifier that
 disagrees with the build. It is not. The 18 checks are two different kinds and they must be read
