@@ -1914,3 +1914,64 @@ the lineage ships.*
   `docs/evidence-qwen36-model-gate/` carries the answer bytes and the artifacts derived from them.
 - **5e had known unpatched defects while it ran.** The security-lane commit messages describe them
   and they are public. Say so; do not let someone else say it first.
+
+---
+
+## The instrumentation I wrote to measure the last open gap had two defects, both already written down
+
+The three `palw_agent_recovery` tests are the one measurement still open. I drove them
+on ibm from a script — `/root/agent-recovery.sh` — and the script contained **two defects
+this session already has notes about**. Neither produced an error.
+
+### 1. `| tail -4` on the build, again
+
+```
+nice -n 19 cargo build --release … --bin palw-worker 2>&1 | tail -4
+```
+
+The four lines that survived were: half of a doc comment, `note: run with RUST_BACKTRACE=1`,
+`warning: build failed, waiting for other jobs to finish...`, and `WORKER MISSING`.
+**The `error:` line is above the window.** The log is 273 bytes and says the build failed
+without saying why — so `grep -n '^error'` over the whole file returns nothing, and the
+file reads as though there were no error at all.
+
+This is the second time today. The rule is not "use a bigger tail":
+
+> **Truncate the summary, never the diagnostic.** A tail is a display decision applied to
+> a stream whose important line is at an unknown position. Write the whole thing to a file
+> and grep it; `tail` the grep, not the build.
+
+### 2. `pgrep -f agent-recovery.sh` matched the ssh command that was asking
+
+My first check printed `script: 2` and I read it as "the run is in progress". The script
+had **exited 1 twenty minutes earlier**. Both matches were shell processes whose *command
+text* contained the string — one of them the `ssh … pgrep …` I had just typed.
+
+I have a memory file about exactly this (`pgrep -f の待機ループは自分に一致する`) and it
+did not fire, because last time the shape was a `until ! pgrep -f` **wait loop** and this
+time it was a one-shot **census**. The stored lesson was attached to the loop, not to the
+predicate.
+
+The second invocation printed the proof in its own output:
+
+```
+2505482 bash -c … pgrep -af "bash /root/agent-recovery.sh" …   <- the asker
+2505485 bash /root/agent-recovery.sh                            <- the actual script
+```
+
+> **A process census that includes the censor is off by one, and the one is always yours.**
+> Match on the executable (`pgrep -x`), or on a pid you recorded when you started it, or
+> require the count to drop rather than to be nonzero.
+
+### What this cost, and what it did not
+
+Nothing in the cut moved: the four re-pin values are unaffected, and the tests concerned
+are already listed under §5 as a **stated gap**, not as a green. What it cost was twenty
+minutes of believing a measurement was running when it had failed, which is the cheaper
+half of the same defect — the expensive half is believing a measurement *passed*.
+
+The rerun captures the full build output and is running now. **Whatever it says, the honest
+line in §5 is unchanged until the tests are observed, and if the build error turns out to
+be something other than the pinned-llama.cpp link I named, then my stated reason for the
+gap was wrong even though the gap was real** — a true fact with a fabricated cause, which
+is the form that survives review because the conclusion checks out.
