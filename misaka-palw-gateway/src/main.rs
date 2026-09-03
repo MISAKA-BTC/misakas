@@ -1702,6 +1702,57 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **ADR-0082 Decision 11 at the entrance: the fence is the chain's, the quantization is
+    /// exact, and neither is silently softened.**
+    #[test]
+    fn the_gateway_refuses_sampling_until_the_chain_arms_it() {
+        use kaspa_consensus_core::palw_decode_select_v2::{PALW_DECODE_SEED_GREEDY, PALW_DECODE_T_ONE};
+        let chat = |temperature: Option<f64>, seed: Option<&str>| ChatRequest {
+            model: None,
+            messages: Vec::new(),
+            max_tokens: None,
+            stream: None,
+            derive: None,
+            serve_dsl: false,
+            temperature,
+            seed: seed.map(str::to_string),
+        };
+        let dormant = chain::ChainFacts::default();
+        let armed = chain::ChainFacts { fp_decode_rules_armed: true, ..Default::default() };
+
+        // Greedy is admissible on every network, and is what an absent field means.
+        assert_eq!(sampling_from_request(&chat(None, None), &dormant), Ok((PALW_DECODE_SEED_GREEDY, 0)));
+        assert_eq!(sampling_from_request(&chat(Some(0.0), Some("")), &dormant), Ok((PALW_DECODE_SEED_GREEDY, 0)));
+
+        // A temperature on a network that has not armed the fence is a refusal that NAMES it —
+        // not a silent downgrade to greedy, and not an inference the operator pays for and the
+        // transition then refuses.
+        let refused = sampling_from_request(&chat(Some(0.7), None), &dormant).unwrap_err();
+        assert!(refused.contains("palw_fp_decode_rules"), "the refusal names the fence: {refused}");
+        assert!(refused.contains("SamplingNotArmed"), "and the error the transition would raise: {refused}");
+        // A seed alone is the same refusal — it is a field claiming to decide something.
+        assert!(sampling_from_request(&chat(None, Some(&"ab".repeat(32))), &dormant).is_err());
+
+        // Armed: the quantization is `round(t x 2^24)`, exactly.
+        assert_eq!(sampling_from_request(&chat(Some(1.0), None), &armed), Ok((PALW_DECODE_SEED_GREEDY, PALW_DECODE_T_ONE as u32)));
+        assert_eq!(sampling_from_request(&chat(Some(0.5), None), &armed).unwrap().1, (PALW_DECODE_T_ONE / 2) as u32);
+        assert_eq!(sampling_from_request(&chat(Some(0.7), None), &armed).unwrap().1, 11_744_051, "0.7 x 2^24 rounded");
+
+        // The seed is 64 hex characters or it is a refusal — never a truncation.
+        let hex = "0123456789abcdef".repeat(4);
+        assert_eq!(sampling_from_request(&chat(Some(1.0), Some(&hex)), &armed).unwrap().0[0], 0x01);
+        assert!(sampling_from_request(&chat(Some(1.0), Some("dead")), &armed).is_err(), "a short seed is refused");
+        assert!(sampling_from_request(&chat(Some(1.0), Some(&"zz".repeat(32))), &armed).is_err(), "non-hex is refused");
+
+        // The ceiling is the FIELD's, derived: `u32::MAX / 2^24`. Above it is a refusal, because a
+        // clamped temperature is a job that ran under a rule nobody asked for.
+        assert!((MAX_TEMPERATURE - 255.999_999).abs() < 1e-4, "u32::MAX / 2^24 = {MAX_TEMPERATURE}");
+        assert!(sampling_from_request(&chat(Some(MAX_TEMPERATURE), None), &armed).is_ok());
+        assert!(sampling_from_request(&chat(Some(MAX_TEMPERATURE + 1.0), None), &armed).is_err());
+        assert!(sampling_from_request(&chat(Some(-0.1), None), &armed).is_err());
+        assert!(sampling_from_request(&chat(Some(f64::NAN), None), &armed).is_err());
+    }
+
     /// **ADR-0079 S5.** The gateway holds the executor PUBLIC key only, and refuses to boot when a
     /// signing secret is reachable in its own view — which is why `--derive-seed` must point
     /// outside `--identity`'s directory and outside `--outbox`, the two this scans.
