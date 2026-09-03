@@ -49,6 +49,30 @@ const DEMONSTRATED: &[&str] = &["music/03-overlapping-melody.json", "scene/02-hi
 /// close is 80,504 bytes, one carrier, prosecutable.
 const BUDGET_AT_512: usize = 503;
 
+/// The same budget against a prompt somebody actually sent: **134 tokens**, measured by the
+/// free-prompt drill on a live devnet.
+///
+/// **The ceiling above is not the operating budget, and reading it as one has already cost a
+/// correction.** The genesis card said the grammar floors "fit at n_ctx 128" on exactly the
+/// ceiling arithmetic; against a 134-token request the budget at 128 is NEGATIVE — the prompt
+/// alone does not fit the context — and nothing fits at all. A floor is what the ANSWER costs,
+/// and the prompt is spent from the same context.
+///
+/// Both are kept because they answer different questions: the ceiling bounds what a width could
+/// ever buy, this bounds what a caller sees. The registered width is the same either way, which is
+/// the point of stating both rather than replacing one with the other:
+///
+/// ```text
+///              ceiling (1-tok)      realistic (134-tok)
+///   n_ctx 128     119   1 of 3          -14   0 of 3
+///   n_ctx 256     247   1 of 3          114   1 of 3
+///   n_ctx 512     503   3 of 3          370   3 of 3
+/// ```
+///
+/// Not a constant of the system — a longer request makes it smaller. It is the number the
+/// demonstration corpus is checked against precisely because it can move.
+const BUDGET_AT_512_REALISTIC: usize = 512 - 8 - 134;
+
 #[test]
 fn every_demonstrated_corpus_answer_fits_the_width_the_launch_registers() {
     let Ok(path) = std::env::var("MISAKA_FLOOR_TOKENIZER_DENSE") else {
@@ -65,8 +89,9 @@ fn every_demonstrated_corpus_answer_fits_the_width_the_launch_registers() {
         let ids = t.encode_without_specials(&compact).expect("a canonical ASCII DSL encodes");
         println!("{rel}: {} tokens", ids.len());
         assert!(
-            ids.len() <= BUDGET_AT_512,
-            "{rel} is {} tokens, over the {BUDGET_AT_512}-token decode budget of the n_ctx 512 row. Either the \
+            ids.len() <= BUDGET_AT_512_REALISTIC,
+            "{rel} is {} tokens, over the {BUDGET_AT_512_REALISTIC}-token budget an n_ctx 512 row leaves after a \
+             134-token request (the ceiling is {BUDGET_AT_512}, and nobody gets it). Either the \
              corpus answer grew or the registered width has to. A demonstration whose own artifact cannot be \
              emitted by the class it demonstrates is the failure this test exists for.",
             ids.len()
