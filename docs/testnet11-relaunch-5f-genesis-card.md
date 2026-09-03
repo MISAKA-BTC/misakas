@@ -150,6 +150,34 @@ makes the table true, which is why §1 arms it.
 one configuration, quoted as if it held under another. It was caught by the session that derived
 it, reading its own label — "dissection court, arity 16, Merkle prompt ids".)*
 
+### …and the same thing again, one axis over: the EVIDENCE ROUTE
+
+The court must be able to play whichever route the disputed position needs, and the two routes do
+not cost the same. Dense graph-v5 @ 512, dissection court, 2^32 ladder, kv_dim-wide tiles:
+
+| route | bottom opening | whole close | chunks |
+|---|---|---|---|
+| checkpoint | 41,997 | 82,719 | **1** |
+| cache-write (rows after the last checkpoint, one leaf per row with its own 2 KiB path) | 175,297 | 216,019 | **3** |
+
+**And the dense tier has no checkpoints at prefill positions today** — the leg checkpoints per
+decode call. So a dispute at any prefill position, or at a decode position whose tile straddles the
+last checkpoint, is the three-chunk close, which §5 cannot file.
+
+**Therefore, as things stand, the dense row is prosecutable only for the positions the checkpoint
+route happens to cover, and that is not "prosecutable".** The honest sentence until this closes is:
+*three carriers on the cache-write route, one on the checkpoint route.*
+
+The fix is structural and cheap because the attention cache is prefix-stable: a tiled-map class
+commits a checkpoint at EVERY position, prefill included, and then every bottom opens at most one
+chunk per kind plus the disputed position's own two rows — about 48 KB, one carrier, at every
+position. That is ADR-0082 stream K, started; it moves the checkpoint leg's leaf version, the
+anchored replay's rule, the cost arm and the fold's capture. **Stream K joins §7's must-land list**
+— without it, §3's central claim holds only for a subset of positions nobody chooses.
+
+Hybrid graph-v5 is 274,460 = 4 chunks on the same derivation, bound by the recurrence replay
+evidence. It is unregistered at genesis (§2) and will need W6/W7's split acceptance regardless.
+
 | row | close proof | + binding | carriers | fileable |
 |---|---|---|---|---|
 | graph-v2/v3 dense @ 512, binary court (today) | 1,154,673 | 1,168,669 | 14 | **no** |
@@ -285,6 +313,9 @@ gate above is the one that would have caught all three.
   `assistant\n`. Under the shipped assembly **4 of 8 correct answers were refused at column 1** and
   2 more burned their budget on an open reasoning trace. The preamble must be `Special(id)` — as
   text it becomes BPE pieces through ADR-0079 D7's `encode_without_specials`.
+- **ADR-0082 stream K — per-position checkpoints.** Without it the registered row is prosecutable
+  only at positions the checkpoint route covers; a dispute at any prefill position is a three-chunk
+  close and §5 cannot file it. See §3.
 - **A way to certify the 512 row.** The A16 catalog is a fixed three-row table — `Qwen/Qwen2.5-1.5B`
   at n_ctx 16, `Qwen/Qwen2.5-Coder-1.5B-Instruct` at 18, `Qwen/Qwen2.5-1.5B/graph-v2` at 16 — and
   `palw-certify bind` takes only `--model-id`, with no `--n-ctx`, no `--class-id` and no
