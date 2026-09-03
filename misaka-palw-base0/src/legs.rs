@@ -59,6 +59,10 @@ pub enum LegError {
     /// The cache could not answer a chunk the map names. A checkpoint over a state the engine does
     /// not hold is not a checkpoint.
     CheckpointStateUnavailable { chunk_index: u64 },
+    /// The FOLD refused (ADR-0082 Decision 7). Carried rather than flattened to a string: the
+    /// sparse capture's refusals name the call, the slot and the width they were given, and a
+    /// producer that has just lost a job needs to read which one it was.
+    Fold(crate::fp_capture::Base0SparseCaptureError),
 }
 
 /// One captured step row, tiled and placed at its canonical leaf index.
@@ -243,6 +247,101 @@ impl Base0StepCaptureV1 {
     /// every leaf nobody filled.
     pub fn finish_partial(self) -> Base0StepTilesV1 {
         Base0StepTilesV1 { leaves: self.leaves, tiles: self.tiles }
+    }
+}
+
+/// **What a run's leaves are folded into: the dense tiles, or the fold** (ADR-0082 Decision 7).
+///
+/// One capture LOOP per family, one enumeration, two sinks. The dense arm holds every tile and
+/// every leaf hash — ~50 MB a position on the dense tier — because the attempt lane's court
+/// assembly reads tiles back out of it (`base0_refutation_from_capture_capped_v1`); the sparse arm
+/// holds one node per `2^retain_level` leaves and nothing else, and an opening asked for later is
+/// re-derived by replay (`fp_interval`). A family chooses the sink at the top of its loop and the
+/// rest of the loop cannot tell the difference, which is the property that makes the roots equal:
+/// the same rows, in the same order, through the same leaf hash.
+pub enum Base0CaptureSinkV1 {
+    Dense(Base0StepCaptureV1),
+    Sparse(crate::fp_capture::Base0SparseStepCaptureV1),
+}
+
+/// What a sealed capture hands its caller: the tree (always), the tiles (dense only), and the two
+/// numbers the binding is built from.
+pub struct Base0CaptureOutcomeV1 {
+    pub tiles: Option<Base0StepTilesV1>,
+    pub tree: crate::fp_capture::Base0SparseStepTreeV1,
+    pub step_leaf_count: u64,
+    pub step_merkle_root: Hash64,
+}
+
+impl Base0CaptureSinkV1 {
+    /// The dense sink: every tile kept.
+    pub fn dense(leaf_count: u64) -> Result<Self, LegError> {
+        Ok(Self::Dense(Base0StepCaptureV1::new(leaf_count)?))
+    }
+
+    /// **The fold**, at the level the ruleset's ladder derives
+    /// (`crate::fp_capture::palw_base0_sparse_retain_level_v1`).
+    pub fn sparse(
+        profile: &PalwShapeProfileV3,
+        ctx: &PalwJobContextV2,
+        leaf_count: u64,
+        max_step_leaf_count: u64,
+    ) -> Result<Self, LegError> {
+        let level = crate::fp_capture::palw_base0_sparse_retain_level_v1(max_step_leaf_count);
+        Ok(Self::Sparse(
+            crate::fp_capture::Base0SparseStepCaptureV1::new_capped_v1(profile, ctx, leaf_count, level, max_step_leaf_count)
+                .map_err(LegError::Fold)?,
+        ))
+    }
+
+    /// One call's rows. The signature is the dense capture's, so a loop that switches sinks
+    /// switches one line.
+    pub fn push_call(
+        &mut self,
+        profile: &PalwShapeProfileV3,
+        ctx: &PalwJobContextV2,
+        call_index: u32,
+        position: u32,
+        rows: &[Base0CapturedRowV1],
+    ) -> Result<(), LegError> {
+        match self {
+            Self::Dense(capture) => capture.push_call(profile, ctx, call_index, position, rows),
+            Self::Sparse(capture) => capture.push_call(profile, call_index, position, rows).map_err(LegError::Fold),
+        }
+    }
+
+    pub fn progress(&self) -> (u64, u64) {
+        match self {
+            Self::Dense(capture) => capture.progress(),
+            Self::Sparse(capture) => capture.progress(),
+        }
+    }
+
+    /// Seal it. Both arms answer with the same tree, because the dense arm folds its own leaves
+    /// through the same accumulator — so `step_merkle_root` has ONE derivation whichever sink ran,
+    /// and "the roots are equal through both routes" is a property of this function rather than a
+    /// coincidence two code paths arrive at.
+    pub fn finish(self, max_step_leaf_count: u64) -> Result<Base0CaptureOutcomeV1, LegError> {
+        match self {
+            Self::Dense(capture) => {
+                let tiles = capture.finish()?;
+                let level = crate::fp_capture::palw_base0_sparse_retain_level_v1(max_step_leaf_count);
+                let tree = crate::fp_capture::Base0SparseStepTreeV1::from_leaves_capped_v1(&tiles.leaves, level, max_step_leaf_count)
+                    .map_err(LegError::Fold)?;
+                let step_merkle_root = tree.root().map_err(LegError::Fold)?;
+                debug_assert_eq!(
+                    Some(step_merkle_root),
+                    kaspa_consensus_core::palw_step_leg::step_merkle_root_capped_v1(&tiles.leaves, max_step_leaf_count).ok(),
+                    "the fold and the whole-vector root are one rule"
+                );
+                Ok(Base0CaptureOutcomeV1 { step_leaf_count: tiles.leaves.len() as u64, step_merkle_root, tree, tiles: Some(tiles) })
+            }
+            Self::Sparse(capture) => {
+                let tree = capture.finish().map_err(LegError::Fold)?;
+                let step_merkle_root = tree.root().map_err(LegError::Fold)?;
+                Ok(Base0CaptureOutcomeV1 { step_leaf_count: tree.leaf_count(), step_merkle_root, tree, tiles: None })
+            }
+        }
     }
 }
 
@@ -721,14 +820,44 @@ pub fn base0_binding_from_capture_with_profile_capped_v1(
     activation_leg_root: Hash64,
     step_ladder_cap: u64,
 ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, LegError> {
-    use kaspa_consensus_core::palw_step_leg::{
-        PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, checkpoint_empty_root_v2, execution_commitment_root_v2,
-        step_merkle_root_capped_v1,
-    };
-    let context_hash = ctx.context_hash();
-    let profile_hash = profile.shape_profile_id();
+    use kaspa_consensus_core::palw_step_leg::step_merkle_root_capped_v1;
     let step_leaf_count = tiles.leaves.len() as u64;
     let step_merkle_root = step_merkle_root_capped_v1(&tiles.leaves, step_ladder_cap).map_err(|_| LegError::EmptySpace)?;
+    base0_binding_from_step_root_v1(
+        profile,
+        ctx,
+        step_leaf_count,
+        step_merkle_root,
+        checkpoints,
+        checkpoint_profile,
+        full_logits_trace_root,
+        activation_leg_root,
+    )
+}
+
+/// **The same commitment, from the step leg's two NUMBERS rather than from a leaf vector.**
+///
+/// Everything above this line in a binding is a function of `(step_leaf_count, step_merkle_root)`
+/// and the job — never of the tiles — so a capture that kept no tiles (ADR-0082 Decision 7's fold)
+/// commits through exactly this function, and the dense path reaches it after computing the same
+/// two numbers. One derivation of `committed_execution_root`, whichever sink the run used.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_binding_from_step_root_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    step_leaf_count: u64,
+    step_merkle_root: Hash64,
+    checkpoints: &Base0CheckpointsV1,
+    checkpoint_profile: &kaspa_consensus_core::palw_legs::PalwCheckpointProfileV1,
+    full_logits_trace_root: Hash64,
+    activation_leg_root: Hash64,
+) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, LegError> {
+    use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, checkpoint_empty_root_v2, execution_commitment_root_v2};
+    if step_leaf_count == 0 {
+        return Err(LegError::EmptySpace);
+    }
+    let context_hash = ctx.context_hash();
+    let profile_hash = profile.shape_profile_id();
     // **From the profile, not from the family constant.** A producer files what ITS class
     // registered; reaching for the constant here would work today and would silently file the
     // integer family's map for a class that had registered something else. One source.

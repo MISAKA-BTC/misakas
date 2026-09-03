@@ -102,6 +102,39 @@ pub enum Base0SparseCaptureError {
         got: usize,
         max: usize,
     },
+    /// **The fold was handed a call it was not expecting.** A cursor is only the canonical index
+    /// while the terms arrive in the canonical order; the dense capture could take them in any
+    /// order because it addressed every leaf, and this cannot.
+    CallOutOfOrder {
+        expected: (u32, u32),
+        got: (u32, u32),
+    },
+    /// A captured row whose `(table, layer, index)` is not a slot of the class's graph.
+    RowIsNotThisGraphs {
+        layer: u16,
+        index: usize,
+    },
+    /// Two rows for one global slot — one execution, two answers about the same node.
+    TwoRowsForOneSlot,
+    /// The position's enumeration reaches a slot the caller supplied no row for. The dense
+    /// capture's own refusal is the short capture its `finish` rejects, one call later.
+    MissingRowForSlot {
+        slot: u32,
+    },
+    /// A row for a slot this position does not have — a post row where no token is selected, or a
+    /// slot past the graph. `NotACanonicalCoordinate` on the dense path.
+    RowForASlotThePositionDoesNotHave {
+        slot: u32,
+    },
+    /// A row whose width is not the one its node's `out_len` implies at this position's `kv_len`.
+    /// The dense capture places such a row's overflow tiles at coordinates
+    /// `canonical_step_leaf_index` refuses; the fold has no coordinate to refuse, so it compares
+    /// the width itself.
+    RowIsNotTheGraphsWidth {
+        slot: u32,
+        got: u64,
+        tiles: u64,
+    },
     /// A deserialized tree whose retained vector is not the width its own `(leaf_count,
     /// retain_level)` implies. It describes no tree, so it has no root — and saying so is the
     /// difference between a refusal and an index past the end of a vector.
@@ -133,6 +166,22 @@ impl std::fmt::Display for Base0SparseCaptureError {
             }
             Self::OpeningTooDeep { got, max } => {
                 write!(f, "the range opening would carry {got} siblings, past the leg's cap of {max}")
+            }
+            Self::CallOutOfOrder { expected, got } => write!(
+                f,
+                "the fold expected call {} position {} and was handed call {} position {}",
+                expected.0, expected.1, got.0, got.1
+            ),
+            Self::RowIsNotThisGraphs { layer, index } => {
+                write!(f, "a captured row at layer {layer} index {index} is not a slot of this class's graph")
+            }
+            Self::TwoRowsForOneSlot => write!(f, "two captured rows name one global node slot"),
+            Self::MissingRowForSlot { slot } => write!(f, "this position's enumeration reaches slot {slot} and no row was captured for it"),
+            Self::RowForASlotThePositionDoesNotHave { slot } => {
+                write!(f, "a row was captured for slot {slot}, which this position's enumeration does not reach")
+            }
+            Self::RowIsNotTheGraphsWidth { slot, got, tiles } => {
+                write!(f, "slot {slot} committed {got} values, which is not the {tiles} tile(s) its declared width implies")
             }
             Self::TreeIsNotItsOwnShape { retained, expected } => {
                 write!(f, "the retained vector holds {retained} nodes and this tree's shape implies {expected}")
@@ -200,8 +249,16 @@ pub struct Base0SparseStepAccumulatorV1 {
 
 impl Base0SparseStepAccumulatorV1 {
     pub fn new(leaf_count: u64, retain_level: u32) -> Result<Self, Base0SparseCaptureError> {
-        if leaf_count == 0 || leaf_count > PALW_STEP_LEG_MAX_LEAVES {
-            return Err(Base0SparseCaptureError::LeafCountOutOfRange { got: leaf_count, max: PALW_STEP_LEG_MAX_LEAVES });
+        Self::new_capped_v1(leaf_count, retain_level, PALW_STEP_LEG_MAX_LEAVES)
+    }
+
+    /// **The same fold against the ladder top the RULESET froze** — W1b's threading
+    /// (`bb4f145b`) applied to the retention side. The leg's own constant is a DEFAULT, and a job
+    /// priced against a deeper ruleset must be foldable or the executor commits a leg it cannot
+    /// retain. A caller with no ruleset in scope passes the default and nothing moves.
+    pub fn new_capped_v1(leaf_count: u64, retain_level: u32, max_step_leaf_count: u64) -> Result<Self, Base0SparseCaptureError> {
+        if leaf_count == 0 || leaf_count > max_step_leaf_count {
+            return Err(Base0SparseCaptureError::LeafCountOutOfRange { got: leaf_count, max: max_step_leaf_count });
         }
         if retain_level > PALW_BASE0_SPARSE_MAX_RETAIN_LEVEL_V1 {
             return Err(Base0SparseCaptureError::RetainLevelOutOfRange {
@@ -283,7 +340,17 @@ impl Base0SparseStepTreeV1 {
     /// leaves — the retention file as it is written today, and the tests — and it goes through the
     /// same accumulator so the two cannot be two rules.
     pub fn from_leaves_v1(leaves: &[Hash64], retain_level: u32) -> Result<Self, Base0SparseCaptureError> {
-        let mut acc = Base0SparseStepAccumulatorV1::new(leaves.len() as u64, retain_level)?;
+        Self::from_leaves_capped_v1(leaves, retain_level, PALW_STEP_LEG_MAX_LEAVES)
+    }
+
+    /// [`Self::from_leaves_v1`] against the ruleset's ladder — the same threading, for the same
+    /// reason ([`Base0SparseStepAccumulatorV1::new_capped_v1`]).
+    pub fn from_leaves_capped_v1(
+        leaves: &[Hash64],
+        retain_level: u32,
+        max_step_leaf_count: u64,
+    ) -> Result<Self, Base0SparseCaptureError> {
+        let mut acc = Base0SparseStepAccumulatorV1::new_capped_v1(leaves.len() as u64, retain_level, max_step_leaf_count)?;
         for leaf in leaves {
             acc.push(*leaf)?;
         }
@@ -299,7 +366,14 @@ impl Base0SparseStepTreeV1 {
     /// answer, it is an index past the end. Checked once, by name, and every derivation goes
     /// through it.
     pub fn validate_v1(&self) -> Result<(), Base0SparseCaptureError> {
-        if self.leaf_count == 0 || self.leaf_count > PALW_STEP_LEG_MAX_LEAVES {
+        // **No ladder bound here, deliberately.** The bound on the accumulator's `leaf_count` is
+        // an ALLOCATION guard — the dense forms size a `Hash64` vector from the field, and a
+        // stranger's blob asking for `2^48` leaves is a process abort. Nothing in this type is
+        // sized from `leaf_count`: the retained vector's width is checked against it below, the
+        // level walks are `O(64)`, and every leaf-hash slice an opening reads is the caller's own.
+        // Bounding it here by the leg's DEFAULT ladder would refuse a tree a deeper ruleset made
+        // legal, which is the w1b defect in the retention path.
+        if self.leaf_count == 0 {
             return Err(Base0SparseCaptureError::LeafCountOutOfRange { got: self.leaf_count, max: PALW_STEP_LEG_MAX_LEAVES });
         }
         if self.retain_level > PALW_BASE0_SPARSE_MAX_RETAIN_LEVEL_V1 {
@@ -522,6 +596,241 @@ fn level_width(leaf_count: u64, level: u32) -> u64 {
     }
     width.max(1)
 }
+
+// =============================================================================================
+// The retained level, derived from the ruleset's ladder
+// =============================================================================================
+
+/// **What the retained set is allowed to weigh: 64 MiB, at any ladder** (ADR-0082 Decision 7).
+///
+/// The budget is the quantity the level is derived FROM; the level is not a number anyone types.
+pub const PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES: u64 = 64 << 20;
+
+/// `⌈log₂(budget / node bytes)⌉` — how many retained nodes the budget buys, as a level. A
+/// `Hash64` is 64 bytes, so 64 MiB is `2^20` of them.
+const fn sparse_retained_nodes_log2_v1() -> u32 {
+    (PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES / 64).trailing_zeros()
+}
+
+/// **The retained level a ladder of `max_step_leaf_count` leaves implies**:
+/// `retain_level = ⌈log₂ leaves⌉ − log₂(budget / 64)` — ADR-0082 Decision 7's own rule, which is
+/// the smallest level whose retained vector fits [`PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES`].
+///
+/// The argument is the RULESET's `PalwCourtParamsV2::max_step_leaf_count`, which is what the
+/// executor has priced its job against since W1b (`bb4f145b`) — never a constant here. At the
+/// `2^32` ladder ADR-0077 Decision 12 moves to it returns 12, which is what
+/// [`PALW_BASE0_SPARSE_RETAIN_LEVEL_V1`] is; at any deeper ladder it returns more, and the
+/// retained set does not grow past the budget.
+pub fn palw_base0_sparse_retain_level_for_ladder_v1(max_step_leaf_count: u64) -> u32 {
+    let ladder_level = max_step_leaf_count.next_power_of_two().trailing_zeros();
+    ladder_level.saturating_sub(sparse_retained_nodes_log2_v1())
+}
+
+/// **The level a capture folds at, for a ruleset whose ladder is `max_step_leaf_count`.**
+///
+/// The ladder's own derivation, floored at [`PALW_BASE0_SPARSE_RETAIN_LEVEL_V1`]. The floor is not
+/// a second rule about bytes — a level BELOW it retains more nodes, and it buys nothing, because
+/// the thing an opening re-derives is a whole CALL of the enumeration (~99 k leaves on the dense
+/// tier, ~298 k on the hybrid) and every level below `2^12` is already far inside one call. So
+/// under the shipped `2^22` ladder a claim's retained tree is 64 KiB rather than the 64 MiB the
+/// budget would allow, and at `2^32` the two rules agree on 12.
+pub fn palw_base0_sparse_retain_level_v1(max_step_leaf_count: u64) -> u32 {
+    palw_base0_sparse_retain_level_for_ladder_v1(max_step_leaf_count).max(PALW_BASE0_SPARSE_RETAIN_LEVEL_V1)
+}
+
+// =============================================================================================
+// The capture: a job's rows folded as they are produced
+// =============================================================================================
+
+/// The number of leaves one node of the graph commits at a position whose cache holds `kv_len`
+/// rows — `tiles_for(node_out_len(node, kv_len), node.tile_len)`, which `palw_step` keeps private
+/// to its own enumeration.
+///
+/// Restating it here is a second spelling of a consensus rule, and the way it is kept honest is
+/// the way the fold itself is: `the_fold_places_every_leaf_where_the_canonical_enumeration_does`
+/// compares this capture's whole index→hash map against the dense one's, which is built out of
+/// `canonical_step_leaf_index` and nothing else. A drift in either direction fails there rather
+/// than at a producer nobody can pay.
+fn node_leaf_count_v1(node: &kaspa_consensus_core::palw_step::PalwStepNodeV1, kv_len: u64) -> u64 {
+    use kaspa_consensus_core::palw_step::PalwStepOutLenV1;
+    let elements = match node.out_len {
+        PalwStepOutLenV1::Fixed { elements } => elements as u64,
+        PalwStepOutLenV1::KvScaled { multiplier } => multiplier as u64 * kv_len,
+    };
+    if node.tile_len == 0 { 0 } else { elements.div_ceil(node.tile_len as u64) }
+}
+
+/// **The free-prompt capture: every leaf hashed the moment the engine produces it, folded, and
+/// thrown away** (ADR-0082 Decision 7).
+///
+/// The dense twin ([`crate::legs::Base0StepCaptureV1`]) holds a `Hash64` for every leaf of the
+/// step space AND a `PalwStepTileLeafV1` — the tile's own bytes — for every one of them: ~50 MB a
+/// position on the dense tier, and it asks `canonical_step_leaf_index` where each of the ~110 k
+/// tiles of a position goes, a walk that is itself linear in the calls already captured. This
+/// holds one retained node per `2^retain_level` leaves and walks the enumeration ONCE per
+/// position, as a cursor: the canonical order is call-major, position-major, slot-major,
+/// tile-major, so the leaf a row's tile lands on is the one after the leaf before it.
+///
+/// **What it therefore requires of its caller, and refuses by name when it does not get it:**
+/// calls in ascending order from 0, positions in ascending order from 0 inside the prefill call,
+/// and every row of the position the class's graph declares — no more, no fewer, each the width
+/// its node's `out_len` implies at that position's `kv_len`. The dense capture could take rows in
+/// any order because it addressed every leaf; this one is a fold, and a fold cannot be given its
+/// terms out of order. Every one of those refusals is a case the dense capture also refused (as
+/// `NotACanonicalCoordinate`, or as the short capture its `finish` rejects) — the fold names them
+/// where they happen instead.
+pub struct Base0SparseStepCaptureV1 {
+    ctx_hash: Hash64,
+    profile_hash: Hash64,
+    prefill: u32,
+    decode_calls: u32,
+    acc: Base0SparseStepAccumulatorV1,
+    /// The next canonical leaf index the fold expects — the cursor that replaces a lookup per tile.
+    cursor: u64,
+    next_call: u32,
+    next_position: u32,
+}
+
+impl Base0SparseStepCaptureV1 {
+    /// `leaf_count` is the class's own step-leaf count for this job, priced against the ruleset's
+    /// ladder (`step_leaf_count_capped_v1`); `retain_level` is
+    /// [`palw_base0_sparse_retain_level_v1`] of that same ladder.
+    pub fn new(
+        profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        ctx: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        leaf_count: u64,
+        retain_level: u32,
+    ) -> Result<Self, Base0SparseCaptureError> {
+        Self::new_capped_v1(profile, ctx, leaf_count, retain_level, PALW_STEP_LEG_MAX_LEAVES)
+    }
+
+    /// The same capture against the ruleset's ladder.
+    pub fn new_capped_v1(
+        profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        ctx: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        leaf_count: u64,
+        retain_level: u32,
+        max_step_leaf_count: u64,
+    ) -> Result<Self, Base0SparseCaptureError> {
+        Ok(Self {
+            ctx_hash: ctx.context_hash(),
+            profile_hash: profile.shape_profile_id(),
+            prefill: ctx.declared_prefill_tokens,
+            decode_calls: ctx.exact_decode_tokens.saturating_sub(1),
+            acc: Base0SparseStepAccumulatorV1::new_capped_v1(leaf_count, retain_level, max_step_leaf_count)?,
+            cursor: 0,
+            next_call: 0,
+            next_position: 0,
+        })
+    }
+
+    /// How much of the step space this capture has folded — the sparse twin of
+    /// [`crate::legs::Base0StepCaptureV1::progress`].
+    pub fn progress(&self) -> (u64, u64) {
+        self.acc.progress()
+    }
+
+    /// **One forward call's committed rows, folded in canonical order.**
+    ///
+    /// `rows` are the family's own flattening ([`crate::legs::a16_captured_rows_v1`] and its two
+    /// siblings); they may arrive in any order within the call, because the slot walk below places
+    /// them, but the SET must be the position's own.
+    pub fn push_call(
+        &mut self,
+        profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        call_index: u32,
+        position: u32,
+        rows: &[crate::legs::Base0CapturedRowV1],
+    ) -> Result<(), Base0SparseCaptureError> {
+        use kaspa_consensus_core::palw_step::PalwStepCoordinateV1;
+        use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1};
+        if call_index != self.next_call || position != self.next_position {
+            return Err(Base0SparseCaptureError::CallOutOfOrder {
+                expected: (self.next_call, self.next_position),
+                got: (call_index, position),
+            });
+        }
+        // The enumeration's own two facts about a position (`canonical_step_leaf_index`): what the
+        // cache holds when it runs, and whether the logits table exists at it.
+        let (kv_len, with_logits) = if call_index == 0 {
+            (position as u64 + 1, position + 1 == self.prefill)
+        } else {
+            (self.prefill as u64 + call_index as u64, true)
+        };
+
+        // Rows by global slot: one `global_node_slot` per ROW, never one per tile.
+        let slot_count = profile.global_node_count();
+        let first_post_slot = slot_count.saturating_sub(profile.post_nodes.len() as u32);
+        let mut by_slot: Vec<(u32, usize)> = Vec::with_capacity(rows.len());
+        for (at, row) in rows.iter().enumerate() {
+            let slot = profile
+                .global_node_slot(row.table, row.layer, row.index)
+                .ok_or(Base0SparseCaptureError::RowIsNotThisGraphs { layer: row.layer, index: row.index })?;
+            by_slot.push((slot, at));
+        }
+        by_slot.sort_unstable_by_key(|(slot, _)| *slot);
+        if by_slot.windows(2).any(|w| w[0].0 == w[1].0) {
+            return Err(Base0SparseCaptureError::TwoRowsForOneSlot);
+        }
+
+        // The position's slots, in the order the enumeration walks them, against the rows in hand.
+        let mut supplied = by_slot.iter().peekable();
+        for slot in 0..slot_count {
+            if slot >= first_post_slot && !with_logits {
+                continue; // post nodes do not exist at a position that selects no token
+            }
+            let (node, _) = profile.resolve_node_slot(slot).ok_or(Base0SparseCaptureError::MissingRowForSlot { slot })?;
+            let expected = node_leaf_count_v1(node, kv_len);
+            let Some((_, at)) = supplied.next_if(|(s, _)| *s == slot).copied() else {
+                return Err(Base0SparseCaptureError::MissingRowForSlot { slot });
+            };
+            let row = &rows[at];
+            let tile_len = node.tile_len as usize;
+            if tile_len == 0 || row.row.len().div_ceil(tile_len) as u64 != expected {
+                return Err(Base0SparseCaptureError::RowIsNotTheGraphsWidth { slot, got: row.row.len() as u64, tiles: expected });
+            }
+            for (tile_index, chunk) in row.row.chunks(tile_len).enumerate() {
+                let leaf = PalwStepTileLeafV1 {
+                    version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                    coord: PalwStepCoordinateV1 {
+                        call_index,
+                        node_slot: slot,
+                        position,
+                        tile_index: tile_index as u32,
+                    },
+                    value_count: chunk.len() as u32,
+                    values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
+                };
+                self.acc.push(kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&self.ctx_hash, &self.profile_hash, &leaf))?;
+                self.cursor += 1;
+            }
+        }
+        // A row for a slot the walk did not reach — a post row at a non-selecting position, or a
+        // slot past the graph — is a row about a different execution.
+        if let Some((slot, _)) = supplied.next() {
+            return Err(Base0SparseCaptureError::RowForASlotThePositionDoesNotHave { slot: *slot });
+        }
+
+        if call_index == 0 && position + 1 < self.prefill {
+            self.next_position = position + 1;
+        } else {
+            self.next_call = call_index + 1;
+            self.next_position = 0;
+        }
+        Ok(())
+    }
+
+    /// Seal the fold: the retained tree, and nothing else. A short capture is refused for the
+    /// reason [`crate::legs::Base0StepCaptureV1::finish`] refuses one — a commitment over a
+    /// partial space says "computed zero" about every leaf nobody filled.
+    pub fn finish(self) -> Result<Base0SparseStepTreeV1, Base0SparseCaptureError> {
+        if self.next_call <= self.decode_calls {
+            return Err(Base0SparseCaptureError::CaptureIncomplete { pushed: self.cursor, expected: self.acc.progress().1 });
+        }
+        self.acc.finish()
+    }
+}
+
 
 // =============================================================================================
 // ADR-0077 Decision 10 — the recurrence's replay state, chunked
