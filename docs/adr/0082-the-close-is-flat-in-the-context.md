@@ -272,7 +272,10 @@ window, and Decision 2 adds rounds. A k-ary round discloses the `k` subtree root
 node — `log₂ k` binary levels at once, authenticated by hashing them back up — so
 `rounds = ⌈log₂ space / log₂ k⌉`, at `k × 64` bytes a move for the leaf space and
 `k × (4 + 8 + 8 × tile_len)` for the history (a max, a sum and `tile_len` partial sums per child).
-Worked at `k = 16`, the value the derivation below selects for the RC windows:
+Worked at `k = 16`, the band the ADR was drafted against; the derivation below selects the
+SMALLEST legal arity that fits, which at the RC windows is **4** (measured by U-03's pin:
+`2^32` in 16 rounds plus 131,072 positions in 7, `(2 × 23 + 2) × 45 = 2,160` DAA — sixteen is the
+band above it, and a smaller arity is a smaller move):
 
 | space | binary rounds | 16-ary rounds |
 |---|---|---|
@@ -312,9 +315,15 @@ per-checkpoint copy of the history exists to retain or to serve.
 **Decision 5 — the prompt ids ride as a Merkle root, armed with the first graph-v5 row.**
 ADR-0081 Decision 3 as implemented (`palw_prompt_ids_v1.rs`), no longer optional: at 131,072 ids the
 flat term is 524,288 bytes on EVERY close, and Decisions 1–4 leave it as the only context-linear
-term. The fence `palw_prompt_ids_merkle` is armed in the same ruleset move as the rows, every
-moved id is re-pinned and listed, and `PalwFpMaterialV1` keeps carrying the ids whole for the
-seats (ADR-0081 Y7).
+term of the PROMPT. The fence `palw_prompt_ids_merkle` is armed in the same ruleset move as the
+rows, every moved id is re-pinned and listed, and `PalwFpMaterialV1` keeps carrying the ids whole
+for the seats (ADR-0081 Y7). **Measured limit (U-04, Z0):** with the prompt ids Merkle-ized a
+graph-v5 dense close is flat only to about `n_ctx` 4,096; at 32,768 the binding node becomes the
+embedding gather, whose GENERATED-token ids (`decode × 4` bytes, the decode pin's flat id list)
+are a second linear term this decision does not anchor. It is linear in the ANSWER's length, not
+the prompt's, so "thousands of tokens" holds and "tens of thousands" does not until the output ids
+ride the same tiled Merkle idiom — one more fence, the symmetric half of ADR-0081 Decision 3,
+recorded in §8 as not decided here and not claimed.
 
 **Decision 6 — the close ceiling is re-derived from the FLAT terms, and the chunk arm is a
 prerequisite, not a hope.** With attention refuted by dissection, the widest term of a close is a
@@ -328,9 +337,13 @@ sets, because two of them are on the table: for the graph-v2/v3 context rows des
 for, the widest term is still the context-linear attention close, and the derivation returns
 design A's own numbers — **14** for `{floor, A16 dense 512}` (`ceil(1,154,673 × 1.2 / 100,000)`),
 **27** with the QWEN36-v3 512 row, 1 for the floor alone; for graph-v5 rows (Decisions 1–5) the
-widest term is a MODEL width and the derivation returns one to three carriers (dense one; the
-hybrid two to three, its recurrence's `interval × 5 refs` replay evidence being the widest flat
-term). Whatever it evaluates to, a row is admitted at a chunk count only when the transport
+widest term is a MODEL width and the derivation returns — measured by U-04's test
+`the_close_ceiling_is_the_derivation_over_the_genesis_set` at `n_ctx` 512 under the dissection
+court with Merkle prompt ids — **80,504 bytes = 1 chunk** on the dense tier (binding node
+`ffn_down`; 82,080 with flat ids) and **200,732 bytes = 3 chunks** on the hybrid (binding node the
+recurrence `GatedDeltaNet`: its `interval × 5 refs` replay evidence, not attention), the set → 3;
+the fused dispute's bottom opening is 25,120 bytes dense and 42,016 hybrid, flat at 512 / 4,096 /
+32,768. Whatever it evaluates to, a row is admitted at a chunk count only when the transport
 carries it — W5's own table (§1.4), never the certification lane's `pending_chunks` and its 8. The
 CODE CONDITION, not a schedule: until W5 is in the ruleset, `max_close_chunks` is ONE and the
 admission gate says so; an admitted row whose worst close no carrier can file is the 5f state §1.4
