@@ -2742,7 +2742,7 @@ mod tests {
     /// C-2's acceptance test are all questions about the same run.
     #[cfg(test)]
     #[allow(clippy::type_complexity)]
-    fn dense_v5_run() -> (
+    pub(super) fn dense_v5_run() -> (
         crate::artifact::Base0ArtifactV1,
         PalwShapeProfileV3,
         PalwJobContextV2,
@@ -3034,4 +3034,186 @@ mod tests {
         assert_eq!(checked, run.checkpoints.leaves.len() as u32, "every committed leaf was reached from some step");
     }
 
+}
+
+// =================================================================================================
+// The acceptance test for the ladder: a class the chain admits must be one a seat can license
+// =================================================================================================
+
+#[cfg(test)]
+mod the_rulesets_ladder {
+    use super::*;
+    use kaspa_consensus_core::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
+    use kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
+    use kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES;
+
+    /// The genesis row's own canonical job, as a binding — the roots are not this test's subject
+    /// (nothing here recomputes them) and the two fields that are, `shape_profile` and
+    /// `job_context`, are the registered row's and the job the chain would pay for.
+    fn v5_512_binding() -> (PalwStepBindingV2, u64) {
+        let row = crate::classes::a16_graph_v5_row_v1().expect("the graph-v5 512 row is in this build");
+        let (prefill, decode) = row.canonical_job;
+        let (job_context, _prompt) = crate::produce::base0_rc_job_v1(
+            &row.profile,
+            Hash64::from_u64_word(0x0082_B2_512),
+            row.artifact_shape.vocab,
+            prefill,
+            decode,
+        );
+        let step_leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(
+            &row.profile,
+            &job_context,
+            COURT_MAX_STEP_LEAVES,
+        )
+        .expect("the canonical job of an admitted class fits the ruleset it was admitted under");
+        let binding = PalwStepBindingV2 {
+            version: 2,
+            job_context,
+            shape_profile: row.profile.clone(),
+            checkpoint_profile: kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
+                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+            ),
+            state_chunk_map_id: row.profile.state_chunk_map_id,
+            full_logits_trace_root: Hash64::default(),
+            activation_leg_root: Hash64::default(),
+            step_leaf_count,
+            step_merkle_root: Hash64::default(),
+            checkpoint_count: 0,
+            checkpoint_merkle_root: Hash64::default(),
+            committed_execution_root: Hash64::default(),
+        };
+        (binding, step_leaf_count)
+    }
+
+    /// **The class the genesis registers is priced at the ruleset's ladder and NAMED at the
+    /// executor's.**
+    ///
+    /// The real `a16_graph_v5_row_v1()` profile and the real canonical job — no fixture, no
+    /// scaling. Under the ruleset the row was admitted under, a seat derives the same 6,630,544
+    /// leaves the binding declares and proceeds. Under the executor's constant it refuses BY NAME,
+    /// with both numbers in the error: not a panic, not an allocation, and not the silent
+    /// `Mismatch` that made the class unlicensable.
+    #[test]
+    fn the_512_rows_honest_price_clears_the_rulesets_ladder_and_is_named_at_the_executors() {
+        let (binding, leaves) = v5_512_binding();
+        assert!(
+            leaves > PALW_STEP_MAX_LEAVES && leaves <= COURT_MAX_STEP_LEAVES,
+            "the row is only interesting because it is between the two: {leaves} leaves, executor {PALW_STEP_MAX_LEAVES}, ruleset {COURT_MAX_STEP_LEAVES}"
+        );
+        eprintln!(
+            "graph-v5 512 row: canonical job ({}, {}) prices {leaves} step leaves; executor constant {PALW_STEP_MAX_LEAVES}, RC ruleset ladder {COURT_MAX_STEP_LEAVES}",
+            binding.job_context.declared_prefill_tokens, binding.job_context.exact_decode_tokens,
+        );
+
+        assert_eq!(base0_fp_binding_step_space_v1(&binding, COURT_MAX_STEP_LEAVES), Ok(leaves));
+        assert_eq!(
+            base0_fp_binding_step_space_v1(&binding, PALW_STEP_MAX_LEAVES),
+            Err(Base0FpIntervalError::LeafCountOutOfRange { got: leaves, max: PALW_STEP_MAX_LEAVES }),
+            "at the executor's constant the refusal must name the ladder that refused, and the price it refused"
+        );
+
+        // And the same at the seat's own door, which is where the class's licensability lives.
+        assert!(
+            Base0FpIntervalGeometryV1::from_binding_capped_v1(&binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1, COURT_MAX_STEP_LEAVES)
+                .is_ok(),
+            "a seat handed the ruleset's ladder must build a geometry for the row the genesis registers"
+        );
+        assert_eq!(
+            Base0FpIntervalGeometryV1::from_binding_capped_v1(
+                &binding,
+                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+                PALW_STEP_MAX_LEAVES
+            ),
+            Err(Base0FpIntervalError::LeafCountOutOfRange { got: leaves, max: PALW_STEP_MAX_LEAVES }),
+        );
+        // The un-capped name is the executor's default and must still BE the executor's default —
+        // a caller with no ruleset in scope keeps exactly the behaviour it had.
+        assert_eq!(
+            Base0FpIntervalGeometryV1::from_binding_v1(&binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1),
+            Err(Base0FpIntervalError::LeafCountOutOfRange { got: leaves, max: PALW_STEP_MAX_LEAVES }),
+        );
+
+        // A price that is not the geometry's is still refused under its own name at either ladder —
+        // raising the ceiling must not have turned the equality into an inequality.
+        let mut lying = binding.clone();
+        lying.step_leaf_count = leaves - 1;
+        assert!(
+            matches!(
+                base0_fp_binding_step_space_v1(&lying, COURT_MAX_STEP_LEAVES),
+                Err(Base0FpIntervalError::PriceIsNotTheGeometrys { declared, .. }) if declared == leaves - 1
+            ),
+            "a binding that under-prices its own geometry is refused as a price, not as a ladder"
+        );
+        let mut inflated = binding.clone();
+        inflated.step_leaf_count = leaves + 1;
+        assert_eq!(
+            base0_fp_binding_step_space_v1(&inflated, COURT_MAX_STEP_LEAVES),
+            Err(Base0FpIntervalError::PriceIsNotTheGeometrys { declared: leaves + 1, derived: leaves }),
+        );
+        // …and one above the ladder never reaches the enumeration at all.
+        let mut absurd = binding.clone();
+        absurd.step_leaf_count = u64::MAX;
+        assert_eq!(
+            base0_fp_binding_step_space_v1(&absurd, COURT_MAX_STEP_LEAVES),
+            Err(Base0FpIntervalError::LeafCountOutOfRange { got: u64::MAX, max: COURT_MAX_STEP_LEAVES }),
+            "the ladder is checked before the count, so no allocation is sized from a stranger's u64"
+        );
+    }
+
+    /// **A seat licenses an honest graph-v5 opening at the ladder it is HANDED, and refuses it by
+    /// name at a narrower one.**
+    ///
+    /// The 512 row's own artifact is 1.7 GiB and its canonical job allocates a 424 MB capture, so
+    /// the end-to-end half runs on the tiny graph-v5 fixture (`dense_v5_run`, the same class
+    /// declaration at a fixture geometry) — and the LADDER is scaled instead of the leaf count.
+    /// That is the same predicate from the other side: the rule is `count > ladder`, and a fixture
+    /// whose count is above the handed ladder exercises exactly the comparison a 6.6M-leaf job
+    /// makes against `2^22`. What it proves is the thing the constant hid — that the seat reads the
+    /// number it is handed, and that the refusal when the number is too small is a NAME rather than
+    /// a panic or an allocation.
+    #[test]
+    fn a_seat_licenses_an_honest_v5_opening_at_the_ladder_it_is_handed() {
+        let (artifact, profile, ctx, prompt, run) = super::tests::dense_v5_run();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let bytes = crate::produce::base0_fp_material_encode_v2(&run, &ids).expect("the fold retains");
+        let material = crate::produce::base0_fp_material_decode_v2(&bytes).expect("its own retention decodes");
+        let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
+        let plan = engine.plan_from_profile(&profile).expect("the plan");
+        let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
+        let interval = PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
+        let claim = PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor: ctx.job_id };
+
+        let leaves = run.binding.step_leaf_count;
+        let wide = COURT_MAX_STEP_LEAVES;
+        let narrow = leaves - 1;
+        assert!(leaves <= wide);
+        eprintln!("the graph-v5 fixture prices {leaves} leaves; licensed at {wide}, refused at {narrow}");
+
+        // The honest opening, produced at the wide ladder.
+        let opened = base0_open_fp_interval_sparse_capped_v1(&material, 0, &ids, interval, wide, &kernels)
+            .expect("an honest graph-v5 interval opens at the ruleset's ladder");
+
+        assert_eq!(
+            base0_verify_fp_interval_opening_with_state_capped_v1(&opened, claim, 0, &ids, leaves, interval, wide, None, &kernels),
+            Base0FpIntervalSeatVerdictV1::Valid,
+            "a seat handed the ladder the class was admitted under must license its honest opening"
+        );
+
+        // The same bytes, the same seat, one number narrower: refused, and refused BY NAME at the
+        // price rule rather than by panicking or by sizing a capture from the field.
+        assert_eq!(
+            base0_fp_binding_step_space_v1(&run.binding, narrow),
+            Err(Base0FpIntervalError::LeafCountOutOfRange { got: leaves, max: narrow }),
+        );
+        assert_eq!(
+            base0_verify_fp_interval_opening_with_state_capped_v1(&opened, claim, 0, &ids, leaves, interval, narrow, None, &kernels),
+            Base0FpIntervalSeatVerdictV1::Mismatch,
+            "and a seat whose ladder cannot hold the class refuses rather than replaying it"
+        );
+        // The executor cannot serve one either, and says so with the numbers.
+        assert_eq!(
+            base0_open_fp_interval_sparse_capped_v1(&material, 0, &ids, interval, narrow, &kernels),
+            Err(Base0FpIntervalError::LeafCountOutOfRange { got: leaves, max: narrow }),
+        );
+    }
 }
