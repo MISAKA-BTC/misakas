@@ -238,10 +238,13 @@ pub const PALW_ECONOMIC_LOCUS_CENSUS_V1: &[PalwEconomicQuantityV1] = &[
         under_n_segments: "N full-size closes — the binding node's operand width is the model's, not the interval's",
     },
     PalwEconomicQuantityV1 {
-        name: "claim state rows, hashed (claims/panels/court_sessions/pending_payouts/derived_artifacts)",
+        name: "claim state rows, hashed (claims/panels/court_sessions/pending_payouts/derived_artifacts/court_close_groups)",
         locus: PalwEconomicLocusV1::PerClaim,
-        cited_at: "palw_state_v2.rs:3190 PalwChainStateV2::state_root",
-        under_n_segments: "N rows in each, and every one of them moves the state root",
+        cited_at: "palw_state_v2.rs PalwChainStateV2::state_root (state version 18)",
+        under_n_segments: "N rows in each, and every one of them moves the state root. \
+                           `court_close_groups` joined the preimage at version 18 (ADR-0080 design A's split \
+                           close, keyed (session, side)) — one more per-CLAIM table, so segmentation multiplies \
+                           it like the rest",
     },
     PalwEconomicQuantityV1 {
         name: "claim state indices, rebuildable (deadlines/unresolved/work_ids/open_courts_by_claim/court_deadlines)",
@@ -743,12 +746,44 @@ mod tests {
     /// This is a tripwire, not a proof, and it is listed as such in the module doc's gaps.
     #[test]
     fn the_claim_state_rows_are_pinned_to_the_state_root_version() {
+        // **Re-read at 18, not re-pinned at 18.** 17 → 18 (ADR-0080 design A, the split court
+        // close) added ONE table to the root preimage — `court_close_groups`, keyed
+        // `(session, side)` and rooted between `pending_chunks` and `derived_artifacts` — and
+        // moved nothing else. It is a per-claim table like every other one in the hashed row, so
+        // the row's LOCUS is unchanged and only its name grew; the rebuildable row is untouched,
+        // because `state_root` still hashes none of the five indices it lists.
+        //
+        // Checked against the preimage rather than remembered: every name the hashed row claims is
+        // in the root walk, and no name the rebuildable row claims is.
         assert_eq!(
             crate::palw_state_v2::PALW_STATE_V2_VERSION,
-            17,
-            "the census's hashed/rebuildable split was read at state version 17; a bump means the \
+            18,
+            "the census's hashed/rebuildable split was read at state version 18; a bump means the \
              root preimage moved and both claim-state rows need re-reading"
         );
+        let preimage = std::include_str!("palw_state_v2.rs");
+        let hashed = PALW_ECONOMIC_LOCUS_CENSUS_V1
+            .iter()
+            .find(|r| r.name.starts_with("claim state rows, hashed"))
+            .expect("the hashed row is in the census");
+        let listed = hashed.name.split_once('(').and_then(|(_, rest)| rest.strip_suffix(')')).expect("the row names its tables");
+        for table in listed.split('/') {
+            assert!(
+                preimage.contains(&format!("collection_root(b\"{table}\"")),
+                "the census claims {table} is in the state root and the root walk does not hash it"
+            );
+        }
+        let rebuildable = PALW_ECONOMIC_LOCUS_CENSUS_V1
+            .iter()
+            .find(|r| r.name.starts_with("claim state indices, rebuildable"))
+            .expect("the rebuildable row is in the census");
+        let indices = rebuildable.name.split_once('(').and_then(|(_, rest)| rest.strip_suffix(')')).expect("it names its indices");
+        for index in indices.split('/') {
+            assert!(
+                !preimage.contains(&format!("collection_root(b\"{index}\"")),
+                "the census calls {index} rebuildable and the root walk hashes it"
+            );
+        }
     }
 
     /// **The payout queue is the row where segmentation breaks a stated premise, not just a
