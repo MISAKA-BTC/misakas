@@ -291,6 +291,26 @@ the genesis UTXO set, so the genesis hash moves, and then **no earlier appdir an
 can join at all** — the failure is at handshake, not at a rule, which is strictly less legible than
 a ruleset mismatch. Everything below assumes that case.
 
+### The wipe list is what the RUNNING NODE connects to, not what a config remembers
+
+Before stopping anything, ask the node. An ssh config, a systemd unit and a launch script all record
+intent; the connection list records fact, and a relaunch is only as complete as the set of hosts
+that actually carry the chain.
+
+    journalctl -u <the node unit> --since "1 hour ago" --no-pager \
+      | grep -oE 'Connected to (incoming|outgoing) peer [0-9.]+' | awk '{print $NF}' | sort -u
+
+Measured on this fleet at the time of writing, that list is **two entries**: `127.0.0.1` (the second
+seat on the same host) and **one external address**. A third host that an ssh config still names was
+unreachable, absent from every launch script and systemd unit, and had not appeared in three hours of
+the node's own log — **a stale entry, not a host to wipe.** Chasing it would have delayed a relaunch
+for a machine that is not on the network.
+
+**And the converse is the part that cannot be fixed by wiping:** an external peer you do not control
+cannot be wiped. It will keep answering to this network name on its own genesis after the relaunch,
+which is exactly the state §"the name is already contested" describes. That is not a fault to
+resolve before launching; it is the reason the genesis hash is the value a joiner checks.
+
 ### The ordering hazard: stop EVERY host before wiping ANY
 
 Wiping hosts one at a time does not work, and the reason is not obvious: **an un-wiped peer
