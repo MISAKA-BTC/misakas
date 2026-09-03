@@ -5477,3 +5477,29 @@ first half is earned on the shipped path **on devnet**: a free-prompt commitment
 mempool on the cut's consensus code (rail fixed post-freeze, tool crate only). Stage 6 (FreePromptCommitted →
 PanelBound → ReceiptLicensed → Final on every node), 7 (a receipt block) and 8 (the artifact derived from the claim's
 own answer) follow as they land. The public chain's own claim still waits for the v5 lane binding.
+
+### 6j — DNS seeds after the cut (21:15 UTC, asked by the operator)
+
+testnet-11's shipped seed list is `seeder1–4.misakascan.com` (`params.rs:8139`, outside `consensus_params_id`; the
+bare `TESTNET11_PARAMS` carries none). The parent zone at xdomain delegates each name to its own host:
+
+    seeder1.misakascan.com → ns-seeder1 = 169.58.232.113   .113's misaka-dnsseeder: active since 17:30 UTC, backed by the cut node
+                                                          (--node-wrpc-borsh 127.0.0.1:26313, --anchors-only), answers 169.58.232.113 169.58.39.220   OK
+    seeder2.misakascan.com → ns-seeder2 = 217.76.57.217    port 53 closed → SERVFAIL                                                              DEAD
+    seeder3.misakascan.com → ns-seeder3 = 95.111.236.186   a seeder outside the fleet (the game host; 53 open, no node on 26311),
+                                                          answers the same two anchors                                                            OK
+    seeder4.misakascan.com → ns-seeder4 = 217.178.101.111  port 53 closed → SERVFAIL                                                              DEAD
+
+`node doctor` on node0 confirms: "Seeder-advertised peers 2 (169.58.232.113, 169.58.39.220)". A joiner resolves the
+new chain's anchors from seeder1/seeder3 and waits out two SERVFAILs; the fleet's own nodes use `--nodnsseed
+--addpeer`. The seeder daemon verifies nothing about the chain itself — it relays its backing node's `is_synced` and
+the configured anchors — so its Aug-31 binary (not part of the cut's build; `misaka-dnsseeder` is not in the release
+targets) is not a correctness question. ibm runs no seeder (port 53 is systemd-resolved); 5.104's unit is testnet-10's
+(`--network-id testnet-10`, anchors 160.16.131.119 / 95.111.236.186) and stays down. `seeder1–3.misakachain.com`
+(mainnet's and testnet-10's lists) resolve to `85.131.213.182` — the registrar's wildcard A record → the web host,
+not a seeder; irrelevant to testnet-11, stale for the others. The seeder on `.113` was in the stop list and was
+restarted in step 6 with the fleet.
+
+Only the operator can change: the two dead delegations (repoint `ns-seeder2`/`ns-seeder4` at xdomain to live
+seeders — e.g. a testnet-11 seeder on 5.104 backed by seat2's borsh 26313, which this session can set up on request)
+and the misakachain.com wildcard.
