@@ -2037,3 +2037,76 @@ before the result rather than after it:** the ibm checkout is `8923b354` detache
 the tree being cut** — and the worker binary is three weeks old, so an equivalence pass is a
 pass against a stale counterpart. Whatever colour it comes back, it is evidence about the
 property and not about 5f's copy of these tests, and §5 keeps its stated gap.
+
+### The run happened, it went red, and the red is about the fixture — measured, not inferred
+
+`a_dead_agent_costs_a_delay_and_not_a_tag`, on ibm, with the real 1.2 GB pinned model:
+
+```
+test result: FAILED. 0 passed; 1 failed   finished in 41.36s      (WALL 131.26 s)
+panicked at palw_agent_recovery.rs:79:5:
+  no resident agent was running to kill — the first seed did not use one
+```
+
+**41.36 s is the first thing to read.** The `--run-ignored all` version of this failure took
+**0.016 s** and was a missing env var. This one loaded a model and ran. *The wall clock is the
+evidence a test ran* — and here it is what separates a real red from a fixture-shaped one.
+
+The panic comes from `pkill -f "palw-worker --mode pow-agent"` exiting non-zero, which the
+assertion renders as *"the first seed did not use one"* — a sentence about the **driver's
+choice**. The actual cause is one level down and is not a choice:
+
+```
+/root/palw-drill/bin/palw-worker   built 2026-08-16   strings | grep -c pow-agent = 0
+/root/palw-class/palw-worker       built 2026-08-14   strings | grep -c pow-agent = 0
+```
+
+**The binaries predate the mode.** `--mode pow-agent` is not an option they can refuse; it is a
+string they do not contain. The driver spawned one, the worker printed its usage line and exited,
+the driver fell back to one-shot — which the test's own comment calls correct — and it did so at
+seed one, where the test needs the agent alive to kill it.
+
+> **`pkill` exiting 1 means "matched nothing", which is not the same as "nothing was started".**
+> A limit rendered as a verdict, once more, and this time the verdict names a *decision*
+> ("did not use one") for what is really an *absence*. The message would have sent a reader to
+> read the driver's fallback logic, which is correct code.
+
+### The fleet fact underneath it, which is the part that outlives this test
+
+Measured across all three hosts, every `palw-worker` on disk:
+
+```
+169.58.39.220    /root/palw-drill/bin/palw-worker   2026-08-16   pow-agent=0
+                 /root/palw-class/palw-worker       2026-08-14   pow-agent=0
+169.58.232.113   /root/palw-class/palw-worker       2026-08-26   pow-agent=0
+5.104.81.23      /root/palw-class/palw-worker       2026-08-14   pow-agent=0
+```
+
+**Four binaries, three hosts, three build dates, zero of them have the resident-agent mode.**
+Running processes: 3 on ibm — all children of the test run above — and **0** on the other two,
+which are the hosts carrying kaspad.
+
+So the claim I had been repeating, *"`palw-worker` runs on all three fleet hosts"*, is wrong twice
+over: it is not running on two of the three, and none of the deployed binaries can do the thing
+the phrase implies. **Nothing in the announcement or the runbook makes a claim about the resident
+agent** — checked, no hits — so there is no public sentence to retract. This one lived only in
+my own prose, which is where it would have leaked from.
+
+### What §5's line should say instead
+
+Not *"the three tests cannot run because the crate links a pinned llama.cpp."* That is a true
+sentence attached to the wrong noun. The accurate version:
+
+> These three tests need a **worker binary built from a tree that has `--mode pow-agent`**.
+> Building one requires an external llama.cpp checkout at `LLAMA_COMMIT`, **built, not merely
+> cloned**, which this repository does not contain and the fleet has never had. Every deployed
+> worker predates the mode. `cargo build --release` skips the crate by default, so **the relaunch
+> will not produce one either** — the fleet's behaviour here is the same before and after the cut.
+>
+> By the crate's own build script: *"No node needs it to produce or verify a block: since ADR-0053
+> there is one execution family and it is BASE-0's, which is pure Rust in this tree."*
+> **These tests exercise a path that is not on the block-production path.**
+
+That last sentence is the one that decides how much the gap costs, and it is the one my original
+phrasing never reached — because I stopped at a true fact about llama.cpp and never asked what
+the subsystem was *for*.
