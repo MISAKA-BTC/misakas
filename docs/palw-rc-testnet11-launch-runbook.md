@@ -178,6 +178,15 @@ a fact the **handshake reports** rather than something an operator has to be tru
 cargo build --release -p kaspad -j 4
 ```
 
+**A seat's honest replay needs 424 MB on this fleet, and that is measured rather than bounded.**
+Raised because the memory picture below is tight and a 4.3 GB figure was circulating: 4.3 GB is the
+allocation for a class at the LADDER TOP (n_ctx ≈ 16,384 dense), which this genesis does not
+register. The 512 row's own job allocates `step_leaf_count × 64` bytes = **424 MB**, and the count is
+the binding's own — the price equality pins it to the job's enumeration, so nobody can inflate it.
+Above the handed ladder the seat refuses **by name, before any allocation**
+(`base0_fp_binding_step_space_v1` → `LeafCountOutOfRange { got, max }`). So a seat replay is not a
+memory risk on these hosts; the build is.
+
 **`-j 4`, not the default, and this is a relaunch hazard rather than a preference.** Every host in
 this fleet is a **23 GB, 8-CPU** machine, and every one of them is already running the chain it is
 about to be wiped of. Measured 2026-09-03, before touching anything:
