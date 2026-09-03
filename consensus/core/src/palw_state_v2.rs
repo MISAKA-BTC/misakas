@@ -3404,8 +3404,8 @@ pub fn palw_court_close_chunk_digest_v1(bytes: &[u8]) -> Hash64 {
     finish(state)
 }
 
-/// **Is this object court CPU a block has to spend before it can be relayed?** (ADR-0080 design
-/// A W9, extended by ADR-0082 Decision 2.)
+/// **Is this dissection move court CPU a block has to spend before it can be relayed?** (ADR-0080
+/// design A W9, extended by ADR-0082 Decision 2; audit C-1.)
 ///
 /// A dissection move is graded in the block that carries it: a round's fold is checked before the
 /// challenger may move, a root claim opens the phase against a proven artifact and a verified
@@ -3414,16 +3414,70 @@ pub fn palw_court_close_chunk_digest_v1(bytes: &[u8]) -> Hash64 {
 /// ([`PALW_COURT_CLOSE_MAX_PER_BLOCK`]) rather than given a second budget of its own — two
 /// budgets for one resource is two answers to "how much court may one block ask for".
 ///
+/// # It reads STATE, and the predecessor that did not was the hole
+///
+/// This replaces a bare `matches!` on the enum variant. On the lifecycle band admission is
+/// stateless — `CourtAttnRootClaimed` asks only `!signature.is_empty()` — so
+/// `CourtAttnRootClaimed { session_id: 0, signature: vec![1] }` first in the transaction order
+/// spent the whole NETWORK's single slot on the variant alone and was only then dropped by
+/// acceptance. One minimum-fee transaction per block therefore denied every close completion on
+/// the chain, and a close denied for the `4 x count` DAA of its assembly window is not a delay
+/// but the conviction of the party that filed it ([`convict_close_declarer_v1`]).
+///
+/// So it asks what its sibling [`palw_court_close_completes_a_group_v1`] asks, against the same
+/// folded state: does the session exist, is the phase open (or, for move 1, openable), and does
+/// the mover owe the turn. Every one of those is a refusal the fold makes on the move's face, in
+/// the fold's own order, and every one of them costs nothing to make.
+///
+/// What it deliberately does NOT ask is anything the WORK answers — the fold check, the artifact
+/// openings, the finalization, the child's range. Those are the work the slot exists to bound, so
+/// a block that asks every validator for them has spent the slot whichever way they come out.
+/// That is the line `palw_court_close_completes_a_group_v1` draws for the close half, and it is
+/// drawn here for the same reason.
+///
+/// The mover's SIGNATURE is not asked here and is not missing: `palw_v2_validate_objects` verifies
+/// it (and the k-ary fence) before the caller counts, which is what makes an unauthenticated move
+/// unable to reach the counter at all.
+///
 /// Drop-not-invalidate, at the caller: admission on the lifecycle band is stateless, so a second
 /// carrier relays and mines freely and invalidating would make honest miners produce the invalid
 /// blocks (audit M-01's shape).
-pub fn palw_court_move_is_court_cpu_v1(object: &PalwConsensusObjectV2) -> bool {
-    matches!(
-        object,
-        PalwConsensusObjectV2::CourtAttnRootClaimed { .. }
-            | PalwConsensusObjectV2::CourtAttnDissected { .. }
-            | PalwConsensusObjectV2::CourtAttnChildChosen { .. }
-    )
+pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &PalwConsensusObjectV2) -> bool {
+    use crate::palw_bisect::PalwBisectTurnV1;
+    let session_id = match object {
+        PalwConsensusObjectV2::CourtAttnRootClaimed { session_id, .. }
+        | PalwConsensusObjectV2::CourtAttnDissected { session_id, .. }
+        | PalwConsensusObjectV2::CourtAttnChildChosen { session_id, .. } => session_id,
+        _ => return false,
+    };
+    let Some(session) = state.court_session(session_id) else {
+        return false;
+    };
+    match object {
+        // Move 1 OPENS the phase, so what it needs is a phase not open yet and a ladder that has
+        // narrowed to the leaf a dissection is about — `DissectionAlreadyOpen` and
+        // `LadderNotTerminal`, the fold's own first two refusals.
+        PalwConsensusObjectV2::CourtAttnRootClaimed { root, .. } => {
+            session.dissection.is_none()
+                && session.ladder.terminal_index().is_some()
+                && root.version == crate::palw_attn_dissect::PALW_ATTN_DISSECT_OBJECT_VERSION_V1
+        }
+        // Move 2 is the responder's, and only when the responder owes it.
+        PalwConsensusObjectV2::CourtAttnDissected { round, .. } => session.dissection.as_ref().is_some_and(|phase| {
+            round.version == crate::palw_attn_dissect::PALW_ATTN_DISSECT_OBJECT_VERSION_V1
+                && phase.turn() == PalwBisectTurnV1::AwaitDisclosure
+                && round.children.len() == phase.child_ranges().len()
+        }),
+        // Move 3 is the challenger's, at the round the phase is actually at.
+        PalwConsensusObjectV2::CourtAttnChildChosen { choice, .. } => session.dissection.as_ref().is_some_and(|phase| {
+            choice.version == crate::palw_attn_court_v1::PALW_ATTN_COURT_OBJECT_VERSION_V1
+                && choice.session_id == *session_id
+                && phase.turn() == PalwBisectTurnV1::AwaitVerdict
+                && choice.round == phase.round()
+                && (choice.child as usize) < phase.child_ranges().len()
+        }),
+        _ => false,
+    }
 }
 
 /// **Will this object complete a declared close, and therefore be assembled, decoded and
@@ -15833,6 +15887,103 @@ pub(crate) mod tests {
                 &PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index: 2, bytes: Vec::new() }
             ),
             "an empty chunk"
+        );
+    }
+
+    /// A dissection move nobody signed, for a session that does not exist — the cheapest object
+    /// audit C-1's attacker could put first in a block.
+    fn forged_root_claim(session_id: Hash64) -> PalwConsensusObjectV2 {
+        let skeleton = crate::palw_step_refute::tests::skeleton_refutation();
+        PalwConsensusObjectV2::CourtAttnRootClaimed {
+            session_id,
+            root: crate::palw_attn_dissect::PalwAttnRootClaimV1 {
+                version: crate::palw_attn_dissect::PALW_ATTN_DISSECT_OBJECT_VERSION_V1,
+                head: 0,
+                lane_first: 0,
+                lane_count: 1,
+                history_positions: 1,
+                claim: crate::palw_attn_dissect::PalwAttnRangeClaimV1 { max: 0, exp_sum: 0, v_acc: vec![0] },
+            },
+            arity: 4,
+            binding: Box::new(skeleton.binding),
+            out_tile: crate::palw_attn_court_v1::PalwAttnRowOpeningV1 {
+                leaf: skeleton.output_preimage,
+                opening: skeleton.output_opening,
+            },
+            operand_openings: Vec::new(),
+            // The lifecycle band asks only that this is non-empty; the signature is verified at
+            // acceptance, which is exactly why the SLOT must not be spent before acceptance runs.
+            signature: vec![1],
+        }
+    }
+
+    /// **A dissection move nobody could have made does not spend the block's only court slot**
+    /// (audit C-1, the critical).
+    ///
+    /// The predecessor of [`palw_court_move_spends_the_slot_v1`] matched the enum VARIANT and
+    /// nothing else. Admission on the lifecycle band is stateless — a `CourtAttnRootClaimed` is
+    /// admitted on `!signature.is_empty()` — so one minimum-fee transaction per block, placed
+    /// first in the transaction order, took `PALW_COURT_CLOSE_MAX_PER_BLOCK` on the variant alone
+    /// and every completing `CourtCloseChunk` behind it was dropped. Held for the `4 x count` DAA
+    /// of a victim's assembly window that is not a delay: the sweep finds the group incomplete and
+    /// [`convict_close_declarer_v1`] convicts the party that filed it.
+    ///
+    /// Two halves, both asserted here: the forged move spends nothing, and the completion behind
+    /// it still spends its slot.
+    #[test]
+    fn an_unauthenticated_dissection_move_does_not_deny_a_close_completion() {
+        let (p, s5, _claim_id, session_id) = split_close_fixture();
+        assert_eq!(PALW_COURT_CLOSE_MAX_PER_BLOCK, 1, "the per-block close cap moved without this test being read");
+        let side = PalwCourtSideV1::Executor;
+        let (s6, _) = apply(&s5, &p, &ctx(6, 200, 6), &[declare_close(session_id, side, 3)], None);
+        let (s7, _) = apply(&s6, &p, &ctx(7, 201, 7), &[close_chunk(session_id, side, 0, 3)], None);
+        let (s8, _) = apply(&s7, &p, &ctx(8, 202, 8), &[close_chunk(session_id, side, 1, 3)], None);
+
+        // The attacker's object, on a session id the chain never opened.
+        assert!(
+            !palw_court_move_spends_the_slot_v1(&s8, &forged_root_claim(h64(0xDEAD_BEEF))),
+            "a root claim for a session that does not exist bought the network's only court slot"
+        );
+        // A root claim whose declared object version is not the one this build plays — refused by
+        // `open_with_arity`'s first line, so it costs nothing and may not buy the slot.
+        let mut wrong_version = forged_root_claim(session_id);
+        if let PalwConsensusObjectV2::CourtAttnRootClaimed { root, .. } = &mut wrong_version {
+            root.version = crate::palw_attn_dissect::PALW_ATTN_DISSECT_OBJECT_VERSION_V1 + 1;
+        }
+        assert!(!palw_court_move_spends_the_slot_v1(&s8, &wrong_version), "a root claim of another object version bought the slot");
+        // **And the half that must stay true.** On the real session the ladder IS terminal and no
+        // dissection is open, so this move is one the fold will play: it spends the slot, exactly
+        // as the predecessor did, and that is the property this fix must not have removed.
+        assert!(
+            palw_court_move_spends_the_slot_v1(&s8, &forged_root_claim(session_id)),
+            "a root claim the fold would open a phase from stopped spending the slot"
+        );
+        // A round for a session with no dissection phase open is not a turn anybody owes.
+        let round = PalwConsensusObjectV2::CourtAttnDissected {
+            session_id,
+            round: crate::palw_attn_dissect::PalwAttnDissectRoundV1 {
+                version: crate::palw_attn_dissect::PALW_ATTN_DISSECT_OBJECT_VERSION_V1,
+                children: Vec::new(),
+            },
+            signature: vec![1],
+        };
+        assert!(!palw_court_move_spends_the_slot_v1(&s8, &round), "a round with no phase open bought the slot");
+        let choice = PalwConsensusObjectV2::CourtAttnChildChosen {
+            session_id,
+            choice: crate::palw_attn_court_v1::PalwAttnDissectChoiceV1 {
+                version: crate::palw_attn_court_v1::PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                session_id,
+                round: 0,
+                child: 0,
+            },
+            signature: vec![1],
+        };
+        assert!(!palw_court_move_spends_the_slot_v1(&s8, &choice), "a choice with no phase open bought the slot");
+
+        // The half that must still be true: the completion behind it spends the slot it is for.
+        assert!(
+            palw_court_close_completes_a_group_v1(&s8, &close_chunk(session_id, side, 2, 3)),
+            "the honest completion stopped spending the slot"
         );
     }
 

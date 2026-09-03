@@ -5421,21 +5421,36 @@ impl VirtualStateProcessor {
             // binding verified), and giving it a second per-block budget would be two answers to
             // "how much court may one block ask for". Same drop-not-invalidate shape, same
             // constant, one counter.
-            if kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
-                || kaspa_consensus_core::palw_state_v2::palw_court_move_is_court_cpu_v1(&object)
+            //
+            // **Audit C-1: the slot is SPENT below, once acceptance has said the object is real.**
+            // Both halves of the disjunction are state-dependent predicates over the folded state
+            // — `palw_court_move_spends_the_slot_v1` replaced a bare variant match that let an
+            // unauthenticated `CourtAttnRootClaimed` burn the network's only slot for the price of
+            // one transaction fee — but a predicate cannot see a signature or the k-ary fence, and
+            // `palw_v2_validate_objects` can. So the CAP is read here, before any work is asked
+            // for, and the COUNTER moves after acceptance returns `Ok`: an object acceptance drops
+            // did no court work (the drop path does none), and must not deny the block's real
+            // close its slot. A close denied inside its assembly window is not a delay, it is the
+            // conviction of the party that filed it.
+            let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
+                || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);
+            if spends_the_court_slot && court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
             {
-                if court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK {
-                    info!(
-                        "Block {block}: a court move that spends the block's adjudication slot was dropped, and the block \
-                         stands: the block already spent {} (PALW_COURT_CLOSE_MAX_PER_BLOCK)",
-                        kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
-                    );
-                    continue;
-                }
-                court_closes_completed += 1;
+                info!(
+                    "Block {block}: a court move that spends the block's adjudication slot was dropped, and the block \
+                     stands: the block already spent {} (PALW_COURT_CLOSE_MAX_PER_BLOCK)",
+                    kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
+                );
+                continue;
             }
             match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
+                    // Acceptance has verified the fence and the mover's signature, and the
+                    // predicate above read the folded state: whatever this block does with the
+                    // object now, every validator has been asked for the court work it names.
+                    if spends_the_court_slot {
+                        court_closes_completed += 1;
+                    }
                     match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_policies(
                         &folded,
                         state_params,
