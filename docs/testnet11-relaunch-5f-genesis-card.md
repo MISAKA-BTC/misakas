@@ -5099,3 +5099,47 @@ registration end to end; the admission decision is covered by route-agreement, `
 tests, and the live evidence for the path itself is 5e's drill stages 2–4 on the floor-only card — registered →
 certified → served → refused at the budget gate as `palw_admission_v2.rs:1408` documents. t11's three classes are
 genesis classes and hold budget from epoch 0; the wall belongs to later additions.
+
+## Step 6 — producer first, then the seats (2026-09-03 17:16 UTC onward)
+
+**6a node0 (ibm, `misaka-t11-node0`, QWEN36 producer + panel + heartbeat lane).** Started 17:16:30 UTC. P2P `26311`
+listening after **344 s** — the 33.99 GiB QWEN36 artifact is mapped and its root derived in one pass over the file
+(`computed root f4aad4fd…`), then the two A16 artifacts (1.67 GiB each); the panel shares the producer's holdings
+rather than mapping a second time. rss 4.5 GB. The four lines the run sheet asks of the producer:
+
+    fingerprint   2222e054f87bed7a33e9c017f5403cd52070d0778776b5bd78143e7f82ff92b7 (network testnet-11)
+    court         PALW court certified end-to-end for: PALW-BASE-0, PALW-QWEN36, PALW-QWEN25-A16, PALW-QWEN25-A16-V5 (court_e2e_root e649e7c0…)
+    genesis       "local: ad30b5cb965ad305dfa1dc7516935763ea2623105581b8…" — read from the rejects THIS node generated
+                  for inbound peers (the 'local' of a generated reject is ours; of a RECEIVED reject it is the peer's)
+                  = PREDICTED_T11_GENESIS. M-07 silent, 0 panics.
+    outpoints     panel and producer started on bond misaka-premine:0 (float :41 accepted by the producer's own start)
+
+Nine distinct external community nodes were refused on genesis mismatch within the first minute (one, 169.58.13.16,
+still carries Relaunch 4's `8d2002cc…`). They need the announcement: new genesis, wipe, new binary.
+`getBlockDagInfo` over `--rpclisten-json` failed as an HTTP POST: that port is wRPC over WebSocket. The instrument is
+`misaka node liveness --rpc 127.0.0.1:26313` (borsh). At +2 min: `ALIVE: daa=0 blocks=0`.
+
+**6b node1 (ibm, `misaka-t11-node1`, floor producer + panel).** Listening after 56 s (no model class to map),
+fingerprint `2222e054…`, **connected to node0** on both `127.0.0.1:26311` and `169.58.39.220:26311` — a completed
+handshake is the same-genesis proof, stronger than a reject line. 0 panics. Liveness right after:
+`ALIVE: daa=1 blocks=1 advanced` — the new chain's first block.
+
+**6c `.113` public node (`misaka-t11-node`, panel + heartbeat, artifacts present).** Listening after 73 s,
+fingerprint `2222e054…`, own genesis `ad30b5cb965ad305…`, connected to node0 and node1, panel loaded the artifacts,
+0 panics, `ALIVE: daa=1 blocks=1 advanced`. 5.104's seat2 (`c-seat2.sh`: producer class `71bbb755…`, all three
+artifacts, panel) started 17:27:26 and was still in its artifact pass at 17:36 — unmeasured, not failed; its watch
+reads a wide window (the first watch's `--since "8 min ago"` fell one minute after its fingerprint line, and a unit
+whose `ExecStart` is `bash <wrapper>` was parsed as a wrapper named `bash`).
+
+**The seats' artifacts are a launch item, not a note.** 5e's live finding (2026-09-02): a panel seat launched
+without `--palw-class-artifact` files an `Incapable` receipt for every claim, which counts toward neither side of
+the quorum; with five seats, quorum 3 and the executor excluded, no claim could ever reach Final and
+`final_claims` stayed 0. The 5e launchers on the hosts still lacked them on node1. Every host holds all three
+(`qwen36.palwq36` 33.99 GiB, `qwen25-1.5b-a16.palwart`, `qwen25-coder-a16.palwart`; 23 GB RAM each, page cache
+shared per file), so node1's launcher got the three flags (`ibm-node1.sh.pre-5f-artifacts` kept) and was
+restarted; seat4's is checked and fitted the same way before it starts. The announcement may not say "finality"
+until `final_claims` is read non-zero within the bind+challenge windows — that sentence has to be earned by a read,
+not by "the seats are running".
+
+**Liveness watchdogs come last on purpose:** `misaka node liveness` reads a node in its artifact pass as WEDGED
+(RPC refused), and a watchdog armed then would restart the node it is waiting for.
