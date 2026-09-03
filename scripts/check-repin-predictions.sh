@@ -26,7 +26,15 @@ git rev-parse --verify -q "${tree}^{tree}" >/dev/null || die "not a tree-ish: $t
 # ---- the predictions, and the tree they were predicted from -------------------------------
 PREDICTED_DERIVE_SRC=4969f8dc051cac3165a051b439efb65f7630f026
 PREDICTED_SOURCE_TREE_SHA=637858dba5ea5e34b9459a580b2b81d1361aecf450bc615a4ee9621d4953a988
-PREDICTED_T11_FP=71efa66480211731e3dc6fa2312ed73f7ed11b93372a19a55ac66ef39b65920e
+# WITHDRAWN 2026-09-04, named by 3e BEFORE the extraction that will move it: the a16-v5 family the
+# cut ships is 5e's per-kernel family (28 vectors, 409,069 B, five carriers; drilled_kernel_ids with
+# the gate `reachable ⊆ drilled`), replacing impl's one-carrier entry whose six leaves cannot have
+# adjudicated the ten kernels it declares (ADR-0069's forbidden object). Adopting it moves the
+# certified-set root (court_e2e_root) and with it the testnet-11 fingerprint. The eight transformer
+# ids, source_tree, fp golden and premine do not move (none read the family).
+#   value held until then: 71efa66480211731e3dc6fa2312ed73f7ed11b93372a19a55ac66ef39b65920e
+# The new value comes ONLY from a table whose `extracted_from` is the tip that carries the family.
+PREDICTED_T11_FP=WITHDRAWN-family-adoption-see-above
 # WITHDRAWN 2026-09-03: devnet genesis now registers the same class set as testnet-11
 # (floor + graph-v5@512 + QWEN36) so the drill rehearses the chain being cut. That moves this
 # fingerprint by design. The prediction is NOT updated by guessing — the new value comes from
