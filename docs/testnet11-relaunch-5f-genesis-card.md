@@ -4331,7 +4331,13 @@ git push ssh://root@169.58.39.220/root/misakas-t11r <5f-tip>:refs/heads/cut-<5f-
 ssh misaka-ibm 'cd /root/misakas-t11r && git checkout cut-<5f-tip> && nice -n 19 cargo build --release -j 4 -p kaspad -p misaka-cli 2>&1 | tee /tmp/cut-build.log'
 #    read the log for `error`, not the exit code; a `tail` is a display decision on a diagnostic
 
-# 4. isolated boot on ibm MUST go green: genesis hash printed == the table's; premine == ba2612417e7e0817…
+# 4. isolated boot on ibm MUST go green. THE TABLE CARRIES NO GENESIS HASH — do not look for one.
+#    The premine re-pin (utxo_commitment 2d882275… -> ba2612417e7e0817…) MOVES GENESIS.hash (audit M-07,
+#    utxo_set_override.rs:66: re-pin GENESIS.hash + utxo_commitment together). The expected hash is
+#    the re-pinned tree's PALW_RC_GENESIS.hash, PROVEN two ways: the M-07 test
+#    every_genesis_commits_to_the_premine_this_build_mints turns GREEN on the re-pinned tree (it is
+#    red before), and the boot prints that same hash. A candidate boot BEFORE the re-pin prints the
+#    old 08e9c8a4cb597145… — correct for the candidate, wrong for the cut.
 
 # 5. the fleet, in this order and no other (fleet-wipe-must-stop-every-host-first):
 scripts/relaunch-fleet-wipe.sh census     # enumerate from PROCESSES and ss, not journals
@@ -4341,7 +4347,8 @@ scripts/relaunch-fleet-wipe.sh wipe       # dnsseeders are part of it; pool slot
 #    a missed host is not a stale peer tonight: it judges fused registrations by a different rule
 
 # 6. producer first (node0 = QWEN36 producer), then the rest; on EVERY host:
-#    the printed genesis hash == the table's; the fingerprint == t11 71efa664…
+#    the printed genesis hash == the re-pinned tree's PALW_RC_GENESIS.hash (see 4); the fingerprint ==
+#    t11 71efa664…; the premine == ba2612417e7e0817…
 
 # 7. the announcement gate, both green on the merged tree, before one public word:
 #    artifact-stranger (independent re-derivation) and the FP gateway smoke [1]-[6]
@@ -4450,3 +4457,19 @@ until 5e and 3e name the survivor.**
 5e's other drill facts, with the bound artifact as their next input: stage 2 PASS (the panel
 registered `4277d84f…`), stage 3 PASS (family + ClassLaneCertified on every validator), stage 4
 refused the unbound artifact — the same gate this card closed with `bound-candidate.palwart`.
+
+### The rehearsal armed on ibm, and what it can and cannot prove
+
+Self-gating on the warm-up build: when `/tmp/warmup-build.log` carries `BUILD rc=0`, ibm copies
+`target/release/kaspad` to `/root/t11/kaspad.candidate-971b2eff` (never over the live
+`/root/t11/kaspad`), boots it on **loopback only** — `--testnet --netsuffix=11 --nodnsseed
+--listen=127.0.0.1:39321 --rpclisten=127.0.0.1:39322`, a fresh `/tmp/fpchk-971b2eff` — captures
+the `Consensus params fingerprint:` line and any genesis line, compares the fingerprint with the
+table's `71efa664…`, stops the node, and writes `/tmp/rehearsal-971b2eff.result`. The recipe is
+the one the previous rehearsal used (its process is still alive from 2026-08-30, running a
+deleted binary, printing the *old* fingerprint `f3bf86b4…` — the wipe kills it).
+
+**What it proves:** the candidate builds, boots in isolation, and announces the fingerprint the
+table predicts. **What it cannot prove:** the genesis hash of the cut — the candidate is
+pre-re-pin, so it prints `08e9c8a4…`; the cut's hash exists only after the premine re-pin, and is
+proven by the M-07 test turning green, not by any table.
