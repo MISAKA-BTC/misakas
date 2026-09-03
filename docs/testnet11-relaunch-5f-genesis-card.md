@@ -5300,3 +5300,11 @@ commitments are local. The on-chain form is the `[UNEARNED until read on chain]`
 the MIDI was recomputed byte-for-byte by an independent path that links nothing; the STL's bytes are identical across
 two builds on two architectures. Condition stated with it: today the derivation succeeds when the answer fills the
 decode budget exactly (56 / 97 tokens); the EOG-cut amendment is post-cut.
+
+**Correction to 6f (18:30 UTC, from 5e's reading of `attempt_target_seed_v1`, `palw_class_daa.rs:745`, checked by
+recomputation):** the v5 class's `u128::MAX` target is **not** a skipped row. The seed is the documented clamp
+`T = MAX · (share_permille · pwu_per_inference) / UNIT`, `UNIT = 2^31`, saturating at MAX when share·pwu ≥ UNIT:
+v5 489 × 6,630,544 = 3,242,336,016 ≥ 2,147,483,648 → MAX; QWEN36 489 × 2,685,360 = 1,313,141,040 → 0.611·MAX —
+both to the digit of the chain's readings. The heaviest inference rides at the ticket floor by design. Nothing for
+the audit; the "skips the fused row" line sent to 3e is withdrawn. The value was right, the mechanism was borrowed
+unread — [[send-the-value-with-what-produced-it]] again.
