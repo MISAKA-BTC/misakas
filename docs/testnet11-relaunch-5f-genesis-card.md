@@ -4982,3 +4982,7 @@ the merge, fixed against HEAD.
 corrected rehearsal keyed to it with **`EXPECT_FP = 2222e054…` and `EXPECT_GEN = ad30b5cb…`**. This
 boot must come up **without** M-07 and print both — the two values the un-re-pinned binary could
 not produce an hour earlier. Its verdict is read as evidence only once 5f's derive pin is green too.
+
+**5f after steps 1–2: core 5 passed, derive 3 passed** — `every_genesis_commits_to_the_premine_this_build_mints`,
+`test_genesis_hashes`, both `golden_vector_ids_are_frozen`, `shipped_presets_have_pinned_fingerprints`,
+and the three transformer-pin tests — on the release branch itself, after the real merge and apply.
