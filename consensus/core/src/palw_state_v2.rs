@@ -1442,6 +1442,16 @@ pub struct PalwClassRowV2 {
     pub share_permille: Option<u16>,
     /// This epoch's cap, as `palw_producer_facts_v2` reads it (`unwrap_or(0)`).
     pub budget_blocks: u64,
+    /// The class's canonical job in step leaves — `PalwPwuRuleV2::canonical_leaves_v1`, which for a
+    /// derived class IS its `pwu_per_inference`.
+    ///
+    /// It is here because every off-chain half that prices a claim needs it and nothing published
+    /// it: the gateway's `--class-leaves` and the rail's `--class-leaves` both default to the
+    /// FLOOR's 7,708, so a drill or an operator running any other class silently priced its quanta
+    /// as the floor's unless they knew the number and passed it twice. A quantity the chain owns
+    /// (ADR-0074 Decision 5) should be read off the chain, not carried in two operator flags that
+    /// can disagree with it and with each other.
+    pub canonical_leaves: u64,
     pub is_base_class: bool,
 }
 

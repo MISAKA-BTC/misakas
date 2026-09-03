@@ -1502,7 +1502,15 @@ Do you confirm? (y/n)";
     // `--palw-register-bond` needs this service too, and requiring `--palw-panel` alongside it
     // would mean a newcomer who passed only the registration flag got silence: no service, no
     // message, nothing to read. The registration dispatches to its own worker inside.
-    let palw_panel_service = if args.palw_panel || args.palw_register_bond {
+    //
+    // **`--palw-register-class` has the identical shape and was missing from this condition**, so
+    // it produced exactly the silence the paragraph above was written to prevent — one flag over.
+    // A node given only `--palw-register-class` built no panel, read the flag nowhere, and ran on
+    // as an ordinary validator: it followed the chain, accepted blocks, logged nothing about a
+    // registration, and never exited. Measured 2026-09-03, where it did that for two hours while
+    // an acceptance drill waited on it. A flag that names an action and is then never read is
+    // worse than an unimplemented one, because the node looks like it is working.
+    let palw_panel_service = if args.palw_panel || args.palw_register_bond || args.palw_register_class.is_some() {
         // The court, from the SAME bundle the mode check reads — a seat resolving a duty's class
         // against a different court would look for a class the chain never registered.
         let panel_court = match &config_for_palw_panel.params.palw_consensus_mode {
@@ -1515,7 +1523,11 @@ Do you confirm? (y/n)";
         // is therefore admitted on the key alone, and the service dispatches to the registration
         // worker instead of the panel duties.
         match (v2, &args.palw_producer_key, &args.palw_producer_bond) {
-            (true, Some(key_path), bond) if bond.is_some() || args.palw_register_bond => {
+            // Class registration is admitted on the key alone for the same reason bond registration
+            // is: ADR-0054 makes admission permissionless, so requiring a bond to register a class
+            // would be the closed seam one level up — the only way to register a class would be to
+            // already be bonded.
+            (true, Some(key_path), bond) if bond.is_some() || args.palw_register_bond || args.palw_register_class.is_some() => {
                 Some(Arc::new(crate::palw_panel::PalwPanelService::new(
                     crate::palw_panel::PalwPanelConfig {
                         register_class: args.palw_register_class.clone(),
@@ -1564,7 +1576,20 @@ Do you confirm? (y/n)";
                 None
             }
             _ => {
-                warn!("--palw-panel needs --palw-producer-key and --palw-producer-bond (the seat identity) — service not started");
+                // Name the flag the operator actually passed. Telling a `--palw-register-class`
+                // user that "--palw-panel needs ..." sends them to configure a service they did
+                // not ask for, and the flag they DID pass goes unmentioned.
+                let asked = if args.palw_register_class.is_some() {
+                    "--palw-register-class"
+                } else if args.palw_register_bond {
+                    "--palw-register-bond"
+                } else {
+                    "--palw-panel"
+                };
+                warn!(
+                    "{asked} needs --palw-producer-key (the seat identity){} — service not started, so nothing was registered",
+                    if args.palw_register_bond || args.palw_register_class.is_some() { "" } else { " and --palw-producer-bond" }
+                );
                 None
             }
         }
