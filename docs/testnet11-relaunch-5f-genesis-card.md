@@ -3102,3 +3102,49 @@ palw-adr0082-impl   derive/src = 4969f8dc051cac31…   music/smf id cb5f27b4… 
 **The trees differ, so the ids differ**, and `transformer_id` is a function of `derive/src`'s
 bytes. *A transformer id read from the wrong tree is exactly the paste this ceremony exists to
 prevent* — and it would have been eight plausible hex strings.
+
+## A valid drill on 5f — and three things it settles
+
+```
+palw-derive drill --corpus misaka-palw-derive/corpus --report drill-5f.json
+{"arch":"aarch64","golden_checked":43,"golden_mismatched":[],"golden_unpinned":[],
+ "bounds_enforced":8,"bounds_not_enforced":[],"refused":10,"rows":33,
+ "verdict":"the corpus reproduces its goldens on this architecture and every declared bound
+            refused an over-bound answer"}                                          exit 0
+```
+
+Run with **both binaries built** (`cargo build -p misaka-palw-derive`, not `--bin`), so
+`palw-evm-runner` is beside the deriver and the six EVM goldens are checked rather than refused —
+the defect that once produced eight plausible ids from a `FAILS` run.
+
+**1. The report file still has no `verdict`, confirmed on a run that PASSED.** Previously I had
+only compared a valid report against a failed one; this is a third, independent confirmation from
+a fresh green run:
+
+```
+file keys   arch bounds golden os refused rows schema source_tree_sha256 transformers
+verdict in the file      False        <- stdout has it; the artefact does not
+golden.mismatched == []  True         <- the discriminator
+```
+
+**2. The report schema itself differs between trees, which my own rule did not say.** I recorded
+the key set as *"…transformers **uncovered**"* and asserted `uncovered == []` is empty in both a
+valid and a failed report. **On 5f there is no `uncovered` key at all** — so `r.get("uncovered")
+== []` is *False* here, on a perfectly good run. That measurement was taken on impl.
+
+> **A rule about a report's fields is a claim about a tree**, and mine did not name one. The rule
+> survives — `golden.mismatched == []` is the discriminator on both — but *the sentence I wrote
+> around it was tree-specific and did not say so.* Third time tonight for the same omission, and
+> this one is inside the correction I made to a previous omission.
+
+**3. `source_tree_sha256` tracks the tree exactly as the prediction assumes.** 5f's drill reports
+`98265872fb7a372c…`; my re-pin prediction is `637858dba5ea5e34…` for impl:
+
+```
+palw-testnet-5f     derive/src 6b8d13ad46ebb22c…   source_tree_sha256 98265872fb7a372c…
+palw-adr0082-impl   derive/src 4969f8dc051cac31…   source_tree_sha256 637858dba5ea5e34…  (predicted)
+```
+
+**Two different trees produce two different values, and neither is a coincidence** — which is the
+mechanism the whole prediction rests on, demonstrated rather than assumed. *The best evidence
+that a pin tracks its input is watching it move when the input does.*
