@@ -771,7 +771,17 @@ run_tier() {
   baseline_of "PALW lifecycle carried.*ClassLaneCertified"
   submit_object "$WORK_DIR/obj/$tag-bind.obj" >>"$WORK_DIR/certify-$tag.log" 2>&1 || true
   if all_nodes_gained "PALW lifecycle carried.*ClassLaneCertified"; then
-    record "stage 3 [$tag] PASS — every validator carried FamilyCertified and ClassLaneCertified for the fp lane"
+    # **Carrying an object in a block is NOT the chain grading it**, and this stage cannot tell the
+    # difference: `palw-certify`'s own output says "the chain grades them when the carriers are
+    # accepted", and nothing this stage can read reports the verdict — the node logs one
+    # "PALW lifecycle carried" line and no grading line, and the CLI has no certified-set query
+    # (`palw` offers fp-submit, submit-object, derived, derived-verify and nothing else).
+    #
+    # So this PASS says what it measured and no more. It said "certified" once, on a run where the
+    # chain had certified nothing and stage 4 then failed on `fp_certified=false` — a green stage
+    # sitting on top of the exact fact it claimed to have established. The certified set is stage
+    # 4's to read, through the gateway's /health, which is the only chain read this drill has.
+    record "stage 3 [$tag] PASS (TRANSPORT ONLY) — every validator carried FamilyCertified and ClassLaneCertified for the fp lane. Whether the chain GRADED them is not checked here; that is stage 4's fp_certified"
   else
     record "stage 3 [$tag] FAIL — not every validator carried the class-lane binding; every commitment will be refused as uncertified"
     worse_than 1; return 0
@@ -863,7 +873,7 @@ PY
   n_ctx=$(jget "$WORK_DIR/health-$tag.json" "n_ctx"); n_ctx=${n_ctx:-0}
   fp_certified=$(jget "$WORK_DIR/health-$tag.json" "chain.fp_certified")
   if [ "$fp_certified" != "True" ] && [ "$fp_certified" != "true" ]; then
-    record "stage 4 [$tag] FAIL — the chain does not certify this class on the free-prompt lane (fp_certified=$fp_certified); no commitment can be written and no derivation can name a claim"
+    record "stage 4 [$tag] FAIL — the chain does not certify this class on the free-prompt lane (fp_certified=$fp_certified); no commitment can be written and no derivation can name a claim. Stage 3 passing does not contradict this: stage 3 checks only that blocks CARRIED the objects, and this is the grading. KNOWN CAUSE (2026-09-03): palw-certify bind takes only --model-id, and the A16 catalog pins n_ctx per model id (16/18/16, classes.rs:199), while this artifact is max_position 512. n_ctx is inside PalwShapeProfileV3 and therefore inside the borsh shape_profile_id hashes, so the registered class and any bindable class are two DIFFERENT classes. No tool in this tree can name the 512 profile, so its free-prompt lane is closed by ADR-0075 and the chain is right to refuse. This is a launch blocker on the genesis card, not a drill defect — do not work around it"
     worse_than 1; return 0
   fi
   record "stage 4 [$tag] PASS — /health names registered/fp_certified/bond_active/exposure_room; the registered class width is n_ctx $n_ctx"
