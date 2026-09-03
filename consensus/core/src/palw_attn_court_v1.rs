@@ -1196,12 +1196,22 @@ mod tests {
         let court = court_at(2);
         let ladder_only = palw_attn_court_admits_row_v1(&court, 0, TILE, 3_000).expect("the shipped ladder fits the RC window");
         assert_eq!(ladder_only, (2 * 22 + 2) * 20, "22 binary rounds at the fixture's 20-DAA clock");
-        // The same court with a 131,072-position history does not fit at arity 2 and does at 16.
-        let wide = palw_attn_court_admits_row_v1(&court, 131_072, TILE, 3_000);
-        assert!(matches!(wide, Err(PalwAttnCourtError::OverrunsWindow { .. })), "a binary dissection of 8,192 tiles fits nothing");
+        // The same court with a 131,072-position history: 22 ladder rounds and 13 history rounds
+        // at arity 2, which the RC window still holds at this fixture's 20-DAA clock — and a
+        // narrower window does not, with the arithmetic in the refusal.
+        let wide = palw_attn_court_admits_row_v1(&court, 131_072, TILE, 3_000).expect("72 moves at 20 DAA is 1,440");
+        assert_eq!(wide, (2 * (22 + 13) + 2) * 20);
+        assert_eq!(
+            palw_attn_court_admits_row_v1(&court, 131_072, TILE, 1_500),
+            Err(PalwAttnCourtError::OverrunsWindow { moves: 72, deadline: 20, reserve: 216, window_court: 1_500 }),
+            "the reserve is the ruleset's 27 carriers, and it is what puts 1,440 over 1,500"
+        );
+        // Sixteen children a round buys the same row 22 moves instead of 72, which is the whole
+        // content of Decision 3.
         let sixteen = court_at(16);
         let worst = palw_attn_court_admits_row_v1(&sixteen, 131_072, TILE, 3_000).expect("16-ary fits");
         assert_eq!(worst, (2 * (6 + 4) + 2) * 20, "6 ladder rounds at 2^22 and 4 history rounds at 8,192 tiles");
+        assert_eq!(palw_attn_court_admits_row_v1(&sixteen, 131_072, TILE, 1_500), Ok(440), "and it fits the narrow window too");
     }
 
     /// **The arity is DERIVED, and the derivation is the ADR's own inequality.**
