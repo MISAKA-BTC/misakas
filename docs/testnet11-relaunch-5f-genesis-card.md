@@ -1060,6 +1060,37 @@ gate above is the one that would have caught all three.
   matters); print the bytes (moved three times: 81,599 → 82,719 → 81,312). *This item exists because
   the announcement cited that test before it was written — the card-without-the-test defect, made by
   the person who had spent the day naming it, in the public-facing document.*
+- **THE DERIVED-ARTIFACT BINDING — no shipped verifier ties an artifact to the inference it names.**
+  Reproduced with the shipped binary: `palw-derive verify` recomputes `dsl_hash`/`artifact_hash`
+  from the caller's ANSWER BYTES and `output_root` from the caller's TOKEN IDS, ANDs them, and
+  prints `verdict: consistent` for an artifact whose DSL has nothing to do with those ids.
+  `rendered_output_hash_v1` hashes the *ids* rather than the rendered text, so `output_root` carries
+  no information about the answer bytes and the two arms cannot meet by accident. **An executor can
+  attach any artifact of any kind to any of its own claims and every verifier in this release calls
+  it consistent** — and the forger must be the claim's own executor, which is precisely the party
+  ADR-0078 Decision 5 says a consumer should not have to trust.
+
+  Every piece is already in the right crate, checked rather than assumed:
+
+      misaka-palw-derive/Cargo.toml:30      misaka-palw-base0 is a real [dependencies] entry
+      misaka-palw-base0/src/fp_worker.rs:851  render_answer_v1(&QwenTokenizer, &[u32]) -> Vec<u8>
+      misaka-palw-derive/src/derive.rs:226    already calls misaka_palw_base0::* on this path
+
+  so the missing step is one call — `canonicalize(render_answer_v1(tok, ids)).dsl_hash ==
+  object.dsl_hash` — and the only input not in hand is the tokenizer, which `PalwJobContextV2`
+  already pins by id.
+
+  **Two parts; the first is mandatory even if the second slips.** (1) `verify` must never print an
+  unqualified `consistent` for a binding it did not check — `binding_checked: false` and a word that
+  does not read as "this artifact came from that inference". (2) `--artifact <path>` loads the
+  tokenizer and performs the join, skipping by name when absent.
+
+  **Ordering:** both files are under `misaka-palw-derive/src/`, so this moves all eight
+  `transformer_id`s. It must land **before** the single `fmt --all` and before the tree is declared
+  frozen, or the re-pin is stale on arrival. `scripts/check-derive-freeze.sh` is the check.
+
+  *This is the one place the release's own promise — that a stranger can check a claim without
+  trusting the claimant — is not kept, and it is the place the launch is named after.*
 - **The 2^22 sweep (fixer FD2).** The ladder went to 2^26, but `2^22` survives as a bare literal at
   a set of sites the ladder change did not reach — and the 512 row's canonical job is **6,630,544
   leaves**, so until they move, *every honest claim of the class this genesis registers is refused
