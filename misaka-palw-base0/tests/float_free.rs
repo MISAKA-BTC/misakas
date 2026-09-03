@@ -293,7 +293,7 @@ fn has_raw_string(source: &str) -> bool {
 }
 
 /// Everything before the file's single trailing `#[cfg(test)]`, comments removed.
-fn scan(path: &Path, label: &str) -> Vec<Finding> {
+fn scan(path: &Path, label: &str) -> (Vec<Finding>, usize, usize) {
     let source = std::fs::read_to_string(path).unwrap_or_else(|e| {
         panic!(
             "{label} could not be read ({e}). This guard enumerates its targets on purpose: a file \
@@ -310,10 +310,40 @@ fn scan(path: &Path, label: &str) -> Vec<Finding> {
          `code_only` raw strings before adding a file that uses one."
     );
     let mut findings = Vec::new();
+    let mut scanned = 0usize;
     let mut in_string = false;
+    let mut skipping_tests = false;
     for (index, raw) in source.lines().enumerate() {
-        if !in_string && raw.trim_start().starts_with("#[cfg(test)]") {
-            break;
+        // **A test module is SKIPPED, not treated as the end of the file — and it used to be
+        // neither.**
+        //
+        // This read "everything before the file's single trailing `#[cfg(test)]`" and stopped at
+        // the first line whose TRIMMED form began with it, so an INDENTED attribute on a
+        // test-only helper inside a shipped `impl` ended the scan. `engine_a16.rs` has three
+        // markers, the first at line 287 of 2,249: the guard read **12%** of a file it lists in
+        // CONSENSUS_PATH — "the dense A16 engine, ADR-0040 Decision A's whole point" — and
+        // reported the result as if it had read the file.
+        //
+        // Stopping at the first COLUMN-ZERO marker instead is still wrong, just less wrong: it
+        // recovered 530 lines and left 1,432, because "the file's single trailing `#[cfg(test)]`"
+        // is a premise this file does not satisfy — it has two top-level test modules, and code
+        // that ships lives between them.
+        //
+        // So the rule is now what it should always have been: a `#[cfg(test)]` module is SKIPPED
+        // — from its attribute to the closing brace at column zero — and the scan resumes after
+        // it. Nothing about a test module makes the code below it untestable, and a guard that
+        // treats "I found tests" as "the file is over" gets quieter every time someone adds one.
+        if !in_string && raw.starts_with("#[cfg(test)]") {
+            skipping_tests = true;
+            continue;
+        }
+        if skipping_tests {
+            // The module's closing brace, at column zero. Nothing else in this codebase's style
+            // puts a bare `}` there.
+            if raw == "}" {
+                skipping_tests = false;
+            }
+            continue;
         }
         let code = code_only(raw, &mut in_string);
         let reason = if has_float_type(&code) {
@@ -325,24 +355,46 @@ fn scan(path: &Path, label: &str) -> Vec<Finding> {
         } else {
             None
         };
+        scanned += 1;
         if let Some(reason) = reason {
             findings.push(Finding { file: label.to_string(), line: index + 1, text: raw.trim().to_string(), reason });
         }
     }
-    findings
+    (findings, scanned, source.lines().count())
 }
 
 #[test]
 fn the_execution_path_contains_no_float() {
     let root = crate_root();
     let mut findings = Vec::new();
+    let (mut scanned, mut total, mut files) = (0usize, 0usize, 0usize);
     for relative in CONSENSUS_PATH.iter().chain(STATES_THE_ARITHMETIC.iter()) {
-        findings.extend(scan(&root.join(relative), relative));
+        let (f, s, t) = scan(&root.join(relative), relative);
+        findings.extend(f);
+        scanned += s;
+        total += t;
+        files += 1;
     }
     for name in CONSENSUS_CORE {
         let path = root.join("../consensus/core/src").join(name);
-        findings.extend(scan(&path, &format!("consensus/core/src/{name}")));
+        let (f, s, t) = scan(&path, &format!("consensus/core/src/{name}"));
+        findings.extend(f);
+        scanned += s;
+        total += t;
+        files += 1;
     }
+    // **A checker that prints its verdict without printing its coverage is unfalsifiable** —
+    // `ci-gates.sh`'s own second rule, applied to a guard that spent its whole life green while
+    // reading 56% of what it claimed. The skipped remainder is `#[cfg(test)]` module bodies.
+    println!(
+        "float-free: {scanned} of {total} lines across {files} declared files ({}% — the rest is test modules)",
+        100 * scanned / total.max(1)
+    );
+    assert!(
+        scanned * 2 > total,
+        "the guard read {scanned} of {total} lines, under half of what it declares — a stopping rule \
+         has gone wrong again and a green result here would mean nothing"
+    );
     assert!(
         findings.is_empty(),
         "ADR-0040 Decision A says integer-only means integer-only, and these lines are not:\n{}",

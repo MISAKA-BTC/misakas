@@ -265,3 +265,78 @@ fn the_genesis_row_is_the_only_a16_row_at_its_width() {
     );
     assert_eq!(at_width[0].0, genesis.model_id, "the one row at this width is not the one genesis registers");
 }
+
+/// **The other end is the GENESIS OBJECT SET, and every test above this one got that wrong.**
+///
+/// This file's own header says: *"Every other test in this area builds both ends of the pairing
+/// from one source of truth and checks they match — which they do, necessarily, because one call
+/// made both."* Then every test above asserts the artifact route equals `a16_graph_v5_row_v1()`,
+/// which is a **catalog** row — `canonical_classes_v1`, the same table `a16_row_for_artifact_shape_v1`
+/// picks from. Both ends, one source. The header describes the defect and the body commits it.
+///
+/// The header is kept verbatim on purpose. Someone who reads it and then finds this is a better
+/// lesson than a clean file.
+///
+/// **What the tree actually registers**, printed by `every_shipped_row_clears_the_derived_turn_deadline`:
+///
+///   f1c5635c…  BASE-0 floor
+///   5bd9ae3d…  QWEN36 graph-v3
+///   71bbb755…  dense A16 **graph-v2 at n_ctx 16**
+///
+/// `4277d84f…` — the graph-v5 512 row — is not among them. `params.rs` calls
+/// `qwen25_a16_registration_v2` over `QWEN25_1_5B_A16`, whose `n_ctx` is 16, and no
+/// `qwen25_a16_registration_v5` exists anywhere in the tree.
+///
+/// The absence has a second, better proof that does not depend on reading a list: the RC ships
+/// `palw_kary_court` DORMANT, and `validate_palw_v2` refuses a genesis set containing a
+/// fused-attention class under a dormant fence. A registered v5 row would make
+/// `palw_rc_shipped_params()` panic and take every test that touches it. They pass. **The absence
+/// is proved by a mechanism that had no idea it was being asked.**
+///
+/// That coupling is load-bearing for FG and the two halves are not separable: **registering the
+/// v5 row without arming `palw_kary_court` in the same change panics the genesis.**
+///
+/// **This test is RED on this tree and that is correct.** It goes green the moment FG registers
+/// the row. A red test that is true is worth more than a green one that is not, and until FG
+/// lands `palw-certify bind --artifact` mints a `ClassLaneCertified` for a class the chain will
+/// refuse with `MissingClass` — the lane stays closed and the first symptom is a free-prompt
+/// refusal that reads like the width wall, which is the exact failure this file exists to prevent.
+#[test]
+fn the_artifact_names_a_class_the_shipped_genesis_actually_registers() {
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+
+    let params = kaspa_consensus_core::config::params::palw_rc_shipped_params();
+    let bundle = match &params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b,
+        other => panic!("the RC preset is not a ConsensusV2 bundle: {other:?}"),
+    };
+    let registered: Vec<String> = bundle
+        .genesis_objects
+        .iter()
+        .filter_map(|o| match o {
+            PalwConsensusObjectV2::ClassRegistered { class_id, .. } => Some(class_id.to_string()),
+            _ => None,
+        })
+        .collect();
+    assert!(!registered.is_empty(), "the RC genesis registers no class at all — this test is measuring the wrong bundle");
+
+    let genesis_row = a16_graph_v5_row_v1().expect("the graph-v5 dense row projects");
+    let named = a16_row_for_artifact_shape_v1(&court(), &genesis_row.artifact_shape, None, None)
+        .expect("the artifact shape names an A16 row")
+        .profile
+        .shape_profile_id()
+        .to_string();
+
+    assert!(
+        registered.contains(&named),
+        "`palw-certify bind --artifact` names class {named}, and the shipped genesis registers \
+         [{}]. A ClassLaneCertified for a class the chain does not hold is accepted as well-formed, \
+         refused by apply_object with MissingClass, and shows up to the operator as a free-prompt \
+         refusal that reads like the context-width wall.\n\
+         \n\
+         FG registers the graph-v5 512 row and this goes green then. FG must ALSO arm \
+         `palw_kary_court` in the same change: validate_palw_v2 refuses a fused class under a \
+         dormant fence, so registering the row alone panics the genesis assembly.",
+        registered.join(", ")
+    );
+}
