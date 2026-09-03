@@ -228,6 +228,18 @@ gate above is the one that would have caught all three.
   `assistant\n`. Under the shipped assembly **4 of 8 correct answers were refused at column 1** and
   2 more burned their budget on an open reasoning trace. The preamble must be `Special(id)` — as
   text it becomes BPE pieces through ADR-0079 D7's `encode_without_specials`.
+- **A way to certify the 512 row.** The A16 catalog is a fixed three-row table — `Qwen/Qwen2.5-1.5B`
+  at n_ctx 16, `Qwen/Qwen2.5-Coder-1.5B-Instruct` at 18, `Qwen/Qwen2.5-1.5B/graph-v2` at 16 — and
+  `palw-certify bind` takes only `--model-id`, with no `--n-ctx`, no `--class-id` and no
+  `--artifact`. **So the certification tool cannot bind the class this card registers.** Under
+  ADR-0075 a class with no `ClassLaneCertified` has its free-prompt lane closed, which is the
+  `registered: false, fp_certified: false` an acceptance drill is already reporting. Needs either a
+  512 catalog row or a `bind` that can name a width.
+
+  *Two things this is NOT, both checked in the source rather than reasoned about:* it is not the
+  court — `shape_profile_id` hashes the profile's borsh and no court field is in that struct, and
+  `canonical_classes_v1`'s second line is `let _ = court;`, so the court parameter is decorative
+  with respect to class identity. W3's `max_close_chunks` is not implicated.
 - **Toolchain pinned** and the CI gates runnable in one local command
 - **The single re-pin**, in the order of §4
 
