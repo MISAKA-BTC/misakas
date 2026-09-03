@@ -652,6 +652,49 @@ is JUDGEMENT and a derived value carries none.
 a set that was typed rather than drilled — the exact defect the field exists to close. If the two
 turn out equal, that is a result to be observed, not a shortcut to be taken.
 
+### A tautology is not a stale claim — the doc was never true, and the check was built not to notice
+
+`the_shipped_rows_keep_interval_one_and_their_ids` asserted `qwen25_a16_class_id_v2() ==
+qwen25_a16_class_id_v2()` — a pure function compared with itself, whose failure message was
+unreachable. Writing the comparison its own doc describes turned it red and produced **three class
+ids for one model at one width**:
+
+    f942e268…   qwen25_a16_profile_v1(QWEN25_1_5B_A16)       the superseded v1 graph
+    71bbb755…   qwen25_a16_profile_v2(QWEN25_1_5B_A16)       what the genesis REGISTERS
+    7a76d29b…   palw_a16_context_row_profile_v1(16)          that module's own projection
+
+"Three adjacent ids loose in this project's notes" has been a warning in these commit messages for
+days. Here they are, measured, and **the reason nobody found them is that the only assertion in the
+area could not fail.**
+
+**This is a different defect from a stale claim and the difference is worth holding.** A stale doc is
+a true statement that expired. This doc was **never true** — so the only assertion that could sit
+underneath it was one incapable of failing, and the test was shaped to agree with the prose rather
+than with the code. You cannot find it by re-reading either the doc or the test; you find it only by
+**writing the comparison the doc describes and watching it go red**.
+
+*Pinned as three-way DISTINCTNESS rather than three literals — a literal would join the re-pin set
+whenever any of the three graphs moved, for no benefit, while the property actually worth holding is
+that they stay tellable apart. A collision means a row built by one route silently names the class
+another route owns, which is the `bind` defect in a different costume.*
+
+### The dense lane is broken from BOTH ends, and it is ONE fixer — do not land half of it
+
+Two findings that read as separate items are the same defect seen from two sides, and FG closes both:
+
+    the class the chain HOLDS cannot be executed   registered row declares rms_eps_q 1;
+                                                   every artifact carries eps_q 256, so
+                                                   A16Engine::plan_from_profile refuses it —
+                                                   while that row holds 489‰ of cadence
+    the class the WORKER embodies is not held      palw-a16-fp-worker's MODEL_ID is the v5 512
+                                                   row, which the genesis does not register, so a
+                                                   commitment under it names a class no chain holds
+
+**Registering the v5 row and arming `palw_kary_court` were never separable, and neither are these.**
+Landing the registration without the eps replacement leaves 489‰ on an unexecutable class; landing
+the eps fix without the registration leaves the worker pointed at nothing. *Written as one item
+because two items are how half of it ships.*
+
 ### The short function name is the genesis-anchored one, and it answers the wrong court
 
 **Measured against myself: I reached for the wrong variant six times in one day**, and every time the
