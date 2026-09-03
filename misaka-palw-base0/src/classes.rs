@@ -1557,30 +1557,37 @@ mod tests {
                 binding.weight_name
             );
 
-            // The checkpoint route alone — the number the relaunch's registration decision turns
-            // on. `palw_context_ladder`'s own sweep pins 82,719 = 1 chunk at arity 16; this is the
-            // same route swap at the arity THIS ruleset derives.
-            let checkpoint_route = checkpoint_route_close(&row.profile, binding.close_bytes);
-            let chunks = kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(checkpoint_route);
+            // **The binding close IS the checkpoint route now, and this used to subtract to get
+            // there.** Stream K put a checkpoint at every position and REFUSED the cache-write
+            // route for any class that does, so the walk no longer charges it: measured here, the
+            // fused site's cache-write bottom is 175,297 and its checkpoint bottom 41,997, while
+            // the whole binding close is 81,599 — smaller than the cache term it was subtracting,
+            // which is why `cache_write_close - cache + ckpt` panicked with "attempt to subtract
+            // with overflow". The route swap is not an arithmetic correction any more; it is
+            // history, and the number it used to compute is the number the walk returns.
+            let chunks = kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(binding.close_bytes);
             println!(
-                "[{name}] graph-v5 dense @ n_ctx {} arity {}: checkpoint-route close {checkpoint_route} B = {chunks} chunk(s)",
-                row.profile.n_ctx, kary.dissection_arity
+                "[{name}] graph-v5 dense @ n_ctx {} arity {}: checkpoint-route close {} B = {chunks} chunk(s)",
+                row.profile.n_ctx, kary.dissection_arity, binding.close_bytes
             );
-            assert_eq!(chunks, 1, "{name}: the registered row must be ONE carrier on the checkpoint route — {checkpoint_route} B");
+            assert!(
+                chunks <= 1,
+                "{name}: the registered row must be ONE carrier — {} B is {chunks} chunks, and a class whose close needs \
+                 more than one carrier cannot be prosecuted on a shipped build",
+                binding.close_bytes
+            );
 
             // **Pinned, with the configuration in the message.** `palw_context_ladder`'s own sweep
-            // states 216,019 / 82,719 for this row at arity 16 — the arity stream E measured with a
-            // 128-lane site. The derivation here reads the ruleset that registers THIS row and
-            // returns 2 (window 3,000, turn deadline 42, ladder 2^26, history 512 positions at a
-            // 16-position tile, 8 lanes), and the whole difference is the per-move disclosure:
-            // 1,120 bytes on BOTH routes, which is why the chunk counts are identical. A moved
-            // arity moves these two numbers and this test says by how much.
-            assert_eq!(
-                (binding.close_bytes, checkpoint_route),
-                (214_899, 81_599),
-                "{name}: the graph-v5 512 row's close moved at arity {} (cache-write, then checkpoint route)",
-                kary.dissection_arity
-            );
+            // states 82,719 for this row at arity 16 — the arity stream E measured with a 128-lane
+            // site. The derivation here reads the ruleset that registers THIS row and returns 2
+            // (window 3,000, turn deadline 42, ladder 2^26, history 512 positions at a 16-position
+            // tile, 8 lanes), and the whole difference is the per-move disclosure: 1,120 bytes, so
+            // 81,599 + 1,120 = 82,719 and the two sweeps agree. A moved arity moves this number and
+            // this test says by how much.
+            //
+            // This pinned `(214_899, 81_599)` before stream K — the cache-write close beside the
+            // checkpoint one. There is one route now and therefore one number.
+            assert_eq!(binding.close_bytes, 81_599, "{name}: the graph-v5 512 row's close moved at arity {}", kary.dissection_arity);
 
             // And WITHOUT the fence: the guard refuses the same row by name.
             match adm::verify_class_admission_v5(&bundle, &row.profile, &canonical, &registration, &[], &[], None, None) {
@@ -1588,37 +1595,5 @@ mod tests {
                 other => panic!("{name}: an unfenced ruleset must refuse the graph-v5 row by name, got {other:?}"),
             }
         }
-    }
-
-    /// The binding close with the fused bottom charged at Decision 4's TILE route instead of the
-    /// cache-write one. The walk charges the larger of the two at the binding node, so swapping the
-    /// route is exactly this difference and nothing else — the same arithmetic
-    /// `palw_context_ladder::the_close_ceiling_is_the_derivation_over_the_genesis_set` states.
-    fn checkpoint_route_close(profile: &PalwShapeProfileV3, cache_write_close: u64) -> u64 {
-        use kaspa_consensus_core::palw_class_admission_v2::{
-            palw_attn_bottom_cache_write_bytes_v1, palw_attn_bottom_tile_route_bytes_v1,
-        };
-        let d_head = profile.attn_head_dim as u64;
-        let kv_dim = profile.attn_kv_heads as u64 * d_head;
-        let node = profile
-            .attn_nodes
-            .iter()
-            .find(|n| n.op_kind == kaspa_consensus_core::palw_step::PalwStepOpKindV1::AttnFused)
-            .expect("a v5 row has a fused site");
-        let out_w = match node.out_len {
-            kaspa_consensus_core::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
-            kaspa_consensus_core::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => multiplier as u64 * profile.n_ctx as u64,
-        };
-        let tile = (node.tile_len as u64).min(out_w);
-        let src = profile
-            .attn_nodes
-            .iter()
-            .find(|n| n.role == kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::KCacheWrite)
-            .map_or(tile, |n| n.tile_len as u64);
-        let positions = (kaspa_consensus_core::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4 as u64).min(profile.n_ctx as u64);
-        let path = 64 * 32u64;
-        let cache = palw_attn_bottom_cache_write_bytes_v1(d_head, kv_dim, positions, tile, src, path).expect("derives");
-        let ckpt = palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, positions, tile, path).expect("derives");
-        cache_write_close - cache + ckpt
     }
 }
