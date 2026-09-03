@@ -4663,3 +4663,40 @@ does not yet; removed, never committed). **Merge surface with G: exit 0, zero co
 measurement (`produced block #4` at 00:45:11; the "10 accepted" counted peers' blocks and
 heartbeats, not the producer's own). **Stage 1 PASS; stage 2 (registering graph-v5@512) in flight
 on the k-ary-wired, T1-derived bundle; stage 4 with `bound-candidate.palwart` ~15–20 min behind.**
+
+## The per-kernel rule, measured on impl: a family the genesis can pin and the chain can never certify
+
+With 5e's (table, kernel, call class) rule, impl's drill plants **BASE-0 26 / QWEN36 74 / A16 32 /
+A16-V5 28** vectors — every declared kernel drilled (10/10, 23/23, 12/12, 10/10), root
+`40c1feac…` identical to 5e's tree. And two consensus caps refuse the QWEN36 family's evidence:
+
+```
+PALW_CERTIFICATION_MAX_VECTORS = 32     palw_state_v2.rs:3001    TooManyDrillVectors { got: 74, max: 32 }
+carriage ceiling 800,000 B              74 vectors = 1,442,857 B  ObjectTooLargeToChunk
+```
+
+> **A family that can be pinned at genesis but never certified through the chain.** The
+> permissionless path for a hybrid-sized model closed by the certificate's own size — and three
+> base0 tests say so by name. **This is the third instance tonight of the genesis route minting
+> what the acceptance path refuses:** v6 priced fused rows genesis-anchored while the genesis
+> assembly priced them for the court; the close ceiling's two readers disagreed by unit; now the
+> certification caps bound post-genesis families and not the genesis set.
+
+**What impl does instead — the rule's purpose, not its enumeration:** a minimal cover. Pass 1,
+one leaf per (table, call class) for the court's covering check; pass 2, one leaf for each
+declared kernel no chosen leaf carries; both in leaf order; the probe and the exhaustive-walk test
+share one selection function, and the test asserts every declared kernel has a drill leaf.
+`drilled_kernel_ids` stays equal to the declared set, so `reachable ⊆ drilled` becomes an
+**equality** re-measured by the pin tests. The counts shrink to what the cover needs (QWEN36
+expected well under 32); the V5 family stays one carrier or a few, never five; **the root moves
+again** — from impl's own printout, into the table. The t11 fingerprint was already withdrawn;
+the value that lands is whatever the printer says on the tip.
+
+**The test this shape asks for, the same one it asked for twice already:** the genesis assembly's
+families must satisfy the acceptance path's caps — `vectors ≤ PALW_CERTIFICATION_MAX_VECTORS`,
+`bytes ≤ the carriage ceiling` — asserted against the *genesis set*, not only against post-genesis
+submissions. Route agreement between the two spellings of "certifiable", or the genesis will
+again be allowed something the chain is not.
+
+For 5f's G: its per-carrier wait multiplies by the carrier count read from the certify log, so a
+one-carrier V5 family leaves it at `parts=1` — harmless, and correct if a family ever needs more.
