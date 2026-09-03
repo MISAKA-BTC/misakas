@@ -5170,6 +5170,36 @@ impl VirtualStateProcessor {
                     continue;
                 }
             }
+            // **ADR-0080 design A: a declared close buys one adjudication, and pays for it before
+            // the group opens.**
+            //
+            // The court lane's `palw_certification_min_fee_v1`, on the object that carries the
+            // count the work is a function of — see `palw_court_close_min_fee_v1` for why it is the
+            // DECLARATION and not the completing chunk: chunks arrive in any order, so "the last
+            // one" is the declarer's choice of `index` and pricing on it is a discount of up to
+            // `max_close_chunks`. Refused BEFORE the row is written, exactly as the slot rent above
+            // is, so an underpaid declaration never reaches the state root and never commits any
+            // validator to the assembly it would have bought.
+            //
+            // Dropped rather than block-invalidating, for SA-2's own reason: admission on the
+            // lifecycle band is stateless, so an underpaid carrier relays and mines freely and it
+            // would be honest miners producing the invalid blocks. Behind the same
+            // `palw_certification_rent` fence as the two rents it copies — `None` on every shipped
+            // preset, and dormant this whole block is skipped.
+            if rent_armed
+                && let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::CourtCloseDeclared { session_id, count, .. } =
+                    &object
+            {
+                let owed = kaspa_consensus_core::palw_state_v2::palw_court_close_min_fee_v1(*count as u64);
+                if carrier_fee < owed {
+                    info!(
+                        "Block {block}: a CourtCloseDeclared for session {session_id} was dropped, and the block stands: its \
+                         carrier paid {carrier_fee} sompi and adjudicating a close of {count} chunks rents for {owed} \
+                         (ADR-0080 design A)"
+                    );
+                    continue;
+                }
+            }
             // ADR-0075 Decision 9: a block grades at most `PALW_CERTIFICATION_MAX_PER_BLOCK`
             // family drills. Counted before grading, in transaction order, so every node drops the
             // same object and the grader is never run for a drill the block may not carry.
@@ -5663,32 +5693,113 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| e.to_string())?;
                 }
-                // **ADR-0080 design A: the declaration's authentication is W6's, and until it
-                // exists this door stays SHUT.**
+                // **ADR-0080 design A, W6: the declaration is a court move, and it is signed.**
                 //
-                // A `CourtCloseDeclared` is a court move: it pins every byte of a close and
-                // asserts a verdict on behalf of one of the two bonds the session id binds. The
-                // transition reads the declarer from the session and the claim, so it can never
-                // name a third party — but nothing here yet proves the SIDE authorised it, and
-                // that is precisely P0-9's hole in its original words: either party could
-                // otherwise write the other's move. `check_court_disclosure_acceptance_v2` is the
-                // construction it needs, under a signing domain registered in
-                // `PALW_COURT_V2_ALL_DOMAINS`, and both belong to W6.
+                // This arm refused every `CourtCloseDeclared` outright until W6 landed, and the
+                // refusal was right for as long as it stood: a declaration pins every byte of a
+                // close and asserts a verdict on behalf of one of the two bonds the session id
+                // binds, the transition acts on it, and nothing proved the SIDE authorised it —
+                // P0-9's hole in its original words, where either party could write the other's
+                // move. Unsigned it was worse than that: a declaration is singular per
+                // `(session, side)` for the life of the session and its failure to assemble is the
+                // declarer's conviction, so one forged object would have voided an honest
+                // producer's claim.
                 //
-                // Refused rather than admitted-and-noted, because the failure of an unchecked
-                // signature here is a forged close, and the state machine behind it is complete
-                // enough to act on one. `palw_lifecycle_object_may_ride_v2` already demands a
-                // non-empty signature; this is the layer that would have to say WHOSE.
-                Obj::CourtCloseDeclared { session_id, .. } => {
-                    return Err(format!(
-                        "a split close was declared for session {session_id}, and no layer yet verifies the declaring side's \
-                         signature (ADR-0080 W6) — refused rather than trusted"
-                    ));
+                // `check_court_close_declaration_acceptance_v2` is the same split
+                // `CourtDisclosed` and `CourtVerdictPosted` use: the transition reads WHICH bond
+                // may declare, this layer reads whether that bond spoke — its registered key is in
+                // the candidate state, and neither party names its own.
+                Obj::CourtCloseDeclared { session_id, side, count, chunk_digests, close_digest, verdict, signature } => {
+                    // The ruleset's own carriage count, which the transition cannot ask for: it has
+                    // no `PalwCourtParamsV2` and enforces only the bitmap's structural bound. On
+                    // devnet this is 1, so the split path is refused there rather than engaged.
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "a court close declaration on a network with no V2 court parameters".to_string())?;
+                    kaspa_consensus_core::palw_court_v2::check_close_declared_chunk_count_v2(session_id, *count, court)
+                        .map_err(|e| e.to_string())?;
+                    kaspa_consensus_core::palw_court_v2::check_court_close_declaration_acceptance_v2(
+                        state,
+                        session_id,
+                        *side,
+                        *count,
+                        chunk_digests,
+                        close_digest,
+                        *verdict,
+                        signature,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
                 }
-                // A chunk carries no signature and needs none: the declaration already pinned
-                // these bytes at this index, and the transition refuses anything else — so there
-                // is nothing here for an acceptance check to add.
-                Obj::CourtCloseChunk { .. } => {}
+                // **ADR-0080 design A, W7: the chunk that COMPLETES a group is adjudicated here.**
+                //
+                // A chunk carries no signature and needs none — the declaration already pinned
+                // these bytes at this index, and the transition refuses anything else — so for
+                // every chunk but the last there is nothing for this layer to add.
+                //
+                // The last one is a court close. The split exists so that a close too wide for one
+                // carrier can be filed at all, and the whole point of design A is that it reaches
+                // the SAME verdict by the SAME function: `adjudicate_court_close_v2` over the
+                // assembled proof, compared against the verdict the declaration announced, refused
+                // in either direction — "an asserted conviction and an asserted acquittal are the
+                // same lie", exactly as the one-carrier `CourtClosed` arm below says it.
+                //
+                // **What this arm does NOT refuse, and why that is not an omission.** Bytes that do
+                // not hash to the declaration's own `close_digest`, or that do not decode to this
+                // session's `CourtClosed`, are ADMITTED here — because a refused lifecycle object
+                // is dropped with the block standing, which would leave the group intact and the
+                // declarer sitting on its reserve until the backstop. Those two facts are
+                // establishable from rooted state alone and are entirely the declarer's doing, so
+                // the transition convicts on them in the block that carries the last chunk (W5's
+                // "a failed declaration loses on its OWN side"). This layer only ever refuses what
+                // it alone can see: whether the proof inside adjudicates.
+                Obj::CourtCloseChunk { session_id, side, index, bytes } => {
+                    if kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(state, object)
+                        && let Some(group) = state.court_close_group(session_id, *side)
+                    {
+                        let mut assembled = Vec::new();
+                        for i in 0..group.count {
+                            match (i == *index).then_some(bytes).or_else(|| group.chunks.get(&i)) {
+                                Some(part) => assembled.extend_from_slice(part),
+                                // Unreachable behind the predicate above, which is exactly the
+                                // "every part present" test — asserted rather than assumed, because
+                                // a hole here would adjudicate a truncated proof.
+                                None => return Err(format!("court {session_id} completes with chunk {i} missing")),
+                            }
+                        }
+                        let assembles = kaspa_consensus_core::palw_state_v2::palw_court_close_chunk_digest_v1(&assembled)
+                            == group.close_digest;
+                        let decoded = assembles
+                            .then(|| {
+                                borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>(&assembled).ok()
+                            })
+                            .flatten();
+                        // Only when the bytes ARE this session's close does the adjudication run;
+                        // anything else is the transition's conviction, not this layer's refusal.
+                        if let Some(Obj::CourtClosed { session_id: decoded_session, verdict, proof }) = &decoded
+                            && decoded_session == session_id
+                            && *verdict == group.verdict
+                        {
+                            let court = self
+                                .palw_court_params_v2
+                                .as_ref()
+                                .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
+                            let derived =
+                                kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(state, session_id, proof, court)
+                                    .map_err(|e| e.to_string())?;
+                            if derived != *verdict {
+                                return Err(format!(
+                                    "court {session_id}: the {} side declared {verdict:?} and the close it assembled adjudicates \
+                                     {derived:?}",
+                                    side.name()
+                                ));
+                            }
+                        }
+                    }
+                }
                 Obj::CourtDisclosed { session_id, disclosure, signature } => {
                     // The responder's rung, under the responder's key. Unsigned, a challenger
                     // could write the answers it wants to convict.
