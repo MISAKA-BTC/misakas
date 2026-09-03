@@ -3874,8 +3874,10 @@ mod the_close_must_be_filable {
             "the acceptance layer files more than the state machine can carry, which is the dangerous direction"
         );
         // The generic group is NOT the close's road, and a change that sent it back down this one
-        // would restore the original hole silently. `FamilyCertified` keeps its own 8.
-        assert_eq!(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT, 8, "the certification lane's carriage moved");
+        // would restore the original hole silently. `FamilyCertified` keeps its own count — 16
+        // since the per-kernel families (the QWEN36 hybrid's 29 vectors are 914 KB), still below
+        // the 27 the close prices.
+        assert_eq!(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT, 16, "the certification lane's carriage moved");
         assert!(
             (crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT as u64) < priced,
             "the certification lane cannot carry a priced close, which is why the close has its own table"

@@ -3015,8 +3015,20 @@ pub const PALW_CERTIFICATION_MAX_PER_BLOCK: usize = 2;
 /// by the digest of the whole object, and applies the object in the block that completes the
 /// group — deterministic on every node, replayed and reverted like any other transition.
 pub const PALW_OBJECT_CHUNK_MAX_BYTES: usize = 100_000;
-/// The most chunks one object may span: 800 KB, above any drill the RC families produce.
-pub const PALW_OBJECT_CHUNK_MAX_COUNT: u8 = 8;
+/// The most chunks one object may span: 1.6 MB, above any drill the RC families produce.
+///
+/// It was 8 (800 KB) — "above any drill the RC families produce" while the drill planted one
+/// fault per (table, call class), six or eight vectors a family. Since 2026-09-04 a family drills
+/// every kernel it declares (`select_candidates_v1`: one leaf per (table, call class), then one per
+/// declared kernel), and the QWEN36 hybrid's 23 kernels come to 29 vectors and 914,168 / 931,572
+/// bytes (attempt / free-prompt lanes, measured) — over 800 KB. A family the genesis pins that the
+/// chain would refuse to carry is the third shape of "the genesis may mint what the acceptance
+/// path refuses" found that night, and `every_pinned_family_is_certifiable_through_the_chain`
+/// (misaka-palw-base0) now asks this cap about every pinned family on both lanes. Sixteen holds
+/// the widest shipped family with room (BASE-0 8 carriers, QWEN36 10, A16 3, A16-V5 2). The
+/// certification fee per vector and the slot mass derive from this number and doubled with it
+/// (ADR-0075 SA-2): a family that fills its carriage pays for the carriage it fills.
+pub const PALW_OBJECT_CHUNK_MAX_COUNT: u8 = 16;
 /// The most groups the state holds half-assembled at once; expired ones are evicted first.
 pub const PALW_OBJECT_CHUNK_MAX_GROUPS: usize = 8;
 /// A group nobody completes within this many DAA is evicted when the room is needed.
