@@ -3299,3 +3299,70 @@ for `head`.
 > `\b` in `git grep -E` matching nothing. Every one produced *a plausible number from a command
 > that was not measuring what I thought.* And this one would have been a public accusation
 > against a tool that was behaving properly.
+
+## The paste is verified by a SECOND IMPLEMENTATION, before the paste
+
+`scripts/misaka-palw-derive-stranger.py` is a Python re-implementation that reads the pins out of
+`misaka-palw-derive/tests/transformer_id_pin.rs` and **recomputes them from the crate's actual
+bytes.** It takes `--crate-root`, so it can be pointed at any tree. Pointed at impl's:
+
+```
+git archive palw-adr0082-impl misaka-palw-derive | tar -x -C <tmp>     # derive/src = 4969f8dc…
+python3 scripts/misaka-palw-derive-stranger.py --crate-root <tmp>/misaka-palw-derive selftest
+
+  source_tree_sha256  recomputed 637858dba5ea5e34b9459a580b2b81d1361aecf450bc615a4ee9621d4953a988
+  cad/stl/v1          recomputed 83e0f5088cd0f9b7e55e5add8fdfdf94…
+  music/smf/v1        recomputed cb5f27b4e63d9601a3e743486ea61b6a…
+```
+
+```
+AGREE  source_tree_sha256   predicted 637858dba5ea5e34b9459a580b2b81d1   recomputed 637858dba5ea5e34…
+AGREE  cad/stl/v1           predicted 83e0f508                           recomputed 83e0f5088cd0f9b7…
+AGREE  music/smf/v1         predicted cb5f27b4                           recomputed cb5f27b4e63d9601…
+```
+
+**Three of the values I am about to paste, recomputed by a different implementation in a different
+language from the raw bytes, agreeing exactly with a prediction that came from the Rust
+extraction.** This is the *two ways* rule applied to the ceremony's own output, and it is
+available **before** the paste rather than after it.
+
+`check-repin-predictions.sh` compares a prediction against a table from the same extractor — it
+catches a value that *moved*, not a value that was *always wrong*. **The stranger is the only
+thing in this repository that can catch the second**, because nothing in it links to, imports or
+shells out to `misaka-palw-derive`.
+
+> **PASTE PROCEDURE, amended.** After writing the pins, run
+> `misaka-palw-derive-stranger.py selftest` on the cut tree. **Oracle 1 must go from MISMATCH to
+> MATCH.** It reads the file the ceremony just wrote and recomputes the same numbers from the
+> bytes — *if the paste is wrong, this is what says so, in a voice that did not help produce it.*
+
+### On 5f the stranger REFUSES, and that is the correct answer
+
+```
+source_tree_sha256  recomputed 98265872fb7a372c…   pinned d2419027673f94eb…   MISMATCH
+music/smf/v1        recomputed 4f4edd02c53ae28e…   pinned 24be30948de1e586…   MISMATCH
+exit 2 — "This verifier may NOT be used as an independent recomputation while it disagrees:
+          a second implementation that is wrong proves nothing and accuses the innocent."
+```
+
+The pin file is **pre-ceremony**; the stranger recomputes from 5f's derive/src (`6b8d13ad`) and
+correctly reports the pins do not match it. **Its `98265872…` is the same value the Rust drill
+reported for 5f** — two implementations agreeing on a tree, and both disagreeing with a stale
+pin, which is precisely the shape a working check has.
+
+**Oracles 2, 3 and 4 pass on 5f right now**: eight corpus goldens recomputed byte-identically
+(including `03-overlapping-melody.json` at 157 B — the MIDI I derived and parsed independently
+above), every corpus file covered by a golden, the `verify` round-trip consistent, and a tampered
+`artifact_hash` caught with exit 2. **The disagreement is confined to the one oracle the ceremony
+exists to fix.**
+
+### Two more announcement commands that do not run as written
+
+```
+python3 scripts/misaka-palw-derive-stranger.py       ->  exit 2, "the following arguments are
+                                                          required: cmd"   (needs `selftest`)
+palw-certify drill --family a16-v5 …                 ->  exit 2, unknown family on 5f
+```
+
+**Two of the roughly eight runnable commands in the public draft, both found by running them.**
+The gate is one hour old and has paid for itself twice.
