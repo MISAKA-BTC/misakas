@@ -3192,6 +3192,9 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::DerivedArtifactV1 { .. } => "DerivedArtifactV1",
         PalwConsensusObjectV2::DefaultAccused { .. } => "DefaultAccused",
         PalwConsensusObjectV2::MaterialDisclosed { .. } => "MaterialDisclosed",
+        // ADR-0080 design A: the split close's two objects.
+        PalwConsensusObjectV2::CourtCloseDeclared { .. } => "CourtCloseDeclared",
+        PalwConsensusObjectV2::CourtCloseChunk { .. } => "CourtCloseChunk",
     }
 }
 
