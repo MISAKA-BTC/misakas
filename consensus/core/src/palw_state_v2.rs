@@ -6833,11 +6833,8 @@ fn sweep_court_close_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBl
         // anyway, for the reason the court sweep gives: the alternative failure mode is a chain
         // that stops forever on a state nothing can repair. The deposit still goes, because the
         // row still held the room it was priced for.
-        let convictable = builder
-            .state
-            .court_sessions
-            .get(&session_id)
-            .is_some_and(|session| builder.state.claims.contains_key(&session.claim));
+        let convictable =
+            builder.state.court_sessions.get(&session_id).is_some_and(|session| builder.state.claims.contains_key(&session.claim));
         if !convictable {
             forfeit_close_deposit_v1(builder, session_id, side)?;
             builder.write_court_close_group(key, None);
@@ -9827,8 +9824,7 @@ fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
         *state.open_courts_by_claim.entry(session.claim).or_insert(0) += 1;
         state.court_deadlines.insert((court_next_deadline_v2(session), *id));
     }
-    state.court_close_deadlines =
-        state.court_close_groups.iter().map(|(key, group)| (group.assembly_deadline_daa, *key)).collect();
+    state.court_close_deadlines = state.court_close_groups.iter().map(|(key, group)| (group.assembly_deadline_daa, *key)).collect();
 }
 
 /// Rebuild ALL indices from primary data. The deadline index needs params (window arithmetic);
@@ -15867,13 +15863,10 @@ pub(crate) mod tests {
             // What the swap form wrote for the SAME arrival: the record before and the record
             // after, both whole.
             let after = next.court_close_group(&session_id, side).expect("the row").clone();
-            swap_form += borsh::to_vec(&PalwDeltaEntryV2::CourtCloseGroup {
-                key: (session_id, side),
-                old: Some(before),
-                new: Some(after),
-            })
-            .expect("the swap entry serializes")
-            .len();
+            swap_form +=
+                borsh::to_vec(&PalwDeltaEntryV2::CourtCloseGroup { key: (session_id, side), old: Some(before), new: Some(after) })
+                    .expect("the swap entry serializes")
+                    .len();
             state = next;
         }
         let block_space = (COUNT as usize - 1) * PALW_COURT_CLOSE_CHUNK_MAX_BYTES;
@@ -15953,7 +15946,10 @@ pub(crate) mod tests {
         assert_eq!(
             apply_palw_transition_v2(&s5, &p, &ctx(6, 200, 6), &[declare_close(session_id, PalwCourtSideV1::Executor, 3)], None)
                 .unwrap_err(),
-            PalwStateV2Error::CourtCloseNotTerminal { session: session_id, turn: crate::palw_bisect::PalwBisectTurnV1::AwaitDisclosure }
+            PalwStateV2Error::CourtCloseNotTerminal {
+                session: session_id,
+                turn: crate::palw_bisect::PalwBisectTurnV1::AwaitDisclosure
+            }
         );
         // Mid-ladder, with the challenger's move outstanding, it is still not a move.
         let (s6, _) = apply(&s5, &p, &ctx(6, 105, 6), &[disclose(session_id, 0, 8, 0xD0)], None);

@@ -5434,8 +5434,7 @@ impl VirtualStateProcessor {
             // conviction of the party that filed it.
             let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
                 || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);
-            if spends_the_court_slot && court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
-            {
+            if spends_the_court_slot && court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK {
                 info!(
                     "Block {block}: a court move that spends the block's adjudication slot was dropped, and the block \
                      stands: the block already spent {} (PALW_COURT_CLOSE_MAX_PER_BLOCK)",
