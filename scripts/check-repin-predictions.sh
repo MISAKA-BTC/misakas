@@ -51,7 +51,12 @@ PREDICTED_T11_FP=WITHDRAWN-family-adoption-see-above
 #       count (81,920 -> 83,333, a ruleset field)
 # The value below is the extractor's, from the table with `extracted_from 971b2eff…`, not a
 # guess and not a re-prediction: it is written here only because both moves are named.
-PREDICTED_DEVNET_FP=34c7e4829eadb996e50871ed9bf32055fe4f54057e66814a6bab1c54b67bd8e1
+# WITHDRAWN AGAIN 2026-09-04 — third named move, named by 3e before the extraction: the per-kernel
+# family's certified-set root (e4f97110, PALW_RC_COURT_E2E_ROOT_BYTES = e649e7c0…) is in devnet's
+# bundle too, so the same commit that moves the t11 fingerprint moves this one. Value held until then:
+#   34c7e4829eadb996e50871ed9bf32055fe4f54057e66814a6bab1c54b67bd8e1   (after (a) and T1)
+# The new value comes ONLY from a table whose `extracted_from` is a tip at or after e4f97110.
+PREDICTED_DEVNET_FP=WITHDRAWN-family-root-see-above
 PREDICTED_FP_GOLDEN=c940b5c36ee40846087e6c5927d6e6b5
 PREDICTED_PREMINE_BUILDS=ba2612417e7e0817
 # The genesis hash the re-pin will write: PALW_RC_GENESIS.hash recomputed over the NEW utxo_commitment by

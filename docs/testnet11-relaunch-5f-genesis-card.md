@@ -4797,3 +4797,24 @@ says 16 with the reason; 16 < 27 keeps the close's own table above it.
 derive/src in its diff: 0 lines; `derive/src` tree still `4969f8dc…`; fingerprint / version / pin
 constants touched: 0. Merge surface impl `4d572142` × 5f `873ef2a9`: exit 0, **0 conflicts**, merged `derive/src`
 = the basis, G survives. The five predicted guard lines are unmoved by it, as measured rather than assumed.
+
+### Both commits are on impl; the finalize runs on `4d572142`; the devnet fingerprint moves a third time
+
+```
+e4f97110  the family: A+B merged onto the probe helper as the minimal cover; pinned 14/29/16/14 with
+          drilled = declared; PALW_RC_COURT_E2E_ROOT_BYTES = e649e7c0…; B's test inverted; the
+          certifiability route-agreement test                                derive/src: 0 lines
+4d572142  PALW_OBJECT_CHUNK_MAX_COUNT 8 -> 16 with the measurement in its doc; the admission pin
+          says 16 with the reason; the derived fee constants doubled           derive/src: 0 lines
+suites before the commit: core state/admission/ladder/e2e/mass 152/0; base0 e2e_drill 22/0 incl.
+every_pinned_family_is_certifiable_through_the_chain — BASE-0 8/6 carriers, QWEN36 10/10, A16 3/3,
+A16-V5 2/2, all under 32 vectors and 1.6 MB
+```
+
+**Named before the extraction:** the family root is in devnet's bundle too, so `e4f97110` moves the
+devnet fingerprint a **third** time (after (a) and T1). Withdrawn in the guard with the cause and the
+held value `34c7e482…`; **the guard now carries four predictions** — source_tree `637858db…`, fp
+golden `c940b5c3…`, premine `ba2612417e7e0817…`, implied genesis `ad30b5cb…9b33edb7` — **and two
+withdrawn lines** (t11, devnet), which is precisely the shape of the table 3e expects. Finalize →
+the six-row table with `extracted_from 4d572142…` → the word, in about fifteen minutes; the drill
+runs behind it with two dense producers and does not gate the word.
