@@ -5503,3 +5503,18 @@ restarted in step 6 with the fleet.
 Only the operator can change: the two dead delegations (repoint `ns-seeder2`/`ns-seeder4` at xdomain to live
 seeders — e.g. a testnet-11 seeder on 5.104 backed by seat2's borsh 26313, which this session can set up on request)
 and the misakachain.com wildcard.
+
+### 6k — the dense tier produces, and its blocks do not enter the fleet's DAG (21:35 UTC)
+
+seat2 (5.104, v5 `4277d84f…`, bond 2) has produced four attempt blocks — `48c19d67…` 19:19:53Z, `134dd1fb…`
+20:25:20Z, `4b303400…` 20:58:11Z, `21bf34e4…` 21:31:23Z (~33 min per 512-context job at ~2 cores) — and its own
+state counts them (`unresolved` 2 → 3 → 5 → 6, `live_total` 537,072 → 2,794,770 at successive job starts). node0's
+state holds **none**: `getPalwProducerFacts` for bond 2 reads `epochProducedBlocks 0, bondReservedExposure 0`;
+node0's `getBlock` cannot find the hashes; node0's and `.113`'s logs never mention them. Every seat2 production
+coincides with 120-second flow timeouts on **both** sides — seat2's `HandleRelayInvsFlow` / `SendPingsFlow` to
+node0, node1, seat4 and the pool, and the fleet's `SendPingsFlow` to 5.104 — followed by reconnects. QWEN36's blocks
+from node0 propagate normally (seat2 counts them). So the dense tier's blocks are made and are not accepted by the
+peers, and the explorer's "few LLM blocks" is this, not a slow class. Open, code-side: what a receiving peer does
+synchronously when a v5 attempt block arrives (validation of its commitment, or the panel's receipt on the claim)
+that exceeds the 120 s flow budget on inference-loaded hosts; 3e's devnet run 2 (three dense producers on one Mac)
+did not show it. With 3e.
