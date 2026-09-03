@@ -47,6 +47,9 @@ fn main() {
 struct NetworkView {
     bundle: PalwConsensusParamsV2,
     network_id: NetworkId,
+    /// The preset itself — the fences (`palw_kary_court`, `palw_context_ladder`) live here, not
+    /// on the bundle, and the gate's shape is resolved from them.
+    params: Params,
     /// `(class_id, artifact_root)` of every class the GENESIS registers — the static half of the
     /// live chain's terms.
     genesis_classes: Vec<(Hash64, Hash64)>,
@@ -58,6 +61,7 @@ fn network_view(raw: &str) -> Result<NetworkView, String> {
     let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
         return Err(format!("{network_id} has no PALW V2 bundle, so it has no classes to speak of"));
     };
+    let bundle = bundle.clone();
     let genesis_classes = bundle
         .genesis_objects
         .iter()
@@ -66,7 +70,7 @@ fn network_view(raw: &str) -> Result<NetworkView, String> {
             _ => None,
         })
         .collect();
-    Ok(NetworkView { bundle: bundle.clone(), network_id, genesis_classes })
+    Ok(NetworkView { bundle, network_id, genesis_classes, params })
 }
 
 fn sdk_for(view: &NetworkView) -> PalwClassSdk {
@@ -174,7 +178,23 @@ fn preflight(view: &NetworkView, path: &std::path::Path, wanted: Option<&str>) -
             }
             continue;
         }
-        match sdk.preflight_admission(&view.bundle, &entry, root) {
+        // The gate's shape at genesis (DAA 0): the fences a shipped preset arms are `always()`,
+        // so the genesis point answers for the chain's whole life. A live chain judges at the
+        // virtual DAA, which is the panel's reading, not this offline one.
+        let shape = match kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1(
+            &view.params,
+            &view.bundle,
+            &entry.profile,
+            0,
+        ) {
+            Ok(shape) => shape,
+            Err(why) => {
+                refused = true;
+                println!("  REFUSED   {}  — {why}", entry.model_id);
+                continue;
+            }
+        };
+        match sdk.preflight_admission(&view.bundle, &entry, root, &shape) {
             Ok(catalog) => println!(
                 "  ADMISSIBLE  {}  root {root}  pwu/inference {}  (gate verdict on {}; a live chain may hold more classes than genesis)",
                 entry.model_id, catalog.canonical_step_leaf_count, view.network_id

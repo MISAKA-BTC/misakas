@@ -395,6 +395,52 @@ pub struct PalwKaryCourtV1 {
     pub window_court_daa: u64,
 }
 
+/// **The shape a registration is judged under at `daa_score`, resolved from the ruleset the way
+/// the ACCEPTANCE path resolves it** (the virtual processor's `ClassRegistered` arm).
+///
+/// Every pre-check that says "this would be admitted" or "this would be refused" must ask THIS
+/// gate — [`verify_class_admission_v6`] with these two values — and never a court-less wrapper.
+/// The panel's preflight asked `verify_class_admission_v3` (court `None`, ladder `None`), so it
+/// refused the graph-v5 row by name (`FusedAttentionNeedsTheKaryCourt`) on a devnet whose fence
+/// is armed, and reported that refusal as the gate's; the gate would have admitted the row. A
+/// pre-check that answers for a court the chain does not run is a limit rendered as a verdict.
+///
+/// * `court` — `None` where `palw_kary_court` is dormant at `daa_score`; otherwise the arity
+///   [`crate::palw_court_v2::palw_court_params_at_v2`] derives from the registered set, the
+///   prompt-ids form at that point, and the ruleset's court window.
+/// * `ladder` — `None` where `palw_context_ladder` is dormant (every shipped preset); otherwise
+///   this profile's ladder rules under that court.
+#[derive(Clone, Debug)]
+pub struct PalwAdmissionShapeV1 {
+    pub court: Option<PalwKaryCourtV1>,
+    pub ladder: Option<PalwClassLadderRulesV1>,
+}
+
+pub fn palw_admission_shape_at_v1(
+    params: &crate::config::params::Params,
+    bundle: &PalwConsensusParamsV2,
+    profile: &PalwShapeProfileV3,
+    daa_score: u64,
+) -> Result<PalwAdmissionShapeV1, String> {
+    let court = if params.palw_kary_court_active_at(daa_score) {
+        let derived = crate::palw_court_v2::palw_court_params_at_v2(bundle, true)
+            .map_err(|e| format!("this ruleset's court has no shape at daa {daa_score}: {e}"))?;
+        Some(PalwKaryCourtV1 {
+            dissection_arity: derived.dissection_arity(),
+            prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),
+            window_court_daa: bundle.state.window_court(),
+        })
+    } else {
+        None
+    };
+    let ladder = params
+        .palw_context_ladder
+        .is_some_and(|fence| fence.is_active(daa_score))
+        .then(|| crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, court, bundle.court.max_step_leaf_count()))
+        .flatten();
+    Ok(PalwAdmissionShapeV1 { court, ladder })
+}
+
 impl PalwCourtCostShapeV1 {
     /// The shipped court: the whole context as history, no anchor, against the RULESET's ladder.
     ///
@@ -3878,5 +3924,49 @@ mod the_close_must_be_filable {
         // 8 for the chat template, 1 for the shortest possible request (`misaka-palw-derive`'s
         // grammar_floor states both), so this is the tokens an ANSWER may have.
         assert_eq!(widest as usize - 9, 21);
+    }
+}
+
+#[cfg(test)]
+mod admission_shape_tests {
+    use super::*;
+
+    /// **The devnet drill's stage-2 failure, at the helper.** Devnet arms `palw_kary_court` at
+    /// genesis, so the shape at DAA 0 carries a court whose arity is the DERIVED one (the same
+    /// number the acceptance path computes), the prompt-ids form of that point and the ruleset's
+    /// court window; with the fence dormant the shape carries no court at all. The ladder fence is
+    /// dormant on every shipped preset, and the shape says so rather than inventing rules.
+    #[test]
+    fn the_admission_shape_is_the_fence_and_the_derived_arity() {
+        let devnet = crate::config::params::devnet_shipped_params();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &devnet.palw_consensus_mode else {
+            panic!("devnet ships a ConsensusV2 bundle");
+        };
+        let profile = crate::palw_qwen25_profile::qwen25_a16_graph_v5_profile_v1().expect("the graph-v5 profile derives");
+        let shape = palw_admission_shape_at_v1(&devnet, bundle, &profile, 0).expect("devnet's court has a shape at genesis");
+        let court = shape.court.expect("devnet arms palw_kary_court at genesis");
+        let derived = crate::palw_court_v2::palw_court_params_at_v2(bundle, true).expect("the armed court derives");
+        assert_eq!(court.dissection_arity, derived.dissection_arity(), "the arity is the derived one, not the preset's literal");
+        assert_eq!(court.window_court_daa, bundle.state.window_court());
+        assert_eq!(court.prompt_ids_form, devnet.palw_prompt_ids_form_at(0));
+        // The ladder half follows ITS fence the way the processor's registration arm does: rules
+        // where `palw_context_ladder` is armed at this point, none where it is dormant (t11 leaves
+        // it dormant — FG's finding that nothing on the acceptance path reads it there — while
+        // devnet's card arms it).
+        let ladder_armed = devnet.palw_context_ladder.is_some_and(|fence| fence.is_active(0));
+        assert_eq!(shape.ladder.is_some(), ladder_armed, "the ladder half is the fence's answer, not a guess");
+        if ladder_armed {
+            let expected = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+                &profile,
+                Some(court),
+                bundle.court.max_step_leaf_count(),
+            );
+            assert_eq!(format!("{:?}", shape.ladder), format!("{:?}", expected), "the rules are the profile's under that court");
+        }
+
+        let mut dormant = devnet.clone();
+        dormant.palw_kary_court = None;
+        let shape = palw_admission_shape_at_v1(&dormant, bundle, &profile, 0).expect("a dormant fence is a shape too");
+        assert!(shape.court.is_none(), "no fence, no court — the gate then refuses a fused row by name");
     }
 }

@@ -786,8 +786,21 @@ impl PalwPanelService {
         // that is not the one being registered. Both builds run the SDK's admission preflight
         // against this network's own bundle, so a class the gate would refuse never reaches the
         // signer, the mempool, or the fee.
-        let build =
-            |signature: Vec<u8>| registry.sdk().build_post_genesis_registration(bundle, &candidate, &terms, 0, bond_key, signature);
+        // **The shape the ACCEPTANCE path judges this registration under** — the court the fence
+        // arms at this point (derived arity, prompt-ids form, court window) and the ladder — from
+        // the one helper the gate's callers share. Until the ADR-0082 devnet drill the SDK asked a
+        // court-less gate here and refused the graph-v5 row by name on a ruleset whose fence is
+        // armed; this node then reported "would be refused by the admission gate" for a row the
+        // chain admits, every tick, and never signed.
+        let shape = kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1(
+            &self.consensus_config.params,
+            bundle,
+            &candidate.entry.profile,
+            session.get_virtual_daa_score(),
+        )?;
+        let build = |signature: Vec<u8>| {
+            registry.sdk().build_post_genesis_registration(bundle, &candidate, &terms, 0, bond_key, signature, &shape)
+        };
         let unsigned = build(Vec::new())?;
         let PalwConsensusObjectV2::ClassRegistered {
             class_id,
