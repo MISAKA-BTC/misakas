@@ -509,6 +509,27 @@ pub struct Qwen25A16Backend {
     step_ladder_cap: u64,
 }
 
+/// **Can a class with this graph carry a capture at all — the ONE spelling of the predicate.**
+///
+/// The question is about the WIDTH of the cache the map describes, not about a particular map id:
+/// a checkpoint leg needs the four-byte layout `A16Cache` holds. Two maps declare it — the
+/// integer-kv v2 map, which addresses the whole history as one chunk, and ADR-0082 Decision 4's
+/// tiled v3 map, which addresses it a tile at a time so a dissection's bottom can open one tile.
+/// Both are court-capable; they differ in how finely an opening is addressed, which is a cost
+/// question and not a capability one.
+///
+/// Spelled once because the same predicate was written out twice in the two constructors and a
+/// third time in `misaka-palw-base0::classes` as the `artifact_root` discriminator, all three
+/// naming v2 alone — so a `graph-v5` class, whose whole point is the tiled map, declared itself
+/// NOT court-capable over its own registered profile and ADR-0069 Decision 5 would have admitted
+/// it weightless. `palw_map_addresses_history_tiles_v1` is the map module's own dispatch for
+/// exactly this: "the alternative is every caller writing `if map == v3 { … }` and the first one
+/// to forget prices a tiled class at the whole history".
+pub fn a16_court_capable_v1(profile: &PalwShapeProfileV3) -> bool {
+    use kaspa_consensus_core::palw_state_chunk_map as map;
+    map::palw_map_addresses_history_tiles_v1(profile) || profile.state_chunk_map_id == map::integer_kv_state_chunk_map_id_v2()
+}
+
 impl Qwen25A16Backend {
     pub fn new(
         artifact: std::sync::Arc<Base0ArtifactV1>,
@@ -518,8 +539,7 @@ impl Qwen25A16Backend {
     ) -> Self {
         let shape_id = artifact.artifact_digest();
         let class_profile_id = profile.shape_profile_id();
-        let court_capable =
-            profile.state_chunk_map_id == kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2();
+        let court_capable = a16_court_capable_v1(&profile);
         Self {
             artifact,
             model_id: "PALW-QWEN25-A16".to_string(),
@@ -547,6 +567,45 @@ impl Qwen25A16Backend {
         self.step_ladder_cap
     }
 
+    /// **A dense class's artifact must SAY which tokenizer its ids belong to, or this constructor
+    /// refuses it by name.**
+    ///
+    /// `Hash64::default()` is not "no opinion": it is published as the job's `tokenizer_id`
+    /// ([`PalwExecutionBackendV1::job_for_anchor`] below reads this field), it goes into
+    /// `PalwJobContextV2::context_hash`, and `PalwFreePromptJobV3::tokenizer_id` "MUST equal the
+    /// class row's". A zero there pins nothing, so a seat replaying with a different
+    /// `tokenizer.json` gets different ids, a different `prompt_token_ids_hash`, a different
+    /// context hash and a claim nobody reproduces — an `Unavailable` quorum and a defaulted
+    /// producer, not a refusal. `Base0ArtifactV1::check_tokenizer_bytes_v1` already answers
+    /// `Undeclared` for this state and its own doc says a runtime reaching it "must SAY so"; this
+    /// is the dense tier saying so at the one boundary where the answer can still be a refusal.
+    ///
+    /// **Why here and not in the file loader.** The floor has no tokenizer at all — its vocabulary
+    /// is 1,024 derived ids and there is no file to commit to — so the rule cannot live in
+    /// `decode_artifact_file_v1`, which serves both tiers. It is a property of the LANE, and this
+    /// constructor is the lane's entrance: the chain-registered path every producer, panel and
+    /// court replay of a dense class goes through.
+    ///
+    /// **A DERIVED artifact is exempt, and that exemption is not a loophole.** `is_derived()` is
+    /// already load-bearing for exactly this distinction — "a derived artifact must never be
+    /// reported as a registered class" — so a fixture minted from a seed carries no tokenizer by
+    /// construction and no chain row can name it. Real weights are the only thing this refuses,
+    /// which is the only thing that can be re-converted.
+    pub fn check_tokenizer_declared_v1(artifact: &Base0ArtifactV1) -> Result<(), String> {
+        if artifact.is_derived() || artifact.tokenizer_commitment != Hash64::default() {
+            return Ok(());
+        }
+        Err(format!(
+            "this artifact declares no tokenizer: `tokenizer_commitment` is all zeros, so every job this class \
+             produces would publish `tokenizer_id` 0 and no replay could prove it read the ids this class means. \
+             Re-convert it with a tokenizer bound — `qwen25-convert <checkpoint-dir> --a16 --out <path>`, where \
+             <checkpoint-dir> holds tokenizer.json beside model.safetensors — and register the artifact_root the \
+             re-conversion produces: binding a tokenizer moves `artifact_digest`, so this is a new artifact and a \
+             genesis decision, not an upgrade of the one on disk (artifact digest {})",
+            artifact.artifact_digest()
+        ))
+    }
+
     /// **ADR-0067 Decision 2's constructor: a backend for a class this build's table never
     /// heard of.** The profile arrives from chain state (the registration's admission carriage),
     /// and the plan it compiles to IS the admission decision — a graph outside this build's
@@ -557,6 +616,7 @@ impl Qwen25A16Backend {
         profile: PalwShapeProfileV3,
         canonical_job: (u32, u32),
     ) -> Result<Self, String> {
+        Self::check_tokenizer_declared_v1(&artifact)?;
         let engine = A16Engine::new(&artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
         // **Two different facts must not wear the same words** (round-3 defect I-3). "This build
         // cannot serve the registered graph" is true of a kernel this build does not carry, and an
@@ -575,8 +635,7 @@ impl Qwen25A16Backend {
         })?;
         let shape_id = artifact.artifact_digest();
         let class_profile_id = profile.shape_profile_id();
-        let court_capable =
-            profile.state_chunk_map_id == kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2();
+        let court_capable = a16_court_capable_v1(&profile);
         Ok(Self {
             artifact,
             model_id: "PALW-A16/chain-registered".to_string(),
@@ -871,7 +930,17 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             shape_profile_id: self.class_profile_id,
             trace_scheme_id: kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1(),
             cu_ruleset_id: Hash64::default(),
-            tokenizer_id: Hash64::default(),
+            // **The tokenizer the ARTIFACT declares, not a constant zero.** The field was
+            // `Hash64::default()` here, which is why "every job's `tokenizer_id` is zero" was true
+            // of the dense tier even for an artifact that had bound one — the commitment reached
+            // `artifact_digest` and stopped there. It is one line because there is only one place
+            // the identity can come from: the artifact this backend is holding.
+            //
+            // For the artifact on disk today this is still zero, and that is the point — the value
+            // now MOVES when the artifact is re-converted, so the job context stops claiming an
+            // identity the class does not have. `check_tokenizer_declared_v1` is what stops a
+            // chain-registered class from getting here with zeros at all.
+            tokenizer_id: self.artifact.tokenizer_commitment,
             prompt_token_ids_hash: prompt_token_ids_hash_v2(&ids),
             declared_prefill_tokens: prefill,
             exact_decode_tokens: decode,
@@ -1155,20 +1224,21 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // the loop a seat runs to check the opening. ADR-0082 Decision 9: a class that registers
         // the tiled map is served FLAT (the anchor's chunks stripped; the seat recomputes the
         // state), because the class's own declaration decides, not this executor's preference.
-        let chunked = match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
-            crate::produce::Base0RetentionV1::Folded(material) => crate::fp_interval::base0_open_fp_interval_sparse_v1(
-                &material,
-                index,
-                prompt_token_ids,
-                self.checkpoint_interval(),
-                &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
-            )
-            .map_err(|e| e.to_string())?,
-            crate::produce::Base0RetentionV1::Dense(material) => {
-                crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, self.checkpoint_interval())
-                    .map_err(|e| e.to_string())?
-            }
-        };
+        let chunked =
+            match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
+                crate::produce::Base0RetentionV1::Folded(material) => crate::fp_interval::base0_open_fp_interval_sparse_v1(
+                    &material,
+                    index,
+                    prompt_token_ids,
+                    self.checkpoint_interval(),
+                    &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+                )
+                .map_err(|e| e.to_string())?,
+                crate::produce::Base0RetentionV1::Dense(material) => {
+                    crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, self.checkpoint_interval())
+                        .map_err(|e| e.to_string())?
+                }
+            };
         if crate::fp_interval::base0_fp_class_requires_flat_openings_v1(&self.profile) {
             return crate::fp_interval::base0_strip_fp_interval_history_v1(&chunked).map_err(|e| e.to_string());
         }
@@ -2100,5 +2170,177 @@ mod free_prompt_tests {
         let shallow = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile, (4, 2)).with_step_ladder_cap(needed - 1);
         let message = shallow.execute_free_prompt(&fp, &prompt).err().expect("a shallower ruleset must refuse it");
         assert!(message.contains("TooManyLeaves"), "the refusal must name the ladder: {message}");
+    }
+
+    /// The geometry the ADR-0082 dense rows are built from here, at a size a unit test can hold.
+    /// One geometry for both rows, so the v2 and v5 profiles differ ONLY where the graph does.
+    fn v5_geometry() -> PalwQwen25GeometryV1 {
+        PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 8,
+            ffn_dim: 8,
+            attn_heads: 2,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 32,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        }
+    }
+
+    /// The artifact those rows are SERVED over: built at the epsilon `qwen25-convert` writes,
+    /// which is the pairing `qwen25_a16_artifact_row_profile_v*` exists to project.
+    fn v5_artifact(geometry: PalwQwen25GeometryV1) -> std::sync::Arc<Base0ArtifactV1> {
+        let shape = Base0ShapeV1 {
+            n_layers: geometry.layer_count as usize,
+            n_heads: geometry.attn_heads as usize,
+            n_kv_heads: geometry.attn_kv_heads as usize,
+            d_head: geometry.attn_head_dim as usize,
+            d_ff: geometry.ffn_dim as usize,
+            vocab: geometry.vocab_size as usize,
+            max_position: geometry.n_ctx as usize,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: kaspa_consensus_core::palw_qwen25_profile::QWEN25_A16_ARTIFACT_EPS_Q,
+        };
+        std::sync::Arc::new(
+            Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+                .expect("a valid shape")
+                .with_a16_params(derived_a16_store(&shape))
+                .expect("the derived store is sorted and unique"),
+        )
+    }
+
+    /// **A `graph-v5` row is court-capable, and it says so through the constructor the chain uses.**
+    ///
+    /// `court_capable` was `state_chunk_map_id == integer_kv_state_chunk_map_id_v2()`, written out
+    /// in both constructors. ADR-0082 Decision 4 has the v5 row register the TILED map — the whole
+    /// reason the dense tier's close is flat, because the dissection's bottom opens ONE history
+    /// tile — so the registered row answered `supports_court() == false` over its own profile.
+    /// That is not a cosmetic label: ADR-0069 Decision 5 admits a class that cannot take a court's
+    /// turn WEIGHTLESS, so the row the genesis registers would have been admitted and earned
+    /// nothing, and the failure is silent because a `false` here is a legal answer for the v1 row.
+    ///
+    /// Both directions are pinned. A v2-mapped row must STILL be court-capable — the predicate got
+    /// wider, not moved — because that row is a live chain fact.
+    #[test]
+    fn the_graph_v5_row_is_court_capable_and_the_v2_row_it_replaces_still_is() {
+        use kaspa_consensus_core::palw_qwen25_profile::{qwen25_a16_artifact_row_profile_v1, qwen25_a16_artifact_row_profile_v5};
+
+        let geometry = v5_geometry();
+        let artifact = v5_artifact(geometry);
+
+        let v5 = qwen25_a16_artifact_row_profile_v5(geometry).expect("the v5 projection is a valid profile");
+        assert!(
+            map::palw_map_addresses_history_tiles_v1(&v5),
+            "the row under test must be the tiled one, or this test is about the wrong class"
+        );
+        let v5_backend = Qwen25A16Backend::from_registered_profile(artifact.clone(), NETWORK.to_vec(), v5.clone(), (4, 2))
+            .expect("the v5 row compiles a plan over the artifact's epsilon");
+        assert!(v5_backend.supports_court(), "a tiled-map class takes a court's turn — ADR-0069 D5 weightlessness turns on this");
+
+        let v2 = qwen25_a16_artifact_row_profile_v1(geometry).expect("the v2 projection is a valid profile");
+        assert_eq!(v2.state_chunk_map_id, map::integer_kv_state_chunk_map_id_v2(), "the v2 row keeps its own map");
+        let v2_backend = Qwen25A16Backend::from_registered_profile(artifact, NETWORK.to_vec(), v2.clone(), (4, 2))
+            .expect("the v2 row still compiles a plan");
+        assert!(v2_backend.supports_court(), "widening the predicate must not drop the row already registered");
+
+        assert_ne!(v5.shape_profile_id(), v2.shape_profile_id(), "a class IS its graph: these are two classes");
+    }
+
+    /// **The v5 row plans over the converter's epsilon, and executes.**
+    ///
+    /// `GeometryMismatch { what: "rms_eps_q", profile: 1, artifact: 256 }` is the refusal that
+    /// stopped EVERY dense row from being built from its own registered profile — declared 1,
+    /// executed `1 << 8` — and it was found only because a test drove `from_registered_profile`
+    /// instead of `::new`. `qwen25_a16_artifact_row_profile_v1` closed it for the v2 row; this
+    /// pins that the v5 row inherits the closure rather than re-opening it, and that the plan it
+    /// compiles actually runs a job rather than merely type-checking.
+    #[test]
+    fn the_graph_v5_row_plans_over_the_converters_epsilon_and_runs_a_job() {
+        use kaspa_consensus_core::palw_qwen25_profile::{qwen25_a16_artifact_row_profile_v5, qwen25_a16_profile_v5};
+
+        let geometry = v5_geometry();
+        let artifact = v5_artifact(geometry);
+
+        // The DECLARED epsilon, unprojected: still refused, on that field and no other. Without
+        // this half the test above would pass on a row whose epsilon nobody had corrected.
+        let frozen = qwen25_a16_profile_v5(geometry).expect("the frozen v5 projection is a valid profile");
+        let message = Qwen25A16Backend::from_registered_profile(artifact.clone(), NETWORK.to_vec(), frozen, (4, 2))
+            .err()
+            .expect("a row declaring an epsilon its artifact does not execute must refuse");
+        assert!(message.contains("rms_eps_q"), "the refusal names the field: {message}");
+
+        let profile = qwen25_a16_artifact_row_profile_v5(geometry).expect("the v5 projection is a valid profile");
+        let backend = Qwen25A16Backend::from_registered_profile(artifact, NETWORK.to_vec(), profile.clone(), (4, 2))
+            .expect("the served v5 row compiles a plan");
+        let (ctx, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0082_5)).expect("the anchor implies a job");
+        let outcome = backend.execute(&ctx, &prompt).expect("the compiled v5 plan executes its own canonical job");
+        let (binding, ..) = crate::produce::base0_material_decode_v1(&outcome.material).expect("the capture decodes");
+        assert_eq!(binding.shape_profile.shape_profile_id(), profile.shape_profile_id(), "it produced for the class it was given");
+        assert!(binding.step_leaf_count > 0, "an execution with no committed steps is not one");
+    }
+
+    /// **A class whose artifact declares no tokenizer is refused at the lane's entrance, by name.**
+    ///
+    /// The shipped `qwen25-1.5b-a16.palwart` carries 64 zero bytes there (read off the file at
+    /// offset 1,777,209,032), so every job it produced published `tokenizer_id` 0 — a value that
+    /// pins nothing, inside `PalwJobContextV2::context_hash`, which
+    /// `PalwFreePromptJobV3::tokenizer_id` "MUST equal". A replay under a different `tokenizer.json`
+    /// then computes different ids and a different context hash and reproduces nothing, and the
+    /// producer is defaulted for work it performed correctly. `Undeclared` was reported and
+    /// stepped over; here it is a refusal.
+    ///
+    /// The exemption is `is_derived()`, which is already the "never a registered class" flag, so
+    /// every fixture in this module keeps working and only real weights are refused.
+    #[test]
+    fn an_artifact_that_declares_no_tokenizer_cannot_serve_a_registered_dense_class() {
+        use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5;
+
+        let geometry = v5_geometry();
+        let derived = v5_artifact(geometry);
+        assert_eq!(derived.tokenizer_commitment, Hash64::default(), "a derived fixture declares none, and may");
+        let profile = qwen25_a16_artifact_row_profile_v5(geometry).expect("the v5 projection is a valid profile");
+        assert!(
+            Qwen25A16Backend::from_registered_profile(derived.clone(), NETWORK.to_vec(), profile.clone(), (4, 2)).is_ok(),
+            "a derived artifact is a fixture, not a registered class"
+        );
+
+        // The same weights with the derived marker gone — the shape a CONVERTED artifact has, and
+        // the shape the file on disk has.
+        let converted = Base0ArtifactV1::from_parts(
+            derived.shape,
+            derived.embed.clone(),
+            derived.unembed.clone(),
+            derived.layers.clone(),
+            derived.norm_requant,
+            derived.residual_requant,
+        )
+        .expect("the parts of a valid artifact rebuild one")
+        .with_a16_params(derived_a16_store(&derived.shape))
+        .expect("the derived store is sorted and unique");
+        assert!(!converted.is_derived(), "this is the converted-artifact case");
+
+        let message = Qwen25A16Backend::from_registered_profile(
+            std::sync::Arc::new(converted.clone()),
+            NETWORK.to_vec(),
+            profile.clone(),
+            (4, 2),
+        )
+        .err()
+        .expect("a converted artifact with a zero tokenizer commitment must be refused");
+        assert!(message.contains("tokenizer_commitment"), "the refusal names the field: {message}");
+        assert!(message.contains("qwen25-convert"), "and the command that fixes it: {message}");
+
+        // Bound: it serves, and the job it builds publishes THAT identity rather than zero.
+        let bound = std::sync::Arc::new(
+            converted.with_tokenizer_commitment(Base0ArtifactV1::tokenizer_commitment_of(b"{\"model\":\"qwen2.5\"}")),
+        );
+        let backend = Qwen25A16Backend::from_registered_profile(bound.clone(), NETWORK.to_vec(), profile, (4, 2))
+            .expect("an artifact that declares its tokenizer serves");
+        let (ctx, _) = backend.job_for_anchor(Hash64::from_u64_word(0x70CE_9155)).expect("the anchor implies a job");
+        assert_eq!(ctx.tokenizer_id, bound.tokenizer_commitment, "the job publishes the artifact's own tokenizer identity");
+        assert_ne!(ctx.tokenizer_id, Hash64::default(), "and it is not the zero that pinned nothing");
     }
 }

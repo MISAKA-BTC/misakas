@@ -3235,6 +3235,10 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         // ADR-0080 design A: the split close's two objects.
         PalwConsensusObjectV2::CourtCloseDeclared { .. } => "CourtCloseDeclared",
         PalwConsensusObjectV2::CourtCloseChunk { .. } => "CourtCloseChunk",
+        // ADR-0082 Decision 2 — the fused-attention dissection's three moves.
+        PalwConsensusObjectV2::CourtAttnRootClaimed { .. } => "CourtAttnRootClaimed",
+        PalwConsensusObjectV2::CourtAttnDissected { .. } => "CourtAttnDissected",
+        PalwConsensusObjectV2::CourtAttnChildChosen { .. } => "CourtAttnChildChosen",
     }
 }
 

@@ -794,7 +794,13 @@ run_tier() {
     worse_than 1; return 0
   fi
   submit_object "$WORK_DIR/obj/$tag-fp.obj" >>"$WORK_DIR/certify-$tag.log" 2>&1 || true
-  if ! "$CERTIFY_BIN" bind --model-id "$model_id" --lane fp --out "$WORK_DIR/obj/$tag-bind.obj" \
+  # **Bind the class from the ARTIFACT, not from the model id.** `--model-id` resolves through a
+  # fixed catalog table that pins `n_ctx` per row (16/18/16), and the panel registers the class at
+  # the width the artifact's header states (512). `n_ctx` is inside `PalwShapeProfileV3` and
+  # therefore inside the borsh `shape_profile_id` hashes, so binding by model id certified a
+  # DIFFERENT class than the one on chain — every run, silently, with the chain correctly refusing
+  # to treat one as certifying the other. That is what `fp_certified=false` was.
+  if ! "$CERTIFY_BIN" bind --artifact "$artifact" --lane fp --out "$WORK_DIR/obj/$tag-bind.obj" \
        >>"$WORK_DIR/certify-$tag.log" 2>&1; then
     record "stage 3 [$tag] FAIL — 'palw-certify bind' refused $model_id"
     worse_than 1; return 0

@@ -24,9 +24,18 @@
 //! by that ordering, not by a filter.
 //!
 //! What is deliberately NOT here: model / runtime / manifest identities. The job names its
-//! `class_id` and the class registration (`palw_registry`) binds the rest; admission cross-checks
-//! the job's `tokenizer_id` against the registered row. Carrying the same fact in two places is
-//! how the two drift apart — ids are lookup keys, not passengers.
+//! `class_id` and the class registration (`palw_registry`) binds the rest. Carrying the same fact
+//! in two places is how the two drift apart — ids are lookup keys, not passengers.
+//!
+//! **What NOTHING on chain checks today, stated so nobody budgets their suspicion on a guard that
+//! is not there:** the job's `tokenizer_id`. This doc used to say admission cross-checks it against
+//! the registered row; no such check exists (`palw_fp_admission_v3` never reads the field; its only
+//! consumer folds it into the job context hash). It cannot be built here either: a class
+//! registration carries `class_id` and `artifact_root`, and a court-capable row's root is the
+//! A16 inventory root, which has no tokenizer input — so the chain holds no tokenizer identity to
+//! compare against. Binding one is a change to what a class IS, not a check to add. The exposure
+//! this leaves is at the gateway, where text becomes ids: a seat replays from ids and is not
+//! affected; the person whose prompt was tokenized is. (ADR-0082 stream M, 2026-09-03.)
 
 use crate::Hash64;
 use crate::palw_attempt_v2::PALW_ATTEMPT_V2_L1_TAG_BYTES;
@@ -220,8 +229,10 @@ pub struct PalwFreePromptJobV3 {
     /// protocol derives randomness from it, which is exactly why grinding it buys nothing — the
     /// draw beacon postdates the claim it would try to aim at.
     pub job_nonce: [u8; 32],
-    /// MUST equal the class row's `tokenizer_id`. Carried as a cross-check because a token-id
-    /// sequence read under the wrong tokenizer is a different prompt with the same bytes.
+    /// The tokenizer the executor read the prompt under, as the executor names it. A token-id
+    /// sequence read under the wrong tokenizer is a different prompt with the same bytes — but
+    /// **no consensus rule compares this field to anything** (the registration carries no tokenizer
+    /// identity; see the module doc). It is folded into the job context hash and nothing more.
     pub tokenizer_id: Hash64,
     pub prompt_token_ids_hash: Hash64,
     pub prompt_tokens: u32,

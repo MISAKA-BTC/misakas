@@ -231,7 +231,15 @@ registered through ADR-0075's route or minted at the relaunch; the shipped v2/v3
 and stay exactly as narrow as they are. Consequence for the leaf count: an attention site costs
 `⌈heads × d_head / tile_len⌉` leaves a position at every context — 24 on the dense tier at a 64-lane
 tile, 32 on the hybrid at 128 — and the job's leaf count returns to the BASE count ADR-0077
-Decision 12 was sized against: `~43,000` dense and `~14,000` hybrid positions under `2^32`.
+Decision 12 was sized against: `~43,000` dense and `~14,000` hybrid positions under `2^32`
+(measured by U-04 at the fence's ladder: dense 41,695, hybrid 13,105). **A width clears the close
+AND the ladder, and the two are different caps**: the RC bundle the 5f genesis freezes carries a
+`2^26` ladder, not the fence's `2^32`, and at `2^26` the widest admissible dense graph-v5 row is
+**574** positions (the release branch's own gate) — 512 fits with about twelve per cent of margin,
+and 1,024 is not the next rung on the ladder side but a different cap (`2^28`). So on the close
+side 1,024 costs 64 bytes more than 512; on the ladder side it needs a re-genesis. Every figure in
+this ADR that quotes a 32-element Merkle path is the fence's number; the ruleset's is read from the
+bundle, never typed.
 
 **Decision 2 — a fused attention leaf is refuted by DISSECTION over the history, and nothing
 context-wide is ever carried.** This is the mechanism Ambient does not have (§1.7) and the one the
