@@ -139,9 +139,9 @@ verify)
     say "== assert NOTHING is producing anywhere (this gates the wipe) =="
     bad=0
     for h in "${HOSTS[@]}"; do
-        n=$(r "$h" 'pgrep -c kaspad 2>/dev/null || echo 0')
-        s=$(r "$h" 'ss -tn state established 2>/dev/null | grep -cE "263[0-9][0-9]" || echo 0')
-        say "  $h  kaspad=${n:-?}  p2p-sockets=${s:-?}"
+        n=$(r "$h" 'pgrep -c kaspad 2>/dev/null || true')
+        s=$(r "$h" 'ss -tn state established 2>/dev/null | grep -cE "263[0-9][0-9]" || true')
+        n=${n:-0}; s=${s:-0}; say "  $h  kaspad=$n  p2p-sockets=$s"
         [ "${n:-1}" != "0" ] && bad=1
     done
     if [ "$bad" = 0 ]; then say ""; say "-- clean. The wipe is now safe to run."; exit 0
