@@ -22,12 +22,18 @@ never making.
 
 Measured on the live fleet, six hours of `misaka-t11-node0`'s own log:
 
-    genesis mismatches      3,793
-    consensus params mismatches   735
-    distinct foreign genesis hashes seen   at least four
-      4b619a1a…  1,440     8d2002cc…  1,396  (Relaunch 4's)
-      c664a224…    612     08e9c8a4…    345  (this node's own, seen from the other side)
-    the node's own peers    3 of 8 outgoing, inbound accepted
+    over 24.3 h on the public entry node (.t11, port 26311)
+    genesis mismatches           18,034   from 10 distinct peers
+    consensus params mismatches   3,074
+    distinct FOREIGN genesis hashes    THREE — the fourth value in the log is ours
+      4b619a1a…  8,352    8d2002cc…  6,377  (Relaunch 4's, still dialling)
+      c664a224…  3,311    08e9c8a4…  18,040 as `local`, once per rejection line
+    successful inbound connections    67, from 9 distinct peers; 6 connected now
+
+The three foreign counts sum to 18,040 exactly, so they account for every line and there is no
+fourth. **Ten stuck peers retrying every ~48 seconds produce eighteen thousand rejections** — which
+is the figure to give a joiner, because "18,034 mismatches" reads like a swarm and ten misconfigured
+nodes on a retry loop is what it is.
 
 So the node is **not** isolated — it has working peers — and at the same time it is rejecting
 thousands of dials from nodes that answer to `misaka-testnet-11` and build on something else. **At
@@ -457,6 +463,7 @@ green except the known pin" said this week was a statement about jobs that never
 | model gate, dense | `palw-model-gate` | A16 lane only — declared in advance |
 | model gate, QWEN36 | `palw-qwen36-model-gate` | needs the ChatML fix (§7) to pass through the production assembly |
 | fused-attention guard | `verify_class_admission_v5` | Refuses an `AttnFused` profile unless `palw_kary_court_active_at` — `FusedAttentionNeedsTheKaryCourt`, *"the class carries a fused attention site and this ruleset's court has no dissection to try it with"*; and `PricedForADifferentCourt { priced, court }` when the registered cost shape's arity is not the court's. **A guard on the way in, beside the drill and not instead of it.** |
+| the split close is open | `check_court_close_declaration_acceptance_v2` (W6's signature), `check_close_declared_chunk_count_v2` (the ruleset's own `max_close_chunks`, so devnet's 1 refuses the path rather than engaging it), `palw_court_close_min_fee_v1` (an under-rented declaration is dropped with the block standing) | **Named so a reader can falsify §5 in ten seconds** rather than trust it. Every number here carries where it came from; a behaviour should too. |
 | **prosecutability** | ADR-0082 stream I's end-to-end court drill | **This is the gate, and admission is not.** A graph-v5 leaf disputed to the bottom under the ARMED fence set, through `apply_object`: honest acquitted, forged convicted. F's admission arm refusing an unfenced `AttnFused` profile by name is a guard on the way in — useful, and not the property. The property is that a dispute can be carried to a verdict, and only the drill asserts it. |
 
 **On the MERGED tree** (`5f + adr0082-impl + the family branch`), measured by a session that wrote
