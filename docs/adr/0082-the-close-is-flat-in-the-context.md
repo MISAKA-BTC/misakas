@@ -121,9 +121,21 @@ not carry it:
   ruleset's ladder (`bb4f145b`) is not an ancestor of 5f. On the shipped commit path that is about
   38 positions, prompt and answer together, whatever the row admits.
 
-So on 5f a 512 row is admitted, unprosecutable past one carrier, and unexecutable past 38
-positions. This is the defect class the tree keeps recording — a gate widened where the rule did not
-move — and it is a prerequisite here (U-00), not a decision.
+So on 5f at `01163cd3` a 512 row is admitted, unprosecutable past one carrier, and unexecutable
+past 38 positions. This is the defect class the tree keeps recording — a gate widened where the rule
+did not move — and it is a prerequisite here, not a decision. **Who lands it (settled 2026-09-03
+with the 5f integrator):** the transport is ADR-0080 W5 (`palw-adr0080-w5-closegroups`) — a court
+close rides its OWN chunk-group table `court_close_groups` keyed `(session_id, side)`, deliberately
+NOT ADR-0075 D14's `pending_chunks`, whose `PALW_OBJECT_CHUNK_MAX_COUNT = 8` bounds the certification
+lane and prices its slot rent; the court's count is the ruleset's `max_close_chunks`; state v17 → 18
+is W5's. W5 carries four requirements its adversarial judges added, recorded here so they are the
+ADR's and not a private brief: the declaration's clock is the session BACKSTOP, refused unless
+`daa + 4 × count ≤ deadline` and never extended; a failed declaration loses on its OWN side (a lapse
+at Terminal must not route to the accuser's slash); the chunk bytes live in ROOTED state, never a
+node-local store; and `PALW_COURT_CLOSE_MAX_PER_BLOCK = 1`, counted in the acceptance walk in
+transaction order, so "close bytes in this block" and "court CPU in this block" stay one number. The
+executor-side half — the worker pricing a job against the ruleset's ladder (W1b, `bb4f145b`) — is
+merged on this ADR's integration branch.
 
 ### 1.5 The practical wall is the capture, and no ADR has priced it
 
@@ -270,12 +282,20 @@ Worked at `k = 16`, the value the derivation below selects for the RC windows:
 | DAA at the 45-DAA deadline | 4,140 — over | 1,170 |
 | bytes a move: leaf space / history at a 64-lane tile | 128 / 1,048 | 1,024 / 8,384 |
 
-`k` is a `PalwCourtParamsV2` quantity — inside `palw_ruleset_id_v2` like the ladder — and it is
-DERIVED at genesis as the smallest power of two for which
+`k` is a `PalwCourtParamsV2` quantity (`dissection_arity`, binary on every court built today) —
+inside `palw_ruleset_id_v2` like the ladder — and it is DERIVED at genesis as the smallest power of
+two for which
 `(2 × (⌈log_k L⌉ + ⌈log_k (n_max / tile)⌉) + terminal) × turn_deadline ≤ window_court` over the
 widest row the ruleset will admit, with `turn_deadline` the SA-4 derivation. No preset writes a
-chosen `k`. The bytes a move carries are inside one carrier at every `k ≤ 64` and every registered
-`tile_len ≤ 128`, and the close ceiling of Decision 6 is what refuses a `k` that is not.
+chosen `k`. The bytes a move carries are inside one carrier at every `k ≤ 64` for a disputed tile
+of 128 lanes and at every `k ≤ 32` for one of 256 (`palw_attn_dissect_arity_fits_carrier_v1` — a
+property of the PAIR, applied by the derivation at the widest registered tile, never of the arity
+alone). On a RUNNING chain the same value arrives by activation rather than by re-genesis: the
+bare top-level fence `Params::palw_kary_court`, `None` on every shipped preset, under which the
+court's arity becomes the derived value and the dissection arm becomes admissible — the
+`palw_context_ladder` shape, which swaps a court parameter inside the ruleset id at its DAA. It
+carries no companion value (the `palw_bond_maturity` hazard): what it selects is a pure function of
+the ruleset every node already holds.
 
 **Decision 4 — the bottom of the dissection opens tiles, so the anchor is tile-addressed and
 priced as such.** ADR-0080 Decision 5 said the anchor must be tile-addressed; ADR-0081 §1.1 found
@@ -302,14 +322,21 @@ MODEL width, not a context: on the dense tier the SwiGLU down projection's opera
 (`ffn_dim` 8,960 lanes; the ADR-0080 §1 binding node, 82,080 bytes with the flat ids and ~80,504
 with the Merkle ones), on the hybrid one head's recurrence state (`k_dim × v_dim × 4 = 65,536`,
 charged once since `4f859f9a`). `DEFAULT_MAX_CLOSE_CHUNKS` is therefore
-`palw_close_chunks_for_bytes_v1(max over the registered families of the widest flat term)` — a
-derivation, evaluated at genesis, that the two shipped families put at ONE or TWO carriers, not 27.
-Whatever it evaluates to, a row is admitted at a chunk count only when the transport carries it:
-`apply_object`'s chunk arm admits `CourtClosed`, the completing chunk pays its adjudication
-(`palw_object_rent_ceiling_v1`'s missing arm), and the count cap is the ruleset's
-(`max_close_chunks`) rather than the transport's `8` — the three changes W13 lists. Until the
-three land, `max_close_chunks` is ONE and the admission gate says so; an admitted row whose worst
-close no carrier can file is the 5f state §1.4 describes, and it is refused here by construction.
+`palw_close_chunks_for_bytes_v1(max over the registered families of the widest term)` — a
+derivation, evaluated at genesis over the rows the genesis set registers. Stated for BOTH genesis
+sets, because two of them are on the table: for the graph-v2/v3 context rows design A was written
+for, the widest term is still the context-linear attention close, and the derivation returns
+design A's own numbers — **14** for `{floor, A16 dense 512}` (`ceil(1,154,673 × 1.2 / 100,000)`),
+**27** with the QWEN36-v3 512 row, 1 for the floor alone; for graph-v5 rows (Decisions 1–5) the
+widest term is a MODEL width and the derivation returns one to three carriers (dense one; the
+hybrid two to three, its recurrence's `interval × 5 refs` replay evidence being the widest flat
+term). Whatever it evaluates to, a row is admitted at a chunk count only when the transport
+carries it — W5's own table (§1.4), never the certification lane's `pending_chunks` and its 8. The
+CODE CONDITION, not a schedule: until W5 is in the ruleset, `max_close_chunks` is ONE and the
+admission gate says so; an admitted row whose worst close no carrier can file is the 5f state §1.4
+describes, and it is refused here by construction. The devnet carries its own count (1) and keeps
+its minutes lattice, which is what turns `the_reserve_reads_the_rulesets_chunk_count` green
+(`2694440c` on 5f: the assembly reserve is per-ruleset).
 
 ### Part B — the executor is flat in the context
 
@@ -353,8 +380,12 @@ Consequences, stated as the derivations they are:
 * The width a row admits on the seat side is bounded by the window a seat has to file in:
   `n_max ≤ window_receipt × rate_seat_prefill`, with `window_receipt` a ruleset window (600 DAA on
   the RC) and `rate_seat_prefill` the SA-4 measurement on the slowest fleet host for that class. No
-  number is chosen; the class row carries the measured rate and admission refuses a width the
-  slowest seat cannot recompute inside the window.
+  number is chosen. **The rule is enforced where seats are measured**: a row nobody can seat
+  certifies nothing (ADR-0075), so the bound is checked by the certification drill that measures
+  the replay floor (`palw-certify`'s route), which refuses to certify a width the slowest seat
+  cannot recompute inside the window — not by `verify_class_admission`, which cannot read a fleet
+  measurement and must not pretend to. The measured rate is recorded on the certification, beside
+  the replay floor SA-4 already records there.
 * A challenger in Decision 2's dissection needs the same state to name a child, and a challenger
   is a seat that recomputed (ADR-0077 Decision 8: "holding the refutation's inputs already").
   Nothing new is fetched for a dispute.
@@ -491,7 +522,7 @@ design and are its precondition.
 
 | unit | content | done when |
 |---|---|---|
-| U-00 | **5f's other half.** The chunk arm admits `CourtClosed`, prices the completing chunk, reads `max_close_chunks`; W1b merged; until then `max_close_chunks = 1` on every preset | Z10 green; `misaka-cli palw court-close` files a two-carrier close on devnet and the transition applies it |
+| U-00 | **5f's other half — owned by the 5f integrator, not this ADR.** ADR-0080 W5 lands the court's own chunk-group table with the four requirements §1.4 records; W1b is merged on this ADR's branch; until W5 is in the ruleset, `max_close_chunks = 1` on every preset | Z10 green; `misaka-cli palw court-close` files a two-carrier close on devnet and the transition applies it |
 | U-01 | **Measure the capture.** Decision 7's fold wired into the free-prompt worker; the per-token ratio against the un-captured forward on the §1.5 host and job | the ratio is a number in this ADR; Z6 green |
 | U-02 | Decision 1 — `AttnFused` in the IR, the profile projection, the engine (`engine_a16.rs`), the adjudicator, the fuzz gate; graph-v5 profiles for both families | Z1 green; no `KvScaled` row projects from a v5 profile (Z0's first half) |
 | U-03 | Decision 2 — the dissection arm in `palw_step_refute` / the court object; Decision 3 — the k-ary ladder in `palw_bisect` and the move derivation in `PalwCourtParamsV2`; Decision 4 — the cache half of the ladder rule reads the class's map | Z2, Z3, Z4 green |
@@ -516,7 +547,7 @@ arrangement left.
 |---|---|
 | ADR-0080 §3 Decisions 1, 2, 4, 5, 6, 7 — one job as N verification segments | **withdrawn** (refuted before implementation; §1.1). Decision 5's "tile-addressed anchor" survives as Decision 4 here, in its honest role: the bottom of a dissection |
 | ADR-0080 §1 and Decision 3 | kept: the measurement is §1.2's starting point and the invariant is Z7, as the census tests it |
-| ADR-0080 design A (`DEFAULT_MAX_CLOSE_CHUNKS = 27`) | re-derived (Decision 6): the count is `chunks(widest flat term)`, one or two on the shipped families; the unlanded chunk arm is U-00 |
+| ADR-0080 design A (`DEFAULT_MAX_CLOSE_CHUNKS = 27`) | kept as the BRIDGE and re-derived (Decision 6): the count is `chunks(widest term over the genesis set)` — 14/27 for the graph-v2/v3 context rows, one to three for graph-v5 rows; the transport is W5's own table, the 5f integrator's |
 | ADR-0081 §3 Decisions 1, 2, 4–9 — the prompt as a prefill state chain | **withdrawn**. What a long prompt needed was never a chain of prefill segments; it was a court that never carries the history (Decision 2) and a seat that recomputes it (Decision 9) |
 | ADR-0081 Decision 3 — Merkle prompt ids | kept and ARMED with the rows (Decision 5) |
 | ADR-0081 §1.1 — "graph-v4 makes a per-leaf attention opening tile-sized" | half right, as its own status block found: the OPENING is tile-sized, the CLOSE was not; Decision 2 is what makes the close tile-sized |
