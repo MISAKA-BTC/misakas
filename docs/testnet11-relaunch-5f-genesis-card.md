@@ -2358,3 +2358,52 @@ against a worker that does not check. Running it against one that does needs the
 patched in, which is what I did.
 
 Neither blocks the cut. Both are the operator's first five minutes.
+
+### A named pre-announcement gate: the free prompt must produce an ANSWER, not a correct refusal
+
+The run above demonstrated the handshake, the class check and the width check. **It never
+demonstrated an inference.** The width wall on 5f is structural, not configuration:
+
+```
+palw-testnet-5f       const MODEL_ID = "Qwen/Qwen2.5-1.5B/graph-v2"      -> n_ctx  16
+palw-adr0082-impl     const MODEL_ID = classes::A16_GRAPH_V5_MODEL_ID    -> n_ctx 512
+palw-adr0082-into-5f  const MODEL_ID = classes::A16_GRAPH_V5_MODEL_ID    -> n_ctx 512
+```
+
+There is no environment override on the A16 worker; the one lever is the *qwen36* worker's
+`MISAKA_PALW_MODEL_ID`, and every qwen36 canonical row shares `QWEN36_RC_CANONICAL = (7, 2)`, so
+all of them land at 8. **No configuration of 5f admits a 60-position job.** The merge is what
+moves it, and after the merge the 5f worktree is already built, so the rerun costs a rebuild and
+a script rather than a fourth cold worktree — `/private/tmp` is at 87% with 55 GiB free, and a
+cold target is 7–62 GiB.
+
+> **GATE — after the merge, before the announcement.** Rerun the FP gateway smoke on merged 5f
+> with the 1.79 GB `.palwart` and the qwen2.5-1.5b tokenizer.
+>
+> **Green: the announcement may say a free prompt produced an answer.**
+> **Red or unrun: it says the width check works.** Only one of those is earned by what is
+> measured today, and it is the second.
+
+Two predicted stoppers, written before the run so a red is reported rather than explained:
+
+1. **The artifact must match the v5 row's declared shape.** 1c's
+   `the_shipped_artifact_names_the_row_genesis_registers` passes in 9.90 s against the real
+   1,795,427,276-byte file, so the header digest lands on `4277d84f…`. If the worker resolves its
+   class the same way, that half is already evidence and need not be re-derived.
+2. **`MISAKA_PALW_TOKENIZER`.** The v5 row pins an *inventory* root rather than a container
+   digest, so a tokenizer binding must not move the class id. **If a tokenizer mismatch surfaces
+   as a wrong class id rather than as its own named refusal, that is a finding about the
+   inventory-root property — not a fixture problem** — and it gets reported as one.
+
+### The rule this evening earned, applied to claims rather than to numbers
+
+Every measurement in this card names its tree: `8923b354` detached, a three-week-old worker,
+`d7957910` one behind. **The claims do not**, and that asymmetry is what nearly produced a false
+finding against this card an hour ago — a number looks incomplete without provenance and a
+sentence does not.
+
+> **A statement about code names its tree in the same sentence, or it is defective for not
+> naming it.** `check-doc-citations.sh` cannot enforce this: there is no `file.rs:NNNN` in
+> *"the worker's MODEL_ID is the v5 512 row"*, so there is nothing for a citation checker to
+> resolve. **A claim about which tree a fact holds in is not a citation, and we have no
+> instrument for it** — only the habit.
