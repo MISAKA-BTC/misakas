@@ -1,0 +1,21 @@
+{
+  "v": 1,
+  "ppq": 480,
+  "tempo_us_per_quarter": 500000,
+  "time_signature": [4, 4],
+  "tracks": [
+    {
+      "name": "Main Theme",
+      "channel": 0,
+      "program": 1,
+      "notes": [
+        {
+          "pitch": 440,
+          "velocity": 0.8,
+          "onset": 0,
+          "duration": 1
+        }
+      ]
+    }
+  ]
+}
