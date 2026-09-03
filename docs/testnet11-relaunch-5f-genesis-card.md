@@ -3785,3 +3785,38 @@ I wrote ``say "… `stop` above cannot reach these"`` with markdown in mind. **I
 those are a subshell**, so the word vanished from the output and the shell tried to run `stop`.
 **Third backtick substitution tonight**, after the two commit messages — and the tell is the same
 each time: *a word missing from the output, and an error about a command nobody invoked.*
+
+## Two sentences the evening earned
+
+> **A figure with its configuration is a measurement. The same figure without it is a claim.**
+
+That is the whole difference between §3 and §7, and it is not about the numbers. §7 said *"the
+registered row"* and gave another row's figure. §3 says *"2^32 ladder"* and gives that ladder's
+figure — **so §3 is safe even though its number is not the shipped one, and §7 was unsafe even
+though its number was real.** It applies to code identically: `palw_admission_shape_at_v1`'s doc
+said *"every field is read off the bundle"* and one field was not.
+
+> **Two out of three hosts confirming a procedure is the most persuasive possible way to be wrong
+> about the third.**
+
+The unit loop is complete on `.113` and `5.104`. It is incomplete on ibm, where one node runs in a
+login-session cgroup. **The fleet looks uniform until you ask each process who owns it** — and a
+two-thirds confirmation is exactly the amount of evidence that stops anyone asking.
+
+*Both of these are consequences of the same thing: an observation carries its conditions or it
+does not, and when it does not, the reader supplies conditions that were never true.*
+
+### And the failure in §4b was procedural, not technical
+
+`verify` was **right**. `stop` was incomplete. The defect is that being right had **no exit**:
+
+```
+the runbook said     stop -> verify
+what happened        stop -> verify says NOT CLEAN -> (nothing)
+what an operator      "verify is broken" -> wipe anyway -> a survivor re-feeds the old chain
+   concludes at 2am
+```
+
+> **A gate with no documented way to satisfy it teaches people to bypass it.** The gate was the
+> only thing standing between a partial wipe and a chain-splitting survivor, and it was the part
+> that worked.
