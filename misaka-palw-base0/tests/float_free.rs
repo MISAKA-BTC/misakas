@@ -85,6 +85,11 @@ const CONSENSUS_PATH: &[&str] = &[
     "src/rc.rs",
     "src/rope.rs",
     "src/tokenizer.rs",
+    // The chat template (ADR-0077 Decision 6): it decides the SEGMENTS a prompt is made of, and
+    // therefore the prompt ids, and `prompt_token_ids_hash_v2` over those ids is part of a job's
+    // identity. Same argument as `tokenizer.rs` directly above, one step earlier in the same
+    // pipeline — what it produces is committed.
+    "src/chat_template.rs",
     // ADR-0067 Decision 5's fuzz gate. On the path by the same argument as `plan.rs`: it drives
     // the interpreter and ASSERTS that two runs of one plan are one bitstream, so a float here
     // would make the gate's own determinism claim unfalsifiable — the harness would inherit the
@@ -137,6 +142,12 @@ const EXEMPT: &[(&str, &str)] = &[
     // scanned engine and hashing integers, adding none of its own. Listed with the reason rather
     // than scanned, because what it must not do is invent arithmetic, and it invents none.
     ("src/bin/palw-slice-kat.rs", "publishes a digest of the scanned engine's own integer rows; computes no arithmetic itself"),
+    // The two model gates. They open a checkpoint, drive the SCANNED backends over a fixed case
+    // list and write the answers to disk; they invent no arithmetic and commit nothing. Both were
+    // unclassified until 2026-09-03 — `palw-model-gate.rs` since it landed — which is the state
+    // this guard exists to refuse, so they are named here with the reason rather than left out.
+    ("src/bin/palw-model-gate.rs", "model gate: drives the scanned dense backend and reports; commits nothing"),
+    ("src/bin/palw-qwen36-model-gate.rs", "model gate: drives the scanned qwen36 backend and reports; commits nothing"),
     ("examples/base0-throughput.rs", "measurement tool: it times the engine, it is not the engine"),
     ("examples/gguf-probe.rs", "offline checkpoint inspector"),
     ("examples/class-weight-report.rs", "measurement tool: it reports what a class would be worth, in floats, and executes nothing"),

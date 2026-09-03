@@ -80,7 +80,45 @@ use crate::palw_v2::PalwJobContextV2;
 /// case — buys every class that could ever be adjudicable, because nothing deeper than
 /// `PALW_STEP_MAX_LEAVES` is admissible in the first place (`worst_case_step_leaf_count_v1`
 /// refuses it).
-pub const PALW_RC_COURT_MAX_STEP_LEAF_COUNT: u64 = crate::palw_step::PALW_STEP_MAX_LEAVES;
+/// **Raised to 2^26 on 2026-09-03, and the reason is a measurement rather than headroom.**
+///
+/// It was `PALW_STEP_MAX_LEAVES` (2^22) — the executor's own hardcoded constant, which before
+/// ADR-0080 W1b was the only cap that existed, so the ruleset agreeing with it cost nothing. W1b
+/// made the executor read THIS field, which converted a constant nobody could choose into a value
+/// somebody has to. 2^22 was that value by inheritance, not by decision.
+///
+/// What 2^22 admits, measured on the A16 tier that actually ships (`base0-class-sizing`, the
+/// `qwen25_a16_profile_v2` projection the registered artifact produces — NOT `qwen25_profile_v1`,
+/// whose numbers are roughly four times more generous and describe a class nobody registers):
+///
+/// | ruleset leaf cap | widest admissible `n_ctx` |
+/// |---|---|
+/// | 2^22 | **39** |
+/// | 2^23 | 79 |
+/// | 2^24 | 156 |
+/// | **2^26** | **574** |
+/// | 2^28 | 1,833 |
+///
+/// The genesis card registers the dense A16 row at `n_ctx` **512**, so 2^26 is the smallest cap
+/// that admits the class the chain is going to carry. Everything below it admits a NARROWER class,
+/// which means a different `shape_profile_id` — `n_ctx` is inside the profile the id hashes — and
+/// therefore a different class than the one certified, which is the exact loop this cut already
+/// paid for once.
+///
+/// It also has to be big enough to hold an ANSWER. The shipped grammars need 38 decode tokens for
+/// `cad/stl/v1`, 60 for `music/smf/v1` and 104 for `scene` before prefill; at 39 positions total,
+/// the free-prompt lane is open in name and empty in fact.
+///
+/// **The window still fits, which is the constraint this cannot break.** 2^26 is 26 bisection
+/// rounds, so `(2 × 26 + 2) = 54` moves; with ADR-0080's 216-DAA assembly reserve the derived turn
+/// deadline is `(3,000 − 216 − 1) / 54 = 51`, and `54 × 51 + 216 = 2,970 < 3,000`. Deeper caps fit
+/// too (2^28 → 47, 2^32 → 42), so this is not the ceiling — it is the smallest value that does the
+/// job, chosen because the cost of the ladder is paid by every honest prosecution.
+///
+/// This value is inside `palw_ruleset_id_v2` and therefore inside the fingerprint. It is free to
+/// move on a wipe relaunch and impossible to move afterwards, which is why it is being decided
+/// before the cut rather than discovered from a user who cannot get a MIDI file out.
+pub const PALW_RC_COURT_MAX_STEP_LEAF_COUNT: u64 = 1 << 26;
 
 /// **The three cost ceilings an RC identity must freeze, and why they are constants rather than
 /// an operator's choice** (ADR-0049 Decision C; the second of the road map's two decisions that
@@ -1012,12 +1050,31 @@ pub fn verify_class_admission_v4(
         }
     }
 
-    let worst = match ladder {
-        Some(rules) => crate::palw_step::worst_case_step_leaf_count_capped_v1(profile, rules.ladder),
-        None => worst_case_step_leaf_count_v1(profile),
-    }
-    .map_err(|e| PalwClassAdmissionError::Profile(format!("{e:?}")))?;
+    // **Both arms count against the RULESET's ladder, and the `None` arm did not.** It called
+    // `worst_case_step_leaf_count_v1`, which counts against `PALW_STEP_MAX_LEAVES` — the
+    // executor's constant — so a caller with no explicit rules had its class refused by a number
+    // the bundle does not contain, before the `bundle_ladder` comparison below ever ran. With the
+    // cap raised past the constant that is not a cosmetic difference: it is the difference between
+    // admitting the class the ruleset describes and admitting the one the old executor could
+    // reach. ADR-0080 W1b made the executor read the field; this is the same correction on the
+    // admission side, and after it the constant bounds nothing here.
     let bundle_ladder = bundle.court.max_step_leaf_count();
+    let worst = match match ladder {
+        Some(rules) => crate::palw_step::worst_case_step_leaf_count_capped_v1(profile, rules.ladder),
+        None => crate::palw_step::worst_case_step_leaf_count_capped_v1(profile, bundle_ladder),
+    } {
+        Ok(worst) => worst,
+        // **A class too deep for the ladder is reported as too deep, not as a bad profile.** The
+        // counter refuses at its cap with `TooManyLeaves { got, max }`, and `got` is exactly the
+        // `worst` the comparison below would have printed — so the refusal is rewritten into the
+        // error that names both numbers. Letting it through as `Profile("TooManyLeaves { .. }")`
+        // would have been correct and useless: the operator learns the profile is unhappy and not
+        // that the ruleset's ladder is the thing to change.
+        Err(crate::palw_step::PalwStepError::TooManyLeaves { got, .. }) => {
+            return Err(PalwClassAdmissionError::DeeperThanTheLadder { worst: got, ladder: bundle_ladder });
+        }
+        Err(e) => return Err(PalwClassAdmissionError::Profile(format!("{e:?}"))),
+    };
     if worst > bundle_ladder {
         return Err(PalwClassAdmissionError::DeeperThanTheLadder { worst, ladder: bundle_ladder });
     }
@@ -1422,8 +1479,12 @@ mod tests {
         // bounded by the ladder rather than by the price. This is the trap, as a measurement.
         assert_eq!(at("dense A16 (graph-v2)", false, OLD_CEILING).3, 21, "the width the 80 KiB carrier admitted, unfenced");
         assert_eq!(at("dense A16 (graph-v2)", false, now).3, 39, "and the width 2,250,000 admits — the LADDER stops it");
+        // The marker for "the LADDER is what refused, not the price" used to be `TooManyLeaves`,
+        // leaking out of the counter as a `Profile(..)`. It is now `DeeperThanTheLadder`, which
+        // carries the two numbers a reader needs — the class's worst case and the ruleset's ladder
+        // — instead of only saying the profile was unhappy. Same condition, better sentence.
         assert!(
-            at("dense A16 (graph-v2)", false, now).4.contains("TooManyLeaves"),
+            at("dense A16 (graph-v2)", false, now).4.contains("DeeperThanTheLadder"),
             "the shipped ladder stopped being the binding refusal: {}",
             at("dense A16 (graph-v2)", false, now).4
         );
@@ -2007,9 +2068,14 @@ mod tests {
         assert_eq!(floor_worst, 8_352, "the floor's longest job, measured");
         assert_eq!(rounds(floor_worst), 14);
 
-        assert_eq!(PALW_RC_COURT_MAX_STEP_LEAF_COUNT, PALW_STEP_MAX_LEAVES);
-        assert_eq!(rounds(PALW_RC_COURT_MAX_STEP_LEAF_COUNT), 22);
-        assert_eq!(rounds(PALW_RC_COURT_MAX_STEP_LEAF_COUNT) - rounds(floor_worst), 8, "the price of the whole step space");
+        // The ruleset's ladder is 2^26 since 2026-09-03 and is no longer the executor's constant:
+        // W1b made the executor read the field, and the field was raised to admit the n_ctx 512
+        // A16 row the genesis registers (2^22 admits n_ctx 39). So these two are deliberately NOT
+        // equal any more, and the constant is a default rather than the ladder.
+        assert_eq!(PALW_RC_COURT_MAX_STEP_LEAF_COUNT, 1 << 26);
+        assert_eq!(PALW_STEP_MAX_LEAVES, 1 << 22, "the executor's default is not the ruleset's ladder");
+        assert_eq!(rounds(PALW_RC_COURT_MAX_STEP_LEAF_COUNT), 26);
+        assert_eq!(rounds(PALW_RC_COURT_MAX_STEP_LEAF_COUNT) - rounds(floor_worst), 12, "the price of the whole step space");
 
         // And it really is every class: the cap is what `worst_case_step_leaf_count_v1` enforces,
         // so a class the ladder cannot reach is a class that was already inadmissible.

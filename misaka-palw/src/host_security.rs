@@ -53,12 +53,30 @@ mod linux;
 /// | `MISAKA_PALW_ARTIFACT` | the A16 / Qwen3.6 free-prompt workers' pinned artifact |
 /// | `MISAKA_PALW_TOKENIZER` | the A16 free-prompt worker's tokenizer |
 /// | `MISAKA_PALW_MODEL_ID` | the Qwen3.6 free-prompt worker's registered model id |
+/// | `MISAKA_PALW_NETWORK_ID` | every free-prompt worker, as an INPUT to the context hash |
+///
+/// **`MISAKA_PALW_NETWORK_ID` was missing, and its absence made the free-prompt workers
+/// unstartable through a gateway** — measured 2026-09-03, where the A16 worker refused with
+/// "MISAKA_PALW_NETWORK_ID is not set" on every spawn and the gateway reported only that the
+/// worker "exited before announcing its manifest". Two well-founded rules had been left pointing
+/// opposite ways: the worker demands the name because every committed root hangs off a context
+/// hash that absorbs it, so a guess yields a claim no seat can replay; this list refuses anything
+/// "the arithmetic does not need". The network name IS arithmetic here — it is an input to the
+/// hash the court re-derives — so it belongs on the list, and its absence was an omission rather
+/// than a policy. It is a name, not a capability: it grants no filesystem, no socket, no library
+/// injection, and a wrong value fails closed at the court rather than silently.
 ///
 /// **`PATH` is not on this list and must not be added** (SA-4). Neither is `HOME`, `TMPDIR`,
 /// `SSH_AUTH_SOCK`, nor anything else: a capability the arithmetic does not need is not granted
 /// "for now" — its absence is a property the court already relies on.
-pub const PALW_WORKER_ENV_ALLOWLIST: &[&str] =
-    &["MISAKA_PALW_GGUF", "MISAKA_PALW_GOLDEN", "MISAKA_PALW_ARTIFACT", "MISAKA_PALW_TOKENIZER", "MISAKA_PALW_MODEL_ID"];
+pub const PALW_WORKER_ENV_ALLOWLIST: &[&str] = &[
+    "MISAKA_PALW_GGUF",
+    "MISAKA_PALW_GOLDEN",
+    "MISAKA_PALW_ARTIFACT",
+    "MISAKA_PALW_TOKENIZER",
+    "MISAKA_PALW_MODEL_ID",
+    "MISAKA_PALW_NETWORK_ID",
+];
 
 /// Values PINNED by this constant rather than inherited — the locale pins the determinism rules
 /// already require. Inheriting them would make the child's number formatting a function of the
@@ -924,6 +942,11 @@ mod tests {
         assert!(!PALW_WORKER_ENV_ALLOWLIST.contains(&"HOME"));
         assert!(!PALW_WORKER_ENV_ALLOWLIST.contains(&"LD_PRELOAD"));
         assert!(!PALW_WORKER_ENV_ALLOWLIST.contains(&"DYLD_INSERT_LIBRARIES"));
+        // Every name a shipped worker refuses to start without must be here, or the worker is
+        // unstartable through a gateway and the gateway can only report that it "exited". The A16
+        // free-prompt worker refuses without its network id, which is an input to the context hash
+        // the court re-derives — not a capability.
+        assert!(PALW_WORKER_ENV_ALLOWLIST.contains(&"MISAKA_PALW_NETWORK_ID"));
     }
 
     /// **S2, the delivered half.** Spawn a real child through the real hardening and compare what

@@ -6048,6 +6048,7 @@ dependencies = [
  "kaspa-rpc-core",
  "kaspa-wrpc-client",
  "misaka-palw",
+ "misaka-palw-base0",
  "misaka-palw-derive",
  "misaka-palw-fp-submit",
  "rand 0.8.6",
