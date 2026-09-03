@@ -243,14 +243,43 @@ mod tests {
         let s = PalwClassSdk::builtin_v1(bundle.court, params.net.to_string().into_bytes());
         let floor = s.ledger().into_iter().find(|e| e.model_id == "PALW-BASE-0/rc").expect("floor");
         let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("pinned");
-        s.preflight_admission(bundle, &floor, root).expect("the floor admits under the network that runs it");
+        let shape = kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1(&params, bundle, &floor.profile, 0)
+            .expect("the network's court has a shape");
+        s.preflight_admission(bundle, &floor, root, &shape).expect("the floor admits under the network that runs it");
 
         // A court too shallow for the class: the gate refuses, and the refusal says so BEFORE any
         // signature or carrier exists. (Ladder depth is a bundle property; 2^4 leaves holds no
         // real class.)
         let mut shallow = bundle.clone();
         shallow.court = PalwCourtParamsV2::new(16, 4, 2).expect("a legal, tiny court");
-        let err = s.preflight_admission(&shallow, &floor, root).expect_err("a class deeper than the ladder is refused");
+        let err = s.preflight_admission(&shallow, &floor, root, &shape).expect_err("a class deeper than the ladder is refused");
         assert!(err.contains("nothing was signed or funded"), "{err}");
+    }
+
+    /// **The ADR-0082 devnet drill's stage-2 failure, as a unit test.** The graph-v5 row
+    /// preflights under the court devnet arms at genesis (the shape the acceptance path judges
+    /// by), and is refused BY NAME under no court — so a preflight that asked a court-less gate
+    /// reported "would be refused" for a row the chain admits, and the panel never signed.
+    #[test]
+    fn a_fused_row_preflights_under_the_court_the_ruleset_arms_and_not_without_it() {
+        use kaspa_consensus_core::palw_class_admission_v2::{PalwAdmissionShapeV1, palw_admission_shape_at_v1};
+        let params = kaspa_consensus_core::config::params::devnet_shipped_params();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("devnet ships a ConsensusV2 bundle");
+        };
+        let s = PalwClassSdk::builtin_v1(bundle.court, params.net.to_string().into_bytes());
+        let row = s
+            .ledger()
+            .into_iter()
+            .find(|e| e.model_id == misaka_palw_base0::classes::A16_GRAPH_V5_MODEL_ID)
+            .expect("this build's SDK knows the graph-v5 row");
+        let root = kaspa_hashes::Hash64::from_u64_word(0xA16);
+        let armed = palw_admission_shape_at_v1(&params, bundle, &row.profile, 0).expect("devnet's court has a shape");
+        assert!(armed.court.is_some(), "devnet arms palw_kary_court at genesis");
+        s.preflight_admission(bundle, &row, root, &armed).expect("the fused row is admissible under the court the ruleset arms");
+
+        let dormant = PalwAdmissionShapeV1 { court: None, ladder: None };
+        let err = s.preflight_admission(bundle, &row, root, &dormant).expect_err("no court, no fused row");
+        assert!(err.contains("has no dissection to try it with"), "{err}");
     }
 }
