@@ -8095,17 +8095,43 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
-    palw_context_ladder: None,
+    // **ARMED on devnet at genesis** — the testnet-11 5f genesis card §1's set, rehearsed here
+    // first. Without the ladder the registered class cannot price a wide row, and the ladder is
+    // the whole point of registering the graph-v5 512 row (`misaka_palw_base0::classes`).
+    //
+    // **Arming the ladder is TWO moves, not one** (card §1): this field AND the bundle's
+    // `PalwCourtParamsV2::max_step_leaf_count`. The second is already
+    // `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` = 2^26 on this base — 2^22 admits n_ctx 39 — so setting
+    // one and not the other would produce a build that looks armed and prices the old row.
+    palw_context_ladder: Some(ForkActivation::always()),
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
     palw_panel_da: None,
     palw_certification_rent: None,
-    // ADR-0069 Decision 7: dormant. Arming it is a per-network activation decision.
-    palw_uncertified_weightless: None,
+    // **ADR-0069 Decision 7, ARMED at genesis** — and `always()` is the only legal value:
+    // `validate_palw_v2` refuses this fence at any other height, because the rule it carries
+    // decides what an uncertified class WEIGHS and a chain cannot change that opinion about
+    // history it already accepted. Genesis is the only moment it can be armed.
+    palw_uncertified_weightless: Some(ForkActivation::always()),
     palw_da_court: None,
     palw_chunk_cap_charge: None,
+    // ADR-0082 Decision 5: NOT armed. At the registered 512 row the flat prompt ids are 82,080
+    // bytes against a one-carrier budget of 83,333, so the Merkle form buys nothing and arming it
+    // would move every free-prompt job id. It becomes REQUIRED above about n_ctx 1,024, which is
+    // the day a wider row registers — not before.
     palw_prompt_ids_merkle: None,
-    palw_kary_court: None,
+    // **ADR-0082 Decision 3, ARMED at genesis.** A bare fence: no companion value, no bundle
+    // field. The preset's `dissection_arity` stays 2 and the fence overrides it with
+    // `palw_court_arity_v1` of this ruleset's own quantities. Without it the graph-v5 row is
+    // admitted and UNPROSECUTABLE — `verify_class_admission_v5` refuses a fused profile under a
+    // dormant fence by name (`FusedAttentionNeedsTheKaryCourt`), which is the guard; the property
+    // is that a dispute reaches a verdict, and only the court drill asserts that.
+    palw_kary_court: Some(ForkActivation::always()),
+    // ADR-0082 stream H's (decode leaves earn, seeded argmax): NOT armed. Not a prosecutability
+    // condition and not on the acceptance path, and its transition arm still refuses by name
+    // (`FreePromptDecodeLeavesUnavailable`) for want of the profile-derived split quantities on
+    // `PalwClassStateV2`. A fence armed without a shipping thing to obey it is the ADR-0065 D1
+    // mistake.
     palw_fp_decode_rules: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
@@ -9159,11 +9185,20 @@ mod consensus_params_id_tests {
     fn the_uncertified_weightless_fence_separates_networks_only_when_it_is_in_force() {
         let shipped = MAINNET_PARAMS;
         assert!(shipped.palw_uncertified_weightless.is_none(), "every shipped preset must leave ADR-0069 D7 dormant");
-        for (name, base) in
-            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
-        {
+        for (name, base) in [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS)] {
             assert!(base.palw_uncertified_weightless.is_none(), "{name}: a fork-choice rule may not ship armed by default");
         }
+        // **DEVNET arms it, at genesis and only at genesis** (the 5f genesis card §1, rehearsed on
+        // devnet first). "By default" is what the rule above forbids; this is a decision the card
+        // records, and `validate_palw_v2` refuses the fence at any other height — so the assertion
+        // is on the VALUE, not merely on presence. A scheduled D7 would change what a chain thinks
+        // uncertified classes weighed in history it already accepted.
+        assert_eq!(
+            DEVNET_PARAMS.palw_uncertified_weightless,
+            Some(ForkActivation::always()),
+            "devnet arms ADR-0069 Decision 7 at genesis, and `always()` is the only height it may take"
+        );
+        devnet_shipped_params().validate_palw_v2().expect("the armed devnet assembles");
         assert!(
             palw_rc_shipped_params().palw_uncertified_weightless.is_none(),
             "the assembled RC ruleset leaves it dormant too — arming it is a deployment decision and it moves the \
@@ -9593,18 +9628,31 @@ mod consensus_params_id_tests {
     /// that never had the field, and an armed one must move every commitment an operator reads.
     #[test]
     fn the_kary_court_fence_is_dormant_and_visible_the_moment_it_is_not() {
-        for (name, shipped) in
-            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
-        {
+        for (name, shipped) in [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS)] {
             assert!(shipped.palw_kary_court.is_none(), "{name} must leave ADR-0082 Decision 3's fence dormant");
             assert!(!shipped.palw_kary_court_active_at(u64::MAX), "{name}: a dormant fence is never active");
         }
+        // **DEVNET arms it at genesis** (the 5f genesis card §1, rehearsed on devnet first): the
+        // graph-v5 row is admitted and UNPROSECUTABLE without it. `always()` and not a schedule,
+        // because a chain that acquired a dissection court mid-life would be two courts wearing
+        // one ruleset id.
+        assert_eq!(
+            DEVNET_PARAMS.palw_kary_court,
+            Some(ForkActivation::always()),
+            "devnet arms ADR-0082 Decision 3's fence at genesis"
+        );
         // The BUNDLED devnet, not the preset literal: `DEVNET_PARAMS` carries
         // `PalwConsensusMode::Disabled`, and the mode condition is folded into every fence
-        // accessor, so a fence armed on the literal answers nothing and asserts nothing.
-        let shipped = devnet_shipped_params();
-        assert!(matches!(shipped.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)));
-        assert!(!shipped.palw_kary_court_active_at(u64::MAX), "the shipped devnet leaves the fence dormant");
+        // accessor, so the fence only ANSWERS once the bundle is installed. That is the half a
+        // preset-literal assertion cannot see.
+        let armed_devnet = devnet_shipped_params();
+        assert!(matches!(armed_devnet.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)));
+        assert!(armed_devnet.palw_kary_court_active_at(0), "the bundled devnet plays the dissection court from genesis");
+
+        // The dormancy/visibility property itself, on a ruleset that has NOT armed it — the RC's,
+        // which is the one the fence's own doc is about.
+        let shipped = palw_rc_shipped_params();
+        assert!(!shipped.palw_kary_court_active_at(u64::MAX), "the RC card leaves the fence dormant");
         let mut armed = shipped.clone();
         armed.palw_kary_court = Some(ForkActivation::new(9_000_000));
         assert_ne!(shipped.consensus_params_id(), armed.consensus_params_id(), "arming the k-ary court must move the fingerprint");
@@ -9679,11 +9727,7 @@ mod consensus_params_id_tests {
         assert!(shipped.palw_fp_decode_rules.is_none(), "the bundled devnet leaves it dormant too");
         let mut armed = shipped.clone();
         armed.palw_fp_decode_rules = Some(ForkActivation::new(9_000_000));
-        assert_ne!(
-            shipped.consensus_params_id(),
-            armed.consensus_params_id(),
-            "arming the decode rules must move the fingerprint"
-        );
+        assert_ne!(shipped.consensus_params_id(), armed.consensus_params_id(), "arming the decode rules must move the fingerprint");
         assert_ne!(shipped.consensus_schedule_id(), armed.consensus_schedule_id(), "the operator log must name it");
         assert!(armed.palw_fp_decode_rules_active_at(9_000_000));
         assert!(!armed.palw_fp_decode_rules_active_at(8_999_999));

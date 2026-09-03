@@ -408,6 +408,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwProducerFactsResponse>, protowire:
         fp_certified: item.fp_certified,
         fp_quanta_per_canonical_job: item.fp_quanta_per_canonical_job,
         fp_max_quanta_per_receipt: item.fp_max_quanta_per_receipt,
+        fp_decode_rules_armed: item.fp_decode_rules_armed,
         error: None,
     }
 });
@@ -1202,6 +1203,7 @@ try_from!(item: &protowire::GetPalwProducerFactsResponseMessage, RpcResult<kaspa
         fp_certified: item.fp_certified,
         fp_quanta_per_canonical_job: item.fp_quanta_per_canonical_job,
         fp_max_quanta_per_receipt: item.fp_max_quanta_per_receipt,
+        fp_decode_rules_armed: item.fp_decode_rules_armed,
     }
 });
 try_from!(item: &protowire::GetPalwDerivedArtifactsRequestMessage, kaspa_rpc_core::GetPalwDerivedArtifactsRequest, {
@@ -1682,6 +1684,10 @@ mod palw_producer_facts_tests {
             fp_certified: true,
             fp_quanta_per_canonical_job: 8,
             fp_max_quanta_per_receipt: 64,
+            // ADR-0082 Decisions 10/11: which decode ruleset the chain plays. `true` here so the
+            // round trip can distinguish "carried" from "defaulted" — the field's own default is
+            // false, and a conversion that dropped it would pass against a false fixture.
+            fp_decode_rules_armed: true,
         };
         let wire: crate::protowire::GetPalwProducerFactsResponseMessage = RpcResult::Ok(&response).into();
         let back: GetPalwProducerFactsResponse = GetPalwProducerFactsResponse::try_from(&wire).unwrap();
@@ -1712,6 +1718,10 @@ mod palw_producer_facts_tests {
         assert!(back.fp_certified, "a gateway that loses fp_certified cannot say why its commitment is unsubmittable");
         assert_eq!(back.fp_quanta_per_canonical_job, response.fp_quanta_per_canonical_job);
         assert_eq!(back.fp_max_quanta_per_receipt, response.fp_max_quanta_per_receipt);
+        assert!(
+            back.fp_decode_rules_armed,
+            "a builder that loses fp_decode_rules_armed builds jobs for the wrong decode ruleset — honest and unreproducible"
+        );
     }
 }
 
