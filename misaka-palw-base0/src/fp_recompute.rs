@@ -202,6 +202,177 @@ pub fn base0_fp_recompute_state_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
 }
 
 // =================================================================================================
+// The families' kernels
+// =================================================================================================
+
+/// **The dense tier's recompute** — the engine and the cache the class's own capture path uses
+/// (`a16_execute_for_attempt_capped_v1`), walked from the plan when the class registered one.
+///
+/// It lives here rather than beside the backend because it is the seat's machinery and the
+/// backend's own file is the executor's: what the backend contributes is the three lines that
+/// build one of these out of its private artifact and plan.
+pub struct A16RecomputeKernelsV1<'a> {
+    engine: crate::engine_a16::A16Engine<'a>,
+    plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
+    cache: crate::engine_a16::A16Cache,
+    vocab: usize,
+    layers: usize,
+}
+
+impl<'a> A16RecomputeKernelsV1<'a> {
+    pub fn new(
+        artifact: &'a crate::artifact::Base0ArtifactV1,
+        plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
+    ) -> Result<Self, Base0FpRecomputeError> {
+        let engine = crate::engine_a16::A16Engine::new(artifact)
+            .map_err(|e| Base0FpRecomputeError::Engine(format!("the artifact is not an A16 class: {e:?}")))?;
+        Ok(Self {
+            engine,
+            plan,
+            cache: crate::engine_a16::A16Cache::new(artifact.shape.n_layers),
+            vocab: artifact.shape.vocab,
+            layers: artifact.shape.n_layers,
+        })
+    }
+}
+
+impl Base0FpRecomputeKernelsV1 for A16RecomputeKernelsV1<'_> {
+    fn forward_no_capture(&mut self, token: usize, position: usize) -> Result<(), Base0FpRecomputeError> {
+        if token >= self.vocab {
+            return Err(Base0FpRecomputeError::Engine(format!(
+                "token {token} is outside this class's vocabulary of {}",
+                self.vocab
+            )));
+        }
+        // The PLANNED walk where the class registered a graph (ADR-0067: the court adjudicates
+        // what was declared, so a seat's own state must come from the declaration too).
+        match self.plan {
+            Some(plan) => self
+                .engine
+                .forward_token_planned(plan, &mut self.cache, token, position)
+                .map(|_| ())
+                .map_err(|e| Base0FpRecomputeError::Engine(format!("planned forward at {position}: {e:?}"))),
+            None => self
+                .engine
+                .forward_token(&mut self.cache, token, position)
+                .map(|_| ())
+                .map_err(|e| Base0FpRecomputeError::Engine(format!("forward at {position}: {e:?}"))),
+        }
+    }
+
+    fn state_chunks(&self, profile: &PalwShapeProfileV3, positions: u32) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
+        let _ = self.layers;
+        // **The CLASS's map, through the one dispatch both directions take.** The same geometry
+        // `Base0CheckpointCaptureV1::next_geometry` takes, so a seat chunks the state exactly
+        // where the executor did — including the v3 tiled map a graph-v5 class registers.
+        let geometry =
+            crate::legs::base0_state_chunk_geometry_v1(profile, positions).map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")))?;
+        let mut chunks = Vec::with_capacity(geometry.chunk_count() as usize);
+        for index in 0..geometry.chunk_count() {
+            let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
+                .ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
+            chunks.push(
+                self.cache.state_chunk_bytes_v1(&entry).ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?,
+            );
+        }
+        Ok(chunks)
+    }
+}
+
+/// **The hybrid tier's recompute.**
+///
+/// The forward is live; the state serializer answers for the RECURRENCE's own map and refuses the
+/// hybrid composition by name. That is not a shortcut: the shipped hybrid class registers the
+/// checkpoint sentinel and commits no checkpoint at all
+/// ([`crate::qwen36_backend::qwen36_checkpoint_profile_v1`]), and no side of the tree spells the
+/// order in which a hybrid's attention chunks and its recurrence chunks compose into one map. The
+/// side that registers the composed class is the side that spells it; a seat that guessed would be
+/// a second opinion about a consensus object.
+pub struct Qwen36RecomputeKernelsV1<'a> {
+    engine: crate::qwen36::Qwen36Engine<'a>,
+    plan: &'a crate::qwen36_plan::Qwen36ProfilePlanV1,
+    cache: crate::qwen36::Qwen36Cache,
+    shape: &'a crate::qwen36::Qwen36ShapeV1,
+}
+
+impl<'a> Qwen36RecomputeKernelsV1<'a> {
+    pub fn new(artifact: &'a crate::qwen36::Qwen36ArtifactV1, plan: &'a crate::qwen36_plan::Qwen36ProfilePlanV1) -> Self {
+        Self {
+            engine: crate::qwen36::Qwen36Engine::new(artifact),
+            plan,
+            cache: crate::qwen36::Qwen36Cache::new(&artifact.shape),
+            shape: &artifact.shape,
+        }
+    }
+
+    /// The recurrence layers' live state, in the shape [`crate::fp_capture`] chunks.
+    fn recurrence_state(&self) -> (Vec<u16>, Vec<crate::fp_capture::Base0GdnLayerStateV1>) {
+        let mut layers = Vec::new();
+        let mut states = Vec::new();
+        for (index, kind) in self.shape.layer_types.iter().enumerate() {
+            if *kind != crate::qwen36::Qwen36LayerKind::LinearAttention {
+                continue;
+            }
+            layers.push(index as u16);
+            states.push(crate::fp_capture::Base0GdnLayerStateV1 {
+                heads: self.cache.gdn.get(index).cloned().unwrap_or_default(),
+                conv: self.cache.conv.get(index).cloned().unwrap_or_default(),
+            });
+        }
+        (layers, states)
+    }
+}
+
+impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
+    fn forward_no_capture(&mut self, token: usize, position: usize) -> Result<(), Base0FpRecomputeError> {
+        if token >= self.shape.vocab {
+            return Err(Base0FpRecomputeError::Engine(format!(
+                "token {token} is outside this class's vocabulary of {}",
+                self.shape.vocab
+            )));
+        }
+        if position >= self.shape.max_position {
+            return Err(Base0FpRecomputeError::Engine(format!("the job runs past the rotary table at position {position}")));
+        }
+        self.engine
+            .forward_token_planned_logits(self.plan, &mut self.cache, token, position)
+            .map(|_| ())
+            .map_err(|e| Base0FpRecomputeError::Engine(format!("forward at {position}: {e}")))
+    }
+
+    fn state_chunks(&self, profile: &PalwShapeProfileV3, _positions: u32) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+        let declared = profile.state_chunk_map_id;
+        let (layers, states) = self.recurrence_state();
+        let heads = self.shape.linear_v_heads as u32;
+        let dim = self.shape.linear_head_dim as u32;
+        let kernel = self.shape.conv_kernel as u32;
+        if declared == map::gdn_state_chunk_map_id_v2() {
+            let geometry = crate::fp_capture::base0_gdn_state_geometry_v2(&layers, heads, dim, dim, kernel)
+                .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?;
+            return crate::fp_capture::base0_gdn_state_chunks_v2(&geometry, &states)
+                .map_err(|e| Base0FpRecomputeError::Map(e.to_string()));
+        }
+        if declared == map::gdn_state_chunk_map_id_v1() {
+            let geometry = crate::fp_capture::base0_gdn_state_geometry_v1(&layers, heads, dim, dim, kernel)
+                .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?;
+            return crate::fp_capture::base0_gdn_state_chunks_v1(&geometry, &states)
+                .map_err(|e| Base0FpRecomputeError::Map(e.to_string()));
+        }
+        if declared == map::hybrid_state_chunk_map_id_v1()
+            || declared == map::hybrid_state_chunk_map_id_v2()
+            || declared == map::hybrid_state_chunk_map_id_v3()
+        {
+            return Err(Base0FpRecomputeError::NoStateSerializer {
+                why: "a hybrid map names an attention half and a recurrence half, and no side of the tree spells the order they \
+                      compose in — the class that registers the composed map is the side that does (ADR-0082 Decision 9)",
+            });
+        }
+        Err(Base0FpRecomputeError::Map(format!("this family serves no geometry for the map {declared}")))
+    }
+}
+
+// =================================================================================================
 // One forward pass, not two
 // =================================================================================================
 
@@ -216,34 +387,41 @@ pub fn base0_fp_recompute_state_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
 /// about one duty, not to be a cache of the fleet's claims. The key is every input the state is a
 /// function of, so a hit cannot be a state computed for another job, another class or another
 /// call — and the value is the seat's own arithmetic either way, never anything received.
+/// **The key is exactly what BOTH askers can compute**, which is what makes the second question
+/// answerable at all: the row check (`PalwBackend::verify_fp_interval_opening`) is handed an
+/// opening and no ids, so it can name the class, the job context, the prompt and the covered call
+/// — and nothing else.
+///
+/// That the OUTPUT ids are not in the key is a statement about the class rather than a shortcut. A
+/// PALW class is a pinned integer computation: one job context and one prompt determine the ids,
+/// so two entries that agree on this key and disagree on the ids cannot both be honest, and the
+/// seat's own comparison against the committed checkpoint is what says which one was not. The ids
+/// the state was computed from are kept in the VALUE so a caller can say which they were.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SeatStateKeyV1 {
     class_id: Hash64,
     context_hash: Hash64,
     prompt_ids_hash: Hash64,
-    output_ids_hash: Hash64,
     decode_calls: u32,
 }
 
-static SEAT_STATE_MEMO: std::sync::Mutex<Option<(SeatStateKeyV1, Base0FpSeatStateV1)>> = std::sync::Mutex::new(None);
+static SEAT_STATE_MEMO: std::sync::Mutex<Option<(SeatStateKeyV1, Hash64, Base0FpSeatStateV1)>> = std::sync::Mutex::new(None);
 
 fn seat_state_key_v1(
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     prompt_token_ids: &[u32],
-    output_token_ids: &[u32],
     decode_calls: u32,
 ) -> SeatStateKeyV1 {
     SeatStateKeyV1 {
         class_id: profile.shape_profile_id(),
         context_hash: ctx.context_hash(),
         prompt_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids),
-        output_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(output_token_ids),
         decode_calls,
     }
 }
 
-/// [`base0_fp_recompute_state_v1`], answered from the memo when the same question was just asked.
+/// [`base0_fp_recompute_state_v1`], with the state kept for the row check that follows it.
 ///
 /// `kernels` is built by the caller and only used on a miss, so a family pays for its engine setup
 /// once per real recompute.
@@ -255,18 +433,40 @@ pub fn base0_fp_seat_state_memoized_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
     decode_calls: u32,
     kernels: &mut K,
 ) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
-    let key = seat_state_key_v1(profile, ctx, prompt_token_ids, output_token_ids, decode_calls);
+    let key = seat_state_key_v1(profile, ctx, prompt_token_ids, decode_calls);
+    let ids = kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(output_token_ids);
     if let Ok(guard) = SEAT_STATE_MEMO.lock()
-        && let Some((held, state)) = guard.as_ref()
+        && let Some((held, held_ids, state)) = guard.as_ref()
         && *held == key
+        && *held_ids == ids
     {
         return Ok(state.clone());
     }
     let state = base0_fp_recompute_state_v1(profile, ctx, prompt_token_ids, output_token_ids, decode_calls, kernels)?;
     if let Ok(mut guard) = SEAT_STATE_MEMO.lock() {
-        *guard = Some((key, state.clone()));
+        *guard = Some((key, ids, state.clone()));
     }
     Ok(state)
+}
+
+/// **The state this seat recomputed for this class, context, prompt and covered call, if it is
+/// still the last one it computed** — the row check's only way to reach it.
+///
+/// `None` is not a fault and never an accusation: it says this seat has not done the recompute
+/// this interval's replay would have to resume from, so it cannot judge the interval, and
+/// `Unverifiable` is the honest verdict. The recompute is the caller's to order
+/// (`PalwBackend::fp_recompute_checkpoint_root`), because only the caller holds the committed
+/// output ids the teacher-forcing needs.
+pub fn base0_fp_seat_state_held_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    prompt_token_ids: &[u32],
+    decode_calls: u32,
+) -> Option<Base0FpSeatStateV1> {
+    let key = seat_state_key_v1(profile, ctx, prompt_token_ids, decode_calls);
+    let guard = SEAT_STATE_MEMO.lock().ok()?;
+    let (held, _ids, state) = guard.as_ref()?;
+    (*held == key).then(|| state.clone())
 }
 
 /// Drop the memo. For tests that measure how many forward passes a sequence costs, and for a node
