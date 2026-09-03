@@ -27,7 +27,16 @@ git rev-parse --verify -q "${tree}^{tree}" >/dev/null || die "not a tree-ish: $t
 PREDICTED_DERIVE_SRC=4969f8dc051cac3165a051b439efb65f7630f026
 PREDICTED_SOURCE_TREE_SHA=637858dba5ea5e34b9459a580b2b81d1361aecf450bc615a4ee9621d4953a988
 PREDICTED_T11_FP=71efa66480211731e3dc6fa2312ed73f7ed11b93372a19a55ac66ef39b65920e
-PREDICTED_DEVNET_FP=c0da0c9024d68b94b95010d1566cb1d535a818cd0727d9978906b0a2a8b13692
+# WITHDRAWN 2026-09-03: devnet genesis now registers the same class set as testnet-11
+# (floor + graph-v5@512 + QWEN36) so the drill rehearses the chain being cut. That moves this
+# fingerprint by design. The prediction is NOT updated by guessing — the new value comes from
+# the extraction table, and until it does this check is DISABLED rather than made to pass.
+#
+# A pin that moves for a NAMED cause, named in advance and in writing by the person moving it,
+# is the only kind this ceremony accepts. A pin that moves and is then quietly re-predicted is
+# the thing this script exists to prevent, and editing this line to the new value would be
+# exactly that.
+PREDICTED_DEVNET_FP=WITHDRAWN-see-above
 PREDICTED_FP_GOLDEN=c940b5c36ee40846087e6c5927d6e6b5
 PREDICTED_PREMINE_BUILDS=ba2612417e7e0817
 

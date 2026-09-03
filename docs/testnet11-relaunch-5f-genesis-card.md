@@ -3864,3 +3864,55 @@ known_hosts         3 hits — all three warn AGAINST it: "the ownership test is
 as a failure in this runbook, and the failing command itself was still sitting in the instructions.**
 *A document can contain the correction and the defect at the same time, and the correction does not
 disable the defect — only editing the instruction does.*
+
+## Devnet genesis registers the class set testnet-11 registers — decided, and it moves a pin
+
+The devnet drill reached stage 5b and stopped on the reason its own stage 2b names: *"this class's
+epoch budget is already spent."* A class registered **post-genesis** is not budgeted until the next
+epoch boundary; devnet's `EPOCH_LENGTH` is 1,000 DAA and the host produces ~35 s blocks, so the
+boundary is **~9.7 hours away.** Stages 5b–8 — commitment, claim, Final, receipt block, **the
+derived MIDI and 3D** — are unreachable on devnet as configured, on any tree.
+
+**Decision: (a).** Devnet's genesis registers the same class set as testnet-11 — floor,
+`graph-v5@512` dense, QWEN36 hybrid — so the class is budgeted from DAA 0 and **the drill rehearses
+the chain being cut.**
+
+**Why, in tonight's terms:** the evening's most expensive finding was *the drill asks a network the
+chain is not.* (a) closes that difference. **(b) — shortening `EPOCH_LENGTH` to ~50 DAA — keeps the
+class-set difference and adds a second one**, a devnet whose epoch no other network has, so the
+drill would diverge from the cut chain in one more dimension while claiming to rehearse it.
+
+**And (b) carries an unmeasured quantity**, stated by the person proposing it: *"I have not checked
+the dense share does not round to zero blocks."* A per-epoch budget is `share‰ × epoch work`, so a
+20× shorter epoch shrinks every budget 20×, and **a share that rounds to zero produces a class that
+is registered, funded, and cannot produce — which looks exactly like a healthy chain with a quiet
+class.** That is the failure mode this project has already shipped once.
+
+**The loss, stated rather than absorbed:** under (a), **no drill anywhere exercises post-genesis
+registration end-to-end on a live chain** — panel → chain → certification → budget → production.
+The SDK and core tests cover the *admission decision*, which is where the launch-stopper was
+actually found; they do not cover that sequence. **§5 carries it in those words.** The drill could
+never have caught it anyway, because devnet arms the ladder and t11 does not.
+
+### The pin it moves, and why that is the good case
+
+`devnet_fingerprint c0da0c90…` is one of the four predicted values, and (a) moves it by design.
+
+> **This is precisely what `check-repin-predictions.sh` exists for: a value that differs with a
+> NAMED cause, named in advance, in writing, by the person making the change.** The rule is *"name
+> the change that moved it, or stop."* **A pin that moves and is then quietly re-predicted is the
+> thing the script prevents — and editing the constant to the new value would be exactly that.**
+
+So the prediction is **withdrawn, not updated**:
+
+```
+PREDICTED_DEVNET_FP=WITHDRAWN-see-above
+```
+
+The new value comes from the extraction table on the tree that carries (a), and from nowhere else.
+**`t11_fingerprint`, `source_tree_sha256`, `fp_golden` and `premine_builds` all stand** — (a) never
+touches the t11 preset, and the stranger has independently recomputed the source-tree value and two
+of the eight ids from impl's raw bytes.
+
+*Asked for alongside it: the devnet fingerprint printed **before and after** in the same run. A pin
+that moves for a named reason should still be able to show what it was.*
