@@ -54,6 +54,17 @@ lineno() {
     echo "$n"
 }
 restore() { git checkout -- . ; rm -f .github/workflows/extra.yaml; rm -rf scripts/__pycache__; }
+
+# **In-place edits go through python3, not `sed -i`.** That flag's spelling is incompatible
+# between BSD (macOS, which wants `-i ''`) and GNU (CI's ubuntu, where `''` is read as the
+# script), and getting it wrong is silent in whichever direction it is wrong: written as
+# `-i'' -e`, BSD sed took `-e` as the BACKUP SUFFIX and left `ci.yaml-e` and four more beside the
+# files it edited. This harness's own closing "did I restore the tree" check is what caught that.
+# python3 is already a hard dependency here -- the thing under test is a python script.
+py_del()  { python3 -c 'import sys;f,a,b=sys.argv[1],int(sys.argv[2]),int(sys.argv[3]);L=open(f).read().splitlines(True);open(f,"w").write("".join(L[:a-1]+L[b:]))' "$@"; }
+py_sub()  { python3 -c 'import sys;f,n,t=sys.argv[1],int(sys.argv[2]),sys.argv[3];L=open(f).read().splitlines(True);L[n-1]=t+"\n";open(f,"w").write("".join(L))' "$@"; }
+py_repl() { python3 -c 'import sys;f,a,b=sys.argv[1],sys.argv[2],sys.argv[3];s=open(f).read();open(f,"w").write(s.replace(a,b))' "$@"; }
+py_drop() { python3 -c 'import sys;f,pre=sys.argv[1],sys.argv[2];L=[l for l in open(f).read().splitlines(True) if not l.startswith(pre)];open(f,"w").write("".join(L))' "$@"; }
 run() {
     local name="$1" expect="$2"; shift 2
     local out rc got
@@ -80,15 +91,15 @@ run "0  untouched tree" OK
 mv rust-toolchain.toml /tmp/ci-gates-selftest-rtt.bak
 run "1a rust-toolchain.toml deleted" FAIL
 mv /tmp/ci-gates-selftest-rtt.bak rust-toolchain.toml
-sed -i'' -e 's/^channel = "1.93.0"/channel = "stable"/' rust-toolchain.toml
+py_repl rust-toolchain.toml 'channel = "1.93.0"' 'channel = "stable"'
 run '1b channel = "stable" -- a floating channel' FAIL; restore
-sed -i'' -e "${TC}d" "$CI";                       run "1c toolchain: line gone -> action default" FAIL; restore
-sed -i'' -e "${STEP_START},${STEP_END}d" "$CI";   run "1d reading step deleted, its comment kept" FAIL; restore
-sed -i'' -e "${EXPORT}s|.*|          # echo \"RUST_CHANNEL=\$channel\"|" "$CI"
+py_del "$CI" "$TC" "$TC";                         run "1c toolchain: line gone -> action default" FAIL; restore
+py_del "$CI" "$STEP_START" "$STEP_END";           run "1d reading step deleted, its comment kept" FAIL; restore
+py_sub "$CI" "$EXPORT" '          # echo "RUST_CHANNEL=$channel"'
 run "1e the export line commented out" FAIL; restore
-sed -i'' -e "${TC}s|.*|          toolchain: stable|" "$CI";  run "1f one job installs stable" FAIL; restore
-sed -i'' -e "${TC}s|.*|          toolchain: 1.90.0|" "$CI";  run "1g a literal that disagrees with the toml" FAIL; restore
-sed -i'' -e 's|uses: dtolnay/rust-toolchain@|uses: other/setup@|' .github/workflows/*.yaml
+py_sub "$CI" "$TC" '          toolchain: stable';            run "1f one job installs stable" FAIL; restore
+py_sub "$CI" "$TC" '          toolchain: 1.90.0';            run "1g a literal that disagrees with the toml" FAIL; restore
+for f in .github/workflows/*.yaml; do py_repl "$f" 'uses: dtolnay/rust-toolchain@' 'uses: other/setup@'; done
 run "1h no job installs a toolchain at all" FAIL; restore
 cat > .github/workflows/extra.yaml <<'YML'
 name: Extra
@@ -106,10 +117,10 @@ run "1i a NEW workflow file installs stable" FAIL; restore
 echo "===== PARITY, script -> ci.yaml ====="
 run "0  untouched tree" OK --parity
 DOC=$(lineno '        run: cargo doc --no-deps')
-sed -i'' -e "${DOC}s|.*|        run: cargo doc --no-deps --document-private-items|" "$CI"
+py_sub "$CI" "$DOC" '        run: cargo doc --no-deps --document-private-items'
 run "2a CI adds a flag; the gate is a prefix" FAIL --parity; restore
 DT=$(lineno '        run: cargo test --doc$')
-sed -i'' -e "${DT}s|.*|        # run: cargo test --doc -- disabled|" "$CI"
+py_sub "$CI" "$DT" '        # run: cargo test --doc -- disabled'
 run "2b gate commented out, comment still names it" FAIL --parity; restore
 printf '\ngate_newthing()      { cargo nonexistent-subcommand; }\n' >> scripts/ci-gates.sh
 run "2c script offers a gate CI does not run" FAIL --parity; restore
@@ -123,9 +134,9 @@ lines[i + 1:i + 1] = ["      - name: Run cargo audit", "        run: cargo audit
 open(p, "w").write("\n".join(lines) + "\n")
 PY
 run "2d ci.yaml grows a gate the script lacks" FAIL --parity; restore
-sed -i'' -e '/^gate_doc()  */d' scripts/ci-gates.sh
+py_drop scripts/ci-gates.sh 'gate_doc()'
 run "2e script drops a gate CI still runs" FAIL --parity; restore
-sed -i'' -e '/^gate_derive_suite()/d' scripts/ci-gates.sh
+py_drop scripts/ci-gates.sh 'gate_derive_suite()'
 run "2f the derive-suite gate is dropped" FAIL --parity; restore
 python3 - <<'PY'
 p = "scripts/ci-toolchain-pin-check.py"
