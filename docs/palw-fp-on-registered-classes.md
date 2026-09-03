@@ -350,7 +350,8 @@ the artifact digest and is a follow-up, not a blocker.
 Two of the findings above are now closed, and one premise has moved:
 
 * **The A16 refusal was the legacy class, not the graph.** `a16_execute_for_attempt_v1`'s
-  Decision-F probe fires only for a backend built with `Qwen25A16Backend::new` (no plan) on the
+  Decision-F probe fires only for a DIRECT caller that passes no plan (`Qwen25A16Backend::new`
+  compiled none until ADR-0082's fix E; both constructors compile the plan now) on the
   v1 profile whose `pre` table declares one node against the two the engine records. The
   registered class on testnet-11 since Relaunch 5 is `Qwen/Qwen2.5-1.5B/graph-v2`
   (`qwen25_a16_class_id_v2`), served through `from_registered_profile`, and `execute_free_prompt`
