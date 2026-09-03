@@ -314,6 +314,24 @@ Anything quoting the old scene goldens is stale: `02-hierarchy` is **2736** (was
 
 ## 5. Known-open, shipping anyway, stated so no page claims otherwise
 
+> **STALE AS OF THE ADR-0082 MERGE — do not cut from this paragraph.** What follows describes the
+> release branch today, where W6/W7/W10 are absent. On the branch being merged they are LANDED and
+> **the split-close path is OPEN**: `max_close_chunks` 27 on the RC and 1 on devnet, with an
+> assembly deposit. The owning session is handing over replacement text as a patch note, and this
+> section must carry what SHIPS before the cut. It is left here rather than deleted because a
+> reader comparing the two branches needs to see which state each is in — and because a card that
+> silently updated a paragraph it had been cut from twice would be the worst possible instance of
+> this project's own defect.
+>
+> **A critical on that now-open path, from the audit:** the block's single court slot
+> (`PALW_COURT_CLOSE_MAX_PER_BLOCK = 1`) is spent by an UNAUTHENTICATED object before validation and
+> before the fence — one minimum-fee transaction per block carrying
+> `CourtAttnRootClaimed { session_id: 0, signature: [1] }` first in order denies every
+> `CourtCloseChunk` completion network-wide. **A close denied through its assembly window is not a
+> delay; it is a conviction of the declarer** — the challenger loses its reserve and deposit, the
+> executor is void-and-slashed. A dormant fence makes it worse rather than safer: refused later,
+> still counted. It must be closed before the split path ships, not before it is armed.
+
 **The split close is shut at the acceptance layer.** W5 built the state machine;
 `palw_v2_validate_objects` refuses every `CourtCloseDeclared` unconditionally — *"no layer yet
 verifies the declaring side's signature (ADR-0080 W6) — refused rather than trusted"*. There is
@@ -546,6 +564,19 @@ is a finding from the audit wave rather than a precaution.
       for `up_bits ≥ 47` — a key 40,000 below the maximum receives full weight. It moves committed
       values only for classes at that width, so **the fix is free exactly now and not after a v5 row
       is registered.** Confirm the shipped artifact's `up_bits` either way.
+- [ ] **The window must fit a dispute a session actually PLAYS.** The derivation prices a k-ary LEAF
+      ladder no session plays — the ladder is binary and only the history search is k-ary. At RC
+      numbers the played dispute is **60 moves × 51 + 216 reserve = 3,276 against a 3,000 window**,
+      so Z4 is violated and **an honest prosecution times out.** Being re-derived; **if no arity fits
+      the 512 row inside the RC window, that is a genesis decision and comes back here.**
+- [ ] **The arity has two spellings** — a bundle literal of 2 against a derived 4, with admission
+      comparing the wrong one and nothing asserting they agree. Fourth instance of one-thing-two-homes.
+- [ ] **The cost walk caps at 2^22** (`genesis_anchored_v1`), so the 512 row is refused with
+      `TooManyLeaves` on a 2^26 network — the same 2^22-against-2^26 mismatch as the executor's
+      ladder, in the cost arm.
+- [ ] **Post-genesis registration calls `verify_class_admission_v3`** — no court, no ladder — so no
+      graph-v5 class can ever register post-genesis; and **genesis minting runs no admission gate at
+      all.**
 - [ ] **A second pinned cross-machine determinism digest for the v5 base** (ADR-0067 D5 is pinned
       only for the v2 fuzz corpus). A new pin produced by a run, not a moved one.
 
