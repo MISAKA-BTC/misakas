@@ -278,6 +278,10 @@ NOT_IN_CI = {
 CI_ONLY = {
     "bash scripts/ci-gates.sh --group fast":
         "this IS the script; a gate that runs the runner would recurse",
+    "bash scripts/ci-gates-selftest.sh":
+        "it rewrites tracked files and restores them with `git checkout -- .` -- safe on an "
+        "ephemeral CI checkout, a trap on a laptop, so it refuses on a dirty tree and stays out "
+        "of the pre-push command. Run it deliberately: `bash scripts/ci-gates-selftest.sh`",
     # Cross-target work. `scripts/ci-gates.sh --list` says the same thing in its footer; this is
     # the machine-checked half of that sentence.
     "cargo check --locked --tests --benches --target x86_64-pc-windows-msvc":

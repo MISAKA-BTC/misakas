@@ -83,6 +83,22 @@ jobs:
       # gate's OWN exit code and never a single aggregate word, so a SECOND red appears by name in
       # the same summary. Read the summary block, not the job's colour, until the re-pin lands.
       #
+      # **The gate that proves the other gates can fail.**
+      #
+      # `ci-toolchain-pin-check.py` answers "is the compiler pinned" and "does ci-gates.sh run what
+      # CI runs", and a checker that only ever prints OK cannot be told apart from one that looks
+      # at nothing. Every hole found in it so far was found by breaking it on purpose and none by
+      # reading it. This applies seventeen breaks, asserts each goes red WITH a named violation,
+      # restores, and asserts the untouched tree is green.
+      #
+      # It is here and not in `ci-gates.sh --group fast` on purpose: it rewrites tracked files and
+      # restores them with `git checkout -- .`. That is safe on an ephemeral CI checkout and is a
+      # trap on a laptop, so it refuses to run on a dirty tree, and the command a contributor runs
+      # before pushing does not include it. `CI_ONLY` in the pin checker records that choice, so
+      # `workflow-parity` does not report it as a gate nobody can run.
+      - name: Prove the pin and parity checks can fail
+        run: bash scripts/ci-gates-selftest.sh
+
       # The same command a contributor runs. `--group fast` is every gate that needs no cargo
       # build; the Lints / Check / Test Suite jobs below run the rest.
       - name: Run the no-compiler gates
