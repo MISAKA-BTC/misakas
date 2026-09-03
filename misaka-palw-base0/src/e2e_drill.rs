@@ -720,7 +720,37 @@ impl PalwRcFamilyV1 {
             "base0" | "palw-base-0" | "floor" => Some(Self::Base0),
             "qwen36" | "palw-qwen36" => Some(Self::Qwen36),
             "a16" | "qwen25-a16" | "palw-qwen25-a16" => Some(Self::Qwen25A16),
+            "a16-v5" | "qwen25-a16-v5" | "palw-qwen25-a16-v5" => Some(Self::Qwen25A16V5),
             _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod family_name_tests {
+    use super::*;
+
+    /// **Every family must be nameable by an operator, and the compiler cannot check that.**
+    ///
+    /// Adding `Qwen25A16V5` made five `match family` sites fail to compile until each answered for
+    /// it — which is the property a non-exhaustive match buys. `parse` is a STRING match, so it
+    /// compiled fine while returning `None` for the new family, and `palw-certify drill --family
+    /// a16-v5` answered "unknown family". The family existed, was drilled, was committed to by the
+    /// network, and the one tool an operator types could not name it.
+    ///
+    /// This closes the gap the compiler cannot: every variant must round-trip through its own name.
+    #[test]
+    fn every_family_can_be_named_by_the_operator() {
+        for family in PalwRcFamilyV1::ALL {
+            let name = family.name();
+            assert_eq!(
+                PalwRcFamilyV1::parse(name),
+                Some(family),
+                "`palw-certify --family {name}` does not parse back to the family it names — a family nobody can \
+                 spell is a family nobody can drill"
+            );
+            // And the short form the docs use, lowercased, for the same reason.
+            assert!(PalwRcFamilyV1::parse(&name.to_ascii_lowercase()).is_some(), "the lowercased name {name} does not parse");
         }
     }
 }
