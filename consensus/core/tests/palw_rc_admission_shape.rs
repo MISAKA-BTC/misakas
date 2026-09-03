@@ -79,6 +79,24 @@ fn the_rc_preset_admission_shape_is_court_armed_and_ladder_dormant() {
 /// genesis set rather than one built here. **5b is asserting the same thing through the SDK
 /// preflight; this goes through `consensus/core`.** Two paths, two authors, one claim: if they
 /// disagree, that disagreement is worth more than either result.
+///
+/// **THE RULE THIS MIRRORS LIVES AT `consensus/src/pipeline/virtual_processor/processor.rs`, in
+/// the `ClassRegistered` arm** — it derives the court from `palw_kary_court_active_at`, the ladder
+/// from `palw_context_ladder_at(daa).then(...)`, and calls `verify_class_admission_v6` with both.
+/// That is the ACCEPTANCE path, so this is not a test of the panel's opinion: it is a test of the
+/// rule the chain applies. `e5651de0` did not touch the processor — it made the preflight agree
+/// with a rule that was already there, and the earlier disagreement between them is what hid it.
+///
+/// **If someone changes the processor's ladder derivation, this test must change with it or it
+/// becomes a false red** — it would keep asking with `ladder: None` after the chain stopped. That
+/// is a real hazard and this paragraph is the only thing guarding against it, so: the assertion
+/// below is valid exactly while the processor derives the ladder from the fence. A fix that makes
+/// the processor compute rules from the bundle regardless (the way the GENESIS route already does)
+/// is a legitimate repair and would require rewriting this test, not deleting it.
+///
+/// Conversely, a fix that repairs only `palw_admission_shape_at_v1` would turn this test and 5b's
+/// green **while the chain still refuses** — a green suite over a closed door. Any candidate fix
+/// should be read against the processor arm before it is believed.
 #[test]
 fn the_fused_row_admits_under_t11s_own_shape_with_the_ladder_dormant() {
     use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
