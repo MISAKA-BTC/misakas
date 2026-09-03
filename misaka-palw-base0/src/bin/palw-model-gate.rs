@@ -412,6 +412,8 @@ fn main() {
             decode_token_limit: decode,
             max_context_tokens: n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            sampling_seed: [0u8; 32],
+            temperature_q: 0,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
         };
         let leaves_for = |decode: u32| -> Result<u64, String> {
