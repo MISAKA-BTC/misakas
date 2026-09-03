@@ -1803,7 +1803,6 @@ mod tests {
     /// have produced. Reverting the guard makes this test hang rather than fail, which is the
     /// point: the defect is unbounded work, and a test that merely returned the wrong answer would
     /// be measuring something else.
-    #[test]
     /// **Which ruleset ladder the registered class needs, as a table rather than as a choice.**
     ///
     /// `PalwCourtParamsV2::max_step_leaf_count` is a genesis input, and until this test existed it

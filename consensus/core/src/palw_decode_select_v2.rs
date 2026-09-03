@@ -203,7 +203,7 @@ pub fn decode_token_select_v2(values: &[i32], seed: &[u8; 32], position: u32, te
 /// [`PALW_GUMBEL_Q24_V1_DIGEST_HEX`]. Strictly increasing, so the index's top bits order the
 /// variates the way the quantile does.
 #[rustfmt::skip]
-pub const PALW_GUMBEL_Q24_V1: [i32; PALW_GUMBEL_TABLE_LEN] = [
+pub static PALW_GUMBEL_Q24_V1: [i32; PALW_GUMBEL_TABLE_LEN] = [
     -38126968, -36111205, -35084514, -34372220, -33819748, -33365161, -32977099, -32637390,
     -32334517, -32060705, -31810443, -31579680, -31365346, -31165056, -30976920, -30799413,
     -30631283, -30471496, -30319180, -30173598, -30034118, -29900196, -29771358, -29647191,

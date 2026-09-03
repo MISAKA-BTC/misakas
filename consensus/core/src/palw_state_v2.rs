@@ -15200,10 +15200,10 @@ pub(crate) mod tests {
         assert!(matches!(c2.claim(&h64(0xFC)).unwrap().phase, PalwClaimPhaseV2::Provisional), "a certified class takes the claim");
     }
 
-    /// **Admission item 8 reaches the free-prompt lane** (review of ADR-0074 Decision 5): what a
-    /// bond already backs plus what a commitment would reserve may not exceed collateral × ratio.
-    /// At a 500‰ ceiling over 1,000 of collateral, one 300-sompi claim fits and a second does not;
-    /// at the default 1000‰ both do. The refusal names the numbers, and nothing was reserved.
+    // **Admission item 8 reaches the free-prompt lane** (review of ADR-0074 Decision 5): what a
+    // bond already backs plus what a commitment would reserve may not exceed collateral × ratio.
+    // At a 500‰ ceiling over 1,000 of collateral, one 300-sompi claim fits and a second does not;
+    // at the default 1000‰ both do. The refusal names the numbers, and nothing was reserved.
 
     /// ADR-0075: a class the CHAIN certified for the free-prompt lane takes commitments under a
     /// genesis gate that does not name it — the genesis set and the chain's are one gate — and the

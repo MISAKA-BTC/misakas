@@ -346,7 +346,7 @@ pub fn a16_attn_scores(
         return Err(PalwA16OpError::LengthMismatch { a: q.len(), b: heads * d_head });
     }
     let kv_dim = kv_heads * d_head;
-    if k_series.is_empty() || k_series.len() % kv_dim != 0 {
+    if k_series.is_empty() || !k_series.len().is_multiple_of(kv_dim) {
         return Err(PalwA16OpError::NotAMultiple { got: k_series.len(), unit: kv_dim });
     }
     let kv_len = k_series.len() / kv_dim;
@@ -616,7 +616,7 @@ pub fn a16_attn_fused_reference_v1(
     params: A16AttnFusedParamsV1,
 ) -> Result<Vec<i32>, PalwA16OpError> {
     let kv_dim = kv_heads.max(1) * d_head.max(1);
-    if k_series.is_empty() || k_series.len() % kv_dim != 0 {
+    if k_series.is_empty() || !k_series.len().is_multiple_of(kv_dim) {
         return Err(PalwA16OpError::NotAMultiple { got: k_series.len(), unit: kv_dim });
     }
     let kv_len = k_series.len() / kv_dim;

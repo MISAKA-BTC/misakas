@@ -2584,42 +2584,42 @@ mod u00_tiled_attention_measurement {
         );
     }
 
-    /// **`the_v3_map_is_not_priced_by_the_ladder_rule` lived here, and ADR-0082 U-04 closed the gap
-    /// it measured.**
-    ///
-    /// It asserted that `palw_class_ladder_rules_v1` charged a tiled class the v2 map's
-    /// whole-history opening — 526,336 bytes against the 18,432 its evidence carries, 28.6x — and
-    /// its own message said what to do when that stopped being true: *"if it now reads the class's
-    /// own map, delete this test and re-pin the ones above at the cheaper price."* The cache half
-    /// has its `_for_map_v1` twin now
-    /// ([`palw_kv_checkpoint_opening_bytes_for_map_v1`], Decision 4), the ladder rule reads it, and
-    /// both halves of what this test pinned are asserted from the gate's own functions at the end
-    /// of `the_tile_moves_the_widest_dense_row_from_thirty_to_two_hundred_and_twenty_three`. The
-    /// note is kept rather than the test because the next reader of "30 → 223" needs to know that
-    /// the 223 was once a measurement no shipped function could reproduce.
+    // **`the_v3_map_is_not_priced_by_the_ladder_rule` lived here, and ADR-0082 U-04 closed the gap
+    // it measured.**
+    //
+    // It asserted that `palw_class_ladder_rules_v1` charged a tiled class the v2 map's
+    // whole-history opening — 526,336 bytes against the 18,432 its evidence carries, 28.6x — and
+    // its own message said what to do when that stopped being true: *"if it now reads the class's
+    // own map, delete this test and re-pin the ones above at the cheaper price."* The cache half
+    // has its `_for_map_v1` twin now
+    // ([`palw_kv_checkpoint_opening_bytes_for_map_v1`], Decision 4), the ladder rule reads it, and
+    // both halves of what this test pinned are asserted from the gate's own functions at the end
+    // of `the_tile_moves_the_widest_dense_row_from_thirty_to_two_hundred_and_twenty_three`. The
+    // note is kept rather than the test because the next reader of "30 → 223" needs to know that
+    // the 223 was once a measurement no shipped function could reproduce.
 
-    /// **`the_graph_v4_hybrid_composition_has_no_priced_recurrence_anchor` lived here, and
-    /// ADR-0082 U-04 closed the gap it measured.**
-    ///
-    /// It recorded a **mainnet blocker**: `gdn_state_terms_for_map_v1` dispatched on the whole
-    /// composition id and knew `hybrid_state_chunk_map_id_v1` and `…_v2` but not `…_v3`, so it
-    /// answered `None`, `palw_class_ladder_rules_v1` turned that into `.unwrap_or(0)`, and a hybrid
-    /// class registering the tiled attention map was admitted with its recurrence anchor charged
-    /// at ZERO — "a v1 class priced at v2's … the direction that admits a class whose disputes
-    /// nobody can raise", quoting the comment it quoted. Its own message said the remedy: *"the v4
-    /// composition is priced now — close this gap in `palw_class_ladder_rules_v1` and delete this
-    /// test."*
-    ///
-    /// It was dormant while nothing registered the v3 composition. ADR-0082 Decision 4 makes that
-    /// composition the map a graph-v5 hybrid registers, which turned it live, and
-    /// `gdn_state_terms_for_map_v1` has the arm now. What it cost, measured: the hybrid graph-v5
-    /// row's close moved 200,732 → 274,460 bytes and 3 carriers → 4, the delta being exactly the
-    /// 71,680-byte head-sliced opening plus its 2,048-byte path. Both halves of what it pinned are
-    /// asserted from the gate's own functions in
-    /// `palw_state_chunk_map::hybrid_composition_tests::the_recurrence_chunks_are_what_the_anchor_is_priced_at`.
-    ///
-    /// The note is kept rather than the test because ADR-0082 Decision 6 sizes the hybrid v5 row at
-    /// "two to three" carriers, and the next reader needs to know that the fourth is this charge.
+    // **`the_graph_v4_hybrid_composition_has_no_priced_recurrence_anchor` lived here, and
+    // ADR-0082 U-04 closed the gap it measured.**
+    //
+    // It recorded a **mainnet blocker**: `gdn_state_terms_for_map_v1` dispatched on the whole
+    // composition id and knew `hybrid_state_chunk_map_id_v1` and `…_v2` but not `…_v3`, so it
+    // answered `None`, `palw_class_ladder_rules_v1` turned that into `.unwrap_or(0)`, and a hybrid
+    // class registering the tiled attention map was admitted with its recurrence anchor charged
+    // at ZERO — "a v1 class priced at v2's … the direction that admits a class whose disputes
+    // nobody can raise", quoting the comment it quoted. Its own message said the remedy: *"the v4
+    // composition is priced now — close this gap in `palw_class_ladder_rules_v1` and delete this
+    // test."*
+    //
+    // It was dormant while nothing registered the v3 composition. ADR-0082 Decision 4 makes that
+    // composition the map a graph-v5 hybrid registers, which turned it live, and
+    // `gdn_state_terms_for_map_v1` has the arm now. What it cost, measured: the hybrid graph-v5
+    // row's close moved 200,732 → 274,460 bytes and 3 carriers → 4, the delta being exactly the
+    // 71,680-byte head-sliced opening plus its 2,048-byte path. Both halves of what it pinned are
+    // asserted from the gate's own functions in
+    // `palw_state_chunk_map::hybrid_composition_tests::the_recurrence_chunks_are_what_the_anchor_is_priced_at`.
+    //
+    // The note is kept rather than the test because ADR-0082 Decision 6 sizes the hybrid v5 row at
+    // "two to three" carriers, and the next reader needs to know that the fourth is this charge.
 
     /// **The carrier binds long before the ladder does** — 223 against 11,477, a factor of 51.
     ///
