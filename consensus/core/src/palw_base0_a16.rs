@@ -346,7 +346,7 @@ pub fn a16_attn_scores(
         return Err(PalwA16OpError::LengthMismatch { a: q.len(), b: heads * d_head });
     }
     let kv_dim = kv_heads * d_head;
-    if k_series.is_empty() || k_series.len() % kv_dim != 0 {
+    if k_series.is_empty() || !k_series.len().is_multiple_of(kv_dim) {
         return Err(PalwA16OpError::NotAMultiple { got: k_series.len(), unit: kv_dim });
     }
     let kv_len = k_series.len() / kv_dim;
@@ -430,6 +430,419 @@ pub fn a16_softmax_rows(logits: &[i32], row_len: usize, up_bits: u8) -> Result<V
         out.extend(probs);
     }
     Ok(out)
+}
+
+// =============================================================================================
+// ADR-0082 Decisions 1 and 2 — the fused attention site, and the tile arithmetic its dissection
+// recomputes at the bottom
+// =============================================================================================
+
+/// The three quantities a range of history positions contributes to one head's fused attention,
+/// all computed against the root claim's `(m*, S*)`. ONE type with the dissection's range claim,
+/// so the fold the court checks between rounds and the fold the executor folds its own tiles
+/// with are the same function (`palw_attn_dissect::palw_attn_fold_v1`).
+pub type A16AttnTileTripleV1 = crate::palw_attn_dissect::PalwAttnRangeClaimV1;
+
+/// The registered narrowings a fused site reads: W9's score triple, the probability requant
+/// triple and W10's value triple — one of each, tiled over the row exactly as the adjudicator
+/// tiles them today (`attn_params_count_v1`, `ReqSlot::Probs`) — plus the softmax's widening
+/// byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct A16AttnFusedParamsV1 {
+    pub scores: A16QuantParams,
+    pub probs: A16QuantParams,
+    pub values: A16QuantParams,
+    pub up_bits: u8,
+}
+
+/// One head's requantized score against key row `j` — W9's per-key arithmetic, verbatim.
+#[inline]
+fn a16_attn_score_one(qh: &[i32], k_row: &[i32], p: A16QuantParams) -> i32 {
+    let acc: i64 = qh.iter().zip(k_row).map(|(a, b)| *a as i64 * *b as i64).sum();
+    clamp16(a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero))
+}
+
+/// W11's per-element exponent given the row max — `softmax_shifted`'s map, one element, through
+/// the SAME expression (`softmax_shifted_diff_v1`): the difference clamped at `i32::MIN >> up`,
+/// then widened, then the pinned `int_exp`.
+///
+/// One expression, not two spellings of it, because the fused site's tile route and the shipped
+/// row softmax must agree bit for bit at every `up_bits` — and they did not: the old form shifted
+/// FIRST and wrapped past `up = 47`, handing the most-suppressed key the full weight of the row
+/// max (audit E M-1).
+#[inline]
+fn a16_attn_exp_one(score: i32, max: i64, up_bits: u8) -> i64 {
+    let up = up_bits.min(62) as i64;
+    crate::palw_base0::int_exp(crate::palw_base0_ops::softmax_shifted_diff_v1(score, max, up)) as i64
+}
+
+/// W11's per-element probability given the exponent and the row's reciprocal sum —
+/// `((e · recip) >> K)` — narrowed by the probs requantization (W5), one code.
+///
+/// **The product is taken in `i128` because the divisor is not this function's** (audit A C-2 /
+/// E C-1). `softmax_shifted` runs the identical expression in `i64` safely: its `recip` is
+/// `int_recip` of the sum it just computed, so `e · recip` is about `2^K` by construction. Here
+/// `recip` comes from the ROOT CLAIM's `S*`, which arrives on the wire — and `int_recip(1)` is
+/// `≈ 2^48` against an `e` of `≈ 2^24`, a product of `≈ 2^72` that overflows `i64` and PANICS
+/// this workspace's release profile (`overflow-checks = true`) inside block validation, on every
+/// node that processes the close. The band check at `open_with_arity` refuses such a claim by
+/// name; this makes the kernel total whatever reaches it, which is the half that does not depend
+/// on a caller remembering. `int_recip` widened for the same reason.
+///
+/// No honest value moves: for every `S* ≥ int_exp(0)` the shifted product is at most `2^24`, so
+/// the old `as i32` was lossless and `a16_scale_round` (itself `i128`) sees the same argument.
+#[inline]
+fn a16_attn_prob_code_one(e: i64, recip: i64, probs: A16QuantParams) -> i32 {
+    let p = i64::try_from((e as i128 * recip as i128) >> crate::palw_base0::K).unwrap_or(i64::MAX);
+    clamp16(a16_scale_round(p, probs.multiplier, probs.shift).saturating_add(probs.zero))
+}
+
+/// **The bottom of the dissection: one head's triple over a tile of history rows.**
+///
+/// `qh` is the head's rotated query slice (`d_head` codes); `k_tile` / `v_tile` are the tile's
+/// K and V rows, position-major, each row `kv_dim` wide — the cache's own layout, so a tile
+/// opened from the state chunk map is handed over unchanged; `kv_off` is the head's GQA slice
+/// within a row; `lanes` is the disputed `(first, count)` within the head. `m_star` and `s_star`
+/// are the ROOT's claims. The max is recomputed from the scores alone — so a wrong `m*` is caught
+/// at the tile whose true max exceeds it — while the exponent sum and the value partials are
+/// computed AGAINST `(m*, S*)`, which is what makes every level of the dissection consistent with
+/// every other and lets the tile be recomputed without the row it sits in.
+#[allow(clippy::too_many_arguments)]
+pub fn a16_attn_tile_triple_v1(
+    qh: &[i32],
+    k_tile: &[i32],
+    v_tile: &[i32],
+    kv_dim: usize,
+    kv_off: usize,
+    lanes: (usize, usize),
+    params: A16AttnFusedParamsV1,
+    m_star: i32,
+    s_star: i64,
+) -> Result<A16AttnTileTripleV1, PalwA16OpError> {
+    let qh = as_a16(qh)?;
+    let k_tile = as_a16(k_tile)?;
+    let v_tile = as_a16(v_tile)?;
+    let d_head = qh.len();
+    if kv_dim == 0 || kv_off + d_head > kv_dim || lanes.1 == 0 || lanes.0 + lanes.1 > d_head {
+        return Err(PalwA16OpError::Empty);
+    }
+    if d_head > A16_MAX_DOT_LEN {
+        return Err(PalwA16OpError::DotTooLong { got: d_head });
+    }
+    if k_tile.len() % kv_dim != 0 {
+        return Err(PalwA16OpError::NotAMultiple { got: k_tile.len(), unit: kv_dim });
+    }
+    if v_tile.len() != k_tile.len() {
+        return Err(PalwA16OpError::LengthMismatch { a: v_tile.len(), b: k_tile.len() });
+    }
+    let positions = k_tile.len() / kv_dim;
+    if positions > A16_MAX_DOT_LEN {
+        return Err(PalwA16OpError::DotTooLong { got: positions });
+    }
+    // An honest row's sum is positive — its max contributes `int_exp(0)`, which is positive (the
+    // pinned polynomial's value at zero, within a rounding of `ONE`) — so a non-positive `S*` is a
+    // claim no execution produced: refused, never divided by.
+    if s_star <= 0 {
+        return Err(PalwA16OpError::Empty);
+    }
+    let recip = crate::palw_base0::int_recip(s_star);
+    let mut max = i32::MIN;
+    let mut exp_sum = 0i64;
+    let mut v_acc = vec![0i64; lanes.1];
+    for j in 0..positions {
+        let base = j * kv_dim + kv_off;
+        let s = a16_attn_score_one(qh, &k_tile[base..base + d_head], params.scores);
+        max = max.max(s);
+        let e = a16_attn_exp_one(s, m_star as i64, params.up_bits);
+        // `e ≤ 2^24` and `positions ≤ 2^18`: the sum stays under 2^42.
+        exp_sum += e;
+        let c = a16_attn_prob_code_one(e, recip, params.probs) as i64;
+        let v_row = &v_tile[base + lanes.0..base + lanes.0 + lanes.1];
+        for (acc, v) in v_acc.iter_mut().zip(v_row) {
+            // `|c · v| < 2^30` over at most 2^18 positions: under 2^48.
+            *acc += c * (*v as i64);
+        }
+    }
+    Ok(A16AttnTileTripleV1 { max, exp_sum, v_acc })
+}
+
+/// **The finalization**: W10's narrowing of the folded value partials — one triple for every
+/// lane, exactly as `a16_attn_values` narrows its accumulator.
+pub fn a16_attn_finalize_v1(v_acc: &[i64], values: A16QuantParams) -> Vec<i32> {
+    v_acc.iter().map(|acc| clamp16(a16_scale_round(*acc, values.multiplier, values.shift).saturating_add(values.zero))).collect()
+}
+
+/// Cut a position-major series of `kv_dim`-wide rows into tiles of `tile` rows (the last ragged).
+fn a16_series_tiles(series: &[i32], kv_dim: usize, tile: usize) -> impl Iterator<Item = &[i32]> {
+    series.chunks(kv_dim * tile.max(1))
+}
+
+/// **The honest root claim for one head** — three passes over the history at `tile` positions a
+/// pass, each a fold of [`a16_attn_tile_triple_v1`] over the tiles: the max first, then the
+/// exponent sum against it, then the value partials against both. What an executor computes to
+/// commit the output and what a challenger recomputes to know which child to dispute.
+#[allow(clippy::too_many_arguments)]
+pub fn a16_attn_root_claim_v1(
+    qh: &[i32],
+    k_series: &[i32],
+    v_series: &[i32],
+    kv_dim: usize,
+    kv_off: usize,
+    lanes: (usize, usize),
+    params: A16AttnFusedParamsV1,
+    tile: usize,
+) -> Result<A16AttnTileTripleV1, PalwA16OpError> {
+    use crate::palw_attn_dissect::palw_attn_fold_v1;
+    let fold = |m_star: i32, s_star: i64| -> Result<A16AttnTileTripleV1, PalwA16OpError> {
+        let mut triples = Vec::new();
+        for (k_tile, v_tile) in a16_series_tiles(k_series, kv_dim, tile).zip(a16_series_tiles(v_series, kv_dim, tile)) {
+            triples.push(a16_attn_tile_triple_v1(qh, k_tile, v_tile, kv_dim, kv_off, lanes, params, m_star, s_star)?);
+        }
+        // The dissection's fold caps a ROUND at its arity; a whole history is folded here in one
+        // pass, so fold it in arity-sized groups the way the rounds would.
+        let mut level = triples;
+        while level.len() > 1 {
+            let mut next = Vec::with_capacity(level.len().div_ceil(crate::palw_attn_dissect::PALW_ATTN_DISSECT_MAX_CHILDREN));
+            for group in level.chunks(crate::palw_attn_dissect::PALW_ATTN_DISSECT_MAX_CHILDREN) {
+                next.push(palw_attn_fold_v1(group).map_err(|_| PalwA16OpError::Empty)?);
+            }
+            level = next;
+        }
+        level.pop().ok_or(PalwA16OpError::Empty)
+    };
+    // Pass 1: the max needs no claim; the other two fields of this pass are discarded.
+    let m_star = fold(0, crate::palw_base0::ONE)?.max;
+    // Pass 2: the exponent sum against the true max; the value partials are discarded.
+    let s_star = fold(m_star, crate::palw_base0::ONE)?.exp_sum;
+    // Pass 3: everything against the root — and the max and sum must reproduce themselves.
+    let root = fold(m_star, s_star)?;
+    debug_assert_eq!((root.max, root.exp_sum), (m_star, s_star));
+    Ok(root)
+}
+
+/// **The fused site as the four shipped kernels composed** — W9 → W11 → the probs requant → W10,
+/// one triple each, tiled as the adjudicator tiles them. This IS the fused node's semantics; the
+/// tile route above is only a different way of computing and checking it, and
+/// `fused::the_tile_route_is_the_composition` is what says the two never part.
+pub fn a16_attn_fused_reference_v1(
+    q: &[i32],
+    k_series: &[i32],
+    v_series: &[i32],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    params: A16AttnFusedParamsV1,
+) -> Result<Vec<i32>, PalwA16OpError> {
+    let kv_dim = kv_heads.max(1) * d_head.max(1);
+    if k_series.is_empty() || !k_series.len().is_multiple_of(kv_dim) {
+        return Err(PalwA16OpError::NotAMultiple { got: k_series.len(), unit: kv_dim });
+    }
+    let kv_len = k_series.len() / kv_dim;
+    let scores = a16_attn_scores(q, k_series, heads, kv_heads, d_head, &vec![params.scores; heads * kv_len])?;
+    let probs = a16_softmax_rows(&scores, kv_len, params.up_bits)?;
+    let codes = a16_requant(&probs, &vec![params.probs; probs.len()])?;
+    a16_attn_values(&codes, v_series, heads, kv_heads, d_head, &vec![params.values; heads * d_head])
+}
+
+/// The fused site through the TILE route: per head, the root claim over all lanes and its
+/// finalization — the output row an executor commits, computed the way a court will check it.
+#[allow(clippy::too_many_arguments)]
+pub fn a16_attn_fused_via_tiles_v1(
+    q: &[i32],
+    k_series: &[i32],
+    v_series: &[i32],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    params: A16AttnFusedParamsV1,
+    tile: usize,
+) -> Result<Vec<i32>, PalwA16OpError> {
+    if heads == 0 || kv_heads == 0 || d_head == 0 || !heads.is_multiple_of(kv_heads) {
+        return Err(PalwA16OpError::Empty);
+    }
+    if q.len() != heads * d_head {
+        return Err(PalwA16OpError::LengthMismatch { a: q.len(), b: heads * d_head });
+    }
+    let kv_dim = kv_heads * d_head;
+    let group = heads / kv_heads;
+    let mut out = Vec::with_capacity(heads * d_head);
+    for h in 0..heads {
+        let qh = &q[h * d_head..(h + 1) * d_head];
+        let kv_off = (h / group) * d_head;
+        let root = a16_attn_root_claim_v1(qh, k_series, v_series, kv_dim, kv_off, (0, d_head), params, tile)?;
+        out.extend(a16_attn_finalize_v1(&root.v_acc, params.values));
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod fused {
+    use super::*;
+    use crate::palw_attn_dissect::{PalwAttnDissectError, palw_attn_child_ranges_v1, palw_attn_fold_check_v1, palw_attn_fold_v1};
+
+    fn codes(n: usize, seed: u64) -> Vec<i32> {
+        let mut state = seed | 1;
+        (0..n)
+            .map(|i| {
+                state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                match i % 23 {
+                    0 => A16_CODE_MAX as i32,
+                    1 => -(A16_CODE_MAX as i32),
+                    _ => ((state >> 33) % 65_535) as i32 - 32_767,
+                }
+            })
+            .collect()
+    }
+
+    fn params() -> A16AttnFusedParamsV1 {
+        A16AttnFusedParamsV1 {
+            // Scores: a q·k dot of 8 codes reaches ~2^33; `m / 2^shift` brings it to a code.
+            scores: A16QuantParams { multiplier: 1 << 10, shift: 30, zero: 3 },
+            // Probabilities: Q24 in, 15-bit codes out — `p · 2^15 / 2^24`.
+            probs: A16QuantParams { multiplier: 1 << 15, shift: 24, zero: 0 },
+            // Values: a code·code dot over the history, narrowed back to a code.
+            values: A16QuantParams { multiplier: 1, shift: 22, zero: -5 },
+            up_bits: 2,
+        }
+    }
+
+    /// **`int_exp(0)` is positive**, so an honest row's sum is positive and the uniform branch of
+    /// `softmax_shifted` is unreachable — the premise `a16_attn_tile_triple_v1` refuses on. It is
+    /// the pinned polynomial's value at zero, near `ONE` but not `ONE` itself: the premise is the
+    /// SIGN, and this pins exactly that.
+    #[test]
+    fn an_honest_rows_sum_is_positive() {
+        let at_zero = crate::palw_base0::int_exp(0) as i64;
+        assert!(at_zero > 0, "int_exp(0) = {at_zero}");
+        // The pinned polynomial is ~3e-4 above ONE at zero (16,781,800 against 16,777,216); the
+        // premise this module rests on is the sign, and the bound below only says the value is
+        // exp(0)'s neighbourhood rather than a table artefact.
+        assert!(
+            (at_zero - crate::palw_base0::ONE).abs() * 100 <= crate::palw_base0::ONE,
+            "int_exp(0) = {at_zero} is not within 1% of ONE"
+        );
+    }
+
+    /// **The tile route is the composition** — byte for byte, at every history length and every
+    /// tile width, ragged tails included. This is ADR-0082 Z1, the equality the whole design
+    /// rests on: a fused site computed and checked in tiles IS the four shipped kernels.
+    #[test]
+    fn the_tile_route_is_the_composition() {
+        let (heads, kv_heads, d_head) = (4usize, 2usize, 8usize);
+        let kv_dim = kv_heads * d_head;
+        let q = codes(heads * d_head, 11);
+        for kv_len in [1usize, 2, 5, 16, 17, 33, 64, 100] {
+            let k = codes(kv_len * kv_dim, 100 + kv_len as u64);
+            let v = codes(kv_len * kv_dim, 200 + kv_len as u64);
+            let reference = a16_attn_fused_reference_v1(&q, &k, &v, heads, kv_heads, d_head, params()).expect("the composition runs");
+            for tile in [1usize, 3, 4, 16, 64] {
+                let tiled =
+                    a16_attn_fused_via_tiles_v1(&q, &k, &v, heads, kv_heads, d_head, params(), tile).expect("the tile route runs");
+                assert_eq!(tiled, reference, "kv_len {kv_len}, tile {tile}: the tile route parted from the composition");
+            }
+        }
+    }
+
+    /// **A lie at the root is caught by the fold, at the level and field it lives in.** The honest
+    /// children fold to the honest root; a root that lies about `m*`, `S*` or the output fails the
+    /// FIRST fold check by name — before any tile is opened.
+    #[test]
+    fn a_lie_at_the_root_fails_the_first_fold_by_name() {
+        let (heads, kv_heads, d_head) = (2usize, 1usize, 8usize);
+        let kv_dim = kv_heads * d_head;
+        let (kv_len, tile) = (70usize, 16usize);
+        let q = codes(heads * d_head, 7);
+        let k = codes(kv_len * kv_dim, 8);
+        let v = codes(kv_len * kv_dim, 9);
+        let (h, lanes) = (1usize, (2usize, 3usize));
+        let qh = &q[h * d_head..(h + 1) * d_head];
+        let root = a16_attn_root_claim_v1(qh, &k, &v, kv_dim, 0, lanes, params(), tile).expect("the honest root");
+        // The children of the whole range at arity 4: five tiles cut into [2, 2, 1].
+        let tiles: Vec<(u64, u64)> = palw_attn_child_ranges_v1(0, kv_len.div_ceil(tile) as u64, 4).expect("legal");
+        assert_eq!(tiles, vec![(0, 2), (2, 2), (4, 1)]);
+        let child = |(first, count): (u64, u64)| {
+            let lo = first as usize * tile * kv_dim;
+            let hi = ((first + count) as usize * tile * kv_dim).min(k.len());
+            a16_attn_tile_triple_v1(qh, &k[lo..hi], &v[lo..hi], kv_dim, 0, lanes, params(), root.max, root.exp_sum).expect("a child")
+        };
+        let children: Vec<_> = tiles.iter().map(|r| child(*r)).collect();
+        palw_attn_fold_check_v1(&root, &children).expect("the honest root folds from its children");
+        assert_eq!(palw_attn_fold_v1(&children).expect("folds"), root);
+
+        let mut lied = root.clone();
+        lied.max += 1;
+        assert!(matches!(palw_attn_fold_check_v1(&lied, &children), Err(PalwAttnDissectError::MaxDoesNotFold { .. })));
+        let mut lied = root.clone();
+        lied.exp_sum -= 1;
+        assert!(matches!(palw_attn_fold_check_v1(&lied, &children), Err(PalwAttnDissectError::SumDoesNotFold { .. })));
+        let mut lied = root.clone();
+        lied.v_acc[2] += 1;
+        assert!(matches!(palw_attn_fold_check_v1(&lied, &children), Err(PalwAttnDissectError::ValueDoesNotFold { lane: 2, .. })));
+
+        // And a bottom recomputed against a lied `(m*, S*)` does not reproduce the honest child:
+        // the max is the same (it never depended on the claim), the sum and the partials move.
+        let honest = child(tiles[0]);
+        let against_lie = a16_attn_tile_triple_v1(
+            qh,
+            &k[..2 * tile * kv_dim],
+            &v[..2 * tile * kv_dim],
+            kv_dim,
+            0,
+            lanes,
+            params(),
+            root.max + 40,
+            root.exp_sum,
+        )
+        .expect("computes");
+        assert_eq!(against_lie.max, honest.max);
+        assert_ne!(against_lie.exp_sum, honest.exp_sum);
+        // A non-positive sum is a claim no execution produced.
+        assert_eq!(
+            a16_attn_tile_triple_v1(qh, &k[..tile * kv_dim], &v[..tile * kv_dim], kv_dim, 0, lanes, params(), root.max, 0),
+            Err(PalwA16OpError::Empty)
+        );
+        // **And a small POSITIVE sum returns, rather than panicking** (audit A C-2 / E C-1).
+        // `int_recip(1)` is `≈ 2^48` and the row max's `e` is `≈ 2^24`, so the product this
+        // kernel forms is `≈ 2^72`: in `i64` that is an arithmetic overflow, and this workspace
+        // ships `overflow-checks = true`, so the panic happened inside `palw_v2_validate_objects`
+        // on every node that processed the close. Every `s_star` in `1..=512` is in that regime.
+        // The court refuses such a claim by name at `open_with_arity`; the kernel is total anyway,
+        // which is the half that does not depend on a caller remembering.
+        for s in [1i64, 2, 512, 513] {
+            assert!(
+                a16_attn_tile_triple_v1(qh, &k[..tile * kv_dim], &v[..tile * kv_dim], kv_dim, 0, lanes, params(), root.max, s).is_ok(),
+                "s_star {s} must answer, not panic"
+            );
+        }
+    }
+
+    /// **The bottom opening is GQA-aware and lane-sliced**: a head reads its own slice of the
+    /// shared K/V rows and a lane window of the head, and the finalization of the sliced partials
+    /// equals the reference's lanes.
+    #[test]
+    fn the_bottom_reads_the_heads_slice_and_only_the_disputed_lanes() {
+        let (heads, kv_heads, d_head) = (4usize, 2usize, 8usize);
+        let kv_dim = kv_heads * d_head;
+        let kv_len = 40usize;
+        let q = codes(heads * d_head, 3);
+        let k = codes(kv_len * kv_dim, 4);
+        let v = codes(kv_len * kv_dim, 5);
+        let reference = a16_attn_fused_reference_v1(&q, &k, &v, heads, kv_heads, d_head, params()).expect("runs");
+        let group = heads / kv_heads;
+        for h in 0..heads {
+            let qh = &q[h * d_head..(h + 1) * d_head];
+            let kv_off = (h / group) * d_head;
+            for (first, count) in [(0usize, 8usize), (2, 3), (7, 1)] {
+                let root = a16_attn_root_claim_v1(qh, &k, &v, kv_dim, kv_off, (first, count), params(), 16).expect("root");
+                let lanes = a16_attn_finalize_v1(&root.v_acc, params().values);
+                assert_eq!(
+                    lanes,
+                    reference[h * d_head + first..h * d_head + first + count].to_vec(),
+                    "head {h} lanes {first}+{count}"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]

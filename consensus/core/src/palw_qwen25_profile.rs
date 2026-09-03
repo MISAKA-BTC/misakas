@@ -183,15 +183,16 @@ mod a16_family {
     /// Three facts the class ledger (`misaka_palw_base0::classes`) builds on, pinned here where
     /// the geometry lives: n_ctx 16 IS the genesis-registered dense class (its id is asserted
     /// byte-for-byte — a drift here would mean the ledger can no longer name the class the chain
-    /// already runs); n_ctx 17..=20 are admissible under the RC court, which is the room the
-    /// family has for sibling models before it needs a second axis; and everything past 20 is
-    /// refused by the close budget or the ladder, so a sibling CANNOT be given a bigger context
-    /// instead of a place in line.
+    /// already runs); the family has room above it under the RC court, which is what a sibling
+    /// model uses before it needs a second axis; and there is a CEILING, which the sweep measures
+    /// rather than recites — 574 under the RC's `2^26` ladder, refused at 576 by
+    /// `DeeperThanTheLadder` and by nothing else, so a sibling still cannot be given an unbounded
+    /// context instead of a place in line.
     #[test]
     fn a16_context_ladder_against_the_shipped_bundle() {
         let p = crate::config::params::palw_rc_shipped_params();
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &p.palw_consensus_mode else { panic!() };
-        for nctx in [15u32, 16, 17, 18, 20, 24, 32, 48, 64, 90, 128] {
+        for nctx in [15u32, 16, 17, 18, 20, 24, 32, 48, 64, 90, 128, 256, 512, 574, 576, 640] {
             let g = PalwQwen25GeometryV1 { n_ctx: nctx, ..QWEN25_1_5B };
             let profile = match qwen25_a16_profile_v1(g) {
                 Ok(pr) => pr,
@@ -236,12 +237,23 @@ mod a16_family {
                 // from {15..21} to {15..39} and the REASON changed with it — see
                 // `palw_class_admission_v2::tests::the_widest_context_each_family_admits`, which
                 // measures both gates for both families.
-                15 | 17 | 18 | 20 | 24 | 32 => {
+                // **The room this family has, and what bounds it** — re-measured after audit D H-5.
+                //
+                // Under the 80 KiB one-transaction ceiling the widest admitted context was 21 and
+                // the COST refused 24; under ADR-0080 design A's 27-chunk group the cost stopped
+                // binding and the ceiling became 39 — which was the EXECUTOR's `PALW_STEP_MAX_LEAVES`
+                // (`2^22`) leaking into the gate through `genesis_anchored_v1`'s ladder field and
+                // through the canonical count, on a ruleset whose own ladder is `2^26`. With that
+                // corrected the bound is the RULESET's ladder, and the ceiling is **574** —
+                // `DeeperThanTheLadder { worst: 67,235,200, ladder: 67,108,864 }` at 576. That is
+                // the same 574 ADR-0082 Decision 1 quotes as "the release branch's own gate", which
+                // is the number this gate was supposed to be producing all along.
+                15 | 17 | 18 | 20 | 24 | 32 | 48 | 64 | 90 | 128 | 256 | 512 | 574 => {
                     assert!(verdict.is_ok(), "n_ctx {nctx} fell out of the family's room: {verdict:?}")
                 }
                 _ => assert!(
-                    verdict.is_err(),
-                    "n_ctx {nctx} was admitted — the family's ceiling moved, revisit the ledger comment: {verdict:?}"
+                    matches!(verdict, Err(crate::palw_class_admission_v2::PalwClassAdmissionError::DeeperThanTheLadder { .. })),
+                    "n_ctx {nctx} must be refused by the RULESET's ladder and nothing else: {verdict:?}"
                 ),
             }
         }
@@ -345,6 +357,7 @@ pub fn qwen25_a16_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
         crate::palw_base0_profile::QWEN25_A16_PRE_IR,
         crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v1(),
         QWEN25_HEAD_TENSOR,
+        false,
     )
 }
 
@@ -363,7 +376,54 @@ pub fn qwen25_a16_profile_v2(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
         crate::palw_base0_profile::QWEN25_A16_PRE_IR_V2,
         crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2(),
         QWEN25_A16_HEAD_TENSOR_V2,
+        false,
     )
+}
+
+/// **`graph-v5`: the dense tier with ONE fused attention node per layer** (ADR-0082 Decision 1).
+///
+/// The v2 graph in every respect but the attention site, where `ATTN_SCORES`, the row `SoftMax`,
+/// the probability requantization and `ATTN_VALUES` — three of them committing `attn_heads × kv_len`
+/// rows at every position — become one [`crate::palw_step::PalwStepOpKindV1::AttnFused`] node whose
+/// committed row is the OUTPUT and nothing else. The scores, the row max, the exponent sum and the
+/// probabilities are internal to the op: computed in whatever order an executor likes, never
+/// committed, never carried, and refuted by a dissection over the history rather than by opening
+/// the row (ADR-0082 Decision 2).
+///
+/// What it buys, measured against v2's own numbers (§1.2–1.3): no committed row of this class has a
+/// context-shaped width, so the close stops growing with `n_ctx`, and an attention site costs
+/// `⌈heads × d_head / tile_len⌉` leaves a position at EVERY context instead of a count linear in
+/// the position — which returns the job's leaf count to the base count ADR-0077 Decision 12 was
+/// sized against.
+///
+/// A class IS its graph (ADR-0049 Decision F), so this is a NEW class id, registered through
+/// ADR-0075's route or minted at a relaunch. The v1 and v2 rows are untouched and stay exactly as
+/// narrow as they are — they are live chain facts.
+///
+/// The artifact is UNCHANGED: the fused node reads the same four registered tensors the four v2
+/// nodes read (`attn_logits.a16`, `attn_probs.a16`, `attn_values.a16` and `attn_softmax_up`), which
+/// is why no re-conversion and no new inventory is implied — see
+/// [`crate::palw_step_refute::palw_attn_fused_tensors_v1`].
+pub fn qwen25_a16_profile_v5(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen25_a16_profile_inner(
+        geometry,
+        crate::palw_base0_profile::QWEN25_A16_PRE_IR_V2,
+        // **ADR-0082 Decision 4: a graph-v5 class registers the TILED map.** The bottom of the
+        // dissection opens one history tile of K rows and one of V rows, so the anchor has to be
+        // addressable at that granularity — under `integer_kv_state_chunk_map_id_v2` the smallest
+        // thing the map can name is the whole history, and the class would be charged 526,336
+        // bytes for an opening its evidence carries in 18,432. This is the one line that makes the
+        // tile buy the dense tier its width; the v2 row above keeps its own map and its own id.
+        crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3(),
+        QWEN25_A16_HEAD_TENSOR_V2,
+        true,
+    )
+}
+
+/// **The `graph-v5` row over the epsilon the artifact executes** — the pairing any v5 row that has
+/// to be SERVED must be built from, exactly as [`qwen25_a16_artifact_row_profile_v1`] is for v2.
+pub fn qwen25_a16_artifact_row_profile_v5(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen25_a16_profile_v5(qwen25_geometry_artifact_eps(geometry))
 }
 
 /// **The epsilon every dense artifact of this lineage actually executes.**
@@ -378,8 +438,10 @@ pub fn qwen25_a16_profile_v2(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
 /// norms with the ARTIFACT's constant. So the declared epsilon is not the executed one, and
 /// `A16Engine::plan_from_profile`'s geometry gate refuses the row over its own class's weights:
 /// `GeometryMismatch { what: "rms_eps_q", profile: 1, artifact: 256 }`. The shipped worker never
-/// saw it because it takes `Qwen25A16Backend::new`, which compiles no plan and lets the artifact's
-/// epsilon execute — the asymmetry is exactly why nobody noticed.
+/// saw it while `Qwen25A16Backend::new` compiled no plan and let the artifact's epsilon execute —
+/// that asymmetry is exactly why nobody noticed, and it is closed: since ADR-0082's audit (fix E,
+/// H-1) BOTH constructors compile the plan, so a worker on this row now refuses at boot with the
+/// mismatch named instead of producing claims that lose every step-leg dispute.
 ///
 /// **This constant does not move a registered class.** `QWEN25_1_5B` and [`QWEN25_1_5B_A16`] stay
 /// exactly as testnet-11's genesis registered them (`params.rs` derives the registration from
@@ -426,6 +488,11 @@ fn qwen25_a16_profile_inner(
     pre_ir: &'static [crate::palw_base0_profile::Base0IrNodeV1],
     state_chunk_map_id: Hash64,
     head: &'static str,
+    // **ADR-0082 Decision 1.** Graph v5 fuses the layer table's four attention nodes into one
+    // `AttnFused` node after the per-node tile budget has run, so the fused node inherits the
+    // budgeted tile of the row it commits and the site's leaf count per position is exactly what
+    // `ATTN_VALUES` costs today. `false` is every shipped row, which is why their ids cannot move.
+    fuse_attention: bool,
 ) -> Result<PalwShapeProfileV3, PalwStepError> {
     use crate::palw_base0_profile::{Base0IrGeometryV1, Base0IrScopeV1, QWEN25_A16_LAYER_IR, QWEN25_A16_POST_IR, base0_ir_nodes_v1};
 
@@ -485,6 +552,11 @@ fn qwen25_a16_profile_inner(
     budget(&mut pre_nodes, pre_ir);
     let mut attn_nodes = base0_ir_nodes_v1(QWEN25_A16_LAYER_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::PerLayer, "");
     budget(&mut attn_nodes, QWEN25_A16_LAYER_IR);
+    // **ADR-0082 Decision 1**, applied to the PROJECTED table and never to a second IR const: one
+    // description of the fusion, read by both families (`palw_fuse_attention_site_v5`).
+    if fuse_attention {
+        attn_nodes = crate::palw_base0_profile::palw_fuse_attention_site_v5(&attn_nodes)?;
+    }
     let mut post_nodes = base0_ir_nodes_v1(QWEN25_A16_POST_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, head);
     budget(&mut post_nodes, QWEN25_A16_POST_IR);
 

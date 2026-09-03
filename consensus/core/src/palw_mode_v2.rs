@@ -318,6 +318,10 @@ pub const DEFAULT_MAX_TERMINAL_MACS: u64 = 16 * 1024 * 1024;
 /// two).
 pub const DEFAULT_MAX_OPERAND_COUNT: u32 = 8;
 
+/// **The shipped ladder's arity: binary, one pinned midpoint a round** (ADR-0082 Decision 3's
+/// baseline). Every shipped preset's court carries this value; a wider arity is a ruleset move.
+pub const PALW_COURT_BINARY_ARITY_V1: u8 = 2;
+
 /// One opaque number becomes three checkable ones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwCourtParamsV2 {
@@ -356,6 +360,15 @@ pub struct PalwCourtParamsV2 {
     max_close_chunks: u64,
     max_terminal_macs: u64,
     max_operand_count: u32,
+    /// **ADR-0082 Decision 3: the dissection arity.** `2` is the shipped binary ladder; `k`
+    /// discloses the `k` subtree roots below the current node — `log₂ k` binary levels at once,
+    /// authenticated by hashing them back up — so a search over `space` items takes
+    /// `⌈log₂ space / log₂ k⌉` rounds (`palw_attn_dissect::palw_kary_rounds_v1`). It is DERIVED
+    /// at genesis from the move budget the window affords over the widest row the ruleset
+    /// admits, never chosen; a power of two in `2..=64`; inside the ruleset id like every field
+    /// beside it. The binary ladder at `2^32` already spends `(2 × 32 + 2) × 45 = 2,970` of the
+    /// RC's 3,000-DAA window, which is why a history dissection cannot be added without it.
+    dissection_arity: u8,
 }
 
 impl PalwCourtParamsV2 {
@@ -403,7 +416,50 @@ impl PalwCourtParamsV2 {
             max_close_chunks,
             max_terminal_macs,
             max_operand_count,
+            dissection_arity: PALW_COURT_BINARY_ARITY_V1,
         })
+    }
+
+    /// The same court with a wider dissection (ADR-0082 Decision 3). Refuses an arity that is
+    /// not a power of two in `2..=64`, by name.
+    pub fn with_dissection_arity(mut self, arity: u8) -> Result<Self, PalwModeV2Error> {
+        if !crate::palw_attn_dissect::palw_attn_arity_is_legal_v1(arity) {
+            return Err(PalwModeV2Error::Invalid("a dissection arity is a power of two in 2..=64"));
+        }
+        self.dissection_arity = arity;
+        Ok(self)
+    }
+
+    pub fn dissection_arity(&self) -> u8 {
+        self.dissection_arity
+    }
+
+    /// **The rounds a dissection over `history_positions` positions takes**, at `tile` positions a
+    /// tile and this court's arity (ADR-0082 Decision 2). `None` for a zero tile.
+    pub fn history_dissection_rounds(&self, history_positions: u64, tile: u32) -> Option<u32> {
+        crate::palw_attn_dissect::palw_attn_dissection_rounds_v1(history_positions, tile, self.dissection_arity)
+    }
+
+    /// [`Self::worst_case_duration_daa`] with a history dissection of `history_positions`
+    /// positions appended to the ladder:
+    /// `(2 × (ladder_rounds + history_rounds) + terminal + root_claim) × deadline`.
+    /// The window gate a graph-v5 row is admitted against; a row with no fused site passes
+    /// `history_positions = 0` and gets the ladder's own number, unchanged.
+    ///
+    /// **The root claim is a move** (audit A M-2). ADR-0082 Z4's count omitted it, and it is the
+    /// one move with no clock of its own: the protocol drawn at the head of `palw_attn_court_v1`
+    /// shows `ladder Terminal ──▶ root claim ──▶ AwaitDisclosure`, so a dissection's clocked
+    /// sequence is one `turn_deadline` longer than the formula said. With `terminal_rounds = 1` a
+    /// row would be admitted whose honest exchange needs one more move than `window_court` holds,
+    /// and the party that legitimately moves last loses at the backstop. Counted only where there
+    /// IS a dissection.
+    pub fn worst_case_duration_with_history_daa(&self, history_positions: u64, tile: u32) -> Option<u64> {
+        let ladder = u64::from(self.bisection_rounds());
+        let history = u64::from(self.history_dissection_rounds(history_positions, tile)?);
+        let root_claim = u64::from(history_positions != 0);
+        let moves =
+            ladder.checked_add(history)?.checked_mul(2)?.checked_add(u64::from(self.terminal_rounds))?.checked_add(root_claim)?;
+        moves.checked_mul(self.turn_deadline_daa)
     }
 
     pub fn max_close_bytes(&self) -> u64 {
@@ -437,10 +493,19 @@ impl PalwCourtParamsV2 {
         self.terminal_rounds
     }
 
-    /// `ceil(log2(max_step_leaf_count))` — the bisection depth needed to isolate one step.
+    /// `⌈log₂ max_step_leaf_count⌉` — the rounds the LEAF ladder takes to isolate one step.
+    ///
+    /// **At the ladder's own arity, which is two** (audit D H-2). This read
+    /// `self.dissection_arity` and so priced a k-ary LEAF ladder that no session plays: a
+    /// session's ladder is [`crate::palw_bisect::PalwBisectLadderV1`], binary at a pinned
+    /// midpoint, and `PalwKaryLadderV1` has no caller outside its own tests. At the RC's numbers
+    /// the difference is not cosmetic — the derivation reported 34 moves where the played dispute
+    /// takes 60, so `window_court` "held" a prosecution it does not hold and an honest challenger
+    /// playing correctly runs out of clock. ADR-0082 Decision 3's k buys rounds of the HISTORY
+    /// search, which is the only search that is k-ary today; the day the ladder itself becomes
+    /// k-ary, this constant moves with it and one place decides.
     pub fn bisection_rounds(&self) -> u32 {
-        // `next_power_of_two` is exact for powers of two, so this is ceil(log2(n)) for n >= 2.
-        self.max_step_leaf_count.next_power_of_two().trailing_zeros()
+        crate::palw_attn_dissect::palw_kary_rounds_v1(self.max_step_leaf_count, PALW_COURT_LEAF_LADDER_ARITY_V1).unwrap_or(u32::MAX)
     }
 
     /// ADR-0042 Decision 8's formula, in DAA units. `None` on overflow, which the startup gate
@@ -456,6 +521,98 @@ impl PalwCourtParamsV2 {
         let bisection_moves = u64::from(self.bisection_rounds()).checked_mul(2)?;
         let moves = bisection_moves.checked_add(u64::from(self.terminal_rounds))?;
         moves.checked_mul(self.turn_deadline_daa)
+    }
+}
+
+/// **ADR-0082 Decision 3: the arity a ruleset DERIVES, never writes.**
+///
+/// The smallest legal power of two for which the whole dispute — the leaf ladder, the history
+/// dissection, and the terminal moves — fits the court window at the deadline SA-4 derives:
+///
+/// ```text
+///   (2 · (ceil(log2 L) + ceil(log_k (history / tile))) + terminal + 1) · turn_deadline  <=  window_court
+/// ```
+///
+/// `log2 L` and not `log_k L`: the LEAF ladder a session plays is binary
+/// ([`PALW_COURT_LEAF_LADDER_ARITY_V1`]), and `k` buys rounds of the HISTORY search alone. The
+/// trailing `+ 1` is the root claim, the move that opens the dissection.
+///
+/// Smallest, not largest, because a wider round costs BYTES: `arity` children of
+/// `(4 + 8 + 8 · lanes)` ride every move, so the arity that just fits the clock is the arity that
+/// spends the least carrier. Every input is a ruleset quantity — the window, the SA-4 deadline,
+/// the ladder's `max_step_leaf_count`, the widest history the ruleset will admit, the class map's
+/// tile, the terminal move count and the widest output tile any registered row disputes — so no
+/// preset writes a `k` and no `k` can be chosen.
+///
+/// **And a round has to fit a carrier, which is a property of the (arity, lanes) PAIR.** At a
+/// 128-lane tile every legal arity fits one framed carrier; at the hybrid's 256-lane head, arity
+/// 64 is 132,102 bytes and does not. The bound is applied at the WIDEST output tile the ruleset
+/// registers, and a `k` whose round no carrier holds is REFUSED rather than priced: `None`. It can
+/// only ever refuse from above — a smaller arity discloses strictly fewer children — so the
+/// smallest window-fitting arity is also the cheapest one to check.
+///
+/// `history_positions_max = 0` is a ruleset with no fused attention site: the dissection has no
+/// rounds and the answer is whatever arity the leaf ladder alone needs.
+///
+/// `None` when no legal arity fits — which is the honest answer for a window that cannot hold the
+/// dispute it admits, and the refusal ADR-0082 Z4 turns into an admission error rather than a
+/// court that runs out of clock mid-prosecution.
+/// **The arity of the LEAF ladder a session actually plays.**
+///
+/// `PalwBisectLadderV1` is binary at a pinned midpoint (`palw_bisect`'s header), and it is what
+/// `PalwCourtSessionStateV2::ladder` holds. ADR-0082 Decision 3's `dissection_arity` is the
+/// HISTORY search's, not this one; naming the two apart is what keeps a derivation from pricing a
+/// ladder no chain runs (audit D H-2).
+pub const PALW_COURT_LEAF_LADDER_ARITY_V1: u8 = 2;
+
+#[allow(clippy::too_many_arguments)]
+pub fn palw_court_arity_v1(
+    window_court: u64,
+    turn_deadline: u64,
+    max_step_leaves: u64,
+    history_positions_max: u64,
+    tile: u32,
+    terminal_moves: u32,
+    widest_lane_count: usize,
+    max_close_chunks: u64,
+) -> Option<u8> {
+    use crate::palw_attn_dissect::{
+        PALW_ATTN_DISSECT_MAX_ARITY, PALW_ATTN_DISSECT_MIN_ARITY, palw_attn_dissect_arity_fits_carrier_v1,
+        palw_attn_dissection_rounds_v1, palw_kary_rounds_v1,
+    };
+    if window_court == 0 || turn_deadline == 0 {
+        return None;
+    }
+    let carrier = palw_close_bytes_for_chunks_v1(1);
+    let mut arity = PALW_ATTN_DISSECT_MIN_ARITY;
+    loop {
+        // The LEAF ladder is binary whatever `k` is (audit D H-2); `k` buys history rounds only.
+        let ladder = u64::from(palw_kary_rounds_v1(max_step_leaves, PALW_COURT_LEAF_LADDER_ARITY_V1)?);
+        let history = if history_positions_max == 0 {
+            0
+        } else {
+            u64::from(palw_attn_dissection_rounds_v1(history_positions_max, tile, arity)?)
+        };
+        // And the root claim is a move (audit A M-2), wherever there is a dissection to open.
+        let root_claim = u64::from(history_positions_max != 0);
+        let moves = ladder.checked_add(history)?.checked_mul(2)?.checked_add(u64::from(terminal_moves))?.checked_add(root_claim)?;
+        // **On the SAME inequality admission applies** (audit A H-2 / audit D H-2c). This selected
+        // on `moves · deadline <= window_court` while `palw_attn_court_admits_row_v1` admits on
+        // `moves · deadline + assembly_reserve < window_court` — so the derivation could return an
+        // arity the admission gate then refuses, and a wider arity that WOULD have fitted was never
+        // reached. The reserve is a property of the window (both sides' closes occupy blocks that
+        // carry no move), so it belongs in the search that chooses the shape the window has to hold.
+        let reserve = crate::palw_context_ladder::palw_close_assembly_daa_v1(max_close_chunks);
+        if moves.checked_mul(turn_deadline)?.checked_add(reserve)? < window_court {
+            // The clock admits this arity. The carrier is the other half of the same question,
+            // and it answers for the PAIR: a wider arity would only weigh more, so a round that
+            // does not fit here is a refusal and never a reason to keep searching upward.
+            return palw_attn_dissect_arity_fits_carrier_v1(arity, widest_lane_count, carrier).then_some(arity);
+        }
+        if arity >= PALW_ATTN_DISSECT_MAX_ARITY {
+            return None;
+        }
+        arity *= 2;
     }
 }
 

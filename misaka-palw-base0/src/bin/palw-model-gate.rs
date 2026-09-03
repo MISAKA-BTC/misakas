@@ -257,11 +257,12 @@ fn main() {
     let net_bytes = net.clone();
     let arc = std::sync::Arc::new(artifact);
     // Reported, because it is a fact about this row and not about the model: the ADR-0067
-    // constructor compiles the declared graph against the artifact, and the DENSE ladder row is
-    // built from `QWEN25_1_5B`, whose `rms_eps_q` is 1 while the converter wrote 256. The
-    // REGISTERED row is built from the same constant and carries the same split — which is why
-    // the shipped worker uses `Qwen25A16Backend::new` (no compiled plan, the artifact's epsilon
-    // executes) and why this harness does too.
+    // constructor compiles the declared graph against the artifact, and a CATALOG row built from
+    // `QWEN25_1_5B` declares `rms_eps_q` 1 while the converter wrote 256. The ladder row this
+    // harness runs (`palw_a16_context_row_profile_v1`) is the artifact-epsilon projection and
+    // compiles; the registered catalog row is not, and its refusal is the measurement. Since
+    // ADR-0082 audit E's H-1 `::new` compiles the same plan, so the two constructors no longer
+    // differ in what they will execute — only in what they are told about the class.
     match Qwen25A16Backend::from_registered_profile(arc.clone(), net.clone(), profile.clone(), registered.canonical_job) {
         Ok(_) => eprintln!("[palw-model-gate] from_registered_profile: the n_ctx {n_ctx} row compiles against this artifact"),
         Err(e) => eprintln!("[palw-model-gate] from_registered_profile REFUSES the n_ctx {n_ctx} row: {e}"),
@@ -272,7 +273,8 @@ fn main() {
     }
     // The shipped worker's own assembly (`palw-a16-fp-worker::load`).
     let engine_arc = arc.clone();
-    let backend = Qwen25A16Backend::new(arc, net.clone(), profile.clone(), registered.canonical_job);
+    let backend = Qwen25A16Backend::new(arc, net.clone(), profile.clone(), registered.canonical_job)
+        .unwrap_or_else(|e| die(format!("::new refuses the n_ctx {n_ctx} row over this artifact: {e}")));
     eprintln!("[palw-model-gate] backend built; supports_court={}", {
         use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
         backend.supports_court()
@@ -429,6 +431,8 @@ fn main() {
             decode_token_limit: decode,
             max_context_tokens: n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            sampling_seed: [0u8; 32],
+            temperature_q: 0,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
         };
         let leaves_for = |decode: u32| -> Result<u64, String> {

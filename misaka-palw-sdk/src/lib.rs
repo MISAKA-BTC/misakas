@@ -49,13 +49,18 @@ mod tests {
 
     use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
     use kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2;
-    use kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES;
     use kaspa_hashes::Hash64;
 
     use super::*;
 
+    /// **The RULESET's ladder, not the executor's constant** (audit D H-5). This was
+    /// `PALW_STEP_MAX_LEAVES` (2^22) — the executor's own default — while the networks this SDK
+    /// serves froze `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` (2^26) for exactly the rows the ledger now
+    /// carries. A battery run at 2^22 reports "the step space does not enumerate" for the graph-v5
+    /// 512 row, which is a statement about a constant somewhere else and not about the class.
     fn court() -> PalwCourtParamsV2 {
-        PalwCourtParamsV2::new(PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court")
+        PalwCourtParamsV2::new(kaspa_consensus_core::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT, 4, 2)
+            .expect("shipped court")
     }
 
     fn sdk() -> PalwClassSdk {

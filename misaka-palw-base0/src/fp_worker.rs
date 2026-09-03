@@ -81,6 +81,7 @@
 //! `Refused` and the worker stays up: refusing is the answer, a crash is not.
 
 use kaspa_consensus_core::palw_backend::{PalwExecutionBackendV1, PalwFpRunV1};
+use kaspa_consensus_core::palw_decode_select_v2::{PALW_DECODE_SEED_GREEDY, PALW_DECODE_TEMPERATURE_GREEDY};
 use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_job_context_v3};
 use kaspa_consensus_core::palw_freeprompt_v3::{
     PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_CANONICAL, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION,
@@ -281,6 +282,42 @@ fn digest_file_v1(path: &Path) -> Result<[u8; 32], String> {
 /// tier's runtime is its artifact (`artifact_digest()`), the hybrid's is the shape its backend
 /// serves (`shape_id()`). Both binaries already fill `model_profile_id` and `runtime_class_id`
 /// with that same value, so it is one field here rather than two that could disagree.
+/// **The court parameters the RULESET of `network_id` froze** (ADR-0082 Decision 8; W1b
+/// `bb4f145b` on the executor side).
+///
+/// A worker prices a job against a ladder — `step_leaf_count_capped_v1` is what decides how many
+/// tokens a user actually gets — and both binaries built that ladder out of
+/// `PALW_STEP_MAX_LEAVES`, the module DEFAULT. A node whose ruleset moved the ladder would serve
+/// a row its own workers refuse, or (worse, and the direction that costs a producer money) a row
+/// they execute past what the court can adjudicate.
+///
+/// The ruleset a worker can know is the one its network's binary ships: `Params::from(NetworkId)`
+/// is exactly what kaspad boots with, and the bundle's `court` is the same object
+/// `PalwCourtParamsV2` the class catalog and the step leg read. A network with PALW disabled has
+/// no ladder at all, and this says so rather than substituting a constant — the mistake this
+/// worker already made once with its network id, where the wrong default was silent.
+///
+/// It is not the LIVE ruleset: an activation moves the bundle and a worker cannot read chain
+/// state. That gap is named here rather than papered over; closing it means the gateway telling
+/// the worker, which is a change to `PalwFpWorkerRequestV3` and therefore a consensus-core change
+/// this stream does not make (see the report's patch notes).
+pub fn fp_worker_court_params_v1(network_id: &str) -> Result<kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2, String> {
+    use kaspa_consensus_core::config::params::Params;
+    use kaspa_consensus_core::network::NetworkId;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    let net: NetworkId = network_id.parse().map_err(|e| {
+        format!("{network_id} is not a network this build knows ({e}); it must be the string kaspad prints for params.net")
+    })?;
+    let params = Params::from(net);
+    match &params.palw_consensus_mode {
+        PalwConsensusMode::ConsensusV2(bundle) => Ok(bundle.court),
+        _ => Err(format!(
+            "{network_id} ships with PALW off, so it freezes no court and no step ladder — there is nothing for this worker to \
+             price a job against"
+        )),
+    }
+}
+
 pub struct FpWorkerFamilyV1 {
     /// The catalog row this worker embodies, e.g. `Qwen/Qwen2.5-1.5B/graph-v2`.
     pub model_id: String,
@@ -300,7 +337,13 @@ pub struct FpWorkerFamilyV1 {
     /// The id ceiling a prompt token is checked against — the model's, not the tokenizer's, which
     /// is padded differently.
     pub vocab: u32,
-    /// `schema` of the per-job retention manifest, e.g. `misaka.palw.fp-v3-a16-retention.v1`.
+    /// `schema` of the per-job retention manifest, e.g. `misaka.palw.fp-v3-a16-retention.v2`.
+    ///
+    /// **It names the bytes in `material.bin`, so it moves when they do.** Both shipped workers
+    /// say `.v2` since ADR-0082 Decision 7: the free-prompt retention is the FOLD
+    /// (`base0_fp_material_encode_v2`), not the dense tile tuple, and a manifest that still
+    /// claimed `.v1` would be telling a reader the one thing about the file it cannot see from
+    /// the outside.
     pub retention_schema: &'static str,
     /// The `family` field of that manifest, e.g. `qwen25-a16`.
     pub retention_family: &'static str,
@@ -497,6 +540,39 @@ pub fn precheck_request_v1(request: &PalwFpWorkerRequestV3) -> Result<(), String
     if request.prompt_mode != PALW_FP_PROMPT_MODE_USER && request.prompt_mode != PALW_FP_PROMPT_MODE_CANONICAL {
         return Err(format!("prompt mode {} is neither User nor Canonical", request.prompt_mode));
     }
+    // **This worker decodes GREEDILY, and it has to say so at the entrance** (ADR-0082 Decision
+    // 11; audit M-6).
+    //
+    // The refusal exists in the consensus envelope (`PalwFpV3Error::SamplingNotArmed`) and in the
+    // shipped gateway, and did not exist in the component that actually selects tokens. Every
+    // backend here calls `base0_decode_token_select_v1` — plain argmax — so a request carrying a
+    // temperature ran the whole inference and then built a `PalwFreePromptJobV3` whose
+    // `fp_job_id_v3` DECLARES that temperature over tokens that obey no temperature at all. Two
+    // failures, both of them this one line:
+    //
+    // * today, any caller that is not the shipped gateway (`misaka-palw-fp-submit`, an operator's
+    //   own rail, a devnet drill) pays for the run and the chain then refuses the commitment as
+    //   `SamplingNotArmed` — precisely the "after the inference had already been paid for" failure
+    //   the design says it avoids;
+    // * armed without a v2-aware engine it is worse, because the commitment is ACCEPTED: five
+    //   seats replay it with the same greedy code, agree, and `temperature` becomes a field that
+    //   changes the claim id and nothing else. `palw_freeprompt_v3` names that outcome itself —
+    //   "a user who asked for a temperature and silently got greedy has been told a false thing
+    //   about what ran".
+    //
+    // **This refusal is deleted in the commit that gives the backends
+    // `PalwDecodeSamplingV2::select`, and not before.** It is a statement about what this binary
+    // implements, so the day the binary implements the sampler the statement becomes false; until
+    // then it is the only thing between a paying caller and an answer that is not the one the job
+    // id describes.
+    if request.temperature_q != PALW_DECODE_TEMPERATURE_GREEDY || request.sampling_seed != PALW_DECODE_SEED_GREEDY {
+        return Err(format!(
+            "this worker decodes greedily: it selects tokens with base0_decode_token_select_v1 and has no \
+             PalwDecodeSamplingV2::select, so a job declaring temperature_q {} / a non-zero sampling seed would commit \
+             greedy tokens under a sampled job id (ADR-0082 Decision 11 is not implemented in this binary)",
+            request.temperature_q
+        ));
+    }
     Ok(())
 }
 
@@ -660,6 +736,10 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
         max_context_tokens: request.max_context_tokens,
         privacy_mode: request.privacy_mode,
         prompt_mode: request.prompt_mode,
+        // ADR-0082 Decision 11: the requester's, verbatim. A worker that substituted its own would
+        // bind its trace to a job id nobody else can rebuild.
+        sampling_seed: request.sampling_seed,
+        temperature_q: request.temperature_q,
     };
     let binding = fp_job_id_v3(&job);
 
@@ -1106,6 +1186,8 @@ mod tests {
             max_context_tokens: manifest.n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             input,
             model_profile_id: manifest.model_profile_id,
             runtime_manifest_hash: manifest.runtime_manifest_hash,
@@ -1120,6 +1202,41 @@ mod tests {
         let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
         frame.extend_from_slice(&payload);
         frame
+    }
+
+    /// **The worker refuses a sampler it does not implement, before the artifact is touched**
+    /// (ADR-0082 Decision 11; audit M-6).
+    ///
+    /// Without it the whole inference runs and the job it builds declares a temperature its own
+    /// tokens do not obey — the chain then refuses the commitment as `SamplingNotArmed` after the
+    /// run is paid for, and if Decision 11 were armed without a v2-aware engine the commitment
+    /// would be ACCEPTED instead, with five seats replaying the same greedy code and agreeing.
+    ///
+    /// The greedy pair is admitted, which is the property that keeps every shipped row working.
+    #[test]
+    fn the_worker_refuses_a_temperature_it_decodes_greedily() {
+        let manifest = fixture_runtime_v1().manifest().clone();
+        let greedy = fixture_request_v1(&manifest, PalwFpWorkerInputV3::TokenIds(vec![3, 5, 8]));
+        precheck_request_v1(&greedy).expect("the greedy pair every shipped row carries is admitted");
+
+        let mut hot = greedy.clone();
+        hot.temperature_q = 1 << 24;
+        let why = precheck_request_v1(&hot).expect_err("a temperature this worker cannot honour was admitted");
+        assert!(why.contains("decodes greedily"), "the refusal must say what this binary does, got: {why}");
+
+        let mut seeded = greedy.clone();
+        seeded.sampling_seed = [7u8; 32];
+        let why = precheck_request_v1(&seeded).expect_err("a non-greedy seed was admitted");
+        assert!(why.contains("decodes greedily"), "got: {why}");
+
+        // And it is the ENTRANCE, not a late check: `run_one_job_v1` calls it first, so the
+        // refusal costs no inference.
+        let temp = std::env::temp_dir().join(format!("palw-fp-worker-m6-{}", std::process::id()));
+        let rt = fixture_runtime_v1();
+        let mut nothing = |_: u32, _: &[u8]| {};
+        let err = run_one_job_v1(&rt, &hot, Hash64::from_u64_word(1), &temp, &mut nothing)
+            .expect_err("the job ran with a temperature the backend does not implement");
+        assert!(err.contains("decodes greedily"), "got: {err}");
     }
 
     /// **W6: a job's roots through `v3-serve` are byte-identical to the same job's roots through

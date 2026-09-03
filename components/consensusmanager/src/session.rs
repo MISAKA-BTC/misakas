@@ -340,6 +340,18 @@ impl ConsensusSessionOwned {
         self.consensus.palw_derived_artifacts_v1(claim_id)
     }
 
+    /// **ADR-0080 design A: one side's declared court close, mid-assembly.** The count, the
+    /// `present` arrival bitmap, the two DAA marks, the pinned `close_digest` and the deposit —
+    /// the same store-tip read profile as the two calls around it. `None` off ConsensusV2 and for
+    /// a `(session, side)` that has declared no close.
+    pub fn palw_court_close_group_v1(
+        &self,
+        session_id: kaspa_consensus_core::Hash64,
+        side: kaspa_consensus_core::palw_state_v2::PalwCourtSideV1,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwCourtCloseGroupV2> {
+        self.consensus.palw_court_close_group_v1(session_id, side)
+    }
+
     /// The PALW-RC producer contract (ADR-0042). Reads the state store's tip, which is a lock-free
     /// snapshot read like the virtual fields above.
     pub fn palw_producer_facts_v2(

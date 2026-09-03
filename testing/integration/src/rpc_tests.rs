@@ -880,6 +880,46 @@ async fn sanity_test() {
                     assert_eq!(response.derived_count, 0);
                 })
             }
+            // ADR-0080 design A: the split close's own read. Simnet is not `ConsensusV2`, so the
+            // contract asserted here is the honest-negative one — and, as above, a MALFORMED
+            // session id or a side that is not one of the two a session binds is an ERROR: "this
+            // chain holds no such group" tells a mover to keep filing, "that is not a side" tells
+            // it that it is asking about nothing.
+            KaspadPayloadOps::GetPalwPendingChunkGroup => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_pending_chunk_group_call(
+                            None,
+                            GetPalwPendingChunkGroupRequest { session_id: "00".repeat(64), side: "executor".into() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!response.found, "a non-ConsensusV2 network answers found:false, and does not error");
+                    assert_eq!(response.count, 0, "and declares no chunk it does not hold");
+                    assert_eq!(response.present, 0);
+                    assert!(
+                        rpc_client
+                            .get_palw_pending_chunk_group_call(
+                                None,
+                                GetPalwPendingChunkGroupRequest { session_id: "nonsense".into(), side: "executor".into() },
+                            )
+                            .await
+                            .is_err(),
+                        "a malformed session id is an error, not an absence"
+                    );
+                    assert!(
+                        rpc_client
+                            .get_palw_pending_chunk_group_call(
+                                None,
+                                GetPalwPendingChunkGroupRequest { session_id: "00".repeat(64), side: "prosecutor".into() },
+                            )
+                            .await
+                            .is_err(),
+                        "a side a session does not bind is an error, not an absence"
+                    );
+                })
+            }
             KaspadPayloadOps::GetTokenSupply => {
                 tst!(op, "TOK supply read — inert preset answers available:false by design")
             }

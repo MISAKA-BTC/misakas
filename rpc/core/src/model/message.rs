@@ -2319,6 +2319,21 @@ pub struct GetPalwProducerFactsResponse {
     pub fp_quanta_per_canonical_job: u32,
     /// The per-receipt jackpot bound (`fp_quanta_v3`'s cap). Zero on a network with no lane.
     pub fp_max_quanta_per_receipt: u32,
+    /// **Is ADR-0082's free-prompt decode ruleset IN FORCE at `daa_score`** — the fence
+    /// `Params::palw_fp_decode_rules`, answered by `palw_fp_decode_rules_active_at` at the same
+    /// chain point every other fact here was read at.
+    ///
+    /// It is a node-config fact and not chain state, exactly like the two prices above, and it is
+    /// on the wire for the same reason `fp_certified` is: it changes what a commitment must
+    /// contain before the commitment is built. Past the fence a job carries `(sampling_seed,
+    /// temperature_q)` inside its context hash and decode leaves are what earn; a gateway that
+    /// guessed would either omit fields the chain requires or publish fields it will not read, and
+    /// in both directions the claim is unreproducible rather than rejected.
+    ///
+    /// False whenever `available` is false, and false on any pre-version-4 peer — the same
+    /// fail-closed reading `fp_certified` takes, and for the same reason: a submitter that held
+    /// back on a stale `false` loses nothing it cannot retry.
+    pub fp_decode_rules_armed: bool,
     /// **Every outpoint a wallet must not spend**, `txid:index` with a 128-hex transaction id.
     ///
     /// Two sources, deliberately in ONE list so a wallet cannot read half of it (audit3 H3, H12):
@@ -2338,11 +2353,12 @@ pub struct GetPalwProducerFactsResponse {
 
 impl Serializer for GetPalwProducerFactsResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        // Version 3: `fp_certified` and the free-prompt price (ADR-0077 Decision 3). Version 2
-        // added `locked_bond_outpoints` (audit3 H3). Every version is a strict suffix, so an older
+        // Version 4: `fp_decode_rules_armed` (ADR-0082 Decisions 10/11's fence). Version 3 added
+        // `fp_certified` and the free-prompt price (ADR-0077 Decision 3). Version 2 added
+        // `locked_bond_outpoints` (audit3 H3). Every version is a strict suffix, so an older
         // reader stops where its version ended and this reader tolerates an older writer by
         // leaving the later fields at their defaults — additive, never re-ordered.
-        store!(u16, &3, writer)?;
+        store!(u16, &4, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.chain_point, writer)?;
         store!(u64, &self.daa_score, writer)?;
@@ -2367,6 +2383,7 @@ impl Serializer for GetPalwProducerFactsResponse {
         store!(bool, &self.fp_certified, writer)?;
         store!(u32, &self.fp_quanta_per_canonical_job, writer)?;
         store!(u32, &self.fp_max_quanta_per_receipt, writer)?;
+        store!(bool, &self.fp_decode_rules_armed, writer)?;
         Ok(())
     }
 }
@@ -2401,6 +2418,11 @@ impl Deserializer for GetPalwProducerFactsResponse {
         // nothing it cannot retry from the outbox. Fail closed.
         let (fp_certified, fp_quanta_per_canonical_job, fp_max_quanta_per_receipt) =
             if version >= 3 { (load!(bool, reader)?, load!(u32, reader)?, load!(u32, reader)?) } else { (false, 0, 0) };
+        // Same fail-closed reading one version on: a peer that predates the fence cannot be
+        // asserting it is dormant, so "unknown" is read as "not in force" and a submitter that
+        // holds back retries. The opposite default would have a gateway building jobs with decode
+        // fields against a chain that will not read them.
+        let fp_decode_rules_armed = if version >= 4 { load!(bool, reader)? } else { false };
         Ok(Self {
             available,
             chain_point,
@@ -2426,6 +2448,7 @@ impl Deserializer for GetPalwProducerFactsResponse {
             fp_certified,
             fp_quanta_per_canonical_job,
             fp_max_quanta_per_receipt,
+            fp_decode_rules_armed,
         })
     }
 }
@@ -2781,6 +2804,137 @@ impl Deserializer for GetPalwFreePromptClaimResponse {
             accepted_daa,
             trace_retention_daa,
             derived_count,
+        })
+    }
+}
+
+// -----------------------------------------------------------------------------------------------
+// ADR-0080 design A — a declared court close, mid-assembly
+// -----------------------------------------------------------------------------------------------
+//
+// A close too wide for one carrier rides as a signed `CourtCloseDeclared` and its chunks, in a
+// table keyed `(session_id, side)`. The mover is under a court deadline and its carriers can be
+// orphaned, so it has to be able to ask what the CHAIN thinks it has received. Before this call the
+// only answer was `misaka palw court-close`'s own journal on the mover's disk — and a journal that
+// believes itself skips a part whose carrier was reorged out and completes a group that can never
+// assemble. It also could not answer the two preflights that matter: whether a declaration for this
+// `(session, side)` already exists (one per side, ever) and how much time is left to assemble.
+
+/// ADR-0080 design A: which declared close to read — a session id and one of its two sides.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwPendingChunkGroupRequest {
+    /// 128-hex court session id.
+    pub session_id: String,
+    /// `challenger` or `executor`. Not defaulted: a group is keyed by the side, and answering for
+    /// the wrong one is answering about the other party's carriage.
+    pub side: String,
+}
+
+impl Serializer for GetPalwPendingChunkGroupRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.session_id, writer)?;
+        store!(String, &self.side, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwPendingChunkGroupRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let session_id = load!(String, reader)?;
+        let side = load!(String, reader)?;
+        Ok(Self { session_id, side })
+    }
+}
+
+/// **One side's declared close, as the chain holds it** (ADR-0080 design A §2.2).
+///
+/// `present` is the row's own `u64` bitmap and is carried as a bitmap rather than as a count,
+/// because chunks arrive in ANY order: "four of seven have landed" does not say which three to
+/// send, and a resume that guessed would re-pay for a carrier the chain already has and leave a
+/// hole it does not.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwPendingChunkGroupResponse {
+    /// False off `ConsensusV2` and for a `(session, side)` that has declared no close. It is also
+    /// false once the group is GONE — adjudicated, convicted or swept with its session — so a
+    /// filer that saw a group and now does not has an answer rather than a silence.
+    pub found: bool,
+    pub session_id: String,
+    pub side: String,
+    /// The chunks the declaration pinned. Every consensus rule on a split close counts these.
+    pub count: u32,
+    /// One bit per index, exactly as `PalwCourtCloseGroupV2::present` holds it.
+    pub present: u64,
+    pub parts_present: u32,
+    pub complete: bool,
+    pub declared_daa: u64,
+    /// `declared_daa + PALW_COURT_CLOSE_INCLUSION_MARGIN × count`, and never past the session's
+    /// own backstop — the declaration may not extend it.
+    pub assembly_deadline_daa: u64,
+    /// 128-hex keyed hash of the concatenation. A filer compares its own cut against this before
+    /// spending a carrier on a group it would convict itself by completing.
+    pub close_digest: String,
+    /// `executor_guilty` / `challenger_defeated`.
+    pub verdict: String,
+    /// `txid:index` — the bond that declared, which is also the outpoint backing the deposit.
+    pub declarer_bond: String,
+    /// The assembly reserve at risk, forfeited if the group never assembles.
+    pub deposit: u64,
+}
+
+impl Serializer for GetPalwPendingChunkGroupResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.found, writer)?;
+        store!(String, &self.session_id, writer)?;
+        store!(String, &self.side, writer)?;
+        store!(u32, &self.count, writer)?;
+        store!(u64, &self.present, writer)?;
+        store!(u32, &self.parts_present, writer)?;
+        store!(bool, &self.complete, writer)?;
+        store!(u64, &self.declared_daa, writer)?;
+        store!(u64, &self.assembly_deadline_daa, writer)?;
+        store!(String, &self.close_digest, writer)?;
+        store!(String, &self.verdict, writer)?;
+        store!(String, &self.declarer_bond, writer)?;
+        store!(u64, &self.deposit, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwPendingChunkGroupResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let found = load!(bool, reader)?;
+        let session_id = load!(String, reader)?;
+        let side = load!(String, reader)?;
+        let count = load!(u32, reader)?;
+        let present = load!(u64, reader)?;
+        let parts_present = load!(u32, reader)?;
+        let complete = load!(bool, reader)?;
+        let declared_daa = load!(u64, reader)?;
+        let assembly_deadline_daa = load!(u64, reader)?;
+        let close_digest = load!(String, reader)?;
+        let verdict = load!(String, reader)?;
+        let declarer_bond = load!(String, reader)?;
+        let deposit = load!(u64, reader)?;
+        Ok(Self {
+            found,
+            session_id,
+            side,
+            count,
+            present,
+            parts_present,
+            complete,
+            declared_daa,
+            assembly_deadline_daa,
+            close_digest,
+            verdict,
+            declarer_bond,
+            deposit,
         })
     }
 }
@@ -5543,7 +5697,7 @@ impl Deserializer for UnsubscribeResponse {
 mod palw_producer_facts_wire_tests {
     use super::*;
 
-    fn v3_response() -> GetPalwProducerFactsResponse {
+    fn v4_response() -> GetPalwProducerFactsResponse {
         GetPalwProducerFactsResponse {
             available: true,
             chain_point: "cc".repeat(64),
@@ -5568,6 +5722,9 @@ mod palw_producer_facts_wire_tests {
             fp_certified: true,
             fp_quanta_per_canonical_job: 8,
             fp_max_quanta_per_receipt: 64,
+            // ADR-0082 Decisions 10/11: `true` so the round trip distinguishes "carried" from
+            // "defaulted" — the field's own default is false and a lost field would pass silently.
+            fp_decode_rules_armed: true,
             locked_bond_outpoints: vec![format!("{}:0", "aa".repeat(64)), format!("{}:7", "bb".repeat(64))],
         }
     }
@@ -5578,17 +5735,61 @@ mod palw_producer_facts_wire_tests {
     /// failure the version prefix exists to make impossible.
     #[test]
     fn the_producer_facts_survive_the_borsh_round_trip() {
-        let response = v3_response();
+        let response = v4_response();
         let mut bytes = Vec::new();
         Serializer::serialize(&response, &mut bytes).unwrap();
         let back = <GetPalwProducerFactsResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
         assert!(back.fp_certified, "ADR-0077 Decision 3: a gateway cannot name its refusal without this");
         assert_eq!(back.fp_quanta_per_canonical_job, 8, "the lane's price is the chain's, not the gateway's");
         assert_eq!(back.fp_max_quanta_per_receipt, 64);
+        assert!(back.fp_decode_rules_armed, "ADR-0082 D10/D11: a builder on the wrong side of this fence is unreproducible");
         assert_eq!(back.locked_bond_outpoints, response.locked_bond_outpoints, "the must-not-spend set must not shorten");
         assert_eq!(back.class_target, response.class_target);
         assert_eq!(back.bond_exposure_ceiling, response.bond_exposure_ceiling);
         assert_eq!(back.not_ready_reason, response.not_ready_reason);
+    }
+
+    /// **ADR-0080 design A: a declared close's arrival bitmap survives the wRPC wire.**
+    ///
+    /// `present` is the field a resume is decided on and it is a BITMAP because chunks arrive in any
+    /// order — so an encoding that lost a bit, or that carried a count of parts instead, would send
+    /// a mover under a court deadline to re-pay for a carrier the chain already holds and leave the
+    /// hole that convicts it. A sparse pattern with a gap in the middle and the top index set is the
+    /// one that catches that; a full or empty bitmap round-trips through either shape.
+    #[test]
+    fn the_declared_close_survives_the_wrpc_round_trip() {
+        let response = GetPalwPendingChunkGroupResponse {
+            found: true,
+            session_id: "5e".repeat(64),
+            side: "executor".to_string(),
+            count: 27,
+            present: 0b1011 | (1u64 << 26),
+            parts_present: 4,
+            complete: false,
+            declared_daa: 91_300,
+            assembly_deadline_daa: 91_408,
+            close_digest: "c1".repeat(64),
+            verdict: "executor_guilty".to_string(),
+            declarer_bond: format!("{}:1", "b0".repeat(32)),
+            deposit: 33_750_000,
+        };
+        let mut bytes = Vec::new();
+        Serializer::serialize(&response, &mut bytes).unwrap();
+        let back = <GetPalwPendingChunkGroupResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert_eq!(back.present, response.present, "the arrival bitmap did not survive the wire");
+        assert_eq!(back.count, 27);
+        assert_eq!(back.parts_present, 4);
+        assert!(!back.complete);
+        assert_eq!(back.side, "executor");
+        assert_eq!(back.close_digest, response.close_digest);
+        assert_eq!(back.assembly_deadline_daa, 91_408);
+        assert_eq!(back.declarer_bond, response.declarer_bond);
+        assert_eq!(back.deposit, 33_750_000);
+        // The default is the honest negative every non-ConsensusV2 node answers with.
+        let mut bytes = Vec::new();
+        Serializer::serialize(&GetPalwPendingChunkGroupResponse::default(), &mut bytes).unwrap();
+        let back = <GetPalwPendingChunkGroupResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert!(!back.found && back.count == 0 && back.present == 0);
     }
 
     /// **An older writer is read fail-CLOSED.** A version-2 peer knows nothing about the free-prompt
@@ -5596,7 +5797,7 @@ mod palw_producer_facts_wire_tests {
     /// Uncertified and unpriced is the safe reading, and it costs a retry, not a fee.
     #[test]
     fn a_version_two_writer_reads_as_uncertified_and_unpriced() {
-        let r = v3_response();
+        let r = v4_response();
         let mut v2 = Vec::new();
         store!(u16, &2, &mut v2).unwrap();
         store!(bool, &r.available, &mut v2).unwrap();
@@ -5625,6 +5826,47 @@ mod palw_producer_facts_wire_tests {
         assert_eq!(back.locked_bond_outpoints, r.locked_bond_outpoints, "everything version 2 DID say is read");
         assert!(!back.fp_certified, "silence is not certification");
         assert_eq!((back.fp_quanta_per_canonical_job, back.fp_max_quanta_per_receipt), (0, 0), "and it prices nothing");
+        assert!(!back.fp_decode_rules_armed, "and a peer older than the fence is not asserting it is dormant either");
+    }
+
+    /// **A version-THREE writer reads as decode-rules-dormant**, and everything version 3 did say
+    /// is still read. The suffix property one version on: each version's fields are a strict
+    /// prefix of the next, so a new field can never shift an old one.
+    #[test]
+    fn a_version_three_writer_reads_as_decode_rules_dormant() {
+        let r = v4_response();
+        let mut v3 = Vec::new();
+        store!(u16, &3, &mut v3).unwrap();
+        store!(bool, &r.available, &mut v3).unwrap();
+        store!(String, &r.chain_point, &mut v3).unwrap();
+        store!(u64, &r.daa_score, &mut v3).unwrap();
+        store!(String, &r.class_id, &mut v3).unwrap();
+        store!(String, &r.artifact_root, &mut v3).unwrap();
+        store!(String, &r.class_target, &mut v3).unwrap();
+        store!(u64, &r.pwu, &mut v3).unwrap();
+        store!(bool, &r.is_base_class, &mut v3).unwrap();
+        store!(u64, &r.min_trace_retention_daa, &mut v3).unwrap();
+        store!(u64, &r.epoch_index, &mut v3).unwrap();
+        store!(u64, &r.epoch_budget_blocks, &mut v3).unwrap();
+        store!(u64, &r.epoch_produced_blocks, &mut v3).unwrap();
+        store!(bool, &r.bond_known, &mut v3).unwrap();
+        store!(String, &r.bond_registered_pubkey, &mut v3).unwrap();
+        store!(String, &r.bond_operator_id, &mut v3).unwrap();
+        store!(u64, &r.bond_collateral, &mut v3).unwrap();
+        store!(String, &r.bond_reserved_exposure, &mut v3).unwrap();
+        store!(String, &r.bond_exposure_ceiling, &mut v3).unwrap();
+        store!(String, &r.bond_claim_exposure, &mut v3).unwrap();
+        store!(String, &r.not_ready_reason, &mut v3).unwrap();
+        store!(Vec<String>, &r.locked_bond_outpoints, &mut v3).unwrap();
+        store!(bool, &r.fp_certified, &mut v3).unwrap();
+        store!(u32, &r.fp_quanta_per_canonical_job, &mut v3).unwrap();
+        store!(u32, &r.fp_max_quanta_per_receipt, &mut v3).unwrap();
+
+        let back = <GetPalwProducerFactsResponse as Deserializer>::deserialize(&mut v3.as_slice()).unwrap();
+        assert!(back.fp_certified, "everything version 3 DID say is read");
+        assert_eq!(back.fp_quanta_per_canonical_job, r.fp_quanta_per_canonical_job);
+        assert_eq!(back.fp_max_quanta_per_receipt, r.fp_max_quanta_per_receipt);
+        assert!(!back.fp_decode_rules_armed, "a version-3 peer knows nothing about the fence — read fail-closed");
     }
 }
 

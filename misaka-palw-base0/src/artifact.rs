@@ -1456,6 +1456,26 @@ mod tests {
         assert_ne!(Base0ArtifactV1::tokenizer_commitment_of(b"ab"), Base0ArtifactV1::tokenizer_commitment_of(b"a"));
         // …and its own domain key, so it cannot collide with an artifact digest.
         assert_ne!(Base0ArtifactV1::tokenizer_commitment_of(b""), base.artifact_digest());
+
+        // **A STRANGER's value, so the commitment is checkable outside this tree.** The rule the
+        // hex pins is the whole encoding: blake2b-512, keyed with `PALW_BASE0_TOKENIZER_DOMAIN`,
+        // over the little-endian u64 length and then the bytes. Whoever has to decide whether a
+        // downloaded `tokenizer.json` is the one an artifact names needs to be able to compute
+        // this without building this crate, and a property test that only compares the function
+        // with itself cannot tell them they got the encoding right. Recomputed in Python
+        // 2026-09-03 (`hashlib.blake2b(digest_size=64, key=...)`, same two inputs) and equal.
+        assert_eq!(
+            faster_hex::hex_string(Base0ArtifactV1::tokenizer_commitment_of(b"abc").as_byte_slice()),
+            "a20677336705cba1b8fcb25f061083df6f2f9e2eb401e1cd50e1f1c35217677a\
+             9c0d236588c020857b114a7f4857ab6869e1ba110ba283ec30c76bc7aeabf859"
+                .replace(['\n', ' '], "")
+        );
+        assert_eq!(
+            faster_hex::hex_string(Base0ArtifactV1::tokenizer_commitment_of(b"").as_byte_slice()),
+            "a2f561414f1f18583efa33f91e7e0cd6a154dcca342da8c7b126490c32ee4ab8\
+             fce32f6f54b1abc708a015a3b20fd2a9f166b922aaeb627fe33996f08df6c504"
+                .replace(['\n', ' '], "")
+        );
     }
 
     /// **A commitment nothing compares against decides nothing** (ADR-0072 Decision 8's shape:
