@@ -1,5 +1,18 @@
 # ADR-0080: The answer is long; the verified unit is short
 
+**Status: SUPERSEDED IN PART by [ADR-0082](0082-the-close-is-flat-in-the-context.md), 2026-09-03,
+later the same day.** §3 — one job as N verification segments — is withdrawn in full and is not to
+be implemented; the refutation below is the reason and it stands. Three things here survive and are
+what ADR-0082 is built on: §1's measurement (the 512 residue is the context's WIDTH, not the
+history's length), Decision 3's economic invariant (reward, ticket, weight and quanta are functions
+of a job's leaves and of nothing a producer can restructure — executable as
+`palw_economic_locus_v1`, which narrowed it to "inside the quanta band"), and "design A" as landed
+on `palw-testnet-5f` (the close ceiling as a chunk-group count; its transport half — a court close
+riding its OWN chunk-group table at `(session_id, side)` — is ADR-0080 W5, which ADR-0082 depends
+on and does not re-decide). The mechanism that replaces §3 is ADR-0082 Decisions 1–3: attention as
+one fused node refuted by a k-ary dissection over the history, so nothing context-wide is committed
+or carried.
+
 **Status: REFUTED IN PART, 2026-09-03, before any of it was implemented.** §1's measurement stands
 and is the best statement of the 512 wall this project has; Decision 3's economic invariant stands
 and is worth keeping whatever replaces this. The MECHANISM — one answer as N claims — does not

@@ -521,8 +521,9 @@ pub fn a16_attn_tile_triple_v1(
     if positions > A16_MAX_DOT_LEN {
         return Err(PalwA16OpError::DotTooLong { got: positions });
     }
-    // An honest row's sum is at least `int_exp(0) = ONE` (its max contributes exp(0)), so a
-    // non-positive `S*` is a claim no execution produced: refused, never divided by.
+    // An honest row's sum is positive — its max contributes `int_exp(0)`, which is positive (the
+    // pinned polynomial's value at zero, within a rounding of `ONE`) — so a non-positive `S*` is a
+    // claim no execution produced: refused, never divided by.
     if s_star <= 0 {
         return Err(PalwA16OpError::Empty);
     }
@@ -687,11 +688,21 @@ mod fused {
         }
     }
 
-    /// **`int_exp(0)` is ONE**, so an honest row's sum is positive and the uniform branch of
-    /// `softmax_shifted` is unreachable — the premise `a16_attn_tile_triple_v1` refuses on.
+    /// **`int_exp(0)` is positive**, so an honest row's sum is positive and the uniform branch of
+    /// `softmax_shifted` is unreachable — the premise `a16_attn_tile_triple_v1` refuses on. It is
+    /// the pinned polynomial's value at zero, near `ONE` but not `ONE` itself: the premise is the
+    /// SIGN, and this pins exactly that.
     #[test]
-    fn an_honest_rows_sum_is_at_least_one() {
-        assert_eq!(crate::palw_base0::int_exp(0) as i64, crate::palw_base0::ONE);
+    fn an_honest_rows_sum_is_positive() {
+        let at_zero = crate::palw_base0::int_exp(0) as i64;
+        assert!(at_zero > 0, "int_exp(0) = {at_zero}");
+        // The pinned polynomial is ~3e-4 above ONE at zero (16,781,800 against 16,777,216); the
+        // premise this module rests on is the sign, and the bound below only says the value is
+        // exp(0)'s neighbourhood rather than a table artefact.
+        assert!(
+            (at_zero - crate::palw_base0::ONE).abs() * 100 <= crate::palw_base0::ONE,
+            "int_exp(0) = {at_zero} is not within 1% of ONE"
+        );
     }
 
     /// **The tile route is the composition** — byte for byte, at every history length and every
@@ -707,7 +718,8 @@ mod fused {
             let v = codes(kv_len * kv_dim, 200 + kv_len as u64);
             let reference = a16_attn_fused_reference_v1(&q, &k, &v, heads, kv_heads, d_head, params()).expect("the composition runs");
             for tile in [1usize, 3, 4, 16, 64] {
-                let tiled = a16_attn_fused_via_tiles_v1(&q, &k, &v, heads, kv_heads, d_head, params(), tile).expect("the tile route runs");
+                let tiled =
+                    a16_attn_fused_via_tiles_v1(&q, &k, &v, heads, kv_heads, d_head, params(), tile).expect("the tile route runs");
                 assert_eq!(tiled, reference, "kv_len {kv_len}, tile {tile}: the tile route parted from the composition");
             }
         }
@@ -752,8 +764,18 @@ mod fused {
         // And a bottom recomputed against a lied `(m*, S*)` does not reproduce the honest child:
         // the max is the same (it never depended on the claim), the sum and the partials move.
         let honest = child(tiles[0]);
-        let against_lie = a16_attn_tile_triple_v1(qh, &k[..2 * tile * kv_dim], &v[..2 * tile * kv_dim], kv_dim, 0, lanes, params(), root.max + 40, root.exp_sum)
-            .expect("computes");
+        let against_lie = a16_attn_tile_triple_v1(
+            qh,
+            &k[..2 * tile * kv_dim],
+            &v[..2 * tile * kv_dim],
+            kv_dim,
+            0,
+            lanes,
+            params(),
+            root.max + 40,
+            root.exp_sum,
+        )
+        .expect("computes");
         assert_eq!(against_lie.max, honest.max);
         assert_ne!(against_lie.exp_sum, honest.exp_sum);
         // A non-positive sum is a claim no execution produced.
@@ -782,7 +804,11 @@ mod fused {
             for (first, count) in [(0usize, 8usize), (2, 3), (7, 1)] {
                 let root = a16_attn_root_claim_v1(qh, &k, &v, kv_dim, kv_off, (first, count), params(), 16).expect("root");
                 let lanes = a16_attn_finalize_v1(&root.v_acc, params().values);
-                assert_eq!(lanes, reference[h * d_head + first..h * d_head + first + count].to_vec(), "head {h} lanes {first}+{count}");
+                assert_eq!(
+                    lanes,
+                    reference[h * d_head + first..h * d_head + first + count].to_vec(),
+                    "head {h} lanes {first}+{count}"
+                );
             }
         }
     }
