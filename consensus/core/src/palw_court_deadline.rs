@@ -242,6 +242,24 @@ pub fn palw_shipped_court_rows_v1() -> Result<Vec<PalwShippedCourtRowV1>, PalwSt
         cost: PALW_COURT_COST_A16,
         checkpoint_interval: interval,
     });
+    // **ADR-0082's graph-v5 512 row, which the testnet-11 genesis registers.** Same family, same
+    // weights and the same four attention tensors (Decision 1 fuses nodes; it moves no tensor), so
+    // the replay is priced at the A16 family's own measured throughput — the sentence the hybrid
+    // loop below already makes for its three members.
+    //
+    // The INTERVAL is not the family's constant, and that is the whole of Decision 4 for this row:
+    // a fused class's anchored replay is one history TILE, not one checkpoint interval, and
+    // `palw_anchored_interval_for_profile_v1` is the one place that is spelled. Writing the
+    // integer-KV interval here would price a replay 32× the one an honest responder performs —
+    // conservative on the deadline, and a figure quoted under a configuration it was not measured
+    // in, which is what this module exists to stop.
+    let a16_v5 = crate::palw_qwen25_profile::qwen25_a16_graph_v5_profile_v1()?;
+    rows.push(PalwShippedCourtRowV1 {
+        class_id: a16_v5.shape_profile_id(),
+        checkpoint_interval: crate::palw_context_ladder::palw_anchored_interval_for_profile_v1(&a16_v5),
+        profile: a16_v5,
+        cost: PALW_COURT_COST_A16,
+    });
     // The hybrid family's members are all priced at the 35B's measured throughput. Conservative by
     // construction: every other member is smaller (the Coder tier has no recurrence at all, the
     // 2B is a fourteenth of the parameters), so no member replays a position more slowly than the
@@ -474,21 +492,44 @@ mod tests {
 
     /// **The unanchored branch is real, and it is the row that would fail first.** The shipped
     /// hybrid registers the sentinel map, so its replay is its whole context; the dense tier and
-    /// the floor register maps and replay one interval.
+    /// the floor register maps and replay one ANCHORED INTERVAL — which is the checkpoint interval
+    /// for a recurrence-anchored row and one history TILE for a fused one (ADR-0082 Decision 4).
+    ///
+    /// This asserted the checkpoint interval directly and read as "a mapped class replays one
+    /// interval". That was true of every mapped row that existed, and the graph-v5 512 row makes it
+    /// false: its bottom opens a tile, so an honest responder replays sixteen positions and not the
+    /// family's interval. Asserted through `palw_anchored_interval_for_profile_v1` now — the one
+    /// place the interval is spelled — so a row cannot be priced at an interval nobody replays.
     #[test]
     fn the_hybrid_replays_its_whole_context_and_the_others_replay_one_interval() {
+        use crate::palw_context_ladder::palw_anchored_interval_for_profile_v1;
         let rows = palw_shipped_court_rows_v1().expect("the shipped rows project");
         for row in &rows {
             let positions = palw_court_replay_positions_v1(&row.profile, row.checkpoint_interval);
             if row.profile.state_chunk_map_id == Hash64::default() {
                 assert_eq!(positions, row.profile.n_ctx, "{}: an unmapped class must be priced at its whole context", row.cost.row);
             } else {
-                assert_eq!(positions, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1, "{}: a mapped class replays one interval", row.cost.row);
+                assert_eq!(positions, row.checkpoint_interval, "{}: a mapped class replays the interval its row declares", row.cost.row);
+                assert_eq!(
+                    row.checkpoint_interval,
+                    palw_anchored_interval_for_profile_v1(&row.profile),
+                    "{}: the row declares an interval that is not the one this class's own anchor replays",
+                    row.cost.row
+                );
             }
         }
-        // At least one of each, or the branch above is untested by construction.
+        // At least one of each, or the branch above is untested by construction — and both KINDS of
+        // mapped row, because the fused one is the case this test used to assert away.
         assert!(rows.iter().any(|r| r.profile.state_chunk_map_id == Hash64::default()), "no unmapped shipped row");
-        assert!(rows.iter().any(|r| r.profile.state_chunk_map_id != Hash64::default()), "no mapped shipped row");
+        assert!(
+            rows.iter().any(|r| r.profile.state_chunk_map_id != Hash64::default() && r.checkpoint_interval == PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1),
+            "no checkpoint-anchored mapped shipped row"
+        );
+        assert!(
+            rows.iter().any(|r| crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&r.profile)
+                && r.checkpoint_interval == crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4),
+            "no fused shipped row priced at the history tile — the graph-v5 case is untested again"
+        );
     }
 
     /// **Where the floor starts to bite** — the number a wider row has to be checked against, and

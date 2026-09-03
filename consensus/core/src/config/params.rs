@@ -5063,6 +5063,23 @@ pub const PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE: u16 = 489;
 /// carries the family, so this line cannot claim more than the certificate supports.
 ///
 /// Weight follows the certificate, not the intent. It did when the number was zero and it does now.
+///
+/// # And since ADR-0082 this number funds the graph-v5 512 row, whose family is NOT yet certified
+///
+/// The paragraph above is about the graph-v2 row and is now half true of the row this share funds.
+/// The dense slot holds ADR-0082's fused 512 row (5f card §2), and the RC's pinned certified set
+/// gives `PALW-QWEN25-A16` the kernel set of the graph-v2 profile — which does not reach
+/// `KDESC_A16_ATTN_FUSED`. So `verify_class_admission_v5` refuses this share by name
+/// (`NotEndToEndCertified { share: 489 }`), measured by
+/// `misaka-palw-base0/tests/a16_root_probe.rs::the_genesis_registered_row_is_admissible_under_the_armed_rc_court`.
+///
+/// A GENESIS registration does not pass through that gate — it is verified against the committed
+/// catalog — so this number is granted and the class holds the cadence. What it does not hold is
+/// weight: `palw_uncertified_weightless` is the rule that reads the certificate at production time.
+/// Closing it is ADR-0082 stream I's court drill over a fused class plus the
+/// `PALW_RC_COURT_E2E_ROOT_BYTES` re-pin that records it — the 5f card §6 calls that drill "the
+/// gate, and admission is not". Until then this line allocates cadence to a class that cannot yet
+/// convert it into weight, which is a launch fact and not a silent one.
 pub const PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE: u16 = 489;
 
 /// The same assembly, with the A16 dense class when its root is pinned. `None` is the two-class
@@ -5196,22 +5213,15 @@ pub fn palw_v2_params_with_classes_on_base(
                 target,
                 bundle,
                 prompt_ids_form,
-                // **Whose bond the registration is charged to.** A fused row must carry its graph
-                // (`PalwClassStateV2::fused_attention` is readable from nowhere else), and the
-                // carriage has a `registrant_bond` field with no room for "the network itself" —
-                // so it names the genesis registry's own first row. Nothing signs it and nothing
-                // at genesis reads a signature; what it costs that bond is ADR-0056 Decision 3's
-                // registration reservation, 40,000 sompi against a genesis collateral of 10,000
-                // MSK. Taken from the assembled registry rather than typed, so it cannot name a
-                // bond this genesis does not hold.
-                bundle
-                    .genesis_objects
-                    .iter()
-                    .find_map(|o| match o {
-                        crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered { bond, .. } => Some(*bond),
-                        _ => None,
-                    })
-                    .ok_or(invalid("a genesis that registers the fused dense row needs a bond registry to charge it to"))?,
+                // **Whose bond the registration is charged to: nobody's.** A fused row must carry
+                // its graph (`PalwClassStateV2::fused_attention` is readable from nowhere else) and
+                // the carriage has a `registrant_bond` field, but a genesis registration has no
+                // registrant — the network itself decided it, and ADR-0056 Decision 3 says it pays
+                // nothing. Naming a real registry row instead would charge that operator a
+                // reservation it never asked for AND make the class stop looking like a genesis
+                // class to ADR-0071 SA-3's exemption, which with the capability fence armed leaves
+                // no bond able to judge it. See `palw_genesis_registrant_bond_v1`.
+                crate::palw_state_v2::palw_genesis_registrant_bond_v1(),
             )
             .map_err(|_| invalid("the Qwen2.5 A16 graph-v5 registration does not derive"))?,
         ),
