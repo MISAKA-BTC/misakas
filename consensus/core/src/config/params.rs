@@ -5304,6 +5304,35 @@ pub fn palw_v2_params_with_classes_on_base(
     // paying. A shared seed is therefore not a slow start; it is a permanent one.
     palw_seed_attempt_targets_v1(bundle)?;
 
+    // **A genesis that registers a FUSED row arms the court that can try it** (ADR-0082
+    // Decision 3; 5f genesis card §1, "ARM, `ForkActivation::always()`").
+    //
+    // This is not a preference and it is not a schedule. `validate_palw_v2` refuses to assemble a
+    // ruleset whose genesis set registers a graph-v5 class while `palw_kary_court` is dormant —
+    // "a court with no dissection cannot try that leaf, so every dispute of that class would end
+    // unprosecuted at the price it was admitted for" — so on this path the two are one decision
+    // and the only question is where it is spelled. It is spelled HERE, as a function of the class
+    // set, rather than as a literal on a preset: a preset that registered the row and forgot the
+    // fence would be a binary that panics at startup, and a preset that armed the fence without
+    // registering the row would be ADR-0065 D1's mistake (a rule with nothing shipping to obey
+    // it). Deriving it from the set is what makes both impossible.
+    //
+    // `always()` and never a height: a chain that acquired a dissection court mid-life would be
+    // two courts wearing one ruleset id, and the arity the court derives is inside
+    // `palw_ruleset_id_v2`. Genesis is the only moment this can be armed.
+    //
+    // Networks with no fused row in their genesis set are untouched — the field stays `None` and
+    // the build fingerprints byte-identically to one without it.
+    let registers_a_fused_row = match &params.palw_consensus_mode {
+        crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+            crate::palw_court_v2::palw_attn_widest_registered_site_v2(bundle).0 > 0
+        }
+        _ => false,
+    };
+    if registers_a_fused_row && params.palw_kary_court.is_none() {
+        params.palw_kary_court = Some(ForkActivation::always());
+    }
+
     // Both gates again, from scratch, over the network actually being shipped.
     params.validate_palw_v2()?;
     let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
