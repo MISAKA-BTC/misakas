@@ -87,7 +87,8 @@ fn class_v5() -> (std::sync::Arc<Base0ArtifactV1>, kaspa_consensus_core::palw_st
 #[test]
 fn a_real_bisection_converges_on_the_tampered_leaf_and_the_close_convicts() {
     let (artifact, profile) = class();
-    let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3));
+    let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3))
+        .expect("the fixture's declaration is this engine's program");
     let anchor = Hash64::from_u64_word(0xC0117E2E);
     let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job");
 
