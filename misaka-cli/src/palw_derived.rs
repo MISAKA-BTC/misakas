@@ -48,12 +48,12 @@ use std::time::Duration;
 /// wrong here: a stranger verifying somebody else's provenance has no UTXOs to select and no
 /// reason to be turned away by an index they will never read. The network match IS kept — a claim
 /// id means nothing without the chain it was made on.
-struct Reader {
-    client: KaspaRpcClient,
+pub(crate) struct Reader {
+    pub(crate) client: KaspaRpcClient,
     network_domain: Hash64,
 }
 
-async fn connect(ctx: &Ctx) -> Result<Reader, CliError> {
+pub(crate) async fn connect(ctx: &Ctx) -> Result<Reader, CliError> {
     let net = NetworkId::from_str(&ctx.network)
         .map_err(|e| CliError::new(exit::GENERIC, format!("bad --network '{}': {e}", ctx.network)))?;
     let registry = misaka_endpoints::EndpointRegistry::load(&ctx.network);
