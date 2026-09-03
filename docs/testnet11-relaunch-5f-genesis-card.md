@@ -2893,3 +2893,62 @@ a differing hex means it ran and disagreed.** Conflating those is what the first
 the trigger I attached was broken in the way the prose version would not have been — a human
 following the checklist would have run the extractor first, because a human knows the pins are
 not there yet.* **Mechanising a rule can lose the context that made the rule obvious.**
+
+### Correcting my own safety argument: the timing is the other way round
+
+I wrote that the v6 change *"is safe because we re-genesis, and the same change on a live chain
+would need a fence"*, and that a missed host therefore *"judges registrations by a different
+rule"*. **The conclusion is right and the timing is inverted.**
+
+**The defect predates tonight.** `processor.rs:6161` — the acceptance path — computes the ladder
+from the fence exactly as the preflight does:
+
+```rust
+let ladder = self.palw_context_ladder_at(point.daa_score).then(|| {
+    palw_class_ladder_rules_for_court_v1(&carriage.profile, court, bundle.court.max_step_leaf_count())
+});
+verify_class_admission_v6(bundle, &carriage.profile, &carriage.canonical, object, …, ladder.flatten(), court, false)
+```
+
+and **`e5651de0` did not touch the processor** — its five files are `palw_class_admission_v2.rs`,
+`palw_panel.rs` and three SDK files. So the chain has refused post-genesis fused registrations on
+a ladder-dormant preset **for as long as the processor has had that arm.**
+
+> What `e5651de0` changed is that the preflight now **agrees** with the chain. Before it, the
+> preflight refused for a *different* reason (no court) — **and the disagreement hid the rule.**
+> Two wrong answers that differ look like one bug in the newer component.
+
+**So the wipe's status is:**
+
+```
+TODAY, before the fix      every node runs the same processor and refuses identically.
+                           No divergence. A surviving host is an ordinary stale peer.
+AFTER the fix ships        the acceptance rule differs between fixed and unfixed nodes.
+                           A missed host judges the same object differently.
+```
+
+**The wipe becomes load-bearing for consensus when the fix ships, not now.** My sentence was
+right about the danger and wrong about when it starts — which matters, because it is the
+difference between "the wipe was already critical" and "the wipe becomes critical at a moment we
+control and can therefore sequence."
+
+### And the corollary that must gate any candidate fix
+
+**A preflight-only repair turns both new tests green while the chain still refuses.** 1c's test
+asks v6 directly and 5b's asks the SDK, and *both* would pass over a closed door if someone
+patched `palw_admission_shape_at_v1` alone. **Checked, not assumed** — `97bdbf75` changes
+`verify_class_admission_v6`'s own body:
+
+```rust
+-  let shape = ladder.map_or_else(|| genesis_anchored_v1(profile, bundle_ladder), |r| r.cost_shape);
++  let shape = match ladder {
++      Some(rules) => rules.cost_shape,
++      None if fused && court armed =>
++          palw_class_ladder_rules_for_court_v1(profile, court, bundle_ladder)
++              .map_or_else(|| genesis_anchored_v1(profile, bundle_ladder), |r| r.cost_shape),
++      None => genesis_anchored_v1(profile, bundle_ladder),
++  };
+```
+
+That is the function `processor.rs:6161` calls, so the acceptance path moves with it.
+**Any later candidate fix gets the same check before it is believed.**
