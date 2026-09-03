@@ -57,7 +57,10 @@ done
 
 echo
 if [ "$found" -eq 0 ]; then
-    echo "-- nothing queued would move ${path}. It is frozen, and the pin can be taken."
+    echo "-- no queued BRANCH would move ${path}."
+    echo "   This does NOT say the crate is frozen: a \`cargo fmt --all\` is not a branch and"
+    echo "   formatting is inside the hash. Run this again AFTER the last formatting pass, and"
+    echo "   only then is the pin safe to take."
 else
     echo "-- ${found} branch(es) still to land. Pinning now means pinning twice."
 fi
