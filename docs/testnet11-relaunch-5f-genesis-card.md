@@ -523,17 +523,33 @@ bases produce a third value, and this project has done exactly that before.
 Anything quoting the old scene goldens is stale: `02-hierarchy` is **2736** (was 2716) and
 `05-tetrahedral-rotations` is **17748** (was 17728).
 
-### The merge surface, measured ahead of the freeze — ONE conflict, already decided
+### The merge surface, measured ahead of the freeze — FIVE conflicts, one already decided
 
 Trial-merged in a throwaway worktree so the conflict set is known before the cut rather than
-discovered during it. Both merges that matter conflict in exactly one file, and it is the same file
-for the same reason:
+discovered during it.
 
-    5f + palw-adr0082-impl                  -> 1 conflict: misaka-palw-base0/src/fuzz_a16.rs
-    5f + palw-artifact-names-genesis-row    -> 1 conflict: misaka-palw-base0/src/fuzz_a16.rs
+**The first version of this section said "one conflict" and was wrong, from two correct
+measurements.** Each branch conflicts with 5f in exactly one file — and that says nothing about the
+merge actually being done, because the remaining four conflicts are between the two BRANCHES, and
+neither pairwise merge contains both:
 
-Everything else auto-merges, including `consensus/core/src/palw_class_admission_v2.rs`, which is the
-file three streams have been writing to.
+    5f + palw-adr0082-impl                 -> 1   misaka-palw-base0/src/fuzz_a16.rs
+    5f + palw-artifact-names-genesis-row   -> 1   misaka-palw-base0/src/fuzz_a16.rs
+
+    5f + impl, THEN + artifact-names       -> 5   fuzz_a16.rs (as above), plus
+                                                 consensus/core/src/palw_class_admission_v2.rs
+                                                 consensus/core/src/palw_state_v2.rs
+                                                 misaka-palw-base0/src/classes.rs
+                                                 misaka-palw-base0/src/fp_recompute.rs
+
+Order does not help: five either way. *`5f + A` and `5f + B` do not predict `5f + A + B`* — and the
+whole point of a trial merge is to trial the merge you are going to do, which this card asserted
+while not doing.
+
+**A merge surface is a measurement with a timestamp.** An earlier three-way run had
+`palw-a16-fp-worker.rs` in the set and today's does not; 5f moved thirty-odd commits between them.
+This set is against `2af2e5c5` and will move again with the next fixer. Re-run before the cut; the
+count is not the deliverable, the *rehearsed resolution* is.
 
 **The conflict, and its resolution, are already ruled.** 5f has `pub fn next(&mut self) -> u64` with
 an `#[allow(clippy::should_implement_trait)]`; impl and 1c's branch both have `pub fn next_u64` with
@@ -547,6 +563,21 @@ reading as ordinary code. Keep that sentence, drop the lint apologia, take the r
 *Recording it here because a one-line conflict resolved under time pressure at a cut is exactly how
 a retracted argument gets re-adopted: the `#[allow]` side reads as the more thoroughly justified one,
 and it is the wrong one.*
+
+**The other four, and who owns them.** `classes.rs`, `palw_class_admission_v2.rs` and
+`palw_state_v2.rs` are where the fourth certified family, the artifact-route change and the
+`canonical_leaves` field meet ADR-0082's court — 1c's to resolve, and they are resolving them.
+`fp_recompute.rs` is impl-against-J and is mine. **Verified state of the two-way merge**, so the
+three-way starts from something known: `misaka-palw-base0` 327 passed / 0 failed (the crate the
+`fuzz_a16` resolution is in), `kaspa-consensus-core` 1,808 passed / **3 failed, and all three are
+re-pins this cut performs anyway**:
+
+    config::genesis::tests::every_genesis_commits_to_the_premine_this_build_mints   re-pin 1
+    config::params::…::shipped_presets_have_pinned_fingerprints                     re-pin 3
+    palw_freeprompt_v3::tests::golden_vector_ids_are_frozen                         re-pin 6
+
+No fourth red, and no red that is not on the re-pin list. That is the result worth having from a
+trial merge — not the conflict count, which expires.
 
 ---
 
