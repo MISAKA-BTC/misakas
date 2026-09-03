@@ -42,15 +42,24 @@ looks armed and prices the old row.
 | class | registered | seated | note |
 |---|---|---|---|
 | BASE-0 floor | yes | yes | the floor must have a producer or DAA stops and the chain cannot leave the state by itself |
-| dense A16 **512 row** | **yes** | yes | the only wide row registered |
+| dense A16 **512 row** | **yes** | yes | the only wide row registered; both model gates needed 256, and at 512 the decode budget is 503 against grammar floors of 38 / 60 / 104 — all three fit with room |
 | hybrid QWEN36 | **NO** | — | see below — this is now a correctness decision, not a margin one |
 | demonstration class | yes | **SEAT AT GENESIS** | a class registered post-genesis has NO epoch budget until the next boundary |
 
-**Why the hybrid row is not registered.** Under ADR-0082 its close is 200,732 bytes = 3 carriers,
-and the split-close path is shut at the acceptance layer (§5). A registered class whose disputes
-cannot be defended is worse than an absent one: the honest party loses by deadline. This was
-already the decision for margin reasons (0.43%, and v4 composition is `NotPriceable`); it now has
-a second and harder reason.
+**Why the hybrid row is not registered — and the reason is not the one either of us gave first.**
+Two weaker arguments were on the table: a 0.43% admission margin, and graph-v4's composition being
+`NotPriceable`. Both invite someone to re-open the question with a tighter geometry. The binding
+reason does not:
+
+    hybrid graph-v5, n_ctx   128:  200,604 bytes = 3 carriers
+    hybrid graph-v5, n_ctx   256:  200,668 bytes = 3 carriers
+    hybrid graph-v5, n_ctx   512:  200,732 bytes = 3 carriers
+
+**The hybrid is three carriers at 128 tokens.** This is not a wide-row problem — it is the
+recurrence's interval replay evidence, which does not shrink at any context. So the hybrid cannot
+close on a shipped build at ANY width until W6/W7 open the split path (§5), and a registered class
+whose disputes cannot be defended is worse than an absent one: the honest party loses by deadline.
+Flat correctness fact, not a margin. *(Swept by 1c on a detached `palw-adr0082-f-cost`.)*
 
 **No operator pubkey may appear in two `BondRegistered` rows.** The genesis tool PANICS on this,
 it does not warn.
@@ -70,8 +79,24 @@ charges for but the court does not is 13,996 at its widest.
 |---|---|---|---|---|
 | graph-v2/v3 dense @ 512 (today) | 1,154,673 | 1,168,669 | 14 | **no** |
 | graph-v5 dense @ 512 (ADR-0082) | 80,504 | **94,500** | **1** | **yes** |
-| graph-v5 dense @ 4,096 | 80,696 | 94,692 | 1 | yes |
 | graph-v5 hybrid @ 512 | 200,732 | — | 3 | no |
+
+**How flat "flat" is, swept rather than interpolated** — graph-v5 dense, every registrable width:
+
+| n_ctx | close proof | carriers | decode budget |
+|---|---|---|---|
+| 128 | 80,376 | 1 | 119 |
+| 256 | 80,440 | 1 | 247 |
+| 512 | 80,504 | 1 | 503 |
+| 1,024 | 80,568 | 1 | 1,015 |
+| 2,048 | 80,632 | 1 | 2,039 |
+| 4,096 | 80,696 | 1 | 4,087 |
+
+**64 bytes per doubling — thirty-two times the context for 320 bytes.** That is the sentence to put
+in front of someone who has to believe it, and it is better than "the close stops growing with
+n_ctx". It also means **512 is not a compromise**: 1,024 costs 64 more bytes and is equally
+prosecutable. The width is chosen by what the model gate measured, not by what the close can
+afford. *(Swept by 1c.)*
 
 **Admissible and prosecutable are different properties**, and the tree had only ever measured the
 first. Swept against what can actually be FILED:
