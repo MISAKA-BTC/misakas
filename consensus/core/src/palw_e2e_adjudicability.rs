@@ -915,8 +915,8 @@ pub fn palw_rc_court_fp_e2e_root_v1() -> Hash64 {
 #[cfg(test)]
 pub(crate) fn catalog_covering_family_for_tests_v1() -> Vec<PalwE2eFamilyV1> {
     vec![PalwE2eFamilyV1 {
-        family_id: Hash64::from_u64_word(0xFA_1_1),
-        drilled_class_id: Hash64::from_u64_word(0xFA_1_2),
+        family_id: Hash64::from_u64_word(0xFA11),
+        drilled_class_id: Hash64::from_u64_word(0xFA12),
         kernel_ids: crate::palw_step_refute::catalogued_kernel_ids_v1(),
         covering: PalwE2eCoveringV1 {
             pre: true,

@@ -1279,7 +1279,7 @@ mod tests {
             );
             // The executor is drawn out of this same set, so a panel needs one spare.
             assert!(
-                fenced >= seats_needed + 1,
+                fenced > seats_needed,
                 "class {class_id:?}: {fenced} eligible operators past the fence, and a panel of {seats_needed} needs one spare for \
                  the executor it excludes"
             );

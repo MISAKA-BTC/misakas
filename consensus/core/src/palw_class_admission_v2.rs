@@ -49,7 +49,7 @@ use kaspa_hashes::Hash64;
 use crate::palw_catalog_coverage::{PalwReachableKernelSetV1, verify_catalog_coverage_v1};
 use crate::palw_mode_v2::{PalwClassCatalogEntryV2, PalwConsensusParamsV2};
 use crate::palw_state_v2::{PalwConsensusObjectV2, PalwPwuRuleV2};
-use crate::palw_step::{PalwShapeProfileV3, step_leaf_count, worst_case_step_leaf_count_v1};
+use crate::palw_step::{PalwShapeProfileV3, step_leaf_count};
 use crate::palw_step_refute::catalogued_kernel_ids_v1;
 use crate::palw_v2::PalwJobContextV2;
 
