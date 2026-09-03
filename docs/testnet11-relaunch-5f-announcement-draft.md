@@ -91,7 +91,19 @@ disagreed, five injuries each refused by name, ladder gate 2/2, stranger RED pen
 | | value |
 |---|---|
 | dispute cost, at EVERY position class | 40,461 bytes — under one carrier, measured per class rather than averaged |
-| close size at 512 | 82,719 bytes, one carrier; 82,911 at n_ctx 4,096 — **64 bytes per doubling of context** |
+| close size at 512 | **one carrier.** The byte figure is re-measured on the cut's own commit — see below |
+
+> **The close's byte count moved and must be taken from the cut, not from this draft.** It has read
+> 81,599, then 82,719, and on `5f + impl` today it is **81,312 bytes**. Each was correct when taken.
+> Publish the number the cut's own tree produces:
+>
+>     cargo test -p kaspa-consensus-core --lib -- the_512_close_is_one_carrier --nocapture
+>
+> **And the count is one carrier at every legal arity** — measured at 2, 4, 8, 16, 32 and 64, all
+> 81,312 bytes. That matters because the genesis derives **arity 2**, not the 16 an early sweep
+> measured at, and this document nearly carried a figure from a court nobody runs. It does not,
+> because the quantity turns out to be arity-invariant — but the check was worth making and the
+> reason it was safe is not a reason to skip it next time.
 
 Under the binary court alone those figures do not hold: a dense 512 close is 1,154,673 bytes and
 fourteen carriers, which the split-carriage path cannot file. **That is why this release waits for
