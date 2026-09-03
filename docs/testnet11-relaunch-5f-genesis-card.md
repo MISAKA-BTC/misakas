@@ -829,6 +829,32 @@ gate above is the one that would have caught all three.
       registered by the panel   71bbb755…   the catalog's graph-v2 row at n_ctx 16
       certified by bind         8d2e6f16…   the artifact's own row at 512
 
+  **And `--artifact` alone does NOT fix it — that prescription was wrong.** All four ids derived and
+  printed on the merged tree, which is what turned a suspicion into a defect:
+
+      a16 graph-v2/v3  n_ctx  16   7a76d29b…  fused false
+      a16 graph-v5     n_ctx  16   1ae17978…  fused true
+      a16 graph-v2/v3  n_ctx 512   8d2e6f16…  fused false   <- what `bind` produces
+      a16 graph-v5     n_ctx 512   4277d84f…  fused true    <- what genesis registers
+
+  `8d2e6f16…` is **graph-v2 at 512**. So `bind` is not merely binding the wrong WIDTH, which is what
+  this section assumed — it binds the wrong GRAPH, at the right width, differing only by the fused
+  site. Deriving from the artifact does not help by itself: the artifact header declares geometry
+  (family, width, eps) and **no graph**, so `bind --artifact` projects it through
+  `a16_row_for_artifact_shape_v1` → `palw_a16_context_row_profile_v1` and lands on v2 again.
+
+  **The correct derivation already exists and is already tested.** J shipped
+  `classes::a16_artifact_row_v1`, which projects the same header through
+  `palw_fuse_attention_site_v5` over the graph-v3 dense row with the artifact's own epsilon and the
+  tiled v3 map — **with an equality test pinning that it derives the same `shape_profile_id` as the
+  genesis row.** The fix is that `bind` calls the other one. *The forcing test existed and the
+  production path took the other spelling anyway*, which is this project's fourth instance of one
+  class root spelled twice with nothing making them equal.
+
+  **The test to add is not "the two derivations agree" — J has that and it did not help.** It is
+  that `bind --artifact` over `instruct-bound.palwart`, through the binary's own argument parsing,
+  prints `4277d84f…`. A unit test that builds both ends from one source of truth checks nothing.
+
   The registered value is printed by the panel that computed it rather than scraped from a log —
   an earlier reading came from `grep -oE '[0-9a-f]{128}' | tail -1` and was returning block hashes.
   **A value an operator is asked to match against a certificate has to be printed by the thing that
