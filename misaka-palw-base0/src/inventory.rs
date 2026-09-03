@@ -1101,3 +1101,77 @@ mod tests {
         ));
     }
 }
+
+/// **ADR-0082 Decision 1's strongest claim, checked directly: fusing the attention site changes
+/// the GRAPH and not the ARTIFACT.**
+#[cfg(test)]
+mod graph_v5 {
+    use crate::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
+    use crate::engine_a16::derived_a16_store;
+    use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v2, qwen25_a16_profile_v5};
+    use kaspa_consensus_core::palw_step::PalwStepOpKindV1;
+    use kaspa_consensus_core::palw_step_refute::palw_attn_fused_tensors_v1;
+
+    /// **The v5 inventory is the v2 inventory, row for row, and therefore root for root.**
+    ///
+    /// The four nodes the fusion replaces contribute exactly four operand rows between them — the
+    /// scores triple, the probability triple, the values triple and the softmax's widening byte —
+    /// and the fused node contributes the SAME four, derived from the one name it carries. So a
+    /// v5 class registers the identical `artifact_root` a v2 class does, which is what "the
+    /// artifact is UNCHANGED" means in bytes rather than in prose: an operator converts nothing,
+    /// re-hashes nothing, and downloads nothing new to run graph v5.
+    ///
+    /// It is also the tightest available statement that the derivation is right. A wrong prefix, a
+    /// wrong suffix or a missing operand would each show up here as a row the v2 inventory has and
+    /// the v5 one does not — before any dispute, and without an oracle.
+    #[test]
+    fn the_v5_inventory_is_the_v2_inventory_and_names_every_derived_tensor() {
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 16,
+            ffn_dim: 12,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 16,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let shape = Base0ShapeV1 {
+            n_layers: 2,
+            n_heads: 4,
+            n_kv_heads: 2,
+            d_head: 4,
+            d_ff: 12,
+            vocab: 64,
+            max_position: 32,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: 1,
+        };
+        let artifact = Base0ArtifactV1::derive_deterministic(shape, 0xF022)
+            .expect("a valid shape")
+            .with_a16_params(derived_a16_store(&shape))
+            .expect("sorted and unique");
+        let v2 = qwen25_a16_profile_v2(geometry).expect("the v2 row projects");
+        let v5 = qwen25_a16_profile_v5(geometry).expect("the v5 row projects");
+
+        let inv_v2 = super::a16_inventory_v1(&artifact, &v2).expect("the v2 inventory builds");
+        let inv_v5 = super::a16_inventory_v1(&artifact, &v5).expect("the v5 inventory builds");
+        assert_eq!(inv_v5.operands(), inv_v2.operands(), "graph v5 implies a different artifact, which it must not");
+        assert_eq!(inv_v5.root(), inv_v2.root(), "and therefore a different artifact_root");
+
+        // …and every tensor the fused node derives is one of those rows, at every layer.
+        let fused = v5.attn_nodes.iter().find(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+        let t = palw_attn_fused_tensors_v1(fused.weight_name.as_str()).expect("the site's operands derive");
+        for layer in 0..geometry.layer_count {
+            for name in [&t.softmax_up, &t.scores, &t.probs, &t.values] {
+                assert!(
+                    inv_v5.operands().iter().any(|o| o.tensor_name == *name && o.layer == Some(layer)),
+                    "the fused site reads {name:?} at layer {layer}, and no inventory row can open it"
+                );
+            }
+        }
+    }
+}
