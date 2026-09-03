@@ -14863,10 +14863,7 @@ pub(crate) mod tests {
         assert!(armed.fp_decode_rules_at(2));
         let (a1, _) = apply(&genesis, &armed, &ctx(1, 100, 1), &register_class_and_bond(), None);
         let refused = apply_palw_transition_v2(&a1, &armed, &ctx(2, 101, 2), &[fp_commit(0xFC, 61, 3)], None);
-        assert_eq!(
-            refused.unwrap_err(),
-            PalwStateV2Error::FreePromptDecodeLeavesUnavailable { claim: h64(0xFC), class: h64(1) }
-        );
+        assert_eq!(refused.unwrap_err(), PalwStateV2Error::FreePromptDecodeLeavesUnavailable { claim: h64(0xFC), class: h64(1) });
         // And the message tells an operator what closing it costs, rather than only that it failed.
         let text = PalwStateV2Error::FreePromptDecodeLeavesUnavailable { claim: h64(0xFC), class: h64(1) }.to_string();
         assert!(text.contains("prompt_tokens") && text.contains("shape profile"), "{text}");
@@ -16042,6 +16039,60 @@ pub(crate) mod tests {
         for (i, variant) in variants.iter().enumerate() {
             assert_ne!(*variant, base, "field {i} of a close declaration is not covered by the signature");
         }
+    }
+
+    /// **The per-block close cap has to hold THROUGH completion, and two sides can complete.**
+    ///
+    /// W5 counted the cap on `palw_court_close_completes_a_group_v1`, and W7 made completion
+    /// expensive: assembling up to 2.7 MB, hashing it, decoding it and running
+    /// `adjudicate_court_close_v2`. The cap is one per block, and the case that proves it is needed
+    /// is two DIFFERENT groups each one chunk from the end — a session's two sides, which is the
+    /// most a single session can offer and is reachable in one block. The predicate says yes to
+    /// both; the acceptance walk's counter is what drops the second, with the block standing.
+    ///
+    /// The transition itself has no cap and must not: it applies what the walk accepted, and a
+    /// transition that refused a second completion would make the block INVALID rather than short
+    /// one object — audit M-01's shape, where honest miners produce the invalid blocks.
+    #[test]
+    fn two_groups_can_complete_and_the_block_cap_is_what_admits_one() {
+        let (p, s5, _claim_id, session_id) = split_close_fixture_funded(50_000_000);
+        let executor = split_close_v1(&a_court_close(session_id, PalwCourtVerdictV2::ExecutorGuilty), PalwCourtSideV1::Executor, 3);
+        let challenger =
+            split_close_v1(&a_court_close(session_id, PalwCourtVerdictV2::ChallengerDefeated), PalwCourtSideV1::Challenger, 3);
+        let (d, _) = apply(&s5, &p, &ctx(6, 200, 6), &[executor.0.clone(), challenger.0.clone()], None);
+        assert_eq!(d.court_close_groups_iter().count(), 2, "one session, two sides, two rows");
+        // Both groups to one chunk from the end.
+        let mut state = d;
+        for (i, daa) in [(0usize, 201u64), (1, 202)] {
+            let (next, _) =
+                apply(&state, &p, &ctx(7 + i as u64, daa, 7 + i as u64), &[executor.1[i].clone(), challenger.1[i].clone()], None);
+            state = next;
+        }
+        // Each remaining chunk completes ITS group, and the predicate says so for both — which is
+        // what makes the walk's `PALW_COURT_CLOSE_MAX_PER_BLOCK` counter fire on the second.
+        assert_eq!(PALW_COURT_CLOSE_MAX_PER_BLOCK, 1, "the per-block close cap moved without this test being read");
+        assert!(palw_court_close_completes_a_group_v1(&state, &executor.1[2]));
+        assert!(palw_court_close_completes_a_group_v1(&state, &challenger.1[2]));
+        // Dropped, not invalidating: the block that carries only the FIRST is a valid block, and
+        // the group the walk did not admit is untouched and still assemblable next block.
+        let (one, _) = apply(&state, &p, &ctx(9, 203, 9), &executor.1[2..], None);
+        assert!(one.court_session(&session_id).is_none(), "the admitted completion did not close the session");
+        // The session is gone, so its OTHER group went with it — a close ends the dispute, and the
+        // cap is a per-block bound on CPU rather than a rule about which of the two sides wins.
+        assert!(one.court_close_group(&session_id, PalwCourtSideV1::Challenger).is_none());
+
+        // **And this is why the walk applies objects ONE AT A TIME.** Handed both completions in
+        // one call the transition refuses the whole set — the first close removed the session, so
+        // the second chunk names a group that no longer exists — and a refusal here is a refusal of
+        // the BLOCK. The acceptance walk never asks that question: it folds object by object and
+        // drops what does not apply, so the second completing carrier costs its sender a fee and
+        // costs the block nothing. The cap sits in front of that for the CPU, not for the validity.
+        assert_eq!(
+            apply_palw_transition_v2(&state, &p, &ctx(9, 203, 9), &[executor.1[2].clone(), challenger.1[2].clone()], None)
+                .unwrap_err(),
+            PalwStateV2Error::MissingCourtCloseGroup { session: session_id },
+            "two completions of one session in one set must not silently apply — the first ends the session"
+        );
     }
 
     /// **The grading fee, and the two quantities it is derived from.**
