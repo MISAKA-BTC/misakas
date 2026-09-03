@@ -58,6 +58,8 @@ Block time, finality, node counts beyond the fleet's six, and anything about VLT
 ## Qwen3.6 produced blocks
 
 At 18:18 and 18:43 UTC the Qwen3.6 seat produced the chain's first two attempt blocks (`c90b028c…`, `7e11fa05…`), each
-the result of one ~25-minute inference on an 8-core CPU host, both draws won. The dense tier's first block is expected
-when its first 512-context job completes; the floor's when its draw wins. Everything else on the chain so far is
-heartbeat blocks.
+the result of one ~25-minute inference on an 8-core CPU host, both draws won. Because a block's parents are fixed when
+its job starts, a 25-minute job lands a block whose parents are 25 minutes old, and the DAG merged both as **red**
+blocks; the protocol counts merged work (ADR-0058), so they register against the class's budget and the seat's bond.
+Their adjudication by the other seats has not begun. The dense tier's first block is expected when its first
+512-context job completes; the floor's when its draw wins. Everything else on the chain so far is heartbeat blocks.

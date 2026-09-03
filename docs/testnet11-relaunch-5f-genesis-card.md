@@ -5427,3 +5427,16 @@ was the rule in 6b; `.113`'s node was the seat it had not been applied to.
 
 The explorer-based watch for a non-heartbeat block cannot fire (the field it reads is constant) and is left to expire.
 Post-cut: the filler must store the header's `pow_algo_id`, or the explorer must not show one.
+
+**6i, continued — the two Qwen3.6 blocks were merged red (19:05 UTC, node0's `getBlocks` mergesets):**
+
+    c90b028c…  blue 26, daa 40, 6 children   → in mergeSetRedsHashes of chain block c71b0f1e… (daa 82) and of five side blocks
+    7e11fa05…  blue 50, daa 80, 1 child      → in mergeSetRedsHashes of chain block b73f8c14… (daa 127)
+
+A 25-minute inference on a template taken at job start yields parents 25 minutes old; under k=1 the DAG merges such a
+block red — the case the ADR-0058 note names ("a slow class is structurally red"). The state nonetheless counts them:
+`epochProducedBlocks 2` of budget 489, `bondReservedExposure 26,853,600 = 2 × 13,426,800` — ADR-0058's merged work
+counted, as written. Whether a red block's claim is adjudicated is a reading not yet taken: node1, seat4 and seat2
+(capable) have filed nothing for either claim; `.113`'s node filed Incapable (refitted). `live_total=0` in node0's own
+state line after both. Post-cut, for the seat runbook and the ADR: on CPU-class hosts every attempt block of a model
+class will be red by construction; the announcement says "produced and merged as red blocks", not "chain blocks".
