@@ -499,7 +499,9 @@ mod tests {
     fn only_per_leaf_rows_claim_invariance() {
         assert_eq!(
             PALW_ECONOMIC_LOCUS_CENSUS_V1.len(),
-            21,
+            // 21 → 22 (ADR-0082 Decision 10): "credited leaves" is a row of its own, because what
+            // a claim is PAID for stopped being the same quantity as what it computed.
+            22,
             "the census is complete or it is nothing — a row added or dropped is a deliberate edit here"
         );
         let mut names: Vec<&str> = PALW_ECONOMIC_LOCUS_CENSUS_V1.iter().map(|row| row.name).collect();
@@ -816,7 +818,7 @@ mod tests {
         // count — so equal quanta means an equal number of identically-keyed draws.
         let (claim, beacon, net) = (Hash64::from_u64_word(0xC1), Hash64::from_u64_word(0xB1), Hash64::from_u64_word(0x9E7));
         for q in 0..a.0 {
-            assert_eq!(fp_quantum_ticket_v3(&net, &beacon, &claim, q), fp_quantum_ticket_v3(&net, &beacon, &claim, q));
+            assert_eq!(fp_quantum_ticket_v3(net, beacon, claim, q), fp_quantum_ticket_v3(net, beacon, claim, q));
         }
 
         // OVER the fence (every shipped preset) the two do NOT price the same, and that is the
@@ -849,7 +851,7 @@ mod tests {
     #[test]
     fn the_attempt_lanes_canonical_job_earns_what_it_earns_today() {
         let c = class(50_000, 3);
-        let attempt = palw_exposure_pwu_v1(&c);
+        let attempt = palw_exposure_pwu_v1(&c, 0);
         assert_eq!(attempt, 50_000, "an attempt's exposure pwu is the class's canonical job, flat");
         // Nothing in `fp_credited_leaves_v1` is reachable from that number: it takes the
         // free-prompt claim's own two leaf counts and returns one of them.

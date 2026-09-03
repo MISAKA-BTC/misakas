@@ -6147,7 +6147,10 @@ pub(crate) mod tests {
     #[test]
     fn the_seeded_arm_convicts_the_token_that_is_not_the_keyed_argmax() {
         use crate::palw_decode_select_v2::PalwDecodeSamplingV2;
-        let sampling = PalwDecodeSamplingV2 { seed: [0x2Bu8; 32], temperature_q: 1 << 24 };
+        // A temperature of 16 in the class's own logit units (Q24), which is large beside this
+        // fixture's ~6-unit spacing between adjacent logits — the row has to be genuinely
+        // re-orderable by the noise or the test proves nothing about the sampler.
+        let sampling = PalwDecodeSamplingV2 { seed: [0x2Bu8; 32], temperature_q: 1 << 28 };
         let (mut binding, _m, _r, _) = base0_honest_decode_commitment();
         let vocab = 10_000usize;
         let decode = binding.job_context.exact_decode_tokens as usize;
@@ -6203,7 +6206,8 @@ pub(crate) mod tests {
     #[test]
     fn the_seeded_flat_arm_agrees_with_the_seeded_tiled_one() {
         use crate::palw_decode_select_v2::PalwDecodeSamplingV2;
-        let sampling = PalwDecodeSamplingV2 { seed: [0x77u8; 32], temperature_q: 1 << 25 };
+        // 16 in logit units, against a 40-lane row whose values span ~429 — see the tiled twin.
+        let sampling = PalwDecodeSamplingV2 { seed: [0x77u8; 32], temperature_q: 1 << 28 };
         let (b, _, _, _) = base0_honest_decode_commitment();
         let vocab = b.shape_profile.vocab_size as usize;
         let decode = b.job_context.exact_decode_tokens as usize;

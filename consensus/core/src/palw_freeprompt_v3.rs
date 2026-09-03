@@ -1474,7 +1474,7 @@ impl PalwFpCommitmentTxPayloadV3 {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
         }
         let envelope = PalwFreePromptCommitmentEnvelopeV3 { commitment: self.commitment.clone(), signature: self.signature.clone() };
-        envelope.validate_v3(network_domain, panel_da_armed)?;
+        envelope.validate_v3(network_domain, panel_da_armed, decode_rules_armed)?;
         // **`PanelDa` carries NO ids, and the check is a REQUIREMENT, not a tolerance** (ADR-0077
         // Decision 16). Placed before the canonical arm because the privacy mode decides what the
         // chain may hold and the prompt mode decides where the ids come from: a mode-2 payload
