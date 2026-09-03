@@ -5770,12 +5770,10 @@ impl VirtualStateProcessor {
                                 None => return Err(format!("court {session_id} completes with chunk {i} missing")),
                             }
                         }
-                        let assembles = kaspa_consensus_core::palw_state_v2::palw_court_close_chunk_digest_v1(&assembled)
-                            == group.close_digest;
+                        let assembles =
+                            kaspa_consensus_core::palw_state_v2::palw_court_close_chunk_digest_v1(&assembled) == group.close_digest;
                         let decoded = assembles
-                            .then(|| {
-                                borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>(&assembled).ok()
-                            })
+                            .then(|| borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>(&assembled).ok())
                             .flatten();
                         // Only when the bytes ARE this session's close does the adjudication run;
                         // anything else is the transition's conviction, not this layer's refusal.
