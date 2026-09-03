@@ -497,6 +497,31 @@ bases produce a third value, and this project has done exactly that before.
 Anything quoting the old scene goldens is stale: `02-hierarchy` is **2736** (was 2716) and
 `05-tetrahedral-rotations` is **17748** (was 17728).
 
+### The merge surface, measured ahead of the freeze — ONE conflict, already decided
+
+Trial-merged in a throwaway worktree so the conflict set is known before the cut rather than
+discovered during it. Both merges that matter conflict in exactly one file, and it is the same file
+for the same reason:
+
+    5f + palw-adr0082-impl                  -> 1 conflict: misaka-palw-base0/src/fuzz_a16.rs
+    5f + palw-artifact-names-genesis-row    -> 1 conflict: misaka-palw-base0/src/fuzz_a16.rs
+
+Everything else auto-merges, including `consensus/core/src/palw_class_admission_v2.rs`, which is the
+file three streams have been writing to.
+
+**The conflict, and its resolution, are already ruled.** 5f has `pub fn next(&mut self) -> u64` with
+an `#[allow(clippy::should_implement_trait)]`; impl and 1c's branch both have `pub fn next_u64` with
+no allow. **Take `next_u64`.** The justification written beside that `allow` was false — it claimed
+`next` is what every RNG calls this step, in a file that already spelled it both ways twice over,
+and `rand_core`'s own name for it is `next_u64`. The half of that doc comment worth keeping is the
+Iterator argument, which is true: this is an infinite deterministic sequence, and implementing
+`Iterator` would offer combinators that are meaningless on it and let a `for` loop run forever while
+reading as ordinary code. Keep that sentence, drop the lint apologia, take the rename.
+
+*Recording it here because a one-line conflict resolved under time pressure at a cut is exactly how
+a retracted argument gets re-adopted: the `#[allow]` side reads as the more thoroughly justified one,
+and it is the wrong one.*
+
 ---
 
 ## 5. Known-open, shipping anyway, stated so no page claims otherwise
