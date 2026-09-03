@@ -2110,3 +2110,54 @@ sentence attached to the wrong noun. The accurate version:
 That last sentence is the one that decides how much the gap costs, and it is the one my original
 phrasing never reached — because I stopped at a true fact about llama.cpp and never asked what
 the subsystem was *for*.
+
+### The second red carries a green inside it, and the verdict throws the green away
+
+`concurrent_seeds_are_faster_and_are_the_same_tags`, same host, same stale worker:
+
+```
+permits: 3 (pool warmed in 156.099172681s)
+3 seeds serially through the pool: 52.802461904s
+3 seeds concurrently:              113.394920626s
+speedup: 0.47x
+FAILED   ... finished in 358.11s   (WALL 375.15 s)
+  concurrent seeds were not faster than serial ones — the permits are not being used
+```
+
+**The assertion that failed is the last one in the test.** Everything above it ran and passed:
+
+```
+assert_eq!(inference_concurrency(), PERMITS)          the permit gate took the count
+expected[i] = one_shot_tag(worker, seed_i)            three fresh-process baselines
+assert_ne!(expected[0], expected[1])                  anti-vacuity: the seeds differ
+assert_eq!(tags[i], expected[i])   x3                 <- THE CONSENSUS PROPERTY, GREEN
+```
+
+So this run established, on real hardware with the real pinned model:
+
+> **Three concurrently-computed Layer-1 PoW tags each equal the tag an independent fresh
+> process computes for the same seed**, with the test's own anti-vacuity guard confirming the
+> three seeds are genuinely distinct.
+
+That is the property consensus depends on. **It is green, it was measured here for the first
+time, and `test result: FAILED` is what the log records.** What actually failed is a *speed
+direction* — and the speed direction is the one property a stale counterpart is guaranteed to
+invert: with no `pow-agent` mode in the binary, "concurrent" means three simultaneous 1.2 GB
+model loads on a 23 GiB box, so 0.47x is the arithmetic of the missing feature, not a defect.
+The message *"the permits are not being used"* is literally true and names a mechanism where
+the cause is again an absent binary feature — **the same mis-attribution as the first test's
+message, in a second test, written by the same hand.**
+
+> **A verdict is a reduction, and a reduction over `assert` is `AND`.** One failed clause turns
+> a run with four established facts into the word FAILED. **This is the exact inverse of the
+> `--report` defect from an hour ago**: there, the file carried the data and omitted whether the
+> run was valid; here, the run carries the validity and discards the data. Both are the same
+> break — *the join between a measurement and its standing is lost* — and they fail in opposite
+> directions, so no single habit catches both. **Read the assertions that passed before the one
+> that failed.** They are not consolation; on this run they are the only new evidence.
+
+The order matters and is not luck: the author put the cheap correctness assertions first and the
+host-dependent timing assertion last, with a comment saying the magnitude is *"a property of the
+host's cores, not of this code"*. **The test was built so that a failure of the weak claim comes
+after the strong ones have been established** — that is a design worth copying, and the log
+format is what hides it.
