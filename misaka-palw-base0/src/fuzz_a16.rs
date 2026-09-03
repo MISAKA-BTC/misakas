@@ -119,6 +119,29 @@ fn tiny_class() -> (Base0ArtifactV1, PalwShapeProfileV3) {
     (artifact, qwen25_a16_profile_v2(geometry).expect("the corrected profile builds"))
 }
 
+/// The SAME artifact and the same geometry as [`tiny_class`], projected as ADR-0082's graph v5:
+/// one fused attention node per layer instead of four. The artifact is unchanged, which is what
+/// makes this a second GRAPH over one model rather than a second fixture.
+fn tiny_class_v5() -> (Base0ArtifactV1, PalwShapeProfileV3) {
+    let (artifact, v2) = tiny_class();
+    let geometry = PalwQwen25GeometryV1 {
+        layer_count: 2,
+        hidden_dim: 16,
+        ffn_dim: 12,
+        attn_heads: 4,
+        attn_kv_heads: 2,
+        attn_head_dim: 4,
+        vocab_size: 64,
+        n_ctx: 16,
+        n_threads: 1,
+        rms_eps_q: 1,
+        tile_len: 4,
+    };
+    let v5 = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v5(geometry).expect("the v5 profile builds");
+    assert_ne!(v2.shape_profile_id(), v5.shape_profile_id(), "a different graph is a different class");
+    (artifact, v5)
+}
+
 /// One random edit. The vocabulary of edits is the vocabulary of ways a stranger's registration
 /// can differ from the family shape — structural (order, arity, count) and nominal (kernels,
 /// operands, widths, dtypes) — plus a "no edit" arm so the unmutated profile stays in the corpus.
@@ -222,7 +245,18 @@ fn gate_accepts(
 /// fence to arm.
 pub fn fuzz_a16_profiles_v1(seed: u64, iterations: u64) -> FuzzTallyV1 {
     let (artifact, base) = tiny_class();
-    let engine = A16Engine::new(&artifact).expect("the store resolves");
+    fuzz_a16_profiles_from_v1(seed, iterations, &artifact, &base)
+}
+
+/// [`fuzz_a16_profiles_v1`] over a caller's BASE profile — the same schedule, the same mutations,
+/// the same findings, driven from a different graph.
+///
+/// A parameter rather than a second harness because ADR-0082's graph v5 is a new graph over the
+/// same model, and a fuzz gate that only ever saw the four-node attention site would say nothing
+/// about the one-node one. `fuzz_a16_profiles_v1` is the shipped base and its corpus digest is
+/// pinned; this is what lets a second base be driven without moving that pin.
+pub fn fuzz_a16_profiles_from_v1(seed: u64, iterations: u64, artifact: &Base0ArtifactV1, base: &PalwShapeProfileV3) -> FuzzTallyV1 {
+    let engine = A16Engine::new(artifact).expect("the store resolves");
     let bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
         base.shape_profile_id(),
         kaspa_hashes::Hash64::from_u64_word(0xCA7),
@@ -581,6 +615,35 @@ mod tests {
         assert!(tally.executed > 0, "the corpus must actually reach execution, or this test gates nothing");
         assert!(tally.court_costed > 0, "and the court cost must actually be derived, or the ceiling column proves nothing");
         assert!(tally.max_close_bytes_seen > 0, "a zero here would mean the ceiling was never compared against anything");
+    }
+
+    /// **The same gate over ADR-0082's graph v5** — the fused attention site, driven through the
+    /// same mutate → admit → plan → execute-twice schedule.
+    ///
+    /// The point is not a second tally. It is that the fence Decision 5 arms is a fence about the
+    /// PROFILE SPACE, and graph v5 changes the shape of that space at exactly the site the
+    /// mutations reach: a fused node has three inputs where every other node has one or two, its
+    /// out width is fixed where the site's used to be job-scaled, and its operand name is the ONE
+    /// the other three derive from. A mutation that rewrites that name, that width or those refs
+    /// must be refused or planned — never panicked on, and never nondeterministic.
+    ///
+    /// No corpus digest is pinned for this base: the digest's whole discipline is that it moves
+    /// only in a commit that says why, and a v5 row is not registered anywhere yet.
+    #[test]
+    fn a_bounded_fuzz_run_over_the_v5_graph_finds_no_panic_and_no_nondeterminism() {
+        let (artifact, base) = tiny_class_v5();
+        let tally = fuzz_a16_profiles_from_v1(0x0082_2026_09_03, 400, &artifact, &base);
+        println!("v5 fuzz tally: {tally:?}");
+        assert_eq!(tally.panics, 0, "a panic inside the interpreter is the fence staying down");
+        assert_eq!(tally.nondeterminism, 0, "two runs of one plan must be one bitstream");
+        assert!(tally.executed > 0, "the v5 corpus must actually reach execution, or this test gates nothing");
+        assert!(tally.court_costed > 0, "and the court cost must actually derive for a v5 row");
+        assert!(tally.max_close_bytes_seen > 0, "a zero here would mean the ceiling was never compared against anything");
+        // `closes_over_ceiling` is REPORTED and not asserted zero: the whole-row route of ADR-0082
+        // Decision 1 opens the K and V history, and pricing it down to the dissection's bounded
+        // close is Decision 2 / stream F's derivation, not this stream's. Asserting zero here
+        // would be asserting a bound this ADR has not yet derived.
+        println!("v5 closes over the shipped ceiling: {}", tally.closes_over_ceiling);
     }
 
     /// **ADR-0067 Decision 5's cross-architecture clause, met by the suite rather than promised.**
