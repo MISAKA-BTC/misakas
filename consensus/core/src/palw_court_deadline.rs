@@ -281,6 +281,38 @@ pub fn palw_shipped_court_rows_v1() -> Result<Vec<PalwShippedCourtRowV1>, PalwSt
     Ok(rows)
 }
 
+/// **What one shipped row's worst close costs, under the court that can TRY that row.**
+///
+/// [`crate::palw_class_admission_v2::derive_court_cost_v1`] is the genesis-anchored binary
+/// derivation, and it is exactly right for every row whose terminal leaf is refuted by opening it.
+/// A FUSED row (ADR-0082 Decision 1) is not one of those: its terminal is a dissection, no ruleset
+/// may admit it while `palw_kary_court` is dormant (`FusedAttentionNeedsTheKaryCourt`), and pricing
+/// it at the binary court measures a court no network that registers it will be running —
+/// 3,446,708 bytes against 81,312 on the graph-v5 512 row, 42 carriers against one.
+///
+/// So the arity, the ladder and the id form come from the RULESET the caller is asking about, and
+/// every non-fused row is priced exactly as before: `genesis_anchored_v1`'s walk takes its path
+/// depth from the class's own worst case, so a row inside the executor's `2^22` prices identically
+/// at either ladder (measured when the row builders moved onto the ruleset's ladder).
+pub fn palw_shipped_row_court_cost_v1(
+    profile: &PalwShapeProfileV3,
+    ladder: u64,
+    dissection_arity: u8,
+    window_court_daa: u64,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<crate::palw_class_admission_v2::PalwCourtCostV1, crate::palw_class_admission_v2::PalwClassAdmissionError> {
+    if crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(profile) {
+        let court = crate::palw_class_admission_v2::PalwKaryCourtV1 { dissection_arity, prompt_ids_form, window_court_daa };
+        let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, Some(court), ladder)
+            .ok_or(crate::palw_class_admission_v2::PalwClassAdmissionError::Profile("a fused row declares no map the ladder prices".to_string()))?;
+        return crate::palw_class_admission_v2::derive_court_cost_shaped_v1(profile, rules.cost_shape);
+    }
+    crate::palw_class_admission_v2::derive_court_cost_shaped_v1(
+        profile,
+        crate::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(profile, ladder),
+    )
+}
+
 /// **The whole of SA-4 over one bundle**: every class the bundle registers at genesis clears the
 /// deadline from below, and the bundle's own ladder clears the window from above.
 ///

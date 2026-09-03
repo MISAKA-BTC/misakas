@@ -1226,7 +1226,17 @@ mod tests {
         let rows = crate::palw_court_deadline::palw_shipped_court_rows_v1().expect("the shipped rows project");
         assert!(!rows.is_empty(), "no shipped rows — this check verified nothing");
         for row in &rows {
-            let cost = crate::palw_class_admission_v2::derive_court_cost_v1(&row.profile).expect("a shipped row prices");
+            // Under the court this ruleset plays: the devnet ARMS `palw_kary_court` at genesis, and
+            // a fused row priced at the binary court is priced at a court the devnet never deals
+            // (`palw_shipped_row_court_cost_v1` — 42 carriers against one on the graph-v5 row).
+            let cost = crate::palw_court_deadline::palw_shipped_row_court_cost_v1(
+                &row.profile,
+                COURT_MAX_STEP_LEAVES,
+                crate::palw_mode_v2::PALW_COURT_BINARY_ARITY_V1,
+                PALW_DEVNET_WINDOWS_V1.window_court,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .expect("a shipped row prices");
             let chunks = crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes);
             println!("{}: n_ctx {} closes at {} bytes = {chunks} carrier(s)", row.cost.row, row.profile.n_ctx, cost.max_close_bytes);
             assert!(

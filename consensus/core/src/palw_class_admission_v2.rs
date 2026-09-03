@@ -3719,7 +3719,18 @@ mod the_close_must_be_filable {
         let rows = crate::palw_court_deadline::palw_shipped_court_rows_v1().expect("the shipped rows project");
         assert!(!rows.is_empty(), "a court with no rows would make this test vacuous");
         for row in rows {
-            let cost = derive_court_cost_v1(&row.profile).expect("a shipped row derives its cost");
+            // Priced under the court that can TRY the row — the binary derivation is not a court a
+            // fused row is ever admitted into, and it prices one at 42 carriers
+            // (`palw_shipped_row_court_cost_v1`). The RC's frozen arity and ladder, because that is
+            // the ruleset the widest shipped rows are registered on.
+            let cost = crate::palw_court_deadline::palw_shipped_row_court_cost_v1(
+                &row.profile,
+                crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES,
+                crate::palw_mode_v2::PALW_COURT_BINARY_ARITY_V1,
+                crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.window_court,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .expect("a shipped row derives its cost");
             let carriers = crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes);
             assert!(
                 carriers <= PALW_COURT_CLOSE_FILABLE_CHUNKS_V1,

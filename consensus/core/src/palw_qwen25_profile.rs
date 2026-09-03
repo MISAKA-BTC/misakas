@@ -1930,7 +1930,19 @@ mod tests {
                 .expect("the genesis registrations apply");
         let class = state.class(&class_id).expect("the fold wrote no class state for the registered row");
         assert!(class.fused_attention, "the genesis class state says this row's terminal leaf owes no root claim");
-        assert!(class.registrant_bond.is_some(), "the carriage names the bond ADR-0056 Decision 3 charges");
+        // **And it names NO registrant.** The carriage exists to carry the graph, not to record a
+        // purchase: `palw_genesis_registrant_bond_v1` is the sentinel the fold maps to `None`, which
+        // is what keeps ADR-0071 SA-3's genesis-class exemption true of a carried genesis row —
+        // without it, an armed capability fence leaves no bond able to judge this class.
+        assert!(
+            class.registrant_bond.is_none(),
+            "a genesis registration recorded a registrant: SA-3's exemption reads this field and the class stops being a genesis class"
+        );
+        assert_eq!(
+            carriage.registrant_bond,
+            crate::palw_state_v2::palw_genesis_registrant_bond_v1(),
+            "the genesis carriage names a real bond, which charges an operator a reservation it never asked for"
+        );
 
         // 4. The court that can try it is ARMED, and the arity the row was priced at is the arity
         //    the armed court derives. Without the first the class is admitted and unprosecutable
