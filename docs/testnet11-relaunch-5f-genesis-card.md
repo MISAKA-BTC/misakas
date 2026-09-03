@@ -3983,3 +3983,79 @@ prints its own regex as an appdir.
 *Noted because the general shape recurs: a defect fixed on the release branch stays live on the
 integration branch for exactly as long as the integration branch is where the work is happening —
 which is the whole of the period when the most people are reading it.*
+
+## T1 answered by reading the definition sites: devnet chose the wrong quantity, and the shipped row IS in its gap
+
+5b's T1: the acceptance path and boot validate compare **chunks**; `check_close_cost_v2`
+compares **bytes**. On the RC they agree exactly; on devnet a 1,414-byte gap opens between
+81,920 and 83,333. The question they left me: *is the ceiling a byte bound or a chunk bound, and
+should devnet's 81,920 become 83,333?* **The code already answers the first half:**
+
+```
+palw_mode_v2.rs:181   "COUNT is DEFAULT_MAX_CLOSE_CHUNKS, and it is the one quantity a network chooses here."
+palw_mode_v2.rs:259   pub const DEFAULT_MAX_CLOSE_BYTES: u64 = palw_close_bytes_for_chunks_v1(DEFAULT_MAX_CLOSE_CHUNKS);
+palw_mode_v2.rs:269   pub const DEFAULT_MAX_CLOSE_CHUNKS: u64 = 27;            (bytes_for_chunks(27) = 2,250,000)
+palw_fp_devnet_v3.rs:268   const DEVNET_COURT_MAX_CLOSE_BYTES: u64 = 81_920;   <- a literal, in BYTES
+palw_fp_devnet_v3.rs:17    "palw_close_chunks_for_bytes_v1(81_920) = 1, with 1,696 carried bytes to spare"
+```
+
+**The RC chooses chunks and derives bytes. Devnet chooses bytes and derives chunks — the
+documented direction, backwards.** The RC's agreement between the two readers is structural;
+devnet's disagreement is the arithmetic of picking the wrong quantity, and its own doc comment
+recorded the slack ("to spare") without recognising it as two readers disagreeing.
+
+> **The fix is not "raise 81,920 to 83,333". It is `DEVNET_COURT_MAX_CLOSE_BYTES =
+> palw_close_bytes_for_chunks_v1(1)`** — one spelling, the documented direction, and 83,333
+> falls out. Same value 5b proposed, but as a derivation rather than a second literal that
+> happens to equal the first. [[derived-sets-need-one-spelling]]. It moves the devnet ruleset
+> id, and devnet is being re-pinned tonight anyway for (a) — **do it in the same re-pin.**
+
+### And "no shipped row is in the gap" is wrong, for a reason this card already lists
+
+5b: *"graph-v5@512 closes at 81,312 B on both presets (the 83,175 figure does not reproduce on
+impl)."* Measured on their own tree (`palw-adr0082-devnet-genesis`, a superset of impl):
+
+```
+83,175   ASSERTED, ungated, twice — passes in 5b's own base0 28/0:
+           classes.rs:1788   the_graph_v5_row_is_admitted_by_the_kary_court_and_refused_without_it
+           artifact_names_the_genesis_row.rs:429   the_registered_row_prices_at_one_carrier_under_the_bundle_…
+81,312   appears ONLY in doc comments (palw_court_deadline.rs:291, classes.rs:1360), both
+           from before the dissection was priced
+```
+
+The pricing itself branches on the dissection — `palw_class_admission_v2.rs` ~960:
+`Op::AttnFused if fused_dissection.is_some() => { … }`, and the close is
+`opening + evidence`. **So 83,175 is the row priced WITH its arity-2 dissection and 81,312 is
+the row priced WITHOUT one.** The triage's route dropped the dissection — which is the
+convenience-wrapper defect §4 already lists six times (`genesis_anchored_v1` and its kin assume
+the genesis shape), and is the *same* `dissection: None` pricing the launch-stopper was about,
+reached from a measurement instead of from the gate.
+
+> **Consequence:** 81,920 < **83,175** ≤ 83,333. **The shipped row's priced close is inside
+> devnet's gap.** On devnet as it stands, `check_close_cost_v2` refuses the genesis-registered
+> row's honest widest close, and with T1's tightening a post-genesis registration of the same
+> row is refused at admission — while (a) puts it in devnet's genesis, so the drill never asks.
+> The derivation fix above closes both at once: 83,175 ≤ 83,333 on every reader.
+
+t11 is unaffected — 27 chunks, 2,250,000 bytes, gap 0. **What is affected is whether devnet
+rehearses t11**, which is the whole reason (a) exists.
+
+### `launch-integration`: a second integration line with a different `derive/src`
+
+```
+launch-integration   tip 618fa198   13 commits beyond impl; devnet-genesis is 233 beyond IT
+                     derive/src  10b7eac25babbfd0     prediction  4969f8dc051cac31   <- DIFFERENT
+                     75079c63  chore(derive): re-pin the eight transformer ids — PROVISIONAL
+                     47d9bc0a  chore(palw): regenerate the certified set — PROVISIONAL, from tree b6e2e5e4
+```
+
+A branch forked ~233 commits back, carrying provisional re-pins over a different derive tree.
+**If it merges into impl as a branch, `derive/src` moves and every pin prediction is stale at
+once** — `check-repin-predictions.sh` stops on exactly that, first, before reading anything
+else. 5b's stated plan (adopt fixer commits individually as they pass refuters) is the safe form;
+this note exists so nobody reaches for the branch. [[merging-two-repins-yields-a-third-fingerprint]]
+
+*And one line for the record: while reading these definition sites I typed `"$T:consensus/…"`
+unbraced and zsh ate the `:c` — a tool that says "unknown revision" for a file that exists —
+minutes after citing the memory that describes it. The rule held only where it was already
+mechanical (the scripts brace); by hand it did not.*
