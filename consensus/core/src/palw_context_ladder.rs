@@ -3900,3 +3900,51 @@ mod u04_flat_close {
         assert!(worst + palw_close_assembly_daa_v1(DEFAULT_MAX_CLOSE_CHUNKS) < windows.window_court, "the derived arity overruns");
     }
 }
+
+#[cfg(test)]
+mod v5_vector_bound {
+    //! **How many drill vectors each dense projection at 512 would cost.**
+    //!
+    //! `PALW_CERTIFICATION_MAX_VECTORS` is 32 and its comment sizes it in TABLES. Under the
+    //! `(table, kernel, call class)` candidate rule the drill plants one fault per distinct triple,
+    //! so the vector count is bounded by `2 × |distinct (table, kernel) pairs|` — the 2 being
+    //! prefill and decode. This is an UPPER bound: a leaf whose capture the material does not hold
+    //! is skipped, so the drill's actual count can be lower and never higher.
+    //!
+    //! An upper bound is the right instrument for a cap question. At or below 32 the cap cannot
+    //! bind; above it, the drill has to be run to find the true number.
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn bound(profile: &PalwShapeProfileV3) -> (usize, usize) {
+        let mut pairs: BTreeSet<(u8, crate::Hash64)> = BTreeSet::new();
+        for slot in 0..profile.global_node_count() {
+            let Some(table) = crate::palw_e2e_adjudicability::table_of_slot_v1(profile, slot) else { continue };
+            let Some((node, _)) = profile.resolve_node_slot(slot) else { continue };
+            pairs.insert((table as u8, node.kernel_semantics_id));
+        }
+        (pairs.len(), pairs.len() * 2)
+    }
+
+    #[test]
+    #[ignore = "measurement: run with --ignored --nocapture"]
+    fn how_many_vectors_would_each_512_projection_cost() {
+        let cap = crate::palw_state_v2::PALW_CERTIFICATION_MAX_VECTORS;
+        for (name, built) in [
+            ("graph-v2/v3 @512", palw_a16_context_row_profile_v1(512)),
+            ("graph-v5    @512", palw_a16_context_row_profile_v5(512)),
+        ] {
+            match built {
+                Ok(p) => {
+                    let (pairs, ub) = bound(&p);
+                    println!(
+                        "=== {name}: {} kernels, {pairs} (table,kernel) pairs, vectors <= {ub}, CAP {cap} -> {}",
+                        p.reachable_kernel_ids_v1().len(),
+                        if ub <= cap { "FITS" } else { "MAY EXCEED — drill it" }
+                    );
+                }
+                Err(e) => println!("=== {name}: will not project: {e:?}"),
+            }
+        }
+    }
+}
