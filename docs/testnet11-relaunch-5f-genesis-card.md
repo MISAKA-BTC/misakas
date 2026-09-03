@@ -4301,3 +4301,52 @@ devnet             84153175… → 34c7e4829eadb996…   TWO NAMED MOVES: (a) �
 writing before the extraction.** The guard carries devnet as WITHDRAWN and takes the table's
 value; it will refuse a table without `extracted_from 971b2eff…`. Release build → devnet drill
 with the class at genesis → table → "frozen".
+
+## The ceremony, as commands — each already run tonight in some form, each gated on the one before
+
+Inputs it waits on: 3e's `extracted-pins.txt` with `extracted_from <sha>` and the word "frozen".
+Nothing below runs until both exist. **Every step stops the sequence on a non-zero exit; none
+is skipped and none is retried "just once more".**
+
+```bash
+# 0. the guard — the table is the ONLY new input; derive/src is checked first and alone
+TABLE=/path/to/extracted-pins.txt scripts/check-repin-predictions.sh <frozen-sha>
+#    -> "all five predictions hold, against a table computed from the frozen tree", or STOP.
+#       A DIFF is not a prompt to re-predict. Name the change that moved it, or stop.
+
+# 1. the four re-pins on 5f, one commit, values pasted FROM THE TABLE (never retyped)
+#    t11 / devnet fingerprints, fp golden, premine, source_tree_sha256 + the eight ids
+#    then: scripts/check-doc-citations.sh docs/testnet11-relaunch-5f-genesis-card.md <5f-tip>
+#          scripts/check-derive-freeze.sh    (derive/src must still read 4969f8dc…)
+
+# 2. the merge impl -> 5f (five conflicts pre-ruled; fuzz_a16.rs -> next_u64), then the pin
+#    tests must go GREEN on the merged tree — the same three that were red are the proof
+cargo test -p kaspa-consensus-core --lib -- every_genesis_commits_to_the_premine shipped_presets_have_pinned_fingerprints golden_vector_ids_are_frozen
+
+# 3. transport + Linux build on ibm — bundle or push, -j 4 (the OOM table in runbook §2)
+git push ssh://root@169.58.39.220/root/misakas-t11r <5f-tip>:refs/heads/cut-<5f-tip>
+ssh misaka-ibm 'cd /root/misakas-t11r && git checkout cut-<5f-tip> && nice -n 19 cargo build --release -j 4 -p kaspad -p misaka-cli 2>&1 | tee /tmp/cut-build.log'
+#    read the log for `error`, not the exit code; a `tail` is a display decision on a diagnostic
+
+# 4. isolated boot on ibm MUST go green: genesis hash printed == the table's; premine == ba2612417e7e0817…
+
+# 5. the fleet, in this order and no other (fleet-wipe-must-stop-every-host-first):
+scripts/relaunch-fleet-wipe.sh census     # enumerate from PROCESSES and ss, not journals
+scripts/relaunch-fleet-wipe.sh stop       # every host, every unit incl. inactive-but-enabled
+scripts/relaunch-fleet-wipe.sh verify     # must be CLEAN before the next line exists
+scripts/relaunch-fleet-wipe.sh wipe       # dnsseeders are part of it; pool slot appdirs too
+#    a missed host is not a stale peer tonight: it judges fused registrations by a different rule
+
+# 6. producer first (node0 = QWEN36 producer), then the rest; on EVERY host:
+#    the printed genesis hash == the table's; the fingerprint == t11 71efa664…
+
+# 7. the announcement gate, both green on the merged tree, before one public word:
+#    artifact-stranger (independent re-derivation) and the FP gateway smoke [1]-[6]
+#    and the two sentences it may carry, no more:
+#      "a free prompt answered, committed, and retained its trace on the class genesis registers"
+#      "3D and MIDI artifacts derived from live free prompts and verified bound to their claims —
+#       when the answer fills the committed budget; a free prompt with a natural stop does not derive"
+```
+
+*What is deliberately absent: any step that reads a value from prose, any `tail` on a build,
+any `pgrep -f`, any count read as a distribution, any "probably fine".*
