@@ -381,35 +381,38 @@ Anything quoting the old scene goldens is stale: `02-hierarchy` is **2736** (was
 
 ## 5. Known-open, shipping anyway, stated so no page claims otherwise
 
-> **STALE AS OF THE ADR-0082 MERGE — do not cut from this paragraph.** What follows describes the
-> release branch today, where W6/W7/W10 are absent. On the branch being merged they are LANDED and
-> **the split-close path is OPEN**: `max_close_chunks` 27 on the RC and 1 on devnet, with an
-> assembly deposit. The owning session is handing over replacement text as a patch note, and this
-> section must carry what SHIPS before the cut. It is left here rather than deleted because a
-> reader comparing the two branches needs to see which state each is in — and because a card that
-> silently updated a paragraph it had been cut from twice would be the worst possible instance of
-> this project's own defect.
->
-> **A critical on that now-open path, from the audit:** the block's single court slot
-> (`PALW_COURT_CLOSE_MAX_PER_BLOCK = 1`) is spent by an UNAUTHENTICATED object before validation and
-> before the fence — one minimum-fee transaction per block carrying
-> `CourtAttnRootClaimed { session_id: 0, signature: [1] }` first in order denies every
-> `CourtCloseChunk` completion network-wide. **A close denied through its assembly window is not a
-> delay; it is a conviction of the declarer** — the challenger loses its reserve and deposit, the
-> executor is void-and-slashed. A dormant fence makes it worse rather than safer: refused later,
-> still counted. It must be closed before the split path ships, not before it is armed.
+### The split close is OPEN, and this is what it costs
 
-**The split close is shut at the acceptance layer.** W5 built the state machine;
-`palw_v2_validate_objects` refuses every `CourtCloseDeclared` unconditionally — *"no layer yet
-verifies the declaring side's signature (ADR-0080 W6) — refused rather than trusted"*. There is
-also nothing to sign (`PALW_COURT_V2_ALL_DOMAINS` carries no close context) and `close_digest` is
-written and never read until W7. A refused lifecycle object is dropped **with the block standing**,
-so filing spends the fee and opens nothing.
+Superseding this card's earlier paragraph, which described the release branch before the ADR-0082
+merge and was marked stale rather than deleted so the two states stayed distinguishable.
 
-This is acceptable at genesis **only because** the registered class's close fits one carrier under
-ADR-0082 and takes the single-carrier `CourtClosed` path, which is fully open and adjudicating. It
-is the reason the hybrid row is not registered. `misaka-cli palw court-close` refuses the split
-path before spending anything and names which limit stopped the operator.
+| | |
+|---|---|
+| `max_close_chunks` | **27** on the RC preset, **1** on devnet; a wider declaration is refused at acceptance |
+| when a declaration is legal | **only at Terminal** — the row cannot be opened at round 0 and held under an unfinished ladder |
+| assembly deposit | `count × relay fee for 100,000 B` = **33,750,000 sompi (0.3375 MSK)** at 27 chunks |
+| when the deposit is collected | on **every ending that is not the close it pinned**, both sides, all five endings — and on no ending that is |
+| what it is charged against | **posted collateral, not an escrow.** A poor bond may declare and is charged what it has |
+| when a group is swept | its own `assembly_deadline_daa` = declared + 4 × count, at most **108 DAA**, through the same conviction the backstop uses, before the backstop |
+| declaration fee | `palw_certification_rent` is `None` on every preset, so the 28,125,000-sompi fee is **not charged**; a declarer pays 28 carrier fees plus the deposit only if it lapses |
+| chunk journalling | O(1) deltas — 26 arrivals are **2,611,201 B** against 67,709,897 B in the whole-group form |
+
+**The critical that made "open" dangerous is closed.** The per-block adjudication slot
+(`PALW_COURT_CLOSE_MAX_PER_BLOCK = 1`) is now spent only by a move acceptance that was **admitted** —
+the counter increments inside the `Ok` arm, after the fence, the signature and the folded state. So
+one minimum-fee transaction per block carrying a forged `CourtAttnRootClaimed` can no longer deny
+every chunk completion network-wide. That mattered more than a denial usually does: **a close denied
+through its assembly window is not a delay but a conviction of the declarer.**
+
+**The hybrid row is still not registered, and the reason has changed.** It is no longer "the split
+path cannot be filed" — it can. It is that the hybrid's close is three carriers at every context
+width, because it binds a recurrence rather than attention, and there is no width at which that
+stops.
+
+*One risk the fixer flagged and I am accepting: a good-faith declarer on the OTHER side is charged
+when a verdict ends the session before its own assembly window closes. That is the right call — the
+row held the room and will never deliver — and the alternative is one `if` if it proves wrong in
+practice.*
 
 **Faucet stays 0.5 tMSK.** The docs carry the real numbers instead: floor 11.2 MSK, A16 2,290,
 QWEN36 3,868, plus an 8,333,316-sompi change floor. The faucet does not fund a bond and the pages

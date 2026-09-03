@@ -152,10 +152,9 @@ inviting the reader to assume there was nothing to say.
 
 ## Known open
 
-* The **split-carriage court close** is refused at the acceptance layer pending its signature
-  verification and digest rules. The registered class does not need it **under the dissection
-  court**, where its close is one carrier; under the binary court alone it would need fourteen and
-  could not be filed. No second tier can be registered until the split path lands.
+* The **split-carriage court close is open**, at up to 27 chunks on this network. The registered
+  class does not need it — its close is one carrier — and a declaration risks a 0.3375 MSK assembly
+  deposit against posted collateral, collected on every session ending except the close it pinned.
 * The **hybrid tier is not registered**, and the reason is not a margin: its close is three carriers
   at every context width, because it binds a recurrence rather than attention. There is no width at
   which it stops needing the split path.
