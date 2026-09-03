@@ -228,19 +228,25 @@ fn main() {
             let n_ctx = flag(&args, "--n-ctx").map(|s| {
                 s.trim().parse::<u32>().unwrap_or_else(|e| die(format!("--n-ctx {s}: {e} — a width is a decimal number of positions")))
             });
-            // Exactly one source names the class. Two would be two widths for one graph, and the
-            // whole point of this subcommand is that a width is part of the identity.
+            // **The artifact AUTHENTICATES; the model id DISAMBIGUATES.** These were mutually
+            // exclusive, on the reasoning that two sources would be two widths for one graph. That
+            // was right about the width and wrong about the graph: a header and a width can match
+            // more than one row, because two rows can be the same width and different classes —
+            // `graph-v2@512` and `graph-v5@512` are both 512 and are not the same class. So the
+            // file says what these weights can execute, and the model id says which of the rows
+            // they can execute is meant. Passing the id without the file is still fine (a row's
+            // width is part of the row); passing the file alone is fine whenever it names one row.
             let (profile, named_by, checked) = match (flag(&args, "--artifact"), flag(&args, "--model-id"), n_ctx) {
-                (Some(_), Some(_), _) => {
-                    die("--artifact and --model-id name the class two ways. Use --artifact (the file states its own width) \
-                     or --model-id (a catalog row's width is part of the row)")
-                }
+                (Some(_), Some(model_id), Some(n)) => die(format!(
+                    "--model-id {model_id} --n-ctx {n} names two widths for one class: a catalog row's n_ctx is part of \
+                     the row. Drop --n-ctx; --artifact bounds the width and --model-id picks the row"
+                )),
                 (None, Some(model_id), Some(n)) => die(format!(
                     "--model-id {model_id} --n-ctx {n} names two widths for one class: a catalog row's n_ctx is part of the \
                      row, so a width beside it would be a third spelling of the graph. Use --artifact <file> (checked \
                      against the weights), or --n-ctx {n} alone for the dense A16 ladder row"
                 )),
-                (Some(path), None, asked) => {
+                (Some(path), wanted, asked) => {
                     // The panel's own load: the whole file is decoded and its declared digest
                     // recomputed over every byte, so a truncated or rewritten artifact is refused
                     // here rather than certified.
@@ -249,13 +255,14 @@ fn main() {
                     let artifact = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes)
                         .unwrap_or_else(|e| die(format!("{path} is not a readable dense PALW artifact: {e}")));
                     drop(bytes);
-                    let row = misaka_palw_base0::classes::a16_artifact_row_v1(&court, &artifact, asked).unwrap_or_else(|e| {
-                        die(format!(
-                            "{path}: {e}\n  \
-                             no class id was computed and nothing was written — a certificate whose class the weights \
-                             cannot execute is worse than none"
-                        ))
-                    });
+                    let row = misaka_palw_base0::classes::a16_artifact_row_v1(&court, &artifact, asked, wanted.as_deref())
+                        .unwrap_or_else(|e| {
+                            die(format!(
+                                "{path}: {e}\n  \
+                                 no class id was computed and nothing was written — a certificate whose class the weights \
+                                 cannot execute is worse than none"
+                            ))
+                        });
                     let width_source = if row.narrowed {
                         format!("--n-ctx {}, NARROWED from the artifact's {}-position rotary span", row.n_ctx, row.artifact_span)
                     } else {
@@ -272,9 +279,11 @@ fn main() {
                                 row.family_rows.join(", ")
                             ),
                             format!("width:     {width_source}"),
-                            "graph:     palw_a16_context_row_profile_v1 — the shipped ladder projection, under the epsilon the \
-                             artifact executes"
-                                .to_string(),
+                            format!(
+                                "row:       {} — MATCHED in this build's registry, not projected: the profile bound is that \
+                                 row's own, so the class id cannot be a second spelling of the graph",
+                                row.model_id
+                            ),
                         ],
                     )
                 }

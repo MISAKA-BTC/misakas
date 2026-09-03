@@ -36,7 +36,7 @@ fn the_row_an_artifact_names_is_the_row_genesis_registers() {
     let genesis = a16_graph_v5_row_v1().expect("the graph-v5 dense row projects");
     let genesis_id = genesis.profile.shape_profile_id();
 
-    let derived = a16_row_for_artifact_shape_v1(&court(), &genesis.artifact_shape, None)
+    let derived = a16_row_for_artifact_shape_v1(&court(), &genesis.artifact_shape, None, None)
         .expect("the genesis row's own artifact shape names an A16 row");
 
     assert_eq!(
@@ -82,7 +82,7 @@ fn the_shipped_artifact_names_the_row_genesis_registers() {
         artifact.shape.max_position, genesis.artifact_shape.max_position
     );
     let derived =
-        a16_artifact_row_v1(&court(), &artifact, None).unwrap_or_else(|e| panic!("the shipped artifact names no A16 row: {e}"));
+        a16_artifact_row_v1(&court(), &artifact, None, None).unwrap_or_else(|e| panic!("the shipped artifact names no A16 row: {e}"));
     assert_eq!(
         derived.profile.shape_profile_id(),
         genesis.profile.shape_profile_id(),
@@ -90,4 +90,40 @@ fn the_shipped_artifact_names_the_row_genesis_registers() {
         derived.profile.shape_profile_id(),
         genesis.profile.shape_profile_id()
     );
+}
+
+/// **The refusals, exercised — because a route that silently picks is the defect this replaced.**
+#[test]
+fn an_ambiguous_header_refuses_and_a_model_id_resolves_it() {
+    let genesis = a16_graph_v5_row_v1().expect("the graph-v5 dense row projects");
+    let shape = &genesis.artifact_shape;
+
+    // n_ctx 16: this build tables several dense rows at that width, and they are different
+    // classes. The file cannot say which, so the route must not choose.
+    match a16_row_for_artifact_shape_v1(&court(), shape, Some(16), None) {
+        Err(A16ArtifactRowError::AmbiguousAtWidth { asked, model_ids }) => {
+            assert_eq!(asked, 16);
+            assert!(model_ids.len() > 1, "an ambiguity refusal that names one row is not an ambiguity");
+            println!("AMBIGUOUS at 16: {model_ids:?}");
+            // And the escape hatch resolves it, to that row and not to another.
+            let picked = a16_row_for_artifact_shape_v1(&court(), shape, Some(16), Some(model_ids[0]))
+                .expect("naming one of the rows resolves the ambiguity");
+            assert_eq!(picked.model_id, model_ids[0]);
+        }
+        Err(e) => panic!("expected an ambiguity refusal at 16, got: {e}"),
+        Ok(row) => panic!("n_ctx 16 resolved silently to {} — the route is picking again", row.model_id),
+    }
+
+    // A width the registry does not offer is refused rather than projected into a class that
+    // nothing registers. 300 is inside the artifact's 512-position span, so this is not the
+    // width-vs-span check.
+    match a16_row_for_artifact_shape_v1(&court(), shape, Some(300), None) {
+        Err(A16ArtifactRowError::NoRowAtWidth { asked, offered }) => {
+            assert_eq!(asked, 300);
+            assert!(!offered.is_empty(), "a refusal that lists no alternatives cannot be acted on");
+            println!("NO ROW at 300; offered {offered:?}");
+        }
+        Err(e) => panic!("expected a no-row refusal at 300, got: {e}"),
+        Ok(row) => panic!("n_ctx 300 produced {} — a width no row spells was projected", row.model_id),
+    }
 }
