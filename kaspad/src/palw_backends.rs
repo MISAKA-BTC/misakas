@@ -504,10 +504,17 @@ mod tests {
         let known: Vec<(Hash64, Hash64)> = [
             palw_rc_qwen36_is_registered()
                 .then(|| (qwen36_class_id_v1(), kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT)),
+            // **The dense slot is ADR-0082's graph-v5 512 row**, not the graph-v2 n_ctx-16 one it
+            // replaced (5f genesis card §2). Named through the same projection the genesis
+            // registration derives its class id from, so this table cannot come to describe a
+            // class the network does not register — which is precisely what this test caught the
+            // day the slot changed.
             kaspa_consensus_core::config::params::palw_rc_qwen25_a16_is_registered().then(|| {
                 (
-                    kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_class_id_v2(),
-                    kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT,
+                    kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_graph_v5_profile_v1()
+                        .expect("the graph-v5 dense row projects")
+                        .shape_profile_id(),
+                    kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT,
                 )
             }),
         ]

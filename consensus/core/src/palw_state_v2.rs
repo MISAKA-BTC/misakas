@@ -8497,10 +8497,10 @@ fn apply_object(
             // The sentinel pays nothing (`palw_genesis_registrant_bond_v1`), and it must, or the
             // release sites — every one of which reads `record.registrant_bond` — would have
             // nothing to give back and the reservation would be permanent.
-            if let Some(carriage) = admission.as_ref() {
-                if carriage.registrant_bond != palw_genesis_registrant_bond_v1() {
-                    builder.move_registration_exposure(carriage.registrant_bond, true)?;
-                }
+            if let Some(carriage) = admission.as_ref()
+                && carriage.registrant_bond != palw_genesis_registrant_bond_v1()
+            {
+                builder.move_registration_exposure(carriage.registrant_bond, true)?;
             }
             // A returning class starts its walk over: the counters are about the CURRENT
             // registration's production and nothing before it.
