@@ -2772,3 +2772,40 @@ fence-invariance is a COROLLARY of that, not a substitute for it
 > the genesis assembly and the acceptance gate price the same row by two different functions.
 > **This project's most-repeated defect, and each time the two spellings were individually
 > correct.**
+
+### Confirmed twice, from two layers, by two people who did not share code
+
+```
+1c   consensus-core, verify_class_admission_v6 direct   PricedForADifferentCourt { priced: None, court: 2 }
+5b   the SDK preflight, as the panel calls it           "priced for a dissection of None … court plays 2"
+```
+
+**Two entry points, no shared code between the calls, the same refusal.** The two-ways rule
+delivered its answer on the load-bearing claim and the answer was red. *The thing I most wanted
+to be a false alarm is now the hardest to dismiss.*
+
+**Scope, narrowed to what is actually true** — my first phrasing above ("closed to newcomers")
+is too broad and is corrected here rather than edited away:
+
+```
+genesis registration of the fused row      FINE — the genesis route prices from the bundle,
+                                                  bypassing the gate entirely
+post-genesis registration, NON-fused       FINE — keeps the genesis-anchored shape, unaffected
+post-genesis registration, FUSED, on t11   REFUSED
+```
+
+So the floor and the non-fused rows still admit. **What is shut is precisely the family the
+network is being minted around**, which is narrower than what I wrote and quite bad enough.
+
+**And §1's ladder row takes its final form** — not *arm it*, not *leave it and all is well*:
+
+> **Leave it dormant — and know that post-genesis fused registration does not preflight under
+> t11's own shape.** Arming remains wrong (it moves t11 to the shape nothing has validated for
+> t11's registered set). What changed is that t11's shape now has a **measured consequence**
+> rather than being merely the untested alternative's opposite.
+
+*How 1c avoided a false alarm at the worst hour is worth copying:* they did not re-verify that
+the row is fused or that the preset was right. They verified **that their invocation asks what
+the panel asks** — `palw_panel.rs` → `palw_admission_shape_at_v1` → `preflight_admission_with_chain`'s
+own doc saying it probes v6 with *exactly those* inputs. **Checking the arrow, on their own
+result, against themselves** — which is the failure mode that has bitten three times tonight.
