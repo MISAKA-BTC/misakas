@@ -32,12 +32,12 @@ use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpPromptSegmentV1, PalwFpWork
 /// A distinct id from the original `…/plain-markers/v1` because that one rode the `Text` arm with
 /// specials ENABLED: same rendered string, different ids, and ids are what consensus sees.
 pub const TEMPLATE_ID_PLAIN_SEGMENTS_V1: &str = "misaka-palw/fp-gateway-template/plain-markers-segments/v1";
-/// ADR-0077 Decision 6 places the model's own control tokens segment-wise, and there are now two
-/// such transforms: `…/chat-segments/v1`, which ends the generation prompt at `assistant\n`, and
-/// `…/chat-segments-think-closed/v1`, which ends it with a reasoning model's own closed think
-/// block. Neither id is spelled here — both live beside the renderer that produces them, in
-/// [`misaka_palw_base0::chat_template`], because two constants with the same value in two crates
-/// is how they stop having the same value. [`template_id_for`] is this file's way to ask.
+// ADR-0077 Decision 6 places the model's own control tokens segment-wise, and there are now two
+// such transforms: `…/chat-segments/v1`, which ends the generation prompt at `assistant\n`, and
+// `…/chat-segments-think-closed/v1`, which ends it with a reasoning model's own closed think
+// block. Neither id is spelled here — both live beside the renderer that produces them, in
+// `misaka_palw_base0::chat_template`, because two constants with the same value in two crates is
+// how they stop having the same value. `template_id_for` below is this file's way to ask.
 
 pub const MARKER_SYSTEM: &str = "### System:\n";
 pub const MARKER_USER: &str = "### User:\n";

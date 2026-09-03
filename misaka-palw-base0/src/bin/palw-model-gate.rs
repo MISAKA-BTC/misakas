@@ -316,10 +316,10 @@ fn main() {
 
     let mut report = Vec::new();
     for case in cases() {
-        if let Some(only) = &only {
-            if &case.name != only {
-                continue;
-            }
+        if let Some(only) = &only
+            && case.name != *only
+        {
+            continue;
         }
         let (segments, displayed) = chatml_user_segments(rt.tokenizer(), &case.prompt);
         let prompt_ids = match prompt_ids_for_input_v1(rt.tokenizer(), rt.manifest(), &PalwFpWorkerInputV3::Segments(segments)) {

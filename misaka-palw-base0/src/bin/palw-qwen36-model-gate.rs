@@ -448,10 +448,10 @@ fn main() {
 
     let mut report = Vec::new();
     for case in cases() {
-        if let Some(only) = &only {
-            if &case.name != only {
-                continue;
-            }
+        if let Some(only) = &only
+            && case.name != *only
+        {
+            continue;
         }
         let (prompt_plan, segments) = chatml_user_segments(rt.tokenizer(), &case.prompt, forced_variant);
         let displayed = prompt_plan.displayed.clone();
