@@ -853,7 +853,24 @@ produces it on every machine simultaneously.* Six of the ignored tests are being
 reasoning: the three IBD-participation cases, and the three pow-driver ones — including
 `a_dead_agent_costs_a_delay_and_not_a_tag`, because **a wipe is every agent dying at once.**
 
-**Running `a_node_killed_partway_through_recovery_comes_back_safe` during the FH2 wait** — it is the
+**RUN, AND GREEN — on the cut tree, with the duration proving it ran.**
+
+    impl 41e364b6
+    ibd_participation_tests::a_node_killed_partway_through_recovery_comes_back_safe
+      RESTART complete: 0 failures out of 7
+      test result: ok. 1 passed; 0 failed  —  242.35s
+
+**242 seconds and seven restart scenarios**, against the 0.016s that would have meant a skipped
+fixture. So the risk this section states is now *measured on this tree* rather than enumerated: a
+node killed partway through recovery comes back safe, which is the failure with the worst story if
+it bit — an operator being told what to delete on a chain nobody has a mental model of yet.
+
+*One of eight. The other seven remain a stated risk, and three IBD cases plus three agent-recovery
+cases are running as this is written. `mainnet_soak_randomized_fault_injection`,
+`mainnet_gate_handoff_holds_repeatedly_over_a_delayed_link`, `daemon_utxos_propagation_test` and
+`test_pruning_via_simpa` are not being run and that is a stated gap, not an oversight.*
+
+**Superseded note — the reasoning that got us here:** — it is the
 failure mode with the worst recovery story, and the wall clock is free while the last fixer
 finishes. Whatever it prints goes in §6 as a gate that was run rather than a set that was skipped.
 
