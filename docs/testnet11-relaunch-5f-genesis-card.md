@@ -5614,3 +5614,24 @@ sampler read its total traffic under ~70 KB/s (no stuck broadcast saturating the
 lossy). `c-seat2.sh` lost `--palw-produce` and `--palw-producer-class` (`c-seat2.sh.pre-5f-pause` kept), keeping
 `--palw-panel`, the three artifacts and the heartbeat address; restarted. Reversible in one line when the transport
 carries 5f-sized materials.
+
+**6m — correction (22:40 UTC): nobody is slashed on the shipped path.** `ProducerDefaulted` is constructed only in
+test regions across the tree (`palw_state_v2.rs` 11860…, `palw_panel_da_v1.rs` 497/561, `processor.rs` 5658); the
+node names it only as a label (`palw_panel.rs:3230`) and neither `palw-certify` nor the CLI builds it. So the
+`void_and_slash` arm read in 6m is reachable only by an operator hand-submitting that object with an Unavailable
+quorum — nothing shipped does. What the state does by itself at a claim's receipt deadline
+(`palw_state_v2.rs:8015–8030`): not yet rebound → one redraw (revived Provisional, a fresh bind deadline); already
+rebound → `slash_silent_seats` — which on the cut is a ten-line no-op whose doc says "an economics gap, not a missing
+slash, deliberately not repaired here" (`a_v2_panel_seat_is_never_paid` pins it) — then `void_claim(ReceiptTimeout)`,
+whose doc says "the hold is a DELAY, never a confiscation": immature weight and the reserve are released. So an LLM
+claim with Unavailable receipts on this chain **voids after one redraw (bind 600 + receipt 600 DAA per pass) and
+slashes nobody**; the "0.134 MSK per claim" line above is withdrawn as a shipped-path consequence. node0's continued
+QWEN36 production costs its bond nothing; it produces claims that cannot be verified until the transport fix, and
+that is the honest description. The pause of seat2's production stands on its own grounds (its blocks never enter
+the DAG; its link cannot carry the broadcasts).
+
+**7b, continued — run 5 (6a):** stage 6 fixed as `ee252944` (polls `misaka palw derived --json` per node and walks
+`phase` provisional → panel_bound → receipt_licensed → final). The RC windows bound what any session can prove on
+the devnet preset (bind 600, receipt 600, challenge 1,200 DAA; one DAA per ~2.5-min dense block): PanelBound ~50 min
+after acceptance, ReceiptLicensed inside ~2 days, Final after ~4 — "carried" (run 4) and "panel bound" are what a
+session measures; the rest it watches. Run 5 is recording the panel binding.
