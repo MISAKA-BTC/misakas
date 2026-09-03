@@ -2539,3 +2539,68 @@ registered against the genesis being cut. Running on ibm (`8923b354`, not the cu
 *The probe is the third instrument the 62-ignored set has supplied tonight* — after the IBD
 participation trio and the drill goldens. **The enumeration has now paid for itself more times
 than it cost**, which is worth saying given it began as a risk about what a skip hides.
+
+### `test result: ok`, `RC=0`, and zero tests ran — mine, tonight
+
+```
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+RC=0
+```
+
+ibm's checkout is `8923b354` and its copy of the probe holds `print_a16_root_forms`.
+`print_a16_v5_root_forms` exists only on `palw-adr0082-impl`. **My name filter matched nothing,
+so cargo filtered out both tests and reported success.** Four minutes of compile, then nothing,
+then the word *ok*.
+
+The only tells were `2 filtered out` and **`0.00s`** — a probe that maps two 1.79 GB artifacts
+and hashes their inventories cannot finish in zero. *The wall clock is the evidence a test ran*,
+for the third time today, and this time against a run I designed.
+
+> I verified the env var names against the test source. **I did not verify that the test name
+> existed in the tree I was running it on** — I checked the arguments and not the target. That
+> is the arrow rule pointed at a command line: *"the probe exists, therefore this invocation
+> runs it"* is an inference, and the tree it runs on is the thing that has to be true for it.
+
+### The checker I wrote to catch silent absence had two silent absences
+
+`scripts/check-doc-tree-claims.sh` reports which identifiers a document mentions whose
+**definition differs between two trees** — the class `check-doc-citations.sh` cannot see, because
+a claim with no `file.rs:NNNN` has nothing to resolve. It took three runs to work, and every
+failure printed a clean plausible number:
+
+```
+run 1   mapfile: command not found          macOS /bin/bash is 3.2 — a script that runs on
+                                            the fleet and dies on the release machine
+run 2   "1 identifier, not found"           the array became a string and `"${idents[@]}"`
+                                            expanded to ONE element, over a document with 299.
+                                            A loop over the wrong collection reports a small
+                                            clean number, NOT a failure
+run 3   "0 found in either tree"  (x39)     `\b` in `git grep -E` is POSIX ERE: it matches
+                                            NOTHING and reports zero. And removing it makes
+                                            `MODEL_ID` match `MODEL_IDENTITY_KEY` — the naive
+                                            repair trades a false zero for a false hit
+```
+
+**A tool written to catch absence-you-cannot-see, silently reporting an absence it could not
+see, twice.** Only running it against a known-present identifier found either.
+
+Working, it earns its place on its first real run — **six identifiers this card names whose
+definition differs between the trees it is written across**:
+
+```
+PALW_STATE_V2_VERSION           5f  = 18                     impl = 20
+genesis_anchored_v1             5f  (profile)                impl (profile, ladder)   <- gained an argument
+PALW_LADDER_FAMILIES_V1         5f  <absent>                 impl  [PalwLadderFamilyV1; 2]
+print_a16_v5_root_forms         5f  <absent>                 impl  present            <- tonight's probe
+MODEL_ID                        same LINE, different FILES   (a16 worker vs qwen36 worker)
+```
+
+`genesis_anchored_v1` is the sharpest: **it takes a `ladder` argument on impl and does not on
+5f.** Every sentence in this card about that wrapper's cost model is a sentence about one of two
+different functions, and until now none of them said which.
+
+*The `MODEL_ID` row is the tool being honest about its own resolution*: the definition line is
+byte-identical on both trees because two different files each define a `MODEL_ID`, and a
+leaf-name match cannot tell them apart. It is reported as differing-or-not by line, which is the
+right conservative answer and not the whole one.

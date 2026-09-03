@@ -36,26 +36,41 @@ done
 
 # Backtick-quoted tokens that look like Rust items: SCREAMING_CONSTS, snake_fns, paths with `::`.
 # Deliberately NOT bare words — a document says "the worker" constantly and means prose.
-mapfile -t idents < <(
+# NOT `mapfile` — the release machine is macOS, whose /bin/bash is 3.2 and has no such builtin.
+# A script that runs on the fleet and dies on the machine that cuts the release is worse than
+# no script, and this one died on its first run for exactly that reason.
+idents=$(
   grep -oE '`[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)*`' "$doc" \
     | tr -d '`' | sort -u \
     | grep -E '^[A-Z][A-Z0-9_]{4,}$|::' || true
 )
 
-[ ${#idents[@]} -gt 0 ] || { echo "no code identifiers found in $doc"; exit 0; }
+[ -n "$idents" ] || { echo "no code identifiers found in $doc"; exit 0; }
 
 printf 'doc   %s\n' "$doc"
 printf 'trees %s  vs  %s\n' "$a" "$b"
 printf '%s\n' "-- identifiers whose DEFINITION differs between the trees ------------------"
 
 differ=0 same=0 absent=0
-for id in "${idents[@]}"; do
+# Word-split `$idents` on newlines. Unquoted on purpose — and note the bug this replaced:
+# when the mapfile array became a plain string, `"${idents[@]}"` kept expanding to ONE element,
+# so the script reported "1 identifier, not found" over a document holding 299 of them. It did
+# not error. **A loop over the wrong collection reports a small clean number, not a failure.**
+while IFS= read -r id; do
+  [ -n "$id" ] || continue
   # The last path segment is what a definition line actually spells.
   leaf=${id##*::}
   # `git grep <rev>` takes the rev as its own argument, so it can never be eaten by a shell
   # history modifier the way `git show "$t:path"` can under zsh. See zsh-colon-c-eats-consensus.
-  da=$(git grep -h -E "(const|static|fn|struct|enum|type)[[:space:]]+${leaf}\b" "$a" -- '*.rs' 2>/dev/null | sed 's/^[[:space:]]*//' | sort -u || true)
-  db=$(git grep -h -E "(const|static|fn|struct|enum|type)[[:space:]]+${leaf}\b" "$b" -- '*.rs' 2>/dev/null | sed 's/^[[:space:]]*//' | sort -u || true)
+  #
+  # The boundary is spelled `([^A-Za-z0-9_]|$)` and NOT `\b`. `git grep -E` is POSIX ERE, which
+  # has no `\b`: it matches NOTHING and reports zero, so the first working version of this script
+  # printed "0 found in either tree" for all 39 identifiers — **a tool written to catch silent
+  # absence, silently reporting an absence it could not see.** And without any boundary at all,
+  # `MODEL_ID` matches `MODEL_IDENTITY_KEY`, so the naive repair trades a false zero for a false
+  # hit. Both failures are quiet; only running it against a known-present identifier finds either.
+  da=$(git grep -h -E "(const|static|fn|struct|enum|type)[[:space:]]+${leaf}([^A-Za-z0-9_]|$)" "$a" -- '*.rs' 2>/dev/null | sed 's/^[[:space:]]*//' | sort -u || true)
+  db=$(git grep -h -E "(const|static|fn|struct|enum|type)[[:space:]]+${leaf}([^A-Za-z0-9_]|$)" "$b" -- '*.rs' 2>/dev/null | sed 's/^[[:space:]]*//' | sort -u || true)
 
   if [ -z "$da" ] && [ -z "$db" ]; then
     absent=$((absent + 1))
@@ -69,7 +84,9 @@ for id in "${idents[@]}"; do
   printf '\n  %s\n' "$id"
   printf '    %-22s %s\n' "$a" "$(printf '%s' "${da:-<absent>}" | head -1 | cut -c1-96)"
   printf '    %-22s %s\n' "$b" "$(printf '%s' "${db:-<absent>}" | head -1 | cut -c1-96)"
-done
+done <<EOF
+$idents
+EOF
 
 printf '\n%s\n' "-- summary -----------------------------------------------------------------"
 printf '  %3d identifiers differ between the trees   <- every sentence using one must name a tree\n' "$differ"
