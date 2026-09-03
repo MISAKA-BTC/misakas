@@ -808,6 +808,28 @@ Landing the registration without the eps replacement leaves 489‰ on an unexecu
 the eps fix without the registration leaves the worker pointed at nothing. *Written as one item
 because two items are how half of it ships.*
 
+### FAVOURABLE staleness is the kind that survives — nobody re-checks an item that got better
+
+Three claims in these documents went stale today and **all three had improved**:
+
+    the hybrid's exclusion       "cannot close at ANY width"  ->  3 carriers against a ceiling of 27
+    the width table              "capped at 39 positions"     ->  the ladder moved to 2^26
+    the announcement's Known-open "the hybrid is not registered" -> FG registered it
+
+**Not one of them was a claim that had broken. Every one was a constraint that had lifted.** A claim
+that breaks produces a red test, a failed build, a confused reader — something pushes back. A
+constraint that lifts produces nothing at all, and the sentence describing it keeps reading as
+true, in a document nobody has a reason to revisit. *An item that got better is one nobody is
+motivated to re-check.*
+
+So the freeze pass has a specific instruction, not a general one: **go through every "known open",
+every "cannot", every "not yet" and ask what would have to have changed for it to be false — then
+check whether it did.** That is a different sweep from looking for broken claims, it takes minutes,
+and it is the one that catches the sentences a re-read cannot.
+
+*All three of these were caught by grepping for the claim, not by re-reading the document. Re-reading
+is what let them survive: a favourable staleness reads exactly like a correct caution.*
+
 ### ASK THE SAME THING TWO WAYS — the only cheap detector for a broken instrument
 
 **This is the method that made this cut work, and it was used all day before anyone named it.** Every
