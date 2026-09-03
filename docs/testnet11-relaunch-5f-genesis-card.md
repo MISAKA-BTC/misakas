@@ -5635,3 +5635,14 @@ the DAG; its link cannot carry the broadcasts).
 the devnet preset (bind 600, receipt 600, challenge 1,200 DAA; one DAA per ~2.5-min dense block): PanelBound ~50 min
 after acceptance, ReceiptLicensed inside ~2 days, Final after ~4 — "carried" (run 4) and "panel bound" are what a
 session measures; the rest it watches. Run 5 is recording the panel binding.
+
+**6m, continued — the pause's result (22:39 UTC).** `systemctl restart` at 22:26:33 UTC: the old process ignored
+SIGTERM for the whole 180 s stop timeout (mid-inference; systemd reports a 22.6 GB memory peak and 903 MB of swap over
+its 7 h 17 min of CPU) and was SIGKILLed at 22:29:33; the new process listened at 22:36:49 after its 433 s artifact
+pass. Its current boot carries **no `[palw-producer]` line** (production is off), the panel and the heartbeat lane
+started, fingerprint `2222e054…`, and **zero flow errors since** — the first quiet stretch on its links since 19:19.
+What the pause does not repair: seat2's DAA is 338 against the fleet's 512 with a fresh sink (past-median age 237 s);
+it missed ~170 blocks while its links died and re-formed, and because its sink stays recent no IBD is triggered —
+it back-fills one orphan's parent at a time (3 orphaned, 2 unorphaned in nine minutes). Its panel cannot obtain LLM
+materials in any case (16 MiB), so as a seat it contributes heartbeats and floor-claim duty until the transport fix;
+post-cut: a node whose DAA lags its peers by more than the DAA window while its sink is fresh should IBD anyway.
