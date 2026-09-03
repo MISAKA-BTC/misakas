@@ -3352,7 +3352,15 @@ fn canonical_input_leaves_anchored(
             context.declared_prefill_tokens,
             out_coord.call_index,
             out_coord.position,
-            crate::palw_context_ladder::palw_checkpoint_interval_v1(profile.n_ctx),
+            // **The spacing the class is PRICED at, never `n_ctx / 32` unconditionally** (stream
+            // F's patch note 2 on ADR-0082 Decision 4). `palw_class_ladder_rules_for_court_v1`
+            // charges the recurrence opening at `palw_anchored_interval_for_court_v1`, which on a
+            // fused row is one history tile; a window derived from `palw_checkpoint_interval_v1`
+            // here would assemble `n_ctx / 32` positions of evidence for a class charged for 16 —
+            // an under-charge, the direction that admits a class whose disputes nobody can carry.
+            // The profile-only spelling is the same function without the ruleset argument this
+            // path is not handed.
+            crate::palw_context_ladder::palw_anchored_interval_for_profile_v1(profile),
         )
     {
         positions = window;
@@ -3373,7 +3381,21 @@ fn canonical_input_leaves_anchored(
     // five rows per prior position and reordering them would be a different program.
     use crate::palw_step::{PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V};
     if node.input_refs.iter().any(|r| *r == PALW_STEP_INPUT_KV_K || *r == PALW_STEP_INPUT_KV_V) {
-        let history: Vec<(u32, u32)> = if out_coord.call_index == 0 {
+        let per_position = matches!(
+            crate::palw_context_ladder::palw_checkpoint_cadence_v1(profile),
+            crate::palw_context_ladder::PalwCheckpointCadenceV1::PerPosition
+        );
+        let history: Vec<(u32, u32)> = if anchored && per_position {
+            // **No residue at all** (ADR-0082 Decision 4, amended). A class whose map addresses
+            // history tiles commits a checkpoint after EVERY position, so this step's anchor is the
+            // one at `p + 1` — the state once position `p`'s own K and V rows have been written —
+            // and attention at `p` reads exactly the positions `0..=p` that checkpoint holds. The
+            // per-call cadence has to leave the disputed call's own write as a step opening because
+            // no checkpoint of its leg covers it; this one does not, at a PREFILL position exactly
+            // as at a decode call. The anchor's rows are prepended to an empty opening list below,
+            // which reproduces the same `kv_len` rows the unanchored route concatenates.
+            Vec::new()
+        } else if out_coord.call_index == 0 {
             (0..=out_coord.position).map(|p| (0, p)).collect()
         } else if anchored {
             // The anchor covers the prefill and calls 1..c−1; only this call's own write remains.
@@ -3601,6 +3623,14 @@ fn intra_table_index(profile: &PalwShapeProfileV3, slot: u32) -> Option<usize> {
 /// ONE opening plus its state chunks, and exactly one step opening remains: the current call's own
 /// cache write, which no earlier checkpoint can hold.
 ///
+/// **Under a class whose map addresses history tiles the same sentence is true at every POSITION**
+/// (ADR-0082 Decision 4, amended): its leg commits a checkpoint after every position, prefill
+/// included, so `covered = p` for a dispute at absolute position `p` and the residue is that
+/// position's own two cache-write rows. Before the amendment a prefill dispute had no anchor at
+/// all and opened `p + 1` rows per kind, which is the 3-chunk close ADR-0082 §5 shuts at
+/// acceptance. [`crate::palw_context_ladder::palw_checkpoint_covered_for_step_v1`] is the one
+/// spelling of which checkpoint that is.
+///
 /// # Why substituting is sound
 ///
 /// The cache row and the cache-write node's step tile are the SAME values — the engine pushes one
@@ -3639,17 +3669,27 @@ struct VerifiedKvAnchor<'a> {
     elem: KvAnchorElemV1,
 }
 
-/// Verify a carried anchor against the binding, for a step at `disputed_call`.
+/// Verify a carried anchor against the binding, for a step at `(disputed_call, disputed_position)`.
 fn verify_kv_anchor<'a>(
     binding: &crate::palw_step_leg::PalwStepBindingV2,
     ops: &'a PalwCheckpointKvOperandsV1,
     disputed_call: u32,
+    disputed_position: u32,
 ) -> Result<VerifiedKvAnchor<'a>, PalwStepRefuteError> {
     use crate::palw_state_chunk_map as map;
     use crate::palw_step_leg::{checkpoint_leaf_hash_v2, state_chunk_leaf_hash_v1, state_chunks_root_v1, step_opening_root_v1};
 
-    // Prefill has no anchor at all; a decode call's anchor is the checkpoint before it, exactly.
-    let want_covered = disputed_call.checked_sub(1).filter(|_| disputed_call > 0).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    // **Which checkpoint is this step's anchor, at the cadence the CLASS's map runs.** Per decode
+    // call: the prefill has no anchor at all and a decode call's is the checkpoint before it,
+    // exactly. Per position: the checkpoint covering every position but this one, which exists for
+    // every position after the first.
+    let want_covered = crate::palw_context_ladder::palw_checkpoint_covered_for_step_v1(
+        &binding.shape_profile,
+        &binding.job_context,
+        disputed_call,
+        disputed_position,
+    )
+    .ok_or(PalwStepRefuteError::Unadjudicable)?;
     if ops.leaf.covered_decode_call != want_covered {
         return Err(PalwStepRefuteError::InputSetNotCanonical("the carried checkpoint is not this step's anchor"));
     }
@@ -3681,7 +3721,14 @@ fn verify_kv_anchor<'a>(
         return Err(PalwStepRefuteError::Leg(crate::palw_step_leg::PalwStepLegError::CommittedRootMismatch));
     }
 
-    let positions = map::integer_kv_positions_at_v1(&binding.job_context, ops.leaf.covered_decode_call);
+    // How many positions the anchor's state covers, at the cadence the class's map runs — the
+    // cadence-aware twin of `integer_kv_positions_at_v1`, which is what it still resolves to on
+    // every per-call class.
+    let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(
+        &binding.shape_profile,
+        &binding.job_context,
+        ops.leaf.covered_decode_call,
+    );
     // **The geometry the CLASS registered, not the one this court knew first.** The producer's
     // capture already dispatches on `state_chunk_map_id` (a v2 class chunks four bytes per
     // element); a court that derived v1 unconditionally would read a v2 class's chunks at a
@@ -3819,7 +3866,7 @@ pub fn check_execution_step_refutation_opened_v1(
     // form: silently ignoring attached evidence makes a refutation mean something other than what
     // it says.
     let anchor = match refutation.kv_checkpoint.as_ref() {
-        Some(ops) => Some(verify_kv_anchor(binding, ops, out_coord.call_index)?),
+        Some(ops) => Some(verify_kv_anchor(binding, ops, out_coord.call_index, out_coord.position)?),
         None => None,
     };
     let required = canonical_input_leaves_anchored(

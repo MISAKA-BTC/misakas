@@ -87,6 +87,25 @@ pub const PALW_ATTN_COURT_OBJECT_VERSION_V1: u16 = 1;
 pub enum PalwAttnCourtError {
     #[error("the k-ary court fence is dormant on this network: a fused-attention dissection is not admissible")]
     FenceDormant,
+    /// **The cache-write route is not a sound court route, and for a class that checkpoints every
+    /// position it is not a necessary one** (ADR-0082 Decision 4, amended).
+    ///
+    /// A graph declares its cache reads as the `KV_K` / `KV_V` input SENTINELS and never names the
+    /// nodes that WRITE them, so nothing in a `CacheWrites` bottom binds an opened row to the K
+    /// series rather than the V series: a bottom that swaps the two wholesale opens rows the claim
+    /// really committed, at coordinates the claim really has, and convicts an honest executor. The
+    /// checkpoint route has no such gap — `(kind, layer, position)` all come from the map, and the
+    /// map is inside the class id.
+    ///
+    /// Refused only where the class has an alternative. A per-decode-call leg commits no checkpoint
+    /// over the prefill at all, so refusing the cache-write route there would leave a prefill
+    /// dispute with no route; a class whose map addresses history tiles has a checkpoint after
+    /// every position, so there is no position the cache-write route is needed for.
+    #[error(
+        "this class commits a checkpoint at every position, so a dissection bottom must open the checkpoint route: the \
+         cache-write route does not bind a row to its own K or V series and is refused"
+    )]
+    CacheWriteRouteRefused,
     #[error("unsupported dissection object version {got} (expected {expected})")]
     UnsupportedVersion { got: u16, expected: u16 },
     #[error("the message does not belong to this dissection")]
@@ -339,6 +358,16 @@ pub struct PalwAttnBottomSiteV1 {
     /// then a `Checkpoint` evidence arm is refused by name rather than guessed at.
     pub anchor_geometry: Option<PalwStateChunkGeometryV1>,
     pub anchor_positions: u32,
+    /// **Does this class commit a checkpoint after EVERY position?**
+    /// (`palw_context_ladder::palw_checkpoint_cadence_v1` of the profile — read by the caller, like
+    /// every other field here.)
+    ///
+    /// When it does, the cache-write evidence route is refused
+    /// ([`PalwAttnCourtError::CacheWriteRouteRefused`]): it is unsound, and the class has a sound
+    /// route at every position it could be disputed at. When it does not, the route stays open,
+    /// because a per-decode-call leg has prefill positions no checkpoint covers and a court that
+    /// refused both routes there would refuse to try the leaf at all.
+    pub every_position_is_checkpointed: bool,
 }
 
 // =================================================================================================
@@ -820,6 +849,12 @@ fn tile_rows_v1(
 ) -> Result<(Vec<i32>, Option<u32>), PalwAttnCourtError> {
     match evidence {
         PalwAttnTileEvidenceV1::CacheWrites { rows } => {
+            // **Refused where a sound route exists at every position** — see
+            // `PalwAttnCourtError::CacheWriteRouteRefused` for why the route is unsound and why the
+            // refusal is conditional rather than absolute.
+            if site.every_position_is_checkpointed {
+                return Err(PalwAttnCourtError::CacheWriteRouteRefused);
+            }
             if rows.len() != width {
                 return Err(PalwAttnCourtError::RowsAfterMismatch { covered: 0, width, got: rows.len() });
             }
@@ -1205,6 +1240,7 @@ mod tests {
         /// The class's description of the disputed site, with no checkpoint in evidence.
         fn site(&self) -> PalwAttnBottomSiteV1 {
             PalwAttnBottomSiteV1 {
+                every_position_is_checkpointed: false,
                 params: params(),
                 kv_dim: self.kv_dim,
                 kv_off: 0,
@@ -1584,6 +1620,91 @@ mod tests {
             check_attn_dissect_bottom_v1(&phase, &elsewhere, &fx.binding, &fx.site(), true),
             Err(PalwAttnCourtError::WrongTile { .. })
         ));
+    }
+
+    /// **The cache-write route swaps K for V undetected — and a class that checkpoints every
+    /// position no longer has to offer it** (ADR-0082 Decision 4, amended; stream I's finding).
+    ///
+    /// A graph declares its cache reads as the `KV_K` / `KV_V` input SENTINELS and never names the
+    /// nodes that WRITE them, so a `CacheWrites` bottom carries no binding between an opened row
+    /// and the series it is supposed to be. Every row in the swapped bottom below is a row the
+    /// claim really committed, at a coordinate the claim really has — the openings all verify —
+    /// and the recompute is handed V where it asked for K.
+    ///
+    /// The first half of this test MEASURES that gap, so it is a fact rather than an argument. The
+    /// second half is the answer this stream makes available: with a checkpoint after every
+    /// position the class has a sound route at every position it could be disputed at, and the
+    /// unsound one is refused BY NAME rather than left as the challenger's choice.
+    #[test]
+    fn the_cache_write_route_cannot_bind_a_row_to_its_series_and_is_refused_where_a_checkpoint_exists() {
+        let fx = fixture(8, 50, 4, 23);
+        let mut phase = open_phase(&fx, 4, fx.root.clone()).expect("an honest root");
+        let (m, s) = phase.root_scale();
+        while phase.turn() != PalwBisectTurnV1::Terminal {
+            let ranges = phase.child_ranges();
+            let children: Vec<_> = ranges.iter().map(|&(f, c)| fx.range_claim(f, c, m, s)).collect();
+            phase
+                .apply_round(&PalwAttnDissectRoundV1 { version: PALW_ATTN_DISSECT_OBJECT_VERSION_V1, children }, 300, 30)
+                .expect("an honest round folds");
+            phase
+                .apply_choice(
+                    &PalwAttnDissectChoiceV1 {
+                        version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                        session_id: h64(9),
+                        round: phase.round(),
+                        child: 0,
+                    },
+                    310,
+                    30,
+                )
+                .expect("child 0 exists");
+        }
+        let tile = phase.terminal_tile().expect("narrowed");
+
+        // The honest bottom acquits on the shipped (per-decode-call) cadence.
+        let honest = fx.bottom(h64(9), tile);
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &honest, &fx.binding, &fx.site(), true),
+            Ok(PalwAttnCourtVerdictV1::ChallengerDefeated),
+            "the honest execution must be acquitted"
+        );
+
+        // **The gap, measured.** Swap the two series wholesale. Every opening still verifies —
+        // nothing in the object or the site says which series a row belongs to — so the court
+        // recomputes a triple from the wrong operands and convicts an honest executor.
+        let mut swapped = fx.bottom(h64(9), tile);
+        std::mem::swap(&mut swapped.k, &mut swapped.v);
+        let verdict = check_attn_dissect_bottom_v1(&phase, &swapped, &fx.binding, &fx.site(), true);
+        assert_eq!(
+            verdict,
+            Ok(PalwAttnCourtVerdictV1::ExecutorGuilty),
+            "the swapped bottom was expected to convict an honest executor — if this now acquits or refuses, the cache-write \
+             route has grown a series binding and this test's premise needs re-reading"
+        );
+
+        // **The answer.** A class that commits a checkpoint after every position is refused the
+        // cache-write route entirely, so the swap has nothing to ride on. The honest bottom is
+        // refused too, and that is the point: the sound route is available at EVERY position of
+        // such a class, so there is nothing the refused route was needed for.
+        let per_position = PalwAttnBottomSiteV1 { every_position_is_checkpointed: true, ..fx.site() };
+        for (what, bottom) in [("the swapped bottom", &swapped), ("the honest one", &honest)] {
+            assert_eq!(
+                check_attn_dissect_bottom_v1(&phase, bottom, &fx.binding, &per_position, true),
+                Err(PalwAttnCourtError::CacheWriteRouteRefused),
+                "{what} must be refused by name on a per-position class"
+            );
+        }
+
+        // And the CHECKPOINT route is unaffected by the flag — it is the route the refusal points
+        // at, and its rows carry `(kind, layer, position)` from the map rather than from the wire.
+        let anchor = fx.anchor(fx.positions as u32);
+        let anchored = fx.bottom_anchored(h64(9), tile, &anchor);
+        let anchored_site = PalwAttnBottomSiteV1 { every_position_is_checkpointed: true, ..fx.site_anchored(&anchor) };
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &anchored, &fx.binding_anchored(&anchor), &anchored_site, true),
+            Ok(PalwAttnCourtVerdictV1::ChallengerDefeated),
+            "the checkpoint route must still acquit an honest execution on a per-position class"
+        );
     }
 
     /// **The fence is the door.** Nothing in this module runs on a network whose
