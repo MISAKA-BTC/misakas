@@ -942,5 +942,24 @@ mod tests {
             artifact.artifact_digest(),
             "the one-byte-map row is not court-capable and keeps the digest testnet-11 registered"
         );
+
+        // **Is the tokenizer commitment a GENESIS INPUT?** The 5f card has to know, because the
+        // shipped dense artifact declares none (64 zero bytes) and binding one is a re-conversion.
+        // `ClassRegistered` carries exactly two identities — `class_id` and `artifact_root` — and
+        // `PalwShapeProfileV3` has no tokenizer field, so the whole question is which root the row
+        // registers. It is answered here rather than reasoned about, in both directions.
+        let bound = artifact.clone().with_tokenizer_commitment(Base0ArtifactV1::tokenizer_commitment_of(b"{}"));
+        assert_ne!(bound.artifact_digest(), artifact.artifact_digest(), "the commitment is inside the artifact digest");
+        assert_eq!(
+            v5.artifact_root(&bound).expect("the v5 row has an inventory"),
+            v5_root,
+            "a court-capable row registers the operand inventory, which the tokenizer is not in — so binding one \
+             is NOT a genesis input for this row and the registered root does not move"
+        );
+        assert_ne!(
+            v1.artifact_root(&bound).expect("the v1 row answers"),
+            v1.artifact_root(&artifact).expect("the v1 row answers"),
+            "a digest-rooted row IS moved by binding a tokenizer — which is why the v1 rows on chain cannot be re-bound"
+        );
     }
 }
