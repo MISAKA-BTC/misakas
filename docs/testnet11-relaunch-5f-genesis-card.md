@@ -3585,3 +3585,36 @@ third of the five that exits 0 while doing nothing.
 
 And the one command that *does* work, `the_registered_row_names_the_ladder_it_needs`, **does not
 print the `512` its row cites** — 2 passed in 0.06 s, no `512` anywhere in the output. *Sixth.*
+
+### Correction: that is five defects, not six — I over-counted my own audit
+
+I listed the `512` row as the sixth, on the ground that its command *"does not print the `512` its
+row cites."* **It does not print it; it asserts it**, which is the stronger thing:
+
+```
+assert_eq!(widest_admissible(1 << 22), 39, "the shipped 2^22 ladder");
+assert_eq!(widest_admissible(1 << 26), 574);
+let row = palw_a16_context_row_profile_v1(512).expect("the registered row");
+for pow in …  assert!(worst_case_step_leaf_count_capped_v1(&row, 1 << pow).is_err(),
+                      "2^{pow} must not admit the registered 512 row, or the ladder below is wrong");
+worst_case_step_leaf_count_capped_v1(&row, 1 << 26).expect("2^26 admits it");
+```
+
+**The command's passing IS the evidence** — a reader who runs it and sees `ok` has verified the
+row. That is a different table convention from the rows whose commands *print* their value, and
+the inconsistency is worth a note; **it is not a defect and I counted it as one.**
+
+```
+the audit, corrected:
+  stranger.py           no subcommand -> exit 2                          DEFECT, fixed
+  palw-certify drill    --family a16-v5 unknown on 5f                    DEFECT, pending merge
+  artifact-thirdparty   0 agreed / 4 unchecked without the libraries     DEFECT, fixed
+  corpus_width          3 SKIPPED, "ok", none of the cited numbers       DEFECT, fixed
+  base0 kary_court      impl-only name -> 0 tests, "ok", exit 0          DEFECT, pending merge
+  consensus-core 512    asserts rather than prints                       NOT a defect
+```
+
+**Five in six, and the sixth was my error in the direction that flatters the audit.** A count of
+found defects is a number with an interest in being larger, and I did not check the last one as
+hard as the first four because it fit the pattern. *Availability again, and this time in the
+tally rather than in the diagnosis.*
