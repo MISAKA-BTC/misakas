@@ -2072,60 +2072,85 @@ mod tests {
         let forward = started.elapsed();
         let forward_rss = rss.finish();
 
-        // ---- phase B: the shipped capture, through the backend's free-prompt verb ------------
-        let job = PalwFreePromptJobV3 {
-            version: PALW_FP_V3_VERSION,
-            network_domain: Hash64::from_u64_word(0xD0),
-            class_id: profile.shape_profile_id(),
-            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
-            executor_pubkey: vec![0x11; 32],
-            operator_id: Hash64::from_u64_word(0x0B),
-            anchor_block: Hash64::from_u64_word(0xA0),
-            anchor_daa: 4242,
-            job_nonce: [0x5A; 32],
-            tokenizer_id: Hash64::default(),
-            prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(
-                &prompt.iter().map(|t| *t as u32).collect::<Vec<_>>(),
-            ),
-            prompt_tokens: prefill,
-            decode_token_limit: decode,
-            max_context_tokens: profile.n_ctx,
-            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
-            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+        // ---- phase B: the DENSE capture — every tile of every node of every position ---------
+        //
+        // The shipped path until ADR-0082 Decision 7, and the thing §1.5's 94x was measured on.
+        // Skippable (`MISAKA_PALW_U01_SKIP_DENSE=1`) because it is also the thing that does not
+        // fit in memory at a real context, which is the other half of what is being measured.
+        let ctx = {
+            let mut ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prefill, decode);
+            ctx.job_id = Hash64::from_u64_word(0x0082_0001);
+            ctx.prompt_token_ids_hash =
+                kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&prompt.iter().map(|t| *t as u32).collect::<Vec<_>>());
+            ctx
         };
-        let backend = crate::qwen25_a16_backend::Qwen25A16Backend::new(
-            std::sync::Arc::new(artifact),
-            b"misaka-palw-rc".to_vec(),
-            profile.clone(),
-            entry.canonical_job,
-        );
+        let cap = court.max_step_leaf_count();
+        let dense = if std::env::var("MISAKA_PALW_U01_SKIP_DENSE").is_ok() {
+            None
+        } else {
+            let rss = U01Rss::start();
+            let started = std::time::Instant::now();
+            let run = crate::qwen25_a16_backend::a16_execute_for_attempt_streaming_capped_v1(
+                &artifact, &profile, None, &ctx, &prompt, cap, &mut |_| {},
+            )
+            .expect("the dense capture runs this job");
+            let took = started.elapsed();
+            let bytes = crate::produce::base0_material_encode_v1(&run).expect("the dense retention encodes").len();
+            Some((took, rss.finish(), bytes))
+        };
+
+        // ---- phase C: the FOLD — Decision 7's capture -----------------------------------------
         let rss = U01Rss::start();
         let started = std::time::Instant::now();
-        let run = kaspa_consensus_core::palw_backend::PalwExecutionBackendV1::execute_free_prompt(&backend, &job, &prompt)
-            .expect("the shipped free-prompt path runs this job");
-        let captured = started.elapsed();
-        let captured_rss = rss.finish();
-        let material = run.outcome.material.len();
+        let folded = crate::qwen25_a16_backend::a16_execute_free_prompt_streaming_v1(
+            &artifact, &profile, None, &ctx, &prompt, cap, &mut |_| {},
+        )
+        .expect("the folded capture runs this job");
+        let fold_took = started.elapsed();
+        let fold_rss = rss.finish();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let fold_bytes = crate::produce::base0_fp_material_encode_v2(&folded, &ids).expect("the fold retains").len();
+        let tree = folded.step_tree.as_ref().expect("a folded run keeps its tree");
+        if let Some((_, _, _)) = &dense {
+            // The measurement is only a measurement if both phases committed the same thing.
+            assert_eq!(tree.root().expect("the tree is its own shape"), folded.binding.step_merkle_root);
+        }
 
         let per = |d: std::time::Duration| d.as_secs_f64() / decode as f64;
         let per_position = |d: std::time::Duration| d.as_secs_f64() / positions as f64;
+        let line = |what: &str, took: std::time::Duration, rss: u64, bytes: Option<usize>| {
+            eprintln!(
+                "U-01 {what:<9}: {:>8.3} s total, {:>7.4} s/token, {:>7.4} s/position, peak RSS {:>5.2} GiB{}",
+                took.as_secs_f64(),
+                per(took),
+                per_position(took),
+                rss as f64 / (1 << 30) as f64,
+                match bytes {
+                    Some(b) => format!(", retention {b} bytes ({:.2} MB/position)", b as f64 / positions as f64 / 1e6),
+                    None => String::new(),
+                }
+            );
+        };
+        line("forward", forward, forward_rss, None);
+        if let Some((took, rss, bytes)) = &dense {
+            line("captured", *took, *rss, Some(*bytes));
+            eprintln!("U-01 captured/forward : {:.1}x", took.as_secs_f64() / forward.as_secs_f64().max(f64::MIN_POSITIVE));
+        }
+        line("folded", fold_took, fold_rss, Some(fold_bytes));
+        eprintln!("U-01 folded/forward   : {:.1}x", fold_took.as_secs_f64() / forward.as_secs_f64().max(f64::MIN_POSITIVE));
+        if let Some((took, _, bytes)) = &dense {
+            eprintln!(
+                "U-01 fold vs dense    : {:.1}x faster, {:.1}x smaller retention",
+                took.as_secs_f64() / fold_took.as_secs_f64().max(f64::MIN_POSITIVE),
+                *bytes as f64 / fold_bytes.max(1) as f64
+            );
+        }
         eprintln!(
-            "U-01 forward   : {:>8.3} s total, {:>7.4} s/token, {:>7.4} s/position, peak RSS {:.2} GiB",
-            forward.as_secs_f64(),
-            per(forward),
-            per_position(forward),
-            forward_rss as f64 / (1 << 30) as f64
+            "U-01 retained tree    : {} nodes at level {} ({} bytes)",
+            tree.retained_nodes().len(),
+            tree.retain_level(),
+            tree.retained_nodes().len() * 64
         );
-        eprintln!(
-            "U-01 captured  : {:>8.3} s total, {:>7.4} s/token, {:>7.4} s/position, peak RSS {:.2} GiB, material {} bytes ({:.1} MB/position)",
-            captured.as_secs_f64(),
-            per(captured),
-            per_position(captured),
-            captured_rss as f64 / (1 << 30) as f64,
-            material,
-            material as f64 / positions as f64 / 1e6
-        );
-        eprintln!("U-01 ratio     : {:.1}x the forward", captured.as_secs_f64() / forward.as_secs_f64().max(f64::MIN_POSITIVE));
         eprintln!("U-01 step leaves: {leaves}, {} per position", leaves / positions.max(1));
     }
 }
