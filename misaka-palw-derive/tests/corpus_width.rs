@@ -54,3 +54,76 @@ fn every_demonstrated_corpus_answer_fits_the_width_the_launch_registers() {
         );
     }
 }
+
+/// **The QWEN36 lane's numbers are not the dense lane's, and nobody had measured them.**
+///
+/// Every token count in this file and in `grammar_floor` is the shipped Qwen2.5 tokenizer's — a
+/// 151,936-entry vocabulary loaded from a `tokenizer.json`. The QWEN36 lane does not use it: its
+/// checkpoint ships no `tokenizer.json` at all and carries a 248,320-entry vocabulary inside the
+/// GGUF's `tokenizer.ggml.*` metadata (`misaka_palw_base0::gguf::KEEP_ARRAYS` exists for exactly
+/// that reason).
+///
+/// A different vocabulary tokenizes the same JSON differently, so "261 tokens" is a fact about one
+/// lane. If the second lane's numbers are materially larger, a width chosen from the first is too
+/// small for the second — and that is a genesis input, not a detail: the registered `n_ctx` is
+/// inside the borsh that `shape_profile_id` hashes, so it cannot be adjusted after the mint.
+///
+/// Skips loudly without `MISAKA_QWEN36_GGUF`, because the alternative to measuring is guessing.
+#[test]
+fn the_qwen36_lanes_tokenizer_is_measured_rather_than_assumed() {
+    let Ok(gguf_path) = std::env::var("MISAKA_QWEN36_GGUF") else {
+        println!("SKIPPED: set MISAKA_QWEN36_GGUF to the QWEN36 checkpoint's .gguf. The second lane's widths were NOT checked.");
+        return;
+    };
+    let bytes = std::fs::read(&gguf_path).unwrap_or_else(|e| panic!("{gguf_path}: {e}"));
+    let dir = misaka_palw_base0::gguf::parse_directory(&bytes).expect("the GGUF directory parses");
+    let get = |k: &str| dir.metadata.get(k);
+    let tokens = get("tokenizer.ggml.tokens").and_then(|v| v.as_strings()).expect("the GGUF carries its vocabulary");
+    let merges = get("tokenizer.ggml.merges").and_then(|v| v.as_strings()).map(|s| s.to_vec()).unwrap_or_default();
+    let types = get("tokenizer.ggml.token_type").and_then(|v| v.as_ints()).map(|s| s.to_vec()).unwrap_or_default();
+    let moe = QwenTokenizer::from_gguf(tokens, &merges, &types).expect("the GGUF vocabulary builds a tokenizer");
+    println!("QWEN36 vocabulary: {} entries", moe.len());
+
+    let dense = std::env::var("MISAKA_FLOOR_TOKENIZER_DENSE")
+        .ok()
+        .map(|p| QwenTokenizer::from_json(&std::fs::read(&p).expect("reads")).expect("parses"));
+
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let mut worst = 0usize;
+    for rel in DEMONSTRATED {
+        let raw = std::fs::read(root.join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"));
+        let value: serde_json::Value = serde_json::from_slice(&raw).expect("the corpus answer parses");
+        let compact = serde_json::to_string(&value).expect("re-serializes");
+        let m = moe.encode_without_specials(&compact).expect("encodes").len();
+        worst = worst.max(m);
+        match dense.as_ref().and_then(|d| d.encode_without_specials(&compact).ok()) {
+            Some(d) => println!("{rel}: qwen36 {m} tokens, dense {} tokens ({:+})", d.len(), m as i64 - d.len() as i64),
+            None => println!("{rel}: qwen36 {m} tokens"),
+        }
+    }
+    assert!(
+        worst <= BUDGET_AT_512,
+        "the widest demonstrated answer is {worst} tokens under the QWEN36 vocabulary, over the {BUDGET_AT_512}-token \
+         budget of an n_ctx 512 row. The second lane needs a wider class than the first, and n_ctx is inside the borsh \
+         that shape_profile_id hashes — so this is a genesis input, not something to adjust later."
+    );
+
+    // **The measured answer is that the two lanes agree exactly, and an agreement is worth nothing
+    // until the instrument is shown capable of disagreeing.** A tokenizer built from empty or
+    // unread merges degrades to something byte-ish, and two degraded tokenizers agree on
+    // everything — which would read as this result. So: the vocabularies must be different sizes,
+    // and they must actually split some text differently. The canonical DSL is ASCII JSON, which
+    // both tokenize identically; the divergence lives outside that range.
+    if let Some(d) = dense.as_ref() {
+        assert_ne!(moe.len(), d.len(), "the two lanes report the same vocabulary size — one of them was not loaded");
+        let divergent = ["\u{3a9}\u{2248}\u{e7}\u{221a}\u{222b}", "\u{1f3b9}\u{1f3bc}"]
+            .iter()
+            .filter(|s| moe.encode_without_specials(s).map(|v| v.len()).ok() != d.encode_without_specials(s).map(|v| v.len()).ok())
+            .count();
+        assert!(
+            divergent > 0,
+            "the two tokenizers agree on every probe including non-ASCII, so one of them is degenerate and the \
+             corpus agreement above proves nothing"
+        );
+    }
+}
