@@ -507,6 +507,74 @@ impl PalwCourtParamsV2 {
     }
 }
 
+/// **ADR-0082 Decision 3: the arity a ruleset DERIVES, never writes.**
+///
+/// The smallest legal power of two for which the whole dispute — the leaf ladder, the history
+/// dissection, and the terminal moves — fits the court window at the deadline SA-4 derives:
+///
+/// ```text
+///   (2 · (ceil(log_k L) + ceil(log_k (history / tile))) + terminal) · turn_deadline  <=  window_court
+/// ```
+///
+/// Smallest, not largest, because a wider round costs BYTES: `arity` children of
+/// `(4 + 8 + 8 · lanes)` ride every move, so the arity that just fits the clock is the arity that
+/// spends the least carrier. Every input is a ruleset quantity — the window, the SA-4 deadline,
+/// the ladder's `max_step_leaf_count`, the widest history the ruleset will admit, the class map's
+/// tile, the terminal move count and the widest output tile any registered row disputes — so no
+/// preset writes a `k` and no `k` can be chosen.
+///
+/// **And a round has to fit a carrier, which is a property of the (arity, lanes) PAIR.** At a
+/// 128-lane tile every legal arity fits one framed carrier; at the hybrid's 256-lane head, arity
+/// 64 is 132,102 bytes and does not. The bound is applied at the WIDEST output tile the ruleset
+/// registers, and a `k` whose round no carrier holds is REFUSED rather than priced: `None`. It can
+/// only ever refuse from above — a smaller arity discloses strictly fewer children — so the
+/// smallest window-fitting arity is also the cheapest one to check.
+///
+/// `history_positions_max = 0` is a ruleset with no fused attention site: the dissection has no
+/// rounds and the answer is whatever arity the leaf ladder alone needs.
+///
+/// `None` when no legal arity fits — which is the honest answer for a window that cannot hold the
+/// dispute it admits, and the refusal ADR-0082 Z4 turns into an admission error rather than a
+/// court that runs out of clock mid-prosecution.
+pub fn palw_court_arity_v1(
+    window_court: u64,
+    turn_deadline: u64,
+    max_step_leaves: u64,
+    history_positions_max: u64,
+    tile: u32,
+    terminal_moves: u32,
+    widest_lane_count: usize,
+) -> Option<u8> {
+    use crate::palw_attn_dissect::{
+        PALW_ATTN_DISSECT_MAX_ARITY, PALW_ATTN_DISSECT_MIN_ARITY, palw_attn_dissect_arity_fits_carrier_v1,
+        palw_attn_dissection_rounds_v1, palw_kary_rounds_v1,
+    };
+    if window_court == 0 || turn_deadline == 0 {
+        return None;
+    }
+    let carrier = palw_close_bytes_for_chunks_v1(1);
+    let mut arity = PALW_ATTN_DISSECT_MIN_ARITY;
+    loop {
+        let ladder = u64::from(palw_kary_rounds_v1(max_step_leaves, arity)?);
+        let history = if history_positions_max == 0 {
+            0
+        } else {
+            u64::from(palw_attn_dissection_rounds_v1(history_positions_max, tile, arity)?)
+        };
+        let moves = ladder.checked_add(history)?.checked_mul(2)?.checked_add(u64::from(terminal_moves))?;
+        if moves.checked_mul(turn_deadline)? <= window_court {
+            // The clock admits this arity. The carrier is the other half of the same question,
+            // and it answers for the PAIR: a wider arity would only weigh more, so a round that
+            // does not fit here is a refusal and never a reason to keep searching upward.
+            return palw_attn_dissect_arity_fits_carrier_v1(arity, widest_lane_count, carrier).then_some(arity);
+        }
+        if arity >= PALW_ATTN_DISSECT_MAX_ARITY {
+            return None;
+        }
+        arity *= 2;
+    }
+}
+
 /// Bond-side network constants (ADR-0042 Decision 6's withdrawal-delay clause).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwBondParamsV2 {
