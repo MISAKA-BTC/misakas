@@ -303,21 +303,41 @@ pub fn softmax(logits_q: &[i32]) -> Result<Vec<i32>, PalwBase0OpError> {
 ///
 /// `softmax_shifted(x, 0)` is byte-identical to `softmax(x)` on every row whose differences fit
 /// `i32`, which is every row op 5 was defined on.
+/// **The shifted difference, clamped BEFORE the widening** (ADR-0082 audit E M-1 / A M-3).
+///
+/// The expression this replaces was `((v − max) << up).clamp(i32::MIN, 0)`, and its comment said
+/// the ordering made "a genuinely enormous gap saturate to `i32::MIN` instead of wrapping". A
+/// left shift on `i64` discards the high bits and is not checked by `overflow-checks`, so at
+/// `up = 48` a key 40,000 code-units BELOW the row max shifts to `+7_187_745_005_283_311_616`,
+/// clamps to `0`, and is handed `int_exp(0)` — the FULL weight, the same the row max gets. The
+/// exponent map stops being monotone in the score, which is the one property a softmax is.
+///
+/// The clamp is therefore applied to the DIFFERENCE, at the smallest value whose shift still
+/// lands inside `i32`: `i32::MIN >> up`. Below it every argument saturates `int_exp` to zero
+/// anyway, so nothing representable is lost, and for every `up ≤ 46` the answer is bit-identical
+/// to the old expression — a code row is `clamp16`-bounded, so `|v − max| < 2^16` and
+/// `2^16 << 46 < 2^63`.
+///
+/// **Measured on the bound shipped artifact (2026-09-03): its `attn_softmax_up` bytes are
+/// {14, 15, 16, 18, 21, 25} across the 28 layers, max 25** — below 47, so this moves no value the
+/// class being registered ever committed, and there is no freeze race on it. The converter writes
+/// `(K + e_lg).clamp(0, 62)` with `K = 24`, so 62 is reachable in principle by an artifact nobody
+/// has built; the point of the fix is that such an artifact is now a softmax rather than a class
+/// whose most-suppressed key wins the row. The two callers (this row kernel and `a16_attn_exp_one`) must stay one
+/// expression or the fused site and the shipped softmax part.
+#[inline]
+pub(crate) fn softmax_shifted_diff_v1(v: i32, max: i64, up: i64) -> i32 {
+    let floor = (i32::MIN as i64) >> up;
+    (((v as i64 - max).max(floor)) << up).clamp(i32::MIN as i64, 0) as i32
+}
+
 pub fn softmax_shifted(logits: &[i32], up_bits: u8) -> Result<Vec<i32>, PalwBase0OpError> {
     if logits.is_empty() {
         return Err(PalwBase0OpError::Empty);
     }
     let up = up_bits.min(62) as i64;
     let max = *logits.iter().max().expect("non-empty checked above") as i64;
-    let exps: Vec<i64> = logits
-        .iter()
-        .map(|v| {
-            // The difference is non-positive by construction; widened FIRST, clamped SECOND, so
-            // a genuinely enormous gap saturates to `i32::MIN` instead of wrapping.
-            let diff = ((*v as i64 - max) << up).clamp(i32::MIN as i64, 0);
-            int_exp(diff as i32) as i64
-        })
-        .collect();
+    let exps: Vec<i64> = logits.iter().map(|v| int_exp(softmax_shifted_diff_v1(*v, max, up)) as i64).collect();
     let sum: i64 = exps.iter().sum();
     if sum <= 0 {
         let uniform = ONE / (logits.len() as i64);
@@ -397,6 +417,32 @@ mod tests {
         // And the sum is still a distribution.
         let sum: i64 = probs.iter().map(|p| *p as i64).sum();
         assert!((sum - super::ONE).abs() < super::ONE / 100, "sums to ONE, got {sum}");
+    }
+
+    /// **The exponent map is monotone in the score at every `up_bits`** (audit E M-1).
+    ///
+    /// A two-element row, because the shipped edge tests all use ONE element and a one-element
+    /// row has `diff == 0` — the only difference the old shift could not wrap. At `up_bits` 48 a
+    /// key 40,000 code-units below the row max shifted to `+7_187_745_005_283_311_616`, clamped
+    /// to `0`, and came out with the SAME weight as the max: the suppressed key winning half the
+    /// row. The assertion is the property, not the number, so it holds at every width.
+    #[test]
+    fn the_shifted_exponent_never_gives_a_suppressed_key_the_max_s_weight() {
+        for up in [0u8, 1, 24, 46, 47, 48, 55, 62] {
+            let row = super::softmax_shifted(&[32_767, -7_233], up).unwrap();
+            assert!(row[0] > row[1], "up_bits {up}: the row max got {} and a key 40,000 below it got {}", row[0], row[1]);
+        }
+        // And the wide gap is DEAD, not equal: past the useful domain every suppressed key is zero.
+        assert_eq!(super::softmax_shifted(&[32_767, -7_233], 48).unwrap()[1], 0);
+        // Below `up = 47` the new clamp is bit-identical to the old shift-then-clamp form, which
+        // is why nothing a shipped class committed moves: a code row is `clamp16`-bounded, so
+        // `|v - max| < 2^16` and `2^16 << 46 < 2^63`.
+        for up in 0u8..=46 {
+            for &(a, b) in &[(32_767i32, -32_767i32), (5, 4), (0, -1), (-7, -7)] {
+                let want = ((b as i64 - a as i64) << (up as i64)).clamp(i32::MIN as i64, 0) as i32;
+                assert_eq!(super::softmax_shifted_diff_v1(b, a as i64, up as i64), want, "up {up} on ({a}, {b})");
+            }
+        }
     }
 
     /// Total on the degenerate rows: empty refused, single-key certain, huge `up_bits` clamped.

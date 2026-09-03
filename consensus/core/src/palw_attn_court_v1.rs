@@ -90,12 +90,16 @@ pub enum PalwAttnCourtError {
     /// **The cache-write route is not a sound court route, and for a class that checkpoints every
     /// position it is not a necessary one** (ADR-0082 Decision 4, amended).
     ///
-    /// A graph declares its cache reads as the `KV_K` / `KV_V` input SENTINELS and never names the
-    /// nodes that WRITE them, so nothing in a `CacheWrites` bottom binds an opened row to the K
-    /// series rather than the V series: a bottom that swaps the two wholesale opens rows the claim
-    /// really committed, at coordinates the claim really has, and convicts an honest executor. The
-    /// checkpoint route has no such gap — `(kind, layer, position)` all come from the map, and the
-    /// map is inside the class id.
+    /// The route is now BOUND — every cache-write row is compared with the full coordinate the
+    /// class puts it at, node slot included, and the slot is the layer's `KCacheWrite` /
+    /// `VCacheWrite` node (audit A C-3/H-1) — so the wholesale K/V swap this refusal was first
+    /// written for is refused by `WrongCoordinate` rather than admitted. What the route still
+    /// cannot do is carry a cache row that is SEVERAL leaves (`CacheRowIsNotOneLeaf`), and what
+    /// the checkpoint route still has that it does not is a kind, layer and position that all come
+    /// from the map, with the map inside the class id — one fact instead of three comparisons.
+    ///
+    /// The refusal therefore stands where the class has an alternative, and it is now the cheaper
+    /// of two sound routes rather than the only sound one.
     ///
     /// Refused only where the class has an alternative. A per-decode-call leg commits no checkpoint
     /// over the prefill at all, so refusing the cache-write route there would leave a prefill
@@ -140,6 +144,30 @@ pub enum PalwAttnCourtError {
         "the root claim is about head {got_head} lanes {got_first}..+{got_count}; the ladder terminated on head {head} lanes {first}..+{count}"
     )]
     WrongSite { got_head: u16, got_first: u16, got_count: u16, head: u16, first: u16, count: u16 },
+    #[error("the root claim states a history of {got} positions; the leaf the ladder terminated on reads {expected}")]
+    WrongHistory { got: u32, expected: u32 },
+    #[error(
+        "the root claim's exponent sum {got} is outside the band {min}..={max} that {positions} positions of an honest row can produce"
+    )]
+    ExponentSumOutOfBand { got: i64, min: i64, max: i64, positions: u32 },
+    #[error("the bottom's {what} opening is committed at {got:?}; the class puts it at {expected:?}")]
+    WrongCoordinate {
+        what: &'static str,
+        got: crate::palw_step::PalwStepCoordinateV1,
+        expected: crate::palw_step::PalwStepCoordinateV1,
+    },
+    #[error("the bottom's K evidence and its V evidence take different routes; a bottom reads one route")]
+    MixedEvidenceRoutes,
+    #[error("the bottom anchors at the checkpoint covering {got}; this step's anchor is the one covering {expected}")]
+    WrongAnchor { got: u32, expected: u32 },
+    #[error(
+        "this class commits a checkpoint at every position, so a tile is wholly inside its anchor; {got} rows were opened after it"
+    )]
+    RowsAfterOnAPerPositionClass { got: usize },
+    #[error("the class names no node holding the {kind} cache role, so a cache-write row cannot be bound to its series")]
+    CacheSeriesNotDeclared { kind: &'static str },
+    #[error("a cache row is {kv_dim} lanes and the node that writes it tiles at {tile}: one opened leaf is not one row")]
+    CacheRowIsNotOneLeaf { kv_dim: usize, tile: usize },
     #[error("the root claim's value partials finalize to a tile the execution did not commit")]
     RootDoesNotFinalize,
     #[error("the bottom opens tile {got} and the dissection narrowed to tile {expected}")]
@@ -150,10 +178,6 @@ pub enum PalwAttnCourtError {
     RowNotCommitted,
     #[error("an opened row carries {got} lanes where the geometry says {expected}")]
     RowWidthMismatch { got: usize, expected: usize },
-    #[error("an opened row stands for position {expected} and its committed coordinate says {got}")]
-    RowIsNotItsPosition { got: u32, expected: u64 },
-    #[error("the tile's rows are committed by {slots} different nodes; one series is written by one node")]
-    RowsAreNotOneSeries { slots: usize },
     #[error("the K rows and the V rows of this tile are the same committed series — a tile has two")]
     KeyAndValueAreTheSameSeries,
     #[error("the bottom reads a tile from a checkpoint and carries no anchor for it")]
@@ -339,10 +363,15 @@ pub struct PalwAttnBottomBindingV1 {
 /// It is here because a geometry and an anchor that describe different histories would let a
 /// chunk index point at another position's rows, and this is the field that says they are one.
 ///
-/// **What this module does NOT decide**: WHICH checkpoint is this step's anchor. That rule —
-/// `covered_decode_call == disputed_call − 1`, exactly — is `palw_step_refute::verify_kv_anchor`'s
-/// and stays there; a challenger choosing among anchors would be choosing which positions the
-/// court never sees, and one refusal for that belongs in one place.
+/// **WHICH checkpoint is this step's anchor is decided by the CALLER and refused here by name.**
+/// The rule is `palw_context_ladder::palw_checkpoint_covered_for_step_v1` — the one function that
+/// says which checkpoint a step's evidence must carry — evaluated in
+/// `palw_court_v2::palw_attn_dispute_site_v2` and carried on [`Self::anchor_covered_decode_call`].
+/// This module used to say the rule "stays" in `palw_step_refute::verify_kv_anchor`; that
+/// function has exactly one caller, on the ARITHMETIC refutation path, and nothing on the
+/// dissection path ever asked it. A challenger free to choose among anchors is a challenger
+/// choosing which positions the court never sees — and, on a per-position class, choosing a
+/// STRADDLE that admits the unsound cache-write rows the straddle's residue is opened with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwAttnBottomSiteV1 {
     pub params: A16AttnFusedParamsV1,
@@ -353,6 +382,38 @@ pub struct PalwAttnBottomSiteV1 {
     pub d_head: usize,
     /// The attention layer in the PROFILE's numbering, which is what the map indexes by.
     pub attn_layer: u16,
+    /// **The disputed leaf's OWN coordinate**, from the canonical enumeration — the call, the
+    /// fused node's slot, the position within that call and the output tile. Every other
+    /// coordinate the bottom opens is derived from it, and the committed output tile the bottom
+    /// carries must BE it.
+    pub disputed: crate::palw_step::PalwStepCoordinateV1,
+    /// The job's declared prefill, so a HISTORY position's own `(call, position)` follows:
+    /// `j < prefill` is `(0, j)` and `j ≥ prefill` is `(j − prefill + 1, 0)` — the canonical
+    /// enumeration's rule, not a second one.
+    pub prefill_positions: u32,
+    /// **The rotated-query node**: its global slot, the tile of its committed row that holds this
+    /// head's slice, that tile's width in lanes, and where the head's `d_head` codes start inside
+    /// it. Without these the bottom read ANY committed `d_head`-wide leaf as the query — another
+    /// head's row, another position's — and convicted an honest executor on genuine material.
+    pub query_slot: u32,
+    pub query_tile_index: u32,
+    pub query_tile_lanes: usize,
+    pub query_lane_offset: usize,
+    /// **The nodes that WRITE the K and the V cache**, as global slots — the `KCacheWrite` /
+    /// `VCacheWrite` roles of the layer's own table, which is the same resolution the K/V input
+    /// sentinels take in `palw_step_refute`. `None` when the class declares no such node, and
+    /// then the cache-write route is refused by name rather than left unbound.
+    pub k_slot: Option<u32>,
+    pub v_slot: Option<u32>,
+    /// The tile width of those nodes' committed rows. One opened leaf is one cache row only when
+    /// it equals `kv_dim`; a narrower tile means a row is several leaves, which this bottom's
+    /// one-opening-per-position shape cannot carry, and it is refused by name.
+    pub kv_tile_lanes: usize,
+    /// **The checkpoint this step's evidence must anchor at** —
+    /// `palw_checkpoint_covered_for_step_v1` of the disputed coordinate. `None` where the class
+    /// commits no checkpoint covering the disputed position at all (the prefill of a
+    /// per-decode-call leg), and then a `Checkpoint` arm has no legal anchor.
+    pub anchor_covered_decode_call: Option<u32>,
     /// The anchor's layout under the class's TILED map (`tiled_kv_state_geometry_v3`), at
     /// `anchor_positions` positions. `None` when no checkpoint precedes the disputed position, and
     /// then a `Checkpoint` evidence arm is refused by name rather than guessed at.
@@ -432,6 +493,7 @@ impl PalwAttnDissectPhaseV1 {
         session_id: Hash64,
         root: &PalwAttnRootClaimV1,
         site: (u16, u16, u16),
+        history_positions: u32,
         out_tile: &[i32],
         values: crate::palw_base0_a16::A16QuantParams,
         court: &PalwCourtParamsV2,
@@ -444,6 +506,7 @@ impl PalwAttnDissectPhaseV1 {
             session_id,
             root,
             site,
+            history_positions,
             out_tile,
             values,
             court.dissection_arity(),
@@ -467,6 +530,7 @@ impl PalwAttnDissectPhaseV1 {
         session_id: Hash64,
         root: &PalwAttnRootClaimV1,
         site: (u16, u16, u16),
+        history_positions: u32,
         out_tile: &[i32],
         values: crate::palw_base0_a16::A16QuantParams,
         arity: u8,
@@ -504,6 +568,38 @@ impl PalwAttnDissectPhaseV1 {
                 head: site.0,
                 first: site.1,
                 count: site.2,
+            });
+        }
+        // **The history is the CHAIN's, not the responder's** (audit A C-1 / E C-2).
+        //
+        // `history_positions` is the length of the history the whole dissection is played over —
+        // the tile space, the round budget, and which positions the bottom must open. The caller
+        // derives it from the terminal leaf's own coordinate and the job context (the canonical
+        // enumeration's `p + 1` inside the prefill, `prefill + call` afterwards) and it was
+        // computed and thrown away: the phase took the length from the wire. A responder that
+        // TRUNCATED it answered honestly about a shorter row and was acquitted; one that inflated
+        // it dissected into positions no committed leaf and no checkpoint chunk can serve, so the
+        // honest challenger could never close, and the backstop closes challenger-side. Neither
+        // needs any arithmetic skill. The whole-row arm for this same node states the rule and the
+        // reason ("the series must be the challenged position's OWN history, exactly").
+        if root.history_positions != history_positions {
+            return Err(PalwAttnCourtError::WrongHistory { got: root.history_positions, expected: history_positions });
+        }
+        // **`S*` is a divisor, and a divisor off the wire is an unbounded one** (audit A C-2 /
+        // E C-1). The band is derivable from pinned constants and the history just pinned above:
+        // the row max contributes exactly `int_exp(0)`, so an honest sum is at least that, and no
+        // position contributes more than `int_exp(0)`, so it is at most `positions × int_exp(0)`.
+        // Below the band `int_recip(S*)` is large enough that the bottom's `e × recip` leaves
+        // `i64` — a panic in block validation before the kernel was made total — and a
+        // non-positive one made the close undeliverable, so the accuser lost a case it had won.
+        let unit = i64::from(crate::palw_base0::int_exp(0));
+        let ceiling = unit.saturating_mul(i64::from(root.history_positions));
+        if root.claim.exp_sum < unit || root.claim.exp_sum > ceiling {
+            return Err(PalwAttnCourtError::ExponentSumOutOfBand {
+                got: root.claim.exp_sum,
+                min: unit,
+                max: ceiling,
+                positions: root.history_positions,
             });
         }
         // **The claim is checked against the execution before it is played against.**
@@ -729,49 +825,58 @@ pub fn palw_attn_opened_lanes_v1(
     opened_lanes_v1(row, binding, expected_lanes)
 }
 
-/// **Every row of a series, checked to be the positions it stands for** (ADR-0082 Decision 2,
-/// step 3).
+/// **The `(call, position)` a HISTORY position was written at** — the canonical enumeration's own
+/// rule, not a second one: the prefill call holds positions `0..P`, and decode call `c` holds the
+/// single position `P + c − 1`.
 ///
-/// `opened_lanes_v1` proves a leaf is IN the claim's step tree. It does not prove WHICH row of
-/// the cache it is, and the recompute below is position-ordered — so without this a challenger
-/// could open sixteen committed rows from anywhere in the history, recompute a triple that is not
-/// the disputed tile's, and take `ExecutorGuilty` against an execution that was honest. The
-/// evidence has to say what it is, not merely that it exists.
+/// The check this replaces compared `coord.position` alone, which is right inside the prefill and
+/// WRONG at every decode position — where the canonical position is `0` and the call carries the
+/// history index. A tile straddling the prefill boundary therefore refused honest evidence on one
+/// side and accepted a row from the wrong call on the other.
+fn history_row_coord_v1(prefill: u32, slot: u32, j: u64) -> crate::palw_step::PalwStepCoordinateV1 {
+    let (call_index, position) = if j < u64::from(prefill) { (0u32, j as u32) } else { ((j - u64::from(prefill) + 1) as u32, 0u32) };
+    crate::palw_step::PalwStepCoordinateV1 { call_index, node_slot: slot, position, tile_index: 0 }
+}
+
+/// **Every row of a series, checked to BE the row it stands for** (ADR-0082 Decision 2, step 3).
 ///
-/// Two things are checked and both come off the committed leaf preimage, which is inside the
-/// leaf hash the opening proves:
+/// `opened_lanes_v1` proves a leaf is IN the claim's step tree. It does not prove WHICH row of the
+/// cache it is, and the recompute below is position-ordered — so without this a challenger could
+/// open sixteen committed rows from anywhere in the history, recompute a triple that is not the
+/// disputed tile's, and take `ExecutorGuilty` against an execution that was honest. The evidence
+/// has to say what it is, not merely that it exists.
 ///
-/// * `coord.position` is the position this row stands for, in order;
-/// * every row of one series is committed by ONE node — a cache series is written by one node at
-///   every position — and the caller additionally requires the K series and the V series to be
-///   different nodes, because two slices of one series are not a tile's K and V.
-///
-/// **What this still does not pin** is WHICH node writes the keys and which the values: a graph
-/// declares its cache reads as the `PALW_STEP_INPUT_KV_K` / `_KV_V` sentinels and never names the
-/// nodes that WRITE them, so the court has no registered fact to compare a slot against. A bottom
-/// that swaps the two series wholesale is therefore still admissible on the cache-write route,
-/// and is refused on the checkpoint route, where kind, layer and position all come from the map.
-/// That gap is ADR-0082's to close before `palw_kary_court` is armed.
+/// What is compared is the WHOLE committed coordinate — call, node slot, position and tile — of
+/// every row, against the coordinate the CLASS puts that history position at. The node slot is
+/// the class's `KCacheWrite` / `VCacheWrite` node (`site.k_slot` / `site.v_slot`), resolved by the
+/// same role lookup the K and V input sentinels take in `palw_step_refute`. The module used to
+/// say a graph "never names the nodes that WRITE" its caches and that a bottom swapping the two
+/// series wholesale was therefore admissible; the roles are exactly that name, and with the slot
+/// compared the swap opens rows at coordinates the site refuses. A class that declares no such
+/// node has no cache-write route at all and is refused by name.
 fn opened_series_v1(
     rows: &[PalwAttnRowOpeningV1],
     binding: &PalwAttnBottomBindingV1,
-    expected_lanes: usize,
+    site: &PalwAttnBottomSiteV1,
+    slot: u32,
+    what: &'static str,
     first_position: u64,
-) -> Result<(Vec<i32>, Option<u32>), PalwAttnCourtError> {
-    let mut out = Vec::with_capacity(rows.len() * expected_lanes);
-    let mut slots = std::collections::BTreeSet::new();
+) -> Result<Vec<i32>, PalwAttnCourtError> {
+    // One opened leaf is one cache row only when the writing node's tile IS the row. A narrower
+    // tile makes a row several leaves, which this bottom's one-opening-per-position shape cannot
+    // carry — said here, by name, rather than discovered as a width mismatch.
+    if !rows.is_empty() && site.kv_tile_lanes != site.kv_dim {
+        return Err(PalwAttnCourtError::CacheRowIsNotOneLeaf { kv_dim: site.kv_dim, tile: site.kv_tile_lanes });
+    }
+    let mut out = Vec::with_capacity(rows.len() * site.kv_dim);
     for (i, row) in rows.iter().enumerate() {
-        let expected = first_position + i as u64;
-        if u64::from(row.leaf.coord.position) != expected {
-            return Err(PalwAttnCourtError::RowIsNotItsPosition { got: row.leaf.coord.position, expected });
+        let expected = history_row_coord_v1(site.prefill_positions, slot, first_position + i as u64);
+        if row.leaf.coord != expected {
+            return Err(PalwAttnCourtError::WrongCoordinate { what, got: row.leaf.coord, expected });
         }
-        slots.insert(row.leaf.coord.node_slot);
-        out.extend(opened_lanes_v1(row, binding, expected_lanes)?);
+        out.extend(opened_lanes_v1(row, binding, site.kv_dim)?);
     }
-    if slots.len() > 1 {
-        return Err(PalwAttnCourtError::RowsAreNotOneSeries { slots: slots.len() });
-    }
-    Ok((out, slots.into_iter().next()))
+    Ok(out)
 }
 
 /// Read an opened row's `i32` lanes out of its leaf preimage, after proving the leaf is the
@@ -805,6 +910,17 @@ fn verified_anchor_v1<'a>(
 ) -> Result<(&'a PalwCheckpointLeafV2, &'a PalwStateChunkGeometryV1), PalwAttnCourtError> {
     let anchor = anchor.ok_or(PalwAttnCourtError::AnchorMissing)?;
     let geometry = site.anchor_geometry.as_ref().ok_or(PalwAttnCourtError::AnchorGeometryMissing)?;
+    // **The anchor is the DERIVED checkpoint, exactly** (audit A C-4). Nothing bound
+    // `covered_decode_call` to `palw_checkpoint_covered_for_step_v1`, so a bottom could anchor at
+    // any checkpoint of the leg whose geometry happened to fit — and on a per-position class,
+    // where one exists at every position, an anchor one position INSIDE the disputed tile makes
+    // the tile straddle its edge and re-opens the residue as cache-write rows, which is the route
+    // the class is refused. Exact and not "at most", for `verify_kv_anchor`'s own reason: a
+    // challenger choosing among anchors is choosing which positions the court never sees.
+    let want = site.anchor_covered_decode_call.ok_or(PalwAttnCourtError::AnchorCoversNothing)?;
+    if anchor.leaf.covered_decode_call != want {
+        return Err(PalwAttnCourtError::WrongAnchor { got: anchor.leaf.covered_decode_call, expected: want });
+    }
     if geometry.positions != site.anchor_positions {
         return Err(PalwAttnCourtError::AnchorGeometryDoesNotDescribeTheAnchor {
             positions: site.anchor_positions,
@@ -846,7 +962,12 @@ fn tile_rows_v1(
     first_position: u64,
     width: usize,
     court_tile: u32,
-) -> Result<(Vec<i32>, Option<u32>), PalwAttnCourtError> {
+) -> Result<Vec<i32>, PalwAttnCourtError> {
+    let (slot, what) = match kind {
+        PalwStateChunkKindV1::Key => (site.k_slot, "K"),
+        PalwStateChunkKindV1::Value => (site.v_slot, "V"),
+    };
+    let slot = slot.ok_or(PalwAttnCourtError::CacheSeriesNotDeclared { kind: what })?;
     match evidence {
         PalwAttnTileEvidenceV1::CacheWrites { rows } => {
             // **Refused where a sound route exists at every position** — see
@@ -858,7 +979,7 @@ fn tile_rows_v1(
             if rows.len() != width {
                 return Err(PalwAttnCourtError::RowsAfterMismatch { covered: 0, width, got: rows.len() });
             }
-            opened_series_v1(rows, binding, site.kv_dim, first_position)
+            opened_series_v1(rows, binding, site, slot, what, first_position)
         }
         PalwAttnTileEvidenceV1::Checkpoint { chunk, rows_after } => {
             let (leaf, geometry) = verified_anchor_v1(anchor, binding, site)?;
@@ -881,6 +1002,15 @@ fn tile_rows_v1(
             }
             if rows_after.len() != width - covered {
                 return Err(PalwAttnCourtError::RowsAfterMismatch { covered, width, got: rows_after.len() });
+            }
+            // **A per-position class has no residue** (audit A C-4, second guard). The derived
+            // anchor covers `p + 1` positions and attention at `p` reads exactly `0..=p`, so the
+            // tile is wholly inside it; a non-empty `rows_after` there is the cache-write route
+            // arriving under the checkpoint arm's name, and it is refused as such. Independent of
+            // the anchor check above on purpose — two guards on one hole, because either alone
+            // would be an argument rather than a rule.
+            if site.every_position_is_checkpointed && !rows_after.is_empty() {
+                return Err(PalwAttnCourtError::RowsAfterOnAPerPositionClass { got: rows_after.len() });
             }
             let position =
                 u32::try_from(first_position).map_err(|_| PalwAttnCourtError::ChunkRowUnreadable { position: first_position })?;
@@ -913,9 +1043,9 @@ fn tile_rows_v1(
                     .ok_or(PalwAttnCourtError::ChunkRowUnreadable { position: u64::from(p) })?;
                 out.extend(bytes.chunks_exact(4).map(|q| i32::from_le_bytes([q[0], q[1], q[2], q[3]])));
             }
-            let (tail, slot) = opened_series_v1(rows_after, binding, site.kv_dim, first_position + covered as u64)?;
+            let tail = opened_series_v1(rows_after, binding, site, slot, what, first_position + covered as u64)?;
             out.extend(tail);
-            Ok((out, slot))
+            Ok(out)
         }
     }
 }
@@ -963,27 +1093,62 @@ pub fn check_attn_dissect_bottom_v1(
     let (first_position, width) =
         phase.terminal_tile_positions().ok_or(PalwAttnCourtError::WrongTile { got: bottom.tile, expected: expected_tile })?;
 
-    // Every operand is opened against something the claim committed before a multiply happens.
-    let qh = opened_lanes_v1(&bottom.query, binding, site.d_head)?;
-    let tile = phase.tile_positions();
-    let (k_tile, k_slot) =
-        tile_rows_v1(&bottom.k, PalwStateChunkKindV1::Key, bottom.anchor.as_ref(), binding, site, first_position, width, tile)?;
-    let (v_tile, v_slot) =
-        tile_rows_v1(&bottom.v, PalwStateChunkKindV1::Value, bottom.anchor.as_ref(), binding, site, first_position, width, tile)?;
-    // **A tile has two series, not one twice.** On the checkpoint route the map says which kind a
-    // chunk holds; on the cache-write route nothing does, and opening the SAME committed series
-    // for both K and V would recompute a triple no execution produced — a conviction built out of
-    // honest rows read twice. Two different committing nodes is the weakest true statement
-    // available here; see `opened_series_v1` for the part that is still not pinned.
-    if let (Some(k), Some(v)) = (k_slot, v_slot)
-        && k == v
-    {
+    // **A tile has two series, not one twice.** The two series are the class's `KCacheWrite` and
+    // `VCacheWrite` nodes, and a graph in which one node holds both roles commits one series that
+    // the recompute would read as two — a conviction built out of honest rows read twice. Asked
+    // of the SITE, before any evidence is walked, because it is a property of the class and not
+    // of the bottom, and it is the same answer on both routes.
+    if site.k_slot.is_some() && site.k_slot == site.v_slot {
         return Err(PalwAttnCourtError::KeyAndValueAreTheSameSeries);
     }
+    // **One bottom reads one route** (audit A H-1). A mixed bottom — one kind from the checkpoint,
+    // the other from cache writes — is not a case the two routes' equality argument covers, and it
+    // was the shape in which the checkpoint arm's `None` slot silently disabled the series
+    // comparison that stood at the time. There is no honest reason to file one: both kinds live in
+    // the same anchor and are written by the same step.
+    if std::mem::discriminant(&bottom.k) != std::mem::discriminant(&bottom.v) {
+        return Err(PalwAttnCourtError::MixedEvidenceRoutes);
+    }
+
+    // Every operand is opened against something the claim committed before a multiply happens, and
+    // "committed" means AT ITS OWN COORDINATE — the class's, derived from the leaf the ladder
+    // narrowed to (audit A C-3 / E C-3).
+    let q_expected = crate::palw_step::PalwStepCoordinateV1 {
+        call_index: site.disputed.call_index,
+        node_slot: site.query_slot,
+        position: site.disputed.position,
+        tile_index: site.query_tile_index,
+    };
+    if bottom.query.leaf.coord != q_expected {
+        return Err(PalwAttnCourtError::WrongCoordinate { what: "query", got: bottom.query.leaf.coord, expected: q_expected });
+    }
+    let q_row = opened_lanes_v1(&bottom.query, binding, site.query_tile_lanes)?;
+    let qh = q_row
+        .get(site.query_lane_offset..site.query_lane_offset + site.d_head)
+        .ok_or(PalwAttnCourtError::RowWidthMismatch { got: q_row.len(), expected: site.query_lane_offset + site.d_head })?;
+    // **The committed output tile is opened too, and it is the disputed leaf** (audit A L-1). The
+    // type's own doc says every field of the bottom is "opened against something the claim
+    // committed"; this one was carried and never read, `4 × lane_count` bytes plus a whole path of
+    // payload the cost gate charges for and nothing checks. It is the fused node's OWN row, so its
+    // coordinate is the disputed coordinate exactly.
+    if bottom.out_tile.leaf.coord != site.disputed {
+        return Err(PalwAttnCourtError::WrongCoordinate {
+            what: "output tile",
+            got: bottom.out_tile.leaf.coord,
+            expected: site.disputed,
+        });
+    }
+    opened_lanes_v1(&bottom.out_tile, binding, phase.lane_count as usize)?;
+
+    let tile = phase.tile_positions();
+    let k_tile =
+        tile_rows_v1(&bottom.k, PalwStateChunkKindV1::Key, bottom.anchor.as_ref(), binding, site, first_position, width, tile)?;
+    let v_tile =
+        tile_rows_v1(&bottom.v, PalwStateChunkKindV1::Value, bottom.anchor.as_ref(), binding, site, first_position, width, tile)?;
 
     let (m_star, s_star) = phase.root_scale();
     let lanes = (phase.lane_first as usize, phase.lane_count as usize);
-    let recomputed = a16_attn_tile_triple_v1(&qh, &k_tile, &v_tile, site.kv_dim, site.kv_off, lanes, site.params, m_star, s_star)?;
+    let recomputed = a16_attn_tile_triple_v1(qh, &k_tile, &v_tile, site.kv_dim, site.kv_off, lanes, site.params, m_star, s_star)?;
     Ok(if recomputed == *phase.claim() { PalwAttnCourtVerdictV1::ChallengerDefeated } else { PalwAttnCourtVerdictV1::ExecutorGuilty })
 }
 
@@ -1246,6 +1411,20 @@ mod tests {
                 kv_off: 0,
                 d_head: self.d_head,
                 attn_layer: LAYER,
+                // The fixture's leaf layout, as the class would describe it: the query at slot 0,
+                // the K series at 1, the V series at 2 and the fused row at 3, one tile each. All
+                // of its history is PREFILL, so every history position's own coordinate is
+                // `(call 0, position j)`.
+                disputed: PalwStepCoordinateV1 { call_index: 0, node_slot: 3, position: 0, tile_index: 0 },
+                prefill_positions: self.positions as u32,
+                query_slot: 0,
+                query_tile_index: 0,
+                query_tile_lanes: self.d_head,
+                query_lane_offset: 0,
+                k_slot: Some(1),
+                v_slot: Some(2),
+                kv_tile_lanes: self.kv_dim,
+                anchor_covered_decode_call: None,
                 anchor_geometry: None,
                 anchor_positions: 0,
             }
@@ -1253,7 +1432,12 @@ mod tests {
 
         /// The same, with the anchor's tiled layout.
         fn site_anchored(&self, anchor: &Anchor) -> PalwAttnBottomSiteV1 {
-            PalwAttnBottomSiteV1 { anchor_geometry: Some(anchor.geometry.clone()), anchor_positions: anchor.positions, ..self.site() }
+            PalwAttnBottomSiteV1 {
+                anchor_geometry: Some(anchor.geometry.clone()),
+                anchor_positions: anchor.positions,
+                anchor_covered_decode_call: Some(anchor.anchor.leaf.covered_decode_call),
+                ..self.site()
+            }
         }
 
         /// The binding, with the anchor's checkpoint leg root.
@@ -1387,7 +1571,19 @@ mod tests {
             claim: root_claim,
         };
         let site = (root.head, root.lane_first, root.lane_count);
-        PalwAttnDissectPhaseV1::open(h64(9), &root, site, &fx.out_tile, params().values, &court_at(arity), TILE, 100, 30, true)
+        PalwAttnDissectPhaseV1::open(
+            h64(9),
+            &root,
+            site,
+            fx.positions as u32,
+            &fx.out_tile,
+            params().values,
+            &court_at(arity),
+            TILE,
+            100,
+            30,
+            true,
+        )
     }
 
     /// What one full dissection decided, and how it got there.
@@ -1669,17 +1865,18 @@ mod tests {
             "the honest execution must be acquitted"
         );
 
-        // **The gap, measured.** Swap the two series wholesale. Every opening still verifies —
-        // nothing in the object or the site says which series a row belongs to — so the court
-        // recomputes a triple from the wrong operands and convicts an honest executor.
+        // **The gap, CLOSED — and this assertion is the record of the move** (audit A C-3/H-1).
+        // Until the rows were bound to their committed coordinates, swapping the two series
+        // wholesale verified every opening (nothing said which series a row belonged to) and
+        // convicted an honest executor. The class names its cache writers by role, so the K rows
+        // now have to stand at the K writer's slot, and the swap is refused by name at the first
+        // row instead of producing a verdict.
         let mut swapped = fx.bottom(h64(9), tile);
         std::mem::swap(&mut swapped.k, &mut swapped.v);
         let verdict = check_attn_dissect_bottom_v1(&phase, &swapped, &fx.binding, &fx.site(), true);
-        assert_eq!(
-            verdict,
-            Ok(PalwAttnCourtVerdictV1::ExecutorGuilty),
-            "the swapped bottom was expected to convict an honest executor — if this now acquits or refuses, the cache-write \
-             route has grown a series binding and this test's premise needs re-reading"
+        assert!(
+            matches!(verdict, Err(PalwAttnCourtError::WrongCoordinate { what: "K", .. })),
+            "the swapped bottom must be refused by the K series' own coordinate, got {verdict:?}"
         );
 
         // **The answer.** A class that commits a checkpoint after every position is refused the
@@ -1722,19 +1919,31 @@ mod tests {
         };
         let site = (0u16, 0u16, 4u16);
         assert_eq!(
-            PalwAttnDissectPhaseV1::open(h64(9), &root, site, &fx.out_tile, params().values, &court_at(16), TILE, 100, 30, false),
+            PalwAttnDissectPhaseV1::open(h64(9), &root, site, 32, &fx.out_tile, params().values, &court_at(16), TILE, 100, 30, false),
             Err(PalwAttnCourtError::FenceDormant)
         );
         // A root claim that does not finalize to the opened tile never reaches a round.
         let mut wrong = root.clone();
         wrong.claim.v_acc[0] = i64::MAX / 4;
         assert_eq!(
-            PalwAttnDissectPhaseV1::open(h64(9), &wrong, site, &fx.out_tile, params().values, &court_at(16), TILE, 100, 30, true),
+            PalwAttnDissectPhaseV1::open(h64(9), &wrong, site, 32, &fx.out_tile, params().values, &court_at(16), TILE, 100, 30, true),
             Err(PalwAttnCourtError::RootDoesNotFinalize)
         );
         // And a truthful claim about ANOTHER head does not answer this dispute.
         assert_eq!(
-            PalwAttnDissectPhaseV1::open(h64(9), &root, (1, 0, 4), &fx.out_tile, params().values, &court_at(16), TILE, 100, 30, true),
+            PalwAttnDissectPhaseV1::open(
+                h64(9),
+                &root,
+                (1, 0, 4),
+                32,
+                &fx.out_tile,
+                params().values,
+                &court_at(16),
+                TILE,
+                100,
+                30,
+                true
+            ),
             Err(PalwAttnCourtError::WrongSite { got_head: 0, got_first: 0, got_count: 4, head: 1, first: 0, count: 4 })
         );
     }
@@ -2215,6 +2424,230 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------------------
+    // The bindings — every quantity the chain can derive is compared with the one on the wire
+    // ---------------------------------------------------------------------------------------
+
+    /// **The history the dissection is played over is the CHAIN's** (audit A C-1 / E C-2).
+    ///
+    /// Both directions of the same hole, because they are two different winning strategies and
+    /// neither needs any arithmetic: a TRUNCATED history is a truthful answer about a shorter row
+    /// (every fold folds, the bottom recomputes, the honest accuser is slashed), and an INFLATED
+    /// one buys tiles no committed leaf and no checkpoint chunk can serve, so the accuser can
+    /// never close and the backstop ends the session on its side.
+    #[test]
+    fn a_root_claim_about_another_history_is_refused_by_name() {
+        let fx = fixture(8, 50, 4, 71);
+        let mut root = PalwAttnRootClaimV1 {
+            version: PALW_ATTN_DISSECT_OBJECT_VERSION_V1,
+            head: 0,
+            lane_first: 0,
+            lane_count: 4,
+            history_positions: 50,
+            claim: fx.root.clone(),
+        };
+        let site = (0u16, 0u16, 4u16);
+        let open = |root: &PalwAttnRootClaimV1| {
+            PalwAttnDissectPhaseV1::open(h64(9), root, site, 50, &fx.out_tile, params().values, &court_at(4), TILE, 100, 30, true)
+        };
+        assert!(open(&root).is_ok(), "the derived history is the honest one");
+        root.history_positions = 8;
+        assert_eq!(open(&root), Err(PalwAttnCourtError::WrongHistory { got: 8, expected: 50 }));
+        root.history_positions = 8_192;
+        assert_eq!(open(&root), Err(PalwAttnCourtError::WrongHistory { got: 8_192, expected: 50 }));
+    }
+
+    /// **`S*` is a divisor, and its band is derivable** (audit A C-2 / E C-1).
+    ///
+    /// The band is `int_exp(0) ..= positions × int_exp(0)`: the row max contributes exactly the
+    /// unit and no position contributes more. Below it `int_recip(S*)` grows until the bottom's
+    /// `e × recip` leaves `i64` — an overflow panic inside block validation on every node, bought
+    /// for one court move — and a non-positive one made the close undeliverable, which acquitted
+    /// the forger and slashed the accuser.
+    #[test]
+    fn an_exponent_sum_outside_the_derivable_band_is_refused_by_name() {
+        let fx = fixture(8, 50, 4, 73);
+        let site = (0u16, 0u16, 4u16);
+        let unit = i64::from(crate::palw_base0::int_exp(0));
+        let open = |sum: i64| {
+            let mut root = PalwAttnRootClaimV1 {
+                version: PALW_ATTN_DISSECT_OBJECT_VERSION_V1,
+                head: 0,
+                lane_first: 0,
+                lane_count: 4,
+                history_positions: 50,
+                claim: fx.root.clone(),
+            };
+            root.claim.exp_sum = sum;
+            PalwAttnDissectPhaseV1::open(h64(9), &root, site, 50, &fx.out_tile, params().values, &court_at(4), TILE, 100, 30, true)
+        };
+        assert!(fx.root.exp_sum >= unit && fx.root.exp_sum <= unit * 50, "the honest sum is inside its own band");
+        for bad in [0i64, 1, 512, unit - 1, unit * 50 + 1, i64::MAX] {
+            assert_eq!(
+                open(bad),
+                Err(PalwAttnCourtError::ExponentSumOutOfBand { got: bad, min: unit, max: unit * 50, positions: 50 }),
+                "S* {bad} is outside the band and must be refused before a round is played"
+            );
+        }
+        assert!(open(unit).is_ok() && open(unit * 50).is_ok(), "both ends of the band are admissible");
+        // The refusal has to NAME the field, not merely refuse: a court finding that reads
+        // "assertion failed" is a finding nobody can sequence.
+        let message = open(1).expect_err("a small S* is refused").to_string();
+        assert!(message.contains("exponent sum") && message.contains('1'), "the refusal must name the field: {message}");
+    }
+
+    /// **Every opening the bottom carries is bound to its own coordinate** (audit A C-3 / E C-3,
+    /// and A L-1 for the output tile).
+    ///
+    /// Each substitution below opens a leaf the honest claim REALLY committed, at a coordinate the
+    /// claim really has — no forgery at all — and each one used to be accepted: the query was
+    /// checked for width alone, the series for `position` alone (so another call's row at the same
+    /// position passed), and the output tile was never read.
+    #[test]
+    fn the_bottoms_openings_are_bound_to_the_coordinates_the_class_derives() {
+        let fx = fixture(8, 50, 4, 79);
+        let site = fx.site();
+        let mut phase = open_phase(&fx, 4, fx.root.clone()).expect("an honest root");
+        walk_to(&fx, &mut phase, 1);
+        let honest = fx.bottom(h64(9), 1);
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &honest, &fx.binding, &site, true).expect("the honest bottom verifies"),
+            PalwAttnCourtVerdictV1::ChallengerDefeated
+        );
+        let coord = |slot: u32, position: u32| PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position, tile_index: 0 };
+
+        // The query, replaced by another committed row of the same width — the K row at position
+        // 0, which is `kv_dim == d_head` lanes wide and is genuinely in the tree.
+        let mut swapped = honest.clone();
+        swapped.query = fx.row_opening(leaf_index_k(0), &fx.k[..fx.kv_dim], 1, 0);
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &swapped, &fx.binding, &site, true),
+            Err(PalwAttnCourtError::WrongCoordinate { what: "query", got: coord(1, 0), expected: coord(0, 0) })
+        );
+
+        // The K series, supplied as the V series' rows — the wholesale swap the module used to
+        // document as admissible. The slot the class registers for the K cache says otherwise.
+        let mut swapped = honest.clone();
+        swapped.k = swapped.v.clone();
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &swapped, &fx.binding, &site, true),
+            Err(PalwAttnCourtError::WrongCoordinate { what: "K", got: coord(2, 16), expected: coord(1, 16) })
+        );
+
+        // The output tile, replaced by the query row: `lane_count` is 4 and the query is 8 lanes,
+        // so before the coordinate check this field was not even read.
+        let mut swapped = honest.clone();
+        swapped.out_tile = fx.row_opening(leaf_index_query(), &fx.q, 0, 0);
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &swapped, &fx.binding, &site, true),
+            Err(PalwAttnCourtError::WrongCoordinate { what: "output tile", got: coord(0, 0), expected: coord(3, 0) })
+        );
+
+        // A class that names no cache-write node has no cache-write route, and says so.
+        let unnamed = PalwAttnBottomSiteV1 { k_slot: None, ..fx.site() };
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &honest, &fx.binding, &unnamed, true),
+            Err(PalwAttnCourtError::CacheSeriesNotDeclared { kind: "K" })
+        );
+        // Nor does one whose two roles resolve to the same node: a tile has two series, not one
+        // twice, and that is a fact of the CLASS rather than of the evidence.
+        let doubled = PalwAttnBottomSiteV1 { v_slot: Some(1), ..fx.site() };
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &honest, &fx.binding, &doubled, true),
+            Err(PalwAttnCourtError::KeyAndValueAreTheSameSeries)
+        );
+        // And a class whose cache row is several leaves cannot be served by a bottom that carries
+        // one opening per position — named, rather than surfacing as a width mismatch.
+        let split = PalwAttnBottomSiteV1 { kv_tile_lanes: fx.kv_dim / 2, ..fx.site() };
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &honest, &fx.binding, &split, true),
+            Err(PalwAttnCourtError::CacheRowIsNotOneLeaf { kv_dim: fx.kv_dim, tile: fx.kv_dim / 2 })
+        );
+    }
+
+    /// **A history position past the prefill is committed at its own CALL, not at `position`**
+    /// (audit A C-3, the half that refuses honest evidence rather than admitting forged).
+    ///
+    /// The canonical enumeration gives every decode call one position, numbered `0`. The check
+    /// this replaced compared `coord.position` with the history index, so on a job with any decode
+    /// at all it demanded a coordinate no conforming executor ever commits — and, in the other
+    /// direction, `(call 3, position 0)` and `(call 0, position 0)` differed only in the field it
+    /// did not read.
+    #[test]
+    fn a_decode_positions_row_is_addressed_by_its_call() {
+        let prefill = 12u32;
+        let slot = 7u32;
+        assert_eq!(
+            history_row_coord_v1(prefill, slot, 5),
+            PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position: 5, tile_index: 0 }
+        );
+        assert_eq!(
+            history_row_coord_v1(prefill, slot, 11),
+            PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position: 11, tile_index: 0 }
+        );
+        assert_eq!(
+            history_row_coord_v1(prefill, slot, 12),
+            PalwStepCoordinateV1 { call_index: 1, node_slot: slot, position: 0, tile_index: 0 },
+            "the first decode call writes history position `prefill`"
+        );
+        assert_eq!(
+            history_row_coord_v1(prefill, slot, 14),
+            PalwStepCoordinateV1 { call_index: 3, node_slot: slot, position: 0, tile_index: 0 }
+        );
+    }
+
+    /// **The anchor is the checkpoint the class derives for this step, and a per-position class
+    /// has no residue** (audit A C-4).
+    ///
+    /// Two independent guards on one hole. The first refuses an anchor that is not
+    /// `palw_checkpoint_covered_for_step_v1`'s: with one checkpoint at every position, an anchor
+    /// chosen INSIDE the disputed tile makes the tile straddle its edge. The second refuses the
+    /// straddle's residue on such a class outright, so neither guard is load-bearing alone.
+    #[test]
+    fn the_anchor_must_be_the_derived_checkpoint_and_a_per_position_class_has_no_residue() {
+        let fx = fixture(8, 50, 4, 83);
+        let anchor = fx.anchor(40);
+        let binding = fx.binding_anchored(&anchor);
+        let mut phase = open_phase(&fx, 4, fx.root.clone()).expect("an honest root");
+        walk_to(&fx, &mut phase, 2);
+        let bottom = fx.bottom_anchored(h64(9), 2, &anchor);
+        // The anchor in evidence covers decode call 0; a site that derives another one refuses it.
+        let elsewhere = PalwAttnBottomSiteV1 { anchor_covered_decode_call: Some(3), ..fx.site_anchored(&anchor) };
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &bottom, &binding, &elsewhere, true),
+            Err(PalwAttnCourtError::WrongAnchor { got: 0, expected: 3 })
+        );
+        // A class with no checkpoint over the disputed position has no checkpoint route at all.
+        let none = PalwAttnBottomSiteV1 { anchor_covered_decode_call: None, ..fx.site_anchored(&anchor) };
+        assert_eq!(check_attn_dissect_bottom_v1(&phase, &bottom, &binding, &none, true), Err(PalwAttnCourtError::AnchorCoversNothing));
+        // Tile 2 straddles the 40-position edge, so it carries eight rows after the anchor — which
+        // on a per-position class is the cache-write route wearing the checkpoint arm's name.
+        let per_position = PalwAttnBottomSiteV1 { every_position_is_checkpointed: true, ..fx.site_anchored(&anchor) };
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &bottom, &binding, &per_position, true),
+            Err(PalwAttnCourtError::RowsAfterOnAPerPositionClass { got: 8 })
+        );
+    }
+
+    /// **One bottom reads one route** (audit A H-1).
+    ///
+    /// The mixed bottom is the shape in which the old series comparison silently switched off: the
+    /// checkpoint arm returned `None` for its slot, so the `if let (Some, Some)` guard against
+    /// "one series read twice" never ran. There is no honest reason to file one — both kinds live
+    /// in the same anchor and are written by the same step — so it is refused by name.
+    #[test]
+    fn a_bottom_whose_kinds_take_different_routes_is_refused() {
+        let fx = fixture(8, 50, 4, 89);
+        let anchor = fx.anchor(48);
+        let binding = fx.binding_anchored(&anchor);
+        let site = fx.site_anchored(&anchor);
+        let mut phase = open_phase(&fx, 4, fx.root.clone()).expect("an honest root");
+        walk_to(&fx, &mut phase, 1);
+        let mut mixed = fx.bottom_anchored(h64(9), 1, &anchor);
+        mixed.v = fx.bottom(h64(9), 1).v;
+        assert_eq!(check_attn_dissect_bottom_v1(&phase, &mixed, &binding, &site, true), Err(PalwAttnCourtError::MixedEvidenceRoutes));
+    }
+
+    // ---------------------------------------------------------------------------------------
     // Z4 — the moves fit the window, and the arity is derived
     // ---------------------------------------------------------------------------------------
 
@@ -2226,22 +2659,24 @@ mod tests {
         let court = court_at(2);
         let ladder_only = palw_attn_court_admits_row_v1(&court, 0, TILE, 3_000).expect("the shipped ladder fits the RC window");
         assert_eq!(ladder_only, (2 * 22 + 2) * 20, "22 binary rounds at the fixture's 20-DAA clock");
-        // The same court with a 131,072-position history: 22 ladder rounds and 13 history rounds
-        // at arity 2, which the RC window still holds at this fixture's 20-DAA clock — and a
-        // narrower window does not, with the arithmetic in the refusal.
-        let wide = palw_attn_court_admits_row_v1(&court, 131_072, TILE, 3_000).expect("72 moves at 20 DAA is 1,440");
-        assert_eq!(wide, (2 * (22 + 13) + 2) * 20);
+        // The same court with a 131,072-position history: 22 BINARY ladder rounds (the ladder a
+        // session plays is `PalwBisectLadderV1`, whatever the dissection's arity — audit D H-2)
+        // and 13 history rounds at arity 2, plus the terminal moves and the ROOT CLAIM (audit A
+        // M-2). The RC window still holds it at this fixture's 20-DAA clock; a narrower one does
+        // not, with the arithmetic in the refusal.
+        let wide = palw_attn_court_admits_row_v1(&court, 131_072, TILE, 3_000).expect("73 moves at 20 DAA is 1,460");
+        assert_eq!(wide, (2 * (22 + 13) + 2 + 1) * 20);
         assert_eq!(
             palw_attn_court_admits_row_v1(&court, 131_072, TILE, 1_500),
-            Err(PalwAttnCourtError::OverrunsWindow { moves: 72, deadline: 20, reserve: 216, window_court: 1_500 }),
-            "the reserve is the ruleset's 27 carriers, and it is what puts 1,440 over 1,500"
+            Err(PalwAttnCourtError::OverrunsWindow { moves: 73, deadline: 20, reserve: 216, window_court: 1_500 }),
+            "the reserve is the ruleset's 27 carriers, and it is what puts 1,460 over 1,500"
         );
-        // Sixteen children a round buys the same row 22 moves instead of 72, which is the whole
-        // content of Decision 3.
+        // Sixteen children a round buys the same row 9 fewer history rounds — 55 moves instead of
+        // 73 — which is the whole content of Decision 3 once the leaf ladder is priced honestly.
         let sixteen = court_at(16);
         let worst = palw_attn_court_admits_row_v1(&sixteen, 131_072, TILE, 3_000).expect("16-ary fits");
-        assert_eq!(worst, (2 * (6 + 4) + 2) * 20, "6 ladder rounds at 2^22 and 4 history rounds at 8,192 tiles");
-        assert_eq!(palw_attn_court_admits_row_v1(&sixteen, 131_072, TILE, 1_500), Ok(440), "and it fits the narrow window too");
+        assert_eq!(worst, (2 * (22 + 4) + 2 + 1) * 20, "22 binary ladder rounds at 2^22 and 4 history rounds at 8,192 tiles");
+        assert_eq!(palw_attn_court_admits_row_v1(&sixteen, 131_072, TILE, 1_500), Ok(1_100), "and it fits the narrow window too");
     }
 
     /// **The arity is DERIVED, and the derivation is the ADR's own inequality.**
@@ -2256,15 +2691,19 @@ mod tests {
         const LADDER: u64 = 1 << 32;
         const HISTORY: u64 = 131_072;
         const WINDOW: u64 = 3_000;
-        // The ADR's table, from the contract's own recurrence.
+        // The table, from the contract's own recurrence — with the LEAF ladder at the arity a
+        // session actually plays (2) and the root claim counted. ADR-0082 §3's own table reads
+        // `log_k` on both search spaces; the tree has one k-ary search, and pricing the other one
+        // k-ary reported 34 moves for a dispute that takes 60 (audit D H-2, audit A M-2).
         let moves = |k: u8| -> u64 {
-            2 * (u64::from(palw_kary_rounds_v1(LADDER, k).unwrap())
+            2 * (u64::from(palw_kary_rounds_v1(LADDER, crate::palw_mode_v2::PALW_COURT_LEAF_LADDER_ARITY_V1).unwrap())
                 + u64::from(crate::palw_attn_dissect::palw_attn_dissection_rounds_v1(HISTORY, TILE, k).unwrap()))
                 + 2
+                + 1
         };
-        assert_eq!((moves(2), moves(4), moves(8), moves(16), moves(32), moves(64)), (92, 48, 34, 26, 22, 20));
-        assert_eq!(moves(16) * 45, 1_170, "ADR-0082 §4: 26 moves at the 45-DAA deadline");
-        assert_eq!(moves(2) * 45, 4_140, "and the binary ladder at the same deadline is over the 3,000-DAA window");
+        assert_eq!((moves(2), moves(4), moves(8), moves(16), moves(32), moves(64)), (93, 81, 77, 75, 73, 73));
+        assert_eq!(moves(16) * 45, 3_375, "75 moves at the 45-DAA deadline — past the 3,000-DAA window, where the ADR read 1,170");
+        assert_eq!(moves(2) * 45, 4_185, "and the widest search at the same deadline is further over it");
 
         // The derivation, at a 128-lane output tile where the carrier bound binds nothing.
         let pick = |deadline: u64, lanes: usize| palw_court_arity_v1(WINDOW, deadline, LADDER, HISTORY, TILE, 2, lanes);
@@ -2275,58 +2714,108 @@ mod tests {
         assert_eq!(pick(WINDOW / moves(4), 128), Some(4));
         assert_eq!(pick(WINDOW / moves(2), 128), Some(2), "a short enough clock needs no wider round");
         assert_eq!(pick(WINDOW, 128), None, "no arity fits a deadline the size of the whole window");
-        // And the carrier bound refuses from ABOVE: at 256 lanes the arity a very long deadline
-        // would need does not fit a carrier, so the court is refused rather than priced.
-        assert_eq!(pick(WINDOW / moves(64), 256), None, "arity 64 at 256 lanes is 132,102 bytes a move");
-        assert_eq!(pick(WINDOW / moves(64), 128), Some(64));
+        // The carrier bound still refuses from ABOVE, and the deepest history search is where it
+        // binds: 64 children of a 256-lane tile is 132,102 bytes a move against an 83,333-byte
+        // carrier. It no longer BITES at these deadlines, because the honest move count never
+        // needs an arity above 32 — 32 at 256 lanes is 66,054 bytes and fits.
+        assert_eq!(pick(WINDOW / moves(32), 256), Some(32), "arity 32 at 256 lanes is 66,054 bytes a move");
+        assert!(
+            palw_attn_dissect_move_bytes_v1(64, 256) > palw_close_bytes_for_chunks_v1(1),
+            "and 64 at 256 lanes is still past one carrier, which is what the pair bound is for"
+        );
         // A ruleset with no fused site derives from the ladder alone.
         assert_eq!(palw_court_arity_v1(WINDOW, 45, LADDER, 0, TILE, 2, 128), Some(2), "66 moves at 45 DAA is 2,970");
     }
 
-    /// **The RC's own numbers, derived rather than quoted — and what they select.**
+    /// **The RC's own numbers, derived rather than quoted — and what they now select.**
     ///
     /// ADR-0082 Decision 3 works its table at `k = 16` and says the derivation "selects" it for
-    /// the RC windows. Run against the tree's own SA-4 derivation it does not: at the deadline
-    /// `palw_court_turn_deadline_v1` returns for a `2^32` ladder — 42 DAA at the RC's 27-carrier
-    /// close ceiling, 45 at the ONE carrier ADR-0082 U-00 leaves in force until the chunk arm
-    /// lands — the SMALLEST power of two whose moves fit 3,000 DAA is **4**, not 16, because 48
-    /// moves at 45 DAA is 2,160 and the window is 3,000. Sixteen is selected only for a deadline
-    /// in `[89, 115]`, the band in which eight no longer fits and sixteen still does.
+    /// the RC windows; the previous version of this test found 4 instead and pinned that. Both
+    /// numbers came from a formula that priced the LEAF ladder k-ary. It is not: a session plays
+    /// `PalwBisectLadderV1`, binary (audit D H-2), and the root claim is a move nobody counted
+    /// (audit A M-2). With both corrected the answers move, and they move in the direction that
+    /// matters — the derivation now reports what the dispute actually costs.
     ///
-    /// This test pins the whole band rather than the ADR's single value, because the derivation
-    /// is the rule and the ADR's 16 is a worked example of it that does not come out of it. The
-    /// consequence is cheaper, not more expensive: arity 4 carries a quarter of arity 16's bytes
-    /// a move and spends 2,160 of a 3,000-DAA window instead of 1,170 — which is exactly the
-    /// trade "smallest" is written to make.
+    /// Two configurations, because they give opposite answers and only one of them ships:
+    ///
+    /// * **The RC as it is** — its own `2^26` ladder and the widest row its genesis registers, a
+    ///   512-position graph-v5 row (32 history tiles) — admits **arity 2**: `2 × (26 + 5) + 2 + 1
+    ///   = 65` moves at the RC's 42-DAA clock is 2,730, and with the 216-DAA assembly reserve
+    ///   2,946 against a 3,000-DAA window. It fits, with 54 DAA of room.
+    /// * **The `2^32` context-ladder fence with a 131,072-position row** — the configuration
+    ///   ADR-0082 §3's table is worked in — admits **NO arity at all**: the cheapest honest move
+    ///   count is 73 (arity 32 or 64), and `73 × 42 = 3,066` is already past 3,000 before the
+    ///   reserve. That is a genesis decision, not a bug in this function: at that ladder and that
+    ///   width the window has to grow, the clock has to shrink, or the leaf ladder has to become
+    ///   k-ary for real. The refusal is `None`, which is what Z4 asks for.
     #[test]
-    fn the_rcs_derived_deadline_selects_arity_four_and_sixteen_is_a_band_above_it() {
-        use crate::palw_context_ladder::palw_court_turn_deadline_v1;
+    fn the_rcs_derived_deadline_selects_an_arity_for_its_own_row_and_none_for_the_fences() {
+        use crate::palw_context_ladder::palw_close_assembly_daa_v1;
         use crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1;
-        const LADDER: u64 = 1 << 32;
-        const HISTORY: u64 = 131_072;
         let window = PALW_RC_WINDOWS_V1.window_court;
-        assert_eq!(window, 3_000);
-        // The SA-4 deadline at the `2^32` ladder, at both close ceilings the ADR discusses.
-        let at_27 = palw_court_turn_deadline_v1(window, LADDER, 2, 27).expect("a clock");
-        let at_1 = palw_court_turn_deadline_v1(window, LADDER, 2, 1).expect("a clock");
-        assert_eq!((at_27, at_1), (42, 45), "the RC's derived clock at 27 carriers and at one");
-        for deadline in [at_27, at_1] {
-            assert_eq!(
-                palw_court_arity_v1(window, deadline, LADDER, HISTORY, TILE, 2, 128),
-                Some(4),
-                "at {deadline} DAA the smallest arity whose 48 moves fit 3,000 is four"
-            );
-        }
-        // The band in which the ADR's sixteen IS the smallest fitting arity.
-        assert_eq!(palw_court_arity_v1(window, 88, LADDER, HISTORY, TILE, 2, 128), Some(8));
-        assert_eq!(palw_court_arity_v1(window, 89, LADDER, HISTORY, TILE, 2, 128), Some(16));
-        assert_eq!(palw_court_arity_v1(window, 115, LADDER, HISTORY, TILE, 2, 128), Some(16));
-        assert_eq!(palw_court_arity_v1(window, 116, LADDER, HISTORY, TILE, 2, 128), Some(32));
-        // And the ADR's own worked cost at sixteen, which every one of these shares.
-        let sixteen = PalwCourtParamsV2::new(LADDER, 45, 2).expect("a court").with_dissection_arity(16).expect("legal");
-        assert_eq!(sixteen.worst_case_duration_with_history_daa(HISTORY, TILE), Some(1_170));
-        let four = PalwCourtParamsV2::new(LADDER, 45, 2).expect("a court").with_dissection_arity(4).expect("legal");
-        assert_eq!(four.worst_case_duration_with_history_daa(HISTORY, TILE), Some(2_160));
+        let deadline = PALW_RC_WINDOWS_V1.court_turn_deadline;
+        assert_eq!((window, deadline), (3_000, 42));
+        let rc_ladder = crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT;
+        assert_eq!(rc_ladder, 1 << 26);
+
+        // The RC's own row: 512 positions, 32 tiles of 16.
+        let arity = palw_court_arity_v1(window, deadline, rc_ladder, 512, TILE, 2, 128).expect("the RC's own row admits an arity");
+        assert_eq!(arity, 2, "26 binary ladder rounds and 5 history rounds is the cheapest exchange that fits");
+        let court = PalwCourtParamsV2::new(rc_ladder, deadline, 2).expect("a court").with_dissection_arity(arity).expect("legal");
+        assert_eq!(court.worst_case_duration_with_history_daa(512, TILE), Some((2 * (26 + 5) + 2 + 1) * deadline));
+        assert_eq!(court.worst_case_duration_with_history_daa(512, TILE), Some(2_730));
+        assert_eq!(palw_close_assembly_daa_v1(court.max_close_chunks()), 216, "the RC's 27-carrier reserve");
+        assert_eq!(palw_attn_court_admits_row_v1(&court, 512, TILE, window), Ok(2_730), "2,730 + 216 is inside 3,000");
+
+        // **The genesis row, at the lane count it actually disputes.** The dense graph-v5 512 row
+        // is a genesis row (stream J), and `palw_court_params_at_v2` derives its arity from these
+        // same numbers through the transition's own path.
+        assert_eq!(palw_court_arity_v1(window, deadline, rc_ladder, 512, TILE, 2, 8), Some(2));
+
+        // **The CLOCK is the other half of the same inequality, and it comes from a different
+        // move count.** `palw_court_turn_deadline_v1(3000, 2^26, 2, 27)` returns 51 — the clock
+        // for the LADDER alone, with no history rounds and no root claim in it — while the RC's
+        // shipped constant is 42. At 51 the honest dispute no longer fits: the cheapest arity
+        // becomes 32 (57 moves, 2,907 DAA), and 2,907 + 216 is past 3,000, so admission refuses a
+        // row the arity derivation just admitted. At 42, arity 2 fits with 54 DAA to spare. Two
+        // derivations of one inequality is the defect; the repair belongs to
+        // `palw_court_turn_deadline_v1`, which this stream does not own (patch note).
+        assert_eq!(crate::palw_context_ladder::palw_court_turn_deadline_v1(window, rc_ladder, 2, 27), Some(51));
+        assert_eq!(palw_court_arity_v1(window, 51, rc_ladder, 512, TILE, 2, 8), Some(32));
+        let at_51 = PalwCourtParamsV2::new(rc_ladder, 51, 2).expect("a court").with_dissection_arity(32).expect("legal");
+        assert_eq!(at_51.worst_case_duration_with_history_daa(512, TILE), Some(57 * 51));
+        assert_eq!(
+            palw_attn_court_admits_row_v1(&at_51, 512, TILE, window),
+            Err(PalwAttnCourtError::OverrunsWindow { moves: 57, deadline: 51, reserve: 216, window_court: window })
+        );
+
+        // **A 4,096-position row shows that the derivation and the GATE are two inequalities.**
+        // `palw_court_arity_v1` selects on `moves x deadline <= window_court`;
+        // `palw_attn_court_admits_row_v1` admits on `moves x deadline + assembly_reserve <
+        // window_court` (Z4's own form). At 4,096 positions arity 2 clears the first and fails the
+        // second by 198 DAA, while arity 4 clears both — so the derivation hands admission a value
+        // admission then refuses, and the row is rejected although a legal arity for it exists.
+        // Pinned rather than fixed here: the repair is one argument (`max_close_chunks`) on the
+        // derivation, and it moves a signature two streams call. See the patch note.
+        assert_eq!(palw_court_arity_v1(window, deadline, rc_ladder, 4_096, TILE, 2, 128), Some(2));
+        let at_two = PalwCourtParamsV2::new(rc_ladder, deadline, 2).expect("a court").with_dissection_arity(2).expect("legal");
+        assert_eq!(at_two.worst_case_duration_with_history_daa(4_096, TILE), Some((2 * (26 + 8) + 2 + 1) * deadline));
+        assert_eq!(
+            palw_attn_court_admits_row_v1(&at_two, 4_096, TILE, window),
+            Err(PalwAttnCourtError::OverrunsWindow { moves: 71, deadline, reserve: 216, window_court: window }),
+            "2,982 + 216 is past 3,000, and the derivation above selected this arity anyway"
+        );
+        let at_four = PalwCourtParamsV2::new(rc_ladder, deadline, 2).expect("a court").with_dissection_arity(4).expect("legal");
+        assert_eq!(palw_attn_court_admits_row_v1(&at_four, 4_096, TILE, window), Ok(2_646), "and four would have fitted");
+
+        // The fence's ladder at the ADR's own width: nothing fits, and the derivation says so.
+        const FENCE_LADDER: u64 = 1 << 32;
+        assert_eq!(palw_court_arity_v1(window, deadline, FENCE_LADDER, 131_072, TILE, 2, 128), None);
+        assert_eq!(palw_court_arity_v1(window, 45, FENCE_LADDER, 131_072, TILE, 2, 128), None);
+        // The cheapest honest count at that ladder, so the gap is a number rather than a verdict.
+        let cheapest = PalwCourtParamsV2::new(FENCE_LADDER, deadline, 2).expect("a court").with_dissection_arity(32).expect("legal");
+        assert_eq!(cheapest.worst_case_duration_with_history_daa(131_072, TILE), Some(73 * deadline));
+        assert_eq!(73 * deadline, 3_066, "past the 3,000-DAA window before the assembly reserve is counted");
     }
 
     /// **Every shipped preset's court still fits its own window with the dissection at zero
