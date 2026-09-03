@@ -362,23 +362,37 @@ async fn submit_carriage_tx(
 // keygen
 // ---------------------------------------------------------------------------------------------
 
+/// **The drill's identity is written by the shared hardened writer, like every other keygen.**
+///
+/// [`kaspa_pq_validator_core::write_validator_seed`]'s own doc names the three callers it exists
+/// for — "validator, drill, re-executor" — so that none of them copies a weaker variant. This one
+/// had copied a weaker variant, and it was weaker in three separate ways rather than one:
+///
+/// * `exists()` then `File::create` is a check and a use with a gap between them, and BOTH follow
+///   symlinks. A dangling symlink planted at `out` reads as "does not exist" and then gets
+///   created — this tool writing a file wherever the link points, with this process's rights.
+///   `create_new` (`O_CREAT|O_EXCL`) has no gap and refuses the link itself.
+/// * create-then-chmod publishes the file at the umask's mode first — 0644 under the usual 022 —
+///   and narrows it afterwards. A key is world-readable for the width of that window, and anyone
+///   who opened it in the window keeps a usable descriptor after the chmod. `.mode(0o600)` at
+///   creation has no window to lose.
+/// * no `fsync`, while the next lines print a funding address. The address can reach someone who
+///   funds it before the key that owns it is durable.
+///
+/// It being a DRILL identity is the argument for fixing it, not against: a drill key is the one
+/// people generate casually, on shared hosts, without thinking about the directory's mode.
 fn keygen(out: &Path, prefix: &str) -> Result<(), String> {
     use rand::RngCore;
     let prefix = parse_prefix(prefix)?;
-    if out.exists() {
-        return Err(format!("{} already exists — refusing to overwrite a key file", out.display()));
-    }
+    let out_str = out.to_str().ok_or_else(|| format!("{} is not valid UTF-8", out.display()))?;
     let mut seed = [0u8; kaspa_pq_validator_core::VALIDATOR_SEED_LEN];
     rand::thread_rng().fill_bytes(&mut seed);
-    let hex: String = seed.iter().map(|b| format!("{b:02x}")).collect();
-    let mut file = std::fs::File::create(out).map_err(|e| format!("create {}: {e}", out.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600)).map_err(|e| format!("chmod: {e}"))?;
-    }
-    file.write_all(hex.as_bytes()).map_err(|e| format!("write: {e}"))?;
+    // the refusal to clobber is the writer's `create_new`, not a preceding `exists()`: the check
+    // that races is worse than no check, because it reads as one
+    kaspa_pq_validator_core::write_validator_seed(out_str, &seed)?;
     let key = ValidatorKey::from_seed(seed);
+    seed.fill(0);
+    std::hint::black_box(&seed);
     println!("drill identity written to {}", out.display());
     println!("validator_id     = {}", hex64(&key.validator_id));
     println!("funding address  = {}", key.funding_address(prefix));
