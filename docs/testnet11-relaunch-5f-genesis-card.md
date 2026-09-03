@@ -4096,3 +4096,63 @@ number is right, that equality is the test — and finding the two producers fin
 *Two measurements are in flight so that neither party has to be right first:* 3e naming the
 producers on impl, and this session running the ungated `classes.rs:1788` assertion on a detached
 worktree of `09a71652` — a second machine's reading of the same number. [[send-the-value-with-what-produced-it]]
+
+## GREEN: a free prompt produced an answer, committed it, and retained its trace — through the operator gateway, on the class genesis registers
+
+Detached worktree of `09a71652` (5b's tree; the v5 worker), the tokenizer-bound artifact
+`bound-candidate.palwart` (sha `3f8fc506…`, inventory root `1a7457f1…`), `NETWORK_ID testnet-11`:
+
+```
+[1] health ok — n_ctx 512, chat-segments/v1; registered/fp_certified/bond_active/exposure_room
+    all present, all "unknown"; can_submit false
+[2] chat answered: '2+2 equals 4.'   24 completion tokens, stop_reason exact_budget
+    fp_job_id f2e78a90…  trace_root …  work_leaves 6,121,824  stream_checked True
+[3] artifact ok: result.borsh + unsigned commitment (925 B) + retained trace
+    (manifest.json 2,598 B + material.bin 14,694,839 B)
+[4] re-ask: same answer, different job id and trace root      (anti-replay binding)
+[5] SSE ok — same answer, W5 checked
+[6] refusals ok
+rc=0   22 s
+```
+
+**That is the sentence the launch document may carry**, and the pre-announcement gate above is
+met on the tree being cut, not on a side branch — `09a71652` is a fast-forward ancestor of impl
+`ce557ffc`.
+
+### Three patches were needed, and every one is the smoke describing an older gateway
+
+```
+1. class_id = "c1" * 64        -> the v5 id 4277d84f…  (the v5 worker checks its identity)
+2. no exposure declared        -> the gateway DECLINED the commitment and wrote why:
+                                    not_committed_because: "the bond's exposure room is not known
+                                    (--bond-exposure-room-sompi / --claim-exposure-sompi …)"
+                                  passing both -> committed: True
+3. asserts traces/<job>/chunk-0.bin  -> the worker retains manifest.json + material.bin
+```
+
+**Nothing on the inference path was wrong.** The gateway's rule — *written only when the chain
+and the operator's exposure both allow it* — is correct and self-describing; the smoke asserted
+the file without meeting the rule. All three are T7, and `ce557ffc`'s smoke carries the first two
+and no longer asserts a trace filename.
+
+### The gap claim, third and final revision — the LADDER, not the dissection
+
+3e named the producers. **81,312 and 83,175 are the same cost walk, same profile, same arity-2
+dissection, same Flat ids — priced under different ladders:**
+
+```
+81,312   the genesis route + the devnet close table   bundle.court.max_step_leaf_count() = 2^26   <- the chain's price
+83,175   classes.rs:1723 and artifact_names_…:392     PALW_CONTEXT_LADDER_MAX_STEP_LEAVES = 2^32   <- six more rungs, 1,863 B
+```
+
+My run printing `binding close 83175 B` for **both** `[devnet]` and `[rc]` was exactly what a
+test that ignores the preset's ladder prints — and I read it as "both presets agree". **So my
+"the shipped row is in devnet's gap" was true of the tests' court and false of the chain's;
+3e's "no shipped row is in the gap" was true of the chain's price. Both readings were right about
+a different ladder.** The 8th constant-where-the-ruleset-belongs site, in tests, and I had it in
+front of me and read it as confirmation.
+
+Fixed on `a733b21e`: both tests price at the ruleset's ladder and assert **route agreement**
+against the genesis entry — `binding.close_bytes == …registration_v1(…).entry.court_cost.max_close_bytes`
+— and devnet's ceiling stays derived (`bytes_for_chunks(1)` = 83,333) because the literal was a
+second unit whatever the row costs. [[send-the-value-with-what-produced-it]]
