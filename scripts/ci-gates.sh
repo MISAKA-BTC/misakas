@@ -55,7 +55,7 @@ export MISAKA_PALW_POW_FIXTURE="${MISAKA_PALW_POW_FIXTURE:-1}"
 # and is what a pre-commit hook or an impatient human should run. `build` needs a toolchain and
 # a compiled workspace.
 # ---------------------------------------------------------------------------------------------
-GATE_IDS="toolchain-pin workflow-parity artifact-conformance artifact-stranger artifact-roundtrip artifact-thirdparty fmt clippy pq-guard check nextest doctest hashes-no-asm doc"
+GATE_IDS="toolchain-pin workflow-parity artifact-conformance artifact-stranger artifact-roundtrip artifact-thirdparty fmt clippy pq-guard check build-devnet-prealloc check-evm-send nextest doctest hashes-no-asm doctest-hashes-no-asm doc example-kip10"
 
 gate_group() {
     case "$1" in
@@ -87,10 +87,14 @@ gate_desc() {
         clippy)               echo "cargo clippy --tests --benches --examples -- -D warnings" ;;
         pq-guard)             echo "secp256k1 isolation + cargo-deny advisories (ADR-0019 SS14)" ;;
         check)                echo "cargo check --tests --benches" ;;
+        build-devnet-prealloc) echo "the devnet-prealloc feature compiles, tests and benches included" ;;
+        check-evm-send)       echo "misaka-cli's evm-send feature compiles" ;;
         nextest)              echo "cargo nextest run" ;;
         doctest)              echo "cargo test --doc" ;;
-        hashes-no-asm)        echo "kaspa-hashes without asm, lib + benches + doctests" ;;
+        hashes-no-asm)        echo "kaspa-hashes without asm, lib + benches" ;;
+        doctest-hashes-no-asm) echo "kaspa-hashes without asm, doctests" ;;
         doc)                  echo "cargo doc --no-deps" ;;
+        example-kip10)        echo "the kip-10 example still runs under legacy-secp256k1" ;;
     esac
 }
 
@@ -190,8 +194,14 @@ gate_coverage() {
         nextest|hashes-no-asm)
             grep -E '^ +Summary ' "$log" 2>/dev/null | sed 's/^ */    coverage: /' || true
             ;;
-        doctest)
+        doctest|doctest-hashes-no-asm)
             printf '    coverage: %s\n' "$(grep -c '^test result:' "$log" 2>/dev/null || echo 0) doctest binaries reported a 'test result:' line"
+            ;;
+        build-devnet-prealloc|check-evm-send)
+            printf '    coverage: %s crate(s) compiled\n' "$(grep -cE '^ +(Checking|Compiling) ' "$log" 2>/dev/null || echo 0)"
+            ;;
+        example-kip10)
+            grep -E '^ +Running ' "$log" 2>/dev/null | sed 's/^ */    coverage: ran /' || true
             ;;
         artifact-*|toolchain-pin|workflow-parity)
             # These print their own coverage; echo the lines that carry it. Indentation varies
@@ -308,6 +318,14 @@ gate_doctest()       { cargo test --doc; }
 gate_hashes_no_asm() { cargo nextest run -p kaspa-hashes --features=no-asm --benches; }
 gate_doc()           { cargo doc --no-deps; }
 
+# Four gates the ci.yaml -> script direction of `workflow-parity` found the day it was written:
+# judgments the Test Suite job makes that nobody could run before pushing. Each line below is
+# the byte-identical `run:` line of ci.yaml, which is what keeps the parity check green.
+gate_build_devnet_prealloc()  { cargo build --features devnet-prealloc --tests --benches; }
+gate_check_evm_send()         { cargo check --locked -p misaka-cli --bin misaka --features evm-send; }
+gate_doctest_hashes_no_asm()  { cargo test --doc -p kaspa-hashes --features=no-asm; }
+gate_example_kip10()          { cargo run -p kaspa-txscript --example kip-10 --features legacy-secp256k1; }
+
 dispatch() {
     case "$1" in
         toolchain-pin)        run_gate "$1" 'PIN OK'                    -- gate_toolchain_pin ;;
@@ -320,10 +338,14 @@ dispatch() {
         clippy)               run_gate "$1" 'Finished|Checking'         -- gate_clippy ;;
         pq-guard)             run_gate "$1" '.'                         -- gate_pq_guard ;;
         check)                run_gate "$1" 'Finished|Checking'         -- gate_check ;;
+        build-devnet-prealloc) run_gate "$1" 'Finished|Compiling'        -- gate_build_devnet_prealloc ;;
+        check-evm-send)       run_gate "$1" 'Finished|Checking'         -- gate_check_evm_send ;;
         nextest)              run_gate "$1" 'Summary \['                -- gate_nextest ;;
         doctest)              run_gate "$1" 'test result:'              -- gate_doctest ;;
         hashes-no-asm)        run_gate "$1" 'Summary \['                -- gate_hashes_no_asm ;;
+        doctest-hashes-no-asm) run_gate "$1" 'test result:'             -- gate_doctest_hashes_no_asm ;;
         doc)                  run_gate "$1" 'Finished|Generated|Documenting' -- gate_doc ;;
+        example-kip10)        run_gate "$1" 'Finished|Running'          -- gate_example_kip10 ;;
         *) echo "unknown gate '$1'; try --list" >&2; return 125 ;;
     esac
 }

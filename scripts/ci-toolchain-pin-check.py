@@ -16,9 +16,13 @@ but the action's source. That is the skew behind this repository's own record of
 CI reds reported as green, and behind release binaries built by a compiler nobody chose.
 
 **PARITY** — every build gate `scripts/ci-gates.sh` offers is spelled, character for character,
-in `.github/workflows/ci.yaml`. A gate the script runs that CI does not is a lie to whoever runs
-it; a `run:` line in CI that the script does not offer is a gate nobody can run before pushing,
-which is the whole reason the first job was red for an unknown length of time.
+in `.github/workflows/ci.yaml`, AND every judgment ci.yaml makes about the tree is a gate the
+script offers. A gate the script runs that CI does not is a lie to whoever runs it; a `run:`
+line in CI that the script does not offer is a gate nobody can run before pushing, which is the
+whole reason the first job was red for an unknown length of time. The second half of that
+sentence was prose only until the deliberate breakage tried it: adding `cargo audit` to ci.yaml
+and deleting `gate_doc` from the script both left PARITY green. A ci.yaml judgment that cannot
+be a local gate is named in `CI_ONLY` with its reason, one entry per command and no wildcards.
 
 Both print their coverage: how many workflow files, how many toolchain steps, how many gates.
 A verdict with no coverage cannot be falsified, and this repository keeps writing that down as
@@ -259,8 +263,55 @@ NOT_IN_CI = {
 }
 
 
+# **The other direction, which the docstring above promised and the first version did not do.**
+#
+# `check_parity` walked the SCRIPT's gates and looked each one up in ci.yaml. Nothing walked
+# ci.yaml. So CI could grow a whole new `cargo` gate -- or the script could drop one CI still
+# runs -- and PARITY stayed green, which is the same defect as the pin's: a green nobody can
+# tell apart from not looking. Both were confirmed by breaking them: adding
+# `run: cargo audit --deny warnings` to ci.yaml, and deleting `gate_doc` from the script.
+#
+# A ci.yaml command JUDGES the tree if it starts with `cargo ` or `bash scripts/`. Every such
+# command must be a gate the script offers, or be named here with the reason it cannot be. A
+# WILDCARD is deliberately not accepted: `cargo .* --target ` would excuse a whole class in one
+# line and hide the next addition to it, which is exactly how a table stops being a claim.
+CI_ONLY = {
+    "bash scripts/ci-gates.sh --group fast":
+        "this IS the script; a gate that runs the runner would recurse",
+    # Cross-target work. `scripts/ci-gates.sh --list` says the same thing in its footer; this is
+    # the machine-checked half of that sentence.
+    "cargo check --locked --tests --benches --target x86_64-pc-windows-msvc":
+        "Check (x86_64-pc-windows-msvc) -- needs windows-latest, not a runner a contributor has",
+    "cargo build --locked --target x86_64-pc-windows-msvc -p kaspad --bin kaspad -p misaka-cli --bin misaka":
+        "Check (x86_64-pc-windows-msvc) -- same runner, and it builds the exes the --help smoke opens",
+    "cargo check -p kaspa-addresses --no-default-features --target thumbv7em-none-eabi":
+        "Check no_std -- the job installs the target with `rustup target add`; this script does "
+        "not silently add targets to a contributor's toolchain",
+    "cargo clippy -p kaspa-wrpc-wasm --target wasm32-unknown-unknown":
+        "Check WASM32 -- needs `rustup target add wasm32-unknown-unknown`",
+    "cargo clippy -p kaspa-wallet-cli-wasm --target wasm32-unknown-unknown":
+        "Check WASM32 -- needs `rustup target add wasm32-unknown-unknown`",
+    "cargo clippy -p kaspa-wasm --target wasm32-unknown-unknown":
+        "Check WASM32 -- needs `rustup target add wasm32-unknown-unknown`",
+    "cargo build --bin kaspad --bin rothschild --bin kaspa-wallet --bin stratum-bridge --release --target x86_64-unknown-linux-musl":
+        "Build Linux Release -- runs after `source musl-toolchain/build.sh`, a cross toolchain "
+        "this script does not build",
+    "cargo build -p misaka-cli --bin misaka --release --target x86_64-unknown-linux-musl":
+        "Build Linux Release -- same musl cross toolchain",
+    "cargo build --locked --release -p misaka-cli --bin misaka":
+        "Check (x86_64-pc-windows-msvc)/release smoke -- a --release artifact for a `--help` "
+        "run, not a verdict; `check-evm-send` compiles the same crate in debug",
+}
+
+# What counts as a judgment ci.yaml makes about the tree, as opposed to runner housekeeping
+# (`sudo apt`, `df -h`, `rustup target add`, PowerShell) or a shell fragment out of a `run: |`
+# block. Narrow on purpose: a prefix list that is too wide fills the table above with excuses
+# and stops being readable, and it is also how `# Alias cc to clang` ends up being called a gate.
+JUDGMENT_PREFIXES = ("cargo ", "bash scripts/")
+
+
 def check_parity():
-    print("== PARITY: every build gate is spelled the same way in ci.yaml ==")
+    print("== PARITY: every build gate is spelled the same way in ci.yaml, both directions ==")
     gates_path = os.path.join(ROOT, "scripts", "ci-gates.sh")
     ci_path = os.path.join(WORKFLOWS, "ci.yaml")
     for p in (gates_path, ci_path):
@@ -281,28 +332,71 @@ def check_parity():
         print("  VIOLATION  no `gate_x() { ...; }` one-liners found -- this checker went blind", file=sys.stderr)
         return 1
 
+    def both_spellings(cmd):
+        # Both spellings of a script gate (`bash x.sh` and `x.sh`) count as the same one.
+        return {cmd, cmd[len("bash ") :] if cmd.startswith("bash ") else "bash " + cmd}
+
+    # ---- direction 1: script -> ci.yaml. A gate the script runs that CI does not is a lie. ----
+    print("  -- gates the script offers, looked up in ci.yaml --")
     missing = []
+    gate_cmds = set()
     for name, cmd in pairs:
+        gate_cmds |= both_spellings(cmd)
         if name in NOT_IN_CI:
             print(f"  {name:<16} not in CI by design: {NOT_IN_CI[name]}")
             continue
         # WHOLE-command comparison, not `in`. `cargo doc --no-deps` is a SUBSTRING of
         # `cargo doc --no-deps --document-private-items`, so a substring test said "found" while
         # CI ran a different command -- a parity check that cannot see a drift is not a parity
-        # check. Both spellings of a script gate (`bash x.sh` and `x.sh`) count as the same one.
-        forms = {cmd, cmd[len("bash ") :] if cmd.startswith("bash ") else "bash " + cmd}
-        hit = forms & ci_cmds
+        # check.
+        hit = both_spellings(cmd) & ci_cmds
         if hit:
             print(f"  {name:<16} `{cmd}`  found in ci.yaml")
         else:
             missing.append((name, cmd))
+
+    # ---- direction 2: ci.yaml -> script. A judgment CI makes that nobody can run before
+    # pushing is the whole reason the first job was red for an unknown length of time. ----
+    print("  -- judgments ci.yaml makes, looked up in the script --")
+    judgments = sorted(c for c in ci_cmds if c.startswith(JUDGMENT_PREFIXES))
+    unrunnable, excused = [], 0
+    for cmd in judgments:
+        if both_spellings(cmd) & gate_cmds:
+            continue
+        if cmd in CI_ONLY:
+            excused += 1
+            print(f"    excused  `{cmd}`\n               {CI_ONLY[cmd]}")
+        else:
+            unrunnable.append(cmd)
+    print(
+        f"    {len(judgments)} judgment(s) in ci.yaml: "
+        f"{len(judgments) - excused - len(unrunnable)} offered by the script, "
+        f"{excused} excused by name, {len(unrunnable)} unrunnable"
+    )
+
     for name, cmd in missing:
         print(f"  VIOLATION  gate_{name} runs `{cmd}`, which does not appear in ci.yaml", file=sys.stderr)
-    print(f"  checked {len(pairs)} build gate(s) against {os.path.relpath(ci_path, ROOT)}")
-    if missing:
-        print(f"PARITY FAILED: {len(missing)} gate(s) are not what CI runs", file=sys.stderr)
+    for cmd in unrunnable:
+        print(
+            f"  VIOLATION  ci.yaml runs `{cmd}`, which no gate in scripts/ci-gates.sh offers -- "
+            f"add a gate, or add it to CI_ONLY with the reason it cannot be one",
+            file=sys.stderr,
+        )
+    print(
+        f"  checked {len(pairs)} build gate(s) and {len(judgments)} ci.yaml judgment(s) against "
+        f"{os.path.relpath(ci_path, ROOT)}"
+    )
+    if missing or unrunnable:
+        print(
+            f"PARITY FAILED: {len(missing)} gate(s) are not what CI runs, "
+            f"{len(unrunnable)} CI judgment(s) cannot be run before pushing",
+            file=sys.stderr,
+        )
         return 1
-    print(f"PARITY OK: {len(pairs)} build gate(s) are spelled identically in ci.yaml")
+    print(
+        f"PARITY OK: {len(pairs)} build gate(s) spelled identically in ci.yaml, and all "
+        f"{len(judgments)} judgment(s) ci.yaml makes are either offered by the script or excused by name"
+    )
     return 0
 
 
