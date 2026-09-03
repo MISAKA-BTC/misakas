@@ -4986,3 +4986,23 @@ not produce an hour earlier. Its verdict is read as evidence only once 5f's deri
 **5f after steps 1–2: core 5 passed, derive 3 passed** — `every_genesis_commits_to_the_premine_this_build_mints`,
 `test_genesis_hashes`, both `golden_vector_ids_are_frozen`, `shipped_presets_have_pinned_fingerprints`,
 and the three transformer-pin tests — on the release branch itself, after the real merge and apply.
+
+## STEP 5, measured before it is taken
+
+```
+hosts        all x86_64 / glibc 2.39 / Ubuntu 24.04; /root/t11/kaspad byte-identical (52,295,128 B) on all three
+             -> ibm's release build runs everywhere by copy
+stop         10 units on ibm, 6 on .113, 9 on 5.104 — listed by the script's dry run, verbatim
+wipe gate    `wipe --genesis 08e9c8a4…` (the backup is named by the OLD genesis) re-verifies nothing runs and
+             ABORTS while any host does — "a live host would re-feed the old chain". Shown refusing in dry run.
+producers    node0: --palw-produce --palw-panel, class 5bd9ae3d… (QWEN36), artifacts qwen36.palwq36 +
+             qwen25-1.5b-a16.palwart + qwen25-coder-a16.palwart, bond …:0, fee outpoint …:41
+             node1: --palw-produce --palw-panel + heartbeat miner, bond …:1
+             (the unbound A16 artifact is fine for producing/certifying — inventory root identical; only the
+             operator FP gateway needs bound-candidate.palwart)
+stale        5.104's misaka-dnsseeder and misaka-miner-c are TESTNET-10's (network-id testnet-10, t10 anchors,
+             kpq-t10-bin/misaminer) — stopped by the wipe, not restarted. .113's dnsseeder is the only t11 seeder
+             (anchors ibm + .113) and is restarted after the wipe.
+step 6 check whether the bond outpoints (…:0, …:1) and the fee outpoint (…:41) exist in the NEW premine is the
+             producer's own refusal at start; it is not assumed here.
+```
