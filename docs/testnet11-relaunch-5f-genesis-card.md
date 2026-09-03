@@ -5669,3 +5669,10 @@ paged. So the seat-artifact rule (6b) and the producer compete for one 24 GB hos
 drops `qwen36.palwq36` (`ibm-node1.sh.pre-5f-noqwen36` kept), keeps the two A16 artifacts, the floor producer and
 the panel; restarted. Expected: swap drains, node0 returns to ~2 cores and a fourth block within the hour. Post-cut:
 one 24 GB host cannot carry a Qwen3.6 producer and a Qwen3.6-capable panel seat together; the seat runbook says so.
+
+**6n, continued (23:40 UTC).** A second contributor, found and removed by 6a: the explorer's `llm-jobs.json` cron on
+ibm (`/root/llm-jobs-publish.sh`, every two minutes) read the three 253 MB retention materials into memory on every
+run — a swap event every two minutes — and stalled each run on a dead `rsync` to 160.16.131.119; it now runs with
+`--retention /root/palw-class/retention-empty`, publishes 3 rows, and any text column is derived off-host. Right
+after node1's restart the host read 13.9 GB free, 15.5 GB available, swap 4.2 GB and draining. Two mappings of a
+33.99 GiB file plus a two-minute 760 MB read on a 24 GB host was the whole of the pressure.
