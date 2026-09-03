@@ -50,7 +50,12 @@ Consensus params fingerprint: a7baab7957d27bbd2591cd24f70ee92b555ab26cd49ef425cb
 ```
 
 (Identity as of **Relaunch 5e, 2026-09-02** — genesis `08e9c8a4…` (`PALW_RC_GENESIS`), which 5e
-keeps: the genesis card has not moved since 5c, only the ruleset over it. Earlier values —
+keeps. **Do not read that as a property of the chain.** Genesis held from 5c through 5e because
+those relaunches moved only the ruleset over it; a relaunch that changes the genesis UTXO set —
+premine entries, community allocations, the class set seated at block zero — moves the genesis
+hash itself, and then no earlier appdir and no earlier binary can join at all. Both values below
+are dated facts about a past relaunch, not constants: take the live ones from your own node's
+first log lines rather than from this page. Earlier values —
 `e2b91c16…` (5d), `d38abe44…` (5c), `f0e50f83…` and `accaadce…` (all 2026-09-02), `5ccdd684…`
 (2026-08-31), `f3bf86b4…` (2026-08-30), `95265934…` (2026-08-29) — name archived rulesets; a node
 still announcing any of them is refused at the handshake by every node on this one. **Wipe the

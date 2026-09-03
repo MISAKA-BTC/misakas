@@ -43,6 +43,20 @@ Widening it is the work in progress; it is not a knob on your side.
 | the shortest CAD description that ships (one box) | 76 |
 | the shortest 3D scene description that ships (one cube) | 255 |
 
+**And when that width arrives, be careful whose answer it was.** The two model tiers are not
+equally evidenced on the machine this page was written on, and the difference is invisible in a
+class table:
+
+| tier | what has been run here | what has NOT |
+|---|---|---|
+| `QWEN25-A16` (dense) | the real 1.7 GiB artifact, on this machine, through the shipped executor | — |
+| `QWEN36` (hybrid, "35B") | the LANE — its graph, executor, tokenizer and ChatML assembly — carrying a **2B** model (`qwen35-2b.palwq36`, 2.48 GB) | the 35B's own answers. `Qwen3.6-35B-A3B-Claude-4.7-base-meta` is **19 MB of metadata**, its weight directory is **0 bytes**, and the runtime repo's cache holds **96 KB** of refs. The weights are a download an operator makes, not something exercised here. |
+
+So a sentence of the form "Qwen3.6 wrote this file" cannot be supported by anything measured
+here, however green the QWEN36 lane goes: a 2B model in the 35B's lane is evidence about the
+LANE. "The QWEN36 lane produced a grammar-valid description" is the claim the evidence carries,
+and it is a different claim.
+
 Put plainly: **no class registered on testnet-11 today can emit even the shortest of these files
 from a real inference.** A live prompt on the model classes gets you a few tokens of English, and
 a request that asks for a derivation on top will be refused by the worker, by name:
