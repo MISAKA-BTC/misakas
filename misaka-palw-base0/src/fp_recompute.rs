@@ -662,4 +662,111 @@ mod tests {
         base0_fp_seat_state_forget_v1();
         assert!(base0_fp_seat_state_held_v1(&profile, &ctx, &ids, 1).is_none(), "forgetting is what a node gets its memory back with");
     }
+
+    /// **What the seat's one forward pass actually costs, on this host** — the measurement
+    /// ADR-0082 §4 "Seat time" asserts and Decision 9's width bound is a function of.
+    ///
+    /// It prints rather than asserts a duration: a wall clock on a shared laptop is not a
+    /// consensus fact, and a test that failed when the machine was busy would be a test that
+    /// measures the fleet's mood. What it DOES assert is the thing the certifier depends on —
+    /// that a measurement can only ever narrow the admitted width, never widen it — because that
+    /// is the direction a wrong number is safe in.
+    ///
+    /// Run it with `--nocapture` to read the numbers.
+    #[test]
+    fn what_one_seat_forward_pass_costs_on_this_host() {
+        // The floor's own RC class: real weights, the shipped geometry, this build's kernels.
+        let geometry = kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY;
+        let profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(geometry).expect("expressible");
+        let artifact = crate::artifact::Base0ArtifactV1::derive_deterministic(
+            crate::artifact::Base0ShapeV1 {
+                n_layers: geometry.layer_count as usize,
+                n_heads: geometry.attn_heads as usize,
+                n_kv_heads: geometry.attn_heads as usize,
+                d_head: geometry.attn_head_dim as usize,
+                d_ff: geometry.ffn_dim as usize,
+                vocab: geometry.vocab_size as usize,
+                max_position: geometry.n_ctx as usize,
+                ln_theta_gen_q: crate::artifact::LN_THETA_10000_GEN_Q,
+                eps_q: geometry.rms_eps_q,
+            },
+            crate::rc::PALW_RC_BASE0_SEED,
+        )
+        .expect("the RC floor shape");
+        let prefill = (geometry.n_ctx / 2).max(1);
+        let decode = 4u32;
+        let (ctx, prompt) =
+            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x5EA7), geometry.vocab_size as usize, prefill, decode);
+        let run = crate::produce::base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the floor runs");
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let covered = ctx.exact_decode_tokens.saturating_sub(1);
+
+        struct FloorRecompute<'a> {
+            engine: crate::engine::Base0Engine<'a>,
+            cache: crate::engine::KvCache,
+        }
+        impl Base0FpRecomputeKernelsV1 for FloorRecompute<'_> {
+            fn forward_no_capture(&mut self, token: usize, position: usize) -> Result<(), Base0FpRecomputeError> {
+                self.engine
+                    .forward_token(&mut self.cache, token, position)
+                    .map(|_| ())
+                    .map_err(|e| Base0FpRecomputeError::Engine(format!("{e:?}")))
+            }
+            fn state_chunks(&self, profile: &PalwShapeProfileV3, positions: u32) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
+                let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions)
+                    .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")))?;
+                let mut chunks = Vec::with_capacity(geometry.chunk_count() as usize);
+                for index in 0..geometry.chunk_count() {
+                    let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
+                        .ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
+                    chunks.push(
+                        self.cache.state_chunk_bytes(&entry).ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?,
+                    );
+                }
+                Ok(chunks)
+            }
+        }
+
+        base0_fp_seat_state_forget_v1();
+        let mut kernels =
+            FloorRecompute { engine: crate::engine::Base0Engine::new(&artifact), cache: crate::engine::KvCache::new(&artifact) };
+        let started = std::time::Instant::now();
+        let state = base0_fp_recompute_state_v1(&profile, &ctx, &ids, &run.generated_token_ids, covered, &mut kernels)
+            .expect("the seat runs the floor's RC job");
+        let elapsed = started.elapsed();
+        assert_eq!(state.positions, prefill + covered, "one pass over every position of the job");
+
+        let micros_per_position = elapsed.as_micros().max(1) / state.positions.max(1) as u128;
+        let measured_ms = base0_fp_seat_ms_per_position_v1(elapsed.as_millis().min(u64::MAX as u128) as u64, state.positions);
+        let windows = kaspa_consensus_core::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1;
+        println!(
+            "seat forward pass (PALW-BASE-0/rc geometry, {} positions): {:?} total, {micros_per_position} us/position, \
+             {measured_ms} ms/position rounded up",
+            state.positions, elapsed
+        );
+        for (name, cost) in [
+            ("PALW-BASE-0/A16", kaspa_consensus_core::palw_context_ladder::PALW_COURT_COST_A16),
+            ("PALW-QWEN36", kaspa_consensus_core::palw_context_ladder::PALW_COURT_COST_QWEN36),
+        ] {
+            let ms = cost.replay_ms_per_position();
+            let rate = base0_fp_seat_milli_positions_per_daa_v1(ms);
+            println!(
+                "  {name}: {ms} ms/position (fleet, ADR-0077 §4) -> {}.{:03} positions/DAA -> n_max {} at window_receipt {}",
+                rate / 1_000,
+                rate % 1_000,
+                base0_fp_seat_width_bound_v1(windows.window_receipt, rate),
+                windows.window_receipt
+            );
+        }
+
+        // **The one assertion**: a measurement can only narrow the width. The certifier takes the
+        // SLOWER of the fleet figure and the host's, so a host that is faster than the row's
+        // figure — every host this fixture runs on — changes nothing, and a slower one binds.
+        let fleet = kaspa_consensus_core::palw_context_ladder::PALW_COURT_COST_QWEN36.replay_ms_per_position();
+        assert!(
+            base0_fp_seat_width_bound_v1(windows.window_receipt, base0_fp_seat_milli_positions_per_daa_v1(fleet.max(measured_ms)))
+                <= base0_fp_seat_width_bound_v1(windows.window_receipt, base0_fp_seat_milli_positions_per_daa_v1(fleet)),
+            "taking the slower of the two measurements must never admit MORE positions"
+        );
+    }
 }
