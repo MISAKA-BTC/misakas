@@ -209,6 +209,9 @@ inviting the reader to assume there was nothing to say.
 * The **split-carriage court close is open**, at up to 27 chunks on this network. The registered
   class does not need it — its close is one carrier — and a declaration risks a 0.3375 MSK assembly
   deposit against posted collateral, collected on every session ending except the close it pinned.
-* The **hybrid tier is not registered**, and the reason is not a margin: its close is three carriers
-  at every context width, because it binds a recurrence rather than attention. There is no width at
-  which it stops needing the split path.
+* The **hybrid tier IS registered** — 489‰ declared, 957‰ after the dense tier's dilution. An
+  earlier draft of this list said it was not, on the grounds that its close is three carriers at
+  every context width and there is no width at which that shrinks. Both halves of that are still
+  true and the conclusion is not: **three carriers is against a ceiling of twenty-seven**, and the
+  split-carriage path above is open. The exclusion was written when a class needing more than one
+  carrier could not file at all.
