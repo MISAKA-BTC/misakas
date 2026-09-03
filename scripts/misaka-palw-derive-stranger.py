@@ -978,12 +978,13 @@ def _pinned_from_test_file(path: str):
     m = re.search(r'const SOURCE_TREE: &str = "([0-9a-f]{64})"', text)
     if not m:
         raise Refused(f"{path} does not spell `const SOURCE_TREE`")
-    # `\s*` after the opening paren, not just between the fields: rustfmt puts each pin on three
-    # lines the moment the 128-hex id pushes the entry past the width, and a regex that demanded
-    # `("name"` on one line read the reformatted table as an EMPTY table. That is the failure this
-    # whole file exists to make impossible -- a checker whose silence is indistinguishable from a
-    # pass -- so the count is asserted against the registry below, not merely against zero.
-    pins = dict(re.findall(r'\(\s*"([a-z0-9/]+)",\s*"([0-9a-f]{128})"\s*,?\s*\)', text))
+    # **Whitespace-tolerant on purpose.** The first version required the tuple on one line, and
+    # `cargo fmt` broke it across three the day the file grew past rustfmt's width — so the oracle
+    # went from "eight pins" to "no pins", the selftest refused, and the whole drill died at stage
+    # 0 with a message about the shipped tree disagreeing. Nothing about the ids had changed. A
+    # parser for source code that depends on where a formatter chose to put its newlines reports
+    # the formatter, not the source.
+    pins = dict(re.findall(r'"([a-z0-9/.]+)"\s*,\s*"([0-9a-f]{128})"', text))
     if not pins:
         raise Refused(f"{path} carries no transformer id pins")
     return m.group(1), pins
