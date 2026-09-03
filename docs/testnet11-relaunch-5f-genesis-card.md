@@ -4974,3 +4974,11 @@ touched 5f; every superseded value grep-checked absent on 5f after it. The same 
 itself now. The freeze checker's standing caveat (formatting is inside the hash) is met by 3e's
 fmt being a no-op on the tip; the citation checker caught one line number of mine that moved with
 the merge, fixed against HEAD.
+
+## STEP 3 RUNNING: the real tip on ibm
+
+`candidate-6e01ba07` pushed (sha-named), checked out on ibm, `cargo build --release -p kaspad
+-p misaka-cli -j 4` incremental over the two earlier warm-ups, the memory watchdog re-armed, the
+corrected rehearsal keyed to it with **`EXPECT_FP = 2222e054…` and `EXPECT_GEN = ad30b5cb…`**. This
+boot must come up **without** M-07 and print both — the two values the un-re-pinned binary could
+not produce an hour earlier. Its verdict is read as evidence only once 5f's derive pin is green too.
