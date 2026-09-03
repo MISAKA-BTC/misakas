@@ -6,8 +6,7 @@
 
 use std::process::Command;
 
-const BOUND_ARTIFACT: &str =
-    "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet/71440f68-0f3b-4144-8b20-73c6aae7fb86/scratchpad/instruct-bound.palwart";
+const BOUND_ARTIFACT: &str = "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet/71440f68-0f3b-4144-8b20-73c6aae7fb86/scratchpad/instruct-bound.palwart";
 const SHIPPED_ARTIFACT: &str = "/Users/wata/Downloads/qwen25-1.5b-a16.palwart";
 
 #[test]

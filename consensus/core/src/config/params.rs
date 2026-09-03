@@ -1936,11 +1936,13 @@ impl Params {
                     crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.court.max_step_leaf_count(),
                     _ => crate::palw_step::PALW_STEP_MAX_LEAVES,
                 };
-                crate::palw_schedule::class_is_adjudicable_capped_v1(&credit.registration.shape_profile, schedule, ladder).map_err(|_| {
-                    crate::palw_registry::PalwRegistryError::NotCanonical(
-                        "the registered class's step space outruns the ladder these windows can walk",
-                    )
-                })?;
+                crate::palw_schedule::class_is_adjudicable_capped_v1(&credit.registration.shape_profile, schedule, ladder).map_err(
+                    |_| {
+                        crate::palw_registry::PalwRegistryError::NotCanonical(
+                            "the registered class's step space outruns the ladder these windows can walk",
+                        )
+                    },
+                )?;
             }
         }
         if let Some(ramp) = self.palw_ramp.as_ref() {
@@ -10135,7 +10137,10 @@ mod consensus_params_id_tests {
         shipped.validate_palw_v2().expect("the shipped devnet assembles");
 
         for (name, arm) in [
-            ("palw_fp_decode_rules", (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_rules = Some(a)) as fn(&mut Params, ForkActivation)),
+            (
+                "palw_fp_decode_rules",
+                (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_rules = Some(a)) as fn(&mut Params, ForkActivation),
+            ),
             ("palw_prompt_ids_merkle", |p: &mut Params, a: ForkActivation| p.palw_prompt_ids_merkle = Some(a)),
         ] {
             for activation in [ForkActivation::always(), ForkActivation::new(9_000_000)] {

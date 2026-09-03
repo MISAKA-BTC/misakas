@@ -625,7 +625,6 @@ pub async fn certified(ctx: &Ctx, class_id: &str, json: bool) -> Result<(), CliE
     Ok(())
 }
 
-
 #[cfg(test)]
 mod rent_tests {
     /// **The rent the chain charges is the relay rate this tool pays** (ADR-0075 SA-1/SA-2).

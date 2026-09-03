@@ -672,8 +672,7 @@ impl Qwen25A16Backend {
         // fixture. It is the artifact's own answer, which is the reading audit D M-6 found is not
         // enforceable — so it is confined to this entry point, and every caller that resolved a
         // CLASS uses `from_registered_profile_in_lane_v1` and says which lane it resolved.
-        let lane =
-            artifact.derived_seed().map_or(ArtifactSourceV1::ConvertedA16, ArtifactSourceV1::Derived);
+        let lane = artifact.derived_seed().map_or(ArtifactSourceV1::ConvertedA16, ArtifactSourceV1::Derived);
         Self::from_registered_profile_in_lane_v1(artifact, network_id, profile, canonical_job, lane)
     }
 
@@ -956,18 +955,26 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
             }
         };
         let vocab = self.artifact.shape.vocab;
-        crate::fp_interval::base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, step_leaf_count, |token, position| {
-            if token >= vocab {
-                return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
-            }
-            let (logits, trace) = match self.plan {
-                Some(plan) => {
-                    engine.forward_token_planned(plan, &mut cache, token, position).map_err(|e| format!("planned forward: {e:?}"))?
+        crate::fp_interval::base0_fp_replay_interval_v1(
+            profile,
+            ctx,
+            start,
+            first_call,
+            last_call,
+            step_leaf_count,
+            |token, position| {
+                if token >= vocab {
+                    return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
                 }
-                None => engine.forward_token_traced(&mut cache, token, position).map_err(|e| format!("forward: {e:?}"))?,
-            };
-            Ok((logits, crate::legs::a16_captured_rows_v1(&trace)))
-        })
+                let (logits, trace) = match self.plan {
+                    Some(plan) => engine
+                        .forward_token_planned(plan, &mut cache, token, position)
+                        .map_err(|e| format!("planned forward: {e:?}"))?,
+                    None => engine.forward_token_traced(&mut cache, token, position).map_err(|e| format!("forward: {e:?}"))?,
+                };
+                Ok((logits, crate::legs::a16_captured_rows_v1(&trace)))
+            },
+        )
     }
 }
 

@@ -500,11 +500,13 @@ mod tests {
         // TESTNET11_GENESIS is the retired fossil). Its `hash` covers its `utxo_commitment`, so a
         // premine re-pin that moves the commitment and not the hash is caught HERE — every other
         // guard (the premine test, the ceremony printer) reads the commitment alone.
-        [GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS, SIMNET_GENESIS, DEVNET_GENESIS, PALW_RC_GENESIS].into_iter().for_each(|genesis| {
-            let block: Block = (&genesis).into();
-            assert_hashes_eq(calc_hash_merkle_root(block.transactions.iter()), block.header.hash_merkle_root);
-            assert_hashes_eq(block.hash(), genesis.hash);
-        });
+        [GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS, SIMNET_GENESIS, DEVNET_GENESIS, PALW_RC_GENESIS].into_iter().for_each(
+            |genesis| {
+                let block: Block = (&genesis).into();
+                assert_hashes_eq(calc_hash_merkle_root(block.transactions.iter()), block.header.hash_merkle_root);
+                assert_hashes_eq(block.hash(), genesis.hash);
+            },
+        );
     }
 
     /// Helper for the kaspa-pq Phase 2 workflow: compute and print the

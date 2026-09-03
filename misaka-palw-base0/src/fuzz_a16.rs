@@ -266,16 +266,19 @@ fn gate_accepts(
         window_court_daa: kaspa_consensus_core::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.window_court,
     });
     let ladder = fused.then(|| {
-        kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, court, bundle.court.max_step_leaf_count()).unwrap_or_else(|| {
-            kaspa_consensus_core::palw_class_admission_v2::PalwClassLadderRulesV1 {
-                ladder: bundle.court.max_step_leaf_count(),
-                cost_shape: kaspa_consensus_core::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(
-                    profile,
-                    bundle.court.max_step_leaf_count(),
-                )
-                .with_dissection_v1(arity),
-                canonical_footprint_floor: 0,
-            }
+        kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+            profile,
+            court,
+            bundle.court.max_step_leaf_count(),
+        )
+        .unwrap_or_else(|| kaspa_consensus_core::palw_class_admission_v2::PalwClassLadderRulesV1 {
+            ladder: bundle.court.max_step_leaf_count(),
+            cost_shape: kaspa_consensus_core::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(
+                profile,
+                bundle.court.max_step_leaf_count(),
+            )
+            .with_dissection_v1(arity),
+            canonical_footprint_floor: 0,
         })
     });
     kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v5(
