@@ -1161,9 +1161,16 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         };
         let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
         let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan);
-        crate::fp_recompute::base0_fp_seat_state_memoized_v1(profile, &ctx, prompt_token_ids, output_token_ids, decode_calls, &mut kernels)
-            .map(|state| state.state_chunks_root)
-            .map_err(|e| e.to_string())
+        crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+            profile,
+            &ctx,
+            prompt_token_ids,
+            output_token_ids,
+            decode_calls,
+            &mut kernels,
+        )
+        .map(|state| state.state_chunks_root)
+        .map_err(|e| e.to_string())
     }
 
     fn operand_openings_for(

@@ -225,22 +225,14 @@ impl<'a> A16RecomputeKernelsV1<'a> {
     ) -> Result<Self, Base0FpRecomputeError> {
         let engine = crate::engine_a16::A16Engine::new(artifact)
             .map_err(|e| Base0FpRecomputeError::Engine(format!("the artifact is not an A16 class: {e:?}")))?;
-        Ok(Self {
-            engine,
-            plan,
-            cache: crate::engine_a16::A16Cache::new(artifact.shape.n_layers),
-            vocab: artifact.shape.vocab,
-        })
+        Ok(Self { engine, plan, cache: crate::engine_a16::A16Cache::new(artifact.shape.n_layers), vocab: artifact.shape.vocab })
     }
 }
 
 impl Base0FpRecomputeKernelsV1 for A16RecomputeKernelsV1<'_> {
     fn forward_no_capture(&mut self, token: usize, position: usize) -> Result<(), Base0FpRecomputeError> {
         if token >= self.vocab {
-            return Err(Base0FpRecomputeError::Engine(format!(
-                "token {token} is outside this class's vocabulary of {}",
-                self.vocab
-            )));
+            return Err(Base0FpRecomputeError::Engine(format!("token {token} is outside this class's vocabulary of {}", self.vocab)));
         }
         // The PLANNED walk where the class registered a graph (ADR-0067: the court adjudicates
         // what was declared, so a seat's own state must come from the declaration too).
@@ -262,15 +254,14 @@ impl Base0FpRecomputeKernelsV1 for A16RecomputeKernelsV1<'_> {
         // **The CLASS's map, through the one dispatch both directions take.** The same geometry
         // `Base0CheckpointCaptureV1::next_geometry` takes, so a seat chunks the state exactly
         // where the executor did — including the v3 tiled map a graph-v5 class registers.
-        let geometry =
-            crate::legs::base0_state_chunk_geometry_v1(profile, positions).map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")))?;
+        let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions)
+            .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")))?;
         let mut chunks = Vec::with_capacity(geometry.chunk_count() as usize);
         for index in 0..geometry.chunk_count() {
             let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
                 .ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
-            chunks.push(
-                self.cache.state_chunk_bytes_v1(&entry).ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?,
-            );
+            chunks
+                .push(self.cache.state_chunk_bytes_v1(&entry).ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?);
         }
         Ok(chunks)
     }

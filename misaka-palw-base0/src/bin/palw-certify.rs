@@ -182,7 +182,8 @@ fn main() {
             // is a row whose seats file `Incapable`, whose claims reach no quorum, and whose
             // certificate would be a promise the fleet cannot keep.
             let measured = flag(&args, "--seat-ms-per-position").map(|v| {
-                v.parse::<u64>().unwrap_or_else(|_| die(format!("--seat-ms-per-position takes a whole number of milliseconds, not `{v}`")))
+                v.parse::<u64>()
+                    .unwrap_or_else(|_| die(format!("--seat-ms-per-position takes a whole number of milliseconds, not `{v}`")))
             });
             let (n_max, ms, rate) = seat_width_bound(&profile, measured);
             let window = kaspa_consensus_core::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.window_receipt;

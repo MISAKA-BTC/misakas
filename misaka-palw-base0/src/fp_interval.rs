@@ -459,10 +459,7 @@ impl Base0FpIntervalOpeningV2 {
             range: opening.range.clone(),
             seed_row_leaf_count: opening.seed_row_leaf_count,
             seed_row_tiles: opening.seed_row_tiles.clone(),
-            anchor: opening
-                .anchor
-                .as_ref()
-                .map(|a| Base0FpCheckpointClaimV1 { leaf: a.leaf.clone(), opening: a.opening.clone() }),
+            anchor: opening.anchor.as_ref().map(|a| Base0FpCheckpointClaimV1 { leaf: a.leaf.clone(), opening: a.opening.clone() }),
         }
     }
 }
@@ -920,10 +917,17 @@ pub fn base0_verify_fp_interval_opening_v1<K: Base0FpIntervalKernelsV1>(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Base0FpIntervalSeatVerdictV1 {
     Valid,
-    Fault { leaf_index: u64 },
+    Fault {
+        leaf_index: u64,
+    },
     /// The seat's own recompute of the state at this checkpoint does not have the root the claim
     /// committed. The seat files NOTHING and may open a court, as any bonded challenger may.
-    CheckpointRootMismatch { checkpoint_index: u32, covered_decode_call: u32, committed: Hash64, recomputed: Hash64 },
+    CheckpointRootMismatch {
+        checkpoint_index: u32,
+        covered_decode_call: u32,
+        committed: Hash64,
+        recomputed: Hash64,
+    },
     /// The class registers a tiled map — a graph-v5 row — and the opening carried the history
     /// anyway. Refused rather than replayed: the whole content of Decision 9 is that a seat's
     /// bytes do not grow with the context, and a seat that accepts the history has spent them.
@@ -1054,9 +1058,14 @@ pub fn base0_verify_fp_interval_opening_with_state_v1<K: Base0FpIntervalKernelsV
     let start = match geometry.anchor_covered_call(index) {
         None => Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt_usize },
         Some(covered) => {
-            let Some(seed_token) =
-                seed_token_from_opened_row_v1(profile, ctx, &opening.seed_row_tiles, &opening.range, covered, leaves_geometry.range_first)
-            else {
+            let Some(seed_token) = seed_token_from_opened_row_v1(
+                profile,
+                ctx,
+                &opening.seed_row_tiles,
+                &opening.range,
+                covered,
+                leaves_geometry.range_first,
+            ) else {
                 return Base0FpIntervalSeatVerdictV1::Mismatch;
             };
             let Some(claimed) = opening.anchor.as_ref() else {
@@ -1737,9 +1746,9 @@ mod tests {
         );
     }
 
-// =============================================================================================
-// ADR-0082 Decision 9 (invariant Z5, unit U-05): the seat recomputes, and never fetches the history
-// =============================================================================================
+    // =============================================================================================
+    // ADR-0082 Decision 9 (invariant Z5, unit U-05): the seat recomputes, and never fetches the history
+    // =============================================================================================
 
     use crate::fp_recompute::{Base0FpRecomputeError, Base0FpRecomputeKernelsV1, base0_fp_recompute_state_v1};
 
@@ -1806,7 +1815,8 @@ mod tests {
     fn the_recomputed_root_is_the_committed_checkpoint_at_every_interval() {
         let (material, _claim, ids, artifact) = floor_material(3, 4);
         let binding = &material.0;
-        let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("a geometry");
+        let geometry =
+            Base0FpIntervalGeometryV1::from_binding_v1(binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("a geometry");
         assert!(geometry.interval_count > 1, "the fixture must have at least one checkpoint-anchored interval");
         let checkpoints = crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(
             &binding.job_context,
@@ -1846,10 +1856,13 @@ mod tests {
     fn the_seats_own_state_and_the_carried_chunks_reach_the_same_verdict() {
         let (material, claim, ids, artifact) = floor_material(3, 4);
         let binding = &material.0;
-        let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("a geometry");
+        let geometry =
+            Base0FpIntervalGeometryV1::from_binding_v1(binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("a geometry");
         for index in 0..geometry.interval_count {
-            let chunked = base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("the chunked form opens");
-            let flat = base0_open_fp_interval_chunkless_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("the flat form opens");
+            let chunked = base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
+                .expect("the chunked form opens");
+            let flat = base0_open_fp_interval_chunkless_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
+                .expect("the flat form opens");
             let state = geometry.anchor_covered_call(index).map(|covered| seat_state(&material, &artifact, &ids, covered));
             let with_history = base0_verify_fp_interval_opening_with_state_v1(
                 &chunked,
@@ -1887,7 +1900,8 @@ mod tests {
     fn a_tampered_checkpoint_is_refused_and_the_refusal_names_it() {
         let (honest, _claim, ids, artifact) = floor_material(3, 4);
         let binding = &honest.0;
-        let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("a geometry");
+        let geometry =
+            Base0FpIntervalGeometryV1::from_binding_v1(binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("a geometry");
         let index = 1;
         let covered = geometry.anchor_covered_call(index).expect("an anchored interval");
 
@@ -1930,7 +1944,8 @@ mod tests {
             anchor: lying.job_context.job_id,
         };
         let material: Base0RetainedMaterialV1 = (lying, honest.1.clone(), honest.2.clone(), honest.3.clone(), chunks);
-        let opening = base0_open_fp_interval_chunkless_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("the liar serves an opening");
+        let opening = base0_open_fp_interval_chunkless_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
+            .expect("the liar serves an opening");
         let state = seat_state(&material, &artifact, &ids, covered);
         let verdict = base0_verify_fp_interval_opening_with_state_v1(
             &opening,
@@ -1967,8 +1982,10 @@ mod tests {
         let measure = |prefill: u32, decode: u32| {
             let (material, _claim, ids, _artifact) = floor_material(prefill, decode);
             let index = 1;
-            let chunked = base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("the chunked form opens");
-            let flat = base0_open_fp_interval_chunkless_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("the flat form opens");
+            let chunked = base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
+                .expect("the chunked form opens");
+            let flat = base0_open_fp_interval_chunkless_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
+                .expect("the flat form opens");
             let decoded = Base0FpIntervalOpeningV2::decode_v1(&flat).expect("the flat form decodes");
             let state_bytes: usize = Base0FpIntervalOpeningV1::decode_v1(&chunked)
                 .expect("decodes")
@@ -2055,7 +2072,8 @@ mod tests {
         let (material, claim, ids, artifact) = floor_material(3, 4);
         let binding = &material.0;
         let index = 1;
-        let chunked = base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("the chunked form opens");
+        let chunked =
+            base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("the chunked form opens");
         let mut decoded = Base0FpIntervalOpeningV1::decode_v1(&chunked).expect("decodes");
         // The class declares the tiled map — Decision 4's graph-v5 declaration.
         decoded.binding.shape_profile.state_chunk_map_id =

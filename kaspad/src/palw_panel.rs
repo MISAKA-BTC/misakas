@@ -3499,8 +3499,8 @@ impl PalwPanelService {
         output_ids: &[u32],
         openings: &HashMap<(Hash64, u32), Vec<Vec<u8>>>,
     ) -> Option<PalwReceiptVerdictV2> {
-        use kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1;
         use crate::palw_fp_seat::PalwFpChainCountsV1;
+        use kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1;
 
         let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else {
             return Some(PalwReceiptVerdictV2::Incapable);
@@ -3536,10 +3536,9 @@ impl PalwPanelService {
                         continue;
                     }
                     let (job_owned, prompt_owned, output_owned) = (job.clone(), prompt_ids.to_vec(), output_ids.to_vec());
-                    let Ok((returned, recomputed)) = offload(backend, move |b| {
-                        b.fp_recompute_checkpoint_root(&job_owned, &prompt_owned, &output_owned, covered)
-                    })
-                    .await
+                    let Ok((returned, recomputed)) =
+                        offload(backend, move |b| b.fp_recompute_checkpoint_root(&job_owned, &prompt_owned, &output_owned, covered))
+                            .await
                     else {
                         return None;
                     };
@@ -3571,10 +3570,9 @@ impl PalwPanelService {
                 let (candidate, prompt_owned) = (bytes.clone(), prompt_ids.to_vec());
                 let work_leaves = duty.work_leaves;
                 let interval = *index;
-                let Ok((returned, verdict)) = offload(backend, move |b| {
-                    b.verify_fp_interval_opening(&candidate, roots, interval, &prompt_owned, work_leaves)
-                })
-                .await
+                let Ok((returned, verdict)) =
+                    offload(backend, move |b| b.verify_fp_interval_opening(&candidate, roots, interval, &prompt_owned, work_leaves))
+                        .await
                 else {
                     return None;
                 };
