@@ -3916,3 +3916,43 @@ of the eight ids from impl's raw bytes.
 
 *Asked for alongside it: the devnet fingerprint printed **before and after** in the same run. A pin
 that moves for a named reason should still be able to show what it was.*
+
+### The pin-safety argument for (a), measured rather than accepted
+
+Before withdrawing one pin and keeping four, I wanted the *"(a) never touches the t11 preset"*
+claim to rest on structure rather than on an assurance:
+
+```
+devnet_shipped_params()    params.rs:8035
+    palw_v2_params_from_artifacts_on_base(DEVNET_PARAMS, …)      <- the line (a) changes
+palw_rc_shipped_params()   params.rs:7968
+    calls NEITHER builder — it constructs from PALW_RC_GENESIS_BONDS and premine outpoints
+```
+
+**They are separate construction paths.** Changing the devnet builder cannot move the t11
+fingerprint, because t11 does not go through that function. *That is a structural argument, and
+the reason I wanted one is that a diff-sized argument — "the change is one line, in a devnet
+function" — is exactly the shape that has been wrong four times tonight.*
+
+### The exposure the merge closes too late
+
+```
+palw-adr0082-impl  docs/palw-rc-testnet11-launch-runbook.md:369
+    pgrep -af kaspad | grep -oE 'appdir=[^ ]+' | sort -u        <- the bare imperative
+```
+
+5f is fixed and **the merge keeps the fix** — impl has 0 commits on that file since merge-base
+`bb2bec63`, 5f has 4, `merge-tree` shows no conflict, so 5f's version wins outright. **The cut is
+safe.**
+
+**But the T1–T11 fix agents are reading impl right now**, and the merge that closes this comes
+*after* them. A fix agent consulting the runbook for the wipe procedure gets the command that
+prints its own regex as an appdir.
+
+> **The mitigation is a message, not a commit.** impl's docs are inside another session's working
+> set, and one writer per file holds even when the fix is one line and obviously right — *especially
+> then, because "obviously right" is how two writers arrive in one file.*
+
+*Noted because the general shape recurs: a defect fixed on the release branch stays live on the
+integration branch for exactly as long as the integration branch is where the work is happening —
+which is the whole of the period when the most people are reading it.*
