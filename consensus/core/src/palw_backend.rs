@@ -409,6 +409,16 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this execution family cannot recompute a checkpoint root from the prompt".to_string())
     }
 
+    /// **The committed output ids of a retained capture, read by the family that wrote it**
+    /// (ADR-0082 Decision 9's companion verb). A seat that recomputes the cache teacher-forces the
+    /// executor's own answer, so it needs the ids the commitment binds — and it must get them
+    /// through the seam, never by naming a family's material decoder from the panel. `None` when
+    /// the bytes are not this family's capture. Defaulted so a family without a free-prompt path
+    /// answers honestly.
+    fn fp_committed_output_ids(&self, _capture: &[u8]) -> Option<Vec<u32>> {
+        None
+    }
+
     /// **A DRILL fault: run the job, corrupt one lane of one tile, and commit to the result.**
     ///
     /// A court that has never convicted on a live chain is a court nobody has evidence works, and
