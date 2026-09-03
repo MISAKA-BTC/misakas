@@ -834,6 +834,25 @@ permanent quarantine.
 *A standing decision made for cost becomes a different decision on the one night its subject is the
 main event. The set did not change; the night did.*
 
+**And that is a THIRD member of the staleness family, more invisible than the other two:**
+
+| what goes stale | what pushes back |
+|---|---|
+| a claim that **broke** | a red test, a failed build, a confused reader — *something* |
+| a claim that **improved** | nothing. It reads as a correct caution (see below) |
+| a **decision** whose premise stopped applying | nothing, and **it was never a statement at all** |
+
+The third is the worst because *a standing decision does not come up for re-decision* — it persists,
+correctly, into a night with different physics. `#[ignore]` for cost is right on an ordinary week and
+nobody re-decides it, because nothing in the mechanism asks. **There is no sentence to re-read.**
+
+*The filter that finds them is not "what claims might be stale" but "what does THIS operation
+uniquely create". A resident agent disagreeing with a fresh process can only surface after every host
+restarts at once — nothing in the normal running of a chain produces that condition, and a wipe
+produces it on every machine simultaneously.* Six of the ignored tests are being run on that
+reasoning: the three IBD-participation cases, and the three pow-driver ones — including
+`a_dead_agent_costs_a_delay_and_not_a_tag`, because **a wipe is every agent dying at once.**
+
 **Running `a_node_killed_partway_through_recovery_comes_back_safe` during the FH2 wait** — it is the
 failure mode with the worst recovery story, and the wall clock is free while the last fixer
 finishes. Whatever it prints goes in §6 as a gate that was run rather than a set that was skipped.
