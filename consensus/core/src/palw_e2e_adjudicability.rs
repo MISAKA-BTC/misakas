@@ -383,7 +383,22 @@ pub fn certify_e2e_family_v1(evidence: &PalwE2eDrillEvidenceV1) -> Result<PalwE2
         // is a different size from its declared graph's is exactly ADR-0049 Decision F's failure,
         // where a producer performs arithmetic the court recomputes differently and is convicted
         // for doing it correctly.
-        let declared = crate::palw_step::step_leaf_count(&evidence.profile, ctx).map_err(|e| PalwE2eError::Profile(e.to_string()))?;
+        // **The cap is the STRUCTURAL top, because the rule on this line is the EQUALITY**
+        // (ADR-0082 Decision 1). The certifier holds no ruleset — a drill is graded anywhere, by
+        // anyone, and `PalwE2eDrillEvidenceV1` is a borsh object that carries no bundle — so it
+        // cannot ask "which ladder". What it CAN do is refuse to invent one: bounding the count at
+        // `PALW_STEP_MAX_LEAVES` (the executor's `2^22`) made a class the ruleset admits at `2^26`
+        // uncertifiable, and by `Profile("TooManyLeaves")` rather than by anything about the drill.
+        // The ladder rule lives at admission (`verify_class_admission_v*`, against the bundle's own
+        // `max_step_leaf_count`), which is the one place that holds the number; here the question
+        // is only whether the graph enumerates what the capture committed. The enumeration is a
+        // closed form, so the wider bound buys no walk.
+        let declared = crate::palw_step::step_leaf_count_capped_v1(
+            &evidence.profile,
+            ctx,
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+        )
+        .map_err(|e| PalwE2eError::Profile(e.to_string()))?;
         if vector.honest.binding.step_leaf_count != declared {
             return Err(PalwE2eError::GraphMisdescribesTheEngine { committed: vector.honest.binding.step_leaf_count, declared });
         }

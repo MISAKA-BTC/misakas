@@ -94,9 +94,46 @@ where
 pub fn palw_fp_objects_from_accepted_txs_under_v3<V>(
     txs: &[Transaction],
     network_domain: Hash64,
+    freeprompt: &PalwFreePromptParamsV3,
+    accepted_block: BlockHash,
+    panel_da_armed: bool,
+    verify_mldsa87: V,
+) -> PalwFpExtractionV3
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    // No bundle in scope, so no ladder: the structural top, exactly as the door uses it. A caller
+    // that holds the bundle calls [`palw_fp_objects_from_accepted_txs_under_ruleset_v3`].
+    palw_fp_objects_from_accepted_txs_under_ruleset_v3(
+        txs,
+        network_domain,
+        freeprompt,
+        accepted_block,
+        panel_da_armed,
+        crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+        verify_mldsa87,
+    )
+}
+
+/// The same walk **under this ruleset's ladder** (ADR-0082 Decision 1).
+///
+/// `max_step_leaf_count` is `PalwCourtParamsV2::max_step_leaf_count` off the bundle the accepting
+/// block is folded under — `2^26` on every shipped preset. It is the ONE place a free-prompt
+/// commitment meets the number its network's court can actually prosecute to: a claim whose
+/// `work_leaves` is past the ladder has a step index no dissection can reach, so crediting it
+/// would be weight for work nobody can be convicted over. A carrier that fails it is SKIPPED, like
+/// every other refusal in this walk, so a peer's payload can never reject the block.
+///
+/// A separate entry rather than a parameter on the old one, for the reason the `_under_v3` split
+/// gives: a caller that has not switched keeps the weaker structural bound rather than silently
+/// acquiring a stricter rule it did not ask for.
+pub fn palw_fp_objects_from_accepted_txs_under_ruleset_v3<V>(
+    txs: &[Transaction],
+    network_domain: Hash64,
     _freeprompt: &PalwFreePromptParamsV3,
     _accepted_block: BlockHash,
     panel_da_armed: bool,
+    max_step_leaf_count: u64,
     verify_mldsa87: V,
 ) -> PalwFpExtractionV3
 where
@@ -117,7 +154,7 @@ where
         };
         // The same stateless rules a peer applies — re-run here rather than assumed, because this
         // walk must be total over whatever was accepted.
-        if payload.validate_stateless_under_v3(network_domain, panel_da_armed).is_err() {
+        if payload.validate_stateless_under_ruleset_v3(network_domain, panel_da_armed, max_step_leaf_count).is_err() {
             out.skipped.push((id, "payload is not stateless-admissible"));
             continue;
         }
@@ -367,14 +404,19 @@ mod tests {
         }
     }
 
-    /// A leaf count above the step space's own cap is refused outright by the stateless rule, so
-    /// it never becomes an object at all (a count within the cap is the seats' to verify against
-    /// the capture — ADR-0074 Decision 5).
+    /// A leaf count above the ladder is refused outright by the stateless rule, so it never
+    /// becomes an object at all (a count within the ladder is the seats' to verify against the
+    /// capture — ADR-0074 Decision 5).
+    ///
+    /// **The cap is the RULESET's, and the walk that has one is the one that applies it**
+    /// (ADR-0082 Decision 1). This asked the arming-free entry about `PALW_STEP_MAX_LEAVES + 1`,
+    /// which pinned the executor's `2^22` as the chain's ladder on a `2^26` network; the
+    /// `_under_ruleset_v3` walk below is where the number lives now.
     #[test]
     fn a_leaf_count_above_the_cap_never_becomes_an_object() {
         let fp = freeprompt();
         let mut p = payload(96, 256);
-        p.commitment.work_leaves = crate::palw_step::PALW_STEP_MAX_LEAVES + 1;
+        p.commitment.work_leaves = crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP + 1;
         let extracted = palw_fp_objects_from_accepted_txs_v3(
             &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap())],
             net(),
@@ -496,7 +538,49 @@ mod tests {
         );
         assert_eq!(out.objects.len(), 1, "and the walk carries the leaves for the seats to judge");
         let mut above = payload(96, 256);
-        above.commitment.work_leaves = crate::palw_step::PALW_STEP_MAX_LEAVES + 1;
+        above.commitment.work_leaves = crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP + 1;
         assert!(validate_palw_fp_commitment_tx(&borsh::to_vec(&above).unwrap()).is_err(), "the cap the door does know");
+    }
+
+    /// **The ladder the network froze is the walk's, and the door is never stricter than it**
+    /// (ADR-0082 Decision 1).
+    ///
+    /// The graph-v5 dense 512 row's canonical job counts more leaves than the executor's `2^22`,
+    /// and the RC bundle admits the class at `2^26`. Both facts are asserted here against one
+    /// commitment: transaction isolation admits it (the door holds no bundle, so it bounds at the
+    /// structural top), the ruleset walk credits it at `2^26`, and a ruleset that froze `2^22`
+    /// skips it by name. Before this, the door refused the carrier and no block could hold one.
+    #[test]
+    fn the_walk_bounds_a_commitment_at_the_rulesets_ladder_and_the_door_never_narrower() {
+        let fp = freeprompt();
+        let mut wide = payload(96, 256);
+        wide.commitment.work_leaves = crate::palw_step::PALW_STEP_MAX_LEAVES + 1;
+        let bytes = borsh::to_vec(&wide).unwrap();
+        assert!(
+            validate_palw_fp_commitment_tx(&bytes).is_ok(),
+            "isolation must not refuse a carrier the 2^26 walk would credit — that is the one direction the door may not fail in"
+        );
+        let carrier = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, bytes);
+        let at_rc = palw_fp_objects_from_accepted_txs_under_ruleset_v3(
+            std::slice::from_ref(&carrier),
+            net(),
+            &fp,
+            h64(1),
+            false,
+            crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES,
+            |_, _, _, _| true,
+        );
+        assert_eq!(at_rc.objects.len(), 1, "the shipped ruleset's 2^26 ladder admits it: {:?}", at_rc.skipped);
+        let at_executor_constant = palw_fp_objects_from_accepted_txs_under_ruleset_v3(
+            std::slice::from_ref(&carrier),
+            net(),
+            &fp,
+            h64(1),
+            false,
+            crate::palw_step::PALW_STEP_MAX_LEAVES,
+            |_, _, _, _| true,
+        );
+        assert!(at_executor_constant.objects.is_empty(), "a ruleset that froze 2^22 refuses it");
+        assert_eq!(at_executor_constant.skipped, vec![(carrier.id(), "payload is not stateless-admissible")]);
     }
 }
