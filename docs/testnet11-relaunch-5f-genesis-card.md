@@ -535,13 +535,38 @@ green except the known pin" said this week was a statement about jobs that never
 | derive | `cargo test -p misaka-palw-derive` | **NOT `--lib`** — `--lib` builds no binaries, `palw-evm-runner` is absent, and ADR-0079's confinement gate refuses rather than falling back in-process. Those seven reds are the gate HOLDING. |
 | cli | `cargo test -p misaka-cli` | 73/0 |
 | artifact selftest | `scripts/misaka-palw-artifact-conformance.py selftest` | five damaged artifacts, each refused BY NAME — a test on the exit code alone would call four-of-five a pass |
-| stranger | `scripts/misaka-palw-derive-stranger.py` | recomputes the bytes in Python, independently of the Rust |
+| stranger | `scripts/misaka-palw-derive-stranger.py selftest` | recomputes the bytes in Python, independently of the Rust. **RED right now, and correctly so — read its two halves separately** (below). |
 | third party | `scripts/misaka-palw-artifact-thirdparty.py --require` | mido / pygltflib / numpy-stl; compares MEANING (enclosed volume, playback duration) against the DSL |
 | model gate, dense | `palw-model-gate` | A16 lane only — declared in advance |
 | model gate, QWEN36 | `palw-qwen36-model-gate` | needs the ChatML fix (§7) to pass through the production assembly |
 | fused-attention guard | `verify_class_admission_v5` | Refuses an `AttnFused` profile unless `palw_kary_court_active_at` — `FusedAttentionNeedsTheKaryCourt`, *"the class carries a fused attention site and this ruleset's court has no dissection to try it with"*; and `PricedForADifferentCourt { priced, court }` when the registered cost shape's arity is not the court's. **A guard on the way in, beside the drill and not instead of it.** |
 | the split close is open | `check_court_close_declaration_acceptance_v2` (W6's signature), `check_close_declared_chunk_count_v2` (the ruleset's own `max_close_chunks`, so devnet's 1 refuses the path rather than engaging it), `palw_court_close_min_fee_v1` (an under-rented declaration is dropped with the block standing) | **Named so a reader can falsify §5 in ten seconds** rather than trust it. Every number here carries where it came from; a behaviour should too. |
 | **prosecutability** | ADR-0082 stream I's end-to-end court drill | **This is the gate, and admission is not.** A graph-v5 leaf disputed to the bottom under the ARMED fence set, through `apply_object`: honest acquitted, forged convicted. F's admission arm refusing an unfenced `AttnFused` profile by name is a guard on the way in — useful, and not the property. The property is that a dispute can be carried to a verdict, and only the drill asserts it. |
+
+**The stranger gate's red is a STALE PIN, and its summary line does not say so.** It prints
+`SELFTEST FAILED — 3 of 18 checks disagree with the shipped tree`, which reads like a verifier that
+disagrees with the build. It is not. The 18 checks are two different kinds and they must be read
+apart:
+
+- **Oracles 1–4 — all GREEN.** Every corpus file's `dsl_hash`+`artifact_hash` MATCH, every refusal
+  refused for the same reason as the shipped tree, every corpus file has a golden entry, and a
+  tampered `artifact_hash` is caught with exit 2. *This* is the property the gate exists for: an
+  independent Python implementation reproduces the Rust byte for byte.
+- **The 3 reds are all `recomputed X, pinned Y`** — `source_tree_sha256` and the two
+  `transformer_id`s. Nothing is disagreeing with anything except a frozen constant, and it is stale
+  for a reason the tree can name: two commits have touched `misaka-palw-derive/src/` since the pin
+  was last set at `d16fb54e` — `a87cc282` (a formatting pass; formatting is inside the hash) and
+  `81c1ca1d` (the alphaMode fix). This is re-pin #5, on schedule.
+
+**So the failure mode to guard against is reading the summary line instead of the split.** A red
+ORACLE would be disqualifying — it would mean the second implementation and the shipped one produce
+different bytes, and the gate says so itself: *"a second implementation that is wrong proves nothing
+and accuses the innocent."* A red PIN is a chore. Both print under one `SELFTEST FAILED`. Before the
+cut this gate must be green outright; before then, check that the reds are exactly three and all of
+them of the `recomputed/pinned` shape.
+
+*(The pins live in `misaka-palw-derive/tests/`, outside the `src/` tree the hash covers, so writing
+the new pin does not move the hash it pins. That is why §4 step 3 can be a single commit.)*
 
 **On the MERGED tree** (`5f + adr0082-impl + the family branch`), measured by a session that wrote
 none of the pins: `kaspa-consensus-core --lib` is **1,790 passed / 3 failed**, and the same three
