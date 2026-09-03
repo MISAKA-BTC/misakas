@@ -141,6 +141,19 @@ pub enum PalwBisectError {
     DeadlineNotReached { deadline: u64, observed: u64 },
     #[error("round budget exceeded — a legal ladder narrows to one index within the bound")]
     RoundBudgetExceeded,
+    // ADR-0082 Decision 3 — the k-ary ladder's own refusals. Appended at the end of the enum
+    // because the binary arms are matched by name all over the tree and a reordering is a silent
+    // change of meaning.
+    #[error("dissection arity {got} is not a power of two in 2..=64")]
+    IllegalArity { got: u8 },
+    #[error("a k-ary round discloses at least one child")]
+    EmptyDisclosure,
+    #[error("the round discloses {got} children; this node has {expected}")]
+    ChildCountMismatch { got: usize, expected: usize },
+    #[error("the disclosed children fold to {folded}, and the node under dispute is {node}")]
+    ChildrenDoNotFold { node: Hash64, folded: Hash64 },
+    #[error("the verdict names child {got} of {children}")]
+    ChildOutOfRange { got: u8, children: usize },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -586,6 +599,342 @@ impl PalwBisectLadderV1 {
             // Terminal: the responder owes the terminal opening — same window discipline.
             PalwBisectTurnV1::Terminal => PalwBisectPartyV1::Responder,
             // An abandoned ladder has already been decided; there is no second silence to charge.
+            PalwBisectTurnV1::Abandoned => return Err(PalwBisectError::AlreadyTerminal),
+        };
+        self.turn = PalwBisectTurnV1::Abandoned;
+        Ok(PalwBisectNoShowV1 {
+            version: PALW_BISECT_OBJECT_VERSION_V1,
+            session_id: self.session_id,
+            round: self.round,
+            silent_party,
+            deadline_daa: self.last_deadline_daa,
+            observed_daa,
+        })
+    }
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0082 Decision 3 — the k-ary ladder, and why it is a SECOND machine rather than an edit
+// ---------------------------------------------------------------------------------------------
+
+/// Wire version of the k-ary round objects.
+pub const PALW_KARY_OBJECT_VERSION_V1: u16 = 1;
+
+/// **Fold `children` back up the step tree** — `step_merkle_root_v1`'s upper half, exactly: pair
+/// left to right, promote a lone odd tail, repeat until one node remains.
+///
+/// This is what AUTHENTICATES a k-ary round. `PalwBisectLadderV1` accepts a midpoint state as an
+/// opaque claim (its own doc says so: "a responder that discloses DISTINCT junk at every rung is
+/// refused nothing here and steers the interval exactly as before"). A k-ary round cannot be
+/// junk, because the `arity` nodes it discloses are the tree's own nodes below the current one and
+/// hashing them together must reproduce the node the previous round already fixed.
+///
+/// **Why folding a SUBTREE with the global rule is exact.** In the tree `step_merkle_root_v1`
+/// builds, the node at level `l`, index `i` covers leaves `[i·2^l, min((i+1)·2^l, n))` — the
+/// promote-odd rule only ever carries the ragged tail at the RIGHT edge, so every level is the
+/// uniform pairing of the level below it. A node's `arity` children start at an index that is a
+/// multiple of `arity` (hence even), so the group's pairing is the global pairing; and a group
+/// shorter than `arity` can only be the last one, whose odd tail is the level's odd tail. The
+/// fold below is therefore the same arithmetic the whole-tree builder would do over that range,
+/// and `the_kary_fold_is_the_step_trees_own_arithmetic` is the test that keeps it that way.
+pub fn palw_kary_fold_up_v1(children: &[Hash64]) -> Result<Hash64, PalwBisectError> {
+    if children.is_empty() {
+        return Err(PalwBisectError::EmptyDisclosure);
+    }
+    let mut level: Vec<Hash64> = children.to_vec();
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut chunks = level.chunks_exact(2);
+        for pair in &mut chunks {
+            next.push(crate::palw_step_leg::step_merkle_node_v1(&pair[0], &pair[1]));
+        }
+        if let [odd] = chunks.remainder() {
+            next.push(*odd);
+        }
+        level = next;
+    }
+    Ok(level[0])
+}
+
+/// **The node span a k-ary ladder starts at**: the tree's own root span, `2^⌈log₂ space⌉`.
+///
+/// A node's span is a power of two even when the space is not, because the promote-odd tree pads
+/// on the right rather than in the middle. `[lo, min(lo + span, space_size))` is the leaf range a
+/// node covers, and the ladder narrows the SPAN by `arity` a round.
+pub const fn palw_kary_root_span_v1(space_size: u64) -> u64 {
+    space_size.next_power_of_two()
+}
+
+/// One round's disclosure: the `arity` (or fewer, at the ragged right edge) tree nodes below the
+/// node the ladder currently disputes, in leaf order.
+///
+/// The node's own coordinates ride with them so a decoder can size the vector before hashing it;
+/// they are DECLARED, not trusted — `apply_disclosure` refuses a disclosure whose coordinates are
+/// not the ladder's own, exactly as the binary machine refuses a midpoint that is not the pinned
+/// one.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwKaryDisclosureV1 {
+    pub version: u16,
+    pub session_id: Hash64,
+    pub round: u32,
+    pub node_lo: u64,
+    pub node_span: u64,
+    pub children: Vec<Hash64>,
+}
+
+/// The challenger's k-ary move: the INDEX of the child it disagrees with, into the list both
+/// parties derive from `(node_lo, node_span, arity, space_size)`. One byte, at every arity — a
+/// challenger names a child, it never names a range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwKaryVerdictV1 {
+    pub version: u16,
+    pub session_id: Hash64,
+    pub round: u32,
+    pub child: u8,
+}
+
+/// **The k-ary ladder over a step-leaf space** (ADR-0082 Decision 3).
+///
+/// It is a second machine and not an edit to [`PalwBisectLadderV1`], for a reason worth stating
+/// once: the binary ladder is a walk over *state commitments at indices* — `mid_state` is an
+/// opaque claim, checked only for not repeating an endpoint — while a k-ary round is a walk over
+/// the step TREE, whose every move is authenticated by [`palw_kary_fold_up_v1`]. The two cannot be
+/// the same object: an authenticated round has no opaque midpoint to carry, and the shipped
+/// machine has no tree to fold. Leaving the shipped one untouched is what makes "binary is
+/// byte-identical to today's ladder" true by construction rather than by test — every existing
+/// vector, every existing transition and every existing state root is the same bytes it was.
+///
+/// What IS shared: the index space and its cap, the session id, the round bound
+/// (`palw_kary_rounds_v1(space_size, arity)`, which at `arity = 2` is `⌈log₂ space⌉` — the binary
+/// count), the turn machine, the deadline discipline, the no-show offense, and the terminal
+/// handoff shape ([`Self::terminal_index`]). And the equivalence that matters is proved rather
+/// than assumed: driven by the same divergence, the two machines terminate on the SAME leaf
+/// (`the_kary_ladder_at_arity_two_locates_what_the_shipped_ladder_locates`).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwKaryLadderV1 {
+    session_id: Hash64,
+    space_size: u64,
+    arity: u8,
+    /// The span of the node currently disputed — a power of two, `arity` times smaller each round.
+    span: u64,
+    /// The first leaf the current node covers. `hi` is `min(lo + span, space_size)`.
+    lo: u64,
+    round: u32,
+    turn: PalwBisectTurnV1,
+    last_deadline_daa: u64,
+    /// The commitment of the node currently disputed: the claim's own committed root at the start,
+    /// and thereafter the child the challenger named — a node the responder has already been made
+    /// to disclose and that folded to its parent.
+    node_root: Hash64,
+    /// The children the current round disclosed, awaiting the challenger's index. Empty except
+    /// between a disclosure and its verdict — the same "read what was accepted rather than
+    /// re-derive it" rule the binary machine states at `disclosures.last()`.
+    pending: Vec<Hash64>,
+    /// `(lo, span, node_root)` at every round the challenger decided, in order.
+    pub choices: Vec<(u64, u64, Hash64)>,
+}
+
+impl PalwKaryLadderV1 {
+    /// Opens a k-ary dispute over `[0, space_size)` against `committed_root`.
+    pub fn open(
+        job_context_hash: &Hash64,
+        committed_root: &Hash64,
+        challenger_id: &Hash64,
+        responder_id: &Hash64,
+        space: PalwBisectSpaceV1,
+        space_size: u64,
+        arity: u8,
+        opened_at_daa: u64,
+        first_deadline_daa: u64,
+    ) -> Result<Self, PalwBisectError> {
+        if !crate::palw_attn_dissect::palw_attn_arity_is_legal_v1(arity) {
+            return Err(PalwBisectError::IllegalArity { got: arity });
+        }
+        if !(2..=PALW_BISECT_MAX_SPACE).contains(&space_size) {
+            return Err(PalwBisectError::SpaceOutOfRange { got: space_size, max: PALW_BISECT_MAX_SPACE });
+        }
+        if first_deadline_daa <= opened_at_daa {
+            return Err(PalwBisectError::DeadlineNotMonotonic { deadline: first_deadline_daa, previous: opened_at_daa });
+        }
+        Ok(Self {
+            session_id: bisect_session_id_v1(job_context_hash, committed_root, challenger_id, responder_id, space, space_size),
+            space_size,
+            arity,
+            span: palw_kary_root_span_v1(space_size),
+            lo: 0,
+            round: 0,
+            turn: PalwBisectTurnV1::AwaitDisclosure,
+            last_deadline_daa: first_deadline_daa,
+            node_root: *committed_root,
+            pending: Vec::new(),
+            choices: Vec::new(),
+        })
+    }
+
+    pub fn session_id(&self) -> Hash64 {
+        self.session_id
+    }
+    pub fn arity(&self) -> u8 {
+        self.arity
+    }
+    pub fn turn(&self) -> PalwBisectTurnV1 {
+        self.turn
+    }
+    pub fn round(&self) -> u32 {
+        self.round
+    }
+    pub fn last_deadline_daa(&self) -> u64 {
+        self.last_deadline_daa
+    }
+    pub fn node_root(&self) -> Hash64 {
+        self.node_root
+    }
+    /// The leaf range `[lo, hi)` the disputed node covers.
+    pub fn interval(&self) -> (u64, u64) {
+        (self.lo, (self.lo.saturating_add(self.span)).min(self.space_size))
+    }
+
+    /// The bound on rounds this ladder is allowed to take, from the contract's own recurrence.
+    pub fn round_budget(&self) -> u32 {
+        crate::palw_attn_dissect::palw_kary_rounds_v1(self.space_size, self.arity).unwrap_or(u32::MAX)
+    }
+
+    /// **The pinned child ranges of the current node**: `(first_leaf, span)`, in leaf order,
+    /// truncated at `space_size` so the ragged right edge has no empty children. Both parties
+    /// derive this list and a verdict names an index into it.
+    pub fn child_ranges(&self) -> Vec<(u64, u64)> {
+        let (lo, hi) = self.interval();
+        if self.span <= 1 {
+            return Vec::new();
+        }
+        let child_span = (self.span / self.arity as u64).max(1);
+        let mut out = Vec::with_capacity(self.arity as usize);
+        let mut start = lo;
+        while start < hi {
+            out.push((start, child_span));
+            start = start.saturating_add(child_span);
+        }
+        out
+    }
+
+    /// The leaf a terminal ladder adjudicates: `Some` only at `Terminal` and only when the node
+    /// really is one leaf wide — the same guard, and the same reason, as the binary machine's.
+    pub fn terminal_index(&self) -> Option<u64> {
+        let (lo, hi) = self.interval();
+        (self.turn == PalwBisectTurnV1::Terminal && hi.saturating_sub(lo) == 1).then_some(lo)
+    }
+
+    fn rung_deadline(accepted_daa: u64, w_round: u64) -> Result<u64, PalwBisectError> {
+        if w_round == 0 {
+            return Err(PalwBisectError::ZeroRungWindow);
+        }
+        Ok(accepted_daa.saturating_add(w_round))
+    }
+
+    /// The same session-backstop cap the binary ladder takes (ADR-0080 W4), verbatim.
+    pub fn cap_deadline_to_session_v1(&mut self, session_deadline_daa: u64, assembly_reserve_daa: u64) -> u64 {
+        let cap = session_deadline_daa.saturating_sub(assembly_reserve_daa);
+        if cap < self.last_deadline_daa {
+            self.last_deadline_daa = cap;
+        }
+        self.last_deadline_daa
+    }
+
+    /// **The responder's round: the `k` nodes below the disputed one.**
+    ///
+    /// Refused unless the disclosure is on turn, for this session and round, about THIS node, of
+    /// the pinned child count — and unless [`palw_kary_fold_up_v1`] reproduces the node's
+    /// commitment. That last check is the whole difference from the binary machine: a round cannot
+    /// steer the interval with invented states, because the states are the tree's own and the tree
+    /// is fixed by the root the claim announced.
+    pub fn apply_disclosure(&mut self, msg: &PalwKaryDisclosureV1, accepted_daa: u64, w_round: u64) -> Result<(), PalwBisectError> {
+        if msg.version != PALW_KARY_OBJECT_VERSION_V1 {
+            return Err(PalwBisectError::UnsupportedVersion { got: msg.version, expected: PALW_KARY_OBJECT_VERSION_V1 });
+        }
+        if msg.session_id != self.session_id {
+            return Err(PalwBisectError::SessionMismatch);
+        }
+        match self.turn {
+            PalwBisectTurnV1::AwaitDisclosure => {}
+            PalwBisectTurnV1::AwaitVerdict => return Err(PalwBisectError::TurnMismatch { expected: "verdict", got: "disclosure" }),
+            PalwBisectTurnV1::Terminal | PalwBisectTurnV1::Abandoned => return Err(PalwBisectError::AlreadyTerminal),
+        }
+        if msg.round != self.round {
+            return Err(PalwBisectError::RoundMismatch { got: msg.round, expected: self.round });
+        }
+        if (msg.node_lo, msg.node_span) != (self.lo, self.span) {
+            return Err(PalwBisectError::TurnMismatch { expected: "the ladder's own node", got: "another node" });
+        }
+        let expected = self.child_ranges();
+        if msg.children.len() != expected.len() {
+            return Err(PalwBisectError::ChildCountMismatch { got: msg.children.len(), expected: expected.len() });
+        }
+        let folded = palw_kary_fold_up_v1(&msg.children)?;
+        if folded != self.node_root {
+            return Err(PalwBisectError::ChildrenDoNotFold { node: self.node_root, folded });
+        }
+        let deadline = Self::rung_deadline(accepted_daa, w_round)?;
+        self.last_deadline_daa = deadline;
+        self.turn = PalwBisectTurnV1::AwaitVerdict;
+        self.pending = msg.children.clone();
+        Ok(())
+    }
+
+    /// **The challenger's round: the index of the child it disputes.** The named child becomes the
+    /// node, its range becomes the interval, and the ladder is terminal when the node is one leaf.
+    pub fn apply_verdict(&mut self, msg: &PalwKaryVerdictV1, accepted_daa: u64, w_round: u64) -> Result<(), PalwBisectError> {
+        if msg.version != PALW_KARY_OBJECT_VERSION_V1 {
+            return Err(PalwBisectError::UnsupportedVersion { got: msg.version, expected: PALW_KARY_OBJECT_VERSION_V1 });
+        }
+        if msg.session_id != self.session_id {
+            return Err(PalwBisectError::SessionMismatch);
+        }
+        match self.turn {
+            PalwBisectTurnV1::AwaitVerdict => {}
+            PalwBisectTurnV1::AwaitDisclosure => return Err(PalwBisectError::TurnMismatch { expected: "disclosure", got: "verdict" }),
+            PalwBisectTurnV1::Terminal | PalwBisectTurnV1::Abandoned => return Err(PalwBisectError::AlreadyTerminal),
+        }
+        if msg.round != self.round {
+            return Err(PalwBisectError::RoundMismatch { got: msg.round, expected: self.round });
+        }
+        // Everything that can refuse is decided before any field moves — the binary machine's
+        // 2026-08-17 lesson, which a second machine gets to inherit rather than relearn.
+        let deadline = Self::rung_deadline(accepted_daa, w_round)?;
+        let next_round = self.round + 1;
+        if next_round > PALW_BISECT_MAX_ROUNDS || next_round > self.round_budget() {
+            return Err(PalwBisectError::RoundBudgetExceeded);
+        }
+        let ranges = self.child_ranges();
+        let idx = msg.child as usize;
+        let Some(&(child_lo, child_span)) = ranges.get(idx) else {
+            return Err(PalwBisectError::ChildOutOfRange { got: msg.child, children: ranges.len() });
+        };
+        let Some(child_root) = self.pending.get(idx).copied() else {
+            return Err(PalwBisectError::TurnMismatch { expected: "a disclosure before the verdict", got: "none" });
+        };
+        self.choices.push((child_lo, child_span, child_root));
+        self.lo = child_lo;
+        self.span = child_span;
+        self.node_root = child_root;
+        self.round = next_round;
+        self.last_deadline_daa = deadline;
+        self.pending = Vec::new();
+        let (lo, hi) = self.interval();
+        self.turn = if hi.saturating_sub(lo) <= 1 { PalwBisectTurnV1::Terminal } else { PalwBisectTurnV1::AwaitDisclosure };
+        Ok(())
+    }
+
+    /// Silence past a rung deadline, with the binary machine's rule: the responder owes the
+    /// terminal move, an abandoned ladder charges no second offense, and the ladder ends here.
+    pub fn declare_no_show(&mut self, observed_daa: u64) -> Result<PalwBisectNoShowV1, PalwBisectError> {
+        if observed_daa <= self.last_deadline_daa {
+            return Err(PalwBisectError::DeadlineNotReached { deadline: self.last_deadline_daa, observed: observed_daa });
+        }
+        let silent_party = match self.turn {
+            PalwBisectTurnV1::AwaitDisclosure => PalwBisectPartyV1::Responder,
+            PalwBisectTurnV1::AwaitVerdict => PalwBisectPartyV1::Challenger,
+            PalwBisectTurnV1::Terminal => PalwBisectPartyV1::Responder,
             PalwBisectTurnV1::Abandoned => return Err(PalwBisectError::AlreadyTerminal),
         };
         self.turn = PalwBisectTurnV1::Abandoned;
