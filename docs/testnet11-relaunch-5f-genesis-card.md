@@ -251,6 +251,20 @@ unprosecutable" is **42 against 27** — refused at acceptance, by fifteen carri
 court is what takes it to 4. That is the whole of §1's reason for arming `palw_kary_court`, in one
 line, and it can now be re-derived by anyone rather than believed.
 
+**Nor does the ladder bind either row — and here too v5 has the larger margin.** Worst-case step
+leaf counts against the ruleset's 2^26, through `worst_case_step_leaf_count_capped_v1` at the
+ruleset's ladder (not the un-suffixed form, which assumes 2^22 and refuses both):
+
+    ruleset ladder cap            67,108,864
+    graph-v2/v3 @ 512             59,000,848   FITS, margin 8,108,016   (12.1%)
+    graph-v5    @ 512             52,778,128   FITS, margin 14,330,736  (21.4%)
+
+`59,000,848` is the same number `palw-certify bind` printed independently for the v2 row, which is
+two routes agreeing. The fused site removes leaves as well as kernels and carriers, so **every one
+of the three ceilings this cut cares about — ladder, vectors, close — has more room under v5 than
+under v2.** That is the fourth independent reason for the row we register, and none of them is the
+fusion being interesting.
+
 **The certification vector cap does not bind either row, and v5 is the cheaper of the two.** Measured
 as an upper bound from the profile alone (`2 × |distinct (table, kernel) pairs|`, the 2 being prefill
 and decode; the drill's real count can only be lower, since a leaf whose capture the material does
