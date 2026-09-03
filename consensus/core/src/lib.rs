@@ -188,6 +188,7 @@ pub mod palw_court_v2;
 /// consumer).
 pub mod palw_credit;
 pub mod palw_credit_batch;
+pub mod palw_decode_select_v2;
 pub mod palw_derived_v1;
 pub mod palw_dispute;
 /// ADR-0069: end-to-end adjudicability — the half of "can this class be prosecuted" that coverage
