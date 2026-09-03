@@ -33,7 +33,16 @@ If you can meaningfully review a pull request, please do so even if you have not
 ## Pull request guidelines
 
 ### Before making a Pull Request:
-- Run `./check` (or `./check.ps1` on windows) to make sure your code adheres to coding standards
+- Run **`bash scripts/ci-gates.sh`** — this is the one command that runs what CI runs. It exits
+  non-zero when any gate fails, prints one line per gate with that gate's own exit code, and says
+  what each gate covered rather than only whether it passed. `--group fast` runs the subset that
+  needs no cargo build (seconds); `--list` shows every gate and the CI job it mirrors.
+  **Please do not skip the first gates because they look boring.** The gates that run first are
+  the ones nobody runs locally, and this project has already shipped a release branch whose
+  `cargo fmt --all -- --check` had been red for an unknown length of time — every "CI is green"
+  said that week was a statement about jobs that never ran, because the job before them failed.
+- `./check` (or `./check.ps1` on windows) still works: it now delegates its lint half to the
+  script above and adds the wasm32 clippy passes.
 - Run `./test` (or `cargo nextest run --release` on windows) and make sure you all tests still pass
 
 ### Please make your PRs easy to review. A helpful PR contains:
