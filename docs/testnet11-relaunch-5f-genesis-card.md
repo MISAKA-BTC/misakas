@@ -2604,3 +2604,52 @@ different functions, and until now none of them said which.
 byte-identical on both trees because two different files each define a `MODEL_ID`, and a
 leaf-name match cannot tell them apart. It is reported as differing-or-not by line, which is the
 right conservative answer and not the whole one.
+
+## §1's `palw_context_ladder` row: the conclusion may stand, the REASON no longer does
+
+§1 says `palw_context_ladder` → **`None`, DO NOT ARM**, and gives as its reason:
+
+> *"There is no `palw_context_ladder_active_at`: nothing reads the fence. Every use of that name
+> is the module, the field, the `never()→None` normalisation, or `params.rs:3243` writing it into
+> the FINGERPRINT. So arming it moves the fingerprint and gates nothing."*
+
+**On `palw-testnet-5f` that is exactly true** — measured, not recalled: outside `config/params.rs`
+the only reads are the guard assertions in `palw_context_ladder.rs`. **On `palw-adr0082-impl` it
+stopped being true tonight**, in 5b's preflight fix `e5651de0`:
+
+```rust
+// consensus/core/src/palw_class_admission_v2.rs   (ADDED in e5651de0)
+let ladder = params
+    .palw_context_ladder … .then(|| palw_class_ladder_rules_for_court_v1(profile, court, bundle.court.max_step_leaf_count()))
+```
+
+**That accessor is the fence's first real read.** The row's conclusion is probably still right —
+§1 records FG proving the 512 row admits and prices at 2^26 *with the fence dormant* — but
+**a decision whose premise stopped applying is not automatically wrong; it is merely no longer
+supported by what it says.** The row keeps its verdict and loses its argument until re-derived.
+
+### And the presets now diverge, deliberately, with a test that says so
+
+```
+DEVNET_PARAMS             palw_context_ladder: Some(ForkActivation::always())
+palw_rc_shipped_params    None                                                <- t11, the cut
+mainnet / testnet / simnet   None
+```
+
+`only_devnet_arms_the_context_ladder` asserts exactly this, and the arming site's comment cites
+**this card's §1** for the two-moves rule. It is considered, not accidental. On 5f the same test
+asserted `devnet_shipped_params().palw_context_ladder.is_none()`; that assertion is gone on impl
+and replaced by an equality against the armed value. *The guard did not silently break — it was
+rewritten to state the new truth, which is the right way for a guard to change.*
+
+> **The open question, and it is the one the announcement leans on:** 5b's devnet drill validates
+> the graph-v5@512 registration under `ladder: Some(…)`. **t11 registers it under `ladder: None`.**
+> Same call, different admission shape. This is the defect 5b just fixed, one level up — *the
+> pre-check asked a court the chain does not run; the drill asks a network the chain is not.*
+>
+> Asked, not assumed: **is that registration exercised anywhere under `palw_rc_shipped_params()`?**
+> Either answer is fine tonight — a covered case to cite, or a gap to state — but it must not be
+> *inferred* from a green on the other preset.
+
+*Recorded because it is the third time today that the thing being validated and the thing being
+shipped were configured differently, and the first two were only found by looking.*
