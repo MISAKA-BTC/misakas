@@ -1097,6 +1097,17 @@ pub struct Params {
     /// **TOP LEVEL rather than in the V2 bundle**, for the `palw_unavailable_abstains` reason: a
     /// fence inside the bundle moves `palw_ruleset_id_v2`, which `for_each_fence` never descends
     /// into, so every old/new pair would fail the handshake outright.
+    ///
+    /// **ARMING IT IS REFUSED BY [`Self::validate_palw_v2`] ON THIS BUILD** (audit D M-2). The
+    /// list above is not a plan, it is the surface: not one of those writers or checkers reads
+    /// this fence today. `palw_fp_prompt_ids_admit_v1` — "the one check that comes before every
+    /// other" — re-derives `prompt_token_ids_hash_v2`, the FLAT digest, unconditionally, and
+    /// `palw_prompt_ids_form_at` has no production caller at all. So arming this would move
+    /// `consensus_identity_id` and nothing else, while the admission price it buys
+    /// (`prompt_ids_close_bytes_v1(MerkleV1, ..)`) is smaller than the close the network still
+    /// carries by the `n_ctx x 4` term — under-counting a ceiling, which is the direction that
+    /// admits a class whose disputes nobody can carry. The refusal lifts when the commitment
+    /// moves with the fence, which is the re-mint this doc describes.
     pub palw_prompt_ids_merkle: Option<ForkActivation>,
 
     /// **ADR-0082 Decision 3's fence: the k-ary court and the history dissection.** Active, the
@@ -1106,6 +1117,20 @@ pub struct Params {
     /// (`palw_attn_dissect`). Dormant, the court is the shipped binary ladder and a graph-v5
     /// row is refused at admission. A bare fence, top level, `None` on every shipped preset —
     /// the `palw_prompt_ids_merkle` shape for its reasons.
+    ///
+    /// **Arming it is a RE-MINT of the ruleset's `dissection_arity`, and
+    /// [`Self::validate_palw_v2`] refuses anything else** (audit D H-1). The derivation
+    /// OVERWRITES `PalwCourtParamsV2::dissection_arity` at activation, so a bundle that still
+    /// carries the binary 2 while the derivation answers 4 states one rule twice: the admission
+    /// gate prices a fused row for the court that will play it, the frozen field is what
+    /// `palw_ruleset_id_v2` hashes, and a chain in which they differ admits classes at a price its
+    /// challengers cannot pay. The assembly refuses that configuration, so the bundle must carry
+    /// the arity it derives.
+    ///
+    /// **And a fused row in the GENESIS set requires it.** Genesis registrations are verified
+    /// against the committed catalog and never run `verify_class_admission_*`, so
+    /// `FusedAttentionNeedsTheKaryCourt` has no door on that route; `validate_palw_v2` refuses a
+    /// ruleset whose genesis set registers a graph-v5 class while this fence is dormant.
     pub palw_kary_court: Option<ForkActivation>,
 
     /// **ADR-0082 Decisions 10 and 11's fence: the free-prompt lane's numerator and its sampler.**
@@ -1125,6 +1150,19 @@ pub struct Params {
     ///
     /// A bare fence, top level, `None` on every shipped preset — the `palw_kary_court` shape
     /// directly above, for its reasons.
+    ///
+    /// **ARMING IT IS REFUSED BY [`Self::validate_palw_v2`] ON THIS BUILD** (audit D M-1): neither
+    /// rule exists on the path that would apply it. Decision 10's numerator is not in the
+    /// transition — `apply_free_prompt` answers `FreePromptDecodeLeavesUnavailable` the moment
+    /// `PalwStateParamsV2::fp_decode_rules_at` is true, so an armed chain refuses EVERY
+    /// free-prompt claim rather than crediting decode leaves — and Decision 11's sampler exists
+    /// in [`crate::palw_decode_select_v2`] but in no engine, while all eight `validate_*_v3`
+    /// entry points pass `decode_rules_armed: false` as a literal, so every temperature job would
+    /// be refused `SamplingNotArmed` after a full inference. Arming it changes exactly one
+    /// observable thing today — `ChainFacts::fp_decode_rules_armed`, which the gateway acts on by
+    /// accepting those jobs — so the fence's only reachable effect is a lane that burns
+    /// inferences and looks broken. The refusal lifts when the transition can enumerate the
+    /// decode half and an engine implements `decode_token_select_v2`.
     pub palw_fp_decode_rules: Option<ForkActivation>,
 
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
@@ -1472,10 +1510,96 @@ impl Params {
         // node that refused only when it came to JUDGE would run, accept claims, and discover at
         // the first dispute that its court has no shape; refusing to assemble is the only way
         // this is a rule rather than a runbook note. Dormant, the ruleset is untouched.
-        if self.palw_kary_court_fence().is_some() && crate::palw_court_v2::palw_court_params_at_v2(bundle, true).is_err() {
+        if self.palw_kary_court_fence().is_some() {
+            let Ok(derived) = crate::palw_court_v2::palw_court_params_at_v2(bundle, true) else {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_kary_court is armed and no dissection arity fits this ruleset's court window: the window \
+                     cannot hold its own dispute, so the court the fence names has no shape",
+                ));
+            };
+            // **ONE spelling of the arity, checked where the ruleset is assembled** (audit D H-1).
+            //
+            // `palw_court_params_at_v2` OVERWRITES `court.dissection_arity` with the derived value,
+            // so past this fence the court that plays a dispute and the field the ruleset froze are
+            // two statements about one rule — and nothing compared them. The admission gate reads
+            // the caller's ruleset reading (`PalwKaryCourtV1::dissection_arity`, this derivation's
+            // answer) and the fold reads the arity off the object; the stored field is what a
+            // genesis tool writes and what `palw_ruleset_id_v2` hashes. If the two differ, a class
+            // is admitted priced for one court and prosecuted in another — under-priced by a factor
+            // of `k/2` in disclosure bytes on a close ceiling it was admitted under.
+            //
+            // No shipped genesis builder writes the derived value in (every preset literal is
+            // `PALW_COURT_BINARY_ARITY_V1`), so arming this fence on a ruleset whose derivation
+            // answers anything but 2 is a re-mint: the bundle must carry the arity it derives.
+            // Refusing to ASSEMBLE is the only way that is a rule rather than a runbook note.
+            if derived.dissection_arity() != bundle.court.dissection_arity() {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_kary_court is armed and this ruleset's frozen dissection_arity is not the arity it \
+                     derives: the gate that admits a class would price it for one court and the court that plays \
+                     its dispute would deal another — re-mint the bundle carrying the derived arity",
+                ));
+            }
+            // **ADR-0082 Decision 1 at the OTHER door** (audit D H-3). A fused row can also arrive
+            // by being minted at genesis, and genesis registrations are verified against the
+            // committed catalog rather than through `verify_class_admission_*` — so
+            // `FusedAttentionNeedsTheKaryCourt`, the refusal that keeps a class the court cannot
+            // try out of the catalog, has no door on that route. The walk below is the same one
+            // the arity derivation uses, so "does this ruleset register a fused row" is answered
+            // once. Here the fence is armed, so the row has a court and nothing is refused; the
+            // dormant half is the check after this block.
+        } else if crate::palw_court_v2::palw_attn_widest_registered_site_v2(bundle).0 > 0 {
             return Err(PalwModeV2Error::Invalid(
-                "palw_kary_court is armed and no dissection arity fits this ruleset's court window: the window \
-                 cannot hold its own dispute, so the court the fence names has no shape",
+                "this ruleset's genesis set registers a fused-attention (graph-v5) class and palw_kary_court is \
+                 dormant: a court with no dissection cannot try that leaf, so every dispute of that class would \
+                 end unprosecuted at the price it was admitted for (ADR-0082 Decision 1, ADR-0049 Decision C)",
+            ));
+        }
+        // **ADR-0082 Decisions 10 and 11 cannot be armed by this build, and saying so is the
+        // fence's job** (audit D M-1 / audit C M-5).
+        //
+        // Arming `palw_fp_decode_rules` moves `consensus_identity_id` and `ChainFacts`, and the
+        // gateway starts accepting `temperature_q > 0` jobs on the strength of it — while the two
+        // inputs the rule needs are not in this cut. Decision 10's decode-leaf enumeration is not
+        // in the transition: `apply_free_prompt` answers `FreePromptDecodeLeavesUnavailable` the
+        // moment `fp_decode_rules_at` is true, so an armed chain refuses EVERY free-prompt claim.
+        // Decision 11's sampler exists in consensus-core (`palw_decode_select_v2`) and is not in
+        // any engine, and the eight `validate_*_v3` entry points pass `decode_rules_armed: false`
+        // as a literal, so every commitment a temperature job produced would be refused
+        // `SamplingNotArmed`. Threading the fence through those validators would arm a rule whose
+        // transition refuses — a lane that looks broken and burns inferences.
+        //
+        // So the fence is refused at assembly, exactly as `palw_uncertified_weightless` refuses a
+        // scheduled height: a configuration that reads as "armed" and behaves as "no claim can be
+        // credited" must not start. `never()` is absence and is exempt.
+        if let Some(activation) = self.palw_fp_decode_rules
+            && activation != ForkActivation::never()
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_fp_decode_rules is armed and this build cannot carry ADR-0082 Decisions 10/11: the state \
+                 transition has no decode-leaf enumeration (every free-prompt claim would be refused \
+                 FreePromptDecodeLeavesUnavailable) and no engine implements decode_token_select_v2 (every \
+                 temperature job would be refused SamplingNotArmed) — the fence may only be armed by a build \
+                 that carries both",
+            ));
+        }
+        // **ADR-0081 Decision 3 / ADR-0082 Decision 5, the same shape** (audit D M-2).
+        //
+        // `palw_prompt_ids_form_at` has no production reader: `palw_fp_prompt_ids_admit_v1` — "the
+        // one check that comes before every other", run by the seat and by both payload decoders —
+        // re-derives the FLAT digest unconditionally, and every writer commits the flat hash. So
+        // arming this fence moves `consensus_identity_id` and nothing else, while the admission
+        // price it is supposed to buy (`prompt_ids_close_bytes_v1(MerkleV1, ..)`) drops the close
+        // by the `n_ctx x 4` term the close still carries. Under-counting a ceiling is the
+        // direction that admits a class whose disputes nobody can carry, so the fence is refused
+        // until the writers and the checkers move together.
+        if let Some(activation) = self.palw_prompt_ids_merkle
+            && activation != ForkActivation::never()
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_prompt_ids_merkle is armed and no writer or checker on this build reads it: \
+                 palw_fp_prompt_ids_admit_v1 and every producer still commit the flat prompt-ids digest, so \
+                 arming it would price a close that is smaller than the one the network carries — the fence may \
+                 only be armed by a build in which the commitment moves with it",
             ));
         }
         if self.palw_credit.is_some()
@@ -2180,6 +2304,13 @@ impl Params {
     /// The mode condition is folded in for [`Self::palw_panel_da_fence`]'s reason: the free-prompt
     /// lane exists only under `ConsensusV2`, so on any other network there is no job whose prompt
     /// commitment this rule could re-form.
+    /// **It has no production caller, and the fence it reads cannot be armed on this build**
+    /// (audit D M-2). Every writer and every checker of a `prompt_token_ids_hash` spells the flat
+    /// form — see `palw_fp_prompt_ids_admit_v1` — so this answers `Flat` on every reachable
+    /// configuration, and `validate_palw_v2` refuses a ruleset that arms `palw_prompt_ids_merkle`
+    /// rather than letting the two halves disagree. It stays because it is where the answer will
+    /// be decided once the commitment moves with the fence, and because the admission gate
+    /// already takes the form as an argument (`PalwKaryCourtV1::prompt_ids_form`).
     pub fn palw_prompt_ids_form_at(&self, daa_score: u64) -> crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
         match self.palw_prompt_ids_merkle_fence() {
             Some(fence) if fence.is_active(daa_score) => crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
@@ -9657,6 +9788,157 @@ mod consensus_params_id_tests {
         let derived = crate::palw_court_v2::palw_court_params_at_v2(bundle, true).expect("derives");
         assert_eq!(bundle.court.dissection_arity(), crate::palw_mode_v2::PALW_COURT_BINARY_ARITY_V1, "every preset literal ships 2");
         assert!(derived.dissection_arity() >= 2, "the armed court plays the derived arity, {}", derived.dissection_arity());
+    }
+
+    /// **Audit D H-1: an armed fence and a bundle that froze a different arity is refused at
+    /// assembly.**
+    ///
+    /// `palw_court_params_at_v2` OVERWRITES `dissection_arity` with the derivation's answer, so
+    /// past the fence the field the ruleset froze (what `palw_ruleset_id_v2` hashes, what a genesis
+    /// tool writes) and the arity the court deals are two statements about one rule. Nothing
+    /// compared them: `validate_palw_v2` only checked that a derivation EXISTS. A chain in which
+    /// they differ admits a fused class priced for one court and prosecutes it in another.
+    #[test]
+    fn an_armed_kary_court_refuses_a_ruleset_that_froze_another_arity() {
+        use crate::palw_mode_v2::PalwConsensusMode;
+        let shipped = devnet_shipped_params();
+        let PalwConsensusMode::ConsensusV2(bundle) = &shipped.palw_consensus_mode else { panic!("a V2 bundle") };
+        let derived = crate::palw_court_v2::palw_court_params_at_v2(bundle, true).expect("derives").dissection_arity();
+
+        // A legal arity that is NOT the one this ruleset derives.
+        let other = if derived == 2 { 4 } else { 2 };
+        let mut mismatched = shipped.clone();
+        mismatched.palw_kary_court = Some(ForkActivation::always());
+        let PalwConsensusMode::ConsensusV2(b) = &mut mismatched.palw_consensus_mode else { panic!("a V2 bundle") };
+        b.court = b.court.with_dissection_arity(other).expect("a power of two in 2..=64 is legal");
+        let err = mismatched.validate_palw_v2().expect_err("a ruleset whose frozen arity is not its derived one must not assemble");
+        assert!(format!("{err}").contains("frozen dissection_arity"), "the refusal must name the field: {err}");
+
+        // Dormant, the same bundle assembles: the fence is what makes the two spellings one rule.
+        let mut dormant = mismatched.clone();
+        dormant.palw_kary_court = None;
+        dormant.validate_palw_v2().expect("a dormant fence leaves the ruleset alone");
+    }
+
+    /// **Audit D H-3, the other door: a fused row MINTED at genesis is refused while the court is
+    /// dormant.**
+    ///
+    /// `verify_class_admission_v5`'s `FusedAttentionNeedsTheKaryCourt` is the refusal that keeps a
+    /// class the court cannot try out of the catalog — and it only guards the permissionless
+    /// registration path. Genesis registrations are verified against the committed catalog and
+    /// never run the admission gate at all, so a relaunch could mint the dense graph-v5 row with
+    /// `palw_kary_court` dormant and nothing would refuse: the leaf would be prosecutable only at
+    /// design A's whole-row width, which is the price the class was never charged for. The walk is
+    /// the arity derivation's own (`palw_attn_widest_registered_site_v2`), so "does this ruleset
+    /// register a fused row" is answered once.
+    #[test]
+    fn a_fused_genesis_row_is_refused_while_the_kary_court_is_dormant() {
+        use crate::palw_mode_v2::PalwConsensusMode;
+        use crate::palw_state_v2::{PalwClassAdmissionCarriageV2, PalwConsensusObjectV2, PalwPwuRuleV2};
+
+        let shipped = devnet_shipped_params();
+        shipped.validate_palw_v2().expect("the shipped devnet assembles");
+
+        // The smallest fused row this crate can project — a class id nothing else has, and the one
+        // property the gate reads: an `AttnFused` node.
+        let profile = crate::palw_qwen25_profile::qwen25_a16_profile_v5(crate::palw_qwen25_profile::PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 16,
+            ffn_dim: 12,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 16,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        })
+        .expect("the v5 projection is a valid profile");
+        let canonical = crate::palw_v2::PalwJobContextV2 {
+            version: crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
+            network_id: b"misaka-palw-rc".to_vec(),
+            job_id: kaspa_hashes::Hash64::default(),
+            job_nullifier: kaspa_hashes::Hash64::default(),
+            assignment_id: kaspa_hashes::Hash64::default(),
+            execution_seed: [0; 32],
+            model_profile_id: kaspa_hashes::Hash64::default(),
+            runtime_manifest_hash: kaspa_hashes::Hash64::default(),
+            runtime_class_id: kaspa_hashes::Hash64::default(),
+            shape_profile_id: profile.shape_profile_id(),
+            trace_scheme_id: kaspa_hashes::Hash64::default(),
+            cu_ruleset_id: kaspa_hashes::Hash64::default(),
+            tokenizer_id: kaspa_hashes::Hash64::default(),
+            prompt_token_ids_hash: kaspa_hashes::Hash64::default(),
+            declared_prefill_tokens: 4,
+            exact_decode_tokens: 2,
+            max_context_tokens: profile.n_ctx,
+        };
+        let registration = PalwConsensusObjectV2::ClassRegistered {
+            class_id: profile.shape_profile_id(),
+            artifact_root: kaspa_hashes::Hash64::from_u64_word(0xA271FAC7),
+            slash_value_per_pwu: 1,
+            pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 1 },
+            initial_target: 1,
+            share_permille: 0,
+            activation_daa: 0,
+            admission: Some(Box::new(PalwClassAdmissionCarriageV2 {
+                profile,
+                canonical,
+                registrant_bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint {
+                    transaction_id: crate::tx::TransactionId::from_u64_word(0x0082_F5ED),
+                    index: 0,
+                }),
+                signature: Vec::new(),
+            })),
+        };
+
+        let mut minted = shipped.clone();
+        let PalwConsensusMode::ConsensusV2(bundle) = &mut minted.palw_consensus_mode else { panic!("a V2 bundle") };
+        bundle.genesis_objects.push(registration);
+        assert!(
+            crate::palw_court_v2::palw_attn_widest_registered_site_v2(bundle).0 > 0,
+            "the premise: this genesis set now registers a fused site"
+        );
+        let err = minted.validate_palw_v2().expect_err("a fused genesis row under a dormant court must not assemble");
+        assert!(format!("{err}").contains("fused-attention"), "the refusal must name the leaf: {err}");
+
+        // Armed, the same genesis set assembles — the row has a court, which is the whole rule.
+        let mut armed = minted.clone();
+        armed.palw_kary_court = Some(ForkActivation::always());
+        armed.validate_palw_v2().expect("a fused genesis row is exactly what an armed k-ary court is for");
+    }
+
+    /// **Audit D M-1 and M-2: a fence this build cannot carry may not be armed.**
+    ///
+    /// Both announce a rule the code cannot reach. `palw_fp_decode_rules` arms a numerator the
+    /// transition answers `FreePromptDecodeLeavesUnavailable` for and a sampler no engine has,
+    /// while `ChainFacts::fp_decode_rules_armed` makes the gateway accept temperature jobs — a lane
+    /// that burns a full inference per refusal. `palw_prompt_ids_merkle` arms a commitment form no
+    /// writer and no checker in this tree reads, so it moves `consensus_identity_id` and nothing
+    /// else, while the admission price it buys is smaller than the close the network carries.
+    /// Refusing to ASSEMBLE is the `palw_uncertified_weightless` shape: a configuration that reads
+    /// as armed and behaves as broken must not start.
+    #[test]
+    fn a_fence_whose_rule_this_build_cannot_reach_is_refused_at_assembly() {
+        let shipped = devnet_shipped_params();
+        shipped.validate_palw_v2().expect("the shipped devnet assembles");
+
+        for (name, arm) in [
+            ("palw_fp_decode_rules", (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_rules = Some(a)) as fn(&mut Params, ForkActivation)),
+            ("palw_prompt_ids_merkle", |p: &mut Params, a: ForkActivation| p.palw_prompt_ids_merkle = Some(a)),
+        ] {
+            for activation in [ForkActivation::always(), ForkActivation::new(9_000_000)] {
+                let mut armed = shipped.clone();
+                arm(&mut armed, activation);
+                let err = armed.validate_palw_v2().expect_err("{name} must not assemble while its rule is unreachable");
+                assert!(format!("{err}").contains(name), "the refusal must name the fence: {err}");
+            }
+            // `Some(never())` is absence and stays assemblable — the collapse every other fence has.
+            let mut never_armed = shipped.clone();
+            arm(&mut never_armed, ForkActivation::never());
+            never_armed.validate_palw_v2().unwrap_or_else(|e| panic!("{name}: Some(never()) is absence, not an arming: {e}"));
+        }
     }
 
     /// **ADR-0082 Decisions 10/11's fence is dormant on every shipped preset and visible the
