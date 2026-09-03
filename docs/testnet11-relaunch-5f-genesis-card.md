@@ -4844,3 +4844,27 @@ Measured on the way and worth keeping: **chunk carriers land in the submitting n
 On this devnet the stage-3 clock is the submitting producer's block interval, not the chain's; T4's
 ×parts absorbed it (5 parts in 17 min against a 3,000 s wait). *Post-cut question: whether peers should
 carry a submitter's queued chunk parts, or the clock should be stated as the producer's.*
+
+## THE TABLE LANDED — `extracted_from 4d572142`, six rows, 01:20
+
+```
+  extracted_from 4d57214222953bdd96d0f94e3693e09d01a995f3
+  source_tree_sha256 637858dba5ea5e34b9459a580b2b81d1361aecf450bc615a4ee9621d4953a988
+  t11_fingerprint a5291e005aca6068d465434c317e05ad24f054faa04a68c38ec0857566c38fa9
+  devnet_fingerprint b40976b27c3bfbd3d6c590b33824f15c4959d6bcfba3676630919b964e94ad34
+  fp_golden c940b5c36ee40846087e6c5927d6e6b5
+  premine_builds ba2612417e7e0817
+  t11_genesis_hash_implied ad30b5cb965ad305dfa1dc7516935763ea2623105581b83bb9359c7247157d36b0f8003b337cdad366e3895c8f159e99332be16e258b144dddf483bf9b33edb7
+```
+
+**The guard's first pass, before any value was written in:** provenance OK; `source_tree`, fp golden,
+premine OK; **`t11_genesis_hash_implied` OK against this session's independent `ad30b5cb965ad305…`** —
+the finalize's printer and my worktree's printer computed the same genesis hash over the same
+premine, on two trees; and **DIFF on exactly the two withdrawn lines** (t11, devnet — the family
+root), which is the guard refusing to compare a withdrawn value, not a disagreement. **Two values
+moved tonight and both were named before the extraction**; their table values are now written in
+beside the causes, and the guard reads **six OK**.
+
+The word "frozen" has not been said. The ceremony's first step — the six re-pins — waits for it. The
+rehearsal on ibm (`candidate-4d572142`) will print the t11 fingerprint from a node on another machine;
+it must equal `a5291e005aca6068…` from this table.

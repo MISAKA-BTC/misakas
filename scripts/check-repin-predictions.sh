@@ -34,7 +34,10 @@ PREDICTED_SOURCE_TREE_SHA=637858dba5ea5e34b9459a580b2b81d1361aecf450bc615a4ee962
 # ids, source_tree, fp golden and premine do not move (none read the family).
 #   value held until then: 71efa66480211731e3dc6fa2312ed73f7ed11b93372a19a55ac66ef39b65920e
 # The new value comes ONLY from a table whose `extracted_from` is the tip that carries the family.
-PREDICTED_T11_FP=WITHDRAWN-family-adoption-see-above
+# NAMED MOVE resolved 2026-09-04 01:20 from the table with extracted_from 4d572142: the per-kernel family's
+# certified-set root (e4f97110). The value is the extractor's, written here only because the cause was named
+# in writing before the extraction.
+PREDICTED_T11_FP=a5291e005aca6068d465434c317e05ad24f054faa04a68c38ec0857566c38fa9
 # WITHDRAWN 2026-09-03: devnet genesis now registers the same class set as testnet-11
 # (floor + graph-v5@512 + QWEN36) so the drill rehearses the chain being cut. That moves this
 # fingerprint by design. The prediction is NOT updated by guessing — the new value comes from
@@ -56,7 +59,9 @@ PREDICTED_T11_FP=WITHDRAWN-family-adoption-see-above
 # bundle too, so the same commit that moves the t11 fingerprint moves this one. Value held until then:
 #   34c7e4829eadb996e50871ed9bf32055fe4f54057e66814a6bab1c54b67bd8e1   (after (a) and T1)
 # The new value comes ONLY from a table whose `extracted_from` is a tip at or after e4f97110.
-PREDICTED_DEVNET_FP=WITHDRAWN-family-root-see-above
+# NAMED MOVE resolved 2026-09-04 01:20 from the same table: the family root is in devnet's bundle (e4f97110),
+# the third named move of this value ((a) -> 24d55f6d…, T1 -> 34c7e482…, family root -> below).
+PREDICTED_DEVNET_FP=b40976b27c3bfbd3d6c590b33824f15c4959d6bcfba3676630919b964e94ad34
 PREDICTED_FP_GOLDEN=c940b5c36ee40846087e6c5927d6e6b5
 PREDICTED_PREMINE_BUILDS=ba2612417e7e0817
 # The genesis hash the re-pin will write: PALW_RC_GENESIS.hash recomputed over the NEW utxo_commitment by
