@@ -1335,6 +1335,87 @@ fn step_leaf_count_capped_counted_v1(
     Ok(total)
 }
 
+/// **ADR-0082 Decision 10: the job's leaves, split into the prefill's and the decode calls'.**
+///
+/// Returns `(prefill_leaves, decode_leaves)`, and the two always sum to
+/// [`step_leaf_count_capped_v1`] at the same cap — enforced by construction, because the total is
+/// that function's own answer and the decode half is the REMAINDER. There is deliberately no
+/// second enumeration here: the shape is [`palw_leaf_shape_v1`]'s, the running total is
+/// [`palw_job_running_total_v1`], and the aux series is [`kv_aux_leaf_count`], the same three the
+/// shipped count is built from. A second spelling of "how many leaves" is how two nodes come to
+/// price one job differently, and this module has one.
+///
+/// # Where the cut falls, and why it falls there
+///
+/// The enumeration is `Σ_{k=1}^{P} B(k) + [P ≥ 1]·Post(P) + Σ_{c=1}^{D} (B(P+c) + Post(P+c)) + aux`
+/// with `P = declared_prefill_tokens` and `D = exact_decode_tokens − 1` (the module note above
+/// [`PalwLeafShapeV1`]). The PREFILL CALL is `call 0`: its `P` positions and the logits it carries
+/// at its last one. The `D` DECODE CALLS are everything after it.
+///
+/// `Post(P)` — the logits row the last prefill position produces, from which the FIRST answer
+/// token is selected — is counted with the prefill, and that is the decision rather than an
+/// accident. Decision 10's rationale is that a pinned integer model is deterministic and causal,
+/// so every leaf that is a pure function of the PROMPT is recomputable at zero cost by the bond
+/// that computed it once. `Post(P)` is such a leaf: it reads the prompt and nothing else. Crediting
+/// it would pay a re-submitted prefix for a row it did not have to compute.
+///
+/// The aux series (`kv_aux_leaf_count`, the KV chunk leaves of ADR-0030 §3) is split at the same
+/// place and by the same rule: the prefill's share is the series evaluated over the prefill's
+/// positions alone, the decode's share is what the remaining positions add. A `⌈positions / c⌉`
+/// term is not additive, so this is a difference of two exact evaluations rather than a
+/// proportion — a chunk straddling the prefill/decode boundary lands on the prefill's side, which
+/// is the conservative direction for a rule that pays only for the decode half.
+///
+/// # What this is NOT
+///
+/// It is not a price. It is the arithmetic a price is made of; whether the free-prompt lane's
+/// numerator is this or the whole count is `Params::palw_fp_decode_rules`, and the attempt lane's
+/// canonical job never asks (ADR-0082 Decision 10: "the attempt lane's canonical job is
+/// untouched").
+pub fn job_leaf_split_capped_v1(
+    profile: &PalwShapeProfileV3,
+    context: &PalwJobContextV2,
+    cap: u64,
+) -> Result<(u64, u64), PalwStepError> {
+    // The TOTAL is the shipped count, cap refusal and error payload included. Every refusal this
+    // function can make is one `step_leaf_count_capped_v1` would have made about the same job.
+    let total = step_leaf_count_capped_v1(profile, context, cap)?;
+    let visits = &mut 0u64;
+    let shape = palw_leaf_shape_v1(profile, visits);
+    let prefill = context.declared_prefill_tokens as u128;
+    // `palw_job_running_total_v1` at `s == prefill` IS the prefill call: `Σ_{k=1}^{P} B(k)` plus
+    // `Post(P)` when `P ≥ 1`, with an empty logits window. At `P == 0` it answers 0, which is the
+    // right answer for a job with no prefill call at all.
+    let prefill_main = palw_saturate_u64(palw_job_running_total_v1(&shape, prefill, prefill, visits));
+    // The aux series over the prefill's positions alone: one decode token means zero decode calls
+    // (`exact_decode_tokens.saturating_sub(1)`), so `positions` is exactly `P`.
+    let prefill_only = PalwJobContextV2 { exact_decode_tokens: 1, ..context.clone() };
+    let prefill_leaves = prefill_main.saturating_add(kv_aux_leaf_count(profile, &prefill_only));
+    // Saturating, not checked: `total` is itself a `u64` saturation of a `u128` sum, so at
+    // `cap == u64::MAX` a job past `2^64` leaves could report a total below its own prefill. Such
+    // a job is unexecutable at any ladder this chain admits; answering `(total, 0)` for it is the
+    // fail-closed direction, since the decode half is what earns.
+    let prefill_leaves = prefill_leaves.min(total);
+    Ok((prefill_leaves, total - prefill_leaves))
+}
+
+/// [`job_leaf_split_capped_v1`] at the shipped ladder — the pair beside [`step_leaf_count`].
+pub fn job_leaf_split_v1(profile: &PalwShapeProfileV3, context: &PalwJobContextV2) -> Result<(u64, u64), PalwStepError> {
+    job_leaf_split_capped_v1(profile, context, PALW_STEP_MAX_LEAVES)
+}
+
+/// **The leaves of the job's DECODE calls** — ADR-0082 Decision 10's numerator, at the shipped
+/// ladder. See [`job_leaf_split_capped_v1`] for where the cut falls.
+pub fn decode_leaf_count_v1(profile: &PalwShapeProfileV3, context: &PalwJobContextV2) -> Result<u64, PalwStepError> {
+    job_leaf_split_v1(profile, context).map(|(_, decode)| decode)
+}
+
+/// **The leaves of the job's PREFILL call** — what Decision 10 prices at zero on the free-prompt
+/// lane. At the shipped ladder; see [`job_leaf_split_capped_v1`].
+pub fn prefill_leaf_count_v1(profile: &PalwShapeProfileV3, context: &PalwJobContextV2) -> Result<u64, PalwStepError> {
+    job_leaf_split_v1(profile, context).map(|(prefill, _)| prefill)
+}
+
 /// The pinned enumeration: main leaves ordered call-major → position → global node slot →
 /// tile; the KV aux series appended after all main leaves, ordered (attention layer, kv head,
 /// K then V, chunk). Returns the coordinates of a main leaf, or `None` for aux leaves (they
@@ -2414,6 +2495,108 @@ mod tests {
             }
         }
         assert!(compared >= 4_000, "the sweep shrank to {compared} comparisons");
+    }
+
+    /// **ADR-0082 Decision 10, as an identity: the split is exhaustive.**
+    ///
+    /// `prefill_leaves + decode_leaves == step_leaf_count` on every shipped profile at every job
+    /// shape and every cap the ordinary sweep uses. This is the property that makes the decode
+    /// count a SPLIT of the shipped enumeration rather than a second opinion about it: if a leaf
+    /// existed that was in neither half, or in both, the lane would pay for a number no seat can
+    /// bind against the capture.
+    #[test]
+    fn the_prefill_and_decode_halves_are_the_whole_job() {
+        let caps = [1u64, 1000, 100_000, PALW_STEP_MAX_LEAVES, 1 << 32, u64::MAX];
+        let mut compared = 0u64;
+        let mut nonzero_decode = 0u64;
+        for (name, profile) in profiles_under_test() {
+            for &(prefill, decode) in &job_shapes_under_test() {
+                let mut ctx = tiny_context();
+                ctx.declared_prefill_tokens = prefill;
+                ctx.exact_decode_tokens = decode;
+                for &cap in &caps {
+                    let total = step_leaf_count_capped_v1(&profile, &ctx, cap);
+                    let split = job_leaf_split_capped_v1(&profile, &ctx, cap);
+                    match (total, split) {
+                        (Ok(t), Ok((pre, dec))) => {
+                            assert_eq!(pre + dec, t, "{name} at prefill={prefill} decode={decode} cap={cap} loses leaves");
+                            // A job with at most one decode token has NO decode call, so it earns
+                            // nothing under Decision 10 — the ADR says so at itself.
+                            if decode <= 1 {
+                                assert_eq!(dec, 0, "{name}: {decode} decode tokens is zero decode calls");
+                            } else {
+                                nonzero_decode += 1;
+                            }
+                            compared += 1;
+                        }
+                        (Err(a), Err(b)) => assert_eq!(a, b, "{name}: the split must refuse exactly what the count refuses"),
+                        (a, b) => panic!("{name} at prefill={prefill} decode={decode} cap={cap}: {a:?} vs {b:?}"),
+                    }
+                }
+            }
+        }
+        assert!(compared >= 1_000, "the sweep shrank to {compared} agreements");
+        assert!(nonzero_decode >= 500, "the sweep stopped reaching jobs that decode: {nonzero_decode}");
+    }
+
+    /// **The cut is at the call boundary, checked against the enumeration term by term.**
+    ///
+    /// The prefill half is `Σ_{k=1}^{P} B(k) + [P ≥ 1]·Post(P) + aux(P)` and the decode half is
+    /// everything the `D` decode calls add. Rather than restate those sums (which would be the
+    /// second spelling this module refuses), the test measures them DIFFERENTIALLY: adding one
+    /// decode token to a job must leave the prefill half untouched, and must add to the decode
+    /// half exactly what the whole count grows by.
+    #[test]
+    fn one_more_decode_token_moves_only_the_decode_half() {
+        for (name, profile) in profiles_under_test() {
+            for &prefill in &[0u32, 1, 7, 64] {
+                let mut ctx = tiny_context();
+                ctx.declared_prefill_tokens = prefill;
+                let mut last: Option<(u64, u64, u64)> = None;
+                for decode in 1..=12u32 {
+                    ctx.exact_decode_tokens = decode;
+                    let Ok(total) = step_leaf_count(&profile, &ctx) else { continue };
+                    let (pre, dec) = job_leaf_split_v1(&profile, &ctx).expect("the count succeeded");
+                    if let Some((prev_total, prev_pre, prev_dec)) = last {
+                        assert_eq!(pre, prev_pre, "{name}: the prefill half moved when only the answer got longer");
+                        assert_eq!(dec - prev_dec, total - prev_total, "{name}: the growth is the decode half's");
+                        assert!(dec > prev_dec, "{name}: another decode call must cost something");
+                    }
+                    last = Some((total, pre, dec));
+                }
+            }
+        }
+    }
+
+    /// **The prompt is what the decode half must NOT see** (Decision 10's whole point).
+    ///
+    /// On a profile with no context-shaped row — which is the graph-v5 shape this fence arms with
+    /// (ADR-0082 Z0) — two jobs with the same number of decode calls and different prompt lengths
+    /// have the SAME decode leaves. On a profile that does commit a `KvScaled` row the decode half
+    /// still grows with the prompt, because a decode position's own committed row is wider; that
+    /// is the shipped rows' honest arithmetic and it is recorded here rather than wished away.
+    #[test]
+    fn a_flat_profile_earns_the_same_for_the_same_answer_whatever_the_prompt() {
+        let mut flat = tiny_profile();
+        // Every out_len Fixed: no row's width mentions the context.
+        for table in [&mut flat.pre_nodes, &mut flat.gdn_nodes, &mut flat.attn_nodes, &mut flat.post_nodes] {
+            for n in table.iter_mut() {
+                n.out_len = PalwStepOutLenV1::Fixed { elements: 32 };
+            }
+        }
+        flat.kv_chunk_calls = 0; // the aux series is the other context-shaped term
+        flat.n_ctx = 4_096;
+        flat.validate_shape().expect("a flat profile is still a profile");
+        let mut short = tiny_context();
+        short.declared_prefill_tokens = 4;
+        short.exact_decode_tokens = 9;
+        let mut long = short.clone();
+        long.declared_prefill_tokens = 3_000;
+        let (short_pre, short_dec) = job_leaf_split_v1(&flat, &short).unwrap();
+        let (long_pre, long_dec) = job_leaf_split_v1(&flat, &long).unwrap();
+        assert_eq!(short_dec, long_dec, "the same answer must earn the same on a flat class");
+        assert!(long_pre > short_pre, "and the prompt must still cost the executor its own leaves");
+        assert!(short_dec > 0);
     }
 
     /// **The corner the ordinary sweep cannot reach: `u64` saturation on a job.**

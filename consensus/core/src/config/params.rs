@@ -9618,7 +9618,12 @@ mod consensus_params_id_tests {
             assert!(shipped.palw_fp_decode_rules.is_none(), "{name} must leave ADR-0082 Decisions 10/11 dormant");
             assert!(!shipped.palw_fp_decode_rules_active_at(u64::MAX), "{name}: a dormant fence is never active");
         }
-        let shipped = DEVNET_PARAMS;
+        // The ACTIVATION half needs a ConsensusV2 network, because the fence folds the mode in and
+        // every `Params` const on this branch is `Disabled` (the const is the base identity; what a
+        // node runs is the bundled form). `devnet_shipped_params()` is that bundled form.
+        let shipped = devnet_shipped_params();
+        assert!(matches!(shipped.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)));
+        assert!(shipped.palw_fp_decode_rules.is_none(), "the bundled devnet leaves it dormant too");
         let mut armed = shipped.clone();
         armed.palw_fp_decode_rules = Some(ForkActivation::new(9_000_000));
         assert_ne!(
@@ -9629,12 +9634,21 @@ mod consensus_params_id_tests {
         assert_ne!(shipped.consensus_schedule_id(), armed.consensus_schedule_id(), "the operator log must name it");
         assert!(armed.palw_fp_decode_rules_active_at(9_000_000));
         assert!(!armed.palw_fp_decode_rules_active_at(8_999_999));
+        // The collapse is observable through `consensus_identity_id`, which is where the
+        // normalizer runs (`consensus_params_id` hashes the raw field and never normalizes).
         let mut never_armed = shipped.clone();
         never_armed.palw_fp_decode_rules = Some(ForkActivation::never());
         assert_eq!(
-            never_armed.consensus_params_id(),
-            shipped.consensus_params_id(),
-            "a never-arming fence collapses to absence, like every bare fence beside it"
+            never_armed.consensus_identity_id(),
+            shipped.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse in normalize_values_a_scheduled_fence_drags_with_it is gone"
+        );
+        let mut at_genesis = shipped.clone();
+        at_genesis.palw_fp_decode_rules = Some(ForkActivation::always());
+        assert_ne!(
+            at_genesis.consensus_identity_id(),
+            shipped.consensus_identity_id(),
+            "in force from block 1 on one side is a rule difference — the two disagree about what a claim earns"
         );
         // Two fences, two fingerprints: arming ADR-0082's court says nothing about its economics.
         let mut kary_only = shipped.clone();
