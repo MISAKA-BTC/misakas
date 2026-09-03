@@ -5646,3 +5646,13 @@ it missed ~170 blocks while its links died and re-formed, and because its sink s
 it back-fills one orphan's parent at a time (3 orphaned, 2 unorphaned in nine minutes). Its panel cannot obtain LLM
 materials in any case (16 MiB), so as a seat it contributes heartbeats and floor-claim duty until the transport fix;
 post-cut: a node whose DAA lags its peers by more than the DAA window while its sink is fresh should IBD anyway.
+
+**6m, continued — seat2's link baseline, and a correction of the sampler note (23:10 UTC).** The sysfs sampler over
+22:23–23:08 UTC (spanning the restart and the artifact pass): **1 MB received, 2 MB sent in 45 minutes**, no
+15-second interval above 3 MB, no production in the window — so no 748 MB burst was captured, and nothing floods the
+link; the mechanism stands on 6a's code read (`broadcast_palw_material` before `submit`) and the loopback timing
+(35 s constant). The earlier line calling the first sampler an instrument error is withdrawn: `/proc/net/dev` on
+5.104 has its space after `eth0:` and `awk` split it correctly; its zeros were true (under 1 MB per 15 s) and its
+"0 MB total" was integer division of ~1 MB over 45 minutes. The constant `flow-timeouts=16` in both samplers was a
+string comparison of times across the local-midnight rollover, not a parse failure. On a link that moves kilobytes
+per second a 748 MB broadcast would take hours, which is the same conclusion by a different arithmetic.
