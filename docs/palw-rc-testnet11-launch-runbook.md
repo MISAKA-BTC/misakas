@@ -439,6 +439,43 @@ has happened here.
     5. start the producer FIRST (see below)
     6. start the rest
 
+**Do not do steps 1–3 by hand.** `scripts/relaunch-fleet-wipe.sh` encodes five findings that cost a
+night to measure, and every one of them is a way to believe a host is stopped when it is not:
+
+    scripts/relaunch-fleet-wipe.sh census        # changes nothing; read it before anything else
+    scripts/relaunch-fleet-wipe.sh stop          # dry run; add --execute
+    scripts/relaunch-fleet-wipe.sh verify        # THE GATE. Do not proceed while it refuses.
+    scripts/relaunch-fleet-wipe.sh wipe --genesis <hash>
+
+| the naive form | what it misses |
+|---|---|
+| the peer set from `journalctl` | the line is emitted at CONNECTION, so the longest-lived peer is invisible. It found 3 of 9; `ss -tn state established` finds all of them |
+| appdirs named by a `.t11` glob | one host carries a full appdir under `/var/lib/misaka-minerpool/slots/…` |
+| `systemctl list-units` without `--plain --all` | a FAILED unit's name is the bullet glyph, and every ENABLED-but-inactive unit is absent — those are exactly the ones that come back at the next boot |
+| `pgrep -af kaspad \| grep appdir=` | matches the command ASKING, and prints its own regex as an appdir |
+| `pgrep -x kaspad` | misses `kaspad.candidate` — a *running node* dropped from the list. Walk `/proc` and match the executable's basename |
+
+### A node that no unit owns survives `stop` entirely
+
+Measured on ibm, 2026-09-03: a `kaspad.candidate` on `/tmp/fpchk`, cgroup
+`/user.slice/user-0.slice/session-28377.scope` — **a login session, not a service.** Stopping every
+`.service` leaves it running and `verify` then refuses, correctly.
+
+**Before this was fixed the procedure had no next step**, and that is the dangerous part rather
+than the missed process:
+
+> **A gate with no documented way to satisfy it teaches people to bypass it.** An operator who has
+> done everything above and is still told NOT CLEAN will conclude the gate is broken — and the
+> gate is the only thing between a partial wipe and a survivor that re-feeds the old chain.
+> **`verify` was right. `stop` was incomplete. Being right had no exit.**
+
+`stop` now walks `/proc`, skips anything whose cgroup contains `.service`, and reports the rest by
+pid with its cgroup, so an operator can see the thing is not a unit rather than guess.
+
+**One host had one; the other two had none.** That is why it survived a working procedure:
+**two of three hosts confirming a step is the most persuasive possible way to be wrong about the
+third.**
+
 ### The producer starts first, and it is not a preference
 
 The floor class must have a producer or **DAA does not advance and the chain cannot leave that
