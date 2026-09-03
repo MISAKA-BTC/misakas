@@ -4921,3 +4921,28 @@ fixed, claim_id surfaced; spend_id and ticket are still behind it. Extracted in 
 temporary `eprintln!` in the dry-run tree only, so fail-fast cannot hide the next value. **Nothing
 has touched 5f.** The merge + re-pins land only when all five are green on the dry-run tree, and
 then again on 5f.
+
+### Three more values the table could not carry, extracted from the tree that ships
+
+**The derive pin's `PINNED` ids were stale in content, not only in order.** The file pinned
+`cad/stl … cde32f30…` where `actual()` computes `83e0f508…` — the eight ids in my drill report,
+verbatim. 3e's "the eight ids are unchanged" was true of `actual()` and false of the file; the
+tip's derive pin was red for content. Line 122 compares `actual()` **sorted by name** against
+`PINNED` in file order, so the array is rewritten sorted, from the test's own printout.
+
+**`golden_vector_ids_are_frozen` pins six values, and fail-fast hid five behind one.** Extracted
+in one run on the patched merged tree — after the genesis re-pin, which several of them are
+functions of:
+
+```
+job_id    c940b5c36ee40846087e6c5927d6e6b5    (= the table's fp_golden; the only one the finalize could see)
+claim_id  e75b8d2e3c590e6df59fe1b0db52676b    was a7c87ce3…
+spend_id  87a0c79c36bf8ff80678a7c3bc48326e    was 7c3e3de7…
+ticket    9a3ed14b531af14a6e2071e206f8e711    was 24a7acb7…
+tag[..8]  24e4a611d9d25f45                    was f0a32ed1…   <- the one nobody had mentioned
+tag.len() == PALW_FP_V3_L1_TAG_BYTES          a constant, not a pin
+```
+
+**Patch v3 on the dry-run merged tree: 4 files, 24 insertions / 48 deletions; every old value —
+thirteen patterns including both byte-array heads and the probe — grep-checked absent.** The five
+pin tests run on it now; only green there lets it touch 5f.
