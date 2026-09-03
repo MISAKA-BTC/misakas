@@ -4218,3 +4218,86 @@ not move `transformer_id` or `source_tree_sha256`. But it changes the bytes a ve
 recomputes the derivation over, so it is a versioned rendering rule and an ADR-0078 amendment:
 D6's premise is true of the *display* trim (marker-based) and false of an EOG cut, which any
 verifier holding the ids and the manifest can recompute. **Not tonight. Stated instead.**
+
+## GREEN: a MIDI from a live free prompt — and BOTH artifacts verified BOUND to their claims (ADR-0078 D5)
+
+Same gateway, same tree, same bound artifact. One-shot exemplar `corpus/music/01-single-note.json`
+(185 B compact — `03`'s 261 tokens do not fit beside the 134-token template; `01` does), ask:
+*two notes in one track, pitch 60 at onset 0 then 67 at onset 480, both velocity 100, duration 480*.
+
+```
+max_tokens 160, first ask     REFUSED  grammar: duplicate key "notes"   <- the MODEL: "v":2, a second
+                                        notes array in the same track, a fourth (65) not a fifth
+max_tokens 160, explicit ask  REFUSED  json: trailing characters at column 240   <- the answer is now
+                                        exactly right (239 chars) and the tail is the only obstacle
+84 / 92 / 94 / 96             REFUSED  unterminated string / EOF at 232 / 234 / 237  (cut short)
+97                            DERIVED
+98 / 100 / 108                REFUSED  trailing characters at column 240
+```
+
+```
+derivation.status        derived     music/smf/v1     transformer_id cb5f27b4…   <- the re-pin set's music/smf id, verbatim
+artifact                 fp-job-….artifact.mid   91 B   audio/midi
+                         MThd format 1, 2 tracks, 480 ppq; track 1 tempo 500,000 µs/quarter;
+                         track 2 note-on (60,100) then (67,100)   <- MATCHES the ask
+committed                true
+```
+
+**The first attempt's refusal is about the model, not the path**: a 1.5B model handed a one-note
+exemplar and a musical instruction wrote structurally-plausible, invalid DSL; told exactly what
+the array must hold, it wrote it exactly. *The launch document should say what that is: the
+DSL is derivable from live output when the prompt is explicit, and the grammar refuses by name
+when it is not.*
+
+### Independent verification — the executor is not trusted
+
+`palw-derive verify` (a fresh build of `misaka-palw-derive` in this session's worktree) was
+first run with `--answer` + `--artifact` only, and **said exactly what that does not prove**:
+
+> *consistent-given-the-supplied-answer — binding_checked: false; NOT a statement that this
+> artifact came from that inference … an executor can attach any artifact of any kind to any of
+> its own claims and pass every check on this path.*
+
+Then with the claim's own inputs — `--output-token-ids` (the gateway's `misaka` extension carries
+them; the outbox summary does not), `--job-context` (764 B borsh hex from the summary),
+`--tokenizer`, `--family qwen25-a16-v5`:
+
+```
+cad/stl   verdict consistent   binding_checked true   dsl_hash ✓  artifact_hash ✓  output_root_matches ✓
+          recomputed_output_root 56cabdb1…   claim_id fcd119d4…   from 56 output ids
+music/smf verdict consistent   binding_checked true   dsl_hash ✓  artifact_hash ✓  output_root_matches ✓
+          recomputed_output_root 970ac531…   claim_id 1834ba2a…   from 97 output ids
+```
+
+**Both artifacts are proven to have come from the inference that committed them** — the
+derivation and the output root recomputed from ids a chain would hold, meeting at the same
+value. That is the bar ADR-0078 Decision 5 sets, and it is met on the tree being cut.
+
+*Two things the verifier taught on the way:* its exit code is 0 for `consistent-given-the-supplied-answer`
+**as well as** for `consistent`, and it says so — *"a caller that branches on the exit code alone
+cannot tell a checked binding from an unchecked one: branch on `binding_checked`"*. And
+`--family qwen25-a16` (the summary's spelling) is not the v5 row's family name for the verifier;
+`qwen25-a16-v5` is. The summary and the verifier spell the family differently — a small
+[[derived-sets-need-one-spelling]] for after the cut.
+
+## The pins, confirmed by the finalize on `971b2eff`
+
+3e's finalize: core **1821 passed / 3 failed = exactly the three pins** (premine commitment,
+fingerprints, fp golden); base0 333/0/2; derive 186/0/5 + the transformer pin; the python gates'
+only disagreements are the three transformer pins. Pinned → actual:
+
+```
+t11 fingerprint    a7baab79… → 71efa66480211731…   PREDICTED ✓ (unchanged)
+fp golden          700b9036… → c940b5c36ee40846…   PREDICTED ✓
+premine            → ba2612417e7e0817…              PREDICTED ✓
+source_tree        d2419027… → 637858dba5ea5e34…   PREDICTED ✓
+eight ids          as before                        PREDICTED ✓
+derive/src         4969f8dc… before and after       the basis, unmoved
+devnet             84153175… → 34c7e4829eadb996…   TWO NAMED MOVES: (a) → 24d55f6d… at 09a71652,
+                                                     then T1's derived ceiling → 34c7e482… at a733b21e
+```
+
+**Every prediction held, and the one value that moved, moved for two causes each named in
+writing before the extraction.** The guard carries devnet as WITHDRAWN and takes the table's
+value; it will refuse a table without `extracted_from 971b2eff…`. Release build → devnet drill
+with the class at genesis → table → "frozen".
