@@ -790,9 +790,17 @@ impl PalwKaryLadderV1 {
     pub fn node_root(&self) -> Hash64 {
         self.node_root
     }
-    /// The leaf range `[lo, hi)` the disputed node covers.
+    /// The leaf range `[lo, hi)` the disputed node covers. `hi` is truncated at the space, which
+    /// is why the SPAN is a separate question from the width.
     pub fn interval(&self) -> (u64, u64) {
         (self.lo, (self.lo.saturating_add(self.span)).min(self.space_size))
+    }
+
+    /// The disputed node's own span — a power of two, and NOT `hi - lo` at the ragged right edge.
+    /// A responder needs it to name the node it is disclosing, and the machine refuses a
+    /// disclosure that names another.
+    pub fn node_span(&self) -> u64 {
+        self.span
     }
 
     /// The bound on rounds this ladder is allowed to take, from the contract's own recurrence.
@@ -1648,5 +1656,334 @@ mod tests {
             PalwBisectLadderV1::open_anchored(&ctx, &root, &ch, &re, space, size, 960, root, 100, 200),
             Err(PalwBisectError::MidStateRepeatsAnEndpoint)
         );
+    }
+}
+
+// =============================================================================================
+// Tests — ADR-0082 Decision 3, the k-ary ladder
+// =============================================================================================
+
+#[cfg(test)]
+mod kary_tests {
+    use super::*;
+    use crate::palw_attn_dissect::palw_kary_rounds_v1;
+    use crate::palw_step_leg::{step_merkle_leaf_v1, step_merkle_node_v1, step_merkle_root_v1};
+
+    fn h64(fill: u8) -> Hash64 {
+        Hash64::from_bytes([fill; 64])
+    }
+
+    fn leaf_hashes(n: u64) -> Vec<Hash64> {
+        (0..n).map(|i| Hash64::from_bytes([(i % 251) as u8 + 1; 64])).collect()
+    }
+
+    /// Every level of the tree `step_merkle_root_v1` builds, level 0 being the index-bound leaves.
+    /// The builder's own loop, run for its intermediate states — which is what a k-ary round
+    /// discloses and what [`palw_kary_fold_up_v1`] has to reproduce.
+    fn tree_levels(leaves: &[Hash64]) -> Vec<Vec<Hash64>> {
+        let mut level: Vec<Hash64> = leaves.iter().enumerate().map(|(i, l)| step_merkle_leaf_v1(i as u64, l)).collect();
+        let mut out = vec![level.clone()];
+        while level.len() > 1 {
+            let mut next = Vec::with_capacity(level.len().div_ceil(2));
+            let mut chunks = level.chunks_exact(2);
+            for pair in &mut chunks {
+                next.push(step_merkle_node_v1(&pair[0], &pair[1]));
+            }
+            if let [odd] = chunks.remainder() {
+                next.push(*odd);
+            }
+            level = next;
+            out.push(level.clone());
+        }
+        out
+    }
+
+    /// The tree node a ladder position `(lo, span)` names: level `log₂ span`, index `lo / span`.
+    fn node_at(levels: &[Vec<Hash64>], lo: u64, span: u64) -> Hash64 {
+        let level = span.trailing_zeros() as usize;
+        levels[level][(lo / span) as usize]
+    }
+
+    /// **The k-ary fold IS the step tree's own arithmetic.**
+    ///
+    /// For every leaf count and every legal arity, the `arity` nodes below a node fold back to
+    /// exactly that node — including at the ragged right edge, where the promote-odd rule is the
+    /// only thing that could have made a subtree fold differently from the whole tree.
+    #[test]
+    fn the_kary_fold_is_the_step_trees_own_arithmetic() {
+        for n in [2u64, 3, 4, 5, 7, 8, 9, 16, 17, 31, 32, 33, 100] {
+            let leaves = leaf_hashes(n);
+            let levels = tree_levels(&leaves);
+            let root = step_merkle_root_v1(&leaves).expect("a tree");
+            assert_eq!(*levels.last().expect("at least one level").first().expect("a root"), root, "n = {n}: level walk is the builder");
+            for arity in [2u8, 4, 8, 16, 64] {
+                let mut span = n.next_power_of_two();
+                let mut lo = 0u64;
+                // Walk the left spine, folding each node from its children.
+                while span > 1 {
+                    let child_span = (span / arity as u64).max(1);
+                    let hi = (lo + span).min(n);
+                    let mut children = Vec::new();
+                    let mut start = lo;
+                    while start < hi {
+                        children.push(node_at(&levels, start, child_span));
+                        start += child_span;
+                    }
+                    assert_eq!(
+                        palw_kary_fold_up_v1(&children).expect("a non-empty disclosure"),
+                        node_at(&levels, lo, span),
+                        "n = {n}, arity = {arity}: the children of ({lo}, {span}) do not fold to their node"
+                    );
+                    span = child_span;
+                }
+            }
+        }
+        assert_eq!(palw_kary_fold_up_v1(&[]), Err(PalwBisectError::EmptyDisclosure));
+        // One child folds to itself — the promoted-odd case, and the reason a lone tail is not an
+        // error: it is what the tree does with it.
+        assert_eq!(palw_kary_fold_up_v1(&[h64(7)]), Ok(h64(7)));
+    }
+
+    /// Drive a k-ary ladder to its terminal against a real tree, with a challenger that names the
+    /// child containing `divergence`. Returns `(terminal index, rounds)`.
+    fn walk_kary(n: u64, arity: u8, divergence: u64) -> (u64, u32) {
+        let leaves = leaf_hashes(n);
+        let levels = tree_levels(&leaves);
+        let root = step_merkle_root_v1(&leaves).expect("a tree");
+        let mut ladder =
+            PalwKaryLadderV1::open(&h64(1), &root, &h64(3), &h64(4), PalwBisectSpaceV1::StepLeaves, n, arity, 100, 200).expect("opens");
+        let mut daa = 200u64;
+        while ladder.turn() == PalwBisectTurnV1::AwaitDisclosure {
+            let ranges = ladder.child_ranges();
+            let children: Vec<Hash64> = ranges.iter().map(|&(lo, span)| node_at(&levels, lo, span)).collect();
+            let (lo, _) = ladder.interval();
+            let span = ladder.node_span();
+            daa += 1;
+            ladder
+                .apply_disclosure(
+                    &PalwKaryDisclosureV1 {
+                        version: PALW_KARY_OBJECT_VERSION_V1,
+                        session_id: ladder.session_id(),
+                        round: ladder.round(),
+                        node_lo: lo,
+                        node_span: span,
+                        children,
+                    },
+                    daa,
+                    30,
+                )
+                .expect("the tree's own children fold to the tree's own node");
+            let child = ranges
+                .iter()
+                .position(|&(lo, span)| divergence >= lo && divergence < lo + span)
+                .expect("the divergence is inside the node") as u8;
+            daa += 1;
+            ladder
+                .apply_verdict(
+                    &PalwKaryVerdictV1 {
+                        version: PALW_KARY_OBJECT_VERSION_V1,
+                        session_id: ladder.session_id(),
+                        round: ladder.round(),
+                        child,
+                    },
+                    daa,
+                    30,
+                )
+                .expect("a child inside the arity");
+        }
+        (ladder.terminal_index().expect("a walked ladder is one leaf wide"), ladder.round())
+    }
+
+    /// The shipped binary machine, driven by the same divergence oracle.
+    fn walk_shipped(n: u64, divergence: u64) -> (u64, u32) {
+        let mut ladder =
+            PalwBisectLadderV1::open(&h64(1), &h64(2), &h64(3), &h64(4), PalwBisectSpaceV1::StepLeaves, n, 100, 200).expect("opens");
+        let mut daa = 200u64;
+        while ladder.turn() == PalwBisectTurnV1::AwaitDisclosure {
+            let round = ladder.round();
+            let mid = ladder.expected_midpoint().expect("a midpoint");
+            daa += 1;
+            ladder
+                .apply_disclosure(
+                    &PalwBisectDisclosureV1 {
+                        version: PALW_BISECT_OBJECT_VERSION_V1,
+                        session_id: ladder.session_id(),
+                        round,
+                        midpoint: mid,
+                        mid_state: Hash64::from_bytes([0x40u8.wrapping_add(round as u8); 64]),
+                    },
+                    daa,
+                    30,
+                )
+                .expect("on turn");
+            daa += 1;
+            ladder
+                .apply_verdict(
+                    &PalwBisectVerdictV1 { version: PALW_BISECT_OBJECT_VERSION_V1, session_id: ladder.session_id(), round, agree: divergence >= mid },
+                    daa,
+                    30,
+                )
+                .expect("on turn");
+        }
+        (ladder.terminal_index().expect("one index wide"), ladder.round())
+    }
+
+    /// **At arity 2 the k-ary ladder is the shipped ladder**: the same cut points on every space
+    /// the ruleset can carry (which are powers of two — `max_step_leaf_count` is `2^22` today and
+    /// `2^32` under ADR-0077 Decision 12), the same round count, and the same located leaf,
+    /// driven by the same divergence.
+    ///
+    /// On a space that is NOT a power of two the two cut differently — the tree's node boundaries
+    /// are aligned to powers of two and `bisect_midpoint_v1` is the interval's own middle — and
+    /// they still locate the same leaf, which is the property a court cares about. Both are
+    /// asserted, because the difference is real and a reader should meet it here rather than in a
+    /// dispute.
+    #[test]
+    fn the_kary_ladder_at_arity_two_locates_what_the_shipped_ladder_locates() {
+        // The cut points agree exactly on a power-of-two space: at every node the k-ary child
+        // boundary IS `bisect_midpoint_v1` of that node's own interval.
+        for log2 in 1..=12u32 {
+            let n = 1u64 << log2;
+            let leaves = leaf_hashes(n);
+            let levels = tree_levels(&leaves);
+            let root = step_merkle_root_v1(&leaves).expect("a tree");
+            let mut ladder =
+                PalwKaryLadderV1::open(&h64(1), &root, &h64(3), &h64(4), PalwBisectSpaceV1::StepLeaves, n, 2, 100, 200).expect("opens");
+            let mut daa = 200u64;
+            while ladder.turn() == PalwBisectTurnV1::AwaitDisclosure {
+                let (lo, hi) = ladder.interval();
+                let ranges = ladder.child_ranges();
+                assert_eq!(ranges.len(), 2, "n = {n}: a binary node has two children");
+                assert_eq!(ranges[1].0, bisect_midpoint_v1(lo, hi), "n = {n}: the binary cut is not the pinned midpoint");
+                let children: Vec<Hash64> = ranges.iter().map(|&(lo, span)| node_at(&levels, lo, span)).collect();
+                daa += 1;
+                ladder
+                    .apply_disclosure(
+                        &PalwKaryDisclosureV1 {
+                            version: PALW_KARY_OBJECT_VERSION_V1,
+                            session_id: ladder.session_id(),
+                            round: ladder.round(),
+                            node_lo: lo,
+                            node_span: hi - lo,
+                            children,
+                        },
+                        daa,
+                        30,
+                    )
+                    .expect("the tree's children fold");
+                daa += 1;
+                ladder
+                    .apply_verdict(
+                        &PalwKaryVerdictV1 {
+                            version: PALW_KARY_OBJECT_VERSION_V1,
+                            session_id: ladder.session_id(),
+                            round: ladder.round(),
+                            child: 1,
+                        },
+                        daa,
+                        30,
+                    )
+                    .expect("child 1");
+            }
+            assert_eq!(ladder.round(), log2, "n = 2^{log2}: the binary k-ary ladder takes log2 rounds");
+        }
+        // And on every space, power of two or not, both machines locate the SAME leaf.
+        for n in [2u64, 3, 4, 5, 8, 9, 16, 17, 31, 64] {
+            for divergence in 0..n {
+                let (kary, kary_rounds) = walk_kary(n, 2, divergence);
+                let (shipped, shipped_rounds) = walk_shipped(n, divergence);
+                assert_eq!(kary, shipped, "n = {n}, divergence {divergence}: the two machines located different leaves");
+                assert_eq!(kary, divergence, "n = {n}: an honest challenger reaches its own divergence");
+                assert!(
+                    kary_rounds <= shipped_rounds.max(palw_kary_rounds_v1(n, 2).expect("legal")),
+                    "n = {n}: the k-ary ladder took more rounds than the binary bound"
+                );
+            }
+        }
+    }
+
+    /// **The round count is the contract's**, at every arity — `palw_kary_rounds_v1(space, arity)`,
+    /// the same recurrence the history dissection is bounded by, so a court cannot budget one
+    /// number and play another.
+    ///
+    /// It is a BOUND, and the distinction is worth the two assertions: a leaf inside the ragged
+    /// right edge is located in fewer rounds, because the node covering it is already narrow (at
+    /// `n = 3` the leaf 2 lives under a node the space truncates to one leaf). On a power-of-two
+    /// space no path is short, and there the bound is reached exactly.
+    #[test]
+    fn the_kary_ladder_takes_the_contracts_round_count() {
+        for n in [2u64, 3, 16, 17, 64, 100, 1_024, 1_025] {
+            for arity in [2u8, 4, 16, 64] {
+                let bound = palw_kary_rounds_v1(n, arity).expect("a legal arity");
+                for divergence in [0u64, n / 3, n - 1] {
+                    let (index, rounds) = walk_kary(n, arity, divergence);
+                    assert_eq!(index, divergence, "n = {n}, arity = {arity}: located the wrong leaf");
+                    assert!(rounds <= bound, "n = {n}, arity = {arity}: {rounds} rounds against the contract's bound of {bound}");
+                }
+                if n.is_power_of_two() {
+                    let (_, rounds) = walk_kary(n, arity, 0);
+                    assert_eq!(rounds, bound, "n = {n}, arity = {arity}: an aligned space reaches the bound exactly");
+                }
+            }
+        }
+    }
+
+    /// **What a k-ary round may not be**: a disclosure that does not fold, one of the wrong size,
+    /// one about another node, a verdict naming a child that is not there, an illegal arity — each
+    /// refused by name, and nothing moves when one is.
+    #[test]
+    fn a_kary_round_that_does_not_fold_is_refused_by_name() {
+        let n = 64u64;
+        let leaves = leaf_hashes(n);
+        let levels = tree_levels(&leaves);
+        let root = step_merkle_root_v1(&leaves).expect("a tree");
+        assert_eq!(
+            PalwKaryLadderV1::open(&h64(1), &root, &h64(3), &h64(4), PalwBisectSpaceV1::StepLeaves, n, 3, 100, 200),
+            Err(PalwBisectError::IllegalArity { got: 3 })
+        );
+        let mut ladder =
+            PalwKaryLadderV1::open(&h64(1), &root, &h64(3), &h64(4), PalwBisectSpaceV1::StepLeaves, n, 4, 100, 200).expect("opens");
+        let ranges = ladder.child_ranges();
+        let honest: Vec<Hash64> = ranges.iter().map(|&(lo, span)| node_at(&levels, lo, span)).collect();
+        let session = ladder.session_id();
+        let msg = move |children: Vec<Hash64>, node_lo: u64, node_span: u64| PalwKaryDisclosureV1 {
+            version: PALW_KARY_OBJECT_VERSION_V1,
+            session_id: session,
+            round: 0,
+            node_lo,
+            node_span,
+            children,
+        };
+        // Junk that is the right SHAPE folds to something else, and the refusal says to what.
+        let junk: Vec<Hash64> = (0..4).map(|i| h64(0x80 + i)).collect();
+        let m = msg(junk.clone(), 0, 64);
+        match ladder.apply_disclosure(&m, 300, 30) {
+            Err(PalwBisectError::ChildrenDoNotFold { node, folded }) => {
+                assert_eq!(node, root);
+                assert_eq!(folded, palw_kary_fold_up_v1(&junk).expect("folds to something"));
+            }
+            other => panic!("junk children were not refused by the fold: {other:?}"),
+        }
+        // Too few children, and a node that is not the ladder's.
+        let m = msg(honest[..3].to_vec(), 0, 64);
+        assert_eq!(ladder.apply_disclosure(&m, 300, 30), Err(PalwBisectError::ChildCountMismatch { got: 3, expected: 4 }));
+        let m = msg(honest.clone(), 16, 64);
+        assert!(matches!(ladder.apply_disclosure(&m, 300, 30), Err(PalwBisectError::TurnMismatch { .. })));
+        // Nothing moved through any of that.
+        assert_eq!((ladder.turn(), ladder.round(), ladder.interval()), (PalwBisectTurnV1::AwaitDisclosure, 0, (0, 64)));
+        // The honest round, then a verdict past the arity.
+        ladder.apply_disclosure(&msg(honest, 0, 64), 300, 30).expect("the tree's children fold");
+        assert_eq!(
+            ladder.apply_verdict(
+                &PalwKaryVerdictV1 { version: PALW_KARY_OBJECT_VERSION_V1, session_id: ladder.session_id(), round: 0, child: 4 },
+                310,
+                30
+            ),
+            Err(PalwBisectError::ChildOutOfRange { got: 4, children: 4 })
+        );
+        // Silence is the same objective offense it is on the binary machine.
+        assert_eq!(ladder.declare_no_show(341).expect("past the deadline").silent_party, PalwBisectPartyV1::Challenger);
+        assert_eq!(ladder.turn(), PalwBisectTurnV1::Abandoned);
+        assert_eq!(ladder.declare_no_show(400), Err(PalwBisectError::AlreadyTerminal));
     }
 }
