@@ -326,6 +326,7 @@ pub fn a16_inventory_v1(
     let k_scores = kid(kd::KDESC_A16_ATTN_SCORES);
     let k_values = kid(kd::KDESC_A16_ATTN_VALUES);
     let k_soft = kid(kd::KDESC_A16_SOFTMAX);
+    let k_fused = kid(kd::KDESC_A16_ATTN_FUSED);
     let k_rope = kid(kd::KDESC_A16_ROPE);
     let k_none = [kid(kd::KDESC_A16_RMS_NORM), kid(kd::KDESC_A16_ADD_ELEM), kid(kd::KDESC_A16_MUL_ELEM), kid(kd::KDESC_Q36_SILU)];
 
@@ -412,6 +413,31 @@ pub fn a16_inventory_v1(
                 return Err(missing(&format!("{name}: the softmax widening is one registered byte")));
             }
             push(&mut rows, &mut seen, name, layer, 0, bytes.to_vec());
+        } else if kidv == k_fused {
+            // **ADR-0082 Decision 1: ONE node, FOUR registered operands, and the artifact is
+            // unchanged.** A fused site reads exactly the tensors the four nodes it replaces read
+            // — W9's score triple, the probability triple, W10's value triple and the softmax's
+            // widening byte — so the inventory it implies is byte for byte the one the v2 graph
+            // implies at this site, and no re-conversion follows from graph v5.
+            //
+            // The three it does not NAME are derived from the one it does, through the single
+            // description the engine's plan compiler and the court's arm also read
+            // (`palw_attn_fused_tensors_v1`). Two spellings of this mapping would be an operand
+            // the court resolves and the inventory cannot open, which is `Unadjudicable` on
+            // honest material.
+            let t = kd::palw_attn_fused_tensors_v1(name).ok_or_else(|| missing(name))?;
+            let up = store_row(&t.softmax_up, layer).ok_or_else(|| missing(&t.softmax_up))?;
+            if up.len() != 1 {
+                return Err(missing(&format!("{}: the softmax widening is one registered byte", t.softmax_up)));
+            }
+            push(&mut rows, &mut seen, &t.softmax_up, layer, 0, up.to_vec());
+            for triple in [&t.scores, &t.probs, &t.values] {
+                let bytes = store_row(triple, layer).ok_or_else(|| missing(triple))?;
+                if bytes.len() != w {
+                    return Err(missing(&format!("{triple}: the attention sites register exactly one triple")));
+                }
+                push(&mut rows, &mut seen, triple, layer, 0, bytes.to_vec());
+            }
         } else if kidv == k_rope {
             let mut offset = 0u32;
             for position in 0..artifact.shape.max_position {
@@ -528,6 +554,7 @@ pub fn qwen36_inventory_v1(
     let k_soft = kid(kd::KDESC_A16_SOFTMAX);
     let k_scores = kid(kd::KDESC_A16_ATTN_SCORES);
     let k_values = kid(kd::KDESC_A16_ATTN_VALUES);
+    let k_fused = kid(kd::KDESC_A16_ATTN_FUSED);
     let k_grouped = kid(kd::KDESC_Q36_MATMUL_GROUPED);
     let k_grouped_wide = kid(kd::KDESC_Q36_MATMUL_GROUPED_WIDE);
     let k_conv = kid(kd::KDESC_Q36_SSM_CONV);
@@ -747,6 +774,20 @@ pub fn qwen36_inventory_v1(
                 return Err(missing(&format!("{name}: the softmax widening is one registered scalar")));
             }
             push(&mut rows, &mut seen, name, layer, 0, vec![store[0].zero.clamp(0, 62) as u8]);
+        } else if kidv == k_fused {
+            // **ADR-0082 Decision 1**, the hybrid's half: the same four operands the four nodes it
+            // replaces read, derived from the one the node names — the softmax byte normalised the
+            // way this family's softmax arm normalises it, and one triple each for the scores, the
+            // probabilities and the values.
+            let t = kd::palw_attn_fused_tensors_v1(name).ok_or_else(|| missing(name))?;
+            let store = param_rows(&sub(&t.softmax_up, layer))?;
+            if store.len() != 1 {
+                return Err(missing(&format!("{}: the softmax widening is one registered scalar", t.softmax_up)));
+            }
+            push(&mut rows, &mut seen, &t.softmax_up, layer, 0, vec![store[0].zero.clamp(0, 62) as u8]);
+            for triple in [&t.scores, &t.probs, &t.values] {
+                one_triple(&mut rows, &mut seen, triple, layer)?;
+            }
         } else if kidv == k_decay {
             let width = fixed.ok_or_else(|| missing(name))?;
             let stem = name.strip_suffix("linear_decay.a16").ok_or_else(|| missing(name))?;
