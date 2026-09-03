@@ -814,8 +814,7 @@ impl Base0CheckpointCaptureV1 {
     /// chunks and asserting against what it received; a PRODUCER has no such excuse, and every one
     /// of them spelled `decode_calls / interval` for itself.
     pub fn finish_canonical_v1(self) -> Result<Base0CheckpointsV1, LegError> {
-        let expected =
-            kaspa_consensus_core::palw_context_ladder::palw_checkpoint_count_v1(&self.profile, &self.ctx, self.interval);
+        let expected = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_count_v1(&self.profile, &self.ctx, self.interval);
         self.finish(expected)
     }
 
@@ -1618,7 +1617,9 @@ mod a16_row_tests {
         // Snapshot every prefix's bytes as the cache grows, exactly as a per-position capture would.
         let mut as_taken: Vec<Vec<u8>> = vec![cache.state_chunk_bytes_v1(&entry(0, 1)).expect("position 0")];
         for position in 1..6u32 {
-            engine.forward_token_traced(&mut cache, (position as usize * 7 + 3) % artifact.shape.vocab, position as usize).expect("runs");
+            engine
+                .forward_token_traced(&mut cache, (position as usize * 7 + 3) % artifact.shape.vocab, position as usize)
+                .expect("runs");
             as_taken.push(cache.state_chunk_bytes_v1(&entry(0, position + 1)).expect("the prefix so far"));
         }
         // Now re-derive every one of them from the FINAL cache — which is what the fold does.

@@ -231,10 +231,7 @@ pub fn base0_fp_recompute_state_at_position_v1<K: Base0FpRecomputeKernelsV1 + ?S
     let job_decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
     let job_positions = ctx.declared_prefill_tokens.saturating_add(job_decode_calls);
     if positions > job_positions || positions == 0 {
-        return Err(Base0FpRecomputeError::DecodeCallsBeyondTheJob {
-            asked: positions,
-            job: job_positions,
-        });
+        return Err(Base0FpRecomputeError::DecodeCallsBeyondTheJob { asked: positions, job: job_positions });
     }
     if profile.state_chunk_map_id == Hash64::default() {
         return Err(Base0FpRecomputeError::NoStateChunkMapRegistered);
@@ -391,10 +388,7 @@ impl<'a> Qwen36RecomputeKernelsV1<'a> {
     /// little-endian `i32` at `attn_kv_heads × attn_head_dim × 4` bytes — the width the `i32` cache
     /// this engine holds actually is. A checkpoint that opened to a state the producer never held
     /// is worse than a missing one, and the producer has signed for it.
-    fn attn_chunk_bytes_v1(
-        &self,
-        entry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1,
-    ) -> Option<Vec<u8>> {
+    fn attn_chunk_bytes_v1(&self, entry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>> {
         use kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1;
         let side = match entry.kind {
             PalwStateChunkKindV1::Key => &self.cache.keys,
@@ -498,14 +492,13 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
                     .ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
                 match entry {
                     map::PalwHybridChunkEntryV1::AttentionCache(entry) => {
-                        out.push(self.attn_chunk_bytes_v1(&entry).ok_or(Base0FpRecomputeError::StateIsNotTheMaps {
-                            chunk_index: index,
-                        })?);
+                        out.push(
+                            self.attn_chunk_bytes_v1(&entry).ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?,
+                        );
                     }
                     map::PalwHybridChunkEntryV1::RecurrenceState { .. } => {
                         let within = (index - geometry.attn.chunk_count()) as usize;
-                        let bytes =
-                            gdn_chunks.get(within).ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
+                        let bytes = gdn_chunks.get(within).ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
                         if bytes.len() as u64 != entry.byte_len() {
                             return Err(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index });
                         }

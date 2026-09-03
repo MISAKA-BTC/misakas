@@ -1209,22 +1209,24 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             .ok_or_else(|| "this backend serves no registered graph, so it opens no interval".to_string())?;
         // Two retention forms, one opening, the class's map deciding whether the history travels —
         // ADR-0082 Decisions 7 and 9, exactly as the dense tier composes them.
-        let chunked = match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
-            crate::produce::Base0RetentionV1::Folded(material) => {
-                let plan = self.plan.as_ref().ok_or_else(|| "this backend serves no registered graph".to_string())?;
-                crate::fp_interval::base0_open_fp_interval_sparse_v1(
-                    &material,
-                    index,
-                    prompt_token_ids,
-                    interval,
-                    &Qwen36IntervalKernels { artifact: &self.artifact, plan },
-                )
-                .map_err(|e| e.to_string())?
-            }
-            crate::produce::Base0RetentionV1::Dense(material) => {
-                crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, interval).map_err(|e| e.to_string())?
-            }
-        };
+        let chunked =
+            match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
+                crate::produce::Base0RetentionV1::Folded(material) => {
+                    let plan = self.plan.as_ref().ok_or_else(|| "this backend serves no registered graph".to_string())?;
+                    crate::fp_interval::base0_open_fp_interval_sparse_v1(
+                        &material,
+                        index,
+                        prompt_token_ids,
+                        interval,
+                        &Qwen36IntervalKernels { artifact: &self.artifact, plan },
+                    )
+                    .map_err(|e| e.to_string())?
+                }
+                crate::produce::Base0RetentionV1::Dense(material) => {
+                    crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, interval)
+                        .map_err(|e| e.to_string())?
+                }
+            };
         if self.profile.as_ref().is_some_and(crate::fp_interval::base0_fp_class_requires_flat_openings_v1) {
             return crate::fp_interval::base0_strip_fp_interval_history_v1(&chunked).map_err(|e| e.to_string());
         }
