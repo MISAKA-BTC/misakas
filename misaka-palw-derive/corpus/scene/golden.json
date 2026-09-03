@@ -5,8 +5,8 @@
     "dsl_hash": "ca684e0bc7fc97b466decd921ba73585b4c305d42d670e41a916aa3c62625fb2a637d73dee065b32273d7566d27e6112cb89b8c5d1404a2ddd73149c49fb92dc"
   },
   "02-hierarchy.json": {
-    "artifact_bytes": 2716,
-    "artifact_hash": "f4cbcf0f3b4c79f2b1386f5c884f91ca080b6e5fde73a2c4f4ee650679ed526f4e7d762015c6bae13381d4f07491c7322583baa83fdae533d9b8d7382ee5caff",
+    "artifact_bytes": 2736,
+    "artifact_hash": "6da65dbc8f6a29faa94e345c6cd37d88369f93856c5ed4ca2eaaff5bf1f8a6b2dc33306ec83a22c7c755eb35c2ebc380ef7c3558aebd76680d01a9e467b42aba",
     "dsl_hash": "c75bed84259082c774c24ce1186dd313e7def35ed81f658080a444bc5662fbbefa3dd3a149bf0ab7ae528d1949271ba500a72d5bf667df71bd72d228e542fbbe"
   },
   "03-prism-octagon.json": {
@@ -20,8 +20,8 @@
     "dsl_hash": "add69097c58ac86a619bb9037e1db308b76dee40696b2e5bdefd62a65e9555f984d8dc6a9f4b64b2ca656eca0595b1d8ffdcc800ecec72d66c2403773f61ba48"
   },
   "05-tetrahedral-rotations.json": {
-    "artifact_bytes": 17728,
-    "artifact_hash": "71d32ab8a35497119e4466a270dd8e71254392526abd703a631042418d553b5862ea0a8d880a25c2d2737cc08f5854a3cb0859500b311a8d1cec0a5c1e6dd14e",
+    "artifact_bytes": 17748,
+    "artifact_hash": "5940e11ffee2d21b080278a502cfc23076e9e0685506856dc9bc9152459d3ec7158aa76bf2ce7de92d7cd3806c6029c0024a8d22cef2f94f7e82dfd902989214",
     "dsl_hash": "003bb4bc2384d1d16650a5cf51b79451647279754d9a9943df7fa6dea7a3400e44b123af14d06eb6867a85e2556d6cef4a24c801a30eb3eb0f98024281663a7a"
   },
   "06-inexact-refused.json": {

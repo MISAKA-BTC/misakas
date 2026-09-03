@@ -53,13 +53,17 @@ impl PalwDumpService {
             info!("[{PALW_DUMP}] {} class(es) at daa {}", rows.len(), daa);
             for row in rows {
                 info!(
-                    "[{PALW_DUMP}]   class={} base={} status={} share={} budget={}",
+                    "[{PALW_DUMP}]   class={} base={} status={} share={} budget={} leaves={}",
                     row.class_id,
                     row.is_base_class,
                     row.status,
                     // The distinction the whole file is for: absent share is not zero budget.
                     row.share_permille.map(|s| s.to_string()).unwrap_or_else(|| "NONE".to_string()),
-                    row.budget_blocks
+                    row.budget_blocks,
+                    // The canonical job in leaves. An operator who runs a gateway or a rail against
+                    // this class needs it for `--class-leaves`, and until now the only published
+                    // value was the floor's 7,708 sitting in both binaries as a default.
+                    row.canonical_leaves
                 );
             }
             return;

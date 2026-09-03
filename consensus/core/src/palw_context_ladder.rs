@@ -75,8 +75,8 @@
 
 use crate::config::constants::consensus::NETWORK_DELAY_BOUND;
 use crate::palw_class_admission_v2::{
-    derive_court_cost_rows_v1, derive_court_cost_shaped_v1, PalwClassAdmissionError, PalwCourtCostRowV1, PalwCourtCostShapeV1,
-    PalwCourtCostV1,
+    PalwClassAdmissionError, PalwCourtCostRowV1, PalwCourtCostShapeV1, PalwCourtCostV1, derive_court_cost_rows_v1,
+    derive_court_cost_shaped_v1,
 };
 use crate::palw_fp_devnet_v3::PalwLatticeWindowsV1;
 use crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
@@ -327,11 +327,7 @@ pub const fn palw_court_replay_floor_daa_v1(row: &PalwCourtRowCostV1, interval_p
     let replay = interval.saturating_mul(row.replay_ms_per_position());
     let total = replay.saturating_add(PALW_COURT_ROUND_TRIP_MS);
     let daa = total.div_ceil(PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS);
-    if daa == 0 {
-        1
-    } else {
-        daa
-    }
+    if daa == 0 { 1 } else { daa }
 }
 
 /// **The turn deadline a window and a ladder DERIVE** (ADR-0077 SA-4; the earlier proposal
@@ -398,11 +394,7 @@ pub const fn palw_court_turn_deadline_v1(
         return None;
     }
     let deadline = (window_court - reserve - 1) / moves;
-    if deadline == 0 {
-        None
-    } else {
-        Some(deadline)
-    }
+    if deadline == 0 { None } else { Some(deadline) }
 }
 
 /// **W4, as a predicate:**
@@ -474,11 +466,7 @@ pub const PALW_CONTEXT_LADDER_INTERVAL_DIVISOR: u32 = 32;
 /// Decisions 11 and 13).
 pub const fn palw_checkpoint_interval_v1(n_ctx: u32) -> u32 {
     let derived = n_ctx / PALW_CONTEXT_LADDER_INTERVAL_DIVISOR;
-    if derived == 0 {
-        1
-    } else {
-        derived
-    }
+    if derived == 0 { 1 } else { derived }
 }
 
 /// What ONE checkpoint-chunk opening of the RECURRENCE costs under the gdn **v1** map: one head's
@@ -713,11 +701,7 @@ pub const PALW_CONTEXT_LADDER_MAX_QUANTA_PER_RECEIPT: u32 = 64;
 /// written for.
 pub const fn palw_canonical_footprint_floor_v1(n_ctx: u32) -> u64 {
     let floor = (n_ctx / PALW_CONTEXT_LADDER_QUANTA_PER_CANONICAL_JOB) as u64;
-    if floor == 0 {
-        1
-    } else {
-        floor
-    }
+    if floor == 0 { 1 } else { floor }
 }
 
 /// The enumeration's own footprint for a job: `prefill + max(1, decode) − 1` cached positions.
@@ -917,8 +901,7 @@ pub fn palw_close_chunks_for_ladder_v1(
 
 /// The RC's graph-v2/v3 genesis set: the dense A16 row and the hybrid QWEN36 row, the two families
 /// ADR-0077 Decision 13's ladder plans and the two `DEFAULT_MAX_CLOSE_CHUNKS`'s own doc names.
-pub const PALW_LADDER_FAMILIES_V1: [PalwLadderFamilyV1; 2] =
-    [palw_a16_context_row_profile_v1, palw_qwen36_context_row_profile_v1];
+pub const PALW_LADDER_FAMILIES_V1: [PalwLadderFamilyV1; 2] = [palw_a16_context_row_profile_v1, palw_qwen36_context_row_profile_v1];
 
 /// **The dense tier at a ladder row, graph v5** (ADR-0082 Decision 1).
 ///
@@ -950,8 +933,7 @@ pub fn palw_qwen36_context_row_profile_v5(n_ctx: u32) -> Result<PalwShapeProfile
 
 /// **The graph-v5 genesis set** — the same two families under ADR-0082 Decisions 1-5, which is the
 /// other set Decision 6's derivation has to be evaluated over.
-pub const PALW_LADDER_FAMILIES_V5: [PalwLadderFamilyV1; 2] =
-    [palw_a16_context_row_profile_v5, palw_qwen36_context_row_profile_v5];
+pub const PALW_LADDER_FAMILIES_V5: [PalwLadderFamilyV1; 2] = [palw_a16_context_row_profile_v5, palw_qwen36_context_row_profile_v5];
 
 #[cfg(test)]
 mod tests {
@@ -1517,7 +1499,7 @@ mod tests {
     /// is not standing in for one that was already there.
     #[test]
     fn the_fenced_gate_refuses_a_row_whose_canonical_job_is_under_its_floor() {
-        use crate::palw_class_admission_v2::{verify_class_admission_v4, PalwClassAdmissionError};
+        use crate::palw_class_admission_v2::{PalwClassAdmissionError, verify_class_admission_v4};
         let params = crate::config::params::palw_rc_shipped_params();
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
             panic!("the RC card carries no V2 bundle");
@@ -1963,7 +1945,7 @@ mod tests {
     #[test]
     fn the_anchored_recurrence_opens_the_window_and_not_the_history() {
         use crate::palw_step::kernel_semantics_id_v1;
-        use crate::palw_step_refute::{canonical_input_leaves_v1_anchored, KDESC_Q36_GDN_STEP};
+        use crate::palw_step_refute::{KDESC_Q36_GDN_STEP, canonical_input_leaves_v1_anchored};
         let mapped = recurrent_row_v2(512);
         let gdn_kernel = kernel_semantics_id_v1(KDESC_Q36_GDN_STEP);
         let slot = (0..u32::MAX)
@@ -2010,9 +1992,9 @@ mod tests {
     #[test]
     fn the_recurrence_map_id_is_the_executors_own_spelling() {
         use crate::palw_state_chunk_map::{
-            gdn_state_chunk_map_id_v1, gdn_state_chunk_map_id_v2, hybrid_state_chunk_map_id_v1, hybrid_state_chunk_map_id_v2,
-            integer_kv_state_chunk_map_id_v2, palw_hybrid_state_chunk_map_name_v1, palw_hybrid_state_chunk_map_name_v2,
-            PALW_GDN_STATE_CHUNK_MAP_NAME_V1, PALW_GDN_STATE_CHUNK_MAP_NAME_V2,
+            PALW_GDN_STATE_CHUNK_MAP_NAME_V1, PALW_GDN_STATE_CHUNK_MAP_NAME_V2, gdn_state_chunk_map_id_v1, gdn_state_chunk_map_id_v2,
+            hybrid_state_chunk_map_id_v1, hybrid_state_chunk_map_id_v2, integer_kv_state_chunk_map_id_v2,
+            palw_hybrid_state_chunk_map_name_v1, palw_hybrid_state_chunk_map_name_v2,
         };
         assert_eq!(
             PALW_GDN_STATE_CHUNK_MAP_NAME_V1,
@@ -2092,7 +2074,7 @@ mod tests {
     /// of claim this tree has watched go stale.
     #[test]
     fn the_anchored_recurrence_replay_agrees_with_the_long_form() {
-        use crate::palw_step_refute::{gdn_core_anchored_replay_v1, DotStructure};
+        use crate::palw_step_refute::{DotStructure, gdn_core_anchored_replay_v1};
         let mut profile = recurrent_row(64);
         profile.gdn_heads = 2;
         profile.gdn_head_k_dim = 16;
@@ -2122,7 +2104,7 @@ mod tests {
     /// the guard the shipped genesis arm never needed because it had no anchor to be handed.
     #[test]
     fn a_mis_shaped_recurrence_anchor_is_refused_by_name() {
-        use crate::palw_step_refute::{gdn_core_anchored_replay_v1, DotStructure, PalwStepRefuteError};
+        use crate::palw_step_refute::{DotStructure, PalwStepRefuteError, gdn_core_anchored_replay_v1};
         let mut profile = recurrent_row(64);
         profile.gdn_heads = 2;
         profile.gdn_head_k_dim = 16;
@@ -2655,9 +2637,9 @@ mod u00_tiled_attention_measurement {
 #[cfg(test)]
 mod u04_flat_close {
     use super::*;
-    use crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1;
     use crate::palw_class_admission_v2::PalwKaryCourtV1;
-    use crate::palw_mode_v2::{palw_close_bytes_for_chunks_v1, palw_close_chunks_for_bytes_v1, DEFAULT_MAX_CLOSE_CHUNKS};
+    use crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1;
+    use crate::palw_mode_v2::{DEFAULT_MAX_CLOSE_CHUNKS, palw_close_bytes_for_chunks_v1, palw_close_chunks_for_bytes_v1};
     use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
     use crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4;
 
@@ -2771,8 +2753,8 @@ mod u04_flat_close {
         let rows = derive_court_cost_rows_v1(&dense, rules.cost_shape).expect("derives");
         let ffn = rows.iter().find(|r| r.weight_name.ends_with("ffn_down.weight")).expect("the dense row has a down projection");
         assert_eq!(ffn.close_bytes, 80_504, "ADR-0082 Decision 6's '~80,504 with the Merkle ones' moved");
-        let flat = derive_court_cost_rows_v1(&dense, rules.cost_shape.with_prompt_ids_form_v1(PalwPromptIdsFormV1::Flat))
-            .expect("derives");
+        let flat =
+            derive_court_cost_rows_v1(&dense, rules.cost_shape.with_prompt_ids_form_v1(PalwPromptIdsFormV1::Flat)).expect("derives");
         let ffn_flat = flat.iter().find(|r| r.weight_name.ends_with("ffn_down.weight")).expect("present");
         assert_eq!(ffn_flat.close_bytes, 82_080, "ADR-0082 Decision 6's '82,080 bytes with the flat ids' moved");
         assert_eq!(palw_close_chunks_for_bytes_v1(ffn.close_bytes), 1, "the dense model width is one carrier");
@@ -2822,9 +2804,7 @@ mod u04_flat_close {
                 let a = palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, positions, tile, path).expect("derives");
                 let b = palw_attn_bottom_cache_write_bytes_v1(d_head, kv_dim, positions, tile, src, path).expect("derives");
                 assert_eq!(palw_attn_bottom_bytes_v1(d_head, kv_dim, positions, tile, src, path), Some(a.max(b)));
-                println!(
-                    "{name} @ {n_ctx}: d_head {d_head} kv_dim {kv_dim} tile {tile} src {src} -> tile-route {a}, cache-write {b}"
-                );
+                println!("{name} @ {n_ctx}: d_head {d_head} kv_dim {kv_dim} tile {tile} src {src} -> tile-route {a}, cache-write {b}");
                 per_family.push((a, b));
                 // Every legal arity's move rides one carrier at the lanes this row disputes.
                 let lanes = tile.min(d_head);
@@ -2859,10 +2839,11 @@ mod u04_flat_close {
         // 37,985 / 55,393 and checkpoint 19,027 / 36,435.
         for (d_head, cache, ckpt) in [(128u64, 37_985u64, 19_027u64), (256, 55_393, 36_435)] {
             let tile = PALW_ATTN_HISTORY_TILE_V4 as u64;
-            let derived_cache =
-                palw_attn_bottom_cache_write_bytes_v1(d_head, d_head, tile, d_head, d_head, 8 * 64).expect("derives");
+            let derived_cache = palw_attn_bottom_cache_write_bytes_v1(d_head, d_head, tile, d_head, d_head, 8 * 64).expect("derives");
             let derived_ckpt = palw_attn_bottom_tile_route_bytes_v1(d_head, d_head, tile, d_head, 8 * 64).expect("derives");
-            println!("E @ d_head {d_head}: cache-write derived {derived_cache} >= {cache}; checkpoint derived {derived_ckpt} >= {ckpt}");
+            println!(
+                "E @ d_head {d_head}: cache-write derived {derived_cache} >= {cache}; checkpoint derived {derived_ckpt} >= {ckpt}"
+            );
             assert!(
                 derived_cache >= cache,
                 "d_head {d_head}: the cache-write derivation ({derived_cache}) is BELOW the object the court files ({cache})"
@@ -2882,14 +2863,14 @@ mod u04_flat_close {
     /// opinion about it.
     #[test]
     fn the_derived_bottom_bounds_the_real_bottom_object() {
+        use crate::Hash64;
         use crate::palw_attn_court_v1::{
-            PalwAttnChunkOpeningV1, PalwAttnDissectBottomV1, PalwAttnRowOpeningV1, PalwAttnTileEvidenceV1,
-            PALW_ATTN_COURT_OBJECT_VERSION_V1,
+            PALW_ATTN_COURT_OBJECT_VERSION_V1, PalwAttnChunkOpeningV1, PalwAttnDissectBottomV1, PalwAttnRowOpeningV1,
+            PalwAttnTileEvidenceV1,
         };
         use crate::palw_class_admission_v2::{palw_attn_bottom_cache_write_bytes_v1, palw_attn_bottom_tile_route_bytes_v1};
         use crate::palw_step::PalwStepCoordinateV1;
         use crate::palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1};
-        use crate::Hash64;
 
         let h = |w: u64| Hash64::from_u64_word(w);
         let depth = 32usize; // the `2^32` ladder's path
@@ -3059,10 +3040,7 @@ mod u04_flat_close {
             PalwPromptIdsFormV1::MerkleV1
         );
         // And with no court the shape is the shipped one, unchanged.
-        assert_eq!(
-            palw_class_ladder_rules_v1(&dense).expect("mapped").cost_shape.prompt_ids_form,
-            PalwPromptIdsFormV1::Flat
-        );
+        assert_eq!(palw_class_ladder_rules_v1(&dense).expect("mapped").cost_shape.prompt_ids_form, PalwPromptIdsFormV1::Flat);
     }
 
     /// **The arity the RC's own window derives, and the moves it buys** (ADR-0082 Decision 3).
@@ -3095,8 +3073,11 @@ mod u04_flat_close {
             .with_dissection_arity(arity)
             .expect("legal");
         let worst = court.worst_case_duration_with_history_daa(131_072, PALW_ATTN_HISTORY_TILE_V4).expect("derives");
-        println!("RC: ladder rounds {} history rounds {:?} worst {worst} DAA", court.bisection_rounds(), court.history_dissection_rounds(131_072, PALW_ATTN_HISTORY_TILE_V4));
+        println!(
+            "RC: ladder rounds {} history rounds {:?} worst {worst} DAA",
+            court.bisection_rounds(),
+            court.history_dissection_rounds(131_072, PALW_ATTN_HISTORY_TILE_V4)
+        );
         assert!(worst + palw_close_assembly_daa_v1(DEFAULT_MAX_CLOSE_CHUNKS) < windows.window_court, "the derived arity overruns");
     }
 }
-

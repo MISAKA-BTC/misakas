@@ -4436,6 +4436,7 @@ impl VirtualStateProcessor {
                 status: format!("{:?}", record.status),
                 share_permille: state.class_share_permille(id),
                 budget_blocks: budgets.and_then(|b| b.budget_blocks.get(id).copied()).unwrap_or(0),
+                canonical_leaves: record.pwu_rule.canonical_leaves_v1(),
                 is_base_class: *id == state_params.base_class_id(),
             })
             .collect()
@@ -5129,6 +5130,8 @@ impl VirtualStateProcessor {
         let mut rehearsal = *point;
         let mut accepted = Vec::with_capacity(objects.len());
         let mut certifications_graded = 0usize;
+        // ADR-0080 design A, W9: how many declared closes this block has already completed.
+        let mut court_closes_completed = 0usize;
         // **ADR-0075 SA-1/SA-2's fence, asked HERE and not only where the fees were resolved.**
         // `false` on every shipped preset, and then neither rent below can fire whatever a caller
         // passed for a carrier fee — so the filter's behaviour is byte-identical to before the
@@ -5359,6 +5362,30 @@ impl VirtualStateProcessor {
                     }
                     vectors_graded += vectors;
                 }
+            }
+            // **ADR-0080 design A: a block completes at most one declared close.**
+            //
+            // Counted here, in transaction order, against the state each accepted object leaves
+            // behind — the same rehearsal every other per-block cap is counted against — and the
+            // extra one is DROPPED with the block standing, mirroring
+            // `PALW_CERTIFICATION_MAX_PER_BLOCK` exactly. Invalidating instead would be audit
+            // M-01's shape: admission on the lifecycle band is stateless, so a second completing
+            // carrier relays and mines freely, and honest miners would be the ones producing the
+            // invalid blocks.
+            //
+            // Not fenced, because the objects it counts do not exist before this state version:
+            // a chain that can carry a `CourtCloseChunk` at all is one that already re-minted for
+            // `PALW_STATE_V2_VERSION` 18, so there is no un-upgraded node to disagree with.
+            if kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object) {
+                if court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK {
+                    info!(
+                        "Block {block}: a CourtCloseChunk that would complete a declared close was dropped, and the block \
+                         stands: the block already completes {} (PALW_COURT_CLOSE_MAX_PER_BLOCK)",
+                        kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
+                    );
+                    continue;
+                }
+                court_closes_completed += 1;
             }
             match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
@@ -5636,6 +5663,32 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| e.to_string())?;
                 }
+                // **ADR-0080 design A: the declaration's authentication is W6's, and until it
+                // exists this door stays SHUT.**
+                //
+                // A `CourtCloseDeclared` is a court move: it pins every byte of a close and
+                // asserts a verdict on behalf of one of the two bonds the session id binds. The
+                // transition reads the declarer from the session and the claim, so it can never
+                // name a third party — but nothing here yet proves the SIDE authorised it, and
+                // that is precisely P0-9's hole in its original words: either party could
+                // otherwise write the other's move. `check_court_disclosure_acceptance_v2` is the
+                // construction it needs, under a signing domain registered in
+                // `PALW_COURT_V2_ALL_DOMAINS`, and both belong to W6.
+                //
+                // Refused rather than admitted-and-noted, because the failure of an unchecked
+                // signature here is a forged close, and the state machine behind it is complete
+                // enough to act on one. `palw_lifecycle_object_may_ride_v2` already demands a
+                // non-empty signature; this is the layer that would have to say WHOSE.
+                Obj::CourtCloseDeclared { session_id, .. } => {
+                    return Err(format!(
+                        "a split close was declared for session {session_id}, and no layer yet verifies the declaring side's \
+                         signature (ADR-0080 W6) — refused rather than trusted"
+                    ));
+                }
+                // A chunk carries no signature and needs none: the declaration already pinned
+                // these bytes at this index, and the transition refuses anything else — so there
+                // is nothing here for an acceptance check to add.
+                Obj::CourtCloseChunk { .. } => {}
                 Obj::CourtDisclosed { session_id, disclosure, signature } => {
                     // The responder's rung, under the responder's key. Unsigned, a challenger
                     // could write the answers it wants to convict.
@@ -13254,6 +13307,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::DerivedArtifactV1 { .. } => "DerivedArtifactV1",
         O::DefaultAccused { .. } => "DefaultAccused",
         O::MaterialDisclosed { .. } => "MaterialDisclosed",
+        O::CourtCloseDeclared { .. } => "CourtCloseDeclared",
+        O::CourtCloseChunk { .. } => "CourtCloseChunk",
     }
 }
 

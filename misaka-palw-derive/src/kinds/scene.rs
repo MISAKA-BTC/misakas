@@ -27,7 +27,8 @@
 //!   "nodes":     [ node, ... ] }          a forest; 1..=1024 nodes in all, depth at most 8
 //!
 //! material = { "name": string (1..=64 bytes, unique),
-//!              "base_color": [r, g, b, a],   each 0..=256, over a denominator of 256
+//!              "base_color": [r, g, b, a],   each 0..=256, over a denominator of 256;
+//!                                            a < 256 makes the material BLEND — see "Materials"
 //!              "metallic": 0..=256, "roughness": 0..=256,
 //!              "double_sided": true | false }
 //!
@@ -70,6 +71,14 @@
 //! exact for every `n` — at most nine significant bits — so the DSL's channels run `0..=256`
 //! and 256 is full scale. The extra value is not an off-by-one; it is the price of an exact
 //! denominator.
+//!
+//! The alpha channel is the one that needs a second field to mean anything. glTF's `alphaMode`
+//! defaults to OPAQUE, and OPAQUE does not mean "alpha is 1" — it means alpha is IGNORED, so a
+//! material written `[0, 0, 256, 128]` arrives with its alpha in the file and renders solid.
+//! An `a` below full scale therefore emits `"alphaMode": "BLEND"`, and full scale emits no key
+//! at all: the default is already exact there, and a redundant one is bytes the answer did not
+//! buy. This is the one place where reading the artifact back is not enough to catch the fault —
+//! the bytes are conformant either way, and only a renderer disagrees with the DSL.
 //!
 //! # Rotation: the twelve exact rotations, and why there are no others
 //!
@@ -1726,7 +1735,7 @@ fn accessor_json(a: &Accessor, view: usize) -> J {
 
 fn material_json(m: &Material) -> J {
     let channel = |v: i64| J::Num { m: v, f: CHANNEL_DENOMINATOR.trailing_zeros() };
-    J::obj(vec![
+    let mut fields = vec![
         ("doubleSided", J::Bool(m.double_sided)),
         ("name", J::str(&m.name)),
         (
@@ -1737,7 +1746,24 @@ fn material_json(m: &Material) -> J {
                 ("roughnessFactor", channel(m.roughness)),
             ]),
         ),
-    ])
+    ];
+    // glTF's default `alphaMode` is OPAQUE, and OPAQUE does not mean "this material's alpha
+    // happens to be 1". It means the alpha channel is IGNORED: §3.9.4 says the rendered output
+    // is fully opaque whatever `baseColorFactor[3]` holds. So a material the DSL writes as
+    // `[0, 0, 256, 128]` — half-transparent blue, an entirely ordinary thing to ask for —
+    // reaches the file with its alpha intact and reaches the SCREEN fully opaque, and every
+    // check that reads the file rather than rendering it agrees the bytes are correct. The
+    // artifact was well formed and described something the answer did not ask for.
+    //
+    // BLEND is the only faithful encoding of a constant alpha below full scale. MASK is not a
+    // second option: it discards the value in favour of a cutoff, which would make the writer's
+    // alpha the writer's opinion — the thing this kind refuses everywhere else. And the field is
+    // OMITTED at full scale rather than spelled "OPAQUE", because there the default already says
+    // exactly the right thing and a redundant key is bytes the answer did not buy.
+    if m.base_color[3] < CHANNEL_DENOMINATOR {
+        fields.push(("alphaMode", J::str("BLEND")));
+    }
+    J::obj(fields)
 }
 
 /// The glTF JSON document of a built scene: every array in its pinned order.
@@ -2573,6 +2599,53 @@ mod tests {
         assert_eq!(materials[1]["pbrMetallicRoughness"]["baseColorFactor"].to_string(), "[0,0,1,0.5]");
         assert_eq!(materials[1]["pbrMetallicRoughness"]["metallicFactor"].to_string(), "0.5");
         assert!(materials[1]["doubleSided"].as_bool().unwrap());
+        // and the alpha above is not decoration: without a mode it is a value the renderer drops
+        assert_eq!(materials[1]["alphaMode"].as_str().unwrap(), "BLEND");
+        assert!(materials[0].get("alphaMode").is_none(), "full scale needs no key");
+    }
+
+    /// **The one fault the checks in this file cannot see.**
+    ///
+    /// Everything else here reads the artifact back and compares it against the DSL, and that is
+    /// enough because a wrong vertex is a wrong byte. Transparency is not like that. glTF §3.9.4
+    /// makes OPAQUE — the DEFAULT — ignore `baseColorFactor[3]` entirely, so a material the DSL
+    /// writes as half-transparent reaches the file with `0.5` sitting in the alpha slot, passes
+    /// every structural walk, matches its golden, re-derives byte-identically in Python, and
+    /// renders solid. The file was conformant and it described the wrong scene.
+    ///
+    /// This test is the missing renderer, reduced to the one bit a renderer would have told us.
+    #[test]
+    fn an_alpha_below_full_scale_is_a_blend_mode_and_not_just_a_number_in_the_file() {
+        let with_alpha = |a: i64| {
+            format!(
+                r#"{{ "v": 1, "frac_bits": 8,
+                   "materials": [ {{ "name": "m", "base_color": [0, 0, 256, {a}], "metallic": 0,
+                                     "roughness": 256, "double_sided": false }} ],
+                   "nodes": [ {{ "name": "n", "translation": [0, 0, 0], "rotation": [0, 0, 0, 2],
+                                 "scale": [256, 256, 256], "material": "m", "children": [],
+                                 "shape": {{ "shape": "box", "min": [-64, -64, -64], "max": [64, 64, 64] }} }} ] }}"#
+            )
+        };
+        // the alpha is compared as its exact decimal spelling, not as a value: this file may not
+        // name a float type at all, and the spelling is what the writer actually emits
+        let spell = |m: i64| {
+            let mut out = Vec::new();
+            write_number(m, CHANNEL_DENOMINATOR.trailing_zeros(), &mut out).unwrap();
+            String::from_utf8(out).unwrap()
+        };
+        // every reachable alpha, not a sample: the rule has one boundary and it is at full scale
+        for a in 0..=CHANNEL_DENOMINATOR {
+            let w = walk(&glb(&with_alpha(a)));
+            let m = &w.json["materials"][0];
+            assert_eq!(m["pbrMetallicRoughness"]["baseColorFactor"][3].to_string(), spell(a), "alpha {a} reached the file wrong");
+            match m.get("alphaMode").and_then(|v| v.as_str()) {
+                Some(mode) => {
+                    assert!(a < CHANNEL_DENOMINATOR, "full scale must not spell a mode it already has by default");
+                    assert_eq!(mode, "BLEND", "MASK would replace the DSL's alpha with a cutoff nobody wrote");
+                }
+                None => assert_eq!(a, CHANNEL_DENOMINATOR, "alpha {a} is below full scale and would render opaque"),
+            }
+        }
     }
 
     // ----- (5) determinism (X3, pinned here; the second architecture is the drill's) ---------

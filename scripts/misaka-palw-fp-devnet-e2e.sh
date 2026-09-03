@@ -56,6 +56,9 @@ MAX_TOKENS="${MAX_TOKENS:-4}"
 MODEL_ID="${MODEL_ID:-Qwen/Qwen2.5-1.5B/graph-v2}"
 PREMINE_TXID="6d6973616b612d7072656d696e65$(printf '0%.0s' $(seq 1 100))"   # "misaka-premine", zero-padded
 MAIN_PREMINE_INDEX=40   # consensus/core/src/config/premine.rs; bond n's fee float is MAIN_PREMINE_INDEX + 1 + n
+DEVNET_BONDS=6          # premine.rs: PALW_DEVNET_GENESIS_BONDS
+REGISTRAR_BOND=$((DEVNET_BONDS - 1))   # the bond no producer node holds, so its float is unspent
+BOND_FEE_FLOAT_SOMPI=10000000000       # premine.rs: PALW_RC_BOND_FEE_FLOAT_SOMPI = 100 * SOMPI_PER_KASPA
 
 log() { printf '[fp-e2e] %s\n' "$*" >&2; }
 die() { log "FATAL: $*"; exit 1; }
@@ -90,7 +93,12 @@ rm -rf "$WORK_DIR"; mkdir -p "$WORK_DIR/keys" "$WORK_DIR/obj" "$WORK_DIR/outbox"
 
 # Public seeds (consensus/core/src/config/premine.rs): value-less, derivable by anyone, which is
 # what makes a devnet drill reproducible on someone else's machine.
-python3 - "$WORK_DIR/keys" "$NODES" <<'PY'
+# ALL SIX, not just the producers'. `PALW_DEVNET_GENESIS_BONDS` is 6 and this drill runs 3 nodes,
+# so bond 5 is a bond nobody produces with — which is what the registrar needs. Every fee float is
+# owned by ITS OWN bond's payout key (`bonded_genesis_utxos`: index MAIN_PREMINE_INDEX+1+i), so the
+# registrar and the rail can only avoid spending the same outpoint by being different bonds. They
+# were both bond 0, and the second spend of a spent float is not a funding error a reader can see.
+python3 - "$WORK_DIR/keys" "$DEVNET_BONDS" <<'PY'
 import hashlib, os, sys
 d, n = sys.argv[1], int(sys.argv[2])
 h = lambda b: hashlib.blake2b(b, digest_size=32).hexdigest()
@@ -198,21 +206,123 @@ advance 1
 # post-genesis route (ADR-0054), from the artifact this node holds.
 # ---------------------------------------------------------------------------------------------
 log "stage 2 — registering $MODEL_ID from the artifact"
+# **Registered by a bond that produces nothing.** ADR-0054 admits a class on the producer key
+# alone, so the registrar does not have to be an executor — and making it a different bond is what
+# keeps bond 0's fee float unspent for the rail in stage 5b. It also makes the drill demonstrate
+# the real shape: one party puts a class on the chain, another executes it.
+REGISTRAR_ADDR="$("$CLI_BIN" --network devnet key address --key-file "$WORK_DIR/keys/bond-$REGISTRAR_BOND.seed" | tail -1 | awk '{print $NF}')"
+[ -n "$REGISTRAR_ADDR" ] || die "cannot derive the registrar bond ($REGISTRAR_BOND) address"
 reg_rpc=17710
-if ! MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg" \
+# **The registrar is a DAEMON, so it is backgrounded and watched, not waited on.** kaspad does not
+# stop when a registration lands — the panel submits the object and goes on validating, which is
+# what a node should do. Running it in the foreground made a successful registration and a silent
+# no-op the same observation (no output, forever) and cost two hours on 2026-09-03. The sentence
+# below is printed only after the object is IN an accepted block, so it is the one that means the
+# chain has the class rather than that a transaction was built.
+MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg" \
       --rpclisten-borsh=127.0.0.1:$((reg_rpc + 100)) --nogrpc --nodnsseed --disable-upnp \
       --connect=127.0.0.1:16410 --utxoindex \
       --palw-register-class="$MODEL_ID" --palw-class-artifact="$MISAKA_PALW_ARTIFACT" \
-      --palw-producer-key="$WORK_DIR/keys/bond-0.seed" --palw-producer-pay-address="${ADDRS[0]}" \
-      --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1))" \
-      >"$WORK_DIR/register-class.log" 2>&1; then
-  tail -30 "$WORK_DIR/register-class.log" >&2
-  die "registering $MODEL_ID failed — see $WORK_DIR/register-class.log"
-fi
+      --palw-producer-key="$WORK_DIR/keys/bond-$REGISTRAR_BOND.seed" --palw-producer-pay-address="$REGISTRAR_ADDR" \
+      --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + REGISTRAR_BOND))" \
+      >"$WORK_DIR/register-class.log" 2>&1 &
+# `$!` into a variable rather than `${pids[-1]}`: macOS ships bash 3.2, which rejects a negative
+# array index at PARSE time — the whole script fails to load, not the line.
+reg_pid=$!
+reg_deadline=$((SECONDS + WAIT))
+reg_outcome="timeout"
+while :; do
+  if grep -q "class registration in tx .* is on the chain" "$WORK_DIR/register-class.log" 2>/dev/null; then
+    reg_outcome="ok"; break
+  fi
+  # The failure that used to be pure silence, now named by the daemon's own refusal line.
+  if grep -q "service not started" "$WORK_DIR/register-class.log" 2>/dev/null; then
+    reg_outcome="no-service"; break
+  fi
+  kill -0 "$reg_pid" 2>/dev/null || { reg_outcome="died"; break; }
+  [ $SECONDS -lt $reg_deadline ] || break
+  sleep 3
+done
+kill "$reg_pid" 2>/dev/null || true
+wait "$reg_pid" 2>/dev/null || true
+case "$reg_outcome" in
+  ok) : ;;
+  no-service)
+    grep -n "service not started" "$WORK_DIR/register-class.log" >&2
+    die "the node built no registration service, so --palw-register-class was read by nobody — see the line above for which flag it wanted" ;;
+  died)
+    tail -30 "$WORK_DIR/register-class.log" >&2
+    die "the registrar exited before the class reached a block — see $WORK_DIR/register-class.log" ;;
+  *)
+    tail -30 "$WORK_DIR/register-class.log" >&2
+    die "the class did not reach an accepted block within ${WAIT}s — see $WORK_DIR/register-class.log" ;;
+esac
 advance 2
-CLASS_ID=$(grep -oE '[0-9a-f]{128}' "$WORK_DIR/register-class.log" | tail -1 || true)
-[ -n "$CLASS_ID" ] || { tail -30 "$WORK_DIR/register-class.log" >&2; die "no class id in the registration log"; }
-log "stage 2 OK — class ${CLASS_ID:0:16}…"
+
+# **The class id comes from the CHAIN'S TABLE, not from a hex scrape of a log.** This read
+# `grep -oE '[0-9a-f]{128}' … | tail -1`, and the last 128-hex string in a registration log is a
+# TXID or a block hash — never the class id, which the panel does not print. Everything downstream
+# (identity.json, the gateway's chain probe, the rail's commitment) then bound a block hash and
+# refused for reasons that named the class rather than the mistake. `--palw-dump-classes` reads
+# `palw_v2_class_table()` at the tip and refuses to answer from genesis, so it names what the chain
+# ACCEPTED — and it prints the budget, which stage 2b needs.
+# No `timeout(1)`: it is coreutils, macOS does not ship it, and this drill's own preflight is on
+# macOS. The dump service returns after it prints, but the NODE goes on running, so this is the
+# same background-watch-kill shape stage 2 uses rather than a wait on a process that never exits.
+class_table() {
+  local pid deadline
+  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg" \
+    --rpclisten-borsh=127.0.0.1:$((reg_rpc + 200)) --nogrpc --nodnsseed --disable-upnp \
+    --connect=127.0.0.1:16410 --utxoindex --palw-dump-classes >"$WORK_DIR/class-table.log" 2>&1 &
+  pid=$!
+  deadline=$((SECONDS + STEP_WAIT))
+  while :; do
+    grep -qE '\[palw-dump\] .* class\(es\) at daa' "$WORK_DIR/class-table.log" 2>/dev/null && break
+    grep -q 'holds no PALW classes' "$WORK_DIR/class-table.log" 2>/dev/null && break
+    kill -0 "$pid" 2>/dev/null || break
+    [ $SECONDS -lt $deadline ] || break
+    sleep 2
+  done
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  grep -E '\[palw-dump\]   class=' "$WORK_DIR/class-table.log" || true
+}
+class_rows=$(class_table)
+[ -n "$class_rows" ] || { tail -20 "$WORK_DIR/class-table.log" >&2; die "--palw-dump-classes named no class rows — see $WORK_DIR/class-table.log"; }
+# The registered class is the one that is not the genesis floor. `base=false` is the chain's own
+# word for "an operator put this here", so the drill does not have to know the floor's id.
+CLASS_ID=$(printf '%s\n' "$class_rows" | grep 'base=false' | sed -E 's/.*class=([0-9a-f]+).*/\1/' | head -1)
+[ -n "$CLASS_ID" ] || { printf '%s\n' "$class_rows" >&2; die "every class on this chain is a base class — $MODEL_ID did not register"; }
+log "stage 2 OK — class ${CLASS_ID:0:16}… (from the chain's class table)"
+
+# ---------------------------------------------------------------------------------------------
+# 2b. The budget, which is a SECOND wall standing behind the class id and looks nothing like one.
+#
+# A class registered post-genesis is Active and holds share, and is NOT budgeted until the next
+# epoch boundary (`palw_admission_v2.rs`, `palw_state_v2.rs` — asserted as shipped). The gateway
+# writes the commitment ONLY when `commit_refusal` is None and gates the derivation on the same
+# field, so on a `budget=0` chain this drill reaches stage 5, gets an answer, and then produces no
+# commitment at all — with a refusal that reads like a width refusal to anyone who has been
+# fighting the width. Naming it here costs one log line and saves that afternoon.
+# ---------------------------------------------------------------------------------------------
+CLASS_BUDGET=$(printf '%s\n' "$class_rows" | grep "class=$CLASS_ID" | sed -E 's/.*budget=([0-9]+).*/\1/' | head -1)
+# **The class's canonical job in leaves, from the chain rather than from a default.** The gateway
+# and the rail each carry `--class-leaves` defaulting to the FLOOR's 7,708, so a drill that omitted
+# it priced a dense class's quanta as the floor's — in two places, which could also disagree with
+# each other. `--palw-dump-classes` publishes it now (`PalwClassRowV2::canonical_leaves`), so the
+# number is read once here and passed to both halves.
+CLASS_LEAVES=$(printf '%s\n' "$class_rows" | grep "class=$CLASS_ID" | sed -E 's/.*leaves=([0-9]+).*/\1/' | head -1)
+[ -n "${CLASS_LEAVES:-}" ] && [ "$CLASS_LEAVES" != 0 ] \
+  || die "the class table published no canonical leaf count for $CLASS_ID — a quantum cannot be priced without it"
+log "  canonical job = $CLASS_LEAVES leaves"
+if [ "${CLASS_BUDGET:-0}" = 0 ]; then
+  log "  WARNING: $MODEL_ID has budget=0 — registered mid-epoch, so it holds share but cannot be"
+  log "           drawn until the next boundary. The gateway will answer and write NO commitment"
+  log "           (commit_refusal: \"this class's epoch budget is already spent\"). That refusal is"
+  log "           NOT the context-width wall. Seat the class at genesis, or wait for the boundary."
+else
+  log "  class budget=$CLASS_BUDGET blocks"
+fi
 
 # ---------------------------------------------------------------------------------------------
 # 3. Certify the family and bind the class to the FREE-PROMPT lane (ADR-0075).
@@ -276,6 +386,7 @@ MISAKA_PALW_ARTIFACT="$MISAKA_PALW_ARTIFACT" MISAKA_PALW_TOKENIZER="$MISAKA_PALW
 MISAKA_PALW_NETWORK_ID="devnet" \
 "$GATEWAY_BIN" --listen "127.0.0.1:$GATEWAY_PORT" --worker "$WORKER_BIN" \
   --outbox "$WORK_DIR/outbox" --identity "$WORK_DIR/identity.json" \
+  --class-leaves "$CLASS_LEAVES" \
   --rpc 127.0.0.1:17710 >"$WORK_DIR/gateway.log" 2>&1 &
 pids+=($!)
 
@@ -330,6 +441,66 @@ m = json.load(open(sys.argv[1]))["misaka"]
 print(m.get("fp_claim_id", ""))' "$WORK_DIR/chat.json")
 [ -n "$JOB_ID" ] || die "the response carries no fp_job_id — there is no job id to follow"
 log "stage 5 OK — job ${JOB_ID:0:16}… claim ${CLAIM_ID:0:16}…"
+
+# ---------------------------------------------------------------------------------------------
+# 5b. Sign the queued commitment and hand it to the chain.
+#
+# **This step did not exist, and stage 6 waited for its result.** The gateway holds no key — ADR-0079
+# Decision 4 keeps the process that parses a stranger's HTTP text away from the bond — so it QUEUES
+# the commitment in the outbox and stops. The rail is the half that signs and spends the fee, and
+# `--submit` appeared nowhere in this file. So `FreePromptCommitted` could never appear on any node,
+# and stage 6 reported "NOT on every node" for a claim that had never been submitted by anyone. A
+# drill whose acceptance condition is unreachable does not measure the chain, it measures itself.
+#
+# The funding is bond 0's own fee float, which stage 2 no longer spends (the registrar is
+# REGISTRAR_BOND). `--submit --rpc` is ADR-0077 Decision 4's one handoff: the rail signs and then
+# calls the same `misaka-palw-fp-submit` library `misaka palw fp-submit` calls, so the freshness,
+# funding and subnetwork answers have one implementation rather than two.
+# ---------------------------------------------------------------------------------------------
+log "stage 5b — signing the queued commitment and submitting it"
+ARTIFACT_STEM="$WORK_DIR/outbox/fp-job-${JOB_ID:0:16}"
+if ! ls "$ARTIFACT_STEM".commitment-unsigned.borsh >/dev/null 2>&1; then
+  ls -la "$WORK_DIR/outbox" >&2
+  # The refusal the gateway records when it declines to queue at all, surfaced by name rather than
+  # left as an absent file: on a mid-epoch registration this is the budget wall from stage 2b, not
+  # anything about the prompt.
+  python3 - "$WORK_DIR/health.json" <<'PY' >&2 || true
+import json, sys
+try: h = json.load(open(sys.argv[1]))
+except Exception: sys.exit(0)
+why = h.get("commit_refusal")
+if why: print(f"  the gateway queued nothing because the chain refuses the commitment: {why}")
+else:  print("  /health names no chain-side refusal, so the cause is on the gateway's own side "
+             "(its per-epoch commit budget, or the worker refused the request) — read gateway.log")
+PY
+  die "the gateway queued no commitment for job ${JOB_ID:0:16} — there is nothing for the rail to sign"
+fi
+if "$RAIL_BIN" --artifact "$ARTIFACT_STEM" \
+     --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
+     --funding-outpoint "$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1))" \
+     --funding-amount "$BOND_FEE_FLOAT_SOMPI" \
+     --class-id "$CLASS_ID" --class-leaves "$CLASS_LEAVES" \
+     --retention-dir "$WORK_DIR/traces" \
+     --submit --rpc 127.0.0.1:17710 >"$WORK_DIR/rail-submit.log" 2>&1; then
+  # Exit 0 is necessary and not sufficient — this tree's own rule. Every failure inside the rail's
+  # submit path calls `die` and exits 1, so a zero here is meaningful, but the thing that says a
+  # TRANSACTION REACHED THE NODE is `"submitted": "<txid>"` in the summary, and reading it costs
+  # one line. A summary with `"submitted": null` would otherwise pass this branch silently.
+  RAIL_TXID=$(python3 -c '
+import json,sys
+try: print(json.load(open(sys.argv[1])).get("submitted") or "")
+except Exception: print("")' "$ARTIFACT_STEM.rail.json" 2>/dev/null)
+  if [ -n "$RAIL_TXID" ]; then
+    log "stage 5b OK — commitment submitted in tx ${RAIL_TXID:0:16}…"
+  else
+    tail -20 "$WORK_DIR/rail-submit.log" >&2
+    log "stage 5b — the rail exited 0 but its summary names no txid; stage 6 will not see FreePromptCommitted"
+  fi
+  advance 2
+else
+  tail -30 "$WORK_DIR/rail-submit.log" >&2
+  log "stage 5b FAILED — the commitment was not submitted; stage 6 cannot reach FreePromptCommitted"
+fi
 
 # ---------------------------------------------------------------------------------------------
 # 6. Follow THAT claim through the lattice on EVERY node.
