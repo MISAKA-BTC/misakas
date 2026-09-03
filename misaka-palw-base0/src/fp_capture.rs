@@ -23,12 +23,13 @@
 //!
 //! One job of ADR-0082 §1.5's own shape on the real dense artifact (`qwen25-1.5b-a16.palwart`,
 //! prefill 26, decode 12, 4,074,040 leaves, 37 forward calls), three phases in one process on one
-//! host: **forward 0.0693 s/position (no capture) · dense capture 1.8831 s/position, 27.2x, 498 MB
-//! retained · the fold 0.1592 s/position, 2.3x, 27.5 MB retained** — the fold is 11.8x faster than
-//! the capture it replaces and retains 18.1x less, and what is left above the forward is the
-//! 0.82 us/leaf of hashing the commitment itself requires. (The host was shared, load ~20; the
-//! captured figure reproduces §1.5's 5.66 s/token at 5.81, so §1.5's 94x and this 27.2x are the
-//! same measurement over a forward that is 3.5x slower here.) Reproduce with
+//! quiet host: **forward 0.0304 s/position (no capture) · dense capture 1.4684 s/position, 48.3x,
+//! 498 MB retained · the fold 0.1154 s/position, 3.8x, 27.5 MB retained** — the fold is 12.7x
+//! faster than the capture it replaces and retains 18.1x less, and what is left above the forward
+//! is the 0.77 us/leaf of hashing the commitment itself requires (`(4.268 − 1.126) s / 4,074,040`).
+//! §1.5's own numbers (5.66 s/token captured, 94x) were taken by another session on another
+//! occasion; this measures both ends in one process, and 4.53 s/token captured brackets theirs.
+//! Reproduce with
 //! `MISAKA_PALW_U01_ARTIFACT=<artifact> cargo test --release -p misaka-palw-base0 --lib -- u01 --nocapture`.
 //!
 //! # The one property this module owes
