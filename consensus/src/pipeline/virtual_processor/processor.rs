@@ -461,6 +461,14 @@ pub struct VirtualStateProcessor {
     /// resolved — the fee collection in `calculate_utxo_state` and the acceptance filter that
     /// spends it must agree, or the filter reads an empty map and silently admits everything.
     pub(super) palw_certification_rent: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0082 Decision 3's fence, `None` on every shipped preset.** Past it a block may carry
+    /// the three moves of a fused-attention dissection, and the court a session is judged under
+    /// takes the DERIVED arity instead of the bundle's binary one. Resolved in exactly one place
+    /// ([`Self::palw_kary_court_active_at`]) for the reason every fence above it is: the
+    /// acceptance filter that admits a move and the court that grades the close it ends in must
+    /// get the same answer for the same block, or one node's session has a phase another node's
+    /// does not.
+    pub(super) palw_kary_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0069 Decision 7's fence, `None` on every shipped preset. Past it a block whose class
     /// holds no granted share contributes zero pwu to both chain weights — see
     /// [`Self::palw_uncertified_weightless_at`], which is the ONE place this is resolved.
@@ -892,6 +900,7 @@ impl VirtualStateProcessor {
             // rather than remembered at each of the three sites below.
             palw_capability_bound: params.palw_capability_bound_fence(),
             palw_certification_rent: params.palw_certification_rent,
+            palw_kary_court: params.palw_kary_court_fence(),
             palw_uncertified_weightless: params.palw_uncertified_weightless,
             palw_da_court: params.palw_da_court,
             palw_frontier_provenance: params.palw_frontier_provenance,
@@ -5406,11 +5415,19 @@ impl VirtualStateProcessor {
             // Not fenced, because the objects it counts do not exist before this state version:
             // a chain that can carry a `CourtCloseChunk` at all is one that already re-minted for
             // `PALW_STATE_V2_VERSION` 18, so there is no un-upgraded node to disagree with.
-            if kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object) {
+            //
+            // **ADR-0082 Decision 2 counts here too**, on the same slot: a dissection move is
+            // court CPU the carrying block must spend (a fold checked, an artifact proven, a
+            // binding verified), and giving it a second per-block budget would be two answers to
+            // "how much court may one block ask for". Same drop-not-invalidate shape, same
+            // constant, one counter.
+            if kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
+                || kaspa_consensus_core::palw_state_v2::palw_court_move_is_court_cpu_v1(&object)
+            {
                 if court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK {
                     info!(
-                        "Block {block}: a CourtCloseChunk that would complete a declared close was dropped, and the block \
-                         stands: the block already completes {} (PALW_COURT_CLOSE_MAX_PER_BLOCK)",
+                        "Block {block}: a court move that spends the block's adjudication slot was dropped, and the block \
+                         stands: the block already spent {} (PALW_COURT_CLOSE_MAX_PER_BLOCK)",
                         kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
                     );
                     continue;
@@ -5848,6 +5865,81 @@ impl VirtualStateProcessor {
                     if derived != *verdict {
                         return Err(format!("court {session_id} declares {verdict:?}; its own proof adjudicates {derived:?}"));
                     }
+                }
+                // -------------------------------------------------------------------------
+                // ADR-0082 Decision 2/3 — the dissection's three moves.
+                //
+                // Two gates, in this order: the FENCE (a move on a network that never armed the
+                // k-ary court is refused by name — the arm exists in the binary but the rule does
+                // not exist on this chain), then the party's signature, the same split every
+                // other court move uses.
+                // -------------------------------------------------------------------------
+                Obj::CourtAttnRootClaimed { session_id, root, arity, signature, .. } => {
+                    kaspa_consensus_core::palw_court_v2::palw_attn_move_is_admissible_v2(
+                        object,
+                        self.palw_kary_court_active_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
+                    // **The declared arity must be the ruleset's own** (patch note 7). The object
+                    // states it because the fold cannot derive it — the derivation reads the
+                    // bundle — and this is the layer that holds the bundle, so this is the layer
+                    // that refuses any other value. Without the comparison the responder would
+                    // choose how many children it discloses per round, which is the move budget
+                    // Z4 sizes the window against.
+                    let derived = self
+                        .palw_court_params_at(point.daa_score)
+                        .ok_or_else(|| "a dissection move on a network with no V2 bundle".to_string())?
+                        .map_err(|e| format!("session {session_id}: {e}"))?;
+                    if *arity != derived.dissection_arity() {
+                        return Err(format!(
+                            "session {session_id}: the root claim declares dissection arity {arity}; this ruleset derives {}",
+                            derived.dissection_arity()
+                        ));
+                    }
+                    kaspa_consensus_core::palw_court_v2::check_court_attn_root_claim_acceptance_v2(
+                        state,
+                        session_id,
+                        root,
+                        signature,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Obj::CourtAttnDissected { session_id, round, signature } => {
+                    kaspa_consensus_core::palw_court_v2::palw_attn_move_is_admissible_v2(
+                        object,
+                        self.palw_kary_court_active_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
+                    kaspa_consensus_core::palw_court_v2::check_court_attn_round_acceptance_v2(
+                        state,
+                        session_id,
+                        round,
+                        signature,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Obj::CourtAttnChildChosen { session_id, choice, signature } => {
+                    kaspa_consensus_core::palw_court_v2::palw_attn_move_is_admissible_v2(
+                        object,
+                        self.palw_kary_court_active_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
+                    kaspa_consensus_core::palw_court_v2::check_court_attn_choice_acceptance_v2(
+                        state,
+                        session_id,
+                        choice,
+                        signature,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
                 }
                 Obj::ClassRegistered {
                     class_id,
@@ -6479,6 +6571,35 @@ impl VirtualStateProcessor {
     /// liveness halt all the same, and the reverse would collect fees nobody reads.
     pub(super) fn palw_certification_rent_at(&self, daa_score: u64) -> bool {
         self.palw_certification_rent.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0082 Decision 3, resolved in exactly one place.** `false` on every shipped preset.
+    ///
+    /// Two things read it and they must agree: the acceptance filter, which admits a dissection
+    /// move only past the fence, and [`Self::palw_court_params_at`], which decides the arity the
+    /// children of every round are cut at. A node that resolved them differently would accept a
+    /// root claim its peers refused, or deal a different number of children from the same range.
+    pub(super) fn palw_kary_court_active_at(&self, daa_score: u64) -> bool {
+        self.palw_kary_court.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **The court a session is judged under at this block** (ADR-0082 Decision 3, patch note 7).
+    ///
+    /// Under a dormant fence this is `bundle.court` byte for byte — every shipped preset's court,
+    /// unchanged. Under an armed one the arity is the derivation's, over the ruleset's own
+    /// quantities and the classes the genesis set registers; `None` from the derivation is a
+    /// REFUSAL here, never a fallback to the binary ladder, because an arity of 2 is a value the
+    /// derivation can legitimately return and using it for "no legal arity" would let a window
+    /// that cannot hold its own dispute run a court that overruns it.
+    pub(super) fn palw_court_params_at(
+        &self,
+        daa_score: u64,
+    ) -> Option<Result<kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2, String>> {
+        let bundle = self.palw_v2_bundle.as_ref()?;
+        Some(
+            kaspa_consensus_core::palw_court_v2::palw_court_params_at_v2(bundle, self.palw_kary_court_active_at(daa_score))
+                .map_err(|e| e.to_string()),
+        )
     }
 
     /// **ADR-0065 D1's blind spot, named in the log instead of left for an operator to find.**
@@ -13418,6 +13539,10 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::MaterialDisclosed { .. } => "MaterialDisclosed",
         O::CourtCloseDeclared { .. } => "CourtCloseDeclared",
         O::CourtCloseChunk { .. } => "CourtCloseChunk",
+        // ADR-0082 Decision 2 — the fused-attention dissection's three moves.
+        O::CourtAttnRootClaimed { .. } => "CourtAttnRootClaimed",
+        O::CourtAttnDissected { .. } => "CourtAttnDissected",
+        O::CourtAttnChildChosen { .. } => "CourtAttnChildChosen",
     }
 }
 

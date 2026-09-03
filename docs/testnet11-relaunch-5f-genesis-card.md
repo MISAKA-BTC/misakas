@@ -98,11 +98,19 @@ At 512 the budget is 503 and the demonstration set closes. Whole corpus, for who
 The tail is grammar coverage rather than demonstration: `map/05-large-dungeon` is 11,222 tokens and
 the `9x-*` entries exist to be refused.
 
-**And the flatness makes the choice free** (§3): 80,440 bytes at 256 against 80,504 at 512 — one
-carrier either way, both prosecutable, sixty-four bytes apart. There is no trade. 1,024 would cost
-64 more and buy one more answer; 512 is taken because that is the width a demonstration has actually
-been measured against, and registering a width nobody has measured is how this card got the previous
-two answers wrong.
+**Two ceilings, and the card quoted only one of them.** On the CLOSE side the flatness makes width
+nearly free: 80,440 bytes at 256 against 80,504 at 512, one carrier either way, sixty-four bytes
+apart. That is what this card said, and it said it as though 1,024 were simply the next rung.
+
+**It is not, on the LADDER side.** At the chosen 2^26 the widest admissible row is **574** — so 512
+fits with about twelve per cent of margin and **1,024 does not fit at all.** 1,024 needs 2^28. So
+512 is not merely "the width a demonstration was measured against"; it is also close to the ceiling
+of the ladder the genesis is arming, and the next rung is a different cap rather than a rounding.
+
+Both sentences are true and only together are they the answer. A width has to clear the close budget
+AND the ladder, and this card had been reasoning about the first while quoting the second's
+numbers — the fifth time a figure measured under one configuration has been read as though it held
+under another, and the first where the figure was this card's own.
 
 **And the width is right for BOTH lanes, measured rather than assumed.** The QWEN36 lane uses a
 different tokenizer — the GGUF's own `tokenizer.ggml.*`, 248,320 tokens against the dense lane's

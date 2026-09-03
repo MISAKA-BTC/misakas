@@ -131,6 +131,12 @@ pub enum PalwAttnCourtError {
     RowNotCommitted,
     #[error("an opened row carries {got} lanes where the geometry says {expected}")]
     RowWidthMismatch { got: usize, expected: usize },
+    #[error("an opened row stands for position {expected} and its committed coordinate says {got}")]
+    RowIsNotItsPosition { got: u32, expected: u64 },
+    #[error("the tile's rows are committed by {slots} different nodes; one series is written by one node")]
+    RowsAreNotOneSeries { slots: usize },
+    #[error("the K rows and the V rows of this tile are the same committed series — a tile has two")]
+    KeyAndValueAreTheSameSeries,
     #[error("the bottom reads a tile from a checkpoint and carries no anchor for it")]
     AnchorMissing,
     #[error("the bottom reads a tile from a checkpoint and the class's tiled geometry was not supplied")]
@@ -405,6 +411,41 @@ impl PalwAttnDissectPhaseV1 {
         w_round: u64,
         kary_court_active: bool,
     ) -> Result<Self, PalwAttnCourtError> {
+        Self::open_with_arity(
+            session_id,
+            root,
+            site,
+            out_tile,
+            values,
+            court.dissection_arity(),
+            tile_positions,
+            opened_at_daa,
+            w_round,
+            kary_court_active,
+        )
+    }
+
+    /// [`Self::open`] with the arity stated directly rather than read off a court.
+    ///
+    /// The chain's transition has the arity — the object declares it and the acceptance layer
+    /// refuses any value but the ruleset's derived one — and does NOT have a
+    /// `PalwCourtParamsV2`, which is a bundle quantity the fold never receives. Building a
+    /// throwaway court there to read one field back out of it would be a second, fake ruleset
+    /// inside the transition; this is the same constructor without it, and `open` is now its one
+    /// caller plus a name for the court-shaped call.
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_with_arity(
+        session_id: Hash64,
+        root: &PalwAttnRootClaimV1,
+        site: (u16, u16, u16),
+        out_tile: &[i32],
+        values: crate::palw_base0_a16::A16QuantParams,
+        arity: u8,
+        tile_positions: u32,
+        opened_at_daa: u64,
+        w_round: u64,
+        kary_court_active: bool,
+    ) -> Result<Self, PalwAttnCourtError> {
         if !kary_court_active {
             return Err(PalwAttnCourtError::FenceDormant);
         }
@@ -441,7 +482,6 @@ impl PalwAttnDissectPhaseV1 {
             return Err(PalwAttnCourtError::RootDoesNotFinalize);
         }
         let tile_count = (root.history_positions as u64).div_ceil(tile_positions as u64);
-        let arity = court.dissection_arity();
         if !palw_attn_arity_is_legal_v1(arity) {
             return Err(PalwAttnCourtError::Dissect(PalwAttnDissectError::ArityOutOfRange { got: arity }));
         }
@@ -497,6 +537,22 @@ impl PalwAttnDissectPhaseV1 {
     /// for a checkpoint chunk to serve the bottom (ADR-0082 Decision 4).
     pub fn tile_positions(&self) -> u32 {
         self.tile_positions
+    }
+
+    /// **Pull this rung's deadline back inside the session's own assembly reserve** (ADR-0080 W4),
+    /// with `PalwBisectLadderV1::cap_deadline_to_session_v1`'s rule verbatim.
+    ///
+    /// The dissection's bottom is a CLOSE, and a close may have to be assembled over several
+    /// blocks. Those blocks come out of the session, so a rung allowed to run to the whole-session
+    /// backstop spends the assembly room the move it is waiting for will need. Never raised, only
+    /// lowered; the deadline in force after the cap is returned so a caller can index on it
+    /// without reading the field back.
+    pub fn cap_deadline_to_session_v1(&mut self, session_deadline_daa: u64, assembly_reserve_daa: u64) -> u64 {
+        let cap = session_deadline_daa.saturating_sub(assembly_reserve_daa);
+        if cap < self.last_deadline_daa {
+            self.last_deadline_daa = cap;
+        }
+        self.last_deadline_daa
     }
 
     /// The rounds this dissection is allowed to take — the contract's own recurrence over the
@@ -629,6 +685,66 @@ impl PalwAttnDissectPhaseV1 {
 // The bottom
 // =================================================================================================
 
+/// **The same reading, for the caller that opens the committed OUTPUT row before a round is
+/// played** (ADR-0082 Decision 2, step 1).
+///
+/// The root claim is admitted only if its `V*` finalizes to the row the execution committed, and
+/// "the row the execution committed" is a leaf of the claim's step tree like any other — so the
+/// arm that opens the phase reads it through the same function the bottom reads its operands
+/// with. A second spelling of "opened" is a second definition of what the court trusts.
+pub fn palw_attn_opened_lanes_v1(
+    row: &PalwAttnRowOpeningV1,
+    binding: &PalwAttnBottomBindingV1,
+    expected_lanes: usize,
+) -> Result<Vec<i32>, PalwAttnCourtError> {
+    opened_lanes_v1(row, binding, expected_lanes)
+}
+
+/// **Every row of a series, checked to be the positions it stands for** (ADR-0082 Decision 2,
+/// step 3).
+///
+/// `opened_lanes_v1` proves a leaf is IN the claim's step tree. It does not prove WHICH row of
+/// the cache it is, and the recompute below is position-ordered — so without this a challenger
+/// could open sixteen committed rows from anywhere in the history, recompute a triple that is not
+/// the disputed tile's, and take `ExecutorGuilty` against an execution that was honest. The
+/// evidence has to say what it is, not merely that it exists.
+///
+/// Two things are checked and both come off the committed leaf preimage, which is inside the
+/// leaf hash the opening proves:
+///
+/// * `coord.position` is the position this row stands for, in order;
+/// * every row of one series is committed by ONE node — a cache series is written by one node at
+///   every position — and the caller additionally requires the K series and the V series to be
+///   different nodes, because two slices of one series are not a tile's K and V.
+///
+/// **What this still does not pin** is WHICH node writes the keys and which the values: a graph
+/// declares its cache reads as the `PALW_STEP_INPUT_KV_K` / `_KV_V` sentinels and never names the
+/// nodes that WRITE them, so the court has no registered fact to compare a slot against. A bottom
+/// that swaps the two series wholesale is therefore still admissible on the cache-write route,
+/// and is refused on the checkpoint route, where kind, layer and position all come from the map.
+/// That gap is ADR-0082's to close before `palw_kary_court` is armed.
+fn opened_series_v1(
+    rows: &[PalwAttnRowOpeningV1],
+    binding: &PalwAttnBottomBindingV1,
+    expected_lanes: usize,
+    first_position: u64,
+) -> Result<(Vec<i32>, Option<u32>), PalwAttnCourtError> {
+    let mut out = Vec::with_capacity(rows.len() * expected_lanes);
+    let mut slots = std::collections::BTreeSet::new();
+    for (i, row) in rows.iter().enumerate() {
+        let expected = first_position + i as u64;
+        if u64::from(row.leaf.coord.position) != expected {
+            return Err(PalwAttnCourtError::RowIsNotItsPosition { got: row.leaf.coord.position, expected });
+        }
+        slots.insert(row.leaf.coord.node_slot);
+        out.extend(opened_lanes_v1(row, binding, expected_lanes)?);
+    }
+    if slots.len() > 1 {
+        return Err(PalwAttnCourtError::RowsAreNotOneSeries { slots: slots.len() });
+    }
+    Ok((out, slots.into_iter().next()))
+}
+
 /// Read an opened row's `i32` lanes out of its leaf preimage, after proving the leaf is the
 /// claim's. One function for every row the bottom opens, so "opened" means the same thing four
 /// times.
@@ -701,17 +817,13 @@ fn tile_rows_v1(
     first_position: u64,
     width: usize,
     court_tile: u32,
-) -> Result<Vec<i32>, PalwAttnCourtError> {
+) -> Result<(Vec<i32>, Option<u32>), PalwAttnCourtError> {
     match evidence {
         PalwAttnTileEvidenceV1::CacheWrites { rows } => {
             if rows.len() != width {
                 return Err(PalwAttnCourtError::RowsAfterMismatch { covered: 0, width, got: rows.len() });
             }
-            let mut out = Vec::with_capacity(width * site.kv_dim);
-            for row in rows {
-                out.extend(opened_lanes_v1(row, binding, site.kv_dim)?);
-            }
-            Ok(out)
+            opened_series_v1(rows, binding, site.kv_dim, first_position)
         }
         PalwAttnTileEvidenceV1::Checkpoint { chunk, rows_after } => {
             let (leaf, geometry) = verified_anchor_v1(anchor, binding, site)?;
@@ -766,10 +878,9 @@ fn tile_rows_v1(
                     .ok_or(PalwAttnCourtError::ChunkRowUnreadable { position: u64::from(p) })?;
                 out.extend(bytes.chunks_exact(4).map(|q| i32::from_le_bytes([q[0], q[1], q[2], q[3]])));
             }
-            for row in rows_after {
-                out.extend(opened_lanes_v1(row, binding, site.kv_dim)?);
-            }
-            Ok(out)
+            let (tail, slot) = opened_series_v1(rows_after, binding, site.kv_dim, first_position + covered as u64)?;
+            out.extend(tail);
+            Ok((out, slot))
         }
     }
 }
@@ -820,10 +931,20 @@ pub fn check_attn_dissect_bottom_v1(
     // Every operand is opened against something the claim committed before a multiply happens.
     let qh = opened_lanes_v1(&bottom.query, binding, site.d_head)?;
     let tile = phase.tile_positions();
-    let k_tile =
+    let (k_tile, k_slot) =
         tile_rows_v1(&bottom.k, PalwStateChunkKindV1::Key, bottom.anchor.as_ref(), binding, site, first_position, width, tile)?;
-    let v_tile =
+    let (v_tile, v_slot) =
         tile_rows_v1(&bottom.v, PalwStateChunkKindV1::Value, bottom.anchor.as_ref(), binding, site, first_position, width, tile)?;
+    // **A tile has two series, not one twice.** On the checkpoint route the map says which kind a
+    // chunk holds; on the cache-write route nothing does, and opening the SAME committed series
+    // for both K and V would recompute a triple no execution produced — a conviction built out of
+    // honest rows read twice. Two different committing nodes is the weakest true statement
+    // available here; see `opened_series_v1` for the part that is still not pinned.
+    if let (Some(k), Some(v)) = (k_slot, v_slot) {
+        if k == v {
+            return Err(PalwAttnCourtError::KeyAndValueAreTheSameSeries);
+        }
+    }
 
     let (m_star, s_star) = phase.root_scale();
     let lanes = (phase.lane_first as usize, phase.lane_count as usize);

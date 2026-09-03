@@ -1178,6 +1178,10 @@ fn proof_kind_v1(proof: &PalwCourtVerdictProofV2) -> &'static str {
         PalwCourtVerdictProofV2::Arithmetic { .. } => "Arithmetic",
         PalwCourtVerdictProofV2::DecodeToken { .. } => "DecodeToken",
         PalwCourtVerdictProofV2::DecodeTokenTiled { .. } => "DecodeTokenTiled",
+        // ADR-0082 Decision 2. Named rather than folded into a `_` arm: the whole point of printing
+        // the kind is that an operator can see WHICH close it is about to spend carriers on, and a
+        // catch-all would have printed "other" for the widest proof this ruleset admits.
+        PalwCourtVerdictProofV2::AttnDissection { .. } => "AttnDissection",
     }
 }
 
