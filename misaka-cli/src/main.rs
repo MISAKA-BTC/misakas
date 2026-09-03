@@ -384,16 +384,24 @@ enum PalwCmd {
         #[arg(long)]
         yes: bool,
     },
-    /// **File a court close whose carriage does not fit one transaction** (ADR-0080 W13).
+    /// **File a court close, whole or in the carriage ADR-0080 gave it** (W13).
     ///
-    /// A court move is a `CourtClosed` object on an ordinary lifecycle transaction, and a close
-    /// larger than one carrier has to ride the ADR-0075 Decision 14 chunk group — several
-    /// transactions, chained on one another's change, reassembled by the chain in the block that
-    /// completes the group. This drives that: it checks the close against the court's own cost
-    /// rule BEFORE spending anything, cuts it the way the chain cuts it, says how many blocks the
+    /// A close that fits one carrier is a `CourtClosed` object on an ordinary lifecycle
+    /// transaction. A close that does not — and on the RC ruleset a legal one needs twenty-three
+    /// carriers — rides ADR-0080 design A's own table: a small signed `CourtCloseDeclared` that
+    /// pins every byte behind it, then those bytes as `CourtCloseChunk`s, one per carrier, keyed
+    /// `(session, side)` rather than by a digest of the bytes. This drives both: it checks the
+    /// close against the court's own cost rule BEFORE spending anything, cuts it the way the court
+    /// cuts it, refuses every limit it can check up front — the ruleset's carrier count, the
+    /// group row's bitmap, the assembly window against `--deadline-at` — says how many blocks the
     /// carriage costs against the turn deadline it spends, funds and submits the parts in order,
     /// and names the part that failed. Resumable: a run interrupted mid-group picks up from the
     /// parts the chain still holds rather than re-paying for them.
+    ///
+    /// **The split path is planned and priced but not yet filable**: consensus refuses every
+    /// `CourtCloseDeclared` until ADR-0080 W6 lands the declaration's signature check, so this
+    /// command reports the whole carriage and then refuses rather than spending fees on carriers
+    /// the chain would drop. A close that fits one carrier files normally.
     CourtClose {
         #[command(flatten)]
         key: KeyArgs,
@@ -404,6 +412,11 @@ enum PalwCmd {
         /// Without it the widest shipped row is assumed and the report says so.
         #[arg(long)]
         class: Option<String>,
+        /// Which of the session's two bonds is declaring: `challenger` or `executor`. Required
+        /// only for a close too large for one carrier — that one rides as a declaration attributed
+        /// to one side, and nothing in the close file says which side is moving.
+        #[arg(long)]
+        side: Option<String>,
         /// The DAA score this move's turn expires at, when you know it. With it the report says
         /// whether the carriage fits the time that is LEFT, not the time a turn is worth.
         #[arg(long)]
@@ -961,13 +974,14 @@ async fn main() -> std::process::ExitCode {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
         Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await,
-        Command::Palw(PalwCmd::CourtClose { key, close, class, deadline_at, state, restart, offline, yes }) => {
+        Command::Palw(PalwCmd::CourtClose { key, close, class, side, deadline_at, state, restart, offline, yes }) => {
             palw_court::court_close(
                 &ctx,
                 &key.source(),
                 palw_court::CourtCloseArgs {
                     close: &close,
                     class: class.as_deref(),
+                    side: side.as_deref(),
                     deadline_at,
                     state: state.as_deref(),
                     restart,
