@@ -9948,13 +9948,18 @@ mod consensus_params_id_tests {
             crate::palw_court_v2::palw_attn_widest_registered_site_v2(bundle).0 > 0,
             "the premise: this genesis set now registers a fused site"
         );
-        let err = minted.validate_palw_v2().expect_err("a fused genesis row under a dormant court must not assemble");
-        assert!(format!("{err}").contains("fused-attention"), "the refusal must name the leaf: {err}");
 
-        // Armed, the same genesis set assembles — the row has a court, which is the whole rule.
+        // Armed — which is what the shipped devnet now is — the same genesis set assembles: the row
+        // has a court, which is the whole rule.
         let mut armed = minted.clone();
         armed.palw_kary_court = Some(ForkActivation::always());
         armed.validate_palw_v2().expect("a fused genesis row is exactly what an armed k-ary court is for");
+
+        // Dormant, it does not.
+        let mut dormant = minted;
+        dormant.palw_kary_court = None;
+        let err = dormant.validate_palw_v2().expect_err("a fused genesis row under a dormant court must not assemble");
+        assert!(format!("{err}").contains("fused-attention"), "the refusal must name the leaf: {err}");
     }
 
     /// **Audit D M-1 and M-2: a fence this build cannot carry may not be armed.**
