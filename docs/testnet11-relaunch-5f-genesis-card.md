@@ -134,7 +134,8 @@ Three different numbers are all "tokens for a kind", and this card quoted the wr
 
 | quantity | value | what it actually answers |
 |---|---|---|
-| grammar floor | cad 38, music 60, scene 104 | the shortest legal non-degenerate answer — fits at n_ctx **128** |
+| grammar floor | cad 38, music 60, scene 104 | the shortest legal non-degenerate answer. **NOT "fits at n_ctx 128"** — see the prompt row |
+| **the prompt itself** | **134 tokens**, ChatML, measured on the live gateway | added to every floor: cad **172**, music **194**, scene **238**. Nothing fits at 128 |
 | what the model gates needed | 256, both tiers | the width at which a checkpoint's own answers parsed |
 | **what the shipped corpus costs** | cad 66, **music 261, scene 286** | **the answers a demonstration actually publishes** |
 
@@ -158,6 +159,24 @@ the `9x-*` entries exist to be refused.
 **Two ceilings, and the card quoted only one of them.** On the CLOSE side the flatness makes width
 nearly free: 80,440 bytes at 256 against 80,504 at 512, one carrier either way, sixty-four bytes
 apart. That is what this card said, and it said it as though 1,024 were simply the next rung.
+
+**And a third confirmation arrived from the chain itself, not from a corpus.** Stage 4 of the
+end-to-end drill PASSED — the panel registered the class, every validator carried `FamilyCertified`
+and `ClassLaneCertified`, the chain graded both, and `/health` reported `fp_certified` true and the
+lane open. Stage 5 then refused a **one-token** job:
+
+    prompt 134 + decode ceiling 1 exceeds max_context_tokens 16
+
+That is the whole certification path working and the width being the only thing left — and it is
+what turns the 134 into a measurement rather than an estimate. It also says the first row of the
+table above was quoted wrong wherever it appeared: a grammar floor is what the ANSWER costs, and no
+job is only its answer. `scene`'s 104 needs 238 positions to be asked for at all.
+
+**So "why 512" has a measured answer in three independent directions**: 238 is the floor once the
+prompt is counted, 286 is what the shipped `scene` corpus actually costs, and 574 is the widest row
+the 2^26 ladder admits. 512 is the first artifact-stated width above the first two and inside the
+third. It is not a round number anybody liked. (2^24's 156 would not have covered even `scene`'s
+238, which confirms the ladder choice from the same direction.)
 
 **It is not, on the LADDER side.** At the chosen 2^26 the widest admissible row is **574** — so 512
 fits with about twelve per cent of margin and **1,024 does not fit at all.** 1,024 needs 2^28. So
