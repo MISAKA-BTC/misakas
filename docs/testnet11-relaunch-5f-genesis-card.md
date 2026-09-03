@@ -491,6 +491,43 @@ thing done before the cut and it is done ONCE.
 | `PALW_RC_COURT_E2E_ROOT_BYTES` | `consensus/core/src/palw_e2e_adjudicability.rs` | here, second — see the ordering below |
 | state version 18 → 19, ADR-0043 goldens | `palw-adr0082-impl` | 5b, on that branch |
 
+### The re-pin list is SEVEN items and only FOUR have a red test — here is where the other three went
+
+Measured on the re-merged tree (`4205f535`): `misaka-palw-base0` 360/0, `kaspa-consensus-core`
+1815/3, `misaka-palw-derive` 201/1. **Four reds, and each is one of the seven:**
+
+    every_genesis_commits_to_the_premine_this_build_mints    re-pin 1  premine utxo_commitment
+    shipped_presets_have_pinned_fingerprints                 re-pin 3  the two fingerprints
+    palw_freeprompt_v3::golden_vector_ids_are_frozen         re-pin 5  free-prompt golden
+    transformer_id_pin::…_pinned_with                        re-pin 4  the eight transformer ids
+
+The other three are accounted for and none of them is a silent hole:
+
+- **re-pin 6, the state-version goldens: already done, by FA2.** `PALW_STATE_V2_VERSION` is 20 and
+  the empty/inhabited goldens were re-pinned in the same change that bumped it
+  (`966bae07…` / `a0b711e1…`, in `palw_state_v2.rs`). A version bump that re-pins its own goldens is
+  the right shape; nothing is left for the freeze.
+- **re-pin 2, `PALW_RC_COURT_E2E_ROOT_BYTES`: gated, and currently NOT stale.** The gate is real and
+  it is not in consensus-core — `the_pinned_rc_e2e_root_is_what_this_build_certifies`
+  (`misaka-palw-base0/src/e2e_drill.rs:1745`), a plain `#[test]`, which compares
+  `palw_court_e2e_root_v1()` (computed from the registered families) against the pin. base0 is
+  360/0, so on this tree the root has not moved. The `581466da… → 8f08d303…` move measured elsewhere
+  was against a per-kernel drill rule that is **not merged**; if it lands, this becomes a live re-pin
+  and base0 goes red to say so.
+- **re-pin 7 does not exist** — the seventh slot was the two fingerprints counted as two items.
+
+**And one assertion in this area checks nothing, with a confident message.** `config/params.rs:11228`:
+
+    assert_eq!(bundle.court_e2e_root, palw_rc_court_e2e_root_v1(),
+               "the attempt-lane genesis set is the one this build certifies");
+
+`bundle.court_e2e_root` is **set from that same function** (`palw_fp_devnet_v3.rs:803`). It compares
+a value with itself. The thing its message claims — that this build's court can play the family set
+the pin names — is `palw_court_e2e_root_v1()`, a different function that this test never calls.
+It is the `signed: true` defect again: *a word answering a different question than the one it was
+asked.* The real check exists in base0; this line should say what it actually checks (that the
+assembler does not let a caller name the root) or point at the gate that does.
+
 ### The certified-set root is regenerated TWICE, and that is correct
 
 It is not a freeze-time chore. With the covering type change in, **no node can register a class at
