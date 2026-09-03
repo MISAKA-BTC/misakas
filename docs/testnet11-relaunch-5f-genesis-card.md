@@ -874,6 +874,30 @@ cases are running as this is written. `mainnet_soak_randomized_fault_injection`,
 failure mode with the worst recovery story, and the wall clock is free while the last fixer
 finishes. Whatever it prints goes in §6 as a gate that was run rather than a set that was skipped.
 
+### A SHORTCUT THAT HAPPENS TO BE RIGHT IS WORSE THAN ONE THAT IS WRONG
+
+`cargo run -p misaka-palw-derive --bin palw-derive -- drill --report r.json` builds **that one
+binary**. The drill then shells out to `palw-evm-runner`, does not find it, and six of forty-six
+goldens refuse — ADR-0079 SA-1's confinement gate holding, exactly as the card already documents for
+the `--lib` case. **The report's own `verdict` field said `FAILS`.** Its `transformers[]` array sat
+right beside it, populated and inviting.
+
+Built the crate properly (`cargo build -p misaka-palw-derive`), re-ran, got a valid report — *46
+goldens, 0 mismatched, 8 bounds enforced* — and compared:
+
+    8 of 8 transformer ids IDENTICAL between the FAILS run and the valid one
+    source_tree_sha256 identical: 637858dba5ea5e34b9459a580b2b81d1361aecf450bc615a4ee9621d4953a988
+
+**The ids do not depend on the EVM runner. So pasting them out of the failed report would have
+produced exactly the right genesis — and nothing, ever, would have told anyone the process was
+wrong.** The values would have been correct, the pins would have been green, the chain would have
+launched, and the next person to follow the same shortcut would have had no reason to doubt it —
+until a change *did* make the ids depend on what the failed leg covers.
+
+*A wrong answer gets corrected. A right answer from an invalid process gets INHERITED.* That is why
+the rule is procedural and not a matter of judgement: **assert the report's verdict before reading
+any field of it.**
+
 ### SEND THE VALUE **AND** WHAT YOU THINK PRODUCED IT — the disagreement is the check
 
 A hash arrived with a sentence: *"derive/src tree hash after the fmt: `4969f8dc…` (the fmt moved it
