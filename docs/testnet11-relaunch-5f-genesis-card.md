@@ -5518,3 +5518,17 @@ peers, and the explorer's "few LLM blocks" is this, not a slow class. Open, code
 synchronously when a v5 attempt block arrives (validation of its commitment, or the panel's receipt on the claim)
 that exceeds the 120 s flow budget on inference-loaded hosts; 3e's devnet run 2 (three dense producers on one Mac)
 did not show it. With 3e.
+
+**6k, continued (21:50 UTC).** Bounds on the stall: seat2's 748 MB retention material is written ~9 s *before* its
+produced-block line (mtimes 21:19:46 / 22:25:11 / 22:58:02 / 23:31:11 local vs blocks at :53 / :20 / :11 / :23), so the
+write is not the stall; seat2's heartbeats continue through each window (#68 23:00:02, #69 23:01:38 local), so its
+runtime is not stalled; node0 accepts other peers' relay blocks and mines heartbeats through the same window. The
+stall is per-connection and symmetric. 6a's loopback devnet (three kaspads, two v5 producers, the same cut and rail,
+the same ~750 MB material per job): run 1 19/19 and run 3 13/13 v5 blocks accepted by the third node within
+seconds. So neither v5 validation nor the block's own bytes; **what moves with a v5 block over a real link inside the
+120 s flow window** — the material/close serving path (ADR-0082 flat close, 748 MB per v5 job against QWEN36's
+smaller material) pulled through the same connection the relay flows share; the 2026-08-28 gossip-cap incident
+(`PALW_MATERIAL_MAX_BYTES` 8 → 16 MiB) was the previous member of this family. A sampler on 5.104 records TX/RX
+bytes per 15 s across its next production to see whether a multi-hundred-MB transfer starts at the block.
+3e's and 5e's sessions are gone; the code read is with 6a. Seat table for the explorer (bond → seat): 0 node0,
+1 node1, 2 seat2, 6 .113 node, seat4 bond 4, pool slot bond .
