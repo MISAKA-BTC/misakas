@@ -8534,8 +8534,9 @@ fn apply_object(
                     "the opened output tile is not the leaf the ladder narrowed to".to_string(),
                 ));
             }
-            let committed = crate::palw_attn_court_v1::palw_attn_opened_lanes_v1(out_tile, &derived.binding, derived.head_lanes.2 as usize)
-                .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            let committed =
+                crate::palw_attn_court_v1::palw_attn_opened_lanes_v1(out_tile, &derived.binding, derived.head_lanes.2 as usize)
+                    .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
             let phase = crate::palw_attn_court_v1::PalwAttnDissectPhaseV1::open_with_arity(
                 *session_id,
                 root,
@@ -17572,29 +17573,32 @@ pub(crate) mod tests {
     /// over.
     #[cfg(test)]
     mod adr0082_dissection_drill {
-    use super::*;
+        use super::*;
         use crate::Hash64;
-        use crate::palw_artifact::{PalwArtifactOpeningV1, PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1, open_artifact_leaf_v1};
-        use crate::palw_attn_court_v1::{
-            PalwAttnCheckpointAnchorV1, PalwAttnChunkOpeningV1, PalwAttnDissectBottomV1, PalwAttnDissectChoiceV1, PalwAttnRowOpeningV1,
-            PalwAttnTileEvidenceV1, PALW_ATTN_COURT_OBJECT_VERSION_V1,
+        use crate::palw_artifact::{
+            PalwArtifactOpeningV1, PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1, open_artifact_leaf_v1,
         };
-        use crate::palw_attn_dissect::{PalwAttnDissectRoundV1, PalwAttnRootClaimV1, PALW_ATTN_DISSECT_OBJECT_VERSION_V1};
-        use crate::palw_base0_a16::{a16_attn_finalize_v1, a16_attn_root_claim_v1, A16AttnFusedParamsV1, A16QuantParams};
-        use crate::palw_bisect::{PalwBisectDisclosureV1, PalwBisectTurnV1, PalwBisectVerdictV1, PALW_BISECT_OBJECT_VERSION_V1};
+        use crate::palw_attn_court_v1::{
+            PALW_ATTN_COURT_OBJECT_VERSION_V1, PalwAttnCheckpointAnchorV1, PalwAttnChunkOpeningV1, PalwAttnDissectBottomV1,
+            PalwAttnDissectChoiceV1, PalwAttnRowOpeningV1, PalwAttnTileEvidenceV1,
+        };
+        use crate::palw_attn_dissect::{PALW_ATTN_DISSECT_OBJECT_VERSION_V1, PalwAttnDissectRoundV1, PalwAttnRootClaimV1};
+        use crate::palw_base0_a16::{A16AttnFusedParamsV1, A16QuantParams, a16_attn_finalize_v1, a16_attn_root_claim_v1};
+        use crate::palw_bisect::{PALW_BISECT_OBJECT_VERSION_V1, PalwBisectDisclosureV1, PalwBisectTurnV1, PalwBisectVerdictV1};
         use crate::palw_court_v2::PalwCourtVerdictProofV2;
-        use crate::palw_qwen25_profile::{qwen25_a16_profile_v5, PalwQwen25GeometryV1};
+        use crate::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v5};
         use crate::palw_state_chunk_map::{
-            integer_kv_state_chunk_entry_v1, integer_kv_state_locate_v1, tiled_kv_state_chunk_map_id_v3, tiled_kv_state_geometry_v3,
-            PalwStateChunkGeometryV1, PalwStateChunkKindV1,
+            PalwStateChunkGeometryV1, PalwStateChunkKindV1, integer_kv_state_chunk_entry_v1, integer_kv_state_locate_v1,
+            tiled_kv_state_chunk_map_id_v3, tiled_kv_state_geometry_v3,
         };
         use crate::palw_step::{
-            canonical_step_leaf_index, step_leaf_count, PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepOpKindV1,
+            PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepOpKindV1, canonical_step_leaf_index, step_leaf_count,
         };
         use crate::palw_step_leg::{
-            checkpoint_genesis_prev_v2, checkpoint_leaf_hash_v2, checkpoint_leg_root_v2, execution_commitment_root_v2, state_chunk_leaf_hash_v1,
-            state_chunk_path_v1, state_chunks_root_v1, step_leg_root_v1, step_merkle_path_v1, step_merkle_root_v1, step_tile_leaf_hash_v1,
-            PalwCheckpointLeafV2, PalwStepBindingV2, PalwStepOpeningV1, PalwStepTileLeafV1, PALW_STEP_LEG_OBJECT_VERSION_V1,
+            PALW_STEP_LEG_OBJECT_VERSION_V1, PalwCheckpointLeafV2, PalwStepBindingV2, PalwStepOpeningV1, PalwStepTileLeafV1,
+            checkpoint_genesis_prev_v2, checkpoint_leaf_hash_v2, checkpoint_leg_root_v2, execution_commitment_root_v2,
+            state_chunk_leaf_hash_v1, state_chunk_path_v1, state_chunks_root_v1, step_leg_root_v1, step_merkle_path_v1,
+            step_merkle_root_v1, step_tile_leaf_hash_v1,
         };
         use crate::palw_step_refute::palw_attn_fused_tensors_v1;
         use crate::palw_v2::PalwJobContextV2;
@@ -17775,13 +17779,20 @@ pub(crate) mod tests {
                 let total = step_leaf_count(&profile, &context).expect("the drill job counts");
                 let mut leaf_hashes = vec![h64(0x5e); total as usize];
                 let index_of = |slot: u32, position: u32, tile: u32| {
-                    canonical_step_leaf_index(&profile, &context, &PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position, tile_index: tile })
-                        .expect("a canonical coordinate")
+                    canonical_step_leaf_index(
+                        &profile,
+                        &context,
+                        &PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position, tile_index: tile },
+                    )
+                    .expect("a canonical coordinate")
                 };
                 let mut place = |values: &[i32], slot: u32, position: u32, tile: u32| -> u64 {
                     let index = index_of(slot, position, tile);
-                    leaf_hashes[index as usize] =
-                        step_tile_leaf_hash_v1(&context.context_hash(), &profile.shape_profile_id(), &leaf(values, slot, position, tile));
+                    leaf_hashes[index as usize] = step_tile_leaf_hash_v1(
+                        &context.context_hash(),
+                        &profile.shape_profile_id(),
+                        &leaf(values, slot, position, tile),
+                    );
                     index
                 };
                 let query_index = place(&q, q_slot, position, 0);
@@ -17815,8 +17826,8 @@ pub(crate) mod tests {
                     triple(tensors.probs.as_str(), quant().probs),
                     triple(tensors.values.as_str(), quant().values),
                 ];
-                let artifact_root =
-                    artifact_root_v1(&operands.iter().map(artifact_leaf_v1).collect::<Vec<_>>()).expect("an artifact over four operands");
+                let artifact_root = artifact_root_v1(&operands.iter().map(artifact_leaf_v1).collect::<Vec<_>>())
+                    .expect("an artifact over four operands");
 
                 let context_hash = context.context_hash();
                 let profile_hash = profile.shape_profile_id();
@@ -17870,7 +17881,7 @@ pub(crate) mod tests {
                     k,
                     v,
                     out_tile,
-                delta,
+                    delta,
                     root_claim: PalwAttnRootClaimV1 {
                         version: PALW_ATTN_DISSECT_OBJECT_VERSION_V1,
                         head: 0,
@@ -17891,7 +17902,9 @@ pub(crate) mod tests {
             }
 
             pub(crate) fn openings(&self) -> Vec<PalwArtifactOpeningV1> {
-                (0..self.operands.len() as u32).map(|i| open_artifact_leaf_v1(&self.operands, i).expect("an artifact opening")).collect()
+                (0..self.operands.len() as u32)
+                    .map(|i| open_artifact_leaf_v1(&self.operands, i).expect("an artifact opening"))
+                    .collect()
             }
 
             fn row(&self, index: u64, values: &[i32], slot: u32, position: u32) -> PalwAttnRowOpeningV1 {
@@ -17962,7 +17975,9 @@ pub(crate) mod tests {
                             siblings: state_chunk_path_v1(&anchor.chunk_hashes, chunk_index as usize).expect("a chunk path"),
                         },
                         rows_after: (first + covered..first + width)
-                            .map(|p| self.row(index[p], &series[p * self.kv_dim..(p + 1) * self.kv_dim], self.slot_of(index[p]), p as u32))
+                            .map(|p| {
+                                self.row(index[p], &series[p * self.kv_dim..(p + 1) * self.kv_dim], self.slot_of(index[p]), p as u32)
+                            })
                             .collect(),
                     }
                 };
@@ -18084,7 +18099,11 @@ pub(crate) mod tests {
                     leg_root: step_merkle_root_v1(&leg).expect("a leg root"),
                     anchor: PalwAttnCheckpointAnchorV1 {
                         leaf,
-                        opening: PalwStepOpeningV1 { leaf_index: 0, leaf_hash, siblings: step_merkle_path_v1(&leg, 0).expect("a path") },
+                        opening: PalwStepOpeningV1 {
+                            leaf_index: 0,
+                            leaf_hash,
+                            siblings: step_merkle_path_v1(&leg, 0).expect("a path"),
+                        },
                     },
                     geometry,
                     chunk_bytes,
@@ -18097,11 +18116,7 @@ pub(crate) mod tests {
         // The objects a block carries
         // =================================================================================================
 
-        pub(crate) fn root_claimed(
-            session_id: Hash64,
-            drill: &Drill,
-            arity: u8,
-        ) -> PalwConsensusObjectV2 {
+        pub(crate) fn root_claimed(session_id: Hash64, drill: &Drill, arity: u8) -> PalwConsensusObjectV2 {
             PalwConsensusObjectV2::CourtAttnRootClaimed {
                 session_id,
                 root: drill.root_claim.clone(),
@@ -18164,17 +18179,13 @@ pub(crate) mod tests {
             }
         }
 
-
         // =============================================================================================
         // The drill
         // =============================================================================================
 
         /// Open a court over a space wide enough to contain the fused leaf, and narrow it to that leaf
         /// with real rung objects — the same moves a chain carries, not a constructed ladder.
-        fn court_at_the_fused_leaf(
-            p: &PalwStateParamsV2,
-            drill: &Drill,
-        ) -> (PalwChainStateV2, Hash64, Hash64, u64) {
+        fn court_at_the_fused_leaf(p: &PalwStateParamsV2, drill: &Drill) -> (PalwChainStateV2, Hash64, Hash64, u64) {
             const SPACE: crate::palw_bisect::PalwBisectSpaceV1 = crate::palw_bisect::PalwBisectSpaceV1::StepLeaves;
             let size = drill.binding.step_leaf_count;
             let genesis = PalwChainStateV2::genesis();
@@ -18291,11 +18302,8 @@ pub(crate) mod tests {
                 // The challenger recomputes every child and names the first that is not what it
                 // computed — its real strategy, and here every child is honest, so it names child 0
                 // and the dissection walks to the tile the forgery (if any) lives in.
-                let child = ranges
-                    .iter()
-                    .zip(&children)
-                    .position(|(&(f, c), claimed)| *claimed != drill.range_claim(f, c))
-                    .unwrap_or(0) as u8;
+                let child =
+                    ranges.iter().zip(&children).position(|(&(f, c), claimed)| *claimed != drill.range_claim(f, c)).unwrap_or(0) as u8;
                 let round = next.court_session(&sid).unwrap().dissection.as_ref().unwrap().round();
                 let (next, _) = apply(&next, p, &ctx(daa, daa, daa), &[child_chosen(sid, round, child)], None);
                 daa += 1;
@@ -18418,7 +18426,6 @@ pub(crate) mod tests {
             assert_eq!(court_next_deadline_v2(opened.court_session(&sid).unwrap()), cap);
         }
 
-
         /// **Z4 through the clock: a lapsed dissection move loses on the mover's side.**
         ///
         /// The rung clock is the PHASE's once one is open. A responder that opens a dissection and
@@ -18498,7 +18505,5 @@ pub(crate) mod tests {
                 lo + (hi - lo) / 2
             })
         }
-
     }
-
 }

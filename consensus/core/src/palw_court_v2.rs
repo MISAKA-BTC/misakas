@@ -124,7 +124,11 @@ pub fn palw_attn_root_claim_message_v1(session_id: &Hash64, root: &crate::palw_a
 /// the SESSION rather than the object: a round carries no index of its own, so without this a
 /// disclosure could be replayed at a later round of the same dissection — signed, in domain, and
 /// about a range nobody is disputing any more.
-pub fn palw_attn_round_message_v1(session_id: &Hash64, round: u32, disclosure: &crate::palw_attn_dissect::PalwAttnDissectRoundV1) -> Vec<u8> {
+pub fn palw_attn_round_message_v1(
+    session_id: &Hash64,
+    round: u32,
+    disclosure: &crate::palw_attn_dissect::PalwAttnDissectRoundV1,
+) -> Vec<u8> {
     let mut message = PALW_COURT_V2_ATTN_ROUND_MESSAGE_TAG_V1.to_vec();
     message.extend_from_slice(session_id.as_byte_slice());
     message.extend_from_slice(&round.to_le_bytes());
@@ -727,13 +731,8 @@ pub fn adjudicate_court_close_v2(
             if bottom.out_tile.opening.leaf_index != narrowed {
                 return Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: bottom.out_tile.opening.leaf_index, narrowed });
             }
-            let verdict = crate::palw_attn_court_v1::check_attn_dissect_bottom_v1(
-                phase,
-                bottom,
-                &derived.binding,
-                &derived.site,
-                true,
-            )?;
+            let verdict =
+                crate::palw_attn_court_v1::check_attn_dissect_bottom_v1(phase, bottom, &derived.binding, &derived.site, true)?;
             return Ok(match verdict {
                 crate::palw_attn_court_v1::PalwAttnCourtVerdictV1::ExecutorGuilty => PalwCourtVerdictV2::ExecutorGuilty,
                 crate::palw_attn_court_v1::PalwAttnCourtVerdictV1::ChallengerDefeated => PalwCourtVerdictV2::ChallengerDefeated,
@@ -981,7 +980,9 @@ pub fn palw_attn_dispute_site_v2(
     let kv_heads = u64::from(profile.attn_kv_heads);
     let d_head = u64::from(profile.attn_head_dim);
     if heads == 0 || kv_heads == 0 || d_head == 0 || !heads.is_multiple_of(kv_heads) {
-        return Err(PalwCourtV2Error::FusedGeometryUnservable("a fused site needs heads, kv heads that divide them, and a head width"));
+        return Err(PalwCourtV2Error::FusedGeometryUnservable(
+            "a fused site needs heads, kv heads that divide them, and a head width",
+        ));
     }
     let row = heads.checked_mul(d_head).ok_or(PalwCourtV2Error::FusedGeometryUnservable("the fused output row overflows"))?;
     let tile_len = u64::from(node.tile_len);
@@ -1069,7 +1070,8 @@ pub fn palw_attn_dispute_site_v2(
             kv_dim: kv_dim as usize,
             kv_off: kv_off as usize,
             d_head: d_head as usize,
-            attn_layer: layer.ok_or(PalwCourtV2Error::FusedGeometryUnservable("a fused site outside a layer table has no cache layer"))?,
+            attn_layer: layer
+                .ok_or(PalwCourtV2Error::FusedGeometryUnservable("a fused site outside a layer table has no cache layer"))?,
             anchor_geometry,
             anchor_positions,
         },
@@ -2321,7 +2323,7 @@ mod tests {
     /// not all carry a bundle, and a dormancy test over an empty list is a test that passes
     /// because it ran nothing.
     fn shipped_bundles() -> Vec<(&'static str, crate::palw_mode_v2::PalwConsensusParamsV2)> {
-        use crate::config::params::{palw_rc_shipped_params, DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS};
+        use crate::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, palw_rc_shipped_params};
         let bundles: Vec<_> = [
             ("mainnet", MAINNET_PARAMS),
             ("testnet", TESTNET_PARAMS),
@@ -2432,5 +2434,4 @@ mod tests {
         };
         assert!(palw_attn_move_is_admissible_v2(&other, false).is_ok(), "the fence does not reach objects it is not about");
     }
-
 }
