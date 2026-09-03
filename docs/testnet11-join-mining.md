@@ -59,7 +59,12 @@ Consensus params fingerprint: a7baab7957d27bbd2591cd24f70ee92b555ab26cd49ef425cb
 ```
 
 (Identity as of **Relaunch 5e, 2026-09-02** — genesis `08e9c8a4…` (`PALW_RC_GENESIS`), which 5e
-keeps: the genesis card has not moved since 5c, only the ruleset over it. Earlier values —
+keeps. **Do not read that as a property of the chain.** Genesis held from 5c through 5e because
+those relaunches moved only the ruleset over it; a relaunch that changes the genesis UTXO set —
+premine entries, community allocations, the class set seated at block zero — moves the genesis
+hash itself, and then no earlier appdir and no earlier binary can join at all. Both values below
+are dated facts about a past relaunch, not constants: take the live ones from your own node's
+first log lines rather than from this page. Earlier values —
 `e2b91c16…` (5d), `d38abe44…` (5c), `f0e50f83…` and `accaadce…` (all 2026-09-02), `5ccdd684…`
 (2026-08-31), `f3bf86b4…` (2026-08-30), `95265934…` (2026-08-29) — name archived rulesets; a node
 still announcing any of them is refused at the handshake by every node on this one. **Wipe the
@@ -398,9 +403,24 @@ in, by these names:
 | `certified` | the seats replayed it and filed `Valid`; a receipt is licensed | `ReceiptLicensed` |
 | `spent` | the receipt matured and one of its quanta paid for a block | `Final`, then spent |
 
-On testnet-11's windows that is roughly **54 hours** from commitment to spendability. It is bind,
-challenge and maturity — fraud-proof safety, not a progress bar someone forgot to speed up. Show
-the stage; do not promise a block.
+On testnet-11's windows that is **about 80 hours to `Final`, and about 93 hours from commitment to
+spendability** — bind, receipt, challenge and then maturity. Fraud-proof safety, not a progress bar
+someone forgot to speed up. Show the stage; do not promise a block.
+
+The four windows are DAA-score counts in the shipped bundle — bind 600, receipt 600, challenge
+1,200, receipt maturity 400 — and the cadence is the frozen 120 s
+(`PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS`). So `Final` is bind + receipt + challenge = 2,400 DAA
+= 80 h, and the receipt is spendable at `final_daa + receipt_maturity` = 2,800 DAA = 93.3 h.
+**Corrected 2026-09-03:** this paragraph said "roughly 54 hours", which is
+bind + receipt + maturity with the 1,200-DAA challenge window left out — the one window the
+lifecycle cannot skip, since `palw_producer_v2` states a claim cannot finalize before it has
+passed. Read the shipped numbers rather than this sentence:
+
+```bash
+cargo test -p kaspa-consensus-core --lib dump_rc_windows -- --ignored --nocapture
+# RC windows: bind=600 receipt=600 challenge=1200 court=3000 epoch=1000
+#   a claim reaches Final at bind+receipt+challenge = 2400 DAA after acceptance
+```
 
 **How many of these the lane can finish in a day is a number, and it is published** (ADR-0082
 Decision 12). It is `min(PALW_V2_MAX_PAYOUTS_PER_BLOCK × blocks_per_day, the panel's measured
@@ -494,10 +514,10 @@ MISAKA_PALW_CONFINEMENT=linux-seccomp-landlock \
   --rpc 127.0.0.1:27210 \
   --class-leaves <the class's canonical leaves — --palw-dump-classes>
 
-# 3. ask it something
+# 3. ask it something — and see §7.2a first: on a 16-token class this is the size that fits
 curl -s localhost:8790/v1/chat/completions -H 'content-type: application/json' \
-  -d '{"messages":[{"role":"user","content":"Name the second highest mountain in Japan."}],
-       "max_tokens":64,"stream":true}'
+  -d '{"messages":[{"role":"user","content":"the capital of France is"}],
+       "max_tokens":3,"stream":true}'
 
 # 4. the one handoff: sign, submit, stage the capture
 ./target/release/misaka-palw-fp-rail \
@@ -548,6 +568,45 @@ registered mid-epoch. A class seated at genesis has budget from block one. Eithe
 answer is the product — and the commitment waits in the outbox with the reason attached. A gateway
 that silently answered without committing would be lying about what you staked on it.
 
+### 7.2a How wide the answer can be, today
+
+**A class's `n_ctx` is the whole job — prompt and answer together — and it is small.** The worker
+serves the width the CLASS registers, read from the catalog row and never from the artifact's own
+rotary span, because a runtime answering wider than the court admits would be exactly the
+two-products split ADR-0077 R0 closes.
+
+| class registered on testnet-11 | `n_ctx` (prompt + answer) |
+|---|---|
+| `QWEN25-A16` (dense 1.5B) | **16** — the widest |
+| `PALW-BASE-0` (the integer floor) | 12 |
+| `QWEN36` (hybrid 35B) | 8 |
+
+(The three genesis rows, as of Relaunch 5e; entrant classes registered later carry their own
+width, and `--palw-dump-classes` is the only source that cannot go stale.)
+
+Measured against the shipped Qwen2.5 tokenizer, the ChatML wrapper the gateway must send —
+`<|im_start|>user\n … <|im_end|>\n<|im_start|>assistant\n` — is **8 tokens** before your first
+word. So on the widest class:
+
+| what you send | prompt tokens | decode tokens left |
+|---|---|---|
+| `"hello"` | 9 | 7 |
+| `"one quiet note"` | 11 | 5 |
+| `"the capital of France is"` | 13 | 3 |
+| `"Name the second highest mountain in Japan."` | 16 | 0 |
+| `"Write a short MIDI melody in C major, four bars, as JSON."` | 23 | **refused — over the class's whole width** |
+
+Over the width, the worker refuses the job and names the numbers rather than trimming:
+
+```
+prompt 23 + decode ceiling 256 exceeds max_context_tokens 16
+```
+
+That is the current state and it is being worked on: the ladder in ADR-0077 Decision 13 registers
+rows at 512, 2,048 and 8,192, and a row's width is inside its class id, so a wider row is a new
+class registered beside these rather than a setting on your node. Until one exists, size your
+requests from the table above, and do not build a demo that asks for a paragraph.
+
 ### 7.3 What a stranger's prompt costs you, and the knobs that bound it
 
 A public prompt becomes **your** claim: it reserves `claim_exposure` on your bond and forfeits it
@@ -596,14 +655,31 @@ input, and "private unless disputed" would be false if the default log were a di
 ### 7.5 Asking for a thing, not only text (ADR-0078)
 
 The same request can ask for a **derivation**: the model's answer is a DSL, a registered
-transformer turns it into an artifact, and what the chain carries is a few hundred bytes naming
-both — never the artifact.
+transformer turns it into an artifact, and what the chain carries is one small record naming both
+— never the artifact. (Measured on this build, that record is 3,056 bytes unsigned and about
+7.7 KB signed; almost all of it is the ML-DSA-87 key and signature, and none of it grows with the
+artifact.)
 
 ```bash
 curl -s localhost:8790/v1/chat/completions -H 'content-type: application/json' \
-  -d '{"messages":[{"role":"user","content":"A small courtyard at dusk."}],
-       "max_tokens":256, "derive":"scene/glb/v1"}'
+  -d '{"messages":[{"role":"user","content":"one quiet note"}],
+       "max_tokens":5, "derive":"music/smf/v1"}'
 ```
+
+> **The width, before you size a request.** `max_tokens` plus the prompt must fit the CLASS's
+> registered `n_ctx`, which is the whole budget — prompt and answer together. The widest model
+> class this network registers today is **16** (`QWEN25-A16`; the floor is 12, `QWEN36` is 8), and
+> the ChatML wrapper is 8 of those before your first word, so the numbers above are what actually
+> fits rather than what reads well. Over the width the worker refuses the whole job — `prompt 23 +
+> decode ceiling 256 exceeds max_context_tokens 16` — instead of trimming it.
+>
+> Which means, stated where you meet it rather than discovered later: **a derivation from a real
+> inference does not fit on any class registered today.** The shortest MIDI DSL that ships in this
+> repository is 118 tokens and the shortest CAD DSL is 76; 16 is the whole job. The transformer
+> half works at full size offline, and widening the rows is the work in progress —
+> [testnet11-ask-for-a-file.md](testnet11-ask-for-a-file.md) is the page for both, with the
+> measurements. This paragraph is dated 2026-09-03; `--palw-dump-classes` is the source that
+> cannot go stale.
 
 The response carries the DSL as the answer, the artifact (inline under
 `--artifact-inline-max`, else by a handle at `GET /v1/artifacts/<derived-id>`), and a signed

@@ -769,6 +769,18 @@ mod tests {
         let commitment = ms.finalize();
         let rust = commitment.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
         println!("TESTNET11_UTXO_COMMITMENT: Hash64::from_bytes([{rust}])");
+        // **Everything that moves, in one place.** `PALW_RC_GENESIS` (the genesis testnet-11
+        // SHIPS) carries the commitment AND a `hash` that covers it; a re-pin that pastes the
+        // commitment alone leaves the hash naming the old block, every consensus-core gate stays
+        // green, and every host aborts at startup on the genesis mismatch. So the printer that the
+        // premine failure sends the operator to prints the hash the new commitment implies.
+        let mut rc = crate::config::genesis::PALW_RC_GENESIS;
+        rc.utxo_commitment = commitment;
+        let block: crate::block::Block = (&rc).into();
+        let hash_rust = block.hash().as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
+        println!("PALW_RC_GENESIS.utxo_commitment: Hash64::from_bytes([{rust}])");
+        println!("PALW_RC_GENESIS.hash (recomputed over that commitment): Hash::from_bytes([{hash_rust}])");
+        println!("PALW_RC_GENESIS.hash_merkle_root (unchanged by the commitment): {}", block.header.hash_merkle_root);
     }
 }
 

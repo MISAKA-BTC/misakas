@@ -667,10 +667,17 @@ open(sys.argv[2], "w").write(p["choices"][0]["message"]["content"])' "$WORK_DIR/
        --out "$WORK_DIR/derived" --claim "$CLAIM_ID" --network-domain "$NETWORK_DOMAIN" \
        --executor-pubkey "$EXEC_PUBKEY" >"$WORK_DIR/derived/derive.log" 2>&1; then
     log "  the answer PARSED under music/smf/v1 — this is the real leg, from a real inference"
-    obj=$(ls "$WORK_DIR"/derived/*derived*.borsh 2>/dev/null | head -1 || true)
-    if [ -n "$obj" ] && "$RAIL_BIN" --derive-artifact "$obj" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
+    obj=$(ls "$WORK_DIR"/derived/*.derived-unsigned.borsh 2>/dev/null | head -1 || true)
+    # **The rail takes a STEM and the chain takes the SIGNED file** — two things this stage had
+    # wrong, both invisible until an answer actually parsed. `--derive-artifact` appends
+    # `.derived-unsigned.borsh` itself (`rail.rs`), so passing the unsigned FILE made it look for
+    # `….derived-unsigned.borsh.derived-unsigned.borsh`; and the object that rides is
+    # `<stem>.derived-object.borsh`, the signed `PalwConsensusObjectV2`, not the bare unsigned
+    # derivation. Submitting the latter would have been refused as unparseable carriage.
+    stem="${obj%.derived-unsigned.borsh}"
+    if [ -n "$obj" ] && "$RAIL_BIN" --derive-artifact "$stem" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
          >>"$WORK_DIR/derived/derive.log" 2>&1; then
-      submit "$obj" >>"$WORK_DIR/derived/derive.log" 2>&1 || true
+      submit "$stem.derived-object.borsh" >>"$WORK_DIR/derived/derive.log" 2>&1 || true
       if all_nodes_logged "DerivedArtifact"; then
         derived_note="ON CHAIN from a real inference — every node carried the derivation"
       else

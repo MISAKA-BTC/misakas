@@ -1998,6 +1998,30 @@ pub struct PalwClassAdmissionCarriageV2 {
     pub signature: Vec<u8>,
 }
 
+/// **The bond a GENESIS carriage names: none of them** (ADR-0056 Decision 3; ADR-0082 audit A C-5).
+///
+/// A carriage answers two different questions and they used to have one answer. "Does this row
+/// carry its graph" is what ADR-0082 needs — `PalwClassStateV2::fused_attention` is readable from
+/// nowhere else, so a fused row registered at genesis MUST carry a profile. "Did a registrant buy
+/// this class" is what ADR-0056 Decision 3 and ADR-0071 SA-3 need, and for a genesis row the
+/// answer is no: the network itself decided it, and it pays nothing.
+///
+/// Fusing the two — `registrant_bond: admission.map(..)`, which is what the fold did — made the
+/// first answer imply the second, and that is load-bearing: SA-3's genesis-class exemption is
+/// `registrant_bond.is_none()`, so a carried genesis row stopped looking like a genesis class and,
+/// with `palw_capability_bound` armed, NO bond could be seated to judge it — every claim on a
+/// fresh network voiding at `BindTimeout` with its escrow burned
+/// (`the_shipped_registry_still_draws_a_full_panel_with_the_capability_fence_armed`).
+///
+/// So a genesis carriage names this sentinel — the zero outpoint, which no transaction can create
+/// and therefore no bond can ever be — and the fold records `registrant_bond: None` for it and
+/// charges no reservation. A post-genesis registration cannot use it: the acceptance layer
+/// verifies the carriage's signature under the registrant bond's REGISTERED key, and there is no
+/// registered bond at this outpoint to hold one.
+pub fn palw_genesis_registrant_bond_v1() -> PalwBondKeyV2 {
+    PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::default(), 0))
+}
+
 pub const PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/class-registration-v2/mldsa87/v1";
 pub const PALW_CLASS_REGISTRATION_V2_DOMAIN: &[u8] = b"misaka-palw/class-registration-v2/message/v1";
 
@@ -8437,8 +8461,15 @@ fn apply_object(
                     registered_daa: ctx.daa_score,
                     // ADR-0056 Decision 3: whose bond paid for this to exist. The carriage is the
                     // post-genesis form and names its registrant; a genesis registration has none,
-                    // and pays nothing, because the network itself decided it.
-                    registrant_bond: admission.as_ref().map(|carriage| carriage.registrant_bond),
+                    // and pays nothing, because the network itself decided it — and since ADR-0082
+                    // a genesis row may have to CARRY a profile anyway (`fused_attention` below is
+                    // readable from nowhere else), so "carries a carriage" stopped implying "was
+                    // bought". `palw_genesis_registrant_bond_v1` is what the two are separated by;
+                    // its doc has the failure this repaired.
+                    registrant_bond: admission
+                        .as_ref()
+                        .map(|carriage| carriage.registrant_bond)
+                        .filter(|bond| *bond != palw_genesis_registrant_bond_v1()),
                     // **ADR-0082 Decision 2 / audit A C-5: does this class's terminal leaf owe a
                     // root claim?** Read off the graph the registration CARRIES, by the one
                     // predicate the court and the admission gate both ask
@@ -8463,7 +8494,12 @@ fn apply_object(
             // **Decision 3: the registry's price, taken now and held while the class lives.** A
             // re-registration of a Dormant class takes it again — the previous reservation was
             // released at reclamation, so this is one live class and one reservation, always.
-            if let Some(carriage) = admission.as_ref() {
+            // The sentinel pays nothing (`palw_genesis_registrant_bond_v1`), and it must, or the
+            // release sites — every one of which reads `record.registrant_bond` — would have
+            // nothing to give back and the reservation would be permanent.
+            if let Some(carriage) = admission.as_ref()
+                && carriage.registrant_bond != palw_genesis_registrant_bond_v1()
+            {
                 builder.move_registration_exposure(carriage.registrant_bond, true)?;
             }
             // A returning class starts its walk over: the counters are about the CURRENT

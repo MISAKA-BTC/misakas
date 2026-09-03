@@ -8,6 +8,8 @@
 //! palw-derive manifest --transformer <name|id> | --all
 //! palw-derive drill [--corpus <dir>] [--report <file.json>] [--check <file.json>]
 //! palw-derive inspect --object <file>
+//! palw-derive width --tokenizer <tokenizer.json> --n-ctx <n> (--prompt <text> | --prompt-file <f>)
+//!                   --dsl <file> [--transformer <name|kind>] [--template chatml|plain]
 //! ```
 //!
 //! `derive` runs the derivation offline (the same code the gateway runs) and writes the DSL, the
@@ -20,7 +22,20 @@
 //! kind's `golden.json`, plus SA-2's generated bound-exhausting corpus; the hashes go to a report
 //! — run it on two architectures and `--check` one report against the other; a transformer whose
 //! bytes differ is not a transformer under this ADR. It exits 3 on a cross-architecture
-//! divergence, 4 on a moved golden, and 5 on a declared ceiling that did not refuse.
+//! divergence, 4 on a moved golden, 5 on a declared ceiling that did not refuse, and 6 on a
+//! registered transformer the corpus never exercised.
+//!
+//! `width` is the one question ADR-0078's leg cannot answer for itself: **is the registered class
+//! row wide enough for the model to WRITE this DSL?** A derivation is a pure function of the
+//! answer, so at the widths registered today the artifact leg fails not in the transformer but in
+//! the class — and it fails as an ordinary short answer that does not parse, which reads as "the
+//! model was bad at JSON" and is nothing of the kind. This subcommand states the arithmetic the
+//! chain itself enforces (`palw_freeprompt_v3`'s `ContextOverflow`: `prompt_tokens +
+//! decode_token_limit <= max_context_tokens`, and `max_context_tokens` is the class profile's
+//! `n_ctx`) against the canonical DSL's own token count, and exits 6 when the row cannot hold it —
+//! `width`'s own 6, on its own subcommand, and not `drill`'s. The number it reports is a LOWER
+//! bound: the canonical form is the shortest text the grammar accepts, so a model writing anything
+//! else needs more.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -200,8 +215,35 @@ fn cmd_verify(mut args: VecDeque<String>) {
     verdict.insert("claim_id".into(), hex(object.claim_id).into());
     verdict.insert("kind".into(), object.kind.into());
     verdict.insert("kind_name".into(), kind::name(object.kind).into());
-    verdict.insert("signed".into(), signature.is_some().into());
+    // **`signed: true` was a claim this tool cannot make.** It was `signature.is_some()` — a
+    // BORSH field being present — printed under a name every reader takes to mean "the executor's
+    // ML-DSA-87 signature verifies". It does not: nothing here checks it, so a `.derived-object`
+    // whose signature is a byte of noise verified `consistent` with `signed: true` (reproduced by
+    // flipping one byte of the rail's own output). Decision 4's signature IS verified, but by the
+    // acceptance layer under `PALW_DERIVED_V1_MLDSA87_CONTEXT` — which is why a derivation read
+    // back from a chain is signed by definition, and one handed over as a FILE is not checked at
+    // all. So the field says what it knows, and names where the check lives. Renamed rather than
+    // qualified: a reader who greps `signed` must not find a field that answers a different
+    // question than the one they asked.
+    verdict.insert("signature_bytes".into(), signature.as_ref().map(|s| s.len()).into());
+    verdict.insert(
+        "signature_verified".into(),
+        "not checked here: this tool re-runs the DERIVATION (Decision 5 / X6) and does not hold a signature verifier. \
+         Decision 4's signature is verified by the chain's acceptance layer under PALW_DERIVED_V1_MLDSA87_CONTEXT, so a \
+         derivation read back from a chain is signed by definition — `misaka palw derived-verify <claim-id>` is the check \
+         that covers it. A `.derived-object.borsh` handed to you out of band carries no proof of its own signer."
+            .into(),
+    );
     let mut all_ok = true;
+    // **"I cannot check this" is not "this is a forgery."** An object naming a grammar or a
+    // transformer THIS build does not publish is SA-5's case, and it is the ordinary consequence
+    // of a rebuild: `transformer_id` covers the crate's source tree, so every edit under
+    // `misaka-palw-derive/src/` moves all eight ids and orphans every derivation already filed
+    // under the old ones. Reporting that as "a demonstrable false object" accuses an honest
+    // executor of the one thing Decision 5 exists to make provable, on the strength of the
+    // reader's own version. `misaka palw derived-verify` already separates UNVERIFIABLE from
+    // MISMATCH; this said MISMATCH for both.
+    let mut unverifiable: Option<String> = None;
     match verify(&object, &answer_bytes) {
         Ok(v) => {
             all_ok &= v.all_match();
@@ -214,6 +256,15 @@ fn cmd_verify(mut args: VecDeque<String>) {
             verdict.insert("manifest_kind".into(), v.manifest_kind.into());
             verdict.insert("recomputed_dsl_hash".into(), hex(v.recomputed_dsl_hash).into());
             verdict.insert("recomputed_artifact_hash".into(), hex(v.recomputed_artifact_hash).into());
+        }
+        Err(e @ (misaka_palw_derive::DeriveError::UnknownGrammar(_) | misaka_palw_derive::DeriveError::UnknownTransformer(_))) => {
+            all_ok = false;
+            unverifiable = Some(format!(
+                "{e} — this build does not publish that manifest (ADR-0078 SA-5), so nobody running it can check this derivation \
+                 either way. `palw-derive manifest --all` prints the ids this build has; a derivation is checkable only against \
+                 the build whose source tree its transformer_id names."
+            ));
+            verdict.insert("derivation_rerun".into(), unverifiable.clone().unwrap().into());
         }
         Err(e) => {
             all_ok = false;
@@ -248,7 +299,15 @@ fn cmd_verify(mut args: VecDeque<String>) {
     }
     verdict.insert(
         "verdict".into(),
-        if all_ok { "consistent" } else { "MISMATCH — a demonstrable false object (ADR-0078 Decision 5)" }.into(),
+        match (all_ok, &unverifiable) {
+            (true, _) => "consistent",
+            // Exit 2 either way — a reader who cannot check an object must not treat it as
+            // checked — but the WORD is the difference between "this executor lied" and "I am
+            // the wrong build to ask".
+            (false, Some(_)) => "UNVERIFIABLE — this build does not publish that manifest (ADR-0078 SA-5)",
+            (false, None) => "MISMATCH — a demonstrable false object (ADR-0078 Decision 5)",
+        }
+        .into(),
     );
     println!("{}", serde_json::Value::Object(verdict));
     if !all_ok {
@@ -362,15 +421,36 @@ fn cmd_drill(mut args: VecDeque<String>) {
     let mut golden_mismatched: Vec<String> = Vec::new();
     let mut golden_unpinned: Vec<String> = Vec::new();
     let mut golden_checked = 0usize;
+    // Registered transformers the corpus never exercised — see the note where this is filled.
+    let mut uncovered: Vec<String> = Vec::new();
 
     for (name, k, grammar) in registry::transformer_names() {
+        // **A transformer is drilled over the corpus of its GRAMMAR when its kind has no
+        // directory of its own.** Two transformers can share one grammar and differ only in the
+        // kind they file under — `code/evm/v1` and `contract/evm/v1` are exactly that pair — and
+        // a corpus laid out by kind name then has no `contract/` directory at all. The lookup
+        // used to stop there: `corpus_answers` on a missing directory is an empty list, so
+        // `contract/evm/v1` produced no rows, no refusals and no unpinned keys, and the drill's
+        // own counters had nothing to say about the transformer it had silently skipped. The
+        // goldens for those rows were already in `corpus/code/golden.json`
+        // (`01-return-42.json#contract/evm/v1` and its two siblings) and were dead pins.
         let kind_name = kind::name(k).unwrap_or("unassigned").to_string();
-        let kind_dir = corpus.join(&kind_name);
-        let golden = goldens.entry(kind_name.clone()).or_insert_with(|| match std::fs::read(kind_dir.join("golden.json")) {
+        let mut dir_name = kind_name.clone();
+        let mut kind_dir = corpus.join(&dir_name);
+        if !kind_dir.is_dir() {
+            let by_grammar = grammar.split('/').next().unwrap_or(grammar).to_string();
+            if corpus.join(&by_grammar).is_dir() {
+                kind_dir = corpus.join(&by_grammar);
+                dir_name = by_grammar;
+            }
+        }
+        let golden = goldens.entry(dir_name.clone()).or_insert_with(|| match std::fs::read(kind_dir.join("golden.json")) {
             Ok(bytes) => serde_json::from_slice(&bytes)
                 .unwrap_or_else(|e| die(format!("{}: not a golden document: {e}", kind_dir.join("golden.json").display()))),
             Err(_) => serde_json::Value::Null,
         });
+        let kind_name = dir_name;
+        let before = rows.len() + refused.len();
         for file in corpus_answers(&kind_dir) {
             let answer = std::fs::read(&file).unwrap_or_else(|e| die(format!("{}: {e}", file.display())));
             let leaf = file.file_name().unwrap().to_string_lossy().into_owned();
@@ -442,6 +522,13 @@ fn cmd_drill(mut args: VecDeque<String>) {
                 }
             }
         }
+        // **A registered transformer the corpus never asked to run is not drilled.** X3 compares
+        // what two architectures produced; a transformer that produced nothing on both agrees
+        // with itself and is reported as held. That is how `contract/evm/v1` sat outside the
+        // drill while every count in the report looked healthy, so the drill now says so by name.
+        if rows.len() + refused.len() == before {
+            uncovered.push(format!("{name}: no corpus answer under {}", kind_dir.display()));
+        }
     }
 
     // ---- SA-2's bound-exhausting corpus, generated rather than stored -----------------------
@@ -500,6 +587,7 @@ fn cmd_drill(mut args: VecDeque<String>) {
             "mismatched": golden_mismatched,
             "unpinned": golden_unpinned,
         },
+        "uncovered": uncovered,
     });
     if let Some(path) = &report {
         std::fs::write(path, serde_json::to_vec_pretty(&doc).unwrap()).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
@@ -575,11 +663,12 @@ fn cmd_drill(mut args: VecDeque<String>) {
                 "golden_unpinned": golden_unpinned,
                 "bounds_enforced": bounds_rows.len(),
                 "bounds_not_enforced": unbounded,
+                "uncovered": uncovered,
                 "report": report.map(|p| p.display().to_string()),
-                "verdict": if golden_mismatched.is_empty() && unbounded.is_empty() {
-                    "the corpus reproduces its goldens on this architecture and every declared bound refused an over-bound answer"
+                "verdict": if golden_mismatched.is_empty() && unbounded.is_empty() && uncovered.is_empty() {
+                    "every registered transformer ran, the corpus reproduces its goldens on this architecture, and every declared bound refused an over-bound answer"
                 } else {
-                    "FAILS: see golden_mismatched / bounds_not_enforced"
+                    "FAILS: see golden_mismatched / bounds_not_enforced / uncovered"
                 },
             })
         );
@@ -590,8 +679,147 @@ fn cmd_drill(mut args: VecDeque<String>) {
     if !unbounded.is_empty() && exit == 0 {
         exit = 5;
     }
+    // 6, and not folded into one of the three above: "a transformer nobody drilled" is a
+    // different fact from "a golden moved" or "a ceiling did not refuse", and a caller that
+    // cannot tell them apart cannot act on either.
+    if !uncovered.is_empty() && exit == 0 {
+        exit = 6;
+    }
     if exit != 0 {
         std::process::exit(exit);
+    }
+}
+
+// -------------------------------------------------------------------------------------------
+// `width` — can the registered row hold the DSL the derivation needs?
+// -------------------------------------------------------------------------------------------
+
+/// The gateway's ChatML template, token for token (`misaka-palw-gateway::wire::build_prompt`).
+///
+/// Reproduced here rather than approximated, because the whole value of this subcommand is that
+/// its number is the number the chain will check. The gateway encodes each TEXT segment with
+/// specials disabled and places the control ids itself, so the count is `3` (two `<|im_start|>`,
+/// one `<|im_end|>`) plus the three text segments — the role line with the user's content, the
+/// turn separator, and the assistant marker's own line.
+///
+/// `plain` is the other half of that function's `if`: one text segment, no control ids, used when
+/// the worker's manifest declares no ChatML markers.
+fn prompt_tokens_v1(tok: &misaka_palw_base0::tokenizer::QwenTokenizer, template: &str, prompt: &str) -> usize {
+    let count = |text: &str| {
+        tok.encode_without_specials(text).map(|ids| ids.len()).unwrap_or_else(|e| die(format!("tokenizing {text:?}: {e}")))
+    };
+    match template {
+        // `<|im_start|>` "user\n{prompt}" `<|im_end|>` "\n" `<|im_start|>` "assistant\n"
+        "chatml" => 3 + count(&format!("user\n{prompt}")) + count("\n") + count("assistant\n"),
+        // `render_plain_markers`: `MARKER_USER ‖ prompt ‖ TURN_SEPARATOR ‖ MARKER_ASSISTANT`, one
+        // segment. The marker text is the gateway's, spelled exactly; a count that guessed it
+        // would be measuring a different template.
+        "plain" => count(&format!("### User:\n{prompt}\n\n### Assistant:\n")),
+        other => die(format!("unknown --template {other:?}: chatml or plain (the two forms the gateway's build_prompt has)")),
+    }
+}
+
+fn cmd_width(mut args: VecDeque<String>) {
+    let mut tokenizer_path = None;
+    let mut n_ctx: Option<u64> = None;
+    let mut prompt: Option<String> = None;
+    let mut dsl_path = None;
+    let mut transformer = None;
+    let mut template = "chatml".to_string();
+    while let Some(arg) = args.pop_front() {
+        match arg.as_str() {
+            "--tokenizer" => tokenizer_path = Some(PathBuf::from(flag(&mut args, "--tokenizer"))),
+            "--n-ctx" => {
+                let v = flag(&mut args, "--n-ctx");
+                n_ctx = Some(v.parse().unwrap_or_else(|e| die(format!("--n-ctx {v:?}: {e}"))));
+            }
+            "--prompt" => prompt = Some(flag(&mut args, "--prompt")),
+            "--prompt-file" => {
+                let p = PathBuf::from(flag(&mut args, "--prompt-file"));
+                prompt = Some(std::fs::read_to_string(&p).unwrap_or_else(|e| die(format!("{}: {e}", p.display()))));
+            }
+            "--dsl" => dsl_path = Some(PathBuf::from(flag(&mut args, "--dsl"))),
+            "--transformer" => transformer = Some(flag(&mut args, "--transformer")),
+            "--template" => template = flag(&mut args, "--template"),
+            other => die(format!("unknown argument {other:?}")),
+        }
+    }
+    // Every one of these is a refusal BY NAME. A width report with a guessed tokenizer or a
+    // guessed row is a number that looks like a measurement and is not one.
+    let tokenizer_path = tokenizer_path.unwrap_or_else(|| {
+        die("--tokenizer <tokenizer.json> is required: the token count IS the measurement, and the count depends on the tokenizer the class is registered with".into())
+    });
+    let n_ctx = n_ctx.unwrap_or_else(|| {
+        die("--n-ctx <n> is required: the row is a PARAMETER of this report, because which row is registered is an operational fact and not this tool's to assume".into())
+    });
+    let prompt = prompt.unwrap_or_else(|| die("--prompt <text> or --prompt-file <file> is required".into()));
+    let dsl_path = dsl_path.unwrap_or_else(|| die("--dsl <file> is required: the DSL whose token count the row must hold".into()));
+
+    let tok_bytes = std::fs::read(&tokenizer_path).unwrap_or_else(|e| die(format!("{}: {e}", tokenizer_path.display())));
+    let tok = misaka_palw_base0::tokenizer::QwenTokenizer::from_json(&tok_bytes)
+        .unwrap_or_else(|e| die(format!("{} is not a tokenizer this build can read: {e}", tokenizer_path.display())));
+    let dsl_bytes = std::fs::read(&dsl_path).unwrap_or_else(|e| die(format!("{}: {e}", dsl_path.display())));
+
+    // **The canonical form, not the file.** `dsl_hash` is over the grammar's canonicalization, and
+    // that is also the shortest text the grammar accepts — so it is the honest floor for "what the
+    // model must emit". Without `--transformer` the file is taken as it stands and the report says
+    // so, because silently canonicalizing under a guessed grammar would move the number.
+    let (canonical, grammar_name) = match transformer.as_deref() {
+        Some(spec) => {
+            let name = match registry::transformer_by_name(spec) {
+                Some(t) => t.manifest().name,
+                None => match kind::id(spec).and_then(|k| registry::transformer_names().into_iter().find(|(_, kk, _)| *kk == k)) {
+                    Some((n, _, _)) => n,
+                    None => die(format!("no transformer or kind named {spec:?} (see `palw-derive list`)")),
+                },
+            };
+            let manifest = registry::transformer_by_name(name).expect("registered").manifest();
+            let grammar = registry::grammar_by_name(manifest.grammar).expect("registered");
+            let canonical = grammar
+                .canonicalize(&dsl_bytes)
+                .unwrap_or_else(|e| die(format!("{} does not parse under {}: {e}", dsl_path.display(), manifest.grammar)));
+            (canonical, Some(manifest.grammar))
+        }
+        None => (dsl_bytes.clone(), None),
+    };
+    let canonical_text = String::from_utf8(canonical.clone())
+        .unwrap_or_else(|_| die("the canonical DSL is not UTF-8, so it is not text a model could emit".into()));
+    let dsl_tokens =
+        tok.encode_without_specials(&canonical_text).unwrap_or_else(|e| die(format!("tokenizing the canonical DSL: {e}"))).len()
+            as u64;
+    let prompt_tokens = prompt_tokens_v1(&tok, &template, prompt.trim_end_matches('\n')) as u64;
+
+    let decode_budget = n_ctx.saturating_sub(prompt_tokens);
+    let required_n_ctx = prompt_tokens + dsl_tokens;
+    let shortfall = dsl_tokens.saturating_sub(decode_budget);
+    let fits = shortfall == 0 && prompt_tokens < n_ctx;
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema": "misaka.palw.derive-width.v1",
+            "n_ctx": n_ctx,
+            "template": template,
+            "prompt_tokens": prompt_tokens,
+            "decode_budget_tokens": decode_budget,
+            "transformer": transformer,
+            "grammar": grammar_name,
+            "dsl_file": dsl_path.display().to_string(),
+            "dsl_bytes": dsl_bytes.len(),
+            "canonical_dsl_bytes": canonical.len(),
+            "canonical_dsl_tokens": dsl_tokens,
+            "required_n_ctx": required_n_ctx,
+            "shortfall_tokens": shortfall,
+            "verdict": if fits { "FITS" } else { "BLOCKED-ON-WIDTH" },
+            "rule": "prompt_tokens + decode_token_limit <= max_context_tokens, and max_context_tokens is the class profile's n_ctx \
+                     (kaspa_consensus_core::palw_freeprompt_v3 ContextOverflow; palw_class_admission_v2 sets max_context_tokens = profile.n_ctx)",
+            "note": "canonical_dsl_tokens is a LOWER bound on the answer: the canonical form is the shortest text the grammar accepts, \
+                     so a model that writes anything else — a newline, a space, a word of preamble — needs more than this",
+        })
+    );
+    if !fits {
+        // A distinct code so a drill can branch on "the row is too narrow" without parsing prose,
+        // and report BLOCKED-ON-WIDTH rather than filing it under "the answer did not parse".
+        std::process::exit(6);
     }
 }
 
@@ -604,6 +832,7 @@ fn main() {
         Some("inspect") => cmd_inspect(args),
         Some("manifest") => cmd_manifest(args),
         Some("drill") => cmd_drill(args),
-        _ => die("usage: palw-derive list | derive | verify | manifest | inspect | drill (see the module doc)".into()),
+        Some("width") => cmd_width(args),
+        _ => die("usage: palw-derive list | derive | verify | manifest | inspect | drill | width (see the module doc)".into()),
     }
 }
