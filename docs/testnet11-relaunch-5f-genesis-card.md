@@ -921,8 +921,29 @@ launched, and the next person to follow the same shortcut would have had no reas
 until a change *did* make the ids depend on what the failed leg covers.
 
 *A wrong answer gets corrected. A right answer from an invalid process gets INHERITED.* That is why
-the rule is procedural and not a matter of judgement: **assert the report's verdict before reading
-any field of it.**
+the rule is procedural and not a matter of judgement: **check the report is valid before reading any
+field of it.**
+
+**And the first version of that rule said "assert the report's `verdict`" — which does not work,
+because the report file has no `verdict` field.** The verdict is printed on **stdout only**. Both
+files carry an identical key set:
+
+    arch bounds golden os refused rows schema source_tree_sha256 transformers uncovered
+
+**A `--report` file, read on its own, is structurally identical for a FAILS run and a valid one.**
+The discriminator exists but it is one level in:
+
+    report["golden"]["mismatched"] == []     valid: []   failed: six entries
+    report["uncovered"] == []                [] in BOTH — this one does not discriminate
+
+So the executable rule is: **`golden.mismatched` must be empty**, not "check the verdict". *I wrote
+the rule from what stdout told me and it did not survive contact with the artefact it was about* —
+which is the same defect one turn later, in the correction for it.
+
+*The deeper reading: a report designed to be machine-read carries the ids and not the judgement of
+whether the run that produced them was valid. That is a defect in the report's shape, worth an
+issue after the cut — the file a tool writes for another tool should not be the one that omits
+whether it worked.*
 
 ### SEND THE VALUE **AND** WHAT YOU THINK PRODUCED IT — the disagreement is the check
 
