@@ -228,11 +228,34 @@ premise "the dense executor calls the constant-capped step_leaf_count" \
         "misaka-palw-base0/src/qwen25_a16_backend.rs" 'palw_step::step_leaf_count\(profile, ctx\)'
 premise "the Qwen3.6 executor calls the constant-capped step_leaf_count" \
         "misaka-palw-base0/src/qwen36_backend.rs" 'palw_step::step_leaf_count\(profile, ctx\)'
-if [ "$PREMISE_OK" = 1 ] && ! grep -rq 'max_step_leaf_count()' "$REPO_ROOT/misaka-palw-base0/src/" 2>/dev/null; then
-  record "stage 0b PASS — the executor's leaf cap is the hardcoded PALW_STEP_MAX_LEAVES (2^22) and NO executor path reads PalwCourtParamsV2::max_step_leaf_count. Stage 7's refusal is about code that is still there."
+# **This stage has TWO regimes, and neither of them is a failure.** ADR-0080 W1b makes the
+# executor read `PalwCourtParamsV2::max_step_leaf_count` instead of the hardcoded constant. When
+# that lands, the old premise stops being true — and that is the drill working, not breaking. A
+# stage that went red on the fix it exists to wait for would be deleted by the first person it
+# inconvenienced, and the check would go with it.
+#
+# So: the CONSTANT regime asserts the cap is hardcoded and nothing reads the ruleset. The RULESET
+# regime asserts the opposite, and additionally that the constant-capped call is GONE from the
+# executor — because both spellings surviving is not progress, it is two caps, and the one that
+# binds would be whichever the path happens to reach.
+if grep -rq 'max_step_leaf_count()' "$REPO_ROOT/misaka-palw-base0/src/" 2>/dev/null; then
+  RULESET_OK=1
+  for f in qwen25_a16_backend qwen36_backend; do
+    if grep -qE 'palw_step::step_leaf_count\(profile, ctx\)' "$REPO_ROOT/misaka-palw-base0/src/$f.rs" 2>/dev/null; then
+      RULESET_OK=0
+      record "stage 0b — TWO CAPS: $f.rs still calls the constant-capped step_leaf_count(profile, ctx) while another path reads max_step_leaf_count(). One of them binds and the source does not say which."
+    fi
+  done
+  if [ "$RULESET_OK" = 1 ]; then
+    record "stage 0b PASS (RULESET REGIME) — an executor path reads PalwCourtParamsV2::max_step_leaf_count and no executor still calls the constant-capped step_leaf_count. ADR-0080 W1b has landed, so stage 7's refusal must name the RULESET's cap and not PALW_STEP_MAX_LEAVES; re-read its wording before quoting it."
+    # No `worse_than` here on purpose: this regime is the FIX landing, and a stage that turns the
+    # run non-green when the thing it waits for arrives is a stage somebody deletes. The
+    # instruction rides in the message instead.
+  else
+    worse_than 2
+  fi
 elif [ "$PREMISE_OK" = 1 ]; then
-  record "stage 0b CHANGED — an executor path now reads max_step_leaf_count(). Re-read stage 7's message before believing it: the ruleset may now be the binding ceiling."
-  worse_than 1
+  record "stage 0b PASS — the executor's leaf cap is the hardcoded PALW_STEP_MAX_LEAVES (2^22) and NO executor path reads PalwCourtParamsV2::max_step_leaf_count. Stage 7's refusal is about code that is still there."
 else
   record "stage 0b CHANGED — stage 7's refusal quotes source that has moved. Do NOT relay its wording without re-reading the files it names."
   worse_than 1
@@ -931,7 +954,9 @@ PY
     record "  stages 7-11 [$tag] NOT RUN — a derivation names a claim, and this claim did not reach Final"
     return 0
   fi
-  if all_nodes_logged "receipt block|algo 7|POW_ALGO_ID_PALW_RECEIPT"; then
+  # `algo 7` on its own matched any line that happened to contain those five characters — the same
+  # loose-match class as the 128-hex grep that reported a claim id as a class id. Anchor it.
+  if all_nodes_logged "receipt block|algo[ _]7[^0-9]|POW_ALGO_ID_PALW_RECEIPT"; then
     record "stage 6 [$tag] PASS — the claim reached Final on every validator and a receipt block was accepted by all"
   else
     record "stage 6 [$tag] PARTIAL — the claim reached Final on every validator; no receipt block within ${STEP_WAIT}s"
@@ -956,8 +981,29 @@ PY
   if chat_request "$port" "$long_prompt" "$LONG_PROMPT_TOKENS" "" "$long_out"; then
     emitted=$(jget "$long_out" "usage.completion_tokens")
     chars=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["choices"][0]["message"]["content"]))' "$long_out")
+    # **"committed on chain" has to be READ from the chain.** This branch used to assert it from
+    # `usage.completion_tokens` alone — a count the gateway put in its own HTTP response — which
+    # is the same error stage 3 made one level up: a genuinely computed, genuinely green signal
+    # about something adjacent to the question. A long answer the chain never took is exactly the
+    # outcome this stage exists to rule out, and it would have printed PASS for it.
+    local long_claim long_chain="$WORK_DIR/chain/long-$tag.json"
+    long_claim=$(jget "$long_out" "misaka.fp_claim_id")
+    if [ "${emitted:-0}" -lt 100 ]; then
+      : # falls through to the FAIL below
+    elif [ -z "$long_claim" ]; then
+      record "stage 11 [$tag] FAIL — $emitted decode tokens answered, but the gateway named no fp_claim_id, so nothing was committed: $(jget "$long_out" "misaka.not_committed_because")"
+      worse_than 2
+    elif ! "${CLI[@]}" palw derived "$long_claim" --json >"$long_chain" 2>"$WORK_DIR/chain/long-$tag.err"; then
+      record "stage 11 [$tag] FAIL — $emitted decode tokens answered and claim ${long_claim:0:16}… is NOT on the chain: $(head -c 200 "$WORK_DIR/chain/long-$tag.err")"
+      worse_than 2
+    else
+      record "stage 11 [$tag] PASS — $emitted decode tokens, $chars characters of practical answer, and the chain holds claim ${long_claim:0:16}…"
+    fi
+    # The short-answer FAIL below is the original branch, kept verbatim rather than restated: it
+    # runs exactly when the token floor was missed, and the block above has already spoken for
+    # every case where it was met.
     if [ "${emitted:-0}" -ge 100 ]; then
-      record "stage 11 [$tag] PASS — $emitted decode tokens, $chars characters of practical answer, committed on chain"
+      :
     else
       record "stage 11 [$tag] FAIL — the class emitted only ${emitted:-0} decode tokens ($chars chars) against a request for $LONG_PROMPT_TOKENS; 'long, practical output' is not demonstrated. Same ceiling stage 7 names."
       worse_than 2
