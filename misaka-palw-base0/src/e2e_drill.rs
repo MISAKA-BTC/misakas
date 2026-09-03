@@ -1330,10 +1330,8 @@ mod certification_object_tests {
                         .expect("the fused dense family is committed");
                     let missing: Vec<String> =
                         reachable.difference(&nearest.kernel_ids).map(|k| k.to_string()[..16].to_string()).collect();
-                    uncovered.push((
-                        model_id.clone(),
-                        format!("{lane} lane, family PALW-QWEN25-A16-V5 is missing kernel(s) {missing:?}"),
-                    ));
+                    uncovered
+                        .push((model_id.clone(), format!("{lane} lane, family PALW-QWEN25-A16-V5 is missing kernel(s) {missing:?}")));
                 }
                 continue;
             }

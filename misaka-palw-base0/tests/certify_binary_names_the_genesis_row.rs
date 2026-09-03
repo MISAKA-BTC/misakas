@@ -41,20 +41,12 @@ fn class_id_from(stdout: &str) -> String {
 /// project's notes for three different things, and a class id quoted from a summary is what burned
 /// n_ctx 17 on 2026-08-28.
 fn genesis_class_id() -> String {
-    misaka_palw_base0::classes::a16_graph_v5_row_v1()
-        .expect("the graph-v5 dense row projects")
-        .profile
-        .shape_profile_id()
-        .to_string()
+    misaka_palw_base0::classes::a16_graph_v5_row_v1().expect("the graph-v5 dense row projects").profile.shape_profile_id().to_string()
 }
 
 fn run(args: &[&str], out: &std::path::Path) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_palw-certify"))
-        .args(args)
-        .arg("--out")
-        .arg(out)
-        .output()
-        .expect("palw-certify runs");
+    let output =
+        Command::new(env!("CARGO_BIN_EXE_palw-certify")).args(args).arg("--out").arg(out).output().expect("palw-certify runs");
     assert!(
         output.status.success(),
         "palw-certify {args:?} failed ({}):\n--- stdout ---\n{}\n--- stderr ---\n{}",
@@ -99,11 +91,7 @@ fn the_binary_binds_the_genesis_row_at_the_registered_width() {
             borsh::from_slice(&bytes).expect("the certificate is a borsh consensus object");
         match object {
             kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassLaneCertified { class_id, profile, .. } => {
-                assert_eq!(
-                    class_id.to_string(),
-                    genesis,
-                    "the {lane} lane printed {genesis} and serialised class {class_id}"
-                );
+                assert_eq!(class_id.to_string(), genesis, "the {lane} lane printed {genesis} and serialised class {class_id}");
                 // And the object's own profile hashes to the class it names — the equality
                 // `apply_object` enforces, checked here so a mismatch is caught on this machine
                 // rather than by the chain refusing the object.
