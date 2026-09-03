@@ -8031,9 +8031,41 @@ pub fn palw_rc_shipped_params() -> Params {
 /// (`palw_v2_params_on_base`), runs the genesis gate (`verify_palw_genesis_v2` — which since
 /// ADR-0061 admits the empty registry), and `validate_palw_v2` proves the armed heartbeat and
 /// attempt-work fences declare exactly the constants this binary enforces.
+///
+/// **The class set is testnet-11's** (ADR-0082 devnet drill, 2026-09-03): the floor, the QWEN36
+/// hybrid and the graph-v5@512 dense row, through the same assembly `palw_rc_shipped_params` uses,
+/// from the same pinned roots. It was the floor alone, which made the dense row a POST-genesis
+/// registration on devnet — and a class registered mid-epoch is not budgeted until the next
+/// boundary (`EPOCH_LENGTH` 1,000 DAA, ~10 h at this host's cadence), so every drill stopped at
+/// the commitment with "this class's epoch budget is already spent" and nothing past stage 5 was
+/// ever rehearsed. Worse, the drill was then asking a network the cut chain is not: on a
+/// floor-only devnet the row's admission went through the post-genesis gate under devnet's armed
+/// `palw_context_ladder`, while on t11 the same row is a genesis object and post-genesis
+/// registrations meet a dormant ladder — the difference that hid `PricedForADifferentCourt`
+/// (97bdbf75) from every green drill. With the set mirrored, the drill rehearses the chain we
+/// ship, and the class is budgeted from DAA 0.
+///
+/// The stated loss: no drill anywhere now exercises post-genesis registration END TO END on a
+/// live chain (panel → chain → certification → budget → production); the admission DECISION is
+/// covered by `palw_class_admission_v2`'s route-agreement test, `tests/palw_rc_admission_shape.rs`
+/// and the SDK's preflight tests. This moves the devnet fingerprint (a named move; the t11 one
+/// does not change — this function never touches the RC preset). The devnet genesis BLOCK is
+/// unchanged: the class objects live in the ruleset bundle, not in the block.
 pub fn devnet_shipped_params() -> Params {
-    palw_v2_params_from_artifacts_on_base(DEVNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, palw_devnet_genesis_bonds_v1())
-        .unwrap_or_else(|e| panic!("the devnet ADR-0068 drill ruleset does not assemble: {e}"))
+    let dense = palw_rc_qwen25_a16_is_registered().then_some(PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT);
+    if palw_rc_qwen36_is_registered() {
+        palw_v2_params_with_classes_on_base(
+            DEVNET_PARAMS,
+            PALW_RC_GENESIS_ARTIFACT_ROOT,
+            PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
+            dense,
+            palw_devnet_genesis_bonds_v1(),
+        )
+        .unwrap_or_else(|e| panic!("the devnet drill ruleset (testnet-11's class set on the devnet base) does not assemble: {e}"))
+    } else {
+        palw_v2_params_from_artifacts_on_base(DEVNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, palw_devnet_genesis_bonds_v1())
+            .unwrap_or_else(|e| panic!("the devnet ADR-0068 drill ruleset does not assemble: {e}"))
+    }
 }
 
 /// **Devnet's genesis bond registry, from public seeds** (`palw_devnet_genesis_bond_seed_v1`):
@@ -10021,10 +10053,18 @@ mod consensus_params_id_tests {
         let err = mismatched.validate_palw_v2().expect_err("a ruleset whose frozen arity is not its derived one must not assemble");
         assert!(format!("{err}").contains("frozen dissection_arity"), "the refusal must name the field: {err}");
 
-        // Dormant, the same bundle assembles: the fence is what makes the two spellings one rule.
+        // Dormant, the frozen-arity rule is silent — but devnet's genesis set registers the
+        // graph-v5 row (testnet-11's set since the ADR-0082 drill), so the OTHER door refuses the
+        // ruleset first: a fused genesis row under a dormant court
+        // (`a_fused_genesis_row_is_refused_while_the_kary_court_is_dormant`). The two refusals
+        // are different rules with different words; this asserts the dormant fence stops the
+        // arity rule from speaking, and that what speaks instead names the fused row.
         let mut dormant = mismatched.clone();
         dormant.palw_kary_court = None;
-        dormant.validate_palw_v2().expect("a dormant fence leaves the ruleset alone");
+        let err = dormant.validate_palw_v2().expect_err("a fused genesis row under a dormant court is refused");
+        let text = format!("{err}");
+        assert!(!text.contains("frozen dissection_arity"), "a dormant fence must silence the arity rule: {text}");
+        assert!(text.contains("fused-attention"), "the dormant refusal is the fused-row guard's, by name: {text}");
     }
 
     /// **Audit D H-3, the other door: a fused row MINTED at genesis is refused while the court is

@@ -42,6 +42,7 @@ CERTIFY_BIN="${CERTIFY_BIN:-$REPO_ROOT/target/release/palw-certify}"
 GATEWAY_BIN="${GATEWAY_BIN:-$REPO_ROOT/target/release/misaka-palw-gateway}"
 WORKER_BIN="${WORKER_BIN:-$REPO_ROOT/target/release/palw-a16-fp-worker}"
 RAIL_BIN="${RAIL_BIN:-$REPO_ROOT/target/release/misaka-palw-fp-rail}"
+CLASS_BIN="${CLASS_BIN:-$REPO_ROOT/target/release/palw-class}"
 NODES="${NODES:-3}"
 WORK_DIR="${WORK_DIR:-$REPO_ROOT/.misaka-palw-fp-devnet}"
 WAIT="${WAIT:-900}"
@@ -77,7 +78,7 @@ die() { log "FATAL: $*"; exit 1; }
 # ---------------------------------------------------------------------------------------------
 # Preflight. Every one of these is a refusal BY NAME rather than a failure thirty minutes in.
 # ---------------------------------------------------------------------------------------------
-for b in "$KASPAD_BIN" "$CLI_BIN" "$CERTIFY_BIN" "$GATEWAY_BIN" "$WORKER_BIN" "$RAIL_BIN"; do
+for b in "$KASPAD_BIN" "$CLI_BIN" "$CERTIFY_BIN" "$GATEWAY_BIN" "$WORKER_BIN" "$RAIL_BIN" "$CLASS_BIN"; do
   [ -x "$b" ] || die "$b is not an executable. Build it: cargo build --release -p <its crate>"
 done
 # Plain `if` rather than `${VAR:?message}`: bash 3.2 (which is what macOS ships) re-parses quotes
@@ -260,14 +261,64 @@ advance 1
 # put the dense class on the chain the way an outside operator would: the permissionless
 # post-genesis route (ADR-0054), from the artifact this node holds.
 # ---------------------------------------------------------------------------------------------
+# **The class id comes from the CHAIN'S TABLE, not from a hex scrape of a log.** This read
+# `grep -oE '[0-9a-f]{128}' … | tail -1`, and the last 128-hex string in a registration log is a
+# TXID or a block hash — never the class id, which the panel does not print. Everything downstream
+# (identity.json, the gateway's chain probe, the rail's commitment) then bound a block hash and
+# refused for reasons that named the class rather than the mistake. `--palw-dump-classes` reads
+# `palw_v2_class_table()` at the tip and refuses to answer from genesis, so it names what the chain
+# ACCEPTED — and it prints the budget, which stage 2b needs.
+# No `timeout(1)`: it is coreutils, macOS does not ship it, and this drill's own preflight is on
+# macOS. The dump service returns after it prints, but the NODE goes on running, so this is the
+# same background-watch-kill shape stage 2 uses rather than a wait on a process that never exits.
+class_table() {
+  local pid deadline
+  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg" \
+    --rpclisten-borsh=127.0.0.1:$((reg_rpc + 200)) --nogrpc --nodnsseed --disable-upnp \
+    --connect=127.0.0.1:$P2P_BASE --utxoindex --palw-dump-classes >"$WORK_DIR/class-table.log" 2>&1 &
+  pid=$!
+  deadline=$((SECONDS + STEP_WAIT))
+  while :; do
+    grep -qE '\[palw-dump\] .* class\(es\) at daa' "$WORK_DIR/class-table.log" 2>/dev/null && break
+    grep -q 'holds no PALW classes' "$WORK_DIR/class-table.log" 2>/dev/null && break
+    kill -0 "$pid" 2>/dev/null || break
+    [ $SECONDS -lt $deadline ] || break
+    sleep 2
+  done
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  grep -E '\[palw-dump\]   class=' "$WORK_DIR/class-table.log" || true
+}
+
 log "stage 2 — registering $MODEL_ID from the artifact"
+# **The class id is the build's, by model id, before anything is registered** — so the row this
+# drill certifies, prices and drives is named once, and a chain that carries more than one
+# non-base class (devnet's genesis set is testnet-11's since the ADR-0082 drill: the floor, the
+# QWEN36 hybrid and the graph-v5@512 dense row) cannot hand the drill the wrong one. `palw-class
+# ledger` prints every class this build can supply with its id — the id `palw-certify bind` names
+# again in stage 3.
+EXPECTED_CLASS_ID=$("$CLASS_BIN" ledger --network devnet 2>/dev/null \
+  | awk -v want="$MODEL_ID" '$1 == want {found=1; next} found && $1 == "class" && $2 == "id" {print $3; exit}')
+[ -n "$EXPECTED_CLASS_ID" ] || die "palw-class ledger names no class id for $MODEL_ID on devnet — this build does not supply that row"
+log "  $MODEL_ID is class ${EXPECTED_CLASS_ID:0:16}… in this build"
+reg_rpc=$RPC_BASE
+# **A class the genesis already registers is not registered again.** With devnet carrying
+# testnet-11's class set, the dense row is a genesis object — Active and budgeted from DAA 0 —
+# and the panel's candidate filter would (correctly) find nothing to register; the registrar
+# would then wait out $WAIT seconds for a carrier that never comes. The chain's own table decides
+# which case this is. The post-genesis path below stays for a row the genesis does not hold; its
+# admission DECISION is what the SDK, core and 1c's tests cover, and no live drill exercises that
+# sequence end to end any more — a stated loss (5f card §5).
+if class_table | grep -q "class=$EXPECTED_CLASS_ID"; then
+  log "  $MODEL_ID is registered at GENESIS on this chain — the registrar is not started"
+  reg_outcome="genesis"
+else
 # **Registered by a bond that produces nothing.** ADR-0054 admits a class on the producer key
 # alone, so the registrar does not have to be an executor — and making it a different bond is what
 # keeps bond 0's fee float unspent for the rail in stage 5b. It also makes the drill demonstrate
 # the real shape: one party puts a class on the chain, another executes it.
 REGISTRAR_ADDR="$("$CLI_BIN" --network devnet key address --key-file "$WORK_DIR/keys/bond-$REGISTRAR_BOND.seed" | tail -1 | awk '{print $NF}')"
 [ -n "$REGISTRAR_ADDR" ] || die "cannot derive the registrar bond ($REGISTRAR_BOND) address"
-reg_rpc=$RPC_BASE
 # **The registrar is a DAEMON, so it is backgrounded and watched, not waited on.** kaspad does not
 # stop when a registration lands — the panel submits the object and goes on validating, which is
 # what a node should do. Running it in the foreground made a successful registration and a silent
@@ -309,8 +360,9 @@ while :; do
 done
 kill "$reg_pid" 2>/dev/null || true
 wait "$reg_pid" 2>/dev/null || true
+fi
 case "$reg_outcome" in
-  ok) : ;;
+  ok|genesis) : ;;
   no-bond)
     grep -n "needs a bond to register the class under" "$WORK_DIR/register-class.log" >&2
     die "the registrar was started without --palw-producer-bond, so the panel declined to register anything — see the line above" ;;
@@ -326,40 +378,14 @@ case "$reg_outcome" in
 esac
 advance 2
 
-# **The class id comes from the CHAIN'S TABLE, not from a hex scrape of a log.** This read
-# `grep -oE '[0-9a-f]{128}' … | tail -1`, and the last 128-hex string in a registration log is a
-# TXID or a block hash — never the class id, which the panel does not print. Everything downstream
-# (identity.json, the gateway's chain probe, the rail's commitment) then bound a block hash and
-# refused for reasons that named the class rather than the mistake. `--palw-dump-classes` reads
-# `palw_v2_class_table()` at the tip and refuses to answer from genesis, so it names what the chain
-# ACCEPTED — and it prints the budget, which stage 2b needs.
-# No `timeout(1)`: it is coreutils, macOS does not ship it, and this drill's own preflight is on
-# macOS. The dump service returns after it prints, but the NODE goes on running, so this is the
-# same background-watch-kill shape stage 2 uses rather than a wait on a process that never exits.
-class_table() {
-  local pid deadline
-  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg" \
-    --rpclisten-borsh=127.0.0.1:$((reg_rpc + 200)) --nogrpc --nodnsseed --disable-upnp \
-    --connect=127.0.0.1:$P2P_BASE --utxoindex --palw-dump-classes >"$WORK_DIR/class-table.log" 2>&1 &
-  pid=$!
-  deadline=$((SECONDS + STEP_WAIT))
-  while :; do
-    grep -qE '\[palw-dump\] .* class\(es\) at daa' "$WORK_DIR/class-table.log" 2>/dev/null && break
-    grep -q 'holds no PALW classes' "$WORK_DIR/class-table.log" 2>/dev/null && break
-    kill -0 "$pid" 2>/dev/null || break
-    [ $SECONDS -lt $deadline ] || break
-    sleep 2
-  done
-  kill "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
-  grep -E '\[palw-dump\]   class=' "$WORK_DIR/class-table.log" || true
-}
 class_rows=$(class_table)
 [ -n "$class_rows" ] || { tail -20 "$WORK_DIR/class-table.log" >&2; die "--palw-dump-classes named no class rows — see $WORK_DIR/class-table.log"; }
 # The registered class is the one that is not the genesis floor. `base=false` is the chain's own
 # word for "an operator put this here", so the drill does not have to know the floor's id.
-CLASS_ID=$(printf '%s\n' "$class_rows" | grep 'base=false' | sed -E 's/.*class=([0-9a-f]+).*/\1/' | head -1)
-[ -n "$CLASS_ID" ] || { printf '%s\n' "$class_rows" >&2; die "every class on this chain is a base class — $MODEL_ID did not register"; }
+# The row is the one this build named for $MODEL_ID — never "the first non-base row", which on
+# a chain with more than one model class is whichever the table lists first.
+CLASS_ID=$(printf '%s\n' "$class_rows" | grep "class=$EXPECTED_CLASS_ID" | sed -E 's/.*class=([0-9a-f]+).*/\1/' | head -1)
+[ -n "$CLASS_ID" ] || { printf '%s\n' "$class_rows" >&2; die "the chain's class table does not hold ${EXPECTED_CLASS_ID:0:16}… ($MODEL_ID) — it did not register"; }
 log "stage 2 OK — class ${CLASS_ID:0:16}… (from the chain's class table)"
 
 # ---------------------------------------------------------------------------------------------
