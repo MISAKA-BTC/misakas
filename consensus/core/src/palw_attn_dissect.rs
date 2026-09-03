@@ -120,16 +120,23 @@ pub enum PalwAttnDissectError {
 impl core::fmt::Display for PalwAttnDissectError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::UnsupportedVersion { got } => write!(f, "dissection object version {got} is not {PALW_ATTN_DISSECT_OBJECT_VERSION_V1}"),
+            Self::UnsupportedVersion { got } => {
+                write!(f, "dissection object version {got} is not {PALW_ATTN_DISSECT_OBJECT_VERSION_V1}")
+            }
             Self::NoChildren => write!(f, "a dissection round discloses at least one child"),
             Self::TooManyChildren { got, max } => write!(f, "a round discloses {got} children; the arity cap is {max}"),
             Self::LaneCountMismatch { parent, child } => write!(f, "a child claims {child} lanes against the parent's {parent}"),
             Self::TooManyLanes { got, max } => write!(f, "a claim disputes {got} lanes; the cap is {max}"),
             Self::ArityOutOfRange { got } => {
-                write!(f, "dissection arity {got} is outside {PALW_ATTN_DISSECT_MIN_ARITY}..={PALW_ATTN_DISSECT_MAX_ARITY} or not a power of two")
+                write!(
+                    f,
+                    "dissection arity {got} is outside {PALW_ATTN_DISSECT_MIN_ARITY}..={PALW_ATTN_DISSECT_MAX_ARITY} or not a power of two"
+                )
             }
             Self::MaxDoesNotFold { claimed, folded } => write!(f, "the children's max folds to {folded}, the parent claims {claimed}"),
-            Self::SumDoesNotFold { claimed, folded } => write!(f, "the children's exponent sums fold to {folded}, the parent claims {claimed}"),
+            Self::SumDoesNotFold { claimed, folded } => {
+                write!(f, "the children's exponent sums fold to {folded}, the parent claims {claimed}")
+            }
             Self::ValueDoesNotFold { lane, claimed, folded } => {
                 write!(f, "lane {lane}: the children's value partials fold to {folded}, the parent claims {claimed}")
             }
@@ -311,7 +318,10 @@ mod tests {
         let too_many: Vec<_> = (0..=PALW_ATTN_DISSECT_MAX_CHILDREN).map(|_| a.clone()).collect();
         assert_eq!(
             palw_attn_fold_v1(&too_many),
-            Err(PalwAttnDissectError::TooManyChildren { got: PALW_ATTN_DISSECT_MAX_CHILDREN + 1, max: PALW_ATTN_DISSECT_MAX_CHILDREN })
+            Err(PalwAttnDissectError::TooManyChildren {
+                got: PALW_ATTN_DISSECT_MAX_CHILDREN + 1,
+                max: PALW_ATTN_DISSECT_MAX_CHILDREN
+            })
         );
     }
 
@@ -387,7 +397,10 @@ mod tests {
             assert!(palw_attn_dissect_arity_fits_carrier_v1(arity, 128, carrier), "arity {arity} at 128 lanes must fit one carrier");
         }
         for arity in [2u8, 4, 8, 16, 32] {
-            assert!(palw_attn_dissect_arity_fits_carrier_v1(arity, PALW_ATTN_DISSECT_MAX_LANES, carrier), "arity {arity} at 256 lanes");
+            assert!(
+                palw_attn_dissect_arity_fits_carrier_v1(arity, PALW_ATTN_DISSECT_MAX_LANES, carrier),
+                "arity {arity} at 256 lanes"
+            );
         }
         assert!(
             !palw_attn_dissect_arity_fits_carrier_v1(64, PALW_ATTN_DISSECT_MAX_LANES, carrier),
