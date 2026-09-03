@@ -5532,3 +5532,28 @@ smaller material) pulled through the same connection the relay flows share; the 
 bytes per 15 s across its next production to see whether a multi-hundred-MB transfer starts at the block.
 3e's and 5e's sessions are gone; the code read is with 6a. Seat table for the explorer (bond → seat): 0 node0,
 1 node1, 2 seat2, 6 .113 node, seat4 bond 4, pool slot bond .
+
+### 6l — the mechanism, read in code by 6a; and the seats' "Unavailable" (21:45 UTC)
+
+`kaspad/src/palw_producer.rs:734–736`: after the draw wins the producer calls `broadcast_palw_material(message,
+material)` and only then sets the header and submits the block. `protocol/flows/src/flow_context.rs:686–696` builds one
+`PalwTraceMaterialBroadcast` with the **whole** material and `hub().broadcast(msg, None)` — no size check on the push
+path; the receiver's `admit_material` (`palw_gossip.rs:619`) refuses `> PALW_MATERIAL_MAX_BYTES` (16 MiB) only after
+the message has arrived (gRPC decode cap 1 GiB). On 6a's loopback devnet that step is a constant 35 s (produced →
+peers' "Accepted … via relay", nothing logged in between); on seat2's links (RTT 250–356 ms, cwnd 2–4, retransmits on
+every peer socket) 748 MB × five peers does not finish in 120 s, `SendPingsFlow` on both ends and the peer's
+`HandleRelayInvsFlow` time out, the routers are torn down, and the block — announced once, queued behind the
+material — is gone. The same floods explain seat2's lag (daa 316 against the fleet's 410 at 21:39 UTC): its links
+die and re-form around every production. QWEN36's blocks cross because ibm's DC links carry its 253 MB material to
+the near peers before the window closes (the 5.104 leg still times out, which is the `SendPingsFlow` node0 logs).
+
+**Second consequence, already visible:** the serve path refuses > 16 MiB too ("never serve what the transport would
+refuse"), so no seat can obtain a 253 MB QWEN36 material or a 748 MB v5 material by gossip. At 21:34 UTC node1 and
+`.113`'s node filed **"Unavailable"** receipts for QWEN36's first claim `e78441c7…` (the half-window); node1's other
+8 receipts are the pre-cut Incapables. **No model-class claim can reach Final on this network with the shipped
+transport cap**, and the window's end defaults the producer — whether that default slashes collateral is read
+below and decides whether node0's production is paused tonight. Fix, post-cut and consensus-inert: cap at broadcast
+(skip + warn above `PALW_MATERIAL_MAX_BYTES`) and submit the block before broadcasting; and verification of
+attempt-lane claims riding the ADR-0077 interval lane (`IntervalOpening`, size-bounded) rather than whole material —
+the "one ceiling, two units" instance (748 MB per 512-context job against a 16 MiB transport cap; 2026-08-28's
+8 → 16 MiB was the previous member).
