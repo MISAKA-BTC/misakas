@@ -17490,6 +17490,10 @@ pub(crate) mod tests {
             tile_len: 16,
         };
 
+        /// The output lane a forged execution overstates. Any lane would do; naming it once
+        /// keeps the root claim, the rounds and the assertions about them on the same one.
+        const LIE_LANE: usize = 3;
+
         /// 34 prefill positions: the disputed one reads 34 of history, which is three tiles of 16 — two
         /// dissection rounds at the binary arity and one ragged tail.
         const PREFILL: u32 = 34;
@@ -17543,6 +17547,9 @@ pub(crate) mod tests {
             pub v: Vec<i32>,
             /// The committed output tile, honest or forged.
             pub out_tile: Vec<i32>,
+            /// How much the responder's claim overstates lane [`LIE_LANE`] of the range that
+            /// holds the divergence; zero on an honest drill.
+            pub delta: i64,
             pub root_claim: PalwAttnRootClaimV1,
             pub leaf_hashes: Vec<Hash64>,
             pub binding: PalwStepBindingV2,
@@ -17580,7 +17587,15 @@ pub(crate) mod tests {
             /// touching the cache — the shape of a real forgery: the history is what it is, and the row
             /// the executor published is not what that history produces.
             pub(crate) fn new(forge: bool) -> Self {
-                let profile = qwen25_a16_profile_v5(DRILL).expect("the drill geometry projects a graph-v5 row");
+                let mut profile = qwen25_a16_profile_v5(DRILL).expect("the drill geometry projects a graph-v5 row");
+                // **ADR-0082 Decision 4, declared by the CLASS.** The bottom's checkpoint route
+                // reads one chunk of the anchor, and that is only addressable when the class's
+                // registered map tiles the cache at the court's tile — `tiled_kv_state_geometry_v3`.
+                // The projected v5 row still carries the v2 map, whose chunk is the whole history,
+                // so the court refuses its checkpoint route BY NAME (`NotTheTiledMap`). Declaring
+                // it here is what a graph-v5 row must do before Decision 4 has a route at all; a
+                // class IS its profile, so this is a different class id and nothing shipped moves.
+                profile.state_chunk_map_id = tiled_kv_state_chunk_map_id_v3();
                 let context = crate::palw_base0_profile::rc_job_context(&profile, PREFILL, 1);
                 let fused = fused_slot(&profile);
                 let (k_slot, v_slot, q_slot) = series_slots(&profile, fused);
@@ -17601,14 +17616,30 @@ pub(crate) mod tests {
                 let v = codes(history * kv_dim, 0x5a5a);
                 // Head 0 of a two-head row at a 16-lane tile: `lane_first = 0`, `lane_count = d_head`,
                 // and `kv_off = 0` under the family's grouped-query map.
-                let root = a16_attn_root_claim_v1(&q, &k, &v, kv_dim, 0, (0, d_head), quant(), 16).expect("an honest root claim");
-                let honest = a16_attn_finalize_v1(&root.v_acc, quant().values);
-                let out_tile = if forge {
-                    let mut forged = honest.clone();
-                    forged[3] = forged[3].wrapping_add(1);
-                    forged
+                let honest_root =
+                    a16_attn_root_claim_v1(&q, &k, &v, kv_dim, 0, (0, d_head), quant(), 16).expect("an honest root claim");
+                let honest = a16_attn_finalize_v1(&honest_root.v_acc, quant().values);
+                // **The forgery is the one ADR-0082 Decision 2 is written against**: the executor
+                // published an output row its own history does not produce, and then has to stand
+                // behind it. It cannot state the honest partials — they finalize to the honest
+                // row, and the phase refuses a root claim that does not reproduce what was
+                // COMMITTED — so it states a lying `V*`, and must then push the lie into a child
+                // at every round and compensate in the siblings, which is what the fold makes it
+                // do.
+                let (root, out_tile, delta) = if forge {
+                    let mut delta = 1i64 << 22;
+                    loop {
+                        let mut lying = honest_root.clone();
+                        lying.v_acc[LIE_LANE] += delta;
+                        let tile = a16_attn_finalize_v1(&lying.v_acc, quant().values);
+                        if tile != honest {
+                            break (lying, tile, delta);
+                        }
+                        delta *= 2;
+                        assert!(delta < 1 << 40, "no perturbation of one lane moves the committed row");
+                    }
                 } else {
-                    honest
+                    (honest_root, honest, 0)
                 };
 
                 let total = step_leaf_count(&profile, &context).expect("the drill job counts");
@@ -17664,9 +17695,9 @@ pub(crate) mod tests {
                     checkpoint_interval: 8,
                     state_layout_id: crate::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
                 };
-                // ONE checkpoint, over the first 32 positions — a multiple of the tile, so the disputed
-                // tile (32..34) is wholly past its edge, and the STRADDLE case is the one the anchored
-                // route exercises at the tile before it.
+                // ONE checkpoint, at decode call 0: it covers the prefill, which is this job's
+                // whole history, so the disputed tile is inside it and the bottom's checkpoint
+                // route opens exactly one chunk.
                 let anchor = Anchor::build(&profile, &context, &k, &v, kv_dim, ANCHOR_POSITIONS);
                 let step_root = step_leg_root_v1(&context_hash, &profile_hash, total, &step_merkle_root);
                 let checkpoint_root = checkpoint_leg_root_v2(
@@ -17709,6 +17740,7 @@ pub(crate) mod tests {
                     k,
                     v,
                     out_tile,
+                delta,
                     root_claim: PalwAttnRootClaimV1 {
                         version: PALW_ATTN_DISSECT_OBJECT_VERSION_V1,
                         head: 0,
@@ -17845,13 +17877,26 @@ pub(crate) mod tests {
                     }
                     level = next;
                 }
-                level.pop().expect("a non-empty range")
+                let mut claim = level.pop().expect("a non-empty range");
+                // **The lie, and where it has to go.** The root claim overstates one lane, so
+                // every disclosure the responder makes must still fold to it: the surplus is
+                // pushed into whichever child holds the divergence (tile 0 here) and the siblings
+                // are honest. That is the only strategy the fold admits, and it walks the
+                // dissection straight to the tile where the recompute contradicts the claim.
+                if self.delta != 0 && first == 0 {
+                    claim.v_acc[LIE_LANE] += self.delta;
+                }
+                claim
             }
         }
 
-        /// The checkpoint covers the first two whole tiles, so the disputed tile is past its edge and the
-        /// tile before it is wholly inside — both cases in one fixture.
-        const ANCHOR_POSITIONS: u32 = 32;
+        /// **What the anchor covers is not a free choice**: a checkpoint's coverage is
+        /// `declared_prefill_tokens + covered_decode_call` (`integer_kv_positions_at_v1`), and the
+        /// court DERIVES it from the job rather than reading it off the object — so a checkpoint
+        /// at decode call 0 covers the whole prefill, which is this job's whole history. The
+        /// straddle (a tile reaching past the anchor's edge) is a decode-position case, and
+        /// `palw_attn_court_v1` is where it is swept.
+        const ANCHOR_POSITIONS: u32 = PREFILL;
 
         struct Anchor {
             geometry: PalwStateChunkGeometryV1,
@@ -17898,7 +17943,7 @@ pub(crate) mod tests {
                 let leaf = PalwCheckpointLeafV2 {
                     version: PALW_STEP_LEG_OBJECT_VERSION_V1,
                     checkpoint_index: 0,
-                    covered_decode_call: positions.saturating_sub(context.declared_prefill_tokens),
+                    covered_decode_call: positions - context.declared_prefill_tokens,
                     prev_checkpoint_leaf_hash: checkpoint_genesis_prev_v2(&context_hash),
                     state_chunk_count: chunk_hashes.len() as u32,
                     state_chunks_root: state_chunks_root_v1(&chunk_hashes).expect("a chunks root"),
@@ -17973,7 +18018,9 @@ pub(crate) mod tests {
                     session_id,
                     round,
                     midpoint,
-                    mid_state: h64(0xD0),
+                    // A fresh state per rung: the ladder refuses a midpoint state that repeats an
+                    // endpoint's, because an interval whose ends agree contains no divergence.
+                    mid_state: h64(0xD00 + round as u64),
                 },
                 signature: vec![0xAA; 8],
             }
@@ -18097,7 +18144,7 @@ pub(crate) mod tests {
             p: &PalwStateParamsV2,
             drill: &Drill,
             anchored: bool,
-        ) -> (PalwChainStateV2, Hash64, Hash64, PalwCourtVerdictV2) {
+        ) -> (PalwChainStateV2, Hash64, Hash64, PalwCourtVerdictV2, u64) {
             let (mut state, claim_id, sid, mut daa) = court_at_the_fused_leaf(p, drill);
             let (next, _) = apply(&state, p, &ctx(daa, daa, daa), &[root_claimed(sid, drill, 2)], None);
             daa += 1;
@@ -18132,7 +18179,7 @@ pub(crate) mod tests {
             let court = crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 22, 20, 2).unwrap();
             let verdict = crate::palw_court_v2::adjudicate_court_close_v2(&state, &sid, &dissection_close(drill, bottom), &court)
                 .expect("the bottom adjudicates");
-            (state, claim_id, sid, verdict)
+            (state, claim_id, sid, verdict, daa)
         }
 
         /// **Z2, through the chain.** An honest execution walks every round and is acquitted; a
@@ -18143,11 +18190,11 @@ pub(crate) mod tests {
             let p = params_with_ladder();
             for anchored in [false, true] {
                 let honest = Drill::new(false);
-                let (_, _, _, verdict) = play_to_the_bottom(&p, &honest, anchored);
+                let (_, _, _, verdict, _) = play_to_the_bottom(&p, &honest, anchored);
                 assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "anchored={anchored}: an honest execution was convicted");
 
                 let forged = Drill::new(true);
-                let (state, claim_id, sid, verdict) = play_to_the_bottom(&p, &forged, anchored);
+                let (state, claim_id, sid, verdict, daa) = play_to_the_bottom(&p, &forged, anchored);
                 assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "anchored={anchored}: a forged output row was acquitted");
 
                 // And the verdict is the shipped court's: the close arm voids and slashes exactly as a
@@ -18160,7 +18207,9 @@ pub(crate) mod tests {
                         operand_openings: Vec::new(),
                     },
                 };
-                let (after, _) = apply(&state, &p, &ctx(900, 900, 900), &[close], None);
+                // The block after the last dissection move — inside the session's own
+                // backstop, so what ends the session is the CLOSE and not the sweep.
+                let (after, _) = apply(&state, &p, &ctx(daa, daa, daa), &[close], None);
                 assert!(after.court_session(&sid).is_none(), "the close ends the session");
                 assert!(
                     matches!(after.claim(&claim_id).expect("the claim survives as a record").phase, PalwClaimPhaseV2::Voided { .. }),
