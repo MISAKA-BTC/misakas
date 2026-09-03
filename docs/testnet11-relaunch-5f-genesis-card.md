@@ -4404,3 +4404,49 @@ shape as t11's node0.
 The final table will be regenerated on the tip that carries the script fix — the pins do not
 depend on the script, but the join rule says a table names the commit its run ran on, and the
 guard enforces that. It will be re-run there before anything is pasted.
+
+## While waiting on "frozen": the fleet measured, a warm-up build, and two facts from the drill session
+
+### The census, from processes and sockets (not journals)
+
+```
+169.58.39.220 (ibm)   kaspad --appdir=/root/.t11   kaspad --appdir=/root/.t11b
+                      kaspad.candidate (DELETED binary) --appdir=/tmp/fpchk     <- a leftover isolated
+                      units: t11-node0, t11-node1, faucet running; miner/validator/kaspad dead     boot; wipe must kill it
+169.58.232.113        kaspad .t11   kaspad .t11c   kaspad /var/lib/misaka-minerpool/slots/slot-01/appdir
+                      units: dnsseeder, minerpool, pool-slot@01, t11-node, t11-seat4 running
+5.104.81.23           kaspad .t11
+                      units: dnsseeder, miner-c, validator-c, t11-seat2 running; seat3 dead
+external peers        111.67.115.228  183.176.36.141  5.104.81.228  60.114.127.4   <- CANNOT be wiped;
+                                                                                   the handshake fingerprint rejects them
+live binaries         every running kaspad on ibm execs /root/t11/kaspad — NOT the build target. The wipe
+                      replaces THAT path; a rebuild into target/ changes nothing a restart would pick up.
+```
+
+### A warm-up build on ibm, under a watchdog
+
+`candidate-971b2eff` (a **sha-named** ref — a name that carries its own claim) pushed to ibm's
+repo over ssh; `cargo build --release -p kaspad -j 4` (runbook §2's recipe; EVM is in the default
+build) started nice'd, so the final release build is incremental. Safe because no live kaspad runs
+from that target (checked by `/proc/<pid>/exe`, not assumed). **Available memory read 11 → 10 →
+9 GiB against the 11.8 GiB floor §2 measured**, so a watchdog on ibm itself kills only the build
+(cargo/rustc/cc1plus) below 8 GiB — the producers are the largest processes and the OOM killer
+would take one of them, not the build. *The build is an optimisation; the chain is not.*
+
+### Two facts from 5e (the acceptance-drill session), one verified and one open
+
+**Verified on impl:** *"the 2^26 ladder forces `court_turn_deadline` 60 → 42 or the RC bundle does
+not assemble (54 × 60 + 216 = 3,456 > 3,000; 59 tests red until it moved); 42 not 51 because 51
+is illegal once the 2^32 fence arms."* `palw_fp_devnet_v3.rs:196 court_turn_deadline: 42`,
+`palw_context_ladder.rs:1351 1 << 26`, and `the_rc_ladder_spends_2484_of_its_3000` — 54 × 42 +
+216 = 2,484. **The basis carries 42; that is why the finalize was 1821/3 and not 59 reds.**
+
+**Open, and a merge-time blocker for any family commit:** 5e's drill certified the a16-v5 family
+at **409,069 B over five carriers**; 3e's drill certified impl's entry at **one carrier**. Two
+family entries of different sizes for one class is one object spelled twice. **The cut ships
+exactly one, chosen by measuring which route produced which — and no family commit is adopted
+until 5e and 3e name the survivor.**
+
+5e's other drill facts, with the bound artifact as their next input: stage 2 PASS (the panel
+registered `4277d84f…`), stage 3 PASS (family + ClassLaneCertified on every validator), stage 4
+refused the unbound artifact — the same gate this card closed with `bound-candidate.palwart`.
