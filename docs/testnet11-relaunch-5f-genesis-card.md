@@ -5681,3 +5681,9 @@ after node1's restart the host read 13.9 GB free, 15.5 GB available, swap 4.2 GB
 only. At +30 s: node1 9.9 GB resident (the first artifact pass touches its files; expected to settle), host 3.1 GB
 free / 5.4 GB available, swap 4.2 GB and draining, node0 at 103 % of one core. A twelve-minute deferred read follows
 for node0's recovery (target: ~2 cores, a fourth material and block).
+
+**6n, continued — recovery, partial (23:28 UTC):** host 14.0 GB used / 10.0 GB available, swap 3.8 GB (down from
+8.2); node0 130 % of one core (from 96 %), 11.4 GB resident with **3.7 GB still swapped** — its fourth job continues
+and will finish as its working set pages back; node1 11.2 GB resident with the two A16 artifacts only, no swap,
+floor producer at 0 blocks. Fleet daa 592: the first coinbase matures near 00:15 UTC; the first QWEN36 claim's
+receipt deadline (daa 640) falls near 23:52 — its redraw is readable in node0's next facts line.
