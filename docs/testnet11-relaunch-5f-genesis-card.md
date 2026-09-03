@@ -825,6 +825,39 @@ trial merge — not the conflict count, which expires.
 
 ---
 
+### The isolated boot has teeth — rehearsed on ibm, and it refused
+
+Run against the `5f + impl` release binary on a throwaway appdir, unused ports, `--nodnsseed`, no
+peers, live producers untouched throughout:
+
+    [INFO ]  PALW court certified end-to-end for: PALW-BASE-0, PALW-QWEN36, PALW-QWEN25-A16
+             (court_e2e_root 581466da…)
+    [INFO ]  Consensus params fingerprint: 68e1e117…10516612 (network testnet-11)
+    [ERROR]  panicked at consensus/src/consensus/utxo_set_override.rs:60:9
+             genesis utxo_commitment mismatch (audit M-07)
+               left:  ba2612417e7e0817…   what the premine BUILDS
+               right: 2d882275dae82945…   what is PINNED
+    Exiting...
+
+**The node refuses to start rather than starting wrong**, which is the whole point of the step and
+the first time this cut has seen it fire. That refusal is re-pin #1 not yet done — correct, because
+the tree is not frozen — so this is the rehearsal succeeding, not the build failing.
+
+**Three things it confirmed that had been reasoned about separately, each now from a running
+binary rather than from a test:**
+
+| | |
+|---|---|
+| the new commitment | `ba2612417e7e0817…` — the same value `print_premine_commitment` prints and `every_genesis_commits_to_the_premine_this_build_mints` reports as "builds". Two routes, one number. |
+| the e2e root has NOT moved | boot prints `581466da…`, the pinned value. Confirms re-pin #2 is not live on this tree — the `8f08d303…` move belongs to an unmerged per-kernel drill rule. |
+| the fingerprint | `68e1e117…10516612`, matching the pre-re-pin measurement taken independently. |
+
+**So the ordering in §4b — build, then isolated boot, THEN stop and wipe — is load-bearing rather
+than tidy.** A node that will not boot is survivable while the old chain is still up and is a dead
+network fifteen minutes after the wipe. **The isolated boot must be green before any host is
+stopped**, and this run is the evidence it can fail for a reason that is invisible to `cargo test`
+until the re-pin is done.
+
 ## 5. Known-open, shipping anyway, stated so no page claims otherwise
 
 ### The split close is OPEN, and this is what it costs
