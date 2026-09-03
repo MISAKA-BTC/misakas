@@ -4791,3 +4791,9 @@ says 16 with the reason; 16 < 27 keeps the close's own table above it.
 > anyway, so every old binary is refused at the handshake. **A future change to the carriage
 > alone would not be** — post-cut, the carriage constants belong in the ruleset id or behind a
 > fence, so a rule that decides what a chain carries is a rule the handshake can see.
+
+### impl took the carriage commit — `4d572142` — measured against 5f before anything else
+
+derive/src in its diff: 0 lines; `derive/src` tree still `4969f8dc…`; fingerprint / version / pin
+constants touched: 0. Merge surface impl `4d572142` × 5f `873ef2a9`: exit 0, **0 conflicts**, merged `derive/src`
+= the basis, G survives. The five predicted guard lines are unmoved by it, as measured rather than assumed.
