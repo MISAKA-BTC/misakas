@@ -462,21 +462,39 @@ fn a16_attn_score_one(qh: &[i32], k_row: &[i32], p: A16QuantParams) -> i32 {
     clamp16(a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero))
 }
 
-/// W11's per-element exponent given the row max — `softmax_shifted`'s map, one element: the
-/// difference widened FIRST in `i64`, clamped SECOND, then the pinned `int_exp`.
+/// W11's per-element exponent given the row max — `softmax_shifted`'s map, one element, through
+/// the SAME expression (`softmax_shifted_diff_v1`): the difference clamped at `i32::MIN >> up`,
+/// then widened, then the pinned `int_exp`.
+///
+/// One expression, not two spellings of it, because the fused site's tile route and the shipped
+/// row softmax must agree bit for bit at every `up_bits` — and they did not: the old form shifted
+/// FIRST and wrapped past `up = 47`, handing the most-suppressed key the full weight of the row
+/// max (audit E M-1).
 #[inline]
 fn a16_attn_exp_one(score: i32, max: i64, up_bits: u8) -> i64 {
     let up = up_bits.min(62) as i64;
-    let diff = ((score as i64 - max) << up).clamp(i32::MIN as i64, 0);
-    crate::palw_base0::int_exp(diff as i32) as i64
+    crate::palw_base0::int_exp(crate::palw_base0_ops::softmax_shifted_diff_v1(score, max, up)) as i64
 }
 
 /// W11's per-element probability given the exponent and the row's reciprocal sum —
 /// `((e · recip) >> K)` — narrowed by the probs requantization (W5), one code.
+///
+/// **The product is taken in `i128` because the divisor is not this function's** (audit A C-2 /
+/// E C-1). `softmax_shifted` runs the identical expression in `i64` safely: its `recip` is
+/// `int_recip` of the sum it just computed, so `e · recip` is about `2^K` by construction. Here
+/// `recip` comes from the ROOT CLAIM's `S*`, which arrives on the wire — and `int_recip(1)` is
+/// `≈ 2^48` against an `e` of `≈ 2^24`, a product of `≈ 2^72` that overflows `i64` and PANICS
+/// this workspace's release profile (`overflow-checks = true`) inside block validation, on every
+/// node that processes the close. The band check at `open_with_arity` refuses such a claim by
+/// name; this makes the kernel total whatever reaches it, which is the half that does not depend
+/// on a caller remembering. `int_recip` widened for the same reason.
+///
+/// No honest value moves: for every `S* ≥ int_exp(0)` the shifted product is at most `2^24`, so
+/// the old `as i32` was lossless and `a16_scale_round` (itself `i128`) sees the same argument.
 #[inline]
 fn a16_attn_prob_code_one(e: i64, recip: i64, probs: A16QuantParams) -> i32 {
-    let p = ((e * recip) >> crate::palw_base0::K) as i32;
-    clamp16(a16_scale_round(p as i64, probs.multiplier, probs.shift).saturating_add(probs.zero))
+    let p = i64::try_from((e as i128 * recip as i128) >> crate::palw_base0::K).unwrap_or(i64::MAX);
+    clamp16(a16_scale_round(p, probs.multiplier, probs.shift).saturating_add(probs.zero))
 }
 
 /// **The bottom of the dissection: one head's triple over a tile of history rows.**
@@ -783,6 +801,19 @@ mod fused {
             a16_attn_tile_triple_v1(qh, &k[..tile * kv_dim], &v[..tile * kv_dim], kv_dim, 0, lanes, params(), root.max, 0),
             Err(PalwA16OpError::Empty)
         );
+        // **And a small POSITIVE sum returns, rather than panicking** (audit A C-2 / E C-1).
+        // `int_recip(1)` is `≈ 2^48` and the row max's `e` is `≈ 2^24`, so the product this
+        // kernel forms is `≈ 2^72`: in `i64` that is an arithmetic overflow, and this workspace
+        // ships `overflow-checks = true`, so the panic happened inside `palw_v2_validate_objects`
+        // on every node that processed the close. Every `s_star` in `1..=512` is in that regime.
+        // The court refuses such a claim by name at `open_with_arity`; the kernel is total anyway,
+        // which is the half that does not depend on a caller remembering.
+        for s in [1i64, 2, 512, 513] {
+            assert!(
+                a16_attn_tile_triple_v1(qh, &k[..tile * kv_dim], &v[..tile * kv_dim], kv_dim, 0, lanes, params(), root.max, s).is_ok(),
+                "s_star {s} must answer, not panic"
+            );
+        }
     }
 
     /// **The bottom opening is GQA-aware and lane-sliced**: a head reads its own slice of the
