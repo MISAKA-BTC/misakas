@@ -424,7 +424,11 @@ pub async fn verify(
         ));
     }
     let as_json = json || ctx.output == OutputFormat::Json;
-    let mut all_consistent = true;
+    // **Two different failures, counted apart.** A row that disagrees is the executor's fault; a
+    // row this build cannot re-run is the READER's version, and folding them into one flag is how
+    // the summary line below came to call an honest executor a forger. See `overall_verdict`.
+    let mut any_mismatch = false;
+    let mut any_unverifiable = false;
     let mut rows = Vec::new();
     for row in &response.artifacts {
         let (object, chain_derived_id) = object_from_chain(&response, row, reader.network_domain)?;
@@ -435,7 +439,7 @@ pub async fn verify(
                 serde_json::json!({ "transformer_id": row.transformer_id, "kind": row.kind, "kind_name": name, "verdict": "consistent", "checked": checked })
             }
             Ok(mismatches) => {
-                all_consistent = false;
+                any_mismatch = true;
                 let first = &mismatches[0];
                 serde_json::json!({
                     "transformer_id": row.transformer_id,
@@ -452,7 +456,8 @@ pub async fn verify(
                 // Not being able to re-run IS a demonstrable gap (SA-5): an object naming a
                 // transformer this build does not publish is one nobody can check, and saying
                 // "consistent" about it would be the failure the whole command exists to prevent.
-                all_consistent = false;
+                // It is not, however, a falsehood — see `overall_verdict`.
+                any_unverifiable = true;
                 serde_json::json!({
                     "transformer_id": row.transformer_id,
                     "kind": row.kind,
@@ -472,7 +477,7 @@ pub async fn verify(
         "output_root": response.output_root,
         "executor_bond": response.executor_bond,
         "derivations": rows,
-        "verdict": if all_consistent { "consistent" } else { "MISMATCH — a demonstrable false object (ADR-0078 Decision 5)" },
+        "verdict": overall_verdict(any_mismatch, any_unverifiable),
     });
     if as_json {
         println!("{}", serde_json::to_string_pretty(&document).expect("serializable"));
@@ -495,7 +500,40 @@ pub async fn verify(
         }
         println!("{}", document["verdict"].as_str().unwrap_or(""));
     }
-    if all_consistent { Ok(()) } else { Err(CliError::new(exit::GENERIC, "the chain and the recomputation disagree")) }
+    match (any_mismatch, any_unverifiable) {
+        (false, false) => Ok(()),
+        (true, _) => Err(CliError::new(exit::GENERIC, "the chain and the recomputation disagree")),
+        // Nonzero, because a reader who could not check an object must not treat it as checked —
+        // but the sentence is about this build, not about the executor.
+        (false, true) => Err(CliError::new(
+            exit::GENERIC,
+            "this build could not re-run the derivation, so nothing was checked either way (ADR-0078 SA-5)",
+        )),
+    }
+}
+
+/// **The summary line, and the one place the two failures must not be confused.**
+///
+/// `MISMATCH` is ADR-0078 Decision 5's word: the executor filed a derivation that re-running the
+/// named grammar and transformer over the answer refutes, and the whole value of the sentence is
+/// that it is an accusation somebody can act on. `UNVERIFIABLE` is SA-5's: `transformer_id` covers
+/// `misaka-palw-derive/src/`, so any edit there moves all eight ids and this build simply is not
+/// the one the derivation names. Nobody lied; the reader is holding the wrong ruler.
+///
+/// This summary used to be `if all_consistent { .. } else { "MISMATCH — a demonstrable false
+/// object" }` over a single flag, which meant a claim whose every row was `UNVERIFIABLE` still
+/// printed a forgery accusation as its LAST line — the line a human reads and a script greps.
+/// `palw-derive verify` was fixed for exactly this; the command a launch note points strangers at
+/// was not.
+///
+/// A mismatch alongside an unverifiable row still reads MISMATCH: one refuted row is a refutation
+/// whatever else could not be checked.
+fn overall_verdict(any_mismatch: bool, any_unverifiable: bool) -> &'static str {
+    match (any_mismatch, any_unverifiable) {
+        (false, false) => "consistent",
+        (true, _) => "MISMATCH — a demonstrable false object (ADR-0078 Decision 5)",
+        (false, true) => "UNVERIFIABLE — this build does not publish that manifest (ADR-0078 SA-5)",
+    }
 }
 
 /// A pass has to say what it covered: "consistent" over one of the three recomputations is not
@@ -631,6 +669,48 @@ mod tests {
         assert!(describe_checked(true, false).contains("NOT output_root"));
         assert!(describe_checked(false, true).contains("NOT the derivation"));
         assert!(describe_checked(false, false).contains("nothing about this derivation was checked"));
+    }
+
+    /// **A derivation this build cannot re-run is not a derivation this build has refuted.**
+    ///
+    /// `transformer_id` names the source tree that produced the artifact, so a node upgrade that
+    /// touches `misaka-palw-derive/src/` moves all eight ids and every derivation already on chain
+    /// becomes one THIS build cannot check. `compare` reports that as `Err` — SA-5 — and the row
+    /// is rendered `UNVERIFIABLE`. This is the fixture the summary-line test below stands on: if
+    /// `compare` ever started returning `Ok(vec![...])` here, `UNVERIFIABLE` would silently become
+    /// `MISMATCH` and an honest executor would be accused by an upgrade.
+    #[test]
+    fn a_transformer_this_build_does_not_publish_is_unverifiable_and_not_a_mismatch() {
+        let ids = vec![7u32, 11, 13];
+        let (binding, family, job_context_hash) = binding(&ids);
+        let answer = corpus_answer();
+        let derivation = derive_named(MUSIC_TRANSFORMER, &binding, &answer).expect("the shipped corpus derives");
+
+        // The object an OLDER build filed: everything true, under an id this tree never published.
+        let mut stale = derivation.object.clone();
+        stale.transformer_id = h(0x5A);
+        let chain_derived_id = derived_id_v1(&stale);
+        let why = compare(&stale, chain_derived_id, Some(&answer), Some((family, job_context_hash, &ids)))
+            .expect_err("a transformer this build does not publish cannot be re-run");
+        assert!(why.contains("transformer"), "the refusal does not name what is unknown: {why}");
+    }
+
+    /// **The summary line must not call an honest executor a forger.**
+    ///
+    /// The last line `derived-verify` prints — and the string a script greps — is this one. It was
+    /// derived from a single `all_consistent` flag, so a claim whose every row was `UNVERIFIABLE`
+    /// printed "a demonstrable false object" underneath them. The three cases are distinct
+    /// sentences and this pins all three.
+    #[test]
+    fn the_summary_line_separates_unverifiable_from_a_false_object() {
+        assert_eq!(overall_verdict(false, false), "consistent");
+        // The regression: nothing was refuted, so nothing may be called false.
+        let unverifiable = overall_verdict(false, true);
+        assert!(unverifiable.starts_with("UNVERIFIABLE"), "{unverifiable}");
+        assert!(!unverifiable.contains("false object"), "an unverifiable claim is being called a forgery: {unverifiable}");
+        assert!(overall_verdict(true, false).contains("false object"));
+        // One refuted row is a refutation whatever else could not be checked.
+        assert!(overall_verdict(true, true).contains("false object"));
     }
 
     /// The gateway's own response is the consumer's half of the evidence: the ids, the job's
