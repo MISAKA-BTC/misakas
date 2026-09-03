@@ -120,6 +120,13 @@ MAIN_PREMINE_INDEX=40   # consensus/core/src/config/premine.rs; bond n's fee flo
 # The two tiers the acceptance condition names, and the family binary that serves each row.
 DENSE_MODEL_ID="${DENSE_MODEL_ID:-Qwen/Qwen2.5-1.5B/graph-v2}"
 DENSE_WORKER="${DENSE_WORKER:-$REPO_ROOT/target/release/palw-a16-fp-worker}"
+# **The certified family that covers the dense row, which is not the same choice as the row.** The
+# graph-v2 row at n_ctx 16 is covered by `a16`; the graph-v5 row at 512 — the one the genesis card
+# registers and the only one wide enough for a grammar's floor once the 134-token prompt is counted
+# — is covered by `a16-v5`, whose kernel set EQUALS the 512 row's (10 of 10, measured). Pointing
+# DENSE_MODEL_ID at the 512 row without moving this leaves the drill certifying a family that does
+# not cover the class it registered, which the chain refuses at grading and nothing before it.
+DENSE_FAMILY="${DENSE_FAMILY:-a16}"
 QWEN36_MODEL_ID="${QWEN36_MODEL_ID:-Qwen3.6-35B-A3B/graph-v3}"
 QWEN36_WORKER="${QWEN36_WORKER:-$REPO_ROOT/target/release/palw-qwen36-fp-worker}"
 
@@ -154,8 +161,8 @@ done
 [ "${#MISAKA_DEVNET_GENESIS}" -eq 128 ] || die "MISAKA_DEVNET_GENESIS is ${#MISAKA_DEVNET_GENESIS} chars, not 128"
 
 rm -rf "$WORK_DIR"
-mkdir -p "$WORK_DIR/keys" "$WORK_DIR/obj" "$WORK_DIR/secrets" "$WORK_DIR/derived" "$WORK_DIR/chain"
-chmod 700 "$WORK_DIR/secrets"
+mkdir -p "$WORK_DIR/keys" "$WORK_DIR/obj" "$WORK_DIR/derived" "$WORK_DIR/chain"
+chmod 700 "$WORK_DIR/keys"
 VERDICT_FILE="$WORK_DIR/verdict.txt"; : >"$VERDICT_FILE"
 
 # ---------------------------------------------------------------------------------------------
@@ -276,21 +283,25 @@ fi
 # TWO forms of the same seed, because the tree has two readers of it and they disagree:
 #   * `keys/bond-n.seed`   — 64 ASCII hex characters, what `misaka --key-file` reads;
 #   * `secrets/bond-n.raw` — the 32 RAW bytes, what `ValidatorKey::from_seed` reads through
-#     `misaka-palw-fp-rail --bond-key-seed` and the gateway's `--derive-seed`
-#     (`VALIDATOR_SEED_LEN = 32`; both refuse a 64-byte file by name).
+#     nothing. **There is ONE reader** — `kaspa_pq_validator_core::load_validator_seed` — and it
+#     takes HEX text (`load_validator_seed_accepts_32_byte_hex`, wrong lengths rejected).
+#     `misaka --key-file`, `misaka-palw-fp-rail --bond-key-seed` and the gateway's `--derive-seed`
+#     all go through it. This comment used to claim two readers wanting two forms; measured
+#     2026-09-03 both binaries refuse the raw file with "stream did not contain valid UTF-8" and
+#     both accept the hex one. The raw files fed nobody, and the ADR-0079 Decision 4 workaround
+#     that protected them protected nothing.
 # `scripts/misaka-palw-fp-devnet-e2e.sh` passes the hex file to `--bond-key-seed` and therefore
 # dies at "the bond key seed is 64 bytes, not 32" — the conversion below is why this drill does
 # not. The raw copies live in their own directory because the gateway refuses to boot when a
 # 32-byte file is reachable in its identity directory or its outbox (ADR-0079 Decision 4).
 # ---------------------------------------------------------------------------------------------
-python3 - "$WORK_DIR/keys" "$WORK_DIR/secrets" "$((NODES + 1))" <<'PY'
+python3 - "$WORK_DIR/keys" "$((NODES + 1))" <<'PY'
 import hashlib, os, sys
-keys, secrets, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
+keys, n = sys.argv[1], int(sys.argv[2])
 h = lambda b: hashlib.blake2b(b, digest_size=32).hexdigest()
 for i in range(n):
     hexed = h(b"misaka-devnet-genesis-bond-v1/" + str(i).encode())
     p = f"{keys}/bond-{i}.seed"; open(p, "w").write(hexed); os.chmod(p, 0o600)
-    r = f"{secrets}/bond-{i}.raw"; open(r, "wb").write(bytes.fromhex(hexed)); os.chmod(r, 0o600)
 p = f"{keys}/main.seed"; open(p, "w").write(h(b"misaka-testnet-premine-9b-claude-managed")); os.chmod(p, 0o600)
 PY
 
@@ -580,7 +591,7 @@ run_kind() {
   if [ "$signed" != "True" ] && [ "$signed" != "true" ]; then
     # No seed reached the gateway; the rail signs it instead (the two-process form).
     stem="${objfile%.derived-unsigned.borsh}"
-    if ! "$RAIL_BIN" --derive-artifact "$stem" --bond-key-seed "$WORK_DIR/secrets/bond-0.raw" \
+    if ! "$RAIL_BIN" --derive-artifact "$stem" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
          >>"$WORK_DIR/derive-$tag-$slug.log" 2>&1; then
       record "stage 8 [$tag/$kind] FAIL — the rail could not sign the derivation (see derive-$tag-$slug.log)"
       worse_than 1; return 0
@@ -775,12 +786,24 @@ run_tier() {
   fi
   advance 2 || true
   local class_id
-  class_id=$(grep -oE '[0-9a-f]{128}' "$WORK_DIR/register-$tag.log" | tail -1)
+  # **Read the class id the panel PRINTED, not the last hex string in the log.** This was
+  # `grep -oE '[0-9a-f]{128}' | tail -1`, which returns whatever 128-hex character run happened to
+  # be last — and on every run that has been a BLOCK HASH. The stage reported it as "class X
+  # registered on chain" and the value was a guess dressed as a measurement; two of them were
+  # relayed to another session before anyone checked. A scrape is a measurement of the log's
+  # SHAPE, not of the thing the log describes.
+  #
+  # The panel now names it (`built a class registration ...: class <id>`), so this reads the
+  # computed value from the process that computed it.
+  class_id=$(sed -n 's/.*built a class registration for this node.s worker: class \([0-9a-f]\{128\}\).*/\1/p' "$WORK_DIR/register-$tag.log" | tail -1)
   if [ -z "$class_id" ]; then
     record "stage 2 [$tag] FAIL — no class id in the registration log"
     worse_than 1; return 0
   fi
-  record "stage 2 [$tag] PASS — class ${class_id:0:16}… registered on chain from the artifact"
+  # And say plainly which class it is, because the whole launch turns on whether this equals the
+  # one `palw-certify bind --artifact` names. They are computed by different code from the same
+  # file, and nothing in the tree asserts they agree.
+  record "stage 2 [$tag] PASS — the panel registered class ${class_id:0:16}… (full id in register-$tag.log)"
 
   # -------------------------------------------------------------------------------------------
   # Stage 3 — certify the family and bind the class to the FREE-PROMPT lane (ADR-0075).
@@ -793,18 +816,82 @@ run_tier() {
     record "stage 3 [$tag] FAIL — 'palw-certify drill --family $family --lane fp' produced no evidence"
     worse_than 1; return 0
   fi
+  # **Wait for the family to be CARRIED before binding a class to it**, for two independent
+  # reasons that were both being violated by submitting back to back:
+  #
+  #   * ADR-0075 binds a class to a chain-certified FAMILY. Filing the binding first asks the
+  #     chain to certify a lane of a class against a family it has not graded yet.
+  #   * both carriers are funded from the same key, and the second was picking a UTXO the first
+  #     had already spent while it sat unconfirmed. `submit-object` prints the OBJECT id, not the
+  #     carrier's fate, so the log said "submitted" for a transaction the mempool dropped — which
+  #     is how three validators ended up carrying FamilyCertified and none carrying the binding.
+  baseline_of "PALW lifecycle carried.*FamilyCertified"
   submit_object "$WORK_DIR/obj/$tag-fp.obj" >>"$WORK_DIR/certify-$tag.log" 2>&1 || true
+  if ! all_nodes_gained "PALW lifecycle carried.*FamilyCertified"; then
+    record "stage 3 [$tag] FAIL — the $family family's evidence never reached a block on every validator, so there is nothing to bind a class to"
+    worse_than 2; return 0
+  fi
   # **Bind the class from the ARTIFACT, not from the model id.** `--model-id` resolves through a
   # fixed catalog table that pins `n_ctx` per row (16/18/16), and the panel registers the class at
   # the width the artifact's header states (512). `n_ctx` is inside `PalwShapeProfileV3` and
   # therefore inside the borsh `shape_profile_id` hashes, so binding by model id certified a
   # DIFFERENT class than the one on chain — every run, silently, with the chain correctly refusing
   # to treat one as certifying the other. That is what `fp_certified=false` was.
-  if ! "$CERTIFY_BIN" bind --artifact "$artifact" --lane fp --out "$WORK_DIR/obj/$tag-bind.obj" \
+  # `DRILL_BIND` selects WHICH class the certificate names, and the default is the launch target.
+  #
+  #   artifact (default) — the class the artifact's own header describes, `n_ctx` 512. This is what
+  #                        the genesis card registers and what the launch needs. Today the panel
+  #                        cannot register it (it resolves through `canonical_classes_v1`'s fixed
+  #                        16/18/16 table), so the pairing check below FAILS and says so. That
+  #                        failure is the launch blocker and must stay visible.
+  #   model-id           — the catalog row the panel actually registers today. Not a fallback and
+  #                        never automatic: it is the diagnostic run that measures HOW MUCH of the
+  #                        pipeline works below the width wall. Stage 7 is expected to refuse at
+  #                        `n_ctx` 16 — the grammar floors are 38/60/104 decode tokens — and every
+  #                        stage between here and there either works or does not, which is a fact
+  #                        nobody has had.
+  #
+  # An automatic fallback would be the defect: it would turn "the launch target cannot be
+  # registered" into a green run.
+  local bind_args
+  if [ "${DRILL_BIND:-artifact}" = "model-id" ]; then
+    log "DRILL_BIND=model-id — binding the CATALOG row the panel registers today, not the 512 row the launch needs"
+    bind_args=(bind --model-id "$model_id" --lane fp --out "$WORK_DIR/obj/$tag-bind.obj")
+  else
+    bind_args=(bind --artifact "$artifact" --lane fp --out "$WORK_DIR/obj/$tag-bind.obj")
+  fi
+  if ! "$CERTIFY_BIN" "${bind_args[@]}" \
        >>"$WORK_DIR/certify-$tag.log" 2>&1; then
     record "stage 3 [$tag] FAIL — 'palw-certify bind' refused $model_id"
     worse_than 1; return 0
   fi
+  # **The one comparison no unit test in this tree can make.** The registration and the
+  # certification each compute a class id from the same artifact, by different code, in different
+  # crates — and nothing asserts they agree. Every test in this area builds both ends of the
+  # pairing from one call and then checks they match, which they do necessarily. The pairing that
+  # matters is between two INDEPENDENT productions of the same value, and this drill is the only
+  # place in the system that has two.
+  #
+  # It is checked BEFORE the binding is filed, because filing a certificate for a class the chain
+  # does not hold is refused silently — three validators carry the family, none carry the binding,
+  # and the log says "submitted" for both.
+  local bound_class
+  bound_class=$(sed -n 's/^  submit:    the chain must already carry \([0-9a-f]\{128\}\) as an Active class.*/\1/p' "$WORK_DIR/certify-$tag.log" | tail -1)
+  if [ -z "$bound_class" ]; then
+    record "stage 3 [$tag] FAIL — palw-certify did not name the class its binding is for, so the pairing cannot be checked"
+    worse_than 2; return 0
+  fi
+  if [ "$bound_class" != "$class_id" ]; then
+    record "stage 3 [$tag] FAIL — THE TWO ENDS NAME DIFFERENT CLASSES."
+    record "  the panel REGISTERED    ${class_id:0:32}…"
+    record "  the certificate BINDS   ${bound_class:0:32}…"
+    record "  Both are computed from $artifact, by different code. The chain will refuse the binding"
+    record "  for a class it does not hold, and it will do it silently: the carrier is accepted, the"
+    record "  object dies inside it, and every free-prompt commitment is then refused as uncertified."
+    worse_than 2; return 0
+  fi
+  record "stage 3 [$tag] the registration and the certification agree on ${class_id:0:16}… — two independent derivations, one value"
+
   baseline_of "PALW lifecycle carried.*ClassLaneCertified"
   submit_object "$WORK_DIR/obj/$tag-bind.obj" >>"$WORK_DIR/certify-$tag.log" 2>&1 || true
   if all_nodes_gained "PALW lifecycle carried.*ClassLaneCertified"; then
@@ -832,7 +919,7 @@ run_tier() {
   # -------------------------------------------------------------------------------------------
   step "stage 4 [$tag] — the gateway"
   local exec_pubkey operator_id port idir outbox
-  exec_pubkey=$("$RAIL_BIN" --bond-key-seed "$WORK_DIR/secrets/bond-0.raw" --print-bond-pubkey \
+  exec_pubkey=$("$RAIL_BIN" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" --print-bond-pubkey \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["executor_pubkey"])')
   if [ -z "$exec_pubkey" ]; then
     record "stage 4 [$tag] FAIL — cannot read bond 0's public key from the rail"
@@ -877,7 +964,7 @@ JSON
   MISAKA_PALW_NETWORK_ID="devnet" MISAKA_PALW_MODEL_ID="$model_id" \
   "$GATEWAY_BIN" --listen "127.0.0.1:$port" --worker "$worker" \
     --outbox "$outbox" --identity "$idir/identity.json" \
-    --derive-seed "$WORK_DIR/secrets/bond-0.raw" \
+    --derive-seed "$WORK_DIR/keys/bond-0.seed" \
     --rpc 127.0.0.1:17810 >"$WORK_DIR/gateway-$tag.log" 2>&1 &
   local gw_pid=$!
   pids+=("$gw_pid")
@@ -1031,7 +1118,7 @@ PY
 # ---------------------------------------------------------------------------------------------
 # Both tiers.
 # ---------------------------------------------------------------------------------------------
-run_tier 0 "dense"  "$DENSE_MODEL_ID"  "$DENSE_WORKER"  "a16"    "$MISAKA_PALW_ARTIFACT" "$MISAKA_PALW_TOKENIZER"
+run_tier 0 "dense"  "$DENSE_MODEL_ID"  "$DENSE_WORKER"  "$DENSE_FAMILY" "$MISAKA_PALW_ARTIFACT" "$MISAKA_PALW_TOKENIZER"
 run_tier 1 "qwen36" "$QWEN36_MODEL_ID" "$QWEN36_WORKER" "qwen36" "${MISAKA_PALW_ARTIFACT_QWEN36:-}" "${MISAKA_PALW_TOKENIZER_QWEN36:-}"
 
 # ---------------------------------------------------------------------------------------------
