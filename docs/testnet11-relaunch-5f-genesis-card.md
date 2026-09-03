@@ -60,7 +60,7 @@ at genesis and the rest stay `None`.
 | `palw_context_ladder` | **ARM** | without it the registered class cannot price a wide row; the ladder is the whole point of the 512 registration |
 | `palw_uncertified_weightless` | **ARM, `ForkActivation::always()`** | genesis is the ONLY moment this can be armed — `validate_palw_v2` refuses any other height |
 | `palw_kary_court` | **ARM, `ForkActivation::always()`** | **ADR-0082's, does not exist yet.** Without it the registered row is admitted and UNPROSECUTABLE — see §3. A bare fence: no companion value, no bundle field. `dissection_arity` stays 2 on every preset and the fence overrides it with the derived arity. |
-| `palw_prompt_ids_merkle` | `None` | ADR-0082's. Not needed at the registered width — flat ids are 82,080 against a budget of 83,333 — and arming it moves every free-prompt job id. **It becomes REQUIRED above about n_ctx 1,024**, so it is the fence to arm the day a wider row is registered, not before. |
+| `palw_prompt_ids_merkle` | `None` — **and it cannot be armed** | ADR-0082's. Not needed at the registered width: flat ids are 82,080 against a budget of 83,333. It becomes REQUIRED above about n_ctx 1,024 — but as of FD it is no longer a fence anyone may arm at that point: **`validate_palw_v2` REFUSES a ruleset that arms it** (`config/params.rs:2310`), because the commitment form it selects does not ship. Registering a wider row is therefore blocked on implementing the form, not on flipping the fence. |
 | `palw_fp_decode_rules` | `None` | ADR-0082 stream H's (decode leaves earn, seeded argmax). Not a prosecutability condition and not on the acceptance path; deferred so the cut arms only what it must. |
 | the other nine | `None` | nothing in this cut needs them; a fence armed without a shipping thing to obey it is the ADR-0065 D1 mistake |
 
@@ -71,6 +71,15 @@ discovered at cut time.
 **Arming the ladder is TWO moves, not one.** `Params::palw_context_ladder` AND the bundle's
 `PalwCourtParamsV2::max_step_leaf_count`. Setting one and not the other produces a build that
 looks armed and prices the old row.
+
+**And it is armed to `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` = 2^26 — not to 2^32.** Naming the field
+without naming its value is the same defect one level down. 2^32 is not available at this cut and
+the refusal is arithmetic, not policy: at 2^32 the RC admits **no arity at all**, because the
+cheapest honest exchange is 73 moves (at arity 32 or 64) and `73 × 42 = 3,066` is already past the
+3,000-DAA window before the 216-DAA assembly reserve is added. `palw_court_arity_v1` returns `None`
+there, which is ADR-0082 Z4's refusal working. Going deeper than 2^26 needs the window to grow, the
+clock to shrink, or the leaf ladder to become k-ary for real — all three are genesis decisions, and
+none of them is in this cut.
 
 ---
 
@@ -273,9 +282,77 @@ landed on the same integers): dense A16 @ 512 = 1,154,673 binding `attn[10]`; hy
 2,240,241 binding `attn[15]`; the set gives **27 = `DEFAULT_MAX_CLOSE_CHUNKS`**. The shipped
 constant IS the derivation — nothing on this card corrects it.
 
-`dissection_arity` stays **2** on every preset until its fence arms. The court's arity derivation
-at the RC selects **4** by the move budget (48 moves, 2,160 of 3,000 DAA at the 45 clock), not the
-ADR's worked 16.
+`dissection_arity` stays **2** on every preset until its fence arms. **The court's arity derivation
+at the RC selects 2** — not the 4 an earlier draft of this card recorded, and not the ADR's worked
+16. Verified by running on `palw-adr0082-impl` at `aa049f96`
+(`the_rcs_derived_deadline_selects_an_arity_for_its_own_row_and_none_for_the_fences`):
+
+| quantity | value |
+|---|---|
+| window / clock | 3,000 DAA / **42** |
+| ladder | 2^26 |
+| RC 512 row | arity **2** — 26 binary ladder rounds + 5 history rounds |
+| moves | `2 × (26 + 5) + 2 + 1` = **65** |
+| worst-case duration | 65 × 42 = **2,730** |
+| assembly reserve | **216** (27 carriers) |
+| total against the window | 2,730 + 216 = **2,946** < 3,000 |
+
+The dense graph-v5 512 row — the row this genesis registers — derives arity **2** as well, at the
+8-lane count it actually disputes. *The four numbers this table replaces (arity 4, 48 moves, 2,160
+DAA, a 45 clock) were each correct when written and none of them survived FD; a figure is only as
+current as the tree it was last read from.*
+
+### Two derivations the cut deliberately does NOT take
+
+Both were raised by fixer FD with the work already done and correct, and both are refused for the
+cut. Recording them here because a derivation that exists and is not used looks like an oversight
+to the next reader, and it is not one.
+
+**M-5 — `court_max_close_bytes` keeps its literals.** FD built the derivation behind the assembler
+(`palw_derived_court_max_close_bytes_v1`) and touched no shipped constant. Measured on `aa049f96`:
+
+| set | derived | shipped |
+|---|---|---|
+| t11, graph-v2/v3 @ 512 | 2,250,000 B = 27 chunks | 2,250,000 B = 27 chunks |
+| devnet, the shipped rows | widest close 78,688 B = 1 chunk → ceiling 83,333 B | 81,920 B = 1 chunk |
+| graph-v5 @ 512, dissection court | 333,333 B = **4 chunks** | — |
+
+The literals stay, for three reasons in order of weight:
+
+1. `with_derived_court_close_v1` takes `families` and `rows` as arguments, and
+   `PALW_LADDER_FAMILIES_V1` / `_V5` have **zero non-test callers** in the tree. An assembler that
+   called it would have to hand it a families constant — the same free choice as a literal, one
+   indirection deeper. That is priced-≠-pinned (ADR-0072 D8) wearing a derivation's clothes.
+2. The ceiling is load-bearing in two OPPOSITE directions: `palw_mode_v2.rs:1211` refuses admission
+   above it, and `palw_attn_court_v1.rs:1186` charges the assembly reserve from it. Tightening to
+   the v5 pair's 4 chunks would buy ~184 DAA of window — the clock goes 42 → ~44, and both are
+   ≥21× the hybrid's 2-DAA worst rung, so neither convicts an honest responder — and would
+   **permanently refuse every class whose close exceeds 333,333 bytes on this network**. Admission
+   is permissionless (ADR-0054). 5f is the first network to carry the dissection court; it is not
+   also going to be the network that can only ever admit dissection-court shapes. That door is
+   worth more than 2 DAA of move budget.
+3. Devnet's 81,920 against a derived 83,333 is the same chunk count, so neither the reserve nor the
+   clock moves. Only the literal would — a fingerprint move that buys nothing.
+
+The builder and its reporting test stay in the tree, unwired: they are the falsifiable record that
+the two numbers agree today and will say so when they stop. **After 5f**, the right shape is to
+wire the derivation to `palw_shipped_court_rows_v1()` — the walk FD's own devnet arm already uses —
+so its input is the registered set rather than a hand-supplied constant. Post-freeze, not at it.
+
+**Decision 3's arity stays "smallest k that fits".** The alternative on the table was "maximise the
+deadline", which would move the RC's clock from 42 to 48. Refused, and *not* because 42 is the
+shipped number — reproducing 42 is the check, not the argument. Two reasons:
+
+- The clock has ~21× headroom over the thing it must cover, while bytes-per-move has a hard carrier
+  ceiling that arity 64 already breaches at the hybrid's 256-lane head
+  (`palw_attn_dissect_arity_fits_carrier_v1`). Spend the abundant resource, conserve the scarce one.
+- **"Maximise the deadline" is not a derivation.** It needs a second number — how much deadline is
+  enough — and that number is chosen. Decision 3 is "the arity a ruleset DERIVES, never writes";
+  the alternative reintroduces exactly the free field the rule exists to close.
+
+*Revisit condition, so this is falsifiable rather than a preference:* if a measured replay floor for
+any graph-v5 row ever comes within half the derived deadline, the trade flips and `k` should buy
+rounds back.
 
 ---
 
@@ -527,6 +604,25 @@ gate above is the one that would have caught all three.
   `palw_kary_court` fence itself (§1), and stream E's court wiring: the dissection phase on the
   court session, the `AttnDissection` close-proof arm, the deadline read, and a **state version bump
   18 → 19** because the session record gains a field.
+- **The 2^22 sweep (fixer FD2).** The ladder went to 2^26, but `2^22` survives as a bare literal at
+  a set of sites the ladder change did not reach — and the 512 row's canonical job is **6,630,544
+  leaves**, so until they move, *every honest claim of the class this genesis registers is refused
+  by the transition*. `palw_freeprompt_v3.rs:1030` (`WorkLeavesAboveCap`) is the one that refuses on
+  the acceptance path; the others are the E2E certificate's declared count, the genesis catalog
+  entry's counts, the schedule's leaves, and `PALW_STEP_LEG_MAX_LEAVES` — if the leg shape pass
+  bounds at 2^22 the row's leg cannot be committed at all. **Plus one the first sweep did not
+  name:** `derive_court_cost_v1` (`palw_class_admission_v2.rs:293-295`) anchors `genesis_anchored_v1`
+  at `PALW_STEP_MAX_LEAVES` = 2^22 while the RC ruleset ships 2^26, and three of its six production
+  callers build the `court_cost` field of a `PalwClassCatalogEntryV2` — the registration row itself
+  (`palw_qwen36_profile.rs:1422`, `:1502`; `palw_base0_profile.rs:805`). Either the catalog row and
+  the v6 gate derive at different ladders and every genesis row is refused by its own cost field, or
+  nothing compares them and the catalog publishes a cost for a court that will not play. The gate
+  for this bullet is one end-to-end test: a 6,630,544-leaf v5 commitment passes every layer under
+  the RC bundle, is refused **by name** under a 2^22 one, and the v5 row's catalog `court_cost`
+  equals what the v6 gate derives under the RC bundle.
+
+  *Why it was found this late: J's drill never reached stage 5, so no v5 claim had been executed
+  through the chain. A cap nothing has yet exceeded is a cap nobody has yet seen refuse.*
 - **NOBODY MAY APPEND A VARIANT TO `PalwConsensusObjectV2` ON 5f** until E's wiring lands. The Borsh
   discriminants are positional; W5 already appended two, and E appends three more. A fourth appended
   in parallel collides by number, and the collision is silent until two builds disagree about what
