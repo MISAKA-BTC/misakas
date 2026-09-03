@@ -2265,3 +2265,96 @@ Recorded, not acted on: closing that gap means building `misaka-palw-worker` aga
 checkout and re-running the three tests here. It is off the block-production path by the crate's
 own statement, so **it is not a precondition for the cut** — but §5 must now say *"unbuilt here,
 buildable on the release machine"* rather than anything that sounds like *"unbuildable"*.
+
+## The free-prompt gateway, driven end to end — and the finding I nearly filed against this card
+
+The goal names *自由プロンプト* beside MIDI and 3D, and the operator-facing path had never been
+run. It runs. On **5f**, with the real A16 artifact and tokenizer:
+
+```
+[1] health ok — template misaka-palw/fp-gateway-template/chat-segments/v1, n_ctx 16,
+    chain anchor file …/anchor.json
+    registered / fp_certified / bond_active / exposure_room  -> all four present, all "unknown"
+    can_submit -> false
+```
+
+**ADR-0077 Decision 3 holds against a live gateway**: all four chain names present in `/health`,
+every one `unknown` in the offline form, and a gateway with no `--rpc` says it cannot submit.
+Then the worker refused the job on width:
+
+```
+the worker refused the job: prompt 36 + decode ceiling 24 exceeds max_context_tokens 16
+```
+
+Which is §2's own argument arriving from the operator's end: **the certification path, the manifest
+handshake, the class check and the width check all work, and width is the only thing left.**
+
+The QWEN36 lane runs too, and refuses on its own class boundary first — correctly:
+
+```
+qwen35-2b.palwq36 is not a Qwen3.6-35B-A3B/graph-v3 artifact: the layer stack is not this
+class's (24 layers)                                    <- the class check doing its job
+class_id mismatch — ours 2e91c9d3…, request c1c1c1c1…  <- the identity check doing its job
+prompt 36 + decode ceiling 24 exceeds max_context_tokens 8
+```
+
+### What I nearly reported, and what stopped it
+
+The running 5f worker announces `71bbb755…` at n_ctx 16, from a hardcoded const:
+
+```
+palw-testnet-5f:  const MODEL_ID: &str = "Qwen/Qwen2.5-1.5B/graph-v2";
+```
+
+This card says, at the dense-lane section: *"the class the WORKER embodies is not held —
+`palw-a16-fp-worker`'s `MODEL_ID` is the v5 512 row."* Measured against 5f, that reads false, and
+I was one command from filing it as a defect **in this card**. Checking the other tree first:
+
+```
+palw-adr0082-impl:  const MODEL_ID: &str = misaka_palw_base0::classes::A16_GRAPH_V5_MODEL_ID;
+```
+
+**The card is right, about impl. I ran 5f.** The statement is accurate for the integration branch
+and unlabelled as to tree — the same defect `check-doc-citations.sh` exists for, in the one form
+that tool cannot catch, because there is no `file.rs:NNNN` in it to resolve.
+
+> **The habit that saved it was checking both trees before asserting, not checking harder.**
+> Every wrong thing I have said today would have survived a more careful reading of the single
+> source I was looking at. *Ask the same thing two ways* is not a thoroughness setting.
+
+So the true state, with the tree named for every clause: **on 5f** the FP worker serves graph-v2
+at 16; **on impl** it points at the v5 512 row; **the merge is what moves it**; and §7's
+*"THE 512 ROW HAS NO GENESIS BUILDER"* remains the binding item, unchanged by any of this.
+
+### Two real defects on a shipped path, found by running the documented command verbatim
+
+`misaka-palw-gateway` **is** in `default-members`, so this is a path the cut ships.
+
+**1. The documented invocation cannot work as written.** `docs/palw-freeprompt-gateway.md`:
+
+```bash
+python3 scripts/misaka-palw-fp-gateway-smoke.py ./target/release/misaka-palw-gateway \
+    ./target/release/palw-a16-fp-worker "$MISAKA_PALW_GGUF"
+```
+
+Run verbatim it fails three times in a row, each on something the doc never mentions:
+
+```
+cannot spawn ./target/release/palw-a16-fp-worker: No such file or directory
+        (relative paths — the gateway does not resolve them from the caller's cwd)
+fatal: MISAKA_PALW_NETWORK_ID is not set        <- checked FIRST, before the artifact
+fatal: MISAKA_PALW_ARTIFACT is not set          <- and then MISAKA_PALW_TOKENIZER
+```
+
+The usage line advertises **three arguments** and the worker needs **three more environment
+variables**, none of which appears anywhere in that document — `grep` for either name returns
+nothing. *An interface that documents a third of what it requires.* And the ordering is worth
+keeping: `NETWORK_ID` is refused first, with the best error message in the subsystem, which is
+why I stopped predicting which variable would fail and read what it said.
+
+**2. The smoke's synthetic identity cannot pass a class-checking worker.** It writes
+`"class_id": "c1" * 64`, which every worker that checks its own id refuses. It works today only
+against a worker that does not check. Running it against one that does needs the real id
+patched in, which is what I did.
+
+Neither blocks the cut. Both are the operator's first five minutes.
