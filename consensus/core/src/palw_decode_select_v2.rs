@@ -78,7 +78,8 @@ pub const PALW_DECODE_SEED_GREEDY: [u8; 32] = [0u8; 32];
 /// **The keyed hash pin of [`PALW_GUMBEL_Q24_V1`]**, hex, as
 /// `scripts/palw-gumbel-table.py --hash` prints it: BLAKE2b-512 keyed with
 /// [`PALW_DECODE_SELECT_V2_GUMBEL_DOMAIN`] over the 8,192 entries as little-endian `i32`.
-pub const PALW_GUMBEL_Q24_V1_DIGEST_HEX: &str = "d2fd7a5c4f4b3a27432233f348087018cde7e1a244d1ffb8c5b700810e2719569b408a9a1383fc3c793a7f47a8aa523f2205a8dd37db1e6cb7e83ee9ae0e1def";
+pub const PALW_GUMBEL_Q24_V1_DIGEST_HEX: &str =
+    "d2fd7a5c4f4b3a27432233f348087018cde7e1a244d1ffb8c5b700810e2719569b408a9a1383fc3c793a7f47a8aa523f2205a8dd37db1e6cb7e83ee9ae0e1def";
 
 /// Which table entry lane `lane` of position `position` draws under `seed`.
 ///
@@ -1243,9 +1244,7 @@ mod tests {
             x ^= x << 17;
             x
         };
-        (0..count)
-            .map(|_| (0..width).map(|_| ((next() % (2 * spread as u64 + 1)) as i64 - spread as i64) as i32).collect())
-            .collect()
+        (0..count).map(|_| (0..width).map(|_| ((next() % (2 * spread as u64 + 1)) as i64 - spread as i64) as i32).collect()).collect()
     }
 
     /// **Z8's first half: `T_q = 0` IS the shipped rule.** Not "agrees on typical rows" — the same
