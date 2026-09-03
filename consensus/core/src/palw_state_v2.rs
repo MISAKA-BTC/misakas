@@ -9310,7 +9310,9 @@ fn apply_object(
             executor_pubkey,
             work_leaves,
             prompt_token_ids_hash,
-            decode_tokens_executed,
+            // Audit H-4: the committed length is a field of the JOB and therefore of the claim id;
+            // it is no longer part of the work identity, because a prefix of a run is that run.
+            decode_tokens_executed: _,
             trace_root,
             output_root,
             execution_root,
@@ -9388,8 +9390,10 @@ fn apply_object(
             if *execution_root == Hash64::default() {
                 return Err(PalwStateV2Error::UnadjudicableCommitment(*claim_id));
             }
-            // **One inference, one claim** (ADR-0074 Decision 4).
-            let work_id = crate::palw_freeprompt_v3::fp_work_id_v1(class_id, prompt_token_ids_hash, *decode_tokens_executed, &bond.0);
+            // **One inference, one claim** (ADR-0074 Decision 4) — and since audit H-4 the identity
+            // is the PROMPT's, not the prompt's plus a length the executor picks: one run
+            // committed at every nested decode limit was D truthful claims for one inference.
+            let work_id = crate::palw_freeprompt_v3::fp_work_id_v1(class_id, prompt_token_ids_hash, &bond.0);
             if let Some(holder) = builder.state.work_ids.get(&work_id) {
                 return Err(PalwStateV2Error::DuplicateWork { work_id, claim: *holder });
             }
@@ -17107,9 +17111,9 @@ pub(crate) mod tests {
         );
     }
 
-    /// **One inference, one claim** (ADR-0074 Decision 4): the same work — class, prompt, decode
-    /// count, bond — under a second claim id is refused while the first claim lives; another
-    /// prompt is other work and is admitted beside it.
+    /// **One inference, one claim** (ADR-0074 Decision 4): the same work — class, prompt, bond —
+    /// under a second claim id is refused while the first claim lives; another prompt is other
+    /// work and is admitted beside it.
     #[test]
     fn fp_the_same_work_is_claimable_once_while_its_claim_lives() {
         let p = params();
@@ -17127,7 +17131,53 @@ pub(crate) mod tests {
         assert_eq!(s3.claims_iter().count(), 2, "another prompt is other work");
         assert_eq!(
             s3.claim(&h64(0xFD)).unwrap().work_id,
-            Some(crate::palw_freeprompt_v3::fp_work_id_v1(&h64(1), &h64(0x7E00 ^ 0xFD), 3, &bond_key(1).0))
+            Some(crate::palw_freeprompt_v3::fp_work_id_v1(&h64(1), &h64(0x7E00 ^ 0xFD), &bond_key(1).0))
+        );
+    }
+
+    /// **One prompt run once is one claim, whatever length the executor commits it at** (audit
+    /// H-4).
+    ///
+    /// `fp_work_id_v1` keyed on `decode_tokens_executed`, so an executor that ran one `D`-token
+    /// answer could file `D` commitments at limits `1, 2, ..., D` — each a truthful, replayable
+    /// execution whose leaves it already held, each with a distinct work id, so `DuplicateWork`
+    /// never fired. It bought up to `64 D` tickets for one inference and imposed `D` full panels
+    /// of five seats each replaying a PREFIX of the same job. The prefixes are what ADR-0082
+    /// Decision 10 prices at zero: a subsidy on them is a subsidy on replay.
+    #[test]
+    fn fp_a_nested_decode_length_is_the_same_work_as_the_run_it_is_a_prefix_of() {
+        let p = params();
+        let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        // The full run: 3 decode tokens.
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+
+        // The same prompt, the same bond, the same class — committed at a SHORTER decode limit.
+        // It is a prefix of the execution already claimed, so it is not other work.
+        for shorter in [1u32, 2] {
+            let mut nested = fp_commit(0xFD, 60, shorter);
+            if let PalwConsensusObjectV2::FreePromptCommitted { prompt_token_ids_hash, .. } = &mut nested {
+                *prompt_token_ids_hash = h64(0x7E00 ^ 0xFC);
+            }
+            let refused = apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[nested], None);
+            assert!(
+                matches!(refused, Err(PalwStateV2Error::DuplicateWork { claim, .. }) if claim == h64(0xFC)),
+                "a {shorter}-token prefix of the claimed run was admitted as new work: {refused:?}"
+            );
+        }
+        // And a LONGER one is refused for the same reason and in the same direction: the identity
+        // is the prompt's, so the executor cannot choose a length that makes a second entry.
+        let mut longer = fp_commit(0xFD, 60, 8);
+        if let PalwConsensusObjectV2::FreePromptCommitted { prompt_token_ids_hash, .. } = &mut longer {
+            *prompt_token_ids_hash = h64(0x7E00 ^ 0xFC);
+        }
+        assert!(matches!(
+            apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[longer], None),
+            Err(PalwStateV2Error::DuplicateWork { .. })
+        ));
+        // The work id itself no longer moves with the length — one identity, one live claim.
+        assert_eq!(
+            crate::palw_freeprompt_v3::fp_work_id_v1(&h64(1), &h64(0x7E00 ^ 0xFC), &bond_key(1).0),
+            s2.claim(&h64(0xFC)).unwrap().work_id.expect("a free-prompt claim carries its work id")
         );
     }
 
