@@ -131,13 +131,11 @@ fn print_the_graph_v5_genesis_row_numbers() {
     let worst = kaspa_consensus_core::palw_step::worst_case_step_leaf_count_capped_v1(&profile, rc_ladder);
     println!("canonical leaves    {counted:?}");
     println!("worst case leaves   {worst:?}");
-    let genesis_anchored = adm::derive_court_cost_shaped_v1(&profile, adm::PalwCourtCostShapeV1::genesis_anchored_v1(&profile, rc_ladder));
+    let genesis_anchored =
+        adm::derive_court_cost_shaped_v1(&profile, adm::PalwCourtCostShapeV1::genesis_anchored_v1(&profile, rc_ladder));
     println!("cost, genesis-anchored (the shipped court): {genesis_anchored:?}");
     if let Ok(cost) = &genesis_anchored {
-        println!(
-            "  close chunks {}",
-            kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes)
-        );
+        println!("  close chunks {}", kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes));
     }
 
     let bundle = match kaspa_consensus_core::config::params::palw_rc_shipped_params().palw_consensus_mode {
@@ -164,10 +162,7 @@ fn print_the_graph_v5_genesis_row_numbers() {
         let cost = adm::derive_court_cost_shaped_v1(&profile, rules.cost_shape);
         println!("cost, dissection court at the RC arity: {cost:?}");
         if let Ok(cost) = &cost {
-            println!(
-                "  close chunks {}",
-                kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes)
-            );
+            println!("  close chunks {}", kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes));
         }
     }
     if let Ok(counted) = counted {
@@ -178,8 +173,9 @@ fn print_the_graph_v5_genesis_row_numbers() {
         );
     }
     for object in &bundle.genesis_objects {
-        if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, pwu_rule, share_permille, .. } =
-            object
+        if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+            class_id, pwu_rule, share_permille, ..
+        } = object
         {
             println!("shipped genesis row {class_id} share {share_permille} pwu {pwu_rule:?}");
         }
@@ -325,20 +321,25 @@ fn the_genesis_registered_row_is_admissible_under_the_armed_rc_court() {
         kary.dissection_arity
     );
 
-    // 2. And with the share the genesis grants, the ONE thing missing is named — the drill, not a
-    //    rule this stream could satisfy by editing a gate.
-    match adm::verify_class_admission_v5(bundle, &profile, &canonical, &registration, &certified, &certified, Some(rules), Some(kary))
-    {
-        Err(adm::PalwClassAdmissionError::NotEndToEndCertified { share }) => {
-            assert_eq!(share, genesis_share, "the refusal is about a share this genesis does not grant");
-            println!(
-                "graph-v5 dense @ 512 asks for {share}‰ and no certified family covers KDESC_A16_ATTN_FUSED: \
-                 ADR-0082 stream I's court drill plus the PALW_RC_COURT_E2E_ROOT_BYTES re-pin is what closes this"
-            );
-        }
-        Ok(_) => println!("the fused family is certified now — stream I's drill landed and this arm can be deleted"),
-        other => panic!("the weight-bearing row must fail on certification alone, got {other:?}"),
+    // 2. And with the SHARE the genesis grants — which is the assertion that was red until the
+    //    fourth certified family (`PALW-QWEN25-A16-V5`) landed. ADR-0069 Decision 5: weight is the
+    //    thing certification buys, and a genesis registration does not pass through this gate, so
+    //    without this test the network could grant 489‰ to a class no certified family covers and
+    //    nothing on the boot path would say so. The refusal is named in the failure arm because it
+    //    is the one this will come back as.
+    let weighted =
+        adm::verify_class_admission_v5(bundle, &profile, &canonical, &registration, &certified, &certified, Some(rules), Some(kary));
+    match &weighted {
+        Ok(_) => println!("graph-v5 dense @ 512 holds its genesis {genesis_share}‰ against a certified family"),
+        Err(adm::PalwClassAdmissionError::NotEndToEndCertified { share }) => panic!(
+            "the genesis grants {share}‰ to a class no certified family covers — the fused kernel \
+             (KDESC_A16_ATTN_FUSED) is not in any family's kernel set, so this class registers, produces and is \
+             weightless under palw_uncertified_weightless. Close it with the fused family's drill and the \
+             PALW_RC_COURT_E2E_ROOT_BYTES re-pin, or register the row at share 0."
+        ),
+        Err(other) => panic!("the weight-bearing row failed on something other than certification: {other:?}"),
     }
+    assert_eq!(genesis_share, kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE);
 
     // 3. And WITHOUT the fence the same object is refused BY NAME — the guard the 5f card §6 names,
     //    which is also why the assembly arms the fence rather than leaving the row unprosecutable.

@@ -303,8 +303,11 @@ pub fn palw_shipped_row_court_cost_v1(
 ) -> Result<crate::palw_class_admission_v2::PalwCourtCostV1, crate::palw_class_admission_v2::PalwClassAdmissionError> {
     if crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(profile) {
         let court = crate::palw_class_admission_v2::PalwKaryCourtV1 { dissection_arity, prompt_ids_form, window_court_daa };
-        let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, Some(court), ladder)
-            .ok_or(crate::palw_class_admission_v2::PalwClassAdmissionError::Profile("a fused row declares no map the ladder prices".to_string()))?;
+        let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, Some(court), ladder).ok_or(
+            crate::palw_class_admission_v2::PalwClassAdmissionError::Profile(
+                "a fused row declares no map the ladder prices".to_string(),
+            ),
+        )?;
         return crate::palw_class_admission_v2::derive_court_cost_shaped_v1(profile, rules.cost_shape);
     }
     crate::palw_class_admission_v2::derive_court_cost_shaped_v1(
@@ -541,7 +544,11 @@ mod tests {
             if row.profile.state_chunk_map_id == Hash64::default() {
                 assert_eq!(positions, row.profile.n_ctx, "{}: an unmapped class must be priced at its whole context", row.cost.row);
             } else {
-                assert_eq!(positions, row.checkpoint_interval, "{}: a mapped class replays the interval its row declares", row.cost.row);
+                assert_eq!(
+                    positions, row.checkpoint_interval,
+                    "{}: a mapped class replays the interval its row declares",
+                    row.cost.row
+                );
                 assert_eq!(
                     row.checkpoint_interval,
                     palw_anchored_interval_for_profile_v1(&row.profile),
@@ -554,7 +561,8 @@ mod tests {
         // mapped row, because the fused one is the case this test used to assert away.
         assert!(rows.iter().any(|r| r.profile.state_chunk_map_id == Hash64::default()), "no unmapped shipped row");
         assert!(
-            rows.iter().any(|r| r.profile.state_chunk_map_id != Hash64::default() && r.checkpoint_interval == PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1),
+            rows.iter().any(|r| r.profile.state_chunk_map_id != Hash64::default()
+                && r.checkpoint_interval == PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1),
             "no checkpoint-anchored mapped shipped row"
         );
         assert!(

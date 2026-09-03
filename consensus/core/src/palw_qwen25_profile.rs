@@ -1917,10 +1917,7 @@ mod tests {
         // 2. The narrow graph-v2 row is NOT registered beside it (GENESIS DECISION: the v5 row
         //    takes the dense slot, it does not join it). Two dense rows would be two classes
         //    dividing one tier's cadence, and the narrow one cannot express the demonstration.
-        assert!(
-            !registered.contains(&qwen25_a16_class_id_v2()),
-            "the graph-v2 n_ctx-16 row is still registered beside the 512 row"
-        );
+        assert!(!registered.contains(&qwen25_a16_class_id_v2()), "the graph-v2 n_ctx-16 row is still registered beside the 512 row");
 
         // 3. The fold writes `fused_attention` — the property C-5 is about, read through the one
         //    predicate and never from a literal.
@@ -1996,7 +1993,9 @@ mod tests {
         let executor = crate::palw_step::PALW_STEP_MAX_LEAVES;
         let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, ruleset).expect("counts at the ruleset");
         let worst = crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, ruleset).expect("enumerates at the ruleset");
-        println!("graph-v5 dense @ {QWEN25_A16_GRAPH_V5_N_CTX}: canonical {counted} leaves, worst {worst}, ruleset ladder {ruleset}, executor {executor}");
+        println!(
+            "graph-v5 dense @ {QWEN25_A16_GRAPH_V5_N_CTX}: canonical {counted} leaves, worst {worst}, ruleset ladder {ruleset}, executor {executor}"
+        );
         assert!(counted > executor, "the canonical count is inside 2^22, so this test no longer says anything");
         assert!(worst <= ruleset, "the registered row does not fit the ladder its own ruleset froze");
         assert!(crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, executor).is_err());
