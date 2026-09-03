@@ -396,12 +396,12 @@ mod tests {
     /// untouched by the fusion and still in the corpus, so this is the v2 space with the attention
     /// site replaced rather than a smaller space.
     ///
-    /// No corpus digest is pinned for this base: a pin moves only in a commit that says why, and a
-    /// v5 row is not registered anywhere yet.
+    /// The corpus digest for THIS base is pinned separately, by
+    /// `the_v5_fuzz_corpus_digest_is_the_same_on_every_machine` below.
     #[test]
     fn a_bounded_fuzz_run_over_the_v5_graph_finds_no_panic_and_no_nondeterminism() {
         let (artifact, base) = tiny_class_v5();
-        let tally = fuzz_qwen36_profiles_from_v1(0x0082_2026_09_03, 400, &artifact, &base);
+        let tally = fuzz_qwen36_profiles_from_v1(0x0082_2026_0903, 400, &artifact, &base);
         println!("qwen36 v5 fuzz tally: {tally:?}");
         assert_eq!(tally.panics, 0, "a panic inside the interpreter is the fence staying down");
         assert_eq!(tally.nondeterminism, 0, "two runs of one plan must be one bitstream");
@@ -429,6 +429,27 @@ mod tests {
 
     /// Seed `0x0067_2026_09_01`, 400 iterations. See the test above.
     const CORPUS_DIGEST_400: &str = "5b9be0a7479f824a1d87fdd33785a226c551130a4768730855d068a4e3acf8e1";
+
+    /// **The same clause over the FUSED base on the hybrid** (ADR-0082 audit E, M-2).
+    ///
+    /// The pin above folds the graph-v2 space; the fused attention site is new arithmetic on the
+    /// executor's hot path and the two-runs-in-one-process gate beside it cannot see a machine
+    /// that computes it differently. A second base gets a second pin rather than the first one
+    /// being widened, so neither hides the other. Re-pin discipline is the v2 pin's, verbatim.
+    #[test]
+    fn the_v5_fuzz_corpus_digest_is_the_same_on_every_machine() {
+        let (artifact, base) = tiny_class_v5();
+        let tally = fuzz_qwen36_profiles_from_v1(0x0082_2026_0903, 400, &artifact, &base);
+        assert_eq!(
+            faster_hex::hex_string(&tally.corpus_digest),
+            V5_CORPUS_DIGEST_400,
+            "this machine computed a different fused corpus than the pinned one — see the doc above before touching the pin"
+        );
+        assert_ne!(V5_CORPUS_DIGEST_400, CORPUS_DIGEST_400, "two bases must not fold to one number, or one of them is unpinned");
+    }
+
+    /// Seed `0x0082_2026_0903`, 400 iterations, over the graph-v5 hybrid base. See the test above.
+    const V5_CORPUS_DIGEST_400: &str = "7e5f14c2b0d66fc53ef1057188b29ec26030f80cb73f666244a22ac33854b5fd";
 
     /// **The panic the design pass found stays closed.** A convolution declared in the ATTENTION
     /// table lands on a window the artifact's layer kinds never pre-filled, and the walk's

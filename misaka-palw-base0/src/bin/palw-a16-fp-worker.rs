@@ -130,7 +130,20 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
     let load_ms = started.elapsed().as_millis() as u64;
 
     let net = network_id.into_bytes();
+    // The constructor compiles this class's declaration into the program it runs, so a graph this
+    // build cannot serve dies here with the node named — never as a producer that executes one
+    // program while committing under another class's declaration.
     let backend = Qwen25A16Backend::new(std::sync::Arc::new(artifact), net.clone(), entry.profile.clone(), entry.canonical_job)
+        .unwrap_or_else(|e| {
+            die(format!(
+                "{}: {e}. This is the ADR-0067 compile, and since ADR-0082 audit E's H-1 it is the SAME compile \
+                 `from_registered_profile` performs: the class's declaration IS the program this worker runs. A \
+                 `rms_eps_q` disagreement here means this catalog row declares an epsilon the converted artifact does \
+                 not execute — the row whose epsilon it DOES execute is `Qwen/Qwen2.5-1.5B/graph-v3`, and moving this \
+                 worker to it is a class decision (a different class id), not a flag",
+                entry.model_id
+            ))
+        })
         .with_step_ladder_cap(court.max_step_leaf_count());
     FpWorkerRuntime::new(
         backend,
