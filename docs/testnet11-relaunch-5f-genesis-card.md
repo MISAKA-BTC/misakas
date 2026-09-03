@@ -295,7 +295,8 @@ thing done before the cut and it is done ONCE.
 | `transformer_id_pin` | `misaka-palw-derive/tests/` | here, at the cut |
 | `shipped_presets_have_pinned_fingerprints` | `consensus/core/src/config/params.rs` | here, at the cut |
 | `golden_vector_ids_are_frozen` | `consensus/core/src/palw_freeprompt_v3.rs` — ADR-0082 stream H gave the job two fields | here, at the cut |
-| `PALW_RC_COURT_E2E_ROOT_BYTES` | `consensus/core/src/palw_e2e_adjudicability.rs` | here, **FIRST** — see the ordering below |
+| **genesis `utxo_commitment`** | `all_networks_genesis_constants_match_premine` | here, **FIRST OF ALL** — via the `config::premine` CEREMONY tool, not a hand edit |
+| `PALW_RC_COURT_E2E_ROOT_BYTES` | `consensus/core/src/palw_e2e_adjudicability.rs` | here, second — see the ordering below |
 | state version 18 → 19, ADR-0043 goldens | `palw-adr0082-impl` | 5b, on that branch |
 
 ### The certified-set root is regenerated TWICE, and that is correct
@@ -330,6 +331,12 @@ chain.** But the useful half is the tell, because knowing the rule did not preve
 The value that moved was nameable — `palw_court_e2e_root_v1` — and the cost was still reported in
 tests, because the comparison that makes it expensive lives in the registration pricing path against
 a genesis commitment, and one side of that comparison is a chain. No suite can hold it.
+
+**The premine commitment is re-pinned before everything, because it is what makes this a
+re-genesis.** `premine_is_the_expected_split` PASSES — the premine itself is right and only the
+commitment pin is stale — but that pin is the genesis UTXO set's identity, so the genesis hash and
+every value downstream of it move with it. It is also the only one of the seven that needs a
+ceremony tool rather than an edit.
 
 **The e2e root is re-pinned BEFORE the fingerprint, because it is INSIDE it.** `consensus_params_id`
 reads the pinned `PALW_RC_COURT_E2E_ROOT_BYTES`, so re-pinning the fingerprint first produces a
@@ -432,7 +439,14 @@ green except the known pin" said this week was a statement about jobs that never
 | fused-attention guard | `verify_class_admission_v5` | Refuses an `AttnFused` profile unless `palw_kary_court_active_at` — `FusedAttentionNeedsTheKaryCourt`, *"the class carries a fused attention site and this ruleset's court has no dissection to try it with"*; and `PricedForADifferentCourt { priced, court }` when the registered cost shape's arity is not the court's. **A guard on the way in, beside the drill and not instead of it.** |
 | **prosecutability** | ADR-0082 stream I's end-to-end court drill | **This is the gate, and admission is not.** A graph-v5 leaf disputed to the bottom under the ARMED fence set, through `apply_object`: honest acquitted, forged convicted. F's admission arm refusing an unfenced `AttnFused` profile by name is a guard on the way in — useful, and not the property. The property is that a dispute can be carried to a verdict, and only the drill asserts it. |
 
-**The whole workspace, measured: 3,809 tests run, 3,807 passed, 2 failed** —
+**On the MERGED tree** (`5f + adr0082-impl + the family branch`), measured by a session that wrote
+none of the pins: `kaspa-consensus-core --lib` is **1,790 passed / 3 failed**, and the same three
+with that session's own changes stashed — so nothing in the merge caused any of them. The three are
+the premine commitment, the shipped fingerprints, and `palw_freeprompt_v3::tests::golden_vector_ids_are_frozen`.
+The gate run there is **15 passed / 4 red, and all four are pins on the ordering above.** Nothing on
+that tree is red for a reason the freeze will not clear.
+
+**On this branch alone: 3,809 tests run, 3,807 passed, 2 failed** —
 `cargo nextest run --no-fail-fast`, 720 seconds. Both failures are the pins below.
 
 **Run it with `--no-fail-fast` or do not quote it.** The default run reported *"353/3809 tests run:
