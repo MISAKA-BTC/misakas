@@ -57,7 +57,7 @@ use misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend;
 use misaka_palw_base0::tokenizer::QwenTokenizer;
 use std::path::PathBuf;
 
-/// **The catalog row this worker embodies: the row the genesis is INTENDED to register.**
+/// **The catalog row this worker embodies: the row the genesis registers.**
 ///
 /// Taken from `misaka_palw_base0::classes` rather than spelled again here, so the worker and the
 /// class ledger cannot come to name different classes — the whole defect this constant class is.
@@ -67,17 +67,17 @@ use std::path::PathBuf;
 /// the two and the worker ran the ARTIFACT's arithmetic while committing under a class registered
 /// at the other — every step-leg dispute lost by an honest producer. After FE it dies at boot with
 /// the mismatch named, which is better and is still the wrong row: the row the testnet-11 5f
-/// genesis is to register is ADR-0082's graph-v5 dense row at n_ctx 512, and that is the class
-/// whose claims a chain will actually adjudicate.
+/// genesis registers is ADR-0082's graph-v5 dense row at n_ctx 512, and that is the class whose
+/// claims a chain will actually adjudicate.
 ///
-/// **Said in the present tense until now, and it is not true yet.** The RC genesis registers
-/// f1c5635c (floor) / 5bd9ae3d (QWEN36) / 71bbb755 (dense graph-v2 @ n_ctx 16); fixer FG lands the
-/// v5 registration. So today the dense lane is broken from BOTH ends and neither end is silent
-/// about it: the class the chain actually holds cannot be executed (its `rms_eps_q` is 1 against
-/// every artifact's 256, which is why this constant moved off it), and the class this worker
-/// embodies is not registered, so a commitment under it names a class no chain holds. FG closes
-/// both — it registers the row whose epsilon matches the artifact — which is why the two were
-/// never separable items.
+/// **For part of 2026-09-03 that sentence was false and this constant was still right.** The RC
+/// genesis registered f1c5635c (floor) / 5bd9ae3d (QWEN36) / 71bbb755 (dense graph-v2 @ n_ctx 16),
+/// so the dense lane was broken from BOTH ends at once: the class the chain held could not be
+/// executed (`rms_eps_q` 1 against every artifact's 256, which is why this constant moved off it),
+/// and the class this worker embodies was not registered, so a commitment under it named a class
+/// no chain held. Fixer FG closed both by registering the row whose epsilon matches the artifact —
+/// which is why the two were never separable items, and why arming `palw_kary_court` had to land
+/// in the same change: `validate_palw_v2` refuses a fused row under a dormant fence.
 ///
 /// **This is still one spelling too many, and the deeper repair is not this stream's.** A worker
 /// carries a MODEL_ID beside an artifact it loads; the artifact's own header states the family and
