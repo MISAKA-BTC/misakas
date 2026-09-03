@@ -405,6 +405,32 @@ thing done before the cut and it is done ONCE.
    inside the hashed bytes.
 2. Run `cargo +<pinned> fmt --all` LAST among source-changing steps — formatting is inside the hash.
 3. Then re-pin `transformer_id_pin` and `shipped_presets_have_pinned_fingerprints`, in one commit.
+3b. **"Frozen" is a sweep, not a recollection** — `scripts/check-derive-freeze.sh`. Re-run it after
+   every merge until it prints nothing. As of this writing **four** branches still move the crate:
+
+       MOVES IT   palw-artifact-names-genesis-row  -> 10b7eac25bab
+       MOVES IT   palw-launch-consolidated         -> defa73b60943
+       MOVES IT   palw-launch-derived-proof        -> 79305dbfe5f1
+       MOVES IT   palw-launch-qwen36-demo          -> 3f5996e60331
+
+   **Three sweeps were written for this and only the third asks the right question**, which is worth
+   knowing because the first two look authoritative and disagree:
+
+   | sweep | asks | answer |
+   |---|---|---|
+   | `git diff <rel> <b> -- <path>` | do the END STATES differ | **11** — mostly abandoned branches that merely predate the work |
+   | `git log <rel>..<b> -- <path>` | are there COMMITS touching it | **23** — includes `palw-adr0082-impl`, whose `derive/src` is byte-identical to 5f's |
+   | merge-tree, compare the subtree hash | would the MERGE move it | **4** — the only count that predicts a stale pin |
+
+   All three are honest counts of different things. The pin depends on the third.
+
+   *This step exists because the pin was taken early and reverted.* The claim was "the merge cannot
+   move `transformer_id`, checked rather than assumed", and what had been checked was
+   `palw-adr0082-impl` and two in-flight fixers. **That claim about impl was true** — impl really
+   does not move the tree. What was false was generalising it to the merge, when three launch
+   branches and 1c's do. Two sessions reached the same wrong shape independently and by the same
+   route: measure the thing in front of you, assert the conclusion for the population.
+
 4. Nothing under `misaka-palw-derive/src/` may be touched after step 3, for any reason, including a
    typo in a comment.
 
