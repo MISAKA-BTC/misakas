@@ -260,6 +260,7 @@ MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg"
       --connect=127.0.0.1:$P2P_BASE --utxoindex \
       --palw-register-class="$MODEL_ID" --palw-class-artifact="$MISAKA_PALW_ARTIFACT" \
       --palw-producer-key="$WORK_DIR/keys/bond-$REGISTRAR_BOND.seed" --palw-producer-pay-address="$REGISTRAR_ADDR" \
+      --palw-producer-bond="$PREMINE_TXID:$REGISTRAR_BOND" \
       --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + REGISTRAR_BOND))" \
       >"$WORK_DIR/register-class.log" 2>&1 &
 # `$!` into a variable rather than `${pids[-1]}`: macOS ships bash 3.2, which rejects a negative
@@ -275,6 +276,14 @@ while :; do
   if grep -q "service not started" "$WORK_DIR/register-class.log" 2>/dev/null; then
     reg_outcome="no-service"; break
   fi
+  # **A registration needs a BOND, and the panel says so in a WARN and then goes on running.**
+  # Measured 2026-09-03: this invocation passed the key, the pay address and the fee outpoint and
+  # not the bond, so the panel logged "Nothing will be registered" and the drill waited fifteen
+  # minutes for a block that was never going to carry anything. A daemon that declines by warning
+  # is invisible to a watcher that only greps for success, so the decline is watched for too.
+  if grep -q "needs a bond to register the class under" "$WORK_DIR/register-class.log" 2>/dev/null; then
+    reg_outcome="no-bond"; break
+  fi
   kill -0 "$reg_pid" 2>/dev/null || { reg_outcome="died"; break; }
   [ $SECONDS -lt $reg_deadline ] || break
   sleep 3
@@ -283,6 +292,9 @@ kill "$reg_pid" 2>/dev/null || true
 wait "$reg_pid" 2>/dev/null || true
 case "$reg_outcome" in
   ok) : ;;
+  no-bond)
+    grep -n "needs a bond to register the class under" "$WORK_DIR/register-class.log" >&2
+    die "the registrar was started without --palw-producer-bond, so the panel declined to register anything — see the line above" ;;
   no-service)
     grep -n "service not started" "$WORK_DIR/register-class.log" >&2
     die "the node built no registration service, so --palw-register-class was read by nobody — see the line above for which flag it wanted" ;;
