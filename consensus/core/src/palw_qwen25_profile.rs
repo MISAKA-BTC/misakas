@@ -1863,4 +1863,137 @@ mod tests {
         assert_ne!(frozen.shape_profile_id(), served.shape_profile_id(), "a different epsilon is a different class");
         assert_eq!(PalwShapeProfileV3 { base0_rms_eps_q: frozen.base0_rms_eps_q, ..served.clone() }, frozen, "one field apart");
     }
+
+    /// **The 5f genesis registers ADR-0082's graph-v5 512 row — and everything that has to hold for
+    /// that to be more than a row in a list.**
+    ///
+    /// The first assertion is the boot gate itself: `palw_rc_shipped_params` assembles through
+    /// `validate_palw_v2` AND `verify_palw_genesis_v2` (with the catalog preimage, which only the
+    /// assembling entry point holds), and panics if either refuses. So a build in which this test
+    /// runs at all is a build whose genesis gate accepted the set with the new row.
+    ///
+    /// What the rest checks is the ADR-0082-specific half that a gate returning `Ok` does not say
+    /// out loud: the row carries its graph, the fold reads `fused_attention` off it, the fence that
+    /// makes the class prosecutable is armed, the arity it was priced at is the arity the armed
+    /// court derives, and the narrow graph-v2 row it replaces is gone from the set.
+    #[test]
+    fn the_shipped_genesis_registers_the_graph_v5_row_and_arms_its_court() {
+        use crate::palw_state_v2::{PalwBlockContextV2, PalwChainStateV2, PalwConsensusObjectV2, apply_palw_transition_v2};
+
+        let params = crate::config::params::palw_rc_shipped_params();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("the RC preset is not a ConsensusV2 network");
+        };
+        let class_id = qwen25_a16_graph_v5_profile_v1().expect("the graph-v5 row projects").shape_profile_id();
+        println!("the class id the testnet-11 genesis derives for the graph-v5 dense 512 row: {class_id}");
+        println!("  canonical job {:?}, n_ctx {}", qwen25_a16_graph_v5_canonical_v1(), QWEN25_A16_GRAPH_V5_N_CTX);
+
+        // 1. The row is registered, and it CARRIES its graph — the only thing the fold can read
+        //    `fused_attention` from (audit A C-5).
+        let registered: Vec<Hash64> = bundle
+            .genesis_objects
+            .iter()
+            .filter_map(|o| match o {
+                PalwConsensusObjectV2::ClassRegistered { class_id, .. } => Some(*class_id),
+                _ => None,
+            })
+            .collect();
+        assert!(registered.contains(&class_id), "the genesis set does not register the graph-v5 row: {registered:?}");
+        let carriage = bundle
+            .genesis_objects
+            .iter()
+            .find_map(|o| match o {
+                PalwConsensusObjectV2::ClassRegistered { class_id: id, admission, .. } if *id == class_id => admission.as_ref(),
+                _ => None,
+            })
+            .expect("a fused genesis row must carry its profile — verify_palw_genesis_v2 refuses one that does not");
+        assert_eq!(carriage.profile.shape_profile_id(), class_id, "the carriage describes another class");
+        assert!(
+            crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&carriage.profile),
+            "the carried graph has no fused attention site, so the class is not the one this row is for"
+        );
+        assert!(carriage.signature.is_empty(), "genesis verifies no signature; a fabricated one would be a key nobody holds");
+
+        // 2. The narrow graph-v2 row is NOT registered beside it (GENESIS DECISION: the v5 row
+        //    takes the dense slot, it does not join it). Two dense rows would be two classes
+        //    dividing one tier's cadence, and the narrow one cannot express the demonstration.
+        assert!(
+            !registered.contains(&qwen25_a16_class_id_v2()),
+            "the graph-v2 n_ctx-16 row is still registered beside the 512 row"
+        );
+
+        // 3. The fold writes `fused_attention` — the property C-5 is about, read through the one
+        //    predicate and never from a literal.
+        let ctx = PalwBlockContextV2 { block: Default::default(), daa_score: 0, blue_score: 0, subsidy: 0 };
+        let (state, _delta) =
+            apply_palw_transition_v2(&PalwChainStateV2::genesis(), &bundle.state, &ctx, &bundle.genesis_objects, None)
+                .expect("the genesis registrations apply");
+        let class = state.class(&class_id).expect("the fold wrote no class state for the registered row");
+        assert!(class.fused_attention, "the genesis class state says this row's terminal leaf owes no root claim");
+        assert!(class.registrant_bond.is_some(), "the carriage names the bond ADR-0056 Decision 3 charges");
+
+        // 4. The court that can try it is ARMED, and the arity the row was priced at is the arity
+        //    the armed court derives. Without the first the class is admitted and unprosecutable
+        //    (5f card §3); without the second it is priced for one court and tried in another.
+        assert!(params.palw_kary_court_active_at(0), "the genesis registers a fused row and its court is dormant");
+        let derived = crate::palw_court_v2::palw_court_params_at_v2(bundle, true).expect("the armed court derives an arity");
+        assert_eq!(
+            derived.dissection_arity(),
+            bundle.court.dissection_arity(),
+            "the frozen arity is not the one this ruleset derives, so the price and the play disagree"
+        );
+
+        // 5. And the close it publishes is ONE carrier, under the ruleset it is registered on —
+        //    which is the whole of ADR-0082 Decision 6 for this row. Re-derived here rather than
+        //    read off the catalog, because the catalog's preimage lives in the assembly.
+        let (_, entry, _) = qwen25_a16_graph_v5_registration_v1(
+            crate::config::params::PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT,
+            crate::config::params::PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE,
+            1,
+            1,
+            bundle,
+            params.palw_prompt_ids_form_at(0),
+            carriage.registrant_bond,
+        )
+        .expect("the row builds on the ruleset that registers it");
+        let chunks = crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(entry.court_cost.max_close_bytes);
+        println!(
+            "graph-v5 dense @ {} on the RC ruleset: close {} B = {chunks} chunk(s) at arity {}, ladder {}, ids {:?}",
+            QWEN25_A16_GRAPH_V5_N_CTX,
+            entry.court_cost.max_close_bytes,
+            bundle.court.dissection_arity(),
+            bundle.court.max_step_leaf_count(),
+            params.palw_prompt_ids_form_at(0)
+        );
+        assert_eq!(chunks, 1, "the registered row's worst close is not one carrier: {} B", entry.court_cost.max_close_bytes);
+        assert!(chunks <= bundle.court.max_close_chunks(), "the boot gate would refuse the row this genesis registers");
+        assert_eq!(entry.class_id, class_id, "the builder and the genesis set disagree about the class");
+    }
+
+    /// **Both numbers this row publishes are outside the executor's ladder, so the uncapped
+    /// spellings do not merely differ — they refuse.**
+    ///
+    /// This is why the builder could not be a copy of `qwen25_a16_registration_v2` with one
+    /// projection swapped, and it is the FD2 rule stated on the one row that needs it.
+    #[test]
+    fn the_graph_v5_rows_numbers_are_the_rulesets_and_not_the_executors() {
+        let profile = qwen25_a16_graph_v5_profile_v1().expect("projects");
+        let (prefill, decode) = qwen25_a16_graph_v5_canonical_v1();
+        let canonical = crate::palw_base0_profile::rc_job_context(&profile, prefill, decode);
+        let ruleset = crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
+        let executor = crate::palw_step::PALW_STEP_MAX_LEAVES;
+        let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, ruleset).expect("counts at the ruleset");
+        let worst = crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, ruleset).expect("enumerates at the ruleset");
+        println!("graph-v5 dense @ {QWEN25_A16_GRAPH_V5_N_CTX}: canonical {counted} leaves, worst {worst}, ruleset ladder {ruleset}, executor {executor}");
+        assert!(counted > executor, "the canonical count is inside 2^22, so this test no longer says anything");
+        assert!(worst <= ruleset, "the registered row does not fit the ladder its own ruleset froze");
+        assert!(crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, executor).is_err());
+        assert!(crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, executor).is_err());
+        // The canonical job meets ADR-0077 Decision 14's floor EXACTLY — it is derived from it.
+        assert_eq!(
+            crate::palw_context_ladder::palw_job_footprint_v1(prefill, decode),
+            crate::palw_context_ladder::palw_canonical_footprint_floor_v1(QWEN25_A16_GRAPH_V5_N_CTX),
+            "the canonical job is not the floor's own footprint"
+        );
+    }
 }

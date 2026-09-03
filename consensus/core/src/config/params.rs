@@ -9889,10 +9889,21 @@ mod consensus_params_id_tests {
         assert!(matches!(armed_devnet.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)));
         assert!(armed_devnet.palw_kary_court_active_at(0), "the bundled devnet plays the dissection court from genesis");
 
-        // The dormancy/visibility property itself, on a ruleset that has NOT armed it — the RC's,
-        // which is the one the fence's own doc is about.
+        // **The RC ARMS it too, and it is not a decision this test can restate.** This half read
+        // "the RC card leaves the fence dormant", and that was true while the RC registered no
+        // fused row. It registers ADR-0082's graph-v5 512 row now (5f genesis card §2), and
+        // `validate_palw_v2` refuses to ASSEMBLE a ruleset that registers a fused row with a
+        // dormant court — so on this preset the two are one fact and the assertion below is the
+        // one that can be made: the fence is armed exactly when the set needs it.
         let shipped = palw_rc_shipped_params();
-        assert!(!shipped.palw_kary_court_active_at(u64::MAX), "the RC card leaves the fence dormant");
+        assert!(
+            shipped.palw_kary_court_active_at(0),
+            "the RC genesis registers a fused-attention row, so its dissection court is armed from block one"
+        );
+        // The dormancy/visibility property itself, on a ruleset that has NOT armed it — the
+        // class-free RC base, which is what the fence's own doc is about.
+        let bare = palw_rc_base_params();
+        assert!(!bare.palw_kary_court_active_at(u64::MAX), "a ruleset with no fused row leaves the fence dormant");
         let mut armed = shipped.clone();
         armed.palw_kary_court = Some(ForkActivation::new(9_000_000));
         assert_ne!(shipped.consensus_params_id(), armed.consensus_params_id(), "arming the k-ary court must move the fingerprint");
@@ -9901,11 +9912,11 @@ mod consensus_params_id_tests {
         assert!(!armed.palw_kary_court_active_at(8_999_999));
         // A never-arming fence collapses to absence in the IDENTITY (the normalised commitment),
         // like every bare fence beside it; the raw params id is the un-normalised preimage.
-        let mut never_armed = shipped.clone();
+        let mut never_armed = bare.clone();
         never_armed.palw_kary_court = Some(ForkActivation::never());
         assert_eq!(
             never_armed.consensus_identity_id(),
-            shipped.consensus_identity_id(),
+            bare.consensus_identity_id(),
             "a never-arming fence collapses to absence, like every bare fence beside it"
         );
         // The mode condition is folded in: outside ConsensusV2 the fence answers nothing.
