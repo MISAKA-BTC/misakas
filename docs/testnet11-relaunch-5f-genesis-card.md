@@ -4889,3 +4889,35 @@ patch touch 5f, where the same five run again after the real merge + apply.
 arrays with whitespace joins and no commas, edited nothing there, and produced a 48-line "patch"
 that was four-sixths of one. Regenerated with commas: 82 lines, all six sites, every old value
 grep-checked absent from the tree before the tests were read.
+
+## The dry-run merge caught the extraction order: the fingerprint hashes the genesis, so every table extracted before the genesis re-pin is stale by construction
+
+On the computed merged tree (zero 5f-only commits touch consensus — its code is the tip's), the six
+re-pins from the table, then the five pin tests:
+
+```
+every_genesis_commits_to_the_premine_this_build_mints   ok        GENESIS.hash + utxo_commitment right
+test_genesis_hashes                                     ok
+palw_derived_v1::golden_vector_ids_are_frozen           ok
+shipped_presets_have_pinned_fingerprints                FAILED    testnet-11: pinned a5291e00… (the table)
+                                                                  GOT 2222e054f87bed7a33e9c017f5403cd52070d0778776b5bd78143e7f82ff92b7
+                                                                  devnet: held (b40976b2…)
+palw_freeprompt_v3::golden_vector_ids_are_frozen        FAILED    job_id c940b5c3… PASSED; claim_id got e75b8d2e… vs pinned a7c87ce3…
+```
+
+**Mechanism, from the tree:** `consensus/core/src/config/params.rs:3058 — h.write(genesis.hash.as_bytes())`.
+The consensus fingerprint hashes the genesis hash; the finalize extracted `t11_fingerprint` while
+`GENESIS.hash` was still `08e9c8a4…`; the ceremony re-pins it to `ad30b5cb…` (M-07 demands it) and
+the fingerprint moves with it. Devnet's genesis did not move and devnet's row held — the same
+mechanism seen from the other side. **The cut's t11 fingerprint is the value printed after the
+genesis re-pin, `2222e054…`; the table's row is a prediction for a tree that no longer exists once
+step 1 runs.** Rule for every future ceremony: **extract after the genesis/premine re-pin — genesis
+first, then everything that is a function of it.**
+
+**Second finding, the report-without-verdict shape inside one test:** `golden_vector_ids_are_frozen`
+pins **four** values (job_id, claim_id, spend_id, ticket). On the tip the first assertion failed on
+job_id, so the other three never ran — the finalize's red described one pin of four. With job_id
+fixed, claim_id surfaced; spend_id and ticket are still behind it. Extracted in one run with a
+temporary `eprintln!` in the dry-run tree only, so fail-fast cannot hide the next value. **Nothing
+has touched 5f.** The merge + re-pins land only when all five are green on the dry-run tree, and
+then again on 5f.
