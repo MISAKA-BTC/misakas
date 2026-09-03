@@ -17,7 +17,7 @@
 //! and not a defect).
 
 use kaspa_consensus_core::palw_catalog_coverage::{PalwReachableKernelSetV1, verify_catalog_coverage_v1, verify_profile_coverage_v1};
-use kaspa_consensus_core::palw_class_admission_v2::{derive_court_cost_v1, reachable_kernels_v1};
+use kaspa_consensus_core::palw_class_admission_v2::{PalwCourtCostShapeV1, derive_court_cost_shaped_v1, reachable_kernels_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
 use kaspa_consensus_core::palw_step::{PALW_STEP_INPUT_SENTINEL_MIN, step_leaf_count_capped_v1, worst_case_step_leaf_count_capped_v1};
 
@@ -93,7 +93,11 @@ pub fn check_lineage_v1(lineage: &dyn PalwModelLineageV1, court: &PalwCourtParam
         }
         // What prosecuting the class costs must at least DERIVE — whether a bundle pays for it is
         // that bundle's admission decision, not conformance's.
-        derive_court_cost_v1(&entry.profile).map_err(|e| format!("{who}: the court cost does not derive: {e}"))?;
+        // Against the same ladder, for the same reason: `derive_court_cost_v1` is
+        // `genesis_anchored_v1` at the EXECUTOR's constant, and the walk uses that field as the cap
+        // of the leaf enumeration (audit D H-5).
+        derive_court_cost_shaped_v1(&entry.profile, PalwCourtCostShapeV1::genesis_anchored_v1(&entry.profile, ladder))
+            .map_err(|e| format!("{who}: the court cost does not derive: {e}"))?;
     }
     Ok(())
 }
