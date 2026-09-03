@@ -79,6 +79,29 @@ NEED
   exit 0
 fi
 
+# **The table must say which tree it came from.** Without this the guard compares five values
+# from an unknown run against a tree it verified separately, and the two halves are joined only
+# by whoever typed the path — which is the same lost join as a `--report` that carries ids and
+# omits whether the run was valid, and as a green suite over a closed door. A table extracted
+# from a DIFFERENT commit can hold five correct-looking values and mean nothing about this one.
+#
+# Required line:   extracted_from <full sha of the tree the extractor ran on>
+grep -qE '^extracted_from[[:space:]]+[0-9a-f]{40}$' "$table" || die "the table has no \`extracted_from <sha>\` line.
+
+        Five values from an unnamed run prove nothing about this tree. Have the extractor
+        print the commit it ran on, or this guard is comparing two things nobody joined."
+from_sha=$(awk '$1=="extracted_from" {print $2}' "$table")
+tree_sha=$(git rev-parse "$tree")
+if [ "$from_sha" != "$tree_sha" ]; then
+  die "the table was extracted from a DIFFERENT commit.
+
+        table says   $from_sha
+        checking     $tree_sha  ($tree)
+
+        Values from another run are not evidence about this one, however right they look."
+fi
+printf '  OK    %-22s %s\n' "table provenance" "extracted_from $(printf '%s' "$from_sha" | cut -c1-12)… == $tree"
+
 get() { awk -v k="$1" '$1==k {print $2; found=1} END{ if(!found) print "<absent>" }' "$table"; }
 check "source_tree_sha256" "$PREDICTED_SOURCE_TREE_SHA" "$(get source_tree_sha256)"
 check "t11 fingerprint"    "$PREDICTED_T11_FP"          "$(get t11_fingerprint)"
