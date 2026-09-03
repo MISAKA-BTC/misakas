@@ -117,12 +117,17 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
     }
     if binding == misaka_palw_base0::artifact::TokenizerBindingV1::Undeclared {
         // Stated at boot rather than defaulted in silence: the artifacts converted before
-        // `qwen25-convert --a16` bound a commitment carry `Hash64::default()`, so this worker's
-        // jobs publish `tokenizer_id` zero and NOTHING — here or on chain — can prove that the
-        // file below is the one the weights were converted with. Binding it needs a re-converted
-        // artifact, which moves the artifact root and is a genesis decision.
+        // `qwen25-convert --a16` bound a commitment carry `Hash64::default()`, and NOTHING — here
+        // or on chain — can prove that the file below is the one the weights were converted with.
+        //
+        // **This is a warning and no longer the last word.** `from_registered_profile` below
+        // REFUSES an unbound converted artifact by name; the only artifacts that reach past it
+        // undeclared are DERIVED ones (`Base0ArtifactV1::is_derived`, whose weights are a function
+        // of a seed every node holds), which is the exemption that constructor states. So this
+        // line now says which kind of artifact is in front of the operator, and the refusal says
+        // whether it may be served.
         eprintln!(
-            "[palw-a16-fp-worker] WARNING: artifact {artifact_path} declares no tokenizer commitment, so {tokenizer_path}              was checked against nothing and every job publishes tokenizer_id 0. A replayer using a different              tokenizer.json derives different token ids and cannot reproduce this producer's claims."
+            "[palw-a16-fp-worker] WARNING: artifact {artifact_path} declares no tokenizer commitment, so {tokenizer_path}              was checked against nothing and every job would publish tokenizer_id 0. A replayer using a different              tokenizer.json derives different token ids and cannot reproduce this producer's claims. A converted              artifact is REFUSED below; only a derived one is served past this point."
         );
     }
     let tokenizer_commitment = binding.tokenizer_id();
@@ -130,8 +135,26 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
     let load_ms = started.elapsed().as_millis() as u64;
 
     let net = network_id.into_bytes();
-    let backend = Qwen25A16Backend::new(std::sync::Arc::new(artifact), net.clone(), entry.profile.clone(), entry.canonical_job)
-        .with_step_ladder_cap(court.max_step_leaf_count());
+    // **`from_registered_profile`, not `::new`.** The two differ in what they CHECK, and this
+    // process is the one place the checks matter: `::new` compiles no plan, so it never compares
+    // the registered profile's arithmetic against the artifact's header (the `rms_eps_q` split that
+    // refused every dense row was invisible from here for exactly that reason), and it never runs
+    // the tokenizer-declaration refusal — so an artifact that names no tokenizer produced jobs with
+    // `tokenizer_id` 0 behind a warning nobody reads. A worker that serves a row it cannot prove it
+    // is serving is the whole failure mode: the claims are honest, unreproducible, and default
+    // their producer.
+    //
+    // The refusal below is therefore a hard stop, not a fallback to `::new`. An unbound artifact
+    // needs re-converting from the checkpoint the weights came from; softening this would trade a
+    // refusal at boot for a slash at the challenge window.
+    let backend = Qwen25A16Backend::from_registered_profile(
+        std::sync::Arc::new(artifact),
+        net.clone(),
+        entry.profile.clone(),
+        entry.canonical_job,
+    )
+    .unwrap_or_else(|why| die(format!("{artifact_path} cannot serve the registered {MODEL_ID} row: {why}")))
+    .with_step_ladder_cap(court.max_step_leaf_count());
     FpWorkerRuntime::new(
         backend,
         &entry.profile,
