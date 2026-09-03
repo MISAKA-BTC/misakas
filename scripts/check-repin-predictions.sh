@@ -54,6 +54,13 @@ PREDICTED_T11_FP=WITHDRAWN-family-adoption-see-above
 PREDICTED_DEVNET_FP=34c7e4829eadb996e50871ed9bf32055fe4f54057e66814a6bab1c54b67bd8e1
 PREDICTED_FP_GOLDEN=c940b5c36ee40846087e6c5927d6e6b5
 PREDICTED_PREMINE_BUILDS=ba2612417e7e0817
+# The genesis hash the re-pin will write: PALW_RC_GENESIS.hash recomputed over the NEW utxo_commitment by
+# premine.rs::print_premine_commitment (the node's own header hasher). Predicted here from a SECOND
+# computation — this session's worktree at 09a71652, premine.rs/genesis.rs byte-identical to 971b2eff —
+# and independently reported by 3e's finalize as ad30b5cb965ad305…9b33edb7. The family adoption does not
+# read the premine, so it is predicted unchanged on the family tip. The table's line is
+# t11_genesis_hash_implied; <absent> is a DIFF here on purpose (the printer printed nothing).
+PREDICTED_T11_GENESIS=ad30b5cb965ad305dfa1dc7516935763ea2623105581b83bb9359c7247157d36b0f8003b337cdad366e3895c8f159e99332be16e258b144dddf483bf9b33edb7
 
 fail=0
 check() { # name expected actual
@@ -132,10 +139,11 @@ check "t11 fingerprint"    "$PREDICTED_T11_FP"          "$(get t11_fingerprint)"
 check "devnet fingerprint" "$PREDICTED_DEVNET_FP"       "$(get devnet_fingerprint)"
 check "fp golden"          "$PREDICTED_FP_GOLDEN"       "$(get fp_golden)"
 check "premine builds"     "$PREDICTED_PREMINE_BUILDS"  "$(get premine_builds)"
+check "t11 genesis (implied)" "$PREDICTED_T11_GENESIS"   "$(get t11_genesis_hash_implied)"
 
 printf '%s\n' "-- summary -----------------------------------------------------------------"
 if [ "$fail" -eq 0 ]; then
-  printf '  all five predictions hold, against a table computed from the frozen tree.\n'
+  printf '  all six predictions hold, against a table computed from the frozen tree.\n'
 else
   die "$fail value(s) differ from the prediction.
 
