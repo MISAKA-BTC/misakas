@@ -5348,3 +5348,28 @@ consensus code (rail fixed post-freeze, tool crate only).* On ibm the series is 
 the branch `candidate-6e01ba07+rail-b037cdc2` and `misaka-palw-fp-rail` alone is rebuilt with `--locked`; the sha of
 that binary is recorded below when the build lands. The kaspad in service stays `14065c93…`; the fingerprint does not
 move.
+
+### 6g — why the model lanes are silent: they are inferring (18:33 UTC)
+
+Two hypotheses were live at 18:20: (a) producer wrappers without `--enable-unsynced-mining` `continue` silently when
+`should_mine` is false (node0 and node1 carry the flag; `.113`'s node, the pool slot and seat2 did not; 3e's drill gives
+every node the flag and produced a v5 block 3 min after boot); (b) the producers are inside `produce_one`, inferring
+slowly on CPU hosts. Genesis `bits` are `0x207fffff` on both t11 and devnet, so Layer-0 does not separate the chains.
+
+Test: seat2 restarted 18:22:27 UTC with the flag added (`c-seat2.sh.pre-5f-unsynced` kept). After its 34 GiB pass
+its producer printed **no** "producing anyway" — with the flag present that line prints only when `should_mine` is
+false — so `should_mine` was already true (node1 printed it on the empty chain at 17:27 and never after its refit).
+**(a) is refuted for this chain.** A 5-second CPU sample of the producer processes:
+
+    seat2  v5 dense (5.104)   ≈ 214 % of one core, 58 threads     8-core VM
+    node0  QWEN36  (ibm)      ≈ 194 % of one core, 58 threads     8-core VM
+    node1  floor   (ibm)      ≈  87 % of one core, 55 threads
+
+All three are computing. **(b) holds:** 3e's dense job took ~3 min on an Apple-silicon Mac; on these 8-core x86 VMs at
+~2 cores of engine work the same job is plausibly tens of minutes, and a QWEN36 job over 33 GiB of mapped weights
+likewise. At class target MAX the draw is not the constraint. The named expectation becomes: **the first v5 attempt
+block is seat2's first completed inference after 18:28 UTC**; if none exists by 20:10, read the engine's per-job
+time on these hosts, not the producer loop. `.113`'s node and the pool slot keep their wrappers; nothing else is
+restarted. Post-cut: the per-host inference time of every registered class belongs in the seat runbook, and a
+producer should log "job N: started / finished in T s / draw lost|won" at INFO — an hour of silence should not need
+a CPU sampler to read.
