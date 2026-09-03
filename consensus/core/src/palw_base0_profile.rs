@@ -1275,6 +1275,30 @@ mod tests {
         assert!(kernel_can_serve_node_v1(&tableless, true).is_err(), "a gather must name the table it reads");
     }
 
+    /// **A node's op kind and its kernel must be the same op** (ADR-0082 audit, fixer A2's note):
+    /// the court reads the op kind and the catalog reads the program the kernel id resolves to,
+    /// and nothing else forced them to agree. A profile declaring `AttnFused` over another
+    /// catalogued kernel, or the fused kernel under another op kind, is refused by name.
+    #[test]
+    fn a_nodes_op_kind_and_its_kernel_must_be_the_same_op() {
+        use crate::palw_step::PalwStepOpKindV1;
+        use crate::palw_step_refute::kernel_can_serve_node_v1;
+        let v5 = crate::palw_qwen25_profile::qwen25_a16_profile_v5(crate::palw_qwen25_profile::QWEN25_1_5B_A16)
+            .expect("the graph-v5 dense profile");
+        let fused = v5.attn_nodes.iter().find(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+        let other = v5.attn_nodes.iter().find(|n| n.op_kind != PalwStepOpKindV1::AttnFused).expect("another node");
+        assert!(kernel_can_serve_node_v1(fused, false).is_ok(), "the fused site as registered is served");
+        assert!(kernel_can_serve_node_v1(other, false).is_ok(), "an ordinary node as registered is served");
+        let mut fused_kind_other_kernel = fused.clone();
+        fused_kind_other_kernel.kernel_semantics_id = other.kernel_semantics_id;
+        let err = kernel_can_serve_node_v1(&fused_kind_other_kernel, false).expect_err("AttnFused over another kernel");
+        assert!(err.contains("same op"), "the refusal names the rule: {err}");
+        let mut other_kind_fused_kernel = other.clone();
+        other_kind_fused_kernel.kernel_semantics_id = fused.kernel_semantics_id;
+        let err = kernel_can_serve_node_v1(&other_kind_fused_kernel, false).expect_err("the fused kernel under another op kind");
+        assert!(err.contains("same op"), "the refusal names the rule: {err}");
+    }
+
     /// Every weighted node carries one dtype byte per layer its table covers, all int8 — BASE-0
     /// has exactly one weight type, and variance would mean it is not BASE-0.
     #[test]
