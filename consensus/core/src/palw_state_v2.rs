@@ -18244,6 +18244,49 @@ pub(crate) mod tests {
             assert!(format!("{err}").contains("head"), "the refusal names the head: {err}");
         }
 
+        /// **ADR-0080 W4 item 4: a rung deadline never eats the session's assembly reserve.**
+        ///
+        /// `cap_deadline_to_session_v1` was written for this and had no caller, so a rung stamped
+        /// near the backstop ran to the backstop — and the blocks a split close has to be
+        /// assembled over came out of the other party's clock. Whoever moved last won by
+        /// arithmetic: the other side was still filing chunks when the deadline it was measured
+        /// against arrived.
+        ///
+        /// Checked at every point that stamps a rung: the opening, both ladder moves, and the
+        /// dissection's own.
+        #[test]
+        fn a_rung_deadline_is_capped_inside_the_sessions_assembly_reserve() {
+            let reserve = palw_close_assembly_daa_v1(PALW_COURT_CLOSE_MAX_CHUNKS);
+            assert_eq!(
+                reserve,
+                PALW_COURT_CLOSE_INCLUSION_MARGIN * PALW_COURT_CLOSE_MAX_CHUNKS as u64,
+                "the reserve is blocks-per-chunk times the most chunks a declaration can address"
+            );
+            // A turn window WIDER than the session's whole reserve-adjusted budget, so the cap is
+            // what decides the rung rather than the window.
+            let p = params().with_turn_deadline_daa(params().window_court()).unwrap();
+            let drill = Drill::new(false);
+            let (state, _claim_id, sid, daa) = court_at_the_fused_leaf(&p, &drill);
+            let session = state.court_session(&sid).expect("the session lives");
+            let cap = session.deadline_daa - reserve;
+            assert_eq!(
+                session.ladder.last_deadline_daa(),
+                cap,
+                "a ladder rung is pulled back to the backstop less the assembly reserve"
+            );
+            // The ladder here is `Terminal`, where the rung clock is off by design (audit M2-4),
+            // so the sweep indexes the backstop — the cap is on the FIELD, and it is the phase
+            // below that shows the sweep reading a capped value.
+            assert_eq!(court_next_deadline_v2(session), session.deadline_daa, "a terminal ladder is clocked by the backstop alone");
+
+            // The dissection's moves take the same cap through the same helper.
+            let (opened, _) = apply(&state, &p, &ctx(daa, daa, daa), &[root_claimed(sid, &drill, 2)], None);
+            let phase = opened.court_session(&sid).unwrap().dissection.as_ref().unwrap();
+            assert_eq!(phase.last_deadline_daa(), cap, "a dissection rung is capped exactly as a ladder rung is");
+            assert_eq!(court_next_deadline_v2(opened.court_session(&sid).unwrap()), cap);
+        }
+
+
         /// **Z4 through the clock: a lapsed dissection move loses on the mover's side.**
         ///
         /// The rung clock is the PHASE's once one is open. A responder that opens a dissection and

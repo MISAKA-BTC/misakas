@@ -796,6 +796,26 @@ pub fn adjudicate_close_proof_v2(
 // ADR-0082 Decision 3 — the arity a ruleset derives at activation
 // =================================================================================================
 
+/// **May a dissection move ride a block at all?** (ADR-0082 Decision 3.)
+///
+/// The rule lives here, beside the court rules it belongs to, rather than inline in the
+/// acceptance walk that reads it — the walk is where a rule is APPLIED, and a fence spelled at
+/// its application site is a fence the next application site has to be told about.
+///
+/// `false` on every shipped preset, so the answer is a refusal BY NAME: the arms exist in the
+/// binary and the rule does not exist on this chain. The block that carried it still stands; the
+/// object is what is refused, which is the drop-not-invalidate shape admission on the lifecycle
+/// band requires.
+pub fn palw_attn_move_is_admissible_v2(
+    object: &crate::palw_state_v2::PalwConsensusObjectV2,
+    kary_court_active: bool,
+) -> Result<(), PalwCourtV2Error> {
+    use crate::palw_state_v2::PalwConsensusObjectV2 as Obj;
+    let is_dissection =
+        matches!(object, Obj::CourtAttnRootClaimed { .. } | Obj::CourtAttnDissected { .. } | Obj::CourtAttnChildChosen { .. });
+    if is_dissection && !kary_court_active { Err(PalwCourtV2Error::KaryCourtDormant) } else { Ok(()) }
+}
+
 /// **The two quantities the arity derivation reads off the REGISTERED classes** — the widest
 /// history any admitted row disputes, and the widest output tile it disputes it at.
 ///
@@ -2290,4 +2310,125 @@ mod tests {
         // that would otherwise report first. `state` here holds no session at all.
         assert!(matches!(adjudicate_court_close_v2(&state, &sid, &many, &tight), Err(PalwCourtV2Error::TooManyOperands { .. })));
     }
+    // =============================================================================================
+    // ADR-0082 Decision 3 — the fence, and the arity at activation
+    // =============================================================================================
+
+    /// Every shipped ruleset that actually carries a V2 bundle — the four network presets and the
+    /// RC parameters a testnet-11 build ships. The RC is in the list because the four presets do
+    /// not all carry a bundle, and a dormancy test over an empty list is a test that passes
+    /// because it ran nothing.
+    fn shipped_bundles() -> Vec<(&'static str, crate::palw_mode_v2::PalwConsensusParamsV2)> {
+        use crate::config::params::{palw_rc_shipped_params, DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS};
+        let bundles: Vec<_> = [
+            ("mainnet", MAINNET_PARAMS),
+            ("testnet", TESTNET_PARAMS),
+            ("simnet", SIMNET_PARAMS),
+            ("devnet", DEVNET_PARAMS),
+            ("rc", palw_rc_shipped_params()),
+        ]
+        .into_iter()
+        .filter_map(|(name, preset)| match &preset.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some((name, bundle.clone())),
+            _ => None,
+        })
+        .collect();
+        assert!(!bundles.is_empty(), "no shipped ruleset carries a V2 bundle — the dormancy tests would prove nothing");
+        bundles
+    }
+
+    /// **Under a dormant fence every shipped preset's court is byte-identical** (ADR-0082
+    /// Decision 3's dormancy clause).
+    ///
+    /// This is the whole of what "nothing is armed" means for the court: the arity a session's
+    /// children are cut at, the ceilings a close is measured by, and the clock a rung runs on are
+    /// the values the bundle already carries — so a build with this code and a build without it
+    /// judge the same disputes identically.
+    #[test]
+    fn a_dormant_fence_leaves_every_shipped_presets_court_byte_identical() {
+        for (name, bundle) in shipped_bundles() {
+            let dormant = palw_court_params_at_v2(&bundle, false).expect("a dormant fence never refuses");
+            assert_eq!(dormant, bundle.court, "{name}: a dormant k-ary fence moved the court");
+            assert_eq!(dormant.dissection_arity(), 2, "{name}: a shipped preset runs the binary ladder");
+        }
+    }
+
+    /// **Armed, the arity is the DERIVATION's — recomputed here from the same ruleset quantities,
+    /// so the test cannot agree with a value the code invented.**
+    #[test]
+    fn an_armed_fence_takes_the_arity_the_ruleset_derives() {
+        for (name, bundle) in shipped_bundles() {
+            let (history_max, lanes) = palw_attn_widest_registered_site_v2(&bundle);
+            let expected = crate::palw_mode_v2::palw_court_arity_v1(
+                bundle.state.window_court(),
+                bundle.court.turn_deadline_daa(),
+                bundle.court.max_step_leaf_count(),
+                history_max,
+                crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4,
+                bundle.court.terminal_rounds(),
+                lanes,
+            );
+            match (palw_court_params_at_v2(&bundle, true), expected) {
+                (Ok(court), Some(k)) => {
+                    assert_eq!(court.dissection_arity(), k, "{name}: the armed court is not the derived arity");
+                    // Everything BUT the arity is the bundle's own: arming swaps one court
+                    // parameter, which is the `palw_context_ladder` shape this fence copies.
+                    assert_eq!(
+                        court.with_dissection_arity(bundle.court.dissection_arity()).unwrap(),
+                        bundle.court,
+                        "{name}: arming moved a court parameter other than the arity"
+                    );
+                }
+                (Err(PalwCourtV2Error::NoAdmissibleArity { .. }), None) => {}
+                (got, want) => panic!("{name}: armed court {got:?} against derivation {want:?}"),
+            }
+        }
+    }
+
+    /// **`None` is a refusal, never a fallback to 2.**
+    ///
+    /// Two is a legal value the derivation can RETURN, so a court that answered 2 when the
+    /// derivation answered nothing would be indistinguishable from one whose window really did fit
+    /// the binary ladder — and the window that cannot hold its own dispute is exactly the state
+    /// ADR-0082 Z4 exists to make impossible.
+    #[test]
+    fn a_window_that_cannot_hold_its_dispute_refuses_rather_than_falling_back_to_two() {
+        let (_, mut bundle) = shipped_bundles().into_iter().next().expect("a shipped V2 bundle");
+        // A deadline as long as the whole window: one move spends it, so no arity fits.
+        bundle.court = crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 22, bundle.state.window_court(), 2).expect("a court");
+        let err = palw_court_params_at_v2(&bundle, true).expect_err("no arity fits a one-move window");
+        assert!(matches!(err, PalwCourtV2Error::NoAdmissibleArity { .. }), "{err}");
+        // And dormant, the same ruleset is untouched — the refusal is the fence's, not the court's.
+        assert_eq!(palw_court_params_at_v2(&bundle, false).unwrap(), bundle.court);
+    }
+
+    /// **A dissection move on a chain that never armed the fence is refused by name**, and every
+    /// other object is untouched by the rule.
+    #[test]
+    fn a_dissection_move_under_a_dormant_fence_is_refused_by_name() {
+        use crate::palw_state_v2::PalwConsensusObjectV2 as Obj;
+        let choice = Obj::CourtAttnChildChosen {
+            session_id: Hash64::from_u64_word(1),
+            choice: crate::palw_attn_court_v1::PalwAttnDissectChoiceV1 {
+                version: crate::palw_attn_court_v1::PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                session_id: Hash64::from_u64_word(1),
+                round: 0,
+                child: 0,
+            },
+            signature: vec![0xBB; 8],
+        };
+        let err = palw_attn_move_is_admissible_v2(&choice, false).expect_err("a dormant chain has no dissection");
+        assert!(matches!(err, PalwCourtV2Error::KaryCourtDormant), "{err}");
+        assert!(format!("{err}").contains("k-ary court fence is dormant"), "the refusal names the fence: {err}");
+        assert!(palw_attn_move_is_admissible_v2(&choice, true).is_ok(), "armed, the same move is admissible");
+        // The rule is about these three objects and nothing else.
+        let other = Obj::CourtCloseChunk {
+            session_id: Hash64::from_u64_word(1),
+            side: crate::palw_state_v2::PalwCourtSideV1::Executor,
+            index: 0,
+            bytes: vec![1],
+        };
+        assert!(palw_attn_move_is_admissible_v2(&other, false).is_ok(), "the fence does not reach objects it is not about");
+    }
+
 }

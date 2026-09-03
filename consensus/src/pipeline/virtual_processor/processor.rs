@@ -5766,12 +5766,11 @@ impl VirtualStateProcessor {
                 // other court move uses.
                 // -------------------------------------------------------------------------
                 Obj::CourtAttnRootClaimed { session_id, root, arity, signature, .. } => {
-                    if !self.palw_kary_court_active_at(point.daa_score) {
-                        return Err(format!(
-                            "a fused-attention root claim for session {session_id} on a chain that has not armed the k-ary court \
-                             (ADR-0082 Decision 3, `palw_kary_court`)"
-                        ));
-                    }
+                    kaspa_consensus_core::palw_court_v2::palw_attn_move_is_admissible_v2(
+                        object,
+                        self.palw_kary_court_active_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
                     // **The declared arity must be the ruleset's own** (patch note 7). The object
                     // states it because the fold cannot derive it — the derivation reads the
                     // bundle — and this is the layer that holds the bundle, so this is the layer
@@ -5800,12 +5799,11 @@ impl VirtualStateProcessor {
                     .map_err(|e| e.to_string())?;
                 }
                 Obj::CourtAttnDissected { session_id, round, signature } => {
-                    if !self.palw_kary_court_active_at(point.daa_score) {
-                        return Err(format!(
-                            "a fused-attention dissection round for session {session_id} on a chain that has not armed the k-ary \
-                             court (ADR-0082 Decision 3, `palw_kary_court`)"
-                        ));
-                    }
+                    kaspa_consensus_core::palw_court_v2::palw_attn_move_is_admissible_v2(
+                        object,
+                        self.palw_kary_court_active_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
                     kaspa_consensus_core::palw_court_v2::check_court_attn_round_acceptance_v2(
                         state,
                         session_id,
@@ -5818,12 +5816,11 @@ impl VirtualStateProcessor {
                     .map_err(|e| e.to_string())?;
                 }
                 Obj::CourtAttnChildChosen { session_id, choice, signature } => {
-                    if !self.palw_kary_court_active_at(point.daa_score) {
-                        return Err(format!(
-                            "a fused-attention child choice for session {session_id} on a chain that has not armed the k-ary court \
-                             (ADR-0082 Decision 3, `palw_kary_court`)"
-                        ));
-                    }
+                    kaspa_consensus_core::palw_court_v2::palw_attn_move_is_admissible_v2(
+                        object,
+                        self.palw_kary_court_active_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
                     kaspa_consensus_core::palw_court_v2::check_court_attn_choice_acceptance_v2(
                         state,
                         session_id,
