@@ -1365,6 +1365,33 @@ until the re-pin is done.
 
 ## 5. Known-open, shipping anyway, stated so no page claims otherwise
 
+### No drill anywhere exercises post-genesis registration end to end on a live chain
+
+**Added when devnet's genesis was changed to register testnet-11's class set**, so this is a gap
+the decision created and it is stated in the terms the decision was taken in.
+
+Before: devnet registered the dense class **post-genesis**, so the drill walked panel → chain →
+certification → budget → production. It never completed — a post-genesis class has no epoch budget
+until the next boundary, and devnet's is 1,000 DAA at ~35 s a block, so stages 5b–8 were **~9.7
+hours** past the end of any drill. **The path was covered by a run that could not finish.**
+
+After: the class is registered at genesis and budgeted from DAA 0, so the drill reaches the
+commitment, the claim, `Final`, the receipt block and the derived MIDI and 3D — **and nothing
+exercises the post-genesis sequence on a live chain any more.**
+
+```
+what still covers it   the admission DECISION — verify_class_admission_v6 under t11's own
+                       shape, from consensus-core and from the SDK preflight, by two authors
+what nothing covers    the SEQUENCE — panel signs -> tx on chain -> family certified ->
+                       lane bound -> epoch budget -> the class produces
+```
+
+**The launch-stopper was found by the unit-level tests, not by the drill** — the drill could not
+have found it, because devnet arms the ladder and t11 does not. So this gap costs less than it
+reads. *It is still a gap, and the reason it is here rather than in a footnote is that the
+alternative was a devnet differing from t11 in two dimensions instead of one, with an unmeasured
+rounding in the second.*
+
 ### The split close is OPEN, and this is what it costs
 
 Superseding this card's earlier paragraph, which described the release branch before the ADR-0082
