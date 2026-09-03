@@ -5463,3 +5463,8 @@ Reference from 3e's drill (blue claims, v5): `live_total` +663,054 per claim one
 `GetPalwProducerFactsResponse` (the operator's only liveness view without a log); the explorer's filler must store the
 header's `pow_algo_id` or the REST must not show one; the producer should log job start/finish/draw at INFO; the seat
 runbook carries per-host inference time for every registered class.
+
+**`.113` after the refit (19:10 UTC):** 17.4 GB used of 24 GB, 6.6 GB available, 99 MB of swap touched, 0 OOM kills
+in the kernel log; `misaka-t11-node` 8.6 GB resident, `misaka-t11-seat4` 10.4 GB (both map the 33 GiB Qwen3.6 file;
+the page cache is shared), pool slot small. Tight but stable; `.113` has no liveness watchdog — post-cut: give the
+public entry the same `palw-liveness-watch` as ibm and 5.104, and read its memory before adding any further mapping.
