@@ -130,7 +130,7 @@ fn the_fused_row_admits_under_t11s_own_shape_with_the_ladder_dormant() {
         registration,
         &kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1(),
         &[],
-        shape.ladder.clone(),
+        shape.ladder,
         shape.court,
         rc.palw_fp_decode_rules.is_some(),
     );
