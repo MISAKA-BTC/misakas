@@ -4059,3 +4059,40 @@ this note exists so nobody reaches for the branch. [[merging-two-repins-yields-a
 unbraced and zsh ate the `:c` — a tool that says "unknown revision" for a file that exists —
 minutes after citing the memory that describes it. The rule held only where it was already
 mechanical (the scripts brace); by hand it did not.*
+
+### Correction, twenty minutes later: the dissection mechanism was a READING, and a measurement contradicts it
+
+The section above states *"83,175 is the row priced WITH its dissection and 81,312 the row priced
+WITHOUT one"* as though measured. It was read off the `Op::AttnFused if fused_dissection.is_some()`
+branch. 3e (the impl integrator) then reported one data point that the reading does not survive:
+
+> *"the genesis route printed **81,312 at arity 2**."*
+
+If the genesis route prices the row **with** an arity-2 dissection and gets 81,312, the 1,863
+bytes are **not** the dissection openings. They are a term one route prices and the other does not
+— the ladder's window reserve, Flat-ids framing, an evidence term; unknown until the two producers
+are named. **My mechanism is withdrawn to the status of hypothesis; 3e's producer measurement
+outranks it.**
+
+**And the alternative is worse than what it replaces:**
+
+```
+genesis assembly     prices graph-v5@512 at 81,312    (arity 2)
+bind / admission     prices the same row at 83,175    (arity 2, Flat — classes.rs:1788, asserted)
+```
+
+**Two routes, one row, one court, two prices.** The route-agreement property that broke for the
+court pricing tonight, again, in the close cost. The genesis route registers the row at a price
+the admission route would not reproduce; a post-genesis re-registration of the identical class is
+judged at a number the chain does not hold. On the RC both fit (gap 0). **On devnet as it stood,
+whether "the shipped row is in the gap" was true depended on which route was asked** — the
+genesis price fits the 81,920 literal, the admission price does not.
+
+The derivation fix makes devnet indifferent (both ≤ 83,333). **It does not make the two routes
+agree.** The assertion that would have caught this is the one already named for the court:
+`price(genesis assembly, row, bundle, court) == price(bind/v6, row, bundle, court)`. Whichever
+number is right, that equality is the test — and finding the two producers finds the omitted term.
+
+*Two measurements are in flight so that neither party has to be right first:* 3e naming the
+producers on impl, and this session running the ungated `classes.rs:1788` assertion on a detached
+worktree of `09a71652` — a second machine's reading of the same number. [[send-the-value-with-what-produced-it]]
