@@ -1022,6 +1022,9 @@ pub fn palw_court_params_at_v2(
         crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4,
         court.terminal_rounds(),
         widest_lane_count,
+        // The reserve is the window's, so the search that chooses the shape the window must hold
+        // reads the same chunk count the admission bound does (audit D H-2c).
+        court.max_close_chunks(),
     )
     .ok_or(PalwCourtV2Error::NoAdmissibleArity { window_court: bundle.state.window_court() })?;
     court.with_dissection_arity(arity).map_err(|e| PalwCourtV2Error::BindingInvalid(e.to_string()))
@@ -2631,6 +2634,7 @@ mod tests {
                 crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4,
                 bundle.court.terminal_rounds(),
                 lanes,
+                bundle.court.max_close_chunks(),
             );
             match (palw_court_params_at_v2(&bundle, true), expected) {
                 (Ok(court), Some(k)) => {

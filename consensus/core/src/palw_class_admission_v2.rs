@@ -2131,7 +2131,7 @@ mod tests {
             let mut bundle = conforming_bundle();
             bundle.court = PalwCourtParamsV2::with_cost_ceilings(
                 crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
-                RC_TURN_DEADLINE,
+                rc_turn_deadline(),
                 2,
                 now,
                 crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
@@ -2204,11 +2204,24 @@ mod tests {
         }
     }
 
-    /// The move clock `palw_court_turn_deadline_v1` derives for the RC's 3,000-DAA court window at
-    /// the `2^32` ladder — asserted against the derivation in
-    /// `the_rc_derives_its_own_arity_and_the_moves_it_buys`, restated here as the constant this
-    /// harness builds its court at.
-    const RC_TURN_DEADLINE: u64 = 42;
+    /// The move clock the RC's 3,000-DAA window derives at the `2^32` ladder for a row with the
+    /// 512-position history these tests use — the JOINT derivation (audit A H-2 / audit D H-2b),
+    /// which counts the dissection rounds and the root claim the old form left out of the divisor.
+    /// Derived here rather than typed: `palw_court_turn_deadline_for_history_v1` is the one place
+    /// the number is computed, and a harness that carried its own copy is how a court comes to be
+    /// judged at a clock its ruleset never chose.
+    fn rc_turn_deadline() -> u64 {
+        crate::palw_context_ladder::palw_court_turn_deadline_for_history_v1(
+            crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.window_court,
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_TERMINAL_MOVES,
+            crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS,
+            512,
+            crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4,
+        )
+        .expect("the RC window holds its own dispute")
+        .1
+    }
 
     /// **Z10: a court that cannot try the leaf must not admit the class** (ADR-0082 Decision 1,
     /// under ADR-0049 Decision C), and the refusal names the COURT rather than the graph.
@@ -2219,7 +2232,7 @@ mod tests {
         let mut bundle = conforming_bundle();
         bundle.court = PalwCourtParamsV2::with_cost_ceilings(
             crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
-            RC_TURN_DEADLINE,
+            rc_turn_deadline(),
             2,
             crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
             crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
@@ -2275,7 +2288,7 @@ mod tests {
         // the CALLER's ruleset reading, and `Params::validate_palw_v2` is what keeps the stored
         // field equal to it on a live ruleset.
         assert_eq!(
-            court_at(1, RC_TURN_DEADLINE).dissection_arity(),
+            court_at(1, rc_turn_deadline()).dissection_arity(),
             crate::palw_mode_v2::PALW_COURT_BINARY_ARITY_V1,
             "the fixture bundle must carry what a chain bundle carries"
         );
@@ -2285,7 +2298,7 @@ mod tests {
             verify_class_admission_v5(&bundle, &profile, &canonical, &registration, &[], &[], Some(rules), Some(k))
         };
         // All three clear.
-        admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, RC_TURN_DEADLINE), court)
+        admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, rc_turn_deadline()), court)
             .expect("the dense graph-v5 512 row clears the close, the ladder and the window");
         // **The dense row now clears ONE carrier, and that is ADR-0082 Decision 4's amendment.**
         //
@@ -2300,7 +2313,7 @@ mod tests {
         // empty residue, the close is 82,719 at the row's own canonical job (81,759 at this test's
         // 510/2 job), and one carrier carries it. The rule that moved this golden is
         // `palw_checkpoint_cadence_v1`; the graph, the map and the arithmetic are untouched.
-        let entry = admit(court_at(1, RC_TURN_DEADLINE), court).expect("one carrier now carries the dense graph-v5 row");
+        let entry = admit(court_at(1, rc_turn_deadline()), court).expect("one carrier now carries the dense graph-v5 row");
         assert!(
             entry.court_cost.max_close_bytes <= crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(1),
             "the row was admitted at a close of {} against one carrier",
@@ -2317,13 +2330,13 @@ mod tests {
             let counted = crate::palw_step::step_leaf_count_capped_v1(&hybrid, &hybrid_job, hybrid_rules.ladder).expect("counts");
             let reg = weightless_registration(hybrid.shape_profile_id(), counted);
             let mut bundle = conforming_bundle();
-            bundle.court = court_at(1, RC_TURN_DEADLINE);
+            bundle.court = court_at(1, rc_turn_deadline());
             let err = verify_class_admission_v5(&bundle, &hybrid, &hybrid_job, &reg, &[], &[], Some(hybrid_rules), Some(court))
                 .expect_err("one carrier does not carry the hybrid row");
             assert!(format!("{err}").contains("court close chunks"), "the close must name itself: {err}");
         }
         // The WINDOW alone refuses, and says so.
-        let err = admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, RC_TURN_DEADLINE), PalwKaryCourtV1 {
+        let err = admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, rc_turn_deadline()), PalwKaryCourtV1 {
             window_court_daa: 100,
             ..court
         })
@@ -2333,7 +2346,7 @@ mod tests {
         let mut mispriced = rules;
         mispriced.cost_shape.dissection = Some(64);
         let mut bundle = conforming_bundle();
-        bundle.court = court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, RC_TURN_DEADLINE);
+        bundle.court = court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, rc_turn_deadline());
         let err = verify_class_admission_v5(&bundle, &profile, &canonical, &registration, &[], &[], Some(mispriced), Some(court))
             .expect_err("a class priced at an arity the court does not play must not be admitted");
         assert!(matches!(err, PalwClassAdmissionError::PricedForADifferentCourt { priced: Some(64), court: 4 }), "got {err}");
@@ -2362,7 +2375,7 @@ mod tests {
         let mut bundle = conforming_bundle();
         bundle.court = PalwCourtParamsV2::with_cost_ceilings(
             crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
-            RC_TURN_DEADLINE,
+            rc_turn_deadline(),
             2,
             crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
             crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
@@ -2440,7 +2453,7 @@ mod tests {
         let mut bundle = conforming_bundle();
         bundle.court = PalwCourtParamsV2::with_cost_ceilings(
             PALW_RC_COURT_MAX_STEP_LEAF_COUNT,
-            RC_TURN_DEADLINE,
+            rc_turn_deadline(),
             2,
             crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
             crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,

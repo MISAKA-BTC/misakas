@@ -383,8 +383,46 @@ pub const fn palw_court_turn_deadline_v1(
     terminal_moves: u32,
     max_close_chunks: u64,
 ) -> Option<u64> {
-    let moves = palw_court_move_count_v1(max_step_leaves, terminal_moves);
-    if moves == 0 || window_court == 0 {
+    match palw_court_turn_deadline_for_history_v1(window_court, max_step_leaves, terminal_moves, max_close_chunks, 0, 1) {
+        Some((_, deadline)) => Some(deadline),
+        None => None,
+    }
+}
+
+/// **SA-4's clock, derived JOINTLY with the dissection arity** (audit A H-2, audit D H-2b).
+///
+/// [`palw_court_turn_deadline_v1`] divides the window by
+/// [`palw_court_move_count_v1`] — `2·⌈log₂ L⌉ + terminal`, the BINARY LEAF LADDER ALONE. ADR-0082
+/// Decision 2 adds a second search over the history and a root-claim move, and neither was in the
+/// divisor: at the RC (`window_court` 3,000, `L = 2^32`, 27 chunks) the old form returns 42 with
+/// zero room, and ONE extra move overruns — `67 × 42 + 216 = 3,030` against 3,000, which is
+/// exactly the `CourtWindowTooShort` the admission gate then reports for a row nobody can widen.
+///
+/// So the clock and the arity are one derivation, not two. For each legal `k` ascending:
+///
+/// ```text
+/// moves(k) = 2·(⌈log₂ L⌉ + ⌈log_k(n_max / tile)⌉) + terminal + root_claim
+/// deadline(k) = (window_court − assembly_reserve − 1) / moves(k)
+/// ```
+///
+/// and the FIRST `k` whose deadline is non-zero is the pair the ruleset carries — the smallest
+/// arity that fits, which is the same selection rule [`crate::palw_mode_v2::palw_court_arity_v1`]
+/// applies, so the two cannot disagree about which court the clock was cut for. The leaf ladder is
+/// binary whatever `k` is ([`crate::palw_mode_v2::PALW_COURT_LEAF_LADDER_ARITY_V1`]); `k` buys
+/// history rounds only.
+///
+/// **`history_positions_max = 0` reproduces the old value byte for byte** — no dissection, no root
+/// claim, `moves = 2·⌈log₂ L⌉ + terminal` — which is what every ruleset with no fused row runs and
+/// what every existing pin asserts.
+pub const fn palw_court_turn_deadline_for_history_v1(
+    window_court: u64,
+    max_step_leaves: u64,
+    terminal_moves: u32,
+    max_close_chunks: u64,
+    history_positions_max: u64,
+    tile: u32,
+) -> Option<(u8, u64)> {
+    if window_court == 0 || tile == 0 {
         return None;
     }
     let reserve = palw_close_assembly_daa_v1(max_close_chunks);
@@ -393,8 +431,59 @@ pub const fn palw_court_turn_deadline_v1(
     if window_court <= reserve {
         return None;
     }
-    let deadline = (window_court - reserve - 1) / moves;
-    if deadline == 0 { None } else { Some(deadline) }
+    let budget = window_court - reserve - 1;
+    let mut arity = crate::palw_attn_dissect::PALW_ATTN_DISSECT_MIN_ARITY;
+    loop {
+        match palw_court_move_count_with_history_v1(max_step_leaves, terminal_moves, history_positions_max, tile, arity) {
+            Some(moves) if moves > 0 => {
+                let deadline = budget / moves;
+                if deadline > 0 {
+                    return Some((arity, deadline));
+                }
+            }
+            _ => {}
+        }
+        if arity >= crate::palw_attn_dissect::PALW_ATTN_DISSECT_MAX_ARITY {
+            return None;
+        }
+        arity *= 2;
+    }
+}
+
+/// **The moves a worst-case honest prosecution takes under ADR-0082's court**: the binary leaf
+/// ladder, the `k`-ary history dissection, the terminal moves, and — wherever there is a history to
+/// dissect — the responder's root claim.
+///
+/// [`palw_court_move_count_v1`] is this with `history_positions_max = 0`, and that is the
+/// pre-ADR-0082 count every ruleset with no fused row still runs.
+pub const fn palw_court_move_count_with_history_v1(
+    max_step_leaves: u64,
+    terminal_moves: u32,
+    history_positions_max: u64,
+    tile: u32,
+    arity: u8,
+) -> Option<u64> {
+    if tile == 0 || arity < 2 {
+        return None;
+    }
+    let ladder = max_step_leaves.next_power_of_two().trailing_zeros() as u64;
+    if history_positions_max == 0 {
+        return Some(2 * ladder + terminal_moves as u64);
+    }
+    // `⌈log_arity(⌈history / tile⌉)⌉`, spelled here as a const fn because the clock is derived at
+    // assembly. `palw_attn_dissect::palw_attn_dissection_rounds_v1` is the same arithmetic and the
+    // two are pinned equal by `the_two_move_counts_are_one_arithmetic`.
+    let leaves = history_positions_max.div_ceil(tile as u64);
+    let mut rounds = 0u64;
+    let mut covered = 1u64;
+    while covered < leaves {
+        covered = match covered.checked_mul(arity as u64) {
+            Some(c) => c,
+            None => return None,
+        };
+        rounds += 1;
+    }
+    Some(2 * (ladder + rounds) + terminal_moves as u64 + 1)
 }
 
 /// **W4, as a predicate:**
@@ -506,9 +595,12 @@ pub const fn palw_checkpoint_interval_v1(n_ctx: u32) -> u32 {
 /// The attention cache is prefix-stable: the K or V row written at position `j` is the same bytes
 /// in every later checkpoint (`A16Cache::state_chunk_bytes_v1` reads
 /// `layer[position_start .. position_start + position_count]` out of whatever cache it is handed).
-/// So a per-position cadence costs the executor NOTHING to retain — the cache once, every earlier
-/// checkpoint's chunk roots re-derivable from it — and one ragged tile's hash to commit, because
-/// every complete tile's chunk hash is the same value it had at the checkpoint before.
+/// So a per-position cadence costs the executor the cache once, every earlier checkpoint's chunk
+/// roots re-derivable from it, and one ragged tile's hash a position, plus the whole cache once
+/// every `PALW_ATTN_HISTORY_TILE_V4` positions, where the slice grows a block and every later
+/// chunk index — and therefore every later leaf hash — moves. Measured at `n_ctx` 512 on the dense
+/// row: 696.5 MB against 7.53 GB for the whole-cache form. (This said the cadence costs "NOTHING";
+/// it does not, because the leaf hash binds the chunk INDEX — fixer FB's measurement.)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PalwCheckpointCadenceV1 {
     /// `(index + 1) × checkpoint_interval` decode calls covered; the prefill is uncovered.
@@ -680,7 +772,7 @@ pub fn palw_checkpoint_leaf_carries_recurrence_v1(profile: &PalwShapeProfileV3, 
         PalwCheckpointCadenceV1::PerDecodeCall => true,
         PalwCheckpointCadenceV1::PerPosition => {
             let spacing = palw_anchored_interval_for_profile_v1(profile).max(1);
-            covered_positions % spacing == 0
+            covered_positions.is_multiple_of(spacing)
         }
     }
 }
@@ -3767,13 +3859,22 @@ mod u04_flat_close {
     #[test]
     fn the_rc_derives_its_own_arity_and_the_moves_it_buys() {
         let windows = PALW_RC_WINDOWS_V1;
-        let deadline = palw_court_turn_deadline_v1(
+        // **The clock is derived for the dispute it will hold, not for the leaf ladder alone**
+        // (audit A H-2 / audit D H-2b). `palw_court_turn_deadline_v1` divides by
+        // `2·⌈log₂ L⌉ + terminal` — no history rounds, no root claim — and at the RC that leaves
+        // zero room: 42 DAA × the 67 moves one fused row really takes is 3,030 against a 3,000-DAA
+        // window, which is the `CourtWindowTooShort` the gate then reports for a row nobody can
+        // widen. The joint form takes the history the ruleset admits and returns the pair.
+        let (clock_arity, deadline) = palw_court_turn_deadline_for_history_v1(
             windows.window_court,
             PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
             PALW_CONTEXT_LADDER_TERMINAL_MOVES,
             DEFAULT_MAX_CLOSE_CHUNKS,
+            131_072,
+            PALW_ATTN_HISTORY_TILE_V4,
         )
         .expect("the RC window admits a move clock");
+        println!("RC: the clock is cut for arity {clock_arity} at {deadline} DAA a move");
         let arity = crate::palw_mode_v2::palw_court_arity_v1(
             windows.window_court,
             deadline,
@@ -3782,6 +3883,7 @@ mod u04_flat_close {
             PALW_ATTN_HISTORY_TILE_V4,
             PALW_CONTEXT_LADDER_TERMINAL_MOVES,
             crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4 as usize * 16,
+            DEFAULT_MAX_CLOSE_CHUNKS,
         );
         println!("RC: window_court {} turn_deadline {deadline} -> arity {arity:?}", windows.window_court);
         let arity = arity.expect("the RC window admits some arity");
