@@ -808,6 +808,31 @@ Landing the registration without the eps replacement leaves 489‰ on an unexecu
 the eps fix without the registration leaves the worker pointed at nothing. *Written as one item
 because two items are how half of it ships.*
 
+### THREE REDS CLOSE WITH ONE PASTE — and one gate breaks the script's own rule
+
+Full `ci-gates.sh` on the merged content: **15 passed, 4 FAILED**, and every failure is a re-pin this
+ceremony performs or the fmt sweep. **No gate fails for a reason this cut does not already own.**
+
+    artifact-stranger   FAILED rc=2     transformer re-pin  \
+    derive-suite        FAILED rc=101   transformer re-pin   > ONE file: transformer_id_pin.rs
+    (consensus-core)    the pin test                        /
+    nextest             FAILED rc=100   premine re-pin
+    fmt                 FAILED rc=1     43 inherited diffs, closed by the single pass
+
+`transformer_id_pin.rs` closes **three** of them — a consensus-core test, a derive-suite gate and a
+CI gate — because the stranger *reads its pins out of that file* rather than restating them. That is
+the one-spelling rule paying a dividend at the freeze: one paste, three reds.
+
+**And `nextest` breaks the script's own rule 2.** `ci-gates.sh` says *"a checker that prints its
+verdict without printing its coverage is unfalsifiable"* — and `nextest` fail-fasts at **34 of
+4,072**, so its verdict is *the first failure* and never *the set*. It prints the coverage number
+and nobody reads it as one. **The gate script states the rule and one of its gates violates it**,
+which is the postmortem-next-to-its-own-instance shape, in the file that exists to enforce the rule.
+
+*After the cut, not now:* `--no-fail-fast` costs wall clock on a red run and buys the entire red set
+on the run where it matters most, which is exactly a freeze. Changing a gate's invocation during one
+is how a freeze acquires an unmeasured variable.
+
 ### FAVOURABLE staleness is the kind that survives — nobody re-checks an item that got better
 
 Three claims in these documents went stale today and **all three had improved**:
