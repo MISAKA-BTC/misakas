@@ -808,6 +808,35 @@ Landing the registration without the eps replacement leaves 489‰ on an unexecu
 the eps fix without the registration leaves the worker pointed at nothing. *Written as one item
 because two items are how half of it ships.*
 
+### THE PREDICTION, taken pre-fmt on impl `41e364b6` — check every paste against it
+
+Recorded **before** the formatting pass, per the ceremony rule, so a value that moves without a named
+cause stops the paste. `derive/src` tree at capture: `4969f8dc051cac31`.
+
+    1  premine    PALW_RC_GENESIS.utxo_commitment
+                    pinned  2d882275dae82945a99e825fcb5f973c66a9e945f4d0849d833e8b8f9c0835ff…
+                    builds  ba2612417e7e0817cca0ac0cade91caa585834c051114bc4125542acb05898db…
+                  and .hash, printed beside it by the ceremony tool
+
+    2  fingerprints  testnet-11  a7baab7957d27bbd… -> 71efa66480211731e3dc6fa2312ed73f
+                                                      7ed11b93372a19a55ac66ef39b65920e
+                    devnet      84153175ce880504… -> c0da0c9024d68b94b95010d1566cb1d5
+                                                      35a818cd0727d9978906b0a2a8b13692
+
+    3  free-prompt golden   pinned 700b90364860460f7d89d85eed59019c
+                            new    c940b5c36ee40846087e6c5927d6e6b5
+
+    4  the eight transformer ids + source_tree_sha256 — THE ONLY ONES THAT MOVE AT THE FMT
+
+**Three of the four must be UNCHANGED after the fmt**, because formatting touches no consensus
+input. If any of 1–3 differs from the above when the ceremony runs, something landed between this
+capture and the paste, and the ceremony stops until it is named.
+
+**The two fingerprints were measured independently by two sessions and agree exactly** — `71efa664…`
+and `c0da0c90…` from 5b's run and from mine, on the same tree by different invocations. That is the
+two-ways rule applied to the prediction itself, which is the one number a wrong paste would freeze
+into the genesis.
+
 ### RED-COUNT IS NOT RE-PIN-COUNT, and two tests print left/right in opposite senses
 
 **Five re-pin tests. Four re-pin values.** Anyone checking their work by "did the number of reds go
