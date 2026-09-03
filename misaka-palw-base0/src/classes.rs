@@ -1603,7 +1603,7 @@ mod tests {
                 &registration,
                 &[],
                 &[],
-                Some(rules.clone()),
+                Some(rules),
                 Some(kary),
             );
             assert!(

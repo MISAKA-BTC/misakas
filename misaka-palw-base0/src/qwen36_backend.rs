@@ -1940,7 +1940,7 @@ mod tests {
         let engine = Qwen36Engine::new(&artifact);
         let plan = engine.plan_from_profile(&profile).expect("the fixture's declaration is its program");
         let (ctx, prompt) =
-            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x0082_C3), artifact.shape.vocab, 3, 4);
+            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x0000_82C3), artifact.shape.vocab, 3, 4);
         let positions_total = ctx.declared_prefill_tokens + ctx.exact_decode_tokens.saturating_sub(1);
         assert!(
             positions_total < palw_anchored_interval_for_profile_v1(&profile),
