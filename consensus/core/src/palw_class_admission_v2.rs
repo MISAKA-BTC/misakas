@@ -2191,40 +2191,34 @@ mod tests {
     }
 }
 
-
 // =================================================================================================
-// The close is PRICED in carriers the transport does not carry
+// The close is priced in carriers, and two different layers cap them
 // =================================================================================================
 
-/// **How many carriers a `CourtClosed` can actually be filed on today: one.**
+/// **The most carriers a court close can actually be filed on.**
 ///
-/// A close larger than one carrier has to ride an `ObjectChunk` group, and the arm that applies a
-/// completed group admits exactly one kind:
+/// A close too large for one carrier rides [`PalwConsensusObjectV2::CourtCloseDeclared`] and its
+/// [`PalwConsensusObjectV2::CourtCloseChunk`]s in the session's own rooted table — NOT the generic
+/// `ObjectChunk` group, whose arm still admits `FamilyCertified` alone. So the number here is
+/// `PALW_COURT_CLOSE_MAX_CHUNKS`, the structural bound the transition enforces from the `u64`
+/// arrival bitmap, and the ruleset's `PalwCourtParamsV2::max_close_chunks()` sits under it.
 ///
-/// ```text
-/// palw_state_v2.rs, apply_object, the ObjectChunk arm:
-///     if !matches!(inner, PalwConsensusObjectV2::FamilyCertified { .. }) {
-///         return Err(PalwStateV2Error::ChunkedObjectKindNotAllowed);
-///     }
-/// ```
+/// **This constant was 1, and it was right when it was written.** Before the close had its own
+/// carriage, a split close was refused in the block that completed it — `ChunkedObjectKindNotAllowed`,
+/// whose message still reads "only a FamilyCertified may ride in chunks; every other object fits
+/// one carrier". Admission priced against 27 carriers the whole time, so a class whose worst close
+/// needed more than one was ACCEPTED, held share, produced blocks, and became unprosecutable the
+/// first time anyone tried. A dense 512-token row prices at 1,154,673 bytes = 14 carriers and would
+/// have shipped exactly that at genesis.
 ///
-/// So a split close is refused in the block that completes it, and `PALW_OBJECT_CHUNK_MAX_COUNT`
-/// is 8 in any case. Meanwhile [`crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS`] is 27 and
-/// admission prices against it — ADR-0080 design A landed the CEILING and not the CARRIAGE.
-///
-/// **What the gap does if nothing guards it.** Admission ACCEPTS a class whose worst close needs
-/// more than one carrier, because 27 says yes. The class is Active, holds share and produces
-/// blocks; the close becomes unfileable the first time anyone prosecutes it. That is a class
-/// carrying weight that cannot be tried — strictly worse than a refusal at registration, which is
-/// loud and recoverable. Measured 2026-09-03 while sizing a 512-token row: priced at 1,154,673
-/// bytes it is inside the ceiling and needs 14 carriers, so arming that row would have shipped
-/// exactly this, at genesis.
-///
-/// **What raises this constant** is the chunk arm admitting `CourtClosed` AND the count cap
-/// reading the ruleset's `max_close_chunks` rather than the literal 8 — both halves, since
-/// admitting the kind while the cap stays 8 still refuses a 14-carrier close. `misaka-cli palw
-/// court-close` already refuses a split close by name and lists the same prerequisites.
-pub const PALW_COURT_CLOSE_FILABLE_CHUNKS_V1: u64 = 1;
+/// **The reconciliation is the interesting part and it is why this constant is derived and not
+/// typed.** When the carriage landed, the test below that pinned the gap did NOT go red — because
+/// it was written against the `ObjectChunk` arm, and a close no longer travels that way. It passed
+/// for a reason that had stopped being true: a guard agreeing with the fix for the wrong mechanism,
+/// which is the failure this file keeps recording in other forms. Reading it as success would have
+/// left the next widening of the price unmatched by the transport all over again. It is now bound to
+/// the path a close actually takes.
+pub const PALW_COURT_CLOSE_FILABLE_CHUNKS_V1: u64 = crate::palw_state_v2::PALW_COURT_CLOSE_MAX_CHUNKS as u64;
 
 #[cfg(test)]
 mod the_close_must_be_filable {
@@ -2232,15 +2226,13 @@ mod the_close_must_be_filable {
 
     /// **Every class this tree ships must have a close somebody can actually file.**
     ///
-    /// Green today, and with less room than it looks: the widest shipped row closes at 78,688
-    /// bytes against a one-carrier limit of 83,333 — 5.6 %. This test is the thing that fails when
-    /// a row is added or widened past that cliff, which is the mistake that was nearly made by
-    /// hand, on this branch, today. It compares against
-    /// [`PALW_COURT_CLOSE_FILABLE_CHUNKS_V1`] rather than the ruleset's `max_close_chunks`
-    /// deliberately: the ruleset's number is what the class is PRICED against, and the two are not
-    /// the same question until the transport carries a split close.
+    /// The sweep that would have caught the 512 row before it was registered. It compares against
+    /// [`PALW_COURT_CLOSE_FILABLE_CHUNKS_V1`] — what the TRANSITION accepts — rather than the
+    /// ruleset's `max_close_chunks`, because the ruleset number is what a class is PRICED against
+    /// and the two are only the same question while both layers agree. The test below is what keeps
+    /// them agreeing.
     #[test]
-    fn no_shipped_row_needs_a_carrier_the_chunk_arm_refuses() {
+    fn no_shipped_row_needs_a_carrier_the_close_table_refuses() {
         let rows = crate::palw_court_deadline::palw_shipped_court_rows_v1().expect("the shipped rows project");
         assert!(!rows.is_empty(), "a court with no rows would make this test vacuous");
         for row in rows {
@@ -2248,7 +2240,7 @@ mod the_close_must_be_filable {
             let carriers = crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes);
             assert!(
                 carriers <= PALW_COURT_CLOSE_FILABLE_CHUNKS_V1,
-                "a shipped row (n_ctx {}) closes at {} bytes = {carriers} carriers, and the chunk arm files {}: \
+                "a shipped row (n_ctx {}) closes at {} bytes = {carriers} carriers and the close table files {}: \
                  admission would accept this class and nobody could ever prosecute it",
                 row.profile.n_ctx,
                 cost.max_close_bytes,
@@ -2257,29 +2249,61 @@ mod the_close_must_be_filable {
         }
     }
 
-    /// **The priced ceiling and the filable ceiling are different numbers, and this says by how
-    /// much** — so that neither can be read as the other, and so that CLOSING the gap has to come
-    /// through here.
+    /// **What is PRICED must be inside what can be FILED, and this is the only place that says so.**
     ///
-    /// When the chunk arm admits `CourtClosed` and the cap reads the ruleset, this test fails and
-    /// whoever landed that raises [`PALW_COURT_CLOSE_FILABLE_CHUNKS_V1`]. That is the intended
-    /// direction: a guard that silently agreed with the fix would let the next widening of the
-    /// PRICE go unmatched by the transport all over again.
+    /// Admission refuses a class whose close exceeds `bundle.court.max_close_chunks()`; the
+    /// transition refuses a declaration whose count exceeds `PALW_COURT_CLOSE_MAX_CHUNKS`. Nothing
+    /// else compares them, and the direction matters: priced ABOVE filable is the hole that let a
+    /// 14-carrier close be admitted onto a transport that carried none of it. Priced below is slack.
     #[test]
-    fn the_priced_ceiling_is_not_the_filable_ceiling_and_the_difference_is_named() {
+    fn the_priced_ceiling_is_inside_the_filable_one() {
         let priced = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS;
-        assert_eq!(priced, 27, "design A's ceiling moved; re-read what the transport carries before following it");
-        assert_eq!(PALW_COURT_CLOSE_FILABLE_CHUNKS_V1, 1, "the chunk arm admits a split close now — raise this and delete the gap");
+        assert_eq!(priced, 27, "design A's ceiling moved — re-check the close table's bound before following it");
+        assert_eq!(PALW_COURT_CLOSE_FILABLE_CHUNKS_V1, 32);
         assert!(
-            priced > PALW_COURT_CLOSE_FILABLE_CHUNKS_V1,
-            "the gap closed; if the transport now carries what the pricer sells, this test should be deleted, not relaxed"
+            priced <= PALW_COURT_CLOSE_FILABLE_CHUNKS_V1,
+            "admission prices {priced} carriers and the close table files {}: every class between them is \
+             admissible and unprosecutable",
+            PALW_COURT_CLOSE_FILABLE_CHUNKS_V1
         );
-        // The cap the transport imposes even for the one kind it does carry. Named so that
-        // admitting `CourtClosed` while leaving this at 8 cannot read as the whole fix.
-        assert_eq!(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT, 8);
+        // The generic group is NOT the close's road, and a change that sent it back down this one
+        // would restore the original hole silently. `FamilyCertified` keeps its own 8.
+        assert_eq!(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT, 8, "the certification lane's carriage moved");
         assert!(
             (crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT as u64) < priced,
-            "even the kind the chunk arm DOES admit cannot be carried at the priced count"
+            "the certification lane cannot carry a priced close, which is why the close has its own table"
         );
+    }
+
+    /// **The row the launch is waiting on, asserted rather than assumed.**
+    ///
+    /// A dense 512-token context is what makes a model's own answer wide enough to be an artifact
+    /// DSL — at `n_ctx` 16 the cheapest artifact of any registered kind costs 35 tokens and nothing
+    /// can be produced at all. This is the arithmetic that says the row is now registrable: it
+    /// prices inside the ruleset's ceiling AND inside what the close table can file. It was true of
+    /// neither before the close got its own carriage.
+    ///
+    /// The hybrid row is measured beside it deliberately. It is inside both too, at 27 of 27 priced
+    /// carriers — 9,759 bytes of margin on a 2,250,000 ceiling, 0.43 % — so any geometry change,
+    /// added term or tile move puts it over, and the failure surfaces at registration on a live
+    /// chain. That is a fact about the margin, not a reason to register or refuse it; this test
+    /// exists so the number is read rather than rediscovered.
+    #[test]
+    fn the_512_rows_are_filable_and_the_hybrid_has_almost_no_margin() {
+        for (label, profile, want_carriers) in [
+            ("A16 dense 512", crate::palw_context_ladder::palw_a16_context_row_profile_v1(512).expect("projects"), 14u64),
+            ("QWEN36 hybrid 512", crate::palw_context_ladder::palw_qwen36_context_row_profile_v1(512).expect("projects"), 27u64),
+        ] {
+            let shape = crate::palw_context_ladder::palw_class_ladder_rules_v1(&profile).expect("a mapped row has rules").cost_shape;
+            let close = derive_court_cost_shaped_v1(&profile, shape).expect("derives").max_close_bytes;
+            let carriers = crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(close);
+            assert_eq!(carriers, want_carriers, "{label}: {close} bytes is {carriers} carriers, not {want_carriers}");
+            assert!(carriers <= PALW_COURT_CLOSE_FILABLE_CHUNKS_V1, "{label}: the close table cannot file {carriers} carriers");
+            assert!(
+                carriers <= crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS,
+                "{label}: admission prices {} carriers and this row needs {carriers}",
+                crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS
+            );
+        }
     }
 }
