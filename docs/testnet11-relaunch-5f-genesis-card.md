@@ -287,7 +287,26 @@ thing done before the cut and it is done ONCE.
 | `transformer_id_pin` | `misaka-palw-derive/tests/` | here, at the cut |
 | `shipped_presets_have_pinned_fingerprints` | `consensus/core/src/config/params.rs` | here, at the cut |
 | `golden_vector_ids_are_frozen` | `consensus/core/src/palw_freeprompt_v3.rs` — ADR-0082 stream H gave the job two fields | here, at the cut |
+| `PALW_RC_COURT_E2E_ROOT_BYTES` | `consensus/core/src/palw_e2e_adjudicability.rs` | here, **FIRST** — see the ordering below |
 | state version 18 → 19, ADR-0043 goldens | `palw-adr0082-impl` | 5b, on that branch |
+
+**The e2e root is re-pinned BEFORE the fingerprint, because it is INSIDE it.** `consensus_params_id`
+reads the pinned `PALW_RC_COURT_E2E_ROOT_BYTES`, so re-pinning the fingerprint first produces a
+value computed from a stale root — correct-looking, self-consistent, and wrong. Order: e2e root,
+then fingerprint, then everything else.
+
+**And the trap that ordering hides, which cost a measurement today.** "Does adding a fourth
+certified family move `consensus_params_id`?" was measured as **no** — byte-identical on both
+networks, with the change and with it stashed. The measurement was correct and the conclusion was
+false: the fingerprint was unchanged *because the build was not yet self-consistent*. Updating the
+root pin, which the build requires anyway, moves it:
+
+    testnet-11  a090885af5856071…  ->  404c624568360b22…
+    devnet      7acb81ebd3c8d942…  ->  67b0e2ebcb02c7e5…
+
+**Measuring whether a change moves a derived value, while a pin that value is derived FROM is
+stale, measures a build nobody will ever run.** The constant's own doc said the root is inside every
+RC network's params id; it was read after the measurement rather than before.
 
 **The fingerprint moves under you, so re-pin LAST and never early.** Measured twice a few hours
 apart on this branch: `a7baab79…` was the pin, one reading gave `d201a54f…`, and the next gave
