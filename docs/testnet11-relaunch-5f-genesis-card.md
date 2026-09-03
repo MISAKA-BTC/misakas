@@ -3050,3 +3050,55 @@ regenerating the values is closed by construction.
 > **The discipline is "has it been seen to fail AND to pass", and case 2 says that is not enough
 > either.** This guard passed on a table it should have refused, and every value in it was right.
 > *Seeing it pass is only evidence if you also know what it would have refused.*
+
+## The MIDI and the 3D, produced and read by something that could have disagreed
+
+The goal names *midi / 3D / 実用的な出力*. I had been carrying that half on someone else's
+report. Produced here, on `palw-testnet-5f`, and checked three ways:
+
+```
+palw-derive derive --transformer music/smf/v1 --answer corpus/music/03-overlapping-melody.json
+                   scene/glb/v1               corpus/scene/02-hierarchy.json
+                   cad/stl/v1                 corpus/cad/01-extrude-l-bracket.json
+```
+
+**1 — the files exist and carry content**, parsed by `scripts/verify-artifacts-independently.py`,
+which implements SMF, glTF-binary and binary-STL **from their published specifications** and
+imports, links and shells out to nothing in this tree:
+
+```
+OK   .mid   157 B   SMF format 1, 2 tracks, division 192, 9 note-on, 1728 ticks
+OK   .glb  2736 B   glTF 2.0, 2 chunks, 3 nodes, 2 meshes, 2 primitives
+OK   .stl  1084 B   binary STL, 20 triangles, no degenerate facets
+```
+
+It walks every MIDI event and checks each track's declared length against where its events
+actually end, checks every glTF accessor fits its bufferView and every bufferView its buffer, and
+checks the STL triangle count implies exactly the file's length with no two vertices equal.
+**These are the checks that fail on a plausible-looking blob**, which is the only kind worth
+running.
+
+**2 — the bytes are the ones the chain pins.** Each artifact hash equals its `golden.json` entry:
+
+```
+MATCH  music/03-overlapping-melody   6e27611c2ee15af0…   157 B
+MATCH  scene/02-hierarchy            6da65dbc8f6a29fa…  2736 B
+MATCH  cad/01-extrude-l-bracket      8b6c0d4389cb20cb…  1084 B
+```
+
+> **So the bytes the chain commits to are files an independent reader accepts** — which is a
+> different claim from the drill's, and the one an operator cares about. `drill --check` compares
+> one run's hashes against another's: it proves two runs agree, **not that the output is a file
+> anything else can open.** Two runs of a broken writer agree perfectly.
+
+**3 — the ids here are 5f's, and my re-pin predictions are impl's.** Stated because the two sets
+look interchangeable and are not:
+
+```
+palw-testnet-5f     derive/src = 6b8d13ad46ebb22c…   music/smf id 4f4edd02c53ae28e
+palw-adr0082-impl   derive/src = 4969f8dc051cac31…   music/smf id cb5f27b4… (predicted)
+```
+
+**The trees differ, so the ids differ**, and `transformer_id` is a function of `derive/src`'s
+bytes. *A transformer id read from the wrong tree is exactly the paste this ceremony exists to
+prevent* — and it would have been eight plausible hex strings.
