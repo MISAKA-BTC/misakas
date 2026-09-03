@@ -23,7 +23,7 @@ chain.
 git checkout <final RC tag>
 cargo build --release -p kaspad -p misaka-cli -p misaka-palw-base0 --bins
 ./target/release/kaspad --version
-sha256sum target/release/kaspad target/release/misaka-cli target/release/palw-certify \
+sha256sum target/release/kaspad target/release/misaka target/release/palw-certify \
           target/release/palw-a16-fp-worker target/release/palw-qwen36-fp-worker
 ```
 
@@ -60,9 +60,9 @@ MISAKA_PALW_POW_FIXTURE=1 kaspad --devnet --appdir <dir> --listen=127.0.0.1:1631
    --utxoindex --nodnsseed --palw-produce --palw-producer-key <bond-0.seed> \
    --palw-producer-bond 6d6973616b612d7072656d696e6500…00:0 --palw-producer-pay-address <address of bond-0.seed>
 palw-certify drill --family base0 --lane fp --out base0-fp.obj
-misaka-cli --network devnet --rpc 127.0.0.1:17610 palw submit-object --key-file <main.seed> --object base0-fp.obj --yes
+misaka --network devnet --rpc 127.0.0.1:17610 palw submit-object --key-file <main.seed> --object base0-fp.obj --yes
 palw-certify bind --model-id "PALW-BASE-0/rc" --lane fp --out base0-bind.obj
-misaka-cli --network devnet --rpc 127.0.0.1:17610 palw submit-object --key-file <main.seed> --object base0-bind.obj --yes
+misaka --network devnet --rpc 127.0.0.1:17610 palw submit-object --key-file <main.seed> --object base0-bind.obj --yes
 ```
 
 ## 3. The fleet swap — every validator, one build, one window

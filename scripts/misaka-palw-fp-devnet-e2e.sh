@@ -541,10 +541,30 @@ if ! ls "$ARTIFACT_STEM".commitment-unsigned.borsh >/dev/null 2>&1; then
 import json, sys
 try: h = json.load(open(sys.argv[1]))
 except Exception: sys.exit(0)
-why = h.get("commit_refusal")
-if why: print(f"  the gateway queued nothing because the chain refuses the commitment: {why}")
-else:  print("  /health names no chain-side refusal, so the cause is on the gateway's own side "
-             "(its per-epoch commit budget, or the worker refused the request) — read gateway.log")
+chain = h.get("chain", {})
+# **Read every field that can carry the reason, in the order they become specific.** This looked at
+# `commit_refusal` alone, found None on a real run, and printed an `ls` of the outbox — while
+# `chain.bond_not_ready_reason` held "this class's epoch budget is already spent" the whole time.
+# `commit_refusal` is `facts.commit_refusal()`, which is empty when the gateway declined for a
+# reason the chain has not been asked about yet; the per-field reasons below are where the cause
+# actually lives.
+for label, why in [
+    ("the chain refuses the commitment", h.get("commit_refusal")),
+    ("the executor bond is not producible", chain.get("bond_not_ready_reason")),
+]:
+    if why:
+        print(f"  {label}: {why}")
+        break
+else:
+    room = chain.get("exposure_room")
+    if isinstance(room, int) and room <= 0:
+        print(f"  the bond has no exposure room ({room}) — it cannot back another claim's lifetime.")
+    elif chain.get("fp_certified") is not True:
+        print("  this class is not certified on the free-prompt lane, so no commitment may be written.")
+    else:
+        print("  no field of /health names a refusal, so the cause is the gateway's own per-epoch "
+              "commit budget or a worker-side refusal — read gateway.log. /health is: "
+              + json.dumps({k: chain.get(k) for k in ("registered", "fp_certified", "bond_active", "exposure_room")}))
 PY
   die "the gateway queued no commitment for job ${JOB_ID:0:16} — there is nothing for the rail to sign"
 fi

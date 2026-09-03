@@ -1523,11 +1523,23 @@ Do you confirm? (y/n)";
         // is therefore admitted on the key alone, and the service dispatches to the registration
         // worker instead of the panel duties.
         match (v2, &args.palw_producer_key, &args.palw_producer_bond) {
-            // Class registration is admitted on the key alone for the same reason bond registration
-            // is: ADR-0054 makes admission permissionless, so requiring a bond to register a class
-            // would be the closed seam one level up — the only way to register a class would be to
-            // already be bonded.
-            (true, Some(key_path), bond) if bond.is_some() || args.palw_register_bond || args.palw_register_class.is_some() => {
+            // **Class registration needs a bond, and admitting it without one started a node that
+            // could never do the job.** This gate used to admit `--palw-register-class` on the key
+            // alone, reasoning that ADR-0054's permissionless admission would otherwise be a closed
+            // seam — the only way to register a class would be to already be bonded. Both halves of
+            // that were wrong.
+            //
+            // Permissionless means no gatekeeper decides WHO may register; it does not mean the
+            // registration is free. `apply_object`'s `ClassRegistered` arm reads `registrant_bond`
+            // — whose bond pays — so a class registration with no bond behind it is not something
+            // the chain can accept, and the panel says so at its own gate. And the seam is not
+            // closed: `--palw-register-bond` obtains one in the same run, which is exactly what the
+            // panel's message tells the operator to pass.
+            //
+            // The cost of admitting it was a node that started, followed the chain, and registered
+            // nothing — the failure a rehearsal spent a run discovering, and the same shape as the
+            // producer gate that read `--palw-register-class` and built no panel at all.
+            (true, Some(key_path), bond) if bond.is_some() || args.palw_register_bond => {
                 Some(Arc::new(crate::palw_panel::PalwPanelService::new(
                     crate::palw_panel::PalwPanelConfig {
                         register_class: args.palw_register_class.clone(),
@@ -1586,10 +1598,17 @@ Do you confirm? (y/n)";
                 } else {
                     "--palw-panel"
                 };
-                warn!(
-                    "{asked} needs --palw-producer-key (the seat identity){} — service not started, so nothing was registered",
-                    if args.palw_register_bond || args.palw_register_class.is_some() { "" } else { " and --palw-producer-bond" }
-                );
+                // What is missing depends on what was passed. `--palw-register-bond` obtains its own
+                // bond, so it needs only the key; everything else needs a bond as well — class
+                // registration included, because the chain reads `registrant_bond` from it.
+                let also = if args.palw_register_bond {
+                    ""
+                } else if args.palw_register_class.is_some() {
+                    " and a bond to register the class under: --palw-producer-bond <txid>:<index>,                      or --palw-register-bond to obtain one in this same run"
+                } else {
+                    " and --palw-producer-bond"
+                };
+                warn!("{asked} needs --palw-producer-key (the seat identity){also} — service not started, so nothing was registered");
                 None
             }
         }

@@ -1,5 +1,22 @@
 # kaspa-pq (MISAKA) Validator Participation Runbook
 
+> ## This is not the page for joining the live network
+>
+> **It describes the DNS-overlay validator on `testnet-10`, and that is not where MISAKA runs.**
+> The live public network is **testnet-11**, whose consensus is PALW — every block carries LLM
+> work — and nothing on this page reaches it. In particular `kaspa-pq-miner`, which §0 below tells
+> a newcomer to build, **cannot mine testnet-11 at all**: that network's blocks are produced by a
+> node with `--palw-produce`, not by an external miner.
+>
+> If you came here to join, read
+> **[testnet11-join-mining.md](testnet11-join-mining.md)** instead. It is the newcomer path, it is
+> the one that gets rehearsed, and it names the five things whose first commands used to fail.
+>
+> This page is kept for the testnet-10 DNS-finality overlay, which is a different mechanism on a
+> different network. It contains zero references to PALW because PALW is not part of it. Nothing
+> below has been re-verified against a live chain recently, and its port numbers, addresses and
+> binaries are testnet-10's.
+
 **Can anyone join by following steps, with NO code changes?**
 **YES — on a network where the DNS overlay is activated.** The per-validator flow below uses
 only the shipped binaries (`kaspad`, `kaspa-pq-validator`, `kaspa-pq-miner`). Zero source edits.
