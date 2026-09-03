@@ -1718,7 +1718,7 @@ mod kary_tests {
             assert_eq!(*levels.last().expect("at least one level").first().expect("a root"), root, "n = {n}: level walk is the builder");
             for arity in [2u8, 4, 8, 16, 64] {
                 let mut span = n.next_power_of_two();
-                let mut lo = 0u64;
+                let lo = 0u64;
                 // Walk the left spine, folding each node from its children.
                 while span > 1 {
                     let child_span = (span / arity as u64).max(1);

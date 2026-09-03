@@ -546,8 +546,8 @@ pub fn palw_court_arity_v1(
     widest_lane_count: usize,
 ) -> Option<u8> {
     use crate::palw_attn_dissect::{
-        PALW_ATTN_DISSECT_MAX_ARITY, PALW_ATTN_DISSECT_MIN_ARITY, palw_attn_dissect_move_bytes_v1, palw_attn_dissection_rounds_v1,
-        palw_kary_rounds_v1,
+        PALW_ATTN_DISSECT_MAX_ARITY, PALW_ATTN_DISSECT_MIN_ARITY, palw_attn_dissect_arity_fits_carrier_v1,
+        palw_attn_dissection_rounds_v1, palw_kary_rounds_v1,
     };
     if window_court == 0 || turn_deadline == 0 {
         return None;
@@ -566,7 +566,7 @@ pub fn palw_court_arity_v1(
             // The clock admits this arity. The carrier is the other half of the same question,
             // and it answers for the PAIR: a wider arity would only weigh more, so a round that
             // does not fit here is a refusal and never a reason to keep searching upward.
-            return (palw_attn_dissect_move_bytes_v1(arity, widest_lane_count) <= carrier).then_some(arity);
+            return palw_attn_dissect_arity_fits_carrier_v1(arity, widest_lane_count, carrier).then_some(arity);
         }
         if arity >= PALW_ATTN_DISSECT_MAX_ARITY {
             return None;

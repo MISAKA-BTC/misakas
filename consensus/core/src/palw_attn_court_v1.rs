@@ -1253,6 +1253,52 @@ mod tests {
         assert_eq!(palw_court_arity_v1(WINDOW, 45, LADDER, 0, TILE, 2, 128), Some(2), "66 moves at 45 DAA is 2,970");
     }
 
+    /// **The RC's own numbers, derived rather than quoted — and what they select.**
+    ///
+    /// ADR-0082 Decision 3 works its table at `k = 16` and says the derivation "selects" it for
+    /// the RC windows. Run against the tree's own SA-4 derivation it does not: at the deadline
+    /// `palw_court_turn_deadline_v1` returns for a `2^32` ladder — 42 DAA at the RC's 27-carrier
+    /// close ceiling, 45 at the ONE carrier ADR-0082 U-00 leaves in force until the chunk arm
+    /// lands — the SMALLEST power of two whose moves fit 3,000 DAA is **4**, not 16, because 48
+    /// moves at 45 DAA is 2,160 and the window is 3,000. Sixteen is selected only for a deadline
+    /// in `[89, 115]`, the band in which eight no longer fits and sixteen still does.
+    ///
+    /// This test pins the whole band rather than the ADR's single value, because the derivation
+    /// is the rule and the ADR's 16 is a worked example of it that does not come out of it. The
+    /// consequence is cheaper, not more expensive: arity 4 carries a quarter of arity 16's bytes
+    /// a move and spends 2,160 of a 3,000-DAA window instead of 1,170 — which is exactly the
+    /// trade "smallest" is written to make.
+    #[test]
+    fn the_rcs_derived_deadline_selects_arity_four_and_sixteen_is_a_band_above_it() {
+        use crate::palw_context_ladder::palw_court_turn_deadline_v1;
+        use crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1;
+        const LADDER: u64 = 1 << 32;
+        const HISTORY: u64 = 131_072;
+        let window = PALW_RC_WINDOWS_V1.window_court;
+        assert_eq!(window, 3_000);
+        // The SA-4 deadline at the `2^32` ladder, at both close ceilings the ADR discusses.
+        let at_27 = palw_court_turn_deadline_v1(window, LADDER, 2, 27).expect("a clock");
+        let at_1 = palw_court_turn_deadline_v1(window, LADDER, 2, 1).expect("a clock");
+        assert_eq!((at_27, at_1), (42, 45), "the RC's derived clock at 27 carriers and at one");
+        for deadline in [at_27, at_1] {
+            assert_eq!(
+                palw_court_arity_v1(window, deadline, LADDER, HISTORY, TILE, 2, 128),
+                Some(4),
+                "at {deadline} DAA the smallest arity whose 48 moves fit 3,000 is four"
+            );
+        }
+        // The band in which the ADR's sixteen IS the smallest fitting arity.
+        assert_eq!(palw_court_arity_v1(window, 88, LADDER, HISTORY, TILE, 2, 128), Some(8));
+        assert_eq!(palw_court_arity_v1(window, 89, LADDER, HISTORY, TILE, 2, 128), Some(16));
+        assert_eq!(palw_court_arity_v1(window, 115, LADDER, HISTORY, TILE, 2, 128), Some(16));
+        assert_eq!(palw_court_arity_v1(window, 116, LADDER, HISTORY, TILE, 2, 128), Some(32));
+        // And the ADR's own worked cost at sixteen, which every one of these shares.
+        let sixteen = PalwCourtParamsV2::new(LADDER, 45, 2).expect("a court").with_dissection_arity(16).expect("legal");
+        assert_eq!(sixteen.worst_case_duration_with_history_daa(HISTORY, TILE), Some(1_170));
+        let four = PalwCourtParamsV2::new(LADDER, 45, 2).expect("a court").with_dissection_arity(4).expect("legal");
+        assert_eq!(four.worst_case_duration_with_history_daa(HISTORY, TILE), Some(2_160));
+    }
+
     /// **Every shipped preset's court still fits its own window with the dissection at zero
     /// history** — the shipped rows have no fused site, so ADR-0082 changes nothing about them,
     /// and this is the assertion that says so rather than assuming it.
