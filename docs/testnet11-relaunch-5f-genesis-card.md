@@ -913,6 +913,30 @@ gate above is the one that would have caught all three.
   and it would anyway be checked against a `registrant_bond` key that the same genesis object list
   is creating.
 
+  **FG MUST NOT ADD A SECOND A16 ROW AT WIDTH 512.** `bind --artifact` resolves without a
+  `--model-id` because the width is unique in the table, and that uniqueness is a property of the
+  TABLE, not of the code. The five A16 rows, printed by the tests rather than asserted:
+
+      Qwen/Qwen2.5-1.5B                    16
+      Qwen/Qwen2.5-Coder-1.5B-Instruct     18
+      Qwen/Qwen2.5-1.5B/graph-v2           16
+      Qwen/Qwen2.5-1.5B/graph-v3           16
+      Qwen/Qwen2.5-1.5B/graph-v5@512      512   <- the only row at its width
+
+  At 16 the route already refuses with `AMBIGUOUS at 16: [three rows]` rather than picking — which
+  is the right behaviour and also the proof that a sixth row at 512 turns the working
+  `bind --artifact` into an `AmbiguousAtWidth` refusal. It fails LOUDLY rather than binding wrong,
+  so it is a liveness risk and not a safety one — but it would arrive on cut day as "certify
+  suddenly refuses", against a tool that worked an hour earlier, at the moment nobody has spare
+  attention. FG is the commit that would be adding rows near that width.
+
+  **And the artifact→class pairing is now RUN rather than argued.** With the real 1,795,427,276-byte
+  `qwen25-1.5b-a16.palwart` present, `the_shipped_artifact_names_the_row_genesis_registers` and
+  `the_binary_binds_the_genesis_row_from_the_shipped_artifact` both pass (9.4 s and 9.6 s — they
+  decoded the file). `decode_artifact_file_v1` recomputes the declared digest over every byte, so
+  the id comes from **the file's own header**, not from a second computation of this build's. That
+  is the pairing this section said nothing forced to agree.
+
   **The class id must be DERIVED and reported, never quoted into the builder.** `shape_profile_id`
   is `keyed64` over the borsh of the profile, so the id is whatever the profile derives to — and
   three adjacent ids are loose in this project's notes for three different things: `4277d84f…` from
