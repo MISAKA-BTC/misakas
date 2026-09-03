@@ -1719,4 +1719,56 @@ mod tests {
         wider.n_experts += 1;
         assert_ne!(qwen36_shape_id_v1(&four.shape), qwen36_shape_id_v1(&wider));
     }
+
+    /// **The fold and the dense capture are ONE commitment on the hybrid tier too** (ADR-0082
+    /// Decision 7). The dense tier's `the_folded_capture_commits_the_dense_captures_roots`, on
+    /// this family's own engine, cache and checkpoint profile — because "the roots do not move"
+    /// is a claim about each family's capture loop, and this family has its own.
+    #[test]
+    fn the_folded_capture_commits_the_dense_captures_roots() {
+        let artifact = std::sync::Arc::new(crate::qwen36::test_fixture(4, 8));
+        let geometry = crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4);
+        let profile = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(geometry).expect("the fixture geometry projects");
+        let backend = Qwen36Backend::with_class_profile(
+            artifact.clone(),
+            "Qwen3.6-fixture",
+            (4, 2),
+            profile.clone(),
+            b"misaka-palw-test".to_vec(),
+        );
+        let plan = Qwen36Engine::new(&artifact).plan_from_profile(&profile).expect("the fixture graph compiles");
+        let (ctx, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0082_F01D)).expect("the anchor implies a job");
+        let cap = kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES;
+
+        let dense = qwen36_execute_for_attempt_streaming_capped_v1(&artifact, &profile, &plan, &ctx, &prompt, cap, &mut |_| {})
+            .expect("the dense sink runs the job");
+        let folded = qwen36_execute_free_prompt_streaming_v1(&artifact, &profile, &plan, &ctx, &prompt, cap, &mut |_| {})
+            .expect("the folded sink runs the job");
+
+        assert_eq!(dense.binding, folded.binding, "the two sinks commit the same binding, field for field");
+        assert_eq!(dense.execution_root, folded.execution_root);
+        assert_eq!(dense.trace_root, folded.trace_root);
+        assert_eq!(dense.output_root, folded.output_root);
+        assert_eq!(dense.trace_manifest_root, folded.trace_manifest_root);
+        assert_eq!(dense.generated_token_ids, folded.generated_token_ids, "one execution, one answer");
+
+        let tree = folded.step_tree.as_ref().expect("a folded run keeps its tree");
+        assert!(folded.tiles.tiles.is_empty() && folded.tiles.leaves.is_empty(), "the fold keeps no tiles");
+        assert_eq!(tree.leaf_count(), dense.tiles.leaves.len() as u64);
+        assert_eq!(tree.root().expect("the tree is its own shape"), dense.binding.step_merkle_root);
+        assert_eq!(tree.retain_level(), crate::fp_capture::palw_base0_sparse_retain_level_v1(cap));
+
+        // And the seat's first question is answered off the retained tree rather than off tiles.
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let bytes = crate::produce::base0_fp_material_encode_v2(&folded, &ids).expect("the fold retains");
+        let claim = PalwClaimRootsV1 { execution_root: folded.execution_root, trace_root: folded.trace_root, anchor: ctx.job_id };
+        assert_eq!(backend.verify_material(&bytes, claim), PalwMaterialVerdictV1::Matches);
+        let dense_bytes = crate::produce::base0_material_encode_v1(&dense).expect("the dense sink retains").len();
+        eprintln!(
+            "Decision 7 on the Qwen3.6 fixture: {} leaves, retention {} bytes folded against {dense_bytes} dense ({:.1}x)",
+            tree.leaf_count(),
+            bytes.len(),
+            dense_bytes as f64 / bytes.len().max(1) as f64
+        );
+    }
 }
