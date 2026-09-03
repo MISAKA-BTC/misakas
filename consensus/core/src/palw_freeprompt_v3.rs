@@ -323,19 +323,38 @@ pub fn fp_canonical_anchor_v1(job: &PalwFreePromptJobV3) -> Hash64 {
 }
 
 /// **The identity of the work a claim commits** (ADR-0074 Decision 4):
-/// `H(domain ‖ class ‖ prompt hash ‖ decode executed ‖ bond)`. One execution committed under N
-/// nonces, N retention values or N anchors is N lottery entries at the cost of hashing; the
-/// transition refuses a commitment whose work identity a live claim already holds.
-pub fn fp_work_id_v1(
-    class_id: &Hash64,
-    prompt_token_ids_hash: &Hash64,
-    decode_tokens_executed: u32,
-    executor_bond: &TransactionOutpoint,
-) -> Hash64 {
+/// `H(domain ‖ class ‖ prompt hash ‖ bond)`. One execution committed under N nonces, N retention
+/// values or N anchors is N lottery entries at the cost of hashing; the transition refuses a
+/// commitment whose work identity a live claim already holds.
+///
+/// # Why `decode_tokens_executed` is NOT in it (audit H-4)
+///
+/// It was, and that made the same prompt run once and committed at limits `1, 2, ..., D` into `D`
+/// distinct work ids and `D` live claims — each of them a truthful, seat-replayable execution
+/// whose leaves the executor already holds, none of them colliding, each drawing up to
+/// `fp_max_quanta_per_receipt`. Tickets earned went from `min(leaves(D)/quantum, 64)` for one
+/// inference to `Sum_d min(leaves(d)/quantum, 64)`, up to `64 D`; and every one of those claims
+/// costs the network a full panel of five seats replaying a PREFIX of the same job, against the
+/// lane's own daily payout ceiling.
+///
+/// The prefixes are exactly what ADR-0082 Decision 10 prices at zero and for the same reason: "a
+/// deterministic causal model makes every prefix leaf recomputable at zero cost by the bond that
+/// computed it once, so a subsidy on them is a subsidy on replay". Nesting is not the
+/// SEGMENTATION the census showed to be unprofitable (disjoint continuations, where each segment
+/// re-prefills the last one's answer); it is prefixes of one run, where nothing is re-prefilled.
+///
+/// So the identity is `(class, prompt, bond)` and nothing else the executor chooses: **one
+/// prompt, one live claim per bond** — which is what "one inference, one claim" means when the
+/// executor picks the length. A second commitment on the same prompt is `DuplicateWork` until the
+/// first claim leaves the live set, exactly as a re-nonced one already was.
+///
+/// The sampler fields stay out for the reason they were always out — N seeds over one execution
+/// must collide, not multiply — and they are inside `fp_job_id_v3` and therefore inside the claim
+/// id, where they belong.
+pub fn fp_work_id_v1(class_id: &Hash64, prompt_token_ids_hash: &Hash64, executor_bond: &TransactionOutpoint) -> Hash64 {
     let mut state = keyed(PALW_FP_V3_DOMAIN_WORK_ID);
     state.update(class_id.as_byte_slice());
     state.update(prompt_token_ids_hash.as_byte_slice());
-    state.update(&decode_tokens_executed.to_le_bytes());
     state.update(executor_bond.transaction_id.as_bytes().as_slice());
     state.update(&executor_bond.index.to_le_bytes());
     finish(state)

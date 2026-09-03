@@ -81,6 +81,7 @@
 //! `Refused` and the worker stays up: refusing is the answer, a crash is not.
 
 use kaspa_consensus_core::palw_backend::{PalwExecutionBackendV1, PalwFpRunV1};
+use kaspa_consensus_core::palw_decode_select_v2::{PALW_DECODE_SEED_GREEDY, PALW_DECODE_TEMPERATURE_GREEDY};
 use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_job_context_v3};
 use kaspa_consensus_core::palw_freeprompt_v3::{
     PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_CANONICAL, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION,
@@ -538,6 +539,39 @@ pub fn precheck_request_v1(request: &PalwFpWorkerRequestV3) -> Result<(), String
     // same check, before the artifact is touched.
     if request.prompt_mode != PALW_FP_PROMPT_MODE_USER && request.prompt_mode != PALW_FP_PROMPT_MODE_CANONICAL {
         return Err(format!("prompt mode {} is neither User nor Canonical", request.prompt_mode));
+    }
+    // **This worker decodes GREEDILY, and it has to say so at the entrance** (ADR-0082 Decision
+    // 11; audit M-6).
+    //
+    // The refusal exists in the consensus envelope (`PalwFpV3Error::SamplingNotArmed`) and in the
+    // shipped gateway, and did not exist in the component that actually selects tokens. Every
+    // backend here calls `base0_decode_token_select_v1` — plain argmax — so a request carrying a
+    // temperature ran the whole inference and then built a `PalwFreePromptJobV3` whose
+    // `fp_job_id_v3` DECLARES that temperature over tokens that obey no temperature at all. Two
+    // failures, both of them this one line:
+    //
+    // * today, any caller that is not the shipped gateway (`misaka-palw-fp-submit`, an operator's
+    //   own rail, a devnet drill) pays for the run and the chain then refuses the commitment as
+    //   `SamplingNotArmed` — precisely the "after the inference had already been paid for" failure
+    //   the design says it avoids;
+    // * armed without a v2-aware engine it is worse, because the commitment is ACCEPTED: five
+    //   seats replay it with the same greedy code, agree, and `temperature` becomes a field that
+    //   changes the claim id and nothing else. `palw_freeprompt_v3` names that outcome itself —
+    //   "a user who asked for a temperature and silently got greedy has been told a false thing
+    //   about what ran".
+    //
+    // **This refusal is deleted in the commit that gives the backends
+    // `PalwDecodeSamplingV2::select`, and not before.** It is a statement about what this binary
+    // implements, so the day the binary implements the sampler the statement becomes false; until
+    // then it is the only thing between a paying caller and an answer that is not the one the job
+    // id describes.
+    if request.temperature_q != PALW_DECODE_TEMPERATURE_GREEDY || request.sampling_seed != PALW_DECODE_SEED_GREEDY {
+        return Err(format!(
+            "this worker decodes greedily: it selects tokens with base0_decode_token_select_v1 and has no \
+             PalwDecodeSamplingV2::select, so a job declaring temperature_q {} / a non-zero sampling seed would commit \
+             greedy tokens under a sampled job id (ADR-0082 Decision 11 is not implemented in this binary)",
+            request.temperature_q
+        ));
     }
     Ok(())
 }
@@ -1168,6 +1202,41 @@ mod tests {
         let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
         frame.extend_from_slice(&payload);
         frame
+    }
+
+    /// **The worker refuses a sampler it does not implement, before the artifact is touched**
+    /// (ADR-0082 Decision 11; audit M-6).
+    ///
+    /// Without it the whole inference runs and the job it builds declares a temperature its own
+    /// tokens do not obey — the chain then refuses the commitment as `SamplingNotArmed` after the
+    /// run is paid for, and if Decision 11 were armed without a v2-aware engine the commitment
+    /// would be ACCEPTED instead, with five seats replaying the same greedy code and agreeing.
+    ///
+    /// The greedy pair is admitted, which is the property that keeps every shipped row working.
+    #[test]
+    fn the_worker_refuses_a_temperature_it_decodes_greedily() {
+        let manifest = fixture_runtime_v1().manifest().clone();
+        let greedy = fixture_request_v1(&manifest, PalwFpWorkerInputV3::TokenIds(vec![3, 5, 8]));
+        precheck_request_v1(&greedy).expect("the greedy pair every shipped row carries is admitted");
+
+        let mut hot = greedy.clone();
+        hot.temperature_q = 1 << 24;
+        let why = precheck_request_v1(&hot).expect_err("a temperature this worker cannot honour was admitted");
+        assert!(why.contains("decodes greedily"), "the refusal must say what this binary does, got: {why}");
+
+        let mut seeded = greedy.clone();
+        seeded.sampling_seed = [7u8; 32];
+        let why = precheck_request_v1(&seeded).expect_err("a non-greedy seed was admitted");
+        assert!(why.contains("decodes greedily"), "got: {why}");
+
+        // And it is the ENTRANCE, not a late check: `run_one_job_v1` calls it first, so the
+        // refusal costs no inference.
+        let temp = std::env::temp_dir().join(format!("palw-fp-worker-m6-{}", std::process::id()));
+        let rt = fixture_runtime_v1();
+        let mut nothing = |_: u32, _: &[u8]| {};
+        let err = run_one_job_v1(&rt, &hot, Hash64::from_u64_word(1), &temp, &mut nothing)
+            .expect_err("the job ran with a temperature the backend does not implement");
+        assert!(err.contains("decodes greedily"), "got: {err}");
     }
 
     /// **W6: a job's roots through `v3-serve` are byte-identical to the same job's roots through
