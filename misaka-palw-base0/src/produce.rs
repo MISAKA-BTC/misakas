@@ -205,7 +205,14 @@ pub struct Base0ExecutionV1 {
     pub binding: PalwStepBindingV2,
     /// Every step leaf, kept for the same reason — a producer that discarded these could not
     /// answer a challenge and would lose its bond by default.
+    ///
+    /// **Empty on a FOLDED run** (ADR-0082 Decision 7): the free-prompt lane keeps `step_tree`
+    /// and re-derives any tile an opening needs by replay. `base0_material_encode_v1` refuses a
+    /// folded run by name rather than encoding an empty tile set as if it were a capture.
     pub tiles: Base0StepTilesV1,
+    /// **The retained tree — one node per `2^retain_level` leaves.** `Some` exactly when the run
+    /// folded; the dense sink keeps its tiles and needs no second copy of the same commitment.
+    pub step_tree: Option<crate::fp_capture::Base0SparseStepTreeV1>,
     /// The checkpoint leg's leaves and their state chunks. Kept for the third time for the same
     /// reason, and for one more: these are what let a challenge be answered — and adjudicated —
     /// from the calls SINCE a checkpoint instead of from the whole inference.
@@ -377,6 +384,10 @@ pub fn base0_execute_for_attempt_streaming_capped_v1(
     let trace_manifest_root = kaspa_consensus_core::palw_attempt_v2::attempt_trace_manifest_root_v1(trace_root, 1);
 
     Ok(Base0ExecutionV1 {
+        // The floor's capture is the dense one: `backend.rs` reads its tiles back for the court's
+        // assembly and for the injected-fault drill, and ADR-0082 Decision 7 is about the lane
+        // whose jobs are thousands of positions long.
+        step_tree: None,
         trace_root,
         output_root,
         execution_root: binding.committed_execution_root,
@@ -402,6 +413,13 @@ pub fn base0_execute_for_attempt_streaming_capped_v1(
 /// retention file, the P2P material broadcast, and the panel seat's decode, so the three cannot
 /// drift. borsh over the tuple, exactly the bytes `retain_execution` has always written.
 pub fn base0_material_encode_v1(run: &Base0ExecutionV1) -> Result<Vec<u8>, ProduceError> {
+    // **A folded run has no tiles, and an empty tile vector is not a capture.** Encoded through
+    // here it would produce material that decodes, carries a binding, and reproduces no step root
+    // at all — a seat's `Mismatch` against an honest producer. The fold's material is v2
+    // ([`base0_fp_material_encode_v2`]), and this says so rather than serialising the absence.
+    if run.step_tree.is_some() {
+        return Err(ProduceError::Internal("a folded capture is retained as v2 material, not as tiles"));
+    }
     borsh::to_vec(&(&run.binding, &run.tiles.tiles, &run.logits_rows, &run.generated_token_ids, &run.checkpoints.chunks))
         .map_err(|_| ProduceError::Internal("the execution material is not serializable"))
 }
@@ -430,6 +448,177 @@ pub type Base0RetainedMaterialV1 = (
     // mis-parse, because borsh refuses a short tuple.
     Vec<Vec<Vec<u8>>>,
 );
+
+/// The wire magic of the FOLDED retention (ADR-0082 Decision 7). Opaque bytes with a magic and a
+/// version, borsh behind it — `Base0FpIntervalOpeningV1`'s shape, for its reason: bytes that are
+/// not this retention are refused as such rather than mis-parsed as the dense tuple, which borsh
+/// would happily attempt.
+pub const PALW_BASE0_FP_MATERIAL_MAGIC_V2: [u8; 8] = *b"MSKFPMV2";
+pub const PALW_BASE0_FP_MATERIAL_VERSION_V2: u16 = 2;
+
+/// **What a free-prompt executor retains for the claim's life, after Decision 7.**
+///
+/// The dense tuple's `Vec<(u64, PalwStepTileLeafV1)>` is gone and nothing replaces it: an opening
+/// re-derives the tiles it needs by replaying the interval from the checkpoint chunks
+/// (`fp_interval`), which is the whole reason the checkpoint leg exists. What is left is what
+/// cannot be recomputed from the class and the job, plus the one thing that can but is asked for
+/// on every seat's first question:
+///
+/// * `binding` — the commitment itself, which is what makes any of this THIS claim's.
+/// * `step_tree` — one 64-byte node per `2^retain_level` leaves. Recomputable by a full replay,
+///   retained because `verify_material` is a seat's first question and a replay is its last resort.
+/// * `logits_rows` — the rows the decode pin is adjudicated against (ADR-0049 Decision E) and the
+///   rows an opening's SEED tile is cut from. Exactly what a seat needs, which is why the capture
+///   already keeps only the selecting rows.
+/// * `generated_token_ids` — the ids, which are also the seed tokens a checkpoint-anchored replay
+///   resumes from.
+/// * `prompt_token_ids` — the user's own ids. The dense retention did not carry them because it
+///   carried every tile of the prefill instead; a fold retains neither, and a retention that
+///   cannot re-derive its own execution can answer no court move. 4 bytes a token, against the
+///   ~50 MB a position the tiles were.
+/// * `checkpoint_chunks` — the cache at each committed checkpoint, in map order. **The one term
+///   that still grows with the job**, and the one Decision 4 addresses (the attention cache is
+///   prefix-stable, so a family may retain it once); that is not this unit's change and is named
+///   in the report rather than half-made here.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct Base0FpMaterialV2 {
+    pub version: u16,
+    pub binding: kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    pub step_tree: crate::fp_capture::Base0SparseStepTreeV1,
+    pub logits_rows: Vec<Vec<i32>>,
+    pub generated_token_ids: Vec<u32>,
+    pub prompt_token_ids: Vec<u32>,
+    pub checkpoint_chunks: Vec<Vec<Vec<u8>>>,
+}
+
+/// Encode a FOLDED run's retention. Refuses a dense one by name: two encodings of one commitment
+/// is the thing the ADR warns about, and the way to keep them one is to make each refuse the
+/// other's input.
+pub fn base0_fp_material_encode_v2(run: &Base0ExecutionV1, prompt_token_ids: &[u32]) -> Result<Vec<u8>, ProduceError> {
+    let Some(tree) = run.step_tree.as_ref() else {
+        return Err(ProduceError::Internal("a dense capture is retained as tiles, not as a fold"));
+    };
+    // The ids must be the job's own, checked where they are stored rather than where they are
+    // read: a retention holding another prompt's ids replays another execution.
+    if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != run.binding.job_context.prompt_token_ids_hash {
+        return Err(ProduceError::Internal("the retained prompt ids are not the job's"));
+    }
+    let material = Base0FpMaterialV2 {
+        version: PALW_BASE0_FP_MATERIAL_VERSION_V2,
+        binding: run.binding.clone(),
+        step_tree: tree.clone(),
+        logits_rows: run.logits_rows.clone(),
+        generated_token_ids: run.generated_token_ids.clone(),
+        prompt_token_ids: prompt_token_ids.to_vec(),
+        checkpoint_chunks: run.checkpoints.chunks.clone(),
+    };
+    let body = borsh::to_vec(&material).map_err(|_| ProduceError::Internal("the execution material is not serializable"))?;
+    let mut out = Vec::with_capacity(body.len() + PALW_BASE0_FP_MATERIAL_MAGIC_V2.len());
+    out.extend_from_slice(&PALW_BASE0_FP_MATERIAL_MAGIC_V2);
+    out.extend_from_slice(&body);
+    Ok(out)
+}
+
+/// Decode what [`base0_fp_material_encode_v2`] produced. `Err` is a seat's honest `Unavailable` —
+/// bytes that do not decode are bytes that were not served — and a tree that is not its own shape
+/// is refused HERE, before any derivation indexes its retained vector.
+pub fn base0_fp_material_decode_v2(bytes: &[u8]) -> Result<Base0FpMaterialV2, ProduceError> {
+    let body = bytes
+        .strip_prefix(&PALW_BASE0_FP_MATERIAL_MAGIC_V2)
+        .ok_or(ProduceError::Internal("the served material is not this family's folded retention"))?;
+    let material: Base0FpMaterialV2 =
+        borsh::from_slice(body).map_err(|_| ProduceError::Internal("the served material does not decode"))?;
+    if material.version != PALW_BASE0_FP_MATERIAL_VERSION_V2 {
+        return Err(ProduceError::Internal("the served material is a different retention version"));
+    }
+    material.step_tree.validate_v1().map_err(|_| ProduceError::Internal("the served retained tree is not its own shape"))?;
+    if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&material.prompt_token_ids)
+        != material.binding.job_context.prompt_token_ids_hash
+    {
+        return Err(ProduceError::Internal("the served material's prompt ids are not its own job's"));
+    }
+    Ok(material)
+}
+
+/// **Either retention, decoded** — the folded one first, because it is the one a free-prompt lane
+/// produces after ADR-0082 Decision 7 and the dense tuple's borsh would happily mis-read it.
+pub enum Base0RetentionV1 {
+    Dense(Base0RetainedMaterialV1),
+    Folded(Base0FpMaterialV2),
+}
+
+impl Base0RetentionV1 {
+    pub fn binding(&self) -> &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2 {
+        match self {
+            Self::Dense((binding, ..)) => binding,
+            Self::Folded(m) => &m.binding,
+        }
+    }
+    pub fn logits_rows(&self) -> &[Vec<i32>] {
+        match self {
+            Self::Dense((_, _, rows, _, _)) => rows,
+            Self::Folded(m) => &m.logits_rows,
+        }
+    }
+    pub fn generated_token_ids(&self) -> &[u32] {
+        match self {
+            Self::Dense((_, _, _, ids, _)) => ids,
+            Self::Folded(m) => &m.generated_token_ids,
+        }
+    }
+    pub fn checkpoint_chunks(&self) -> &[Vec<Vec<u8>>] {
+        match self {
+            Self::Dense((_, _, _, _, chunks)) => chunks,
+            Self::Folded(m) => &m.checkpoint_chunks,
+        }
+    }
+    /// The tiles a dense retention kept — `None` for a fold, whose caller must re-derive what it
+    /// needs by replay.
+    pub fn tiles(&self) -> Option<&[(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)]> {
+        match self {
+            Self::Dense((_, tiles, ..)) => Some(tiles),
+            Self::Folded(_) => None,
+        }
+    }
+}
+
+pub fn base0_material_decode_any_v1(bytes: &[u8]) -> Result<Base0RetentionV1, ProduceError> {
+    match base0_fp_material_decode_v2(bytes) {
+        Ok(folded) => Ok(Base0RetentionV1::Folded(folded)),
+        Err(_) => base0_material_decode_v1(bytes).map(Base0RetentionV1::Dense),
+    }
+}
+
+/// **What a panel seat checks before it signs `Valid`, on folded material.**
+///
+/// The dense check rebuilds the step root from the tiles; this reads it off the retained tree,
+/// which is the same root by construction (`Base0CaptureSinkV1::finish`) and is checked against
+/// the binding here rather than trusted. Everything after that is
+/// [`base0_material_tail_matches_v1`] — one rule for both retentions.
+pub fn base0_fp_material_matches_claim_v2(
+    material: &Base0FpMaterialV2,
+    committed_execution_root: Hash64,
+    committed_trace_root: Hash64,
+) -> Result<bool, ProduceError> {
+    let binding = &material.binding;
+    if material.step_tree.validate_v1().is_err() || material.step_tree.leaf_count() != binding.step_leaf_count {
+        return Ok(false);
+    }
+    let Ok(root) = material.step_tree.root() else {
+        return Ok(false);
+    };
+    if root != binding.step_merkle_root {
+        return Ok(false);
+    }
+    base0_material_tail_matches_v1(
+        binding,
+        &material.logits_rows,
+        &material.generated_token_ids,
+        &material.checkpoint_chunks,
+        committed_execution_root,
+        committed_trace_root,
+    )
+}
 
 /// What a replay from a checkpoint produced.
 ///
@@ -752,6 +941,24 @@ pub fn base0_material_matches_claim_v1(
     if root != binding.step_merkle_root {
         return Ok(false);
     }
+    base0_material_tail_matches_v1(binding, logits_rows, generated, checkpoint_chunks, committed_execution_root, committed_trace_root)
+}
+
+/// **Everything a retained material must reproduce that is not the step leg**: the logits trace
+/// root under the scheme the class registered, the checkpoint leg re-derived from the served
+/// chunks, and the binding's own two roots against the claim's.
+///
+/// One function because there are two retentions and one rule (ADR-0082 Decision 7): the dense
+/// tuple rebuilds its step root from tiles, the folded one reads it off the retained tree, and
+/// from there they owe exactly the same things.
+pub fn base0_material_tail_matches_v1(
+    binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    logits_rows: &[Vec<i32>],
+    generated: &[u32],
+    checkpoint_chunks: &[Vec<Vec<u8>>],
+    committed_execution_root: Hash64,
+    committed_trace_root: Hash64,
+) -> Result<bool, ProduceError> {
     // The logits rows and generated ids must REPRODUCE the trace root the binding carries —
     // equality of the binding's field against the claim says the producer kept the right
     // commitment; this says it kept the execution behind it, which is what a decode-side dispute

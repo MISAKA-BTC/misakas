@@ -202,6 +202,50 @@ pub fn a16_execute_for_attempt_streaming_capped_v1(
     max_step_leaf_count: u64,
     on_token: &mut dyn FnMut(u32),
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
+    a16_execute_streaming_v1(
+        artifact,
+        profile,
+        plan,
+        ctx,
+        prompt,
+        max_step_leaf_count,
+        crate::legs::Base0CaptureKindV1::DenseTiles,
+        on_token,
+    )
+}
+
+/// **The same run, FOLDED** (ADR-0082 Decision 7) — the free-prompt lane's capture.
+///
+/// Identical in every respect a commitment can see: the same loop, the same rows, the same leaf
+/// hashes, the same four roots. What differs is what survives the loop — one retained node per
+/// `2^retain_level` leaves instead of every tile of every node of every position (~50 MB a
+/// position on this tier) — and therefore what an opening costs to serve: a replay of the
+/// interval rather than a lookup in memory the executor could not hold.
+pub fn a16_execute_free_prompt_streaming_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    plan: Option<&crate::engine_a16::A16ProfilePlanV1>,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
+    on_token: &mut dyn FnMut(u32),
+) -> Result<crate::produce::Base0ExecutionV1, String> {
+    a16_execute_streaming_v1(artifact, profile, plan, ctx, prompt, max_step_leaf_count, crate::legs::Base0CaptureKindV1::Fold, on_token)
+}
+
+/// **The one capture loop this family has**, over either sink. A second loop would be a second
+/// enumeration, and two enumerations of one step space is two commitments.
+#[allow(clippy::too_many_arguments)]
+fn a16_execute_streaming_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    plan: Option<&crate::engine_a16::A16ProfilePlanV1>,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
+    capture_kind: crate::legs::Base0CaptureKindV1,
+    on_token: &mut dyn FnMut(u32),
+) -> Result<crate::produce::Base0ExecutionV1, String> {
     use kaspa_consensus_core::palw_state_chunk_map as map;
 
     let prefill = ctx.declared_prefill_tokens as usize;
@@ -254,7 +298,8 @@ pub fn a16_execute_for_attempt_streaming_capped_v1(
 
     let leaf_count =
         kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, ctx, max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
-    let mut capture = crate::legs::Base0StepCaptureV1::new(leaf_count).map_err(|e| format!("{e:?}"))?;
+    let mut capture =
+        crate::legs::Base0CaptureSinkV1::for_kind(capture_kind, profile, ctx, leaf_count, max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
     let checkpoint_profile = map::integer_kv_checkpoint_profile_v1(map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
     let mut checkpoints = crate::legs::Base0CheckpointCaptureV1::new(ctx, profile, &checkpoint_profile);
     let mut cache = A16Cache::new(artifact.shape.n_layers);
@@ -316,7 +361,7 @@ pub fn a16_execute_for_attempt_streaming_capped_v1(
 
     let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
     let checkpoints = checkpoints.finish(decode_calls / checkpoint_profile.checkpoint_interval).map_err(|e| format!("{e:?}"))?;
-    let tiles = capture.finish().map_err(|e| format!("{e:?}"))?;
+    let captured = capture.finish(max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
 
     // **This class's own trace scheme, not the floor's.** The retained rows ARE the selecting
     // rows (row `r` is the one `generated[r]` was chosen from), so the tiled root commits them
@@ -324,8 +369,18 @@ pub fn a16_execute_for_attempt_streaming_capped_v1(
     let trace_root = kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(ctx, &logits_rows, &generated)
         .ok_or_else(|| "the retained rows build no tree".to_string())?;
     let activation_leg_root = crate::produce::base0_activation_leg_root_v1(ctx);
-    let binding = crate::legs::base0_binding_from_capture_v1(profile, ctx, &tiles, &checkpoints, trace_root, activation_leg_root)
-        .map_err(|e| format!("{e:?}"))?;
+    let binding = crate::legs::base0_binding_from_step_root_v1(
+        profile,
+        ctx,
+        captured.step_leaf_count,
+        captured.step_merkle_root,
+        &checkpoints,
+        &checkpoint_profile,
+        trace_root,
+        activation_leg_root,
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    let (tiles, step_tree) = captured.into_execution_parts();
 
     let context = ctx.context_hash();
     let rendered = rendered_output_hash_v1(&generated);
@@ -342,6 +397,7 @@ pub fn a16_execute_for_attempt_streaming_capped_v1(
         trace_chunk_count: 1,
         binding,
         tiles,
+        step_tree,
         checkpoints,
         logits_rows,
         generated_token_ids: generated,
@@ -575,21 +631,64 @@ impl Qwen25A16Backend {
     /// The one prover behind both [`PalwExecutionBackendV1::refutation_for_index`] and
     /// [`PalwExecutionBackendV1::refutation_for_free_prompt_index`]: `carried` is `None` for an
     /// attempt (the prompt is re-derived from the anchor) and the user's ids for a free prompt.
+    /// **A folded retention, re-executed into the dense capture the court's assembly reads**
+    /// (ADR-0082 Decision 7).
+    ///
+    /// The fold keeps no tiles, and `base0_refutation_from_capture_capped_v1` needs the whole leaf
+    /// vector — one path per input row, one preimage per input leaf. Re-deriving exactly the
+    /// leaves a refutation reads is ADR-0082 U-03's work (the dissection's own openings); until
+    /// that lands, the party that wants to prosecute pays for ONE re-execution of a job it has the
+    /// ids for, which is Decision 9's own sentence about a challenger ("a challenger is a seat that
+    /// recomputed"). It is bounded by the ruleset's ladder, and the resulting binding must be the
+    /// retention's own or this is not that execution.
+    fn dense_capture_from_fold_v1(
+        &self,
+        material: &crate::produce::Base0FpMaterialV2,
+    ) -> Result<crate::produce::Base0ExecutionV1, String> {
+        let prompt: Vec<usize> = material.prompt_token_ids.iter().map(|t| *t as usize).collect();
+        let run = a16_execute_for_attempt_streaming_capped_v1(
+            &self.artifact,
+            &material.binding.shape_profile,
+            self.plan.as_ref(),
+            &material.binding.job_context,
+            &prompt,
+            self.step_ladder_cap,
+            &mut |_| {},
+        )?;
+        if run.binding.committed_execution_root != material.binding.committed_execution_root {
+            return Err("the retained fold and its re-execution are not one execution".to_string());
+        }
+        Ok(run)
+    }
+
+    /// The dense tiles either retention can answer with: the ones it kept, or the ones a
+    /// re-execution reproduces.
+    fn tiles_from_material_v1(&self, retention: &crate::produce::Base0RetentionV1) -> Result<crate::legs::Base0StepTilesV1, String> {
+        match retention {
+            crate::produce::Base0RetentionV1::Dense((binding, tiles, ..)) => {
+                Ok(crate::legs::Base0StepTilesV1 { leaves: a16_leaves_by_position(binding, tiles), tiles: tiles.clone() })
+            }
+            crate::produce::Base0RetentionV1::Folded(material) => Ok(self.dense_capture_from_fold_v1(material)?.tiles),
+        }
+    }
+
     fn refutation_with_prompt(
         &self,
         material: &[u8],
         index: u64,
         carried: Option<&[u32]>,
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
-        let (binding, tiles, logits_rows, generated, checkpoint_chunks) =
-            crate::produce::base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        let retention = crate::produce::base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        let binding = retention.binding().clone();
+        let logits_rows = retention.logits_rows().to_vec();
+        let generated = retention.generated_token_ids().to_vec();
+        let checkpoint_chunks = retention.checkpoint_chunks().to_vec();
         if binding.step_leaf_count == 0 || binding.step_leaf_count > self.step_ladder_cap {
             return Err("the binding's leaf count is outside the ruleset's ladder".to_string());
         }
         let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
             .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
-        let leaves = a16_leaves_by_position(&binding, &tiles);
-        let step_tiles = crate::legs::Base0StepTilesV1 { leaves, tiles };
+        let step_tiles = self.tiles_from_material_v1(&retention)?;
 
         // **This class's own pin: the tiled scheme's.** The generated ids are bound through the
         // rows-tree root — carrying the rows themselves is exactly what the tiled scheme exists to
@@ -597,7 +696,7 @@ impl Qwen25A16Backend {
         let rows_root = kaspa_consensus_core::palw_step_refute::tiled_logits_rows_root_v1(&binding.job_context, &logits_rows)
             .ok_or_else(|| "the retained rows build no tree".to_string())?;
         let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::TiledV1(
-            kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated },
+            kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated.clone() },
         );
 
         // **The prompt: re-derived for an attempt, carried for a free prompt** (ADR-0073 Decision
@@ -780,7 +879,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         if self.court_capable {
             let cap = self.step_ladder_cap;
             let run = a16_execute_for_attempt_capped_v1(&self.artifact, &self.profile, self.plan.as_ref(), job, prompt, cap)?;
-            let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
+            let material = crate::produce::base0_fp_material_encode_v2(&run, &prompt_ids).map_err(|e| e.to_string())?;
             return Ok(PalwExecutionOutcomeV1 {
                 trace_root: run.trace_root,
                 output_root: run.output_root,
@@ -870,11 +969,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // nobody can reproduce.
         let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
 
+        let prompt_ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
         // **The one capture path this family has** (ADR-0049 Decision F's probe, the checkpoint
         // serializer at the class's declared width, and the selecting-rows retention all live in
         // it). The free-prompt lane differs from the attempt lane only in where its context and
         // its tokens come from, so the run itself must not be a second implementation.
-        let run = a16_execute_for_attempt_streaming_capped_v1(
+        let run = a16_execute_free_prompt_streaming_v1(
             &self.artifact,
             &self.profile,
             self.plan.as_ref(),
@@ -915,6 +1015,22 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // seat check rebuilds the step root from the tiles, the checkpoint leg from the chunks,
         // and the tiled trace root from the retained rows. The legacy composite decode stays as
         // the fallback for the v1 class's claims, whose material is rows-and-ids only.
+        // **The fold first** (ADR-0082 Decision 7): a free-prompt claim of this class retains v2,
+        // and its step root is read off the retained tree rather than rebuilt from tiles there are
+        // none of. Same three questions, same three answers.
+        if let Ok(folded) = crate::produce::base0_fp_material_decode_v2(material) {
+            if claim.anchor != Hash64::default() && folded.binding.job_context.job_id != claim.anchor {
+                return PalwMaterialVerdictV1::Mismatch;
+            }
+            if folded.binding.shape_profile.shape_profile_id() != self.class_profile_id {
+                return PalwMaterialVerdictV1::Unverifiable;
+            }
+            return match crate::produce::base0_fp_material_matches_claim_v2(&folded, claim.execution_root, claim.trace_root) {
+                Ok(true) => PalwMaterialVerdictV1::Matches,
+                Ok(false) => PalwMaterialVerdictV1::Mismatch,
+                Err(_) => PalwMaterialVerdictV1::Unverifiable,
+            };
+        }
         if let Ok(decoded) = crate::produce::base0_material_decode_v1(material) {
             if claim.anchor != Hash64::default() && decoded.0.job_context.job_id != claim.anchor {
                 return PalwMaterialVerdictV1::Mismatch;
@@ -962,7 +1078,8 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     }
 
     fn capture_shape(&self, material: &[u8]) -> Option<kaspa_consensus_core::palw_backend::PalwCaptureShapeV1> {
-        let (binding, ..) = crate::produce::base0_material_decode_v1(material).ok()?;
+        let retention = crate::produce::base0_material_decode_any_v1(material).ok()?;
+        let binding = retention.binding();
         Some(kaspa_consensus_core::palw_backend::PalwCaptureShapeV1 {
             job_context: binding.job_context.clone(),
             step_leaf_count: binding.step_leaf_count,
@@ -970,14 +1087,18 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     }
 
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
-        let (binding, tiles, _, _, _) = crate::produce::base0_material_decode_v1(material).ok()?;
+        let retention = crate::produce::base0_material_decode_any_v1(material).ok()?;
+        let binding = retention.binding().clone();
         // The count arrived over gossip inside a borsh blob; bounding it BEFORE the allocation is
         // the lesson the seat check already wrote down.
         if binding.step_leaf_count == 0 || binding.step_leaf_count > self.step_ladder_cap {
             return None;
         }
-        let leaves = a16_leaves_by_position(&binding, &tiles);
-        Some(crate::legs::base0_bisect_prefix_state_v1(&binding.job_context, &leaves, index))
+        // A rung is a commitment to the execution PREFIX, so it is a fact about every leaf below
+        // the index — which a fold answers by re-deriving them (`dense_capture_from_fold_v1`) and
+        // a dense retention answers from what it kept.
+        let tiles = self.tiles_from_material_v1(&retention).ok()?;
+        Some(crate::legs::base0_bisect_prefix_state_v1(&binding.job_context, &tiles.leaves, index))
     }
 
     fn refutation_for_index(
@@ -1004,8 +1125,8 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     // `None`/refusal is the honest answer there, and it is the same fact `supports_court` reports.
 
     fn fp_interval_count(&self, capture: &[u8]) -> Option<u32> {
-        let (binding, ..) = crate::produce::base0_material_decode_v1(capture).ok()?;
-        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&binding, self.checkpoint_interval())
+        let retention = crate::produce::base0_material_decode_any_v1(capture).ok()?;
+        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(retention.binding(), self.checkpoint_interval())
             .ok()
             .map(|g| g.interval_count)
     }
@@ -1018,9 +1139,24 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     }
 
     fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
-        let material = crate::produce::base0_material_decode_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
-        crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, self.checkpoint_interval())
-            .map_err(|e| e.to_string())
+        // **The folded route is the one a free-prompt claim of this class takes** (ADR-0082
+        // Decision 7): no tiles were kept, so the span's leaf hashes are re-derived by replaying
+        // the interval from the checkpoint chunks — this family's own kernels, the same loop a
+        // seat runs to check the opening.
+        match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
+            crate::produce::Base0RetentionV1::Folded(material) => crate::fp_interval::base0_open_fp_interval_sparse_v1(
+                &material,
+                index,
+                prompt_token_ids,
+                self.checkpoint_interval(),
+                &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+            )
+            .map_err(|e| e.to_string()),
+            crate::produce::Base0RetentionV1::Dense(material) => {
+                crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, self.checkpoint_interval())
+                    .map_err(|e| e.to_string())
+            }
+        }
     }
 
     fn verify_fp_interval_opening(

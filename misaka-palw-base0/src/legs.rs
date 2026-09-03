@@ -273,7 +273,41 @@ pub struct Base0CaptureOutcomeV1 {
     pub step_merkle_root: Hash64,
 }
 
+/// Which sink a family's capture loop runs. The free-prompt lane folds (ADR-0082 Decision 7); the
+/// attempt lane keeps its tiles, because the court's assembly reads them back out of the retained
+/// material and that path is ADR-0082 U-03's, not this unit's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Base0CaptureKindV1 {
+    DenseTiles,
+    Fold,
+}
+
+impl Base0CaptureOutcomeV1 {
+    /// The two fields a `Base0ExecutionV1` carries: the tiles (empty when the run folded) and the
+    /// tree (`Some` exactly then).
+    pub fn into_execution_parts(self) -> (Base0StepTilesV1, Option<crate::fp_capture::Base0SparseStepTreeV1>) {
+        match self.tiles {
+            Some(tiles) => (tiles, None),
+            None => (Base0StepTilesV1 { leaves: Vec::new(), tiles: Vec::new() }, Some(self.tree)),
+        }
+    }
+}
+
 impl Base0CaptureSinkV1 {
+    /// The sink a run's lane asks for.
+    pub fn for_kind(
+        kind: Base0CaptureKindV1,
+        profile: &PalwShapeProfileV3,
+        ctx: &PalwJobContextV2,
+        leaf_count: u64,
+        max_step_leaf_count: u64,
+    ) -> Result<Self, LegError> {
+        match kind {
+            Base0CaptureKindV1::DenseTiles => Self::dense(leaf_count),
+            Base0CaptureKindV1::Fold => Self::sparse(profile, ctx, leaf_count, max_step_leaf_count),
+        }
+    }
+
     /// The dense sink: every tile kept.
     pub fn dense(leaf_count: u64) -> Result<Self, LegError> {
         Ok(Self::Dense(Base0StepCaptureV1::new(leaf_count)?))
