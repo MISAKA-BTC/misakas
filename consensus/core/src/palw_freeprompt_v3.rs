@@ -947,7 +947,12 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         self.validate_v3(None, panel_da_armed, false)
     }
 
-    fn validate_v3(&self, network_domain: Option<Hash64>, panel_da_armed: bool, decode_rules_armed: bool) -> Result<(), PalwFpV3Error> {
+    fn validate_v3(
+        &self,
+        network_domain: Option<Hash64>,
+        panel_da_armed: bool,
+        decode_rules_armed: bool,
+    ) -> Result<(), PalwFpV3Error> {
         let c = &self.commitment;
         let job = &c.job;
         if job.version != PALW_FP_V3_VERSION {
@@ -1499,7 +1504,12 @@ impl PalwFpCommitmentTxPayloadV3 {
             .validate_signature_v3(verify_mldsa87)
     }
 
-    fn validate_v3(&self, network_domain: Option<Hash64>, panel_da_armed: bool, decode_rules_armed: bool) -> Result<(), PalwFpV3Error> {
+    fn validate_v3(
+        &self,
+        network_domain: Option<Hash64>,
+        panel_da_armed: bool,
+        decode_rules_armed: bool,
+    ) -> Result<(), PalwFpV3Error> {
         if self.version != PALW_FP_V3_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
         }

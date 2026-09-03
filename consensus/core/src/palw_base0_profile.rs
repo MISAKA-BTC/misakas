@@ -1439,11 +1439,7 @@ mod graph_v5 {
             // tile existed (`palw_context_ladder::u00_tiled_attention_measurement`).
             assert_ne!(v2.state_chunk_map_id, v5.state_chunk_map_id, "{family}: a v5 row must register the tiled map");
             assert_eq!(
-                PalwShapeProfileV3 {
-                    attn_nodes: v2.attn_nodes.clone(),
-                    state_chunk_map_id: v2.state_chunk_map_id,
-                    ..v5.clone()
-                },
+                PalwShapeProfileV3 { attn_nodes: v2.attn_nodes.clone(), state_chunk_map_id: v2.state_chunk_map_id, ..v5.clone() },
                 v2,
                 "{family}: the v5 row differs from the v2 row somewhere other than the attention table and the map"
             );

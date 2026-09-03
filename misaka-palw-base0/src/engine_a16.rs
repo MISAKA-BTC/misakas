@@ -972,9 +972,9 @@ use kaspa_consensus_core::palw_step::{
     PalwStepLaneV1, PalwStepNodeV1, PalwStepOutLenV1, kernel_semantics_id_v1,
 };
 use kaspa_consensus_core::palw_step_refute::{
-    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_FUSED, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED,
-    KDESC_A16_MATMUL_REQUANT, KDESC_A16_MATMUL_RESCALE, KDESC_A16_MUL_ELEM, KDESC_A16_REQUANTIZE, KDESC_A16_RMS_NORM,
-    KDESC_A16_ROPE, KDESC_A16_SOFTMAX, KDESC_Q36_SILU, palw_attn_fused_tensors_v1,
+    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_FUSED, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT,
+    KDESC_A16_MATMUL_RESCALE, KDESC_A16_MUL_ELEM, KDESC_A16_REQUANTIZE, KDESC_A16_RMS_NORM, KDESC_A16_ROPE, KDESC_A16_SOFTMAX,
+    KDESC_Q36_SILU, palw_attn_fused_tensors_v1,
 };
 
 /// Why a profile could not be compiled to a plan. Every variant names the boundary it found —
@@ -1128,7 +1128,9 @@ enum PlanOp {
     Requant(ReqSlot),
     MatMulRequant(MatSlot),
     MatMulRescale(MatSlot),
-    Rope { kv: bool },
+    Rope {
+        kv: bool,
+    },
     AttnScores,
     Softmax,
     AttnValues,
@@ -1955,12 +1957,8 @@ mod profile_plan_tests {
 
                     // …and it is the catalogued composition, and the tile route, to the bit.
                     let lp = &engine.layers[li];
-                    let params = A16AttnFusedParamsV1 {
-                        scores: lp.logits,
-                        probs: lp.probs,
-                        values: lp.values,
-                        up_bits: lp.softmax_up,
-                    };
+                    let params =
+                        A16AttnFusedParamsV1 { scores: lp.logits, probs: lp.probs, values: lp.values, up_bits: lp.softmax_up };
                     let q = &v5_rows[v5.attn_nodes[fused_at].input_refs[0] as usize];
                     let flat = |series: &Vec<Vec<i32>>| -> Vec<i32> { series.iter().flatten().copied().collect() };
                     let k = flat(&cache_v5.keys[li]);

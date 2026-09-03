@@ -278,8 +278,17 @@ fn gate_accepts(
             }
         })
     });
-    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v5(bundle, profile, &canonical, &probe, &[], &[], ladder, court)
-        .is_ok()
+    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v5(
+        bundle,
+        profile,
+        &canonical,
+        &probe,
+        &[],
+        &[],
+        ladder,
+        court,
+    )
+    .is_ok()
 }
 
 /// Drive `iterations` mutated profiles through gate → plan → double execution. See the module
