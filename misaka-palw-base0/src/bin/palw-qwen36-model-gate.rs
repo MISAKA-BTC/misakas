@@ -288,8 +288,8 @@ fn main() {
     let tokens = get("tokenizer.ggml.tokens").and_then(|v| v.as_strings()).unwrap_or_else(|| die("no tokenizer.ggml.tokens".into()));
     let merges = get("tokenizer.ggml.merges").and_then(|v| v.as_strings()).unwrap_or_else(|| die("no tokenizer.ggml.merges".into()));
     let types = get("tokenizer.ggml.token_type").and_then(|v| v.as_ints()).unwrap_or(&[]);
-    let gguf_arch = get("general.architecture").and_then(|v| v.as_string()).unwrap_or("<none>").to_string();
-    let gguf_name = get("general.name").and_then(|v| v.as_string()).unwrap_or("<none>").to_string();
+    let gguf_arch = get("general.architecture").and_then(|v| v.as_str()).unwrap_or("<none>").to_string();
+    let gguf_name = get("general.name").and_then(|v| v.as_str()).unwrap_or("<none>").to_string();
     let gguf_tokens = tokens.len();
     let gguf_merges = merges.len();
     let tokenizer = QwenTokenizer::from_gguf(tokens, merges, types).unwrap_or_else(|e| die(format!("{gguf_path}: {e}")));
