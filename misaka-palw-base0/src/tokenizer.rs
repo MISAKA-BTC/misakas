@@ -582,7 +582,10 @@ fn match_one(text: &str, at: usize) -> usize {
 ///
 /// Reproduced rather than read from `tokenizer_config.json` because that field is a Jinja program
 /// and running one to build a prompt is a larger surface than this runtime needs. A model whose
-/// template differs needs its own renderer, and that is a per-class fact like every other.
+/// template differs needs its own renderer, and that is a per-class fact like every other —
+/// [`crate::chat_template`] is where that fact is decided, and
+/// [`crate::chat_template::qwen35_chat_prompt`] is the renderer the QWEN36 lane's reasoning model
+/// needed. This function stays exactly what it is: Qwen2.5's template, and the dense tier's.
 pub fn qwen_chat_prompt(system: Option<&str>, turns: &[(&str, &str)]) -> String {
     let mut out = String::new();
     if let Some(system) = system {

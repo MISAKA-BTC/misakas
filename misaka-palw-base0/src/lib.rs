@@ -39,6 +39,10 @@
 
 pub mod artifact;
 pub mod backend;
+/// The chat template a lane renders. `tokenizer::qwen_chat_prompt` is *Qwen2.5's*, and its own
+/// doc says a model whose template differs needs its own renderer; this is where that per-class
+/// fact is decided, and the only place a prompt's segments are built.
+pub mod chat_template;
 pub mod classes;
 /// ADR-0069 Decision 3: the certification drill — the harness that takes a family's own backend
 /// through a real dispute and asks the SHIPPED court which way it reads. Holding the certificate
