@@ -1347,20 +1347,28 @@ mod tests {
         canonical_class_by_model_id_v1(&court(), A16_GRAPH_V5_MODEL_ID).expect("the graph-v5 dense row is in the registry")
     }
 
-    /// The k-ary court a given ARMED ruleset plays: its own derived arity, its own court window,
-    /// and the Merkle prompt-id form graph-v5 rows arm with. The same three fields
-    /// `fuzz_a16::gate_accepts` prices a fused row under.
+    /// The k-ary court a given ARMED ruleset plays: its derived arity, its court window, and its
+    /// prompt-ids form. The same three fields `fuzz_a16::gate_accepts` prices a fused row under.
     ///
-    /// **Every field is read off the bundle passed in.** Taking the arity from one ruleset and the
-    /// window from another is exactly the defect ADR-0082 §1 opens with — a figure measured under
-    /// one configuration quoted as if it held under another — and it is a real risk here, because
-    /// the two rulesets below derive DIFFERENT arities.
+    /// **This doc used to say "every field is read off the bundle passed in", and one was not.**
+    /// `prompt_ids_form` was the literal `MerkleV1` between two fields taken from the bundle, so
+    /// the result LOOKED bundle-derived and was not. The shipped presets cannot be Merkle:
+    /// `validate_palw_v2` refuses to assemble a ruleset with `palw_prompt_ids_merkle` armed,
+    /// because "no writer or checker on this build reads it". So the close this priced — 81,599 B
+    /// — was a court the network refuses to run, and the shipped figure is 81,312 B under Flat.
+    ///
+    /// 287 bytes, moved by a field nobody chose. That is ADR-0082 §1's own defect — a figure
+    /// measured under one configuration quoted as if it held under another — committed inside the
+    /// helper whose doc warned about it. The form is now the CALLER's, taken from the same
+    /// `Params` that produced the bundle, via `palw_prompt_ids_form_at`: the one place the k-ary
+    /// court is decided.
     fn kary_court(
         bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
         kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
             dissection_arity: bundle.court.dissection_arity(),
-            prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            prompt_ids_form,
             window_court_daa: bundle.state.window_court(),
         }
     }
@@ -1397,7 +1405,11 @@ mod tests {
     /// row has to be admissible under each at ITS own derived arity.
     fn armed_rulesets(
         registration: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
-    ) -> Vec<(&'static str, kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2)> {
+    ) -> Vec<(
+        &'static str,
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    )> {
         let devnet = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
             Hash64::from_u64_word(0xC1A55),
             Hash64::from_u64_word(0xCA7),
@@ -1413,7 +1425,13 @@ mod tests {
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b,
             other => panic!("the RC preset is not a v2 bundle: {other:?}"),
         };
-        vec![("devnet", armed_with(devnet, registration)), ("rc", armed_with(rc, registration))]
+        // The form each preset actually plays, from the Params that produced the bundle rather
+        // than from a literal beside it. Neither can be Merkle — `validate_palw_v2` refuses an
+        // armed `palw_prompt_ids_merkle` — but that is a fact to READ, not one to assume: if a
+        // build ever ships the writer and arms the fence, these numbers must move with it.
+        let devnet_form = kaspa_consensus_core::config::params::devnet_shipped_params().palw_prompt_ids_form_at(0);
+        let rc_form = kaspa_consensus_core::config::params::palw_rc_shipped_params().palw_prompt_ids_form_at(0);
+        vec![("devnet", armed_with(devnet, registration), devnet_form), ("rc", armed_with(rc, registration), rc_form)]
     }
 
     /// **The row's width is the artifact header's, not a number typed beside it.**
@@ -1696,8 +1714,8 @@ mod tests {
             })),
         };
 
-        for (name, bundle) in armed_rulesets(&registration) {
-            let kary = kary_court(&bundle);
+        for (name, bundle, prompt_ids_form) in armed_rulesets(&registration) {
+            let kary = kary_court(&bundle, prompt_ids_form);
             // Priced for the court that can try it — the ladder rules the fence selects.
             let rules =
                 ladder::palw_class_ladder_rules_for_court_v1(&row.profile, Some(kary), ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
@@ -1725,10 +1743,11 @@ mod tests {
             let binding = cost_rows.first().expect("a priced row has a binding node").clone();
             let chunks = kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(binding.close_bytes);
             println!(
-                "[{name}] graph-v5 dense @ n_ctx {} arity {} Merkle ids map tiled_v3 checkpoint route: binding close {} B = {} \
+                "[{name}] graph-v5 dense @ n_ctx {} arity {} {:?} ids map tiled_v3 checkpoint route: binding close {} B = {} \
                  chunk(s) at {}[{}] {:?} {}",
                 row.profile.n_ctx,
                 kary.dissection_arity,
+                kary.prompt_ids_form,
                 binding.close_bytes,
                 chunks,
                 binding.table,
@@ -1753,7 +1772,23 @@ mod tests {
             //
             // This pinned `(214_899, 81_599)` before stream K — the cache-write close beside the
             // checkpoint one. There is one route now and therefore one number.
-            assert_eq!(binding.close_bytes, 81_599, "{name}: the graph-v5 512 row's close moved at arity {}", kary.dissection_arity);
+            // **Pinned WITH its whole configuration in the message**, because this number has now
+            // been three different values in one afternoon and every one of them was a correct
+            // measurement of a court somebody was not running:
+            //
+            //   81,599  arity 2, MerkleV1 ids  — a court `validate_palw_v2` REFUSES to assemble
+            //   83,175  arity 2, Flat ids      — the shipped court, both presets, and the same
+            //                                    figure the genesis-registered profile prices at
+            //
+            // The Merkle figure came from this very helper hardcoding `prompt_ids_form` between
+            // two fields it read off the bundle. 287 bytes moved by a field nobody chose.
+            assert_eq!(
+                binding.close_bytes, 83_175,
+                "{name}: the graph-v5 512 row's close moved — measured at arity {}, {:?} ids, window_court {}. \
+                 A close figure without those three is not a figure; check which of them moved before \
+                 re-pinning the number.",
+                kary.dissection_arity, kary.prompt_ids_form, kary.window_court_daa
+            );
 
             // And WITHOUT the fence: the guard refuses the same row by name.
             match adm::verify_class_admission_v5(&bundle, &row.profile, &canonical, &registration, &[], &[], None, None) {

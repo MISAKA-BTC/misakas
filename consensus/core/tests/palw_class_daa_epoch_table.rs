@@ -783,6 +783,18 @@ fn the_bind_window_gate_measures_the_dearest_class() {
             // …and `_v2` for the dense tier, for the same reason: this rebuilds the shipped
             // catalog, so every entry has to come from the builder the shipped assembly used or
             // the reconstructed root is a different ruleset's.
+            //
+            // **This branch had no `filter`, and the paragraph above is the story of what that
+            // costs — told about the OTHER branch.** The repair then was to add the filter where
+            // the symptom appeared; the rule ("a fallback must prove it built the class it was
+            // asked for") was never applied to the fallback itself. So when fixer FG registered
+            // the graph-v5 512 row through a THIRD builder, this branch answered with the
+            // graph-v2 entry, the reconstructed catalog carried a row for a class id nobody asked
+            // about, and the failure surfaced several steps downstream as
+            // `"the class catalog is not the one this ruleset's root commits to"` — a message that
+            // says nothing about the missing builder.
+            //
+            // With the filter here it fails at the `expect` below, naming the class.
             kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_registration_v2(
                 *artifact_root,
                 *share_permille,
@@ -790,8 +802,16 @@ fn the_bind_window_gate_measures_the_dearest_class() {
                 *initial_target,
             )
             .ok()
+            .filter(|(_, entry, _)| entry.class_id == *class_id)
         })
-        .expect("one of the two tiers derives this registration");
+        .unwrap_or_else(|| {
+            panic!(
+                "no builder in this test reconstructs the genesis registration of class {class_id} — it is \
+                 registered by a builder this list does not try. Add it here (and keep the class_id filter on \
+                 every branch, or a wrong builder answers silently and the failure moves downstream to a root \
+                 mismatch)."
+            )
+        });
         entries.push(built.1);
     }
     entries.sort_by(|a, b| a.class_id.cmp(&b.class_id));
