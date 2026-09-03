@@ -2695,7 +2695,7 @@ mod u00_tiled_attention_measurement {
 mod u04_flat_close {
     use super::*;
     use crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1;
-    use crate::palw_class_admission_v2::{derive_court_cost_shaped_v1, PalwKaryCourtV1};
+    use crate::palw_class_admission_v2::PalwKaryCourtV1;
     use crate::palw_mode_v2::{palw_close_bytes_for_chunks_v1, palw_close_chunks_for_bytes_v1, DEFAULT_MAX_CLOSE_CHUNKS};
     use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
     use crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4;
@@ -2711,48 +2711,85 @@ mod u04_flat_close {
         }
     }
 
-    /// **Decision 6, for both genesis sets.** The count is derived from the rows a set registers,
-    /// never typed — and this is where the two answers are written down.
+    /// **Decision 6, for both genesis sets, as a DERIVATION rather than a number.**
+    ///
+    /// `DEFAULT_MAX_CLOSE_CHUNKS` is `palw_close_chunks_for_ladder_v1` over the rows the genesis
+    /// set registers, and the shipped 27 is what that returns for the graph-v2/v3 set at ADR-0077
+    /// Decision 13's first row. The value is NOT touched here: it is the 5f genesis card's, and a
+    /// derivation that disagreed with it would be a finding and not an edit.
     #[test]
     fn the_close_ceiling_is_the_derivation_over_the_genesis_set() {
-        // ---- the graph-v2/v3 set, at Decision 13's first row.
-        for (name, build) in [("dense A16 graph-v2", PALW_LADDER_FAMILIES_V1[0]), ("hybrid QWEN36 graph-v3", PALW_LADDER_FAMILIES_V1[1])]
-        {
-            let (_, row, binding) = palw_widest_close_over_the_ladder_v1(&[build], &[512], None).expect("the 512 row prices");
-            println!(
-                "v2/v3 {name} @ {row}: {} bytes = {} chunks; binding {}[{}] {:?} {}",
-                binding.close_bytes,
-                palw_close_chunks_for_bytes_v1(binding.close_bytes),
-                binding.table,
-                binding.index,
-                binding.op_kind,
-                binding.weight_name
-            );
+        // ---- the graph-v2/v3 set, at Decision 13's first row. The two numbers
+        // `DEFAULT_MAX_CLOSE_CHUNKS`'s own doc quotes, reproduced by the walk rather than recited,
+        // and the node each of them binds on.
+        let v23: Vec<(u64, u64, String)> = PALW_LADDER_FAMILIES_V1
+            .iter()
+            .map(|build| {
+                let (_, _, binding) = palw_widest_close_over_the_ladder_v1(&[*build], &[512], None).expect("the 512 row prices");
+                (
+                    binding.close_bytes,
+                    palw_close_chunks_for_bytes_v1(binding.close_bytes),
+                    format!("{}[{}] {:?} {}", binding.table, binding.index, binding.op_kind, binding.weight_name),
+                )
+            })
+            .collect();
+        for row in &v23 {
+            println!("v2/v3: {} bytes = {} chunks; binds {}", row.0, row.1, row.2);
         }
-        let derived = palw_close_chunks_for_ladder_v1(&PALW_LADDER_FAMILIES_V1, &[512], None).expect("the set prices");
-        println!("v2/v3 set @ 512 -> {derived} chunks (shipped DEFAULT_MAX_CLOSE_CHUNKS = {DEFAULT_MAX_CLOSE_CHUNKS})");
+        assert_eq!((v23[0].0, v23[0].1), (1_154_673, 14), "the dense graph-v2 512 row's close moved");
+        assert_eq!((v23[1].0, v23[1].1), (2_240_241, 27), "the hybrid graph-v3 512 row's close moved");
+        for row in &v23 {
+            assert!(row.2.contains("attn_values.a16"), "the context-linear attention close stopped binding the v2/v3 rows: {}", row.2);
+        }
+        assert_eq!(
+            palw_close_chunks_for_ladder_v1(&PALW_LADDER_FAMILIES_V1, &[512], None),
+            Some(DEFAULT_MAX_CLOSE_CHUNKS),
+            "the shipped close ceiling is no longer the derivation over the genesis set it was chosen for"
+        );
 
-        // ---- the graph-v5 set, under the dissection court.
-        for (name, build) in [("dense A16 graph-v5", PALW_LADDER_FAMILIES_V5[0]), ("hybrid QWEN36 graph-v5", PALW_LADDER_FAMILIES_V5[1])] {
-            for row in [512u32, 4_096, 32_768] {
-                match palw_widest_close_over_the_ladder_v1(&[build], &[row], Some(kary(16))) {
-                    Some((_, _, binding)) => println!(
-                        "v5 {name} @ {row}: {} bytes = {} chunks; binding {}[{}] {:?} {} (open {} + ev {})",
-                        binding.close_bytes,
-                        palw_close_chunks_for_bytes_v1(binding.close_bytes),
-                        binding.table,
-                        binding.index,
-                        binding.op_kind,
-                        binding.weight_name,
-                        binding.opening_bytes,
-                        binding.evidence_bytes
-                    ),
-                    None => println!("v5 {name} @ {row}: NOT PRICEABLE"),
-                }
-            }
+        // ---- the graph-v5 set, under the dissection court. Decision 6 says "one to three"; the
+        // derivation says ONE for the dense tier's model width, TWO once the bottom is charged at
+        // the route the court can actually play, and FOUR for the hybrid — whose recurrence anchor
+        // the v3 composition's dispatch was pricing at zero until this stream added the arm.
+        let v5: Vec<(u64, u64, String)> = PALW_LADDER_FAMILIES_V5
+            .iter()
+            .map(|build| {
+                let (_, _, binding) =
+                    palw_widest_close_over_the_ladder_v1(&[*build], &[512], Some(kary(16))).expect("the v5 512 row prices");
+                (
+                    binding.close_bytes,
+                    palw_close_chunks_for_bytes_v1(binding.close_bytes),
+                    format!("{}[{}] {:?} {}", binding.table, binding.index, binding.op_kind, binding.weight_name),
+                )
+            })
+            .collect();
+        for row in &v5 {
+            println!("v5: {} bytes = {} chunks; binds {}", row.0, row.1, row.2);
         }
-        let v5 = palw_close_chunks_for_ladder_v1(&PALW_LADDER_FAMILIES_V5, &[512], Some(kary(16)));
-        println!("v5 set @ 512 -> {v5:?} chunks");
+        // The dense tier: the fused site itself, because the bottom is charged at the cache-write
+        // route (90,110 bytes at `d_head` 128) rather than at Decision 4's tile route (25,610).
+        // Charged at the tile route the binding node is `ffn_down` at 80,504 — ADR-0082 Decision
+        // 6's own number for this family — and the row is ONE carrier.
+        assert_eq!((v5[0].0, v5[0].1), (130_832, 2), "the dense graph-v5 512 row's close moved");
+        assert!(v5[0].2.contains("AttnFused"), "the dense v5 row stopped binding on its fused site: {}", v5[0].2);
+        // The hybrid: the recurrence's replay evidence, `interval x 5 refs`, plus the head-sliced
+        // anchor. Decision 6 names this term and sizes it at two to three; it is four.
+        assert_eq!((v5[1].0, v5[1].1), (274_460, 4), "the hybrid graph-v5 512 row's close moved");
+        assert!(v5[1].2.contains("GatedDeltaNet"), "the hybrid v5 row stopped binding on its recurrence: {}", v5[1].2);
+        assert_eq!(palw_close_chunks_for_ladder_v1(&PALW_LADDER_FAMILIES_V5, &[512], Some(kary(16))), Some(4));
+
+        // ---- and what Decision 6's own numbers ARE, so the difference is attributable rather than
+        // a disagreement: the dense model width at the tile route, both id forms.
+        let dense = PALW_LADDER_FAMILIES_V5[0](512).expect("projects");
+        let rules = palw_class_ladder_rules_for_court_v1(&dense, Some(kary(16))).expect("mapped");
+        let rows = derive_court_cost_rows_v1(&dense, rules.cost_shape).expect("derives");
+        let ffn = rows.iter().find(|r| r.weight_name.ends_with("ffn_down.weight")).expect("the dense row has a down projection");
+        assert_eq!(ffn.close_bytes, 80_504, "ADR-0082 Decision 6's '~80,504 with the Merkle ones' moved");
+        let flat = derive_court_cost_rows_v1(&dense, rules.cost_shape.with_prompt_ids_form_v1(PalwPromptIdsFormV1::Flat))
+            .expect("derives");
+        let ffn_flat = flat.iter().find(|r| r.weight_name.ends_with("ffn_down.weight")).expect("present");
+        assert_eq!(ffn_flat.close_bytes, 82_080, "ADR-0082 Decision 6's '82,080 bytes with the flat ids' moved");
+        assert_eq!(palw_close_chunks_for_bytes_v1(ffn.close_bytes), 1, "the dense model width is one carrier");
     }
 
     /// **Z3, the bytes half.** The bottom of a fused dispute, both routes, at every registered
@@ -2818,37 +2855,138 @@ mod u04_flat_close {
     }
 
     /// **Z0's second half.** A graph-v5 class's close is independent of `n_ctx` except for the
-    /// prompt-id term, at 512 / 4,096 / 32,768 / 131,072, on both families.
+    /// prompt-id term — swept at 512, 4,096, 32,768 and 131,072 on both families, under both id
+    /// forms, with the ruleset's own form named.
+    ///
+    /// **It holds to 4,096 and not beyond, and the term that breaks it is not attention.** Past
+    /// that width the binding node becomes the GATHER, whose evidence carries the generated token
+    /// ids (`n_ctx x 4`) and the decode pin — a SECOND context-linear term, which ADR-0082
+    /// Decision 5 does not anchor because Decision 5 anchors the PROMPT ids. The attention terms
+    /// Decisions 1-4 flatten stay flat at every width, which is what the per-node reading below
+    /// separates out.
     #[test]
     fn a_graph_v5_close_is_flat_in_the_context() {
         for (name, build) in [("dense", PALW_LADDER_FAMILIES_V5[0]), ("hybrid", PALW_LADDER_FAMILIES_V5[1])] {
             for form in [PalwPromptIdsFormV1::MerkleV1, PalwPromptIdsFormV1::Flat] {
-                let mut seen = Vec::new();
+                // Per width: the whole close, the FUSED site's close, and the id term.
+                let mut seen: Vec<(u32, u64, u64, u64)> = Vec::new();
                 for n_ctx in [512u32, 4_096, 32_768, 131_072] {
-                    let Ok(profile) = build(n_ctx) else {
-                        println!("{name} {form:?} @ {n_ctx}: does not project");
-                        continue;
-                    };
+                    let Ok(profile) = build(n_ctx) else { continue };
                     let court = PalwKaryCourtV1 { prompt_ids_form: form, ..kary(16) };
-                    let Some(rules) = palw_class_ladder_rules_for_court_v1(&profile, Some(court)) else {
-                        println!("{name} {form:?} @ {n_ctx}: no rules");
-                        continue;
-                    };
-                    match derive_court_cost_shaped_v1(&profile, rules.cost_shape) {
-                        Ok(cost) => {
-                            let ids =
-                                crate::palw_prompt_ids_v1::prompt_ids_close_bytes_v1(form, n_ctx as u64).expect("the id term prices");
-                            println!("{name} {form:?} @ {n_ctx}: close {} (id term {ids})", cost.max_close_bytes);
-                            seen.push((n_ctx, cost.max_close_bytes, ids));
-                        }
-                        Err(e) => println!("{name} {form:?} @ {n_ctx}: {e}"),
-                    }
+                    let Some(rules) = palw_class_ladder_rules_for_court_v1(&profile, Some(court)) else { continue };
+                    let Ok(rows) = derive_court_cost_rows_v1(&profile, rules.cost_shape) else { continue };
+                    let whole = rows.first().expect("a non-empty walk").close_bytes;
+                    let fused = rows
+                        .iter()
+                        .find(|r| r.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused)
+                        .expect("a v5 row has a fused site")
+                        .close_bytes;
+                    let ids = crate::palw_prompt_ids_v1::prompt_ids_close_bytes_v1(form, n_ctx as u64).expect("prices");
+                    println!("{name} {form:?} @ {n_ctx}: close {whole}, fused site {fused}, id term {ids}");
+                    seen.push((n_ctx, whole, fused, ids));
                 }
-                for w in seen.windows(2) {
-                    let (a, b) = (&w[0], &w[1]);
-                    println!("    {name} {form:?} {} -> {}: close +{}, ids +{}", a.0, b.0, b.1 as i64 - a.1 as i64, b.2 as i64 - a.2 as i64);
+                assert!(seen.len() >= 2, "{name} {form:?}: nothing swept");
+                // **The FUSED SITE is flat at every width, in both forms**: its close moves by
+                // exactly the id term and by nothing else. This is Decisions 1-4's whole claim,
+                // isolated from the terms they do not touch.
+                for pair in seen.windows(2) {
+                    let (a, b) = (&pair[0], &pair[1]);
+                    assert_eq!(
+                        i128::from(b.2) - i128::from(a.2),
+                        i128::from(b.3) - i128::from(a.3),
+                        "{name} {form:?}: the fused site's close moved by something other than the id term between \
+                         n_ctx {} and {}",
+                        a.0,
+                        b.0
+                    );
+                }
+                // And the WHOLE close is flat only while the fused site binds it. Where it stops
+                // being flat, the node that broke it is named — never waved at.
+                for pair in seen.windows(2) {
+                    let (a, b) = (&pair[0], &pair[1]);
+                    let by_ids = i128::from(b.1) - i128::from(a.1) == i128::from(b.3) - i128::from(a.3);
+                    if !by_ids {
+                        let profile = build(b.0).expect("projects");
+                        let court = PalwKaryCourtV1 { prompt_ids_form: form, ..kary(16) };
+                        let rules = palw_class_ladder_rules_for_court_v1(&profile, Some(court)).expect("mapped");
+                        let rows = derive_court_cost_rows_v1(&profile, rules.cost_shape).expect("derives");
+                        let binding = rows.first().expect("non-empty");
+                        assert_eq!(
+                            binding.op_kind,
+                            crate::palw_step::PalwStepOpKindV1::EmbedLookup,
+                            "{name} {form:?}: the close stopped being flat at n_ctx {} on {}[{}] {:?} — if that is not the \
+                             gather's generated-id term, ADR-0082 Decisions 1-5 have a second unanchored context term",
+                            b.0,
+                            binding.table,
+                            binding.index,
+                            binding.op_kind
+                        );
+                        println!("{name} {form:?}: flatness ends at n_ctx {} — the gather's generated ids, not attention", b.0);
+                    }
                 }
             }
         }
     }
+
+    /// **Which id form the ruleset selects, and what each costs.** Z0 allows exactly one growing
+    /// term and Decision 5 says which: the Merkle opening, `⌈log₂⌉`-shaped. The flat form is
+    /// `n_ctx x 4` and is what every shipped preset still reads, so both are stated rather than one
+    /// standing in for the other.
+    #[test]
+    fn the_id_term_the_ruleset_selects_is_the_merkle_one() {
+        let terms = |form: PalwPromptIdsFormV1| -> Vec<u64> {
+            [512u64, 4_096, 32_768, 131_072]
+                .iter()
+                .map(|n| crate::palw_prompt_ids_v1::prompt_ids_close_bytes_v1(form, *n).expect("prices"))
+                .collect()
+        };
+        assert_eq!(terms(PalwPromptIdsFormV1::Flat), vec![2_048, 16_384, 131_072, 524_288], "the flat term is n_ctx x 4");
+        assert_eq!(terms(PalwPromptIdsFormV1::MerkleV1), vec![472, 664, 856, 984], "one 64-byte element more per doubling");
+        // Decision 5's form is the one a `palw_kary_court`-armed ruleset carries into the shape.
+        let dense = PALW_LADDER_FAMILIES_V5[0](512).expect("projects");
+        assert_eq!(
+            palw_class_ladder_rules_for_court_v1(&dense, Some(kary(16))).expect("mapped").cost_shape.prompt_ids_form,
+            PalwPromptIdsFormV1::MerkleV1
+        );
+        // And with no court the shape is the shipped one, unchanged.
+        assert_eq!(
+            palw_class_ladder_rules_v1(&dense).expect("mapped").cost_shape.prompt_ids_form,
+            PalwPromptIdsFormV1::Flat
+        );
+    }
+
+    /// **The arity the RC's own window derives, and the moves it buys** (ADR-0082 Decision 3).
+    ///
+    /// Nothing here is chosen: `palw_court_arity_v1` walks upward from binary until the clock
+    /// admits the pair of searches, and refuses an arity whose round no carrier holds.
+    #[test]
+    fn the_rc_derives_its_own_arity_and_the_moves_it_buys() {
+        let windows = PALW_RC_WINDOWS_V1;
+        let deadline = palw_court_turn_deadline_v1(
+            windows.window_court,
+            PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            PALW_CONTEXT_LADDER_TERMINAL_MOVES,
+            DEFAULT_MAX_CLOSE_CHUNKS,
+        )
+        .expect("the RC window admits a move clock");
+        let arity = crate::palw_mode_v2::palw_court_arity_v1(
+            windows.window_court,
+            deadline,
+            PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            131_072,
+            PALW_ATTN_HISTORY_TILE_V4,
+            PALW_CONTEXT_LADDER_TERMINAL_MOVES,
+            crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4 as usize * 16,
+        );
+        println!("RC: window_court {} turn_deadline {deadline} -> arity {arity:?}", windows.window_court);
+        let arity = arity.expect("the RC window admits some arity");
+        let court = crate::palw_mode_v2::PalwCourtParamsV2::new(PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, deadline, 2)
+            .expect("a court")
+            .with_dissection_arity(arity)
+            .expect("legal");
+        let worst = court.worst_case_duration_with_history_daa(131_072, PALW_ATTN_HISTORY_TILE_V4).expect("derives");
+        println!("RC: ladder rounds {} history rounds {:?} worst {worst} DAA", court.bisection_rounds(), court.history_dissection_rounds(131_072, PALW_ATTN_HISTORY_TILE_V4));
+        assert!(worst + palw_close_assembly_daa_v1(DEFAULT_MAX_CLOSE_CHUNKS) < windows.window_court, "the derived arity overruns");
+    }
 }
+
