@@ -369,7 +369,7 @@ Two of the findings above are now closed, and one premise has moved:
   weightless class is seated at the floor share. The genesis free-prompt set is derived by the
   same coverage rule and, on 5e, names the floor, the A16 graph-v2 class and the QWEN36 graph-v3
   class, so the real models take free-prompt claims from genesis; any later model takes the
-  on-chain route with `palw-certify drill|bind` and `misaka-cli palw submit-object`.
+  on-chain route with `palw-certify drill|bind` and `misaka palw submit-object`.
 
 Still true: the seat replays from token ids and needs no tokenizer, and the artifact's
 `tokenizer_commitment` remains zero and unchecked. New: `palw-qwen36-fp-worker` implements the

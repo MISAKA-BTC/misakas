@@ -39,7 +39,16 @@ that changed.
 | MSK | enough to cover the collateral plus a transaction fee, in a **non-coinbase** output (§2) |
 | a model | **no.** The default class is the integer floor; see §5 |
 
-`--netsuffix=11`, P2P **26311**, RPC **26312**. DNS seeding is live, so no `--addpeer` is needed
+`--netsuffix=11`, P2P **26311**, gRPC **26312**, **wRPC-borsh 27210**. DNS seeding is live, so no
+`--addpeer` is needed
+
+**Two RPC ports, and the tools on this page use the second one.** `--rpclisten` sets the gRPC
+port; `misaka`, `misaka-palw-gateway` and `misaka-palw-fp-rail` all speak **wRPC-borsh** and their
+`--rpc` flag wants that port. A node booted with `--rpclisten` alone logs
+`node-wrpc-borsh: disabled`, and every tool below then fails with
+`invalid HTTP version (node up with --rpclisten-borsh?)`. Pass `--rpclisten-borsh=default` as well
+— it resolves to 27210 on testnet-11 — or omit `--rpc` entirely and let `--network testnet-11`
+supply the default
 (fallback entry nodes: `169.58.232.113:26311`, `169.58.39.220:26311` — the two the seeders
 verify and advertise. `5.104.81.23` does not accept inbound connections and `169.58.232.114`
 was withdrawn on 2026-08-29.)
@@ -93,7 +102,7 @@ symptom is "no confirmed UTXO to spend".
 
 ```bash
 kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
-  --listen=0.0.0.0:26311 --rpclisten=127.0.0.1:26312 \
+  --listen=0.0.0.0:26311 --rpclisten=127.0.0.1:26312 --rpclisten-borsh=default \
   --addpeer=169.58.39.220:26311 \
   --palw-register-bond \
   --palw-producer-key=~/.misaka/miner.seed \
@@ -194,7 +203,7 @@ reaching for the collateral knob.
 
 ```bash
 kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
-  --listen=0.0.0.0:26311 --rpclisten=127.0.0.1:26312 \
+  --listen=0.0.0.0:26311 --rpclisten=127.0.0.1:26312 --rpclisten-borsh=default \
   --addpeer=169.58.39.220:26311 \
   --palw-produce --palw-panel \
   --palw-producer-key=~/.misaka/miner.seed \
@@ -202,10 +211,22 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
   --palw-producer-pay-address=<your misakatest: address>
 ```
 
-All four of key, bond, pay address and a class are required or the producer does not start at all.
+All **five** of key, bond, pay address, a class and a fee outpoint are required or the producer does
+not start at all.
 
-There is no `--palw-fee-outpoint` here either, and that IS a choice: a panel seat without one runs
-receipts-only and says so at startup —
+**`--palw-fee-outpoint` is mandatory here, and this paragraph used to say it was a choice.** The
+command above PANICS at startup without it:
+
+```
+panicked at kaspad/src/daemon.rs: --palw-produce on a ConsensusV2 network needs a way to carry
+lifecycle objects: pass --palw-fee-outpoint <txid>:<index>
+```
+
+The receipts-only mode described below is the **panel seat's** rule, not the producer's: the gate
+that panics keys on `--palw-produce`, and a seat that does not produce never reaches it. The only
+node that starts without the flag is one whose previous run persisted
+`<appdir>/misaka-testnet-11/palw-panel/palw-fee-outpoint` — which a first run does not have. So for
+a panel seat, and only for a panel seat, this is still true:
 
 ```
 [palw-panel] starting (bond=…, submitter=off — receipts only)
@@ -325,8 +346,14 @@ kaspad --testnet --netsuffix=11 \
 > run, which is the only source that cannot go stale:
 >
 > ```bash
-> kaspad --testnet --netsuffix=11 --palw-dump-classes
+> kaspad --testnet --netsuffix=11 --appdir=~/.t11 --palw-dump-classes
 > ```
+>
+> **It needs an appdir that has already synced, and on a fresh one it prints nothing at all —
+> silently, indefinitely.** The dump waits for a non-zero virtual DAA rather than answering from
+> genesis (which would be a confident wrong answer about the tip), and it logs that wait at `trace`
+> level. Measured: 45 seconds, zero output, exit only on Ctrl-C. Run it against the appdir your node
+> already uses, after it has caught up.
 
 Conversion recipes, per-class hardware requirements, and how a panel seat serves an LLM class are
 in [palw-public-testnet-classes-runbook.md](palw-public-testnet-classes-runbook.md). The floor
@@ -419,10 +446,10 @@ MISAKA_PALW_NETWORK_ID=testnet-11 \
 MISAKA_PALW_CONFINEMENT=linux-seccomp-landlock \
 ./target/release/misaka-palw-gateway \
   --listen 127.0.0.1:8790 \
-  --worker ./target/release/palw-a16-fp-worker \
+  --worker $PWD/target/release/palw-a16-fp-worker \   # ABSOLUTE, not ./ — see below
   --outbox ~/.misaka/fp-outbox \
   --identity ~/.misaka/fp-identity.json \
-  --rpc 127.0.0.1:26312 \
+  --rpc 127.0.0.1:27210 \
   --class-leaves <the class's canonical leaves — --palw-dump-classes>
 
 # 3. ask it something
@@ -437,8 +464,18 @@ curl -s localhost:8790/v1/chat/completions -H 'content-type: application/json' \
   --funding-outpoint <txid>:1 --funding-amount <sompi> \
   --capture ~/.misaka/fp-outbox/traces/<id>/material.bin \
   --retention-dir ~/.t11/palw-retention \
-  --submit --rpc 127.0.0.1:26312
+  --submit --rpc 127.0.0.1:27210
 ```
+
+**`--worker` must be an absolute path.** The gateway confines the worker and pins its working
+directory to a scratch directory of its own (ADR-0079), so a relative path is resolved THERE, not
+where you typed it. `./target/release/palw-a16-fp-worker` fails with
+
+```
+fatal: cannot spawn ./target/release/palw-a16-fp-worker: No such file or directory
+```
+
+with the file sitting in the directory you ran from. `$PWD/...` is the fix.
 
 `GET /health` answers the question every operator asks next — *why did my answer not become a
 claim* — by name, from the chain rather than from config:
@@ -449,7 +486,23 @@ claim* — by name, from the chain rather than from config:
 
 `registered` false means this network does not know your class. `fp_certified` false means the
 class is not seated on the free-prompt lane (ADR-0075 `ClassLaneCertified`) and a commitment would
-be refused as `FreePromptLaneUncertified`. Either way **the user still gets their answer** — the
+be refused as `FreePromptLaneUncertified`.
+
+**`bond_active` false is usually not about your bond, and this is the field that wastes an
+afternoon.** It is computed as "the bond is known AND there is no not-ready reason", and the
+not-ready reasons are CLASS-level as well as bond-level. So a bond that is registered, funded and
+holding exposure room reports `bond_active: false` whenever its CLASS is out of epoch budget —
+which is the normal state of any class registered mid-epoch, for the rest of that epoch. **Read
+`bond_not_ready_reason` beside it**; it is in the same `/health` and it names the actual cause:
+
+```
+"bond_active": false,
+"bond_not_ready_reason": "this class's epoch budget is already spent"
+```
+
+Measured on a devnet drill: a class registered at DAA 31 against a 1,000-DAA epoch answered every
+request and wrote no commitment for the rest of that epoch. Nothing was broken; the class was
+registered mid-epoch. A class seated at genesis has budget from block one. Either way **the user still gets their answer** — the
 answer is the product — and the commitment waits in the outbox with the reason attached. A gateway
 that silently answered without committing would be lying about what you staked on it.
 
@@ -489,7 +542,7 @@ gateway refuses to do it quietly:
 * then ask the host what it actually is, from live state rather than from your config:
 
 ```bash
-misaka node security-report --worker ./target/release/palw-a16-fp-worker
+misaka node security-report --worker $PWD/target/release/palw-a16-fp-worker
 # exit 0 = OK, 14 = DEGRADED (no backend, nothing public), 13 = EXPOSED (a public
 # entrance on a none-backend host, or a public parser holding a key)
 ```
