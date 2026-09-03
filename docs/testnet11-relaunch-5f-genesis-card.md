@@ -4553,3 +4553,60 @@ and refuse `<absent>`.**
 Impl now carries the drill-seat fix (`0a9068d4`, script only; `derive/src` unmoved). 3e takes
 5e's missing-row test onto impl beside T1 so `consensus/core` keeps one writer; 5e's family
 commits (fault rule + covering type/gate) still come one at a time with file lists.
+
+## The genesis hash, computed twice; the guard at six lines; and the handover rules the drill session wrote down
+
+### A second computation, not a second reading
+
+```
+premine.rs::print_premine_commitment on this session's worktree 09a71652
+  (premine.rs, genesis.rs byte-identical to 971b2eff — git diff --quiet, not assumed)
+PALW_RC_GENESIS.utxo_commitment              ba2612417e7e0817…                         = the table's premine
+PALW_RC_GENESIS.hash (recomputed over it)    ad30b5cb965ad305dfa1dc7516935763ea2623105581b83bb9359c7247157d36
+                                             b0f8003b337cdad366e3895c8f159e99332be16e258b144dddf483bf9b33edb7
+hash_merkle_root (unchanged by it)           4fb0ecf43674655f…c605d197
+```
+
+3e's finalize reported `ad30b5cb965ad305…9b33edb7` from `971b2eff`. **Prefix and suffix agree
+across two trees and two machines; the guard now carries all 128 hex as its sixth line and
+refuses `<absent>`.** The family adoption does not read the premine, so the family tip's value is
+predicted unchanged — and if 3e's step-5b line disagrees, the disagreement is the finding.
+
+Against the old `971b2eff` table the six-line guard stops on **exactly two** lines — the withdrawn
+t11 fingerprint and the not-yet-present genesis line — with the other four OK. *That is the guard
+distinguishing "withdrawn for a named cause" and "the table predates the field" from "wrong".*
+
+### The invocation that ran zero tests and said `ok`, a third time tonight
+
+3e's message called the printer "the `#[ignore]` printer". On both trees it is `#[test]` without
+`#[ignore]`; `-- --ignored` therefore selected nothing:
+
+```
+test result: ok. 0 passed; 0 failed; 1832 filtered out; finished in 0.00s     TEST rc=0
+```
+
+The second run stated its expected count — **exactly 1** — and ran one. *This time the wrong
+attribute came from a sentence rather than a file; the discipline is the same: state how many
+tests the command should run before reading its colour.*
+
+### Handover rules from the drill session (5e), verbatim where it matters
+
+- **Never cherry-pick `618fa198` or `e23ad361`.** The first sweeps the 12-file k-ary-court reader
+  under a drill-script subject; the second sweeps four unblock fixes **plus a rig-only
+  `transformer_id_pin.rs` re-pin**. Either sha onto impl imports a pin with the code. Per-unit
+  diffs only. (A `1fd6a30a` and B `0cdc4e15` are clean and with 3e; E/T4 and F/DENSE_FAMILY are
+  scripts-only and went to 3e too, because 3e is the drill script's writer on impl tonight.)
+- **Apply order on impl: A → B → H1 → D; H2, H3 free-standing; H5 (tests) last.** D calls
+  `palw_post_genesis_registration_v2`, which H1 introduces — 5e's first sentence to 3e said D
+  needed nothing from H1–H4, and a cross-reference check run *alongside* the claim refuted it.
+  *"I ran the check alongside the claim instead of before it; the card should carry the order,
+  not my first sentence."* It does.
+- **The missing-row test was the rig's omission, not impl's** — impl's `palw_shipped_court_rows_v1`
+  already pushes the v5 512 row. What remains is a rule to weigh after the cut, both producers
+  named: *impl's shipped-rows test prints the row at 81,312 (undissected) while the k-ary court
+  tries the dissected close at 83,175.* Under the derived devnet ceiling (83,333) and the RC's
+  2,250,000 both fit; it is the same object priced by two routes, written down before it bites.
+
+Drill with `bound-candidate.palwart` on the rig: `fb49d541` built clean; stage 0 PASS (18/18,
+stranger agrees); 0b PASS; stage 1 running — the first boot of a devnet bundle with the k-ary
+reader wired **and** the derived ceiling. Stage 4 is the verdict this card wants to read.
