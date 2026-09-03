@@ -19218,34 +19218,33 @@ pub(crate) mod tests {
             // stream K: that route cannot bind a row to its own K or V series, and this class has
             // a sound route at every position). Only the anchored arm is playable for it; the
             // refusal itself is pinned by the test below.
-            for anchored in [true] {
-                let honest = Drill::new(false);
-                let (_, _, _, verdict, _) = play_to_the_bottom(&p, &honest, anchored);
-                assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "anchored={anchored}: an honest execution was convicted");
+            let anchored = true;
+            let honest = Drill::new(false);
+            let (_, _, _, verdict, _) = play_to_the_bottom(&p, &honest, anchored);
+            assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest execution was convicted");
 
-                let forged = Drill::new(true);
-                let (state, claim_id, sid, verdict, daa) = play_to_the_bottom(&p, &forged, anchored);
-                assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "anchored={anchored}: a forged output row was acquitted");
+            let forged = Drill::new(true);
+            let (state, claim_id, sid, verdict, daa) = play_to_the_bottom(&p, &forged, anchored);
+            assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "a forged output row was acquitted");
 
-                // And the verdict is the shipped court's: the close arm voids and slashes exactly as a
-                // proven arithmetic fault does, through the same state machine.
-                let close = PalwConsensusObjectV2::CourtClosed {
-                    session_id: sid,
-                    verdict: PalwCourtVerdictV2::ExecutorGuilty,
-                    proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
-                        refutation: crate::palw_step_refute::tests::skeleton_refutation(),
-                        operand_openings: Vec::new(),
-                    },
-                };
-                // The block after the last dissection move — inside the session's own
-                // backstop, so what ends the session is the CLOSE and not the sweep.
-                let (after, _) = apply(&state, &p, &ctx(daa, daa, daa), &[close], None);
-                assert!(after.court_session(&sid).is_none(), "the close ends the session");
-                assert!(
-                    matches!(after.claim(&claim_id).expect("the claim survives as a record").phase, PalwClaimPhaseV2::Voided { .. }),
-                    "anchored={anchored}: a convicted claim is voided"
-                );
-            }
+            // And the verdict is the shipped court's: the close arm voids and slashes exactly as a
+            // proven arithmetic fault does, through the same state machine.
+            let close = PalwConsensusObjectV2::CourtClosed {
+                session_id: sid,
+                verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
+                    refutation: crate::palw_step_refute::tests::skeleton_refutation(),
+                    operand_openings: Vec::new(),
+                },
+            };
+            // The block after the last dissection move — inside the session's own backstop, so
+            // what ends the session is the CLOSE and not the sweep.
+            let (after, _) = apply(&state, &p, &ctx(daa, daa, daa), &[close], None);
+            assert!(after.court_session(&sid).is_none(), "the close ends the session");
+            assert!(
+                matches!(after.claim(&claim_id).expect("the claim survives as a record").phase, PalwClaimPhaseV2::Voided { .. }),
+                "a convicted claim is voided"
+            );
         }
 
         /// **The cache-write route is refused BY NAME for a class that checkpoints every position**

@@ -2489,6 +2489,10 @@ mod tests {
             );
         }
         assert!(open(unit).is_ok() && open(unit * 50).is_ok(), "both ends of the band are admissible");
+        // The refusal has to NAME the field, not merely refuse: a court finding that reads
+        // "assertion failed" is a finding nobody can sequence.
+        let message = open(1).expect_err("a small S* is refused").to_string();
+        assert!(message.contains("exponent sum") && message.contains('1'), "the refusal must name the field: {message}");
     }
 
     /// **Every opening the bottom carries is bound to its own coordinate** (audit A C-3 / E C-3,
@@ -2715,9 +2719,8 @@ mod tests {
         // carrier. It no longer BITES at these deadlines, because the honest move count never
         // needs an arity above 32 — 32 at 256 lanes is 66,054 bytes and fits.
         assert_eq!(pick(WINDOW / moves(32), 256), Some(32), "arity 32 at 256 lanes is 66,054 bytes a move");
-        assert_eq!(
+        assert!(
             palw_attn_dissect_move_bytes_v1(64, 256) > palw_close_bytes_for_chunks_v1(1),
-            true,
             "and 64 at 256 lanes is still past one carrier, which is what the pair bound is for"
         );
         // A ruleset with no fused site derives from the ladder alone.

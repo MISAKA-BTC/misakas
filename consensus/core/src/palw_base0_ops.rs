@@ -316,7 +316,14 @@ pub fn softmax(logits_q: &[i32]) -> Result<Vec<i32>, PalwBase0OpError> {
 /// lands inside `i32`: `i32::MIN >> up`. Below it every argument saturates `int_exp` to zero
 /// anyway, so nothing representable is lost, and for every `up ≤ 46` the answer is bit-identical
 /// to the old expression — a code row is `clamp16`-bounded, so `|v − max| < 2^16` and
-/// `2^16 << 46 < 2^63`. The two callers (this row kernel and `a16_attn_exp_one`) must stay one
+/// `2^16 << 46 < 2^63`.
+///
+/// **Measured on the bound shipped artifact (2026-09-03): its `attn_softmax_up` bytes are
+/// {14, 15, 16, 18, 21, 25} across the 28 layers, max 25** — below 47, so this moves no value the
+/// class being registered ever committed, and there is no freeze race on it. The converter writes
+/// `(K + e_lg).clamp(0, 62)` with `K = 24`, so 62 is reachable in principle by an artifact nobody
+/// has built; the point of the fix is that such an artifact is now a softmax rather than a class
+/// whose most-suppressed key wins the row. The two callers (this row kernel and `a16_attn_exp_one`) must stay one
 /// expression or the fused site and the shipped softmax part.
 #[inline]
 pub(crate) fn softmax_shifted_diff_v1(v: i32, max: i64, up: i64) -> i32 {
