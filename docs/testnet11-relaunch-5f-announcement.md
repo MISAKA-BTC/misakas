@@ -61,5 +61,10 @@ At 18:18 and 18:43 UTC the Qwen3.6 seat produced the chain's first two attempt b
 the result of one ~25-minute inference on an 8-core CPU host, both draws won. Because a block's parents are fixed when
 its job starts, a 25-minute job lands a block whose parents are 25 minutes old, and the DAG merged both as **red**
 blocks; the protocol counts merged work (ADR-0058), so they register against the class's budget and the seat's bond.
-Their adjudication by the other seats has not begun. The dense tier's first block is expected when its first
+Their adjudication by the other seats cannot complete on this chain yet: a Qwen3.6 job's retained material is 253 MB and
+a dense-tier job's 748 MB, and the peer transport that carries material to the verifying seats caps a message at
+16 MiB, so seats answer "Unavailable" at the half-window. The transport fix (chunked or interval-based serving, or a
+cap sized to the largest class) is scheduled after this relaunch; until it lands, LLM claims on the public chain are
+produced and counted but not verified or finalized, and the dense tier's blocks do not yet reach the other nodes
+(the same transport path). The floor and heartbeat lanes are unaffected. The dense tier's first block is expected when its first
 512-context job completes; the floor's when its draw wins. Everything else on the chain so far is heartbeat blocks.
