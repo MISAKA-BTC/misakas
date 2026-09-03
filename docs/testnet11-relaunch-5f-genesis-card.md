@@ -4319,7 +4319,10 @@ TABLE=/path/to/extracted-pins.txt scripts/check-repin-predictions.sh <frozen-sha
 #    then: scripts/check-doc-citations.sh docs/testnet11-relaunch-5f-genesis-card.md <5f-tip>
 #          scripts/check-derive-freeze.sh    (derive/src must still read 4969f8dc…)
 
-# 2. the merge impl -> 5f (five conflicts pre-ruled; fuzz_a16.rs -> next_u64), then the pin
+# 2. the merge impl -> 5f — RE-MEASURED 2026-09-04 against impl 971b2eff x 5f ee27ef4e:
+#    merge-tree exit 0, ZERO conflicts (the five once pre-ruled were resolved upstream), and the
+#    merged tree's misaka-palw-derive/src is 4969f8dc… — the pin basis, verbatim. A merge
+#    surface is a measurement with a timestamp; re-measure on the frozen tip. Then the pin
 #    tests must go GREEN on the merged tree — the same three that were red are the proof
 cargo test -p kaspa-consensus-core --lib -- every_genesis_commits_to_the_premine shipped_presets_have_pinned_fingerprints golden_vector_ids_are_frozen
 
