@@ -291,23 +291,71 @@ the genesis UTXO set, so the genesis hash moves, and then **no earlier appdir an
 can join at all** — the failure is at handshake, not at a rule, which is strictly less legible than
 a ruleset mismatch. Everything below assumes that case.
 
-### The wipe list is what the RUNNING NODE connects to, not what a config remembers
+### The wipe list is what the RUNNING NODE connects to — and the journal does NOT tell you that
 
 Before stopping anything, ask the node. An ssh config, a systemd unit and a launch script all record
-intent; the connection list records fact, and a relaunch is only as complete as the set of hosts
-that actually carry the chain.
+intent; only the live connection set records fact, and a relaunch is only as complete as the set of
+hosts that actually carry the chain.
 
-    journalctl -u <the node unit> --since "1 hour ago" --no-pager \
-      | grep -oE 'Connected to (incoming|outgoing) peer [0-9.]+' | awk '{print $NF}' | sort -u
+**An earlier version of this runbook prescribed a journal scrape, and it undercounts. Measured
+2026-09-03 on the live fleet, the two methods disagree badly:**
 
-Measured on this fleet at the time of writing, that list is **two entries**: `127.0.0.1` (the second
-seat on the same host) and **one external address**. A third host that an ssh config still names was
-unreachable, absent from every launch script and systemd unit, and had not appeared in three hours of
-the node's own log — **a stale entry, not a host to wipe.** Chasing it would have delayed a relaunch
-for a machine that is not on the network.
+    journalctl 'Connected to (incoming|outgoing) peer', 3h window  ->  3 addresses
+    ss -tnp state established, on the p2p ports                    ->  9 addresses
 
-**And the converse is the part that cannot be fixed by wiping:** an external peer you do not control
-cannot be wiped. It will keep answering to this network name on its own genesis after the relaunch,
+The journal line is emitted at connection ESTABLISHMENT. A peer that connected before the window
+opened and has stayed connected since never appears in it again. The scrape measures the shape of
+the log, not the thing the log describes — and the single most-connected peer on this fleet
+(`169.58.232.113`, which we dial OUTBOUND four times, and which runs three kaspad of its own) had
+**zero journal lines in three hours**. A wipe driven by the journal list would have left it running,
+and an unwiped peer re-feeds the old chain by IBD to every host you just cleaned.
+
+**Ask the sockets, in both directions:**
+
+    ss -tnp state established | grep -E '263[0-9][0-9]' \
+      | awk '{split($3,l,":"); split($4,r,":"); \
+             print (l[2] ~ /^263/ ? "INBOUND " : "outbound"), r[1]}' | sort -u
+
+Then split that list in two, because the halves need opposite treatment:
+
+| | how to tell | what to do |
+|---|---|---|
+| **ours** | answers `ssh -i ~/.ssh/claude_key`, or appears in `known_hosts` | stop, then wipe — every appdir, not "the" appdir |
+| **not ours** | does not | cannot be wiped, and does not need to be — see below |
+
+**Wipe by ENUMERATING each host's kaspad processes, never by naming an appdir.** The fleet does not
+hold one appdir per host:
+
+    169.58.39.220  (ibm)  /root/.t11  /root/.t11b
+    169.58.232.113        /root/.t11  /root/.t11c  /var/lib/misaka-minerpool/slots/slot-01/appdir
+    5.104.81.23           /root/.t11
+
+The miner-pool slot on `.113` carries a full appdir under `/var/lib/`, nowhere near the others, and
+is invisible to anything that greps for `.t11`. Get the list from the processes themselves:
+
+    pgrep -af kaspad | grep -oE 'appdir=[^ ]+' | sort -u
+
+**And the seeders are part of the wipe.** Two hosts run `misaka-dnsseeder` (`.113` and
+`5.104.81.23`). A seeder that survives the relaunch keeps handing out old-genesis peers to every new
+joiner, so the first thing a newcomer meets is the dead chain — with a handshake failure that looks
+like the joiner's fault. Stop both, and clear their peer databases, before the producer starts.
+
+**The units are what restart them.** Stopping a process without masking its unit is not stopping it:
+
+    ibm    misaka-t11-node0  misaka-t11-node1  misaka-faucet  palw-drill-attest  palw-drill-watch
+    .113   misaka-t11-node   misaka-t11-seat4  misaka-minerpool  misaka-pool-slot@01  misaka-dnsseeder
+    .23    misaka-t11-seat2  misaka-miner-c    misaka-validator-c  misaka-dnsseeder
+
+**One live peer is unresolved and must be settled before the cut.** `5.104.81.228` connects INBOUND
+to both of ibm's ports and is in `known_hosts` — so a previous session reached it — but it does not
+answer `claude_key` as `root` or `ubuntu`. Either it is ours under another key, in which case it
+must be wiped, or it is a stranger, in which case it is the case below. **Do not guess.** A host you
+believe is yours and do not wipe is exactly the IBD re-feed that this whole section exists to
+prevent.
+
+**And the converse is the part that cannot be fixed by wiping:** the four external peers
+(`60.114.127.4`, `183.176.36.141`, `121.81.248.189`, `111.67.115.228`) are not ours and cannot be
+stopped. They will keep answering to this network name on their own genesis after the relaunch,
 which is exactly the state §"the name is already contested" describes. That is not a fault to
 resolve before launching; it is the reason the genesis hash is the value a joiner checks.
 
