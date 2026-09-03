@@ -80,6 +80,13 @@
 //! layer refuses a wider declaration (`check_close_declared_chunk_count_v2`) and no carriage helps.
 //! [`court_close_chunked_carriage_v1`] says so in the operator's words.
 //!
+//! **And WHEN, since audit H-2a: only at `Terminal`.** The transition refuses a declaration on a
+//! session whose ladder (or dissection) still owes a move — `CourtCloseNotTerminal` — because the
+//! row is priced for `4 x count` DAA of assembly and was otherwise openable at round 0 and held for
+//! the whole `window_court`. Nothing here can check it offline (the ladder is chain state); it is
+//! the reason a declaration filed early is dropped with the block standing rather than opening a
+//! group, and `GetPalwPendingChunkGroup` answering `found: false` afterwards is that refusal.
+//!
 //! # And the resume is the CHAIN's answer now, not a file's
 //!
 //! `GetPalwPendingChunkGroup` returns the group's own `present` bitmap, count, deadline and pinned
@@ -125,26 +132,20 @@ use std::path::{Path, PathBuf};
 /// a court, so putting the court's carriage there would let anyone renting eight slots defeat every
 /// prosecution on the network. W5 built the close its OWN table instead, keyed `(session_id, side)`.
 ///
-/// **That table is complete. What is missing is on either side of it**, and both halves are real
-/// refusals rather than absences — filing into them costs the fee and carries nothing:
+/// **That table is complete, and so are the two halves that used to be missing** (audit M-8b).
+/// This doc listed three of them — W6's acceptance arm, W6's signing domain, W7's adjudication —
+/// and all three have landed: the declaration is verified against the declaring side's registered
+/// bond key, `PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT` is in
+/// [`PALW_COURT_V2_ALL_DOMAINS`], and the completing chunk assembles, checks `close_digest`,
+/// decodes and adjudicates through the arm a one-carrier close takes. The module doc seventy lines
+/// above already said so; a function doc that contradicts its own module is a reader sent looking
+/// for work that is merged.
 ///
-/// 1. **W6, the authentication.** `palw_v2_validate_objects`' `CourtCloseDeclared` arm returns an
-///    error unconditionally, and a refused lifecycle object is DROPPED with the block standing. So
-///    a declaration filed today pays its carrier, prints one `info!` line on every node, and opens
-///    no group; each chunk behind it then fails `MissingCourtCloseGroup` and pays for that too.
-/// 2. **W6, the message.** [`PALW_COURT_V2_ALL_DOMAINS`] carries no close-declaration signing
-///    context, so there is not yet a message for the side's ML-DSA-87 key to bind. This is the half
-///    this crate can READ, and [`close_declaration_context_v1`] is where it reads it: consensus
-///    will register the domain when W6 lands, and that is what turns this seam green.
-/// 3. **W7, the adjudication.** The `CourtCloseChunk` arm says what it does not do — a completing
-///    chunk "does not assemble, decode, check `close_digest`, run `check_close_cost_v2` /
-///    `adjudicate_court_close_v2` or apply the `CourtClosed` state machine". So `close_digest` is
-///    written and never read, and no shipped function says which digest it IS. This tool computes
-///    the one the only shipped court-close domain admits; until W7 reads it, that is a reading and
-///    not an agreement, and filing on a reading is how a group assembles into a refusal.
-///
-/// Stated here in one place so the owning session can close it without reading this file, and so a
-/// tool that cannot yet file a split close still says exactly what would let it.
+/// **So the only thing this can still refuse is the RULESET's**, and the body below asks exactly
+/// two questions in that order: is the signing domain shipped at all (a build fact, and the one
+/// half `misaka-cli` can read — it depends on `kaspa-consensus-core` and not on the pipeline), and
+/// does THIS network's court pay for more than one carrier. The first is a belt on a bolt that is
+/// closed; the second is the live answer on devnet, where `max_close_chunks` is 1.
 pub(crate) fn court_close_chunked_carriage_v1(court: &PalwCourtParamsV2) -> Result<(), CarriageGap> {
     // **W6's own signal, and it is a fact about CONSENSUS rather than about this file agreeing with
     // itself.** The signing context is the half `misaka-cli` can read — it depends on

@@ -3556,8 +3556,16 @@ pub fn palw_court_close_completes_a_group_v1(state: &PalwChainStateV2, object: &
 /// **What that costs, measured rather than waved at.** A live group at the ruleset's 27 chunks is
 /// up to 2.7 MB inside `collection_root`, which re-serializes and re-hashes every entry of every
 /// collection on every `state_root` — the same cost `pending_chunks` already pays at 800 KB. The
-/// bound is the number of live groups, which is two per open session, and the assembly window
-/// (`4 × count`, at most 108 DAA) is what keeps it short-lived.
+/// bound is the number of live groups, which is two per open session.
+///
+/// **And the assembly window is what keeps it short-lived — since audit H-2c, in code.** That
+/// sentence stood here while nothing swept a group at `assembly_deadline_daa`: the row was deleted
+/// when the SESSION ended, so the bytes were priced for `4 × count` DAA (at most 108) and actually
+/// held for `window_court` (3,000 on the RC). `sweep_court_close_deadlines` now ends the group at
+/// its own deadline, through the same `convict_close_declarer_v1` the backstop used, and
+/// `court_close_deadlines` is the index that makes it a sweep rather than a scan. A declaration is
+/// also legal only at `Terminal` (audit H-2a), so the window cannot be opened at round 0 and held
+/// under a ladder that has not finished.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwCourtCloseGroupV2 {
     /// The bond on `side` — read from the session (challenger) or the claim (executor) at
