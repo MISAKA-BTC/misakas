@@ -65,7 +65,9 @@ use crate::palw_attn_dissect::{
 use crate::palw_base0_a16::{A16AttnFusedParamsV1, PalwA16OpError, a16_attn_finalize_v1, a16_attn_tile_triple_v1};
 use crate::palw_bisect::{PalwBisectNoShowV1, PalwBisectPartyV1, PalwBisectTurnV1};
 use crate::palw_mode_v2::PalwCourtParamsV2;
-use crate::palw_step_leg::{PalwStepLegError, PalwStepOpeningV1, PalwStepTileLeafV1, step_opening_root_capped_v1, step_tile_leaf_hash_v1};
+use crate::palw_step_leg::{
+    PalwStepLegError, PalwStepOpeningV1, PalwStepTileLeafV1, step_opening_root_capped_v1, step_tile_leaf_hash_v1,
+};
 
 /// Wire version of every object in this module.
 pub const PALW_ATTN_COURT_OBJECT_VERSION_V1: u16 = 1;
@@ -110,7 +112,9 @@ pub enum PalwAttnCourtError {
     Leg(#[from] PalwStepLegError),
     #[error("a root claim of {history_positions} positions at {lanes} lanes is outside the court's bounds")]
     RootClaimOutOfRange { history_positions: u32, lanes: usize },
-    #[error("the root claim is about head {got_head} lanes {got_first}..+{got_count}; the ladder terminated on head {head} lanes {first}..+{count}")]
+    #[error(
+        "the root claim is about head {got_head} lanes {got_first}..+{got_count}; the ladder terminated on head {head} lanes {first}..+{count}"
+    )]
     WrongSite { got_head: u16, got_first: u16, got_count: u16, head: u16, first: u16, count: u16 },
     #[error("the root claim's value partials finalize to a tile the execution did not commit")]
     RootDoesNotFinalize,
@@ -572,10 +576,8 @@ pub fn check_attn_dissect_bottom_v1(
     if bottom.tile != expected_tile {
         return Err(PalwAttnCourtError::WrongTile { got: bottom.tile, expected: expected_tile });
     }
-    let (_first_position, width) = phase.terminal_tile_positions().ok_or(PalwAttnCourtError::WrongTile {
-        got: bottom.tile,
-        expected: expected_tile,
-    })?;
+    let (_first_position, width) =
+        phase.terminal_tile_positions().ok_or(PalwAttnCourtError::WrongTile { got: bottom.tile, expected: expected_tile })?;
     if bottom.k_rows.len() != width || bottom.v_rows.len() != width {
         return Err(PalwAttnCourtError::WrongTileWidth {
             got: bottom.k_rows.len(),
@@ -900,7 +902,16 @@ mod tests {
                 .unwrap_or(0) as u8;
             daa += 1;
             phase
-                .apply_choice(&PalwAttnDissectChoiceV1 { version: PALW_ATTN_COURT_OBJECT_VERSION_V1, session_id: h64(9), round: phase.round(), child }, daa, 30)
+                .apply_choice(
+                    &PalwAttnDissectChoiceV1 {
+                        version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                        session_id: h64(9),
+                        round: phase.round(),
+                        child,
+                    },
+                    daa,
+                    30,
+                )
                 .expect("a choice inside the arity");
             assert!(phase.round() <= phase.round_budget(), "arity {arity}: the dissection outran its own round bound");
         }
@@ -1128,7 +1139,11 @@ mod tests {
         let mut silent = phase.clone();
         assert_eq!(silent.declare_no_show(131).expect("silence past the deadline").silent_party, PalwBisectPartyV1::Responder);
         assert_eq!(silent.turn(), PalwBisectTurnV1::Abandoned);
-        assert_eq!(silent.declare_no_show(200), Err(PalwAttnCourtError::AlreadyTerminal), "an abandoned phase charges no second offense");
+        assert_eq!(
+            silent.declare_no_show(200),
+            Err(PalwAttnCourtError::AlreadyTerminal),
+            "an abandoned phase charges no second offense"
+        );
 
         let (m, s) = phase.root_scale();
         let children: Vec<_> = phase.child_ranges().iter().map(|&(f, c)| fx.range_claim(f, c, m, s)).collect();

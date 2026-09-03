@@ -613,7 +613,6 @@ impl PalwBisectLadderV1 {
     }
 }
 
-
 // ---------------------------------------------------------------------------------------------
 // ADR-0082 Decision 3 — the k-ary ladder, and why it is a SECOND machine rather than an edit
 // ---------------------------------------------------------------------------------------------
@@ -1715,7 +1714,11 @@ mod kary_tests {
             let leaves = leaf_hashes(n);
             let levels = tree_levels(&leaves);
             let root = step_merkle_root_v1(&leaves).expect("a tree");
-            assert_eq!(*levels.last().expect("at least one level").first().expect("a root"), root, "n = {n}: level walk is the builder");
+            assert_eq!(
+                *levels.last().expect("at least one level").first().expect("a root"),
+                root,
+                "n = {n}: level walk is the builder"
+            );
             for arity in [2u8, 4, 8, 16, 64] {
                 let mut span = n.next_power_of_two();
                 let lo = 0u64;
@@ -1750,8 +1753,8 @@ mod kary_tests {
         let leaves = leaf_hashes(n);
         let levels = tree_levels(&leaves);
         let root = step_merkle_root_v1(&leaves).expect("a tree");
-        let mut ladder =
-            PalwKaryLadderV1::open(&h64(1), &root, &h64(3), &h64(4), PalwBisectSpaceV1::StepLeaves, n, arity, 100, 200).expect("opens");
+        let mut ladder = PalwKaryLadderV1::open(&h64(1), &root, &h64(3), &h64(4), PalwBisectSpaceV1::StepLeaves, n, arity, 100, 200)
+            .expect("opens");
         let mut daa = 200u64;
         while ladder.turn() == PalwBisectTurnV1::AwaitDisclosure {
             let ranges = ladder.child_ranges();
@@ -1819,7 +1822,12 @@ mod kary_tests {
             daa += 1;
             ladder
                 .apply_verdict(
-                    &PalwBisectVerdictV1 { version: PALW_BISECT_OBJECT_VERSION_V1, session_id: ladder.session_id(), round, agree: divergence >= mid },
+                    &PalwBisectVerdictV1 {
+                        version: PALW_BISECT_OBJECT_VERSION_V1,
+                        session_id: ladder.session_id(),
+                        round,
+                        agree: divergence >= mid,
+                    },
                     daa,
                     30,
                 )
@@ -1847,8 +1855,8 @@ mod kary_tests {
             let leaves = leaf_hashes(n);
             let levels = tree_levels(&leaves);
             let root = step_merkle_root_v1(&leaves).expect("a tree");
-            let mut ladder =
-                PalwKaryLadderV1::open(&h64(1), &root, &h64(3), &h64(4), PalwBisectSpaceV1::StepLeaves, n, 2, 100, 200).expect("opens");
+            let mut ladder = PalwKaryLadderV1::open(&h64(1), &root, &h64(3), &h64(4), PalwBisectSpaceV1::StepLeaves, n, 2, 100, 200)
+                .expect("opens");
             let mut daa = 200u64;
             while ladder.turn() == PalwBisectTurnV1::AwaitDisclosure {
                 let (lo, hi) = ladder.interval();
