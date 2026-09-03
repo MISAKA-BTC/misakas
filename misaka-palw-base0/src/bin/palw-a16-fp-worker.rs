@@ -90,9 +90,12 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
     let artifact_path = std::env::var("MISAKA_PALW_ARTIFACT").unwrap_or_else(|_| die("MISAKA_PALW_ARTIFACT is not set".into()));
     let tokenizer_path = std::env::var("MISAKA_PALW_TOKENIZER").unwrap_or_else(|_| die("MISAKA_PALW_TOKENIZER is not set".into()));
 
-    let court =
-        kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
-            .unwrap_or_else(|e| die(format!("the shipped court params do not build: {e:?}")));
+    // **The ladder is the RULESET's, not this module's constant** (ADR-0082 Decision 8, W1b).
+    // `PALW_STEP_MAX_LEAVES` decided how many tokens a user got — measured, 12 decode tokens on a
+    // 26-token prompt — and it is a default rather than a rule. The court the network's own
+    // binary ships is what the class catalog is walked against and what the capture prices
+    // against, and they must be the same object or the worker serves rows its own chain refuses.
+    let court = misaka_palw_base0::fp_worker::fp_worker_court_params_v1(&network_id).unwrap_or_else(die);
     let entry =
         canonical_class_by_model_id_v1(&court, MODEL_ID).unwrap_or_else(|| die(format!("this build's catalog has no {MODEL_ID} row")));
 
@@ -127,7 +130,8 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
     let load_ms = started.elapsed().as_millis() as u64;
 
     let net = network_id.into_bytes();
-    let backend = Qwen25A16Backend::new(std::sync::Arc::new(artifact), net.clone(), entry.profile.clone(), entry.canonical_job);
+    let backend = Qwen25A16Backend::new(std::sync::Arc::new(artifact), net.clone(), entry.profile.clone(), entry.canonical_job)
+        .with_step_ladder_cap(court.max_step_leaf_count());
     FpWorkerRuntime::new(
         backend,
         &entry.profile,

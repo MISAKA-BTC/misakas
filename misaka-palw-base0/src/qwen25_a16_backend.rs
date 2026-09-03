@@ -1685,4 +1685,157 @@ mod free_prompt_tests {
             kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Matches
         );
     }
+
+    /// **The fold and the dense capture are ONE commitment** (ADR-0082 Decision 7).
+    ///
+    /// This is the test that makes Decision 7 safe to ship: the free-prompt lane stopped keeping
+    /// its tiles, and the only thing that must not move is what the job COMMITS. Both sinks run
+    /// the same loop over the same rows, and every root the chain sees — execution, trace, output,
+    /// manifest, and the step leg's own root and leaf count inside the binding — is compared.
+    ///
+    /// Root equality is also what pins the fold's ENUMERATION. The step tree's leaves are
+    /// `step_merkle_leaf_v1(index, hash)`, so a leaf placed at a different index is a different
+    /// tree: the cursor the fold walks (call-major, position-major, slot-major, tile-major) agrees
+    /// with `canonical_step_leaf_index` for every leaf of this job, or this assertion fails.
+    #[test]
+    fn the_folded_capture_commits_the_dense_captures_roots() {
+        let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
+        let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3));
+        let (ctx, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0xF01D)).expect("the anchor implies a job");
+        let cap = kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES;
+
+        let dense = a16_execute_for_attempt_streaming_capped_v1(&artifact, &profile, None, &ctx, &prompt, cap, &mut |_| {})
+            .expect("the dense sink runs the job");
+        let folded = a16_execute_free_prompt_streaming_v1(&artifact, &profile, None, &ctx, &prompt, cap, &mut |_| {})
+            .expect("the folded sink runs the job");
+
+        assert_eq!(dense.binding, folded.binding, "the two sinks commit the same binding, field for field");
+        assert_eq!(dense.execution_root, folded.execution_root);
+        assert_eq!(dense.trace_root, folded.trace_root);
+        assert_eq!(dense.output_root, folded.output_root);
+        assert_eq!(dense.trace_manifest_root, folded.trace_manifest_root);
+        assert_eq!(dense.generated_token_ids, folded.generated_token_ids, "one execution, one answer");
+        assert_eq!(dense.checkpoints.merkle_root, folded.checkpoints.merkle_root);
+
+        // And the retention is the thing that changed: no tiles, one node per 2^retain_level leaves.
+        let tree = folded.step_tree.as_ref().expect("a folded run keeps its tree");
+        assert!(folded.tiles.tiles.is_empty() && folded.tiles.leaves.is_empty(), "the fold keeps no tiles");
+        assert_eq!(tree.leaf_count(), dense.tiles.leaves.len() as u64);
+        assert_eq!(tree.root().expect("the tree is its own shape"), dense.binding.step_merkle_root);
+        let level = crate::fp_capture::palw_base0_sparse_retain_level_v1(cap);
+        assert_eq!(tree.retain_level(), level, "the level is the ruleset ladder's derivation, not a constant");
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let folded_bytes = crate::produce::base0_fp_material_encode_v2(&folded, &ids).expect("the fold retains").len();
+        let dense_bytes = crate::produce::base0_material_encode_v1(&dense).expect("the dense sink retains").len();
+        assert!(
+            folded_bytes < dense_bytes,
+            "the fold must retain less than the tiles it replaced ({folded_bytes} against {dense_bytes})"
+        );
+        eprintln!(
+            "Decision 7 on the A16 fixture: {} leaves, retention {folded_bytes} bytes folded against {dense_bytes} dense ({:.1}x)",
+            tree.leaf_count(),
+            dense_bytes as f64 / folded_bytes.max(1) as f64
+        );
+    }
+
+    /// **An opening re-derived by replay IS the opening the dense capture would have served** —
+    /// byte for byte, at every interval index of a multi-interval job (ADR-0082 Z6's second half).
+    ///
+    /// The executor kept no tiles, so the span's leaf hashes come from running the interval again
+    /// from its checkpoint. If that replay were a different execution — a different seed id, a
+    /// different resume point, a different order — the bytes would differ here, and a seat would
+    /// have read the difference as this producer's fault.
+    #[test]
+    fn a_replayed_interval_opening_is_the_dense_ones() {
+        let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
+        let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3));
+        let (ctx, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0BEE)).expect("the anchor implies a job");
+        let cap = kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES;
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+
+        let dense = a16_execute_for_attempt_streaming_capped_v1(&artifact, &profile, None, &ctx, &prompt, cap, &mut |_| {})
+            .expect("the dense sink runs the job");
+        let folded = a16_execute_free_prompt_streaming_v1(&artifact, &profile, None, &ctx, &prompt, cap, &mut |_| {})
+            .expect("the folded sink runs the job");
+        let dense_material: crate::produce::Base0RetainedMaterialV1 = (
+            dense.binding.clone(),
+            dense.tiles.tiles.clone(),
+            dense.logits_rows.clone(),
+            dense.generated_token_ids.clone(),
+            dense.checkpoints.chunks.clone(),
+        );
+        let folded_bytes = crate::produce::base0_fp_material_encode_v2(&folded, &ids).expect("the fold retains");
+        let folded_material = crate::produce::base0_fp_material_decode_v2(&folded_bytes).expect("its own retention decodes");
+
+        let interval = kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
+        let count = crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&dense.binding, interval)
+            .expect("the capture has an interval geometry")
+            .interval_count;
+        assert!(count >= 2, "a one-interval job cannot show that a replayed anchor is the committed one");
+        let claim = PalwClaimRootsV1 { execution_root: dense.execution_root, trace_root: dense.trace_root, anchor: ctx.job_id };
+        for index in 0..count {
+            let from_tiles = crate::fp_interval::base0_open_fp_interval_v1(&dense_material, index, &ids, interval)
+                .unwrap_or_else(|e| panic!("interval {index} opens from the tiles: {e}"));
+            let from_replay = crate::fp_interval::base0_open_fp_interval_sparse_v1(
+                &folded_material,
+                index,
+                &ids,
+                interval,
+                &A16IntervalKernels { artifact: &artifact, plan: None },
+            )
+            .unwrap_or_else(|e| panic!("interval {index} opens from the fold: {e}"));
+            assert_eq!(from_replay, from_tiles, "interval {index}: the replayed opening is not the retained one");
+            assert_eq!(
+                backend.verify_fp_interval_opening(&from_replay, claim, index, &ids, dense.binding.step_leaf_count),
+                kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1::Valid,
+                "interval {index}: a seat must license the replayed opening"
+            );
+        }
+    }
+
+    /// **Z6: what the fold retains is a fixed fraction of the leaf count — of nothing else.**
+    ///
+    /// Two jobs of different length on one class: the retained vector is `⌈leaves / 2^level⌉`
+    /// nodes in both, so the retention per leaf is the same number whatever the context, and the
+    /// only thing that moves it is the ladder the level is derived from. The dense capture's own
+    /// retention is printed beside it, because the ratio is what ADR-0082 §1.5 is about.
+    ///
+    /// What this does NOT claim: that the whole retained MATERIAL is flat per position. It is not,
+    /// and the reason is named — the checkpoint chunks hold the cache at every checkpoint
+    /// (Decision 4's prefix-stability is not implemented here), and on a graph-v3 class the leaves
+    /// per position themselves grow with `kv_len` (Decision 1). Both are other units' work, and a
+    /// test that asserted flatness today would be asserting something this tree does not do.
+    #[test]
+    fn the_folds_retention_is_a_fixed_fraction_of_the_leaf_count() {
+        let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
+        let cap = kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES;
+        let level = crate::fp_capture::palw_base0_sparse_retain_level_v1(cap);
+        let mut seen = Vec::new();
+        for (prefill, decode) in [(4u32, 3u32), (9, 6)] {
+            let ctx = {
+                let mut ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prefill, decode);
+                ctx.job_id = Hash64::from_u64_word(0x2626 + prefill as u64);
+                let prompt: Vec<u32> = (0..prefill).map(|i| i % profile.vocab_size).collect();
+                ctx.prompt_token_ids_hash = kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&prompt);
+                ctx
+            };
+            let prompt: Vec<usize> = (0..prefill as usize).map(|i| i % profile.vocab_size as usize).collect();
+            let folded = a16_execute_free_prompt_streaming_v1(&artifact, &profile, None, &ctx, &prompt, cap, &mut |_| {})
+                .expect("the folded sink runs the job");
+            let tree = folded.step_tree.as_ref().expect("a folded run keeps its tree");
+            let leaves = tree.leaf_count();
+            let nodes = tree.retained_nodes().len() as u64;
+            assert_eq!(nodes, leaves.div_ceil(1 << level), "the retained vector is the leaf count over the block, and nothing else");
+            seen.push((leaves, nodes));
+        }
+        assert!(seen[0].0 != seen[1].0, "two jobs of the same length prove nothing about the context");
+        // 64 bytes a node, and the budget the level was derived from bounds it — on both jobs.
+        for (leaves, nodes) in seen {
+            assert!(
+                nodes * 64 <= crate::fp_capture::PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES,
+                "{leaves} leaves retained {} bytes, past the budget the level derives from",
+                nodes * 64
+            );
+        }
+    }
 }

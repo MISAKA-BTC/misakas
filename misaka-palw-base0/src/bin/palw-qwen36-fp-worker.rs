@@ -124,6 +124,11 @@ fn load() -> FpWorkerRuntime<Qwen36Backend> {
     row.shape_matches(&artifact.shape).unwrap_or_else(|e| die(format!("{artifact_path} is not a {model_id} artifact: {e}")));
     let load_ms = started.elapsed().as_millis() as u64;
 
+    // **The ladder is the RULESET's, not the module default** (ADR-0082 Decision 8, W1b): the
+    // number that decides how many tokens a user gets is the court's `max_step_leaf_count`, and
+    // this binary was pricing every job against `PALW_STEP_MAX_LEAVES` because that is what
+    // `step_leaf_count` reaches for when nobody states one.
+    let court = misaka_palw_base0::fp_worker::fp_worker_court_params_v1(&network_id).unwrap_or_else(die);
     let net = network_id.into_bytes();
     let backend = Qwen36Backend::with_class_profile(
         std::sync::Arc::new(artifact),
@@ -131,7 +136,8 @@ fn load() -> FpWorkerRuntime<Qwen36Backend> {
         row.canonical_job,
         profile.clone(),
         net.clone(),
-    );
+    )
+    .with_step_ladder_cap(court.max_step_leaf_count());
     if !backend.supports_court() {
         die(format!("this build cannot serve {model_id}'s registered graph, so it cannot commit a step leg for it"));
     }

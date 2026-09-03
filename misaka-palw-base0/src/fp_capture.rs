@@ -1906,6 +1906,44 @@ mod tests {
         }
     }
 
+    /// **The retained level is the ladder's, and the budget is what derives it** (ADR-0082
+    /// Decision 7's `retain_level = ⌈log₂ leaves⌉ − 20`).
+    ///
+    /// Two things are pinned, and the shipped constant is the SECOND of them rather than an
+    /// independent number: that the level the derivation returns is the smallest one whose
+    /// retained vector fits [`PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES`] — one lower would exceed it
+    /// — and that at the `2^32` ladder ADR-0077 Decision 12 moves to, that level is
+    /// [`PALW_BASE0_SPARSE_RETAIN_LEVEL_V1`].
+    #[test]
+    fn the_retained_level_is_the_ladders_and_the_budget_is_what_bounds_it() {
+        let node_bytes = 64u64;
+        for ladder_log2 in 10..=48u32 {
+            let ladder = 1u64 << ladder_log2;
+            let level = palw_base0_sparse_retain_level_for_ladder_v1(ladder);
+            let retained = |level: u32| -> u64 { ladder.div_ceil(1u64 << level) * node_bytes };
+            assert!(
+                retained(level) <= PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES,
+                "a 2^{ladder_log2} ladder retains {} bytes at level {level}, past the budget",
+                retained(level)
+            );
+            if level > 0 {
+                assert!(
+                    retained(level - 1) > PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES,
+                    "level {level} is not the smallest that fits at 2^{ladder_log2}"
+                );
+            }
+        }
+        assert_eq!(
+            palw_base0_sparse_retain_level_for_ladder_v1(1 << 32),
+            PALW_BASE0_SPARSE_RETAIN_LEVEL_V1,
+            "the shipped constant is what the 2^32 ladder derives to — 2^20 retained nodes, 64 MiB"
+        );
+        // And the level a capture actually folds at never goes below it, because an opening
+        // re-derives a whole CALL and every level under 2^12 is already inside one.
+        assert_eq!(palw_base0_sparse_retain_level_v1(PALW_STEP_LEG_MAX_LEAVES), PALW_BASE0_SPARSE_RETAIN_LEVEL_V1);
+        assert_eq!(palw_base0_sparse_retain_level_v1(1 << 40), palw_base0_sparse_retain_level_for_ladder_v1(1 << 40));
+    }
+
     // =========================================================================================
     // U-01 — the capture, measured against the forward (ADR-0082 Decision 7)
     // =========================================================================================
