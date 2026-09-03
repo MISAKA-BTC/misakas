@@ -3366,3 +3366,55 @@ palw-certify drill --family a16-v5 …                 ->  exit 2, unknown famil
 
 **Two of the roughly eight runnable commands in the public draft, both found by running them.**
 The gate is one hour old and has paid for itself twice.
+
+### The announcement command gate — first pass, on 5f
+
+```
+FIXED   stranger.py                     -> `… stranger.py selftest`; the bare form exits 2 on
+                                           "the following arguments are required: cmd".
+                                           The fixed form runs: 13 oracle MATCH lines.
+PENDING palw-certify drill --family a16-v5  unknown family on 5f; impl-only. Replace with
+                                           `--model-id "Qwen/Qwen2.5-1.5B/graph-v5@512"` AFTER
+                                           the merge and AFTER running it there.
+```
+
+1c ran the replacement on the merged tree and it is better than a fix — **the tool prints the
+derivation it made:**
+
+```
+$ palw-certify drill --model-id "Qwen/Qwen2.5-1.5B/graph-v5@512" --lane attempt --out attempt.json
+palw-certify: Qwen/Qwen2.5-1.5B/graph-v5@512 reaches the kernels of PALW-QWEN25-A16-V5 —
+              drilling that family
+wrote …: FamilyCertified, attempt lane, family PALW-QWEN25-A16-V5 (5c22b8d0…), 76873 bytes
+fits one carrier                                                                      exit 0
+$ … --model-id "Qwen/Qwen2.5-1.5B/graph-v9@512"
+palw-certify: this build's catalogs have no `Qwen/Qwen2.5-1.5B/graph-v9@512` row       exit 2
+```
+
+> **The operator types the ROW and the tool says which family that implies.** With
+> `--family a16-v5` the operator asserts the family and nothing checks the assertion — which is
+> exactly the stage-5b defect, where a script named `a16` for a row whose family is
+> `PALW-QWEN25-A16-V5`. **One spelling, and the derivation printed rather than assumed.**
+
+*And the mistyped form refuses by name with exit 2, which is what a "verify it yourself" command
+owes a reader who fat-fingers it.*
+
+## The artifact answer, corroborated across two machines and two trees
+
+```
+             wt-tm f939ddc5 (Mac)            ibm 8923b354
+  shipped    artifact_digest  c00faa48…      c00faa48…
+  bound      artifact_digest  158314b5…      158314b5…
+  shipped    inventory_root(v5) 1a7457f1…    1a7457f1…
+  bound      inventory_root(v5) 1a7457f1…    1a7457f1…
+  run        1 passed, 5 filtered out,       1 passed, 0 filtered out,
+             59.35s                          88.55s
+```
+
+**Two machines, two trees, four identical values.** `c00faa48…` now holds **four ways**: the raw
+trailing bytes read off the file, the worker's refusal text, the ibm probe, and this one.
+
+*The redundancy found nothing this time, and that is the correct outcome rather than a wasted
+twenty-six minutes.* **A second measurement that agrees converts "one machine computed this" into
+"this is a property of the artifacts."** Tonight the same habit found a launch-stopper once and
+confirmed a result twice — a good rate for something whose expected yield is nothing.

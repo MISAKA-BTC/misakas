@@ -76,7 +76,7 @@ carries the model's own answer bytes and the artifacts derived from them.
 | dense class faithfulness | **45 of 57 top-1**, 56/57 top-5, rank corr 0.893 | `qwen25-convert <checkpoint-dir> --a16`, which prints it at conversion time |
 | artifacts open in foreign software | 4 agreed, 0 disagreed | `python3 scripts/misaka-palw-artifact-thirdparty.py --require docs/evidence-qwen36-model-gate/artifacts/` |
 | the format checker has teeth | five injuries, each refused by name | `python3 scripts/misaka-palw-artifact-conformance.py selftest` |
-| a second implementation agrees | — | `python3 scripts/misaka-palw-derive-stranger.py` |
+| a second implementation agrees | — | `python3 scripts/misaka-palw-derive-stranger.py selftest` |
 
 **Publication gate on that last row.** Running the five commands above found the stranger red on the
 pre-cut branch — the transformer ids moved when the source tree changed, which the single re-pin at
