@@ -5102,6 +5102,14 @@ pub fn palw_v2_params_with_classes_on_base(
     let invalid = |what: &'static str| E::Invalid(what);
 
     let mut params = palw_v2_params_from_artifacts_on_base(base, base0_artifact_root, genesis_bonds)?;
+    // **Which prompt-id form the dense row is PRICED at, read before the bundle is borrowed.**
+    //
+    // ADR-0082 Decision 5's fence (`palw_prompt_ids_merkle`) is `None` on every shipped preset, so
+    // this is `Flat` — the more expensive of the two forms (82,080 bytes of ids against 80,504),
+    // which is the safe direction for a ceiling. It is read from the network's own fence rather
+    // than chosen here, because a class priced under a form its ruleset does not run is the
+    // "figure measured under one configuration" defect ADR-0082 §1 opens with.
+    let prompt_ids_form = params.palw_prompt_ids_form_at(0);
     let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else {
         unreachable!("palw_rc_params_from_artifacts installs a ConsensusV2 bundle or returns Err");
     };
@@ -5166,11 +5174,46 @@ pub fn palw_v2_params_with_classes_on_base(
             .map_err(|_| invalid("the Qwen3.6 registration does not derive"))?;
     // The A16 dense class, when its artifact root is pinned. It registers last, so what it declares
     // is what it keeps — no dilution follows it.
+    //
+    // **GENESIS DECISION (8e): the dense slot holds ADR-0082's `graph-v5` 512 row, and the
+    // `graph-v2` `n_ctx`-16 row it replaces is not registered.** The 5f genesis card §2 registers
+    // "dense A16 **512 row** — the only wide row registered", and §6 states why the narrow one
+    // cannot stand in for it: at `n_ctx` 16 the decode budget is 7 tokens against grammar floors of
+    // 38 / 60 / 104, so the demonstration the launch is about cannot be expressed. A class is its
+    // graph, so this is a NEW class id and not a repair — `qwen25_a16_registration_v2` and the row
+    // it builds stay exactly where they are for the networks that already registered them.
+    //
+    // **GENESIS DECISION (8e): the share is the dense tier's existing
+    // `PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE`, unchanged.** One class leaves the slot and
+    // another takes it, so the cadence table the chain starts with is the one the card's arithmetic
+    // was written against, and the hybrid's dilution inversion above is unmoved.
     let dense = match qwen25_a16_artifact_root {
         Some(root) => Some(
-            // The dense tier's correction shares its geometry, so its row is simply `_v2`.
-            crate::palw_qwen25_profile::qwen25_a16_registration_v2(root, dense_share, slash, target)
-                .map_err(|_| invalid("the Qwen2.5 A16 registration does not derive"))?,
+            crate::palw_qwen25_profile::qwen25_a16_graph_v5_registration_v1(
+                root,
+                dense_share,
+                slash,
+                target,
+                bundle,
+                prompt_ids_form,
+                // **Whose bond the registration is charged to.** A fused row must carry its graph
+                // (`PalwClassStateV2::fused_attention` is readable from nowhere else), and the
+                // carriage has a `registrant_bond` field with no room for "the network itself" —
+                // so it names the genesis registry's own first row. Nothing signs it and nothing
+                // at genesis reads a signature; what it costs that bond is ADR-0056 Decision 3's
+                // registration reservation, 40,000 sompi against a genesis collateral of 10,000
+                // MSK. Taken from the assembled registry rather than typed, so it cannot name a
+                // bond this genesis does not hold.
+                bundle
+                    .genesis_objects
+                    .iter()
+                    .find_map(|o| match o {
+                        crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered { bond, .. } => Some(*bond),
+                        _ => None,
+                    })
+                    .ok_or(invalid("a genesis that registers the fused dense row needs a bond registry to charge it to"))?,
+            )
+            .map_err(|_| invalid("the Qwen2.5 A16 graph-v5 registration does not derive"))?,
         ),
         None => None,
     };
@@ -5426,6 +5469,35 @@ pub const PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT: crate::Hash64 = crate::Hash6
     0x8e, 0xd7, 0xfe, 0x7a, 0x2f, 0x72, 0x9d, 0x10, 0xf0, 0x08, 0x21, 0xf9, 0x4b, 0x1e, 0x85, 0x62, 0xe4, 0xe2, 0x17, 0xb7, 0x27,
     0x08,
 ]);
+
+/// **The genesis root of ADR-0082's graph-v5 dense row — the same value, and that is the
+/// measurement rather than a shortcut.**
+///
+/// The 5f card registers the dense tier as the graph-v5 512 row
+/// ([`crate::palw_qwen25_profile::qwen25_a16_graph_v5_registration_v1`]), which is a court-capable
+/// row and therefore pins an INVENTORY root, not a container digest
+/// (`misaka_palw_base0::classes::CanonicalClassV1::artifact_root`). Two things could have moved it
+/// and neither does:
+///
+/// * **the graph.** Decision 1 fuses four attention nodes into one; it moves no tensor, so the
+///   operand inventory the root is taken over is the same set in the same order.
+/// * **the tokenizer binding.** The file the cut ships is the re-bound conversion, whose digest is
+///   `158314b5…` against the deployed file's `c00faa48…` — binding writes the commitment field, and
+///   the commitment field is not an operand.
+///
+/// **Measured 2026-09-03 with `misaka-palw-base0/tests/a16_root_probe.rs`
+/// (`print_a16_v5_root_forms`) over BOTH files under `palw_a16_context_row_profile_v5(512)`:**
+///
+/// | file | `artifact_digest()` | `a16_inventory_v1(.., v5).root()` |
+/// |---|---|---|
+/// | `/Users/wata/Downloads/qwen25-1.5b-a16.palwart` (deployed) | `c00faa48…` | `1a7457f1…` |
+/// | `instruct-bound.palwart` (the bound file the cut ships) | `158314b5…` | `1a7457f1…` |
+///
+/// So this is an ALIAS and not a second byte array: the two rows are one file's one inventory, and
+/// a second spelling of a value that is equal by measurement is the two-mappings defect this
+/// family has already paid for once. If a future conversion ever moves the operand set, the probe
+/// above is what says so — and then this becomes its own constant, with its own measurement.
+pub const PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT: crate::Hash64 = PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT;
 
 pub fn palw_rc_qwen25_a16_is_registered() -> bool {
     PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT != crate::Hash64::from_bytes([0u8; 64])
@@ -7872,7 +7944,9 @@ pub fn palw_rc_shipped_params() -> Params {
     // backend registry at the moment a claim names it (`--palw-class-artifact`); a node without
     // the weights still validates the chain, it simply cannot produce for that class.
     if palw_rc_qwen36_is_registered() {
-        let dense = palw_rc_qwen25_a16_is_registered().then_some(PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT);
+        // The dense slot is ADR-0082's graph-v5 512 row (5f card §2); its root is the same
+        // inventory root by measurement — see `PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT`.
+        let dense = palw_rc_qwen25_a16_is_registered().then_some(PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT);
         return palw_rc_arm_phase1(
             palw_rc_params_with_classes(PALW_RC_GENESIS_ARTIFACT_ROOT, PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT, dense, bonds)
                 .unwrap_or_else(|e| panic!("the pinned PALW-RC genesis card does not assemble: {e}")),
