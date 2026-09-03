@@ -61,3 +61,7 @@ rothschild-generated-key.hex
 
 # PALW worker per-cwd GGUF sha cache (generated wherever a worker runs)
 .palw-gguf-sha.json
+
+# Python bytecode caches are never source (a .pyc was tracked by accident at 4c97f930)
+__pycache__/
+*.pyc
