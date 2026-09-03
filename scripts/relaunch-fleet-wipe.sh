@@ -156,8 +156,12 @@ wipe)
     stamp=$(date -u +%Y%m%d-%H%M)
     for h in "${HOSTS[@]}"; do
         say "-- $h --"
-        dirs=$(r "$h" 'pgrep -af kaspad 2>/dev/null | grep -oE "appdir=[^ ]+" | cut -d= -f2 | sort -u')
-        [ -z "$dirs" ] && dirs=$(r "$h" 'ls -d /root/.t11 /root/.t11? /var/lib/misaka-minerpool/slots/*/appdir 2>/dev/null')
+        # STATIC on purpose. wipe runs only after verify proved nothing runs, so "the appdirs of
+        # running nodes" is empty by construction. The pgrep form this replaced matched the remote
+        # shell running it (its own cmdline holds `appdir=[^ ]+`), returned the literal `[^`, and —
+        # being non-empty — masked this list: with --execute that is a wipe that moves nothing and
+        # prints nothing, found only because the dry run was read before the real one (2026-09-04).
+        dirs=$(r "$h" 'ls -d /root/.t11 /root/.t11? /var/lib/misaka-minerpool/slots/*/appdir 2>/dev/null')
         for d in $dirs; do
             if [ "$EXECUTE" = 1 ]; then
                 r "$h" "mv '$d' '${d}.old-${GENESIS}-${stamp}'" && say "  moved $d -> ${d}.old-${GENESIS}-${stamp}"
