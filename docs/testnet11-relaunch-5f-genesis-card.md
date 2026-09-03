@@ -4610,3 +4610,56 @@ tests the command should run before reading its colour.*
 Drill with `bound-candidate.palwart` on the rig: `fb49d541` built clean; stage 0 PASS (18/18,
 stranger agrees); 0b PASS; stage 1 running — the first boot of a devnet bundle with the k-ary
 reader wired **and** the derived ceiling. Stage 4 is the verdict this card wants to read.
+
+## The rehearsal fired: the fingerprint line, then M-07 refusing the un-re-pinned genesis — by design
+
+```
+candidate binary  /root/t11/kaspad.candidate-971b2eff   53,886,936 B   sha256 5f28a4d9…
+17:41:07.240  [INFO ]  Consensus params fingerprint: 71efa664… (network testnet-11)   <- = the 971b2eff table
+17:41:07.686  [ERROR] panicked at consensus/src/consensus/utxo_set_override.rs:60:9:
+              genesis utxo_commitment mismatch (audit M-07): the pinned GENESIS.utxo_commitment
+              does not match the premine UTXO set — re-pin it after any premine change
+node stopped after 11 s
+```
+
+**Both lines are correct.** The candidate is pre-re-pin: its pinned `utxo_commitment` is the old
+`2d882275…` while the build mints `ba2612417e7e0817…`, and **the M-07 guard refuses to boot a node
+whose genesis does not commit to its own premine.** That is the audit fix working, and it is the
+proof — from the binary rather than from a test — that a launch on an un-re-pinned tree cannot
+happen by accident. It fixes the ceremony's order: **step 1 (the re-pins, `GENESIS.utxo_commitment`
+and `GENESIS.hash` together) before step 4 (the boot), never the reverse.**
+
+### Two defects in my own instruments, found by that run
+
+**The rehearsal script reported `fingerprint OK` over a node that panicked 0.4 s later.** Its wait
+loop broke on the fingerprint line before asking whether the process was alive. A green line over
+a dead process — the family every false green tonight belongs to, in a script written for the
+ceremony's boot step. Fixed: liveness (`kill -0`) and a `panicked at` scan are checked **before any
+verdict is written**, and a dead or panicked node reads `BOOT FAILED` with the panic's location.
+The fixed script is on ibm for the real boot; the candidate was not re-run — its outcome is known.
+
+**`pkill -f "kaspad.candidate-971b2eff"` killed the ssh shell that issued it** — the shell's own
+command line carried the string — and returned 255, an hour after I wrote *"a process census that
+includes the censor is off by one"* into this card. The census that cannot match the asker reads
+`/proc/*/exe`; it found **zero** leftovers, so the "2" the substring count reported were both
+askers. The rule moved from prose to the only form that held tonight: the command itself.
+
+### Scripts from the drill session: F and E adopted, reverted, replaced by G
+
+F applied cleanly; E's hunk had moved, and I ported it by hand after asserting its two anchor
+lines unique and adjacent — **necessary, not sufficient**: 5e then showed 5f's drill script lacks
+the family-first ordering (`baseline_of "…FamilyCertified"` does not exist there), so the ported
+wait sat on a structure the drill does not perform. Both reverted (`1d54629e`, `6ab20fa4`; the
+scripts byte-identical to pre-adoption 5f, checked); **G** — the full ordered delta versus 5f's own
+copies, eight drill commits, E and F subsumed — applied clean at `77d886b6`. `bash -n` and
+`py_compile` clean (and `py_compile` writes `scripts/__pycache__/`, which impl now ignores and 5f
+does not yet; removed, never committed). **Merge surface with G: exit 0, zero conflicts, merged
+`derive/src` = the basis, and the merged drill script equals 5f's — G survives the merge.**
+
+### From the drill session, in its own words
+
+*"Two-minute gaps in a log at a two-minute cadence are not silence. I know that rule; I said
+'hang' before applying it."* — retracting a silent-hang call five minutes after making it, on
+measurement (`produced block #4` at 00:45:11; the "10 accepted" counted peers' blocks and
+heartbeats, not the producer's own). **Stage 1 PASS; stage 2 (registering graph-v5@512) in flight
+on the k-ary-wired, T1-derived bundle; stage 4 with `bound-candidate.palwart` ~15–20 min behind.**
