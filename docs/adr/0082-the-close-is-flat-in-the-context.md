@@ -342,8 +342,13 @@ widest term is a MODEL width and the derivation returns — measured by U-04's t
 court with Merkle prompt ids — **80,504 bytes = 1 chunk** on the dense tier (binding node
 `ffn_down`; 82,080 with flat ids) and **200,732 bytes = 3 chunks** on the hybrid (binding node the
 recurrence `GatedDeltaNet`: its `interval × 5 refs` replay evidence, not attention), the set → 3;
-the fused dispute's bottom opening is 25,120 bytes dense and 42,016 hybrid, flat at 512 / 4,096 /
-32,768. Whatever it evaluates to, a row is admitted at a chunk count only when the transport
+the fused dispute's bottom opening is 25,120 bytes dense and 42,016 hybrid on the checkpoint-tile
+route (derived), 37,982 and 55,390 on the cache-write route (measured by borsh on the real object,
+34 rows with their paths), flat at 512 / 4,096 / 32,768. "Flat" as a measurement rather than an
+adjective (verified independently by a second session on a detached checkout): the dense graph-v5
+close is **80,504 bytes at `n_ctx` 512 and 80,696 at 4,096 — 192 bytes for eight times the
+context**; at 32,768 it is 303,640 with the binding node moved to `EmbedLookup` (Decision 5's
+measured limit). Whatever it evaluates to, a row is admitted at a chunk count only when the transport
 carries it — W5's own table (§1.4), never the certification lane's `pending_chunks` and its 8. The
 CODE CONDITION, not a schedule: until W5 is in the ruleset, `max_close_chunks` is ONE and the
 admission gate says so; an admitted row whose worst close no carrier can file is the 5f state §1.4
