@@ -2070,7 +2070,7 @@ mod candidate_probe {
         let (prefill, decode) = row.canonical_job;
         let (ctx, _prompt) = crate::produce::base0_rc_job_v1(
             &row.profile,
-            Hash64::from_u64_word(0x0082_B2_512),
+            Hash64::from_u64_word(0x0000_082B_2512),
             row.artifact_shape.vocab,
             prefill,
             decode,
