@@ -6863,11 +6863,7 @@ fn cap_session_rung_deadline_v2(session: &mut PalwCourtSessionStateV2, params: &
 /// A session whose claim or class has already been retired answers `false`: the record that would
 /// say otherwise is gone, and a clock nothing can serve must not convict anyone.
 pub(crate) fn court_session_class_is_fused_v2(state: &PalwChainStateV2, session: &PalwCourtSessionStateV2) -> bool {
-    state
-        .claims
-        .get(&session.claim)
-        .and_then(|claim| state.classes.get(&claim.class_id))
-        .is_some_and(|class| class.fused_attention)
+    state.claims.get(&session.claim).and_then(|claim| state.classes.get(&claim.class_id)).is_some_and(|class| class.fused_attention)
 }
 
 fn court_turn_and_rung_deadline_v2(
@@ -7019,7 +7015,8 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         // index uses. Asking the LADDER here would read `Terminal` on every session that had
         // reached its dissection and hand the whole exchange to the backstop, which closes
         // challenger-side: a responder could simply stop answering rounds and win.
-        let (turn, rung_deadline) = court_turn_and_rung_deadline_v2(&session, court_session_class_is_fused_v2(&builder.state, &session));
+        let (turn, rung_deadline) =
+            court_turn_and_rung_deadline_v2(&session, court_session_class_is_fused_v2(&builder.state, &session));
         let turn_can_still_move =
             !matches!(turn, crate::palw_bisect::PalwBisectTurnV1::Terminal | crate::palw_bisect::PalwBisectTurnV1::Abandoned);
         let rung_fired = turn_can_still_move && rung_deadline < ctx.daa_score && rung_deadline < session.deadline_daa;
@@ -8444,9 +8441,9 @@ fn apply_object(
                     // table of the rows THIS BUILD ships would be worse than a gap: the fold's
                     // answer would be a function of the binary rather than of the chain, and two
                     // builds shipping different row sets would root the same genesis differently.
-                    fused_attention: admission
-                        .as_ref()
-                        .is_some_and(|carriage| crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&carriage.profile)),
+                    fused_attention: admission.as_ref().is_some_and(|carriage| {
+                        crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&carriage.profile)
+                    }),
                 }),
             );
             // **Decision 3: the registry's price, taken now and held while the class lives.** A
@@ -17826,7 +17823,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&19u16.to_le_bytes()); // version_le(2) = 19, restated from the ADR (ADR-0082: the court session's dissection phase)
+            s.update(&20u16.to_le_bytes()); // version_le(2) = 20, restated from the ADR (ADR-0082 C-5: the class record's `fused_attention`)
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
