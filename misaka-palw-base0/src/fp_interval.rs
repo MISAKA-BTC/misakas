@@ -1734,4 +1734,346 @@ mod tests {
             "the anchored form must reach the SAME verdict as the long one — otherwise a challenger picks the route that convicts"
         );
     }
+
+// =============================================================================================
+// ADR-0082 Decision 9 (invariant Z5, unit U-05): the seat recomputes, and never fetches the history
+// =============================================================================================
+
+    use crate::fp_recompute::{Base0FpRecomputeError, Base0FpRecomputeKernelsV1, base0_fp_recompute_state_v1};
+
+    /// The floor's kernels for a RECOMPUTE — the same engine and cache its capture path uses, with
+    /// nothing captured and no token selected. The dense and hybrid tiers ship theirs in
+    /// `crate::fp_recompute`; this one exists because the floor's fixture is the class in this
+    /// file's tests, and it drives exactly the same shared driver.
+    struct FloorRecompute<'a> {
+        engine: crate::engine::Base0Engine<'a>,
+        cache: crate::engine::KvCache,
+        artifact: &'a crate::artifact::Base0ArtifactV1,
+    }
+
+    impl<'a> FloorRecompute<'a> {
+        fn new(artifact: &'a crate::artifact::Base0ArtifactV1) -> Self {
+            Self { engine: crate::engine::Base0Engine::new(artifact), cache: crate::engine::KvCache::new(artifact), artifact }
+        }
+    }
+
+    impl Base0FpRecomputeKernelsV1 for FloorRecompute<'_> {
+        fn forward_no_capture(&mut self, token: usize, position: usize) -> Result<(), Base0FpRecomputeError> {
+            self.engine
+                .forward_token(&mut self.cache, token, position)
+                .map(|_| ())
+                .map_err(|e| Base0FpRecomputeError::Engine(format!("{e:?}")))
+        }
+
+        fn state_chunks(&self, profile: &PalwShapeProfileV3, positions: u32) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
+            let _ = self.artifact;
+            let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions)
+                .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")))?;
+            let mut chunks = Vec::with_capacity(geometry.chunk_count() as usize);
+            for index in 0..geometry.chunk_count() {
+                let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
+                    .ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
+                chunks.push(
+                    self.cache.state_chunk_bytes(&entry).ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?,
+                );
+            }
+            Ok(chunks)
+        }
+    }
+
+    /// The seat's own state at one interval's start, computed the way Decision 9 says: the prompt
+    /// it holds and the committed output ids, teacher-forced, with the family's own kernels.
+    fn seat_state(
+        material: &Base0RetainedMaterialV1,
+        artifact: &crate::artifact::Base0ArtifactV1,
+        prompt_ids: &[u32],
+        covered: u32,
+    ) -> crate::fp_recompute::Base0FpSeatStateV1 {
+        let binding = &material.0;
+        let mut kernels = FloorRecompute::new(artifact);
+        base0_fp_recompute_state_v1(&binding.shape_profile, &binding.job_context, prompt_ids, &material.3, covered, &mut kernels)
+            .expect("the seat can run the floor")
+    }
+
+    /// **(a) Z5's first half: the root a seat recomputes IS the checkpoint the executor committed,
+    /// at every interval of a multi-interval job.**
+    ///
+    /// Nothing about the executor's state is read: the comparison is between 64 bytes the claim
+    /// commits and 64 bytes this process computed from the prompt and the answer's ids.
+    #[test]
+    fn the_recomputed_root_is_the_committed_checkpoint_at_every_interval() {
+        let (material, _claim, ids, artifact) = floor_material(3, 4);
+        let binding = &material.0;
+        let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("a geometry");
+        assert!(geometry.interval_count > 1, "the fixture must have at least one checkpoint-anchored interval");
+        let checkpoints = crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(
+            &binding.job_context,
+            &binding.shape_profile,
+            &binding.checkpoint_profile,
+            &material.4,
+        )
+        .expect("the executor's own leg");
+        let mut checked = 0;
+        for index in 1..geometry.interval_count {
+            let covered = geometry.anchor_covered_call(index).expect("an anchored interval");
+            let state = seat_state(&material, &artifact, &ids, covered);
+            let committed = checkpoints
+                .leaves
+                .iter()
+                .find(|l| l.covered_decode_call == covered)
+                .unwrap_or_else(|| panic!("the executor committed a checkpoint at call {covered}"));
+            assert_eq!(
+                state.state_chunks_root, committed.state_chunks_root,
+                "interval {index}: the seat's own recompute must reach the committed state root"
+            );
+            // …and it is the executor's own spelling that produced both, not two hashes that
+            // happen to agree today.
+            assert_eq!(
+                base0_state_chunks_root_v1(&binding.state_chunk_map_id, &state.chunks).expect("a root"),
+                committed.state_chunks_root
+            );
+            checked += 1;
+        }
+        assert!(checked > 0);
+    }
+
+    /// **(e) The two forms agree on honest material**, and the chunkless one is what a graph-v5
+    /// seat is served: the same interval, replayed from the seat's own recomputed state, reaches
+    /// the same verdict as the ADR-0077 replay fed the executor's chunks.
+    #[test]
+    fn the_seats_own_state_and_the_carried_chunks_reach_the_same_verdict() {
+        let (material, claim, ids, artifact) = floor_material(3, 4);
+        let binding = &material.0;
+        let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("a geometry");
+        for index in 0..geometry.interval_count {
+            let chunked = base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("the chunked form opens");
+            let flat = base0_open_fp_interval_chunkless_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("the flat form opens");
+            let state = geometry.anchor_covered_call(index).map(|covered| seat_state(&material, &artifact, &ids, covered));
+            let with_history = base0_verify_fp_interval_opening_with_state_v1(
+                &chunked,
+                claim,
+                index,
+                &ids,
+                binding.step_leaf_count,
+                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+                None,
+                &FloorKernels(&artifact),
+            );
+            let recomputed = base0_verify_fp_interval_opening_with_state_v1(
+                &flat,
+                claim,
+                index,
+                &ids,
+                binding.step_leaf_count,
+                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+                state.as_ref(),
+                &FloorKernels(&artifact),
+            );
+            assert_eq!(with_history, Base0FpIntervalSeatVerdictV1::Valid, "interval {index}, the carried form");
+            assert_eq!(recomputed, Base0FpIntervalSeatVerdictV1::Valid, "interval {index}, from the seat's own state");
+        }
+    }
+
+    /// **(b) A tampered checkpoint is refused, and the refusal NAMES it.**
+    ///
+    /// The producer is honest about its own bytes: one cache row is changed and the whole
+    /// commitment is RE-DERIVED from the corrupted chunks, so its roots are self-consistent and
+    /// every check that reads the opening against the claim passes. The only thing that catches it
+    /// is arithmetic nobody can fake — the seat running the job — and what comes back names the
+    /// checkpoint, the call it covers, and both roots.
+    #[test]
+    fn a_tampered_checkpoint_is_refused_and_the_refusal_names_it() {
+        let (honest, _claim, ids, artifact) = floor_material(3, 4);
+        let binding = &honest.0;
+        let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("a geometry");
+        let index = 1;
+        let covered = geometry.anchor_covered_call(index).expect("an anchored interval");
+
+        // One byte of one cache row, and then the producer's own commitment over it.
+        let mut chunks = honest.4.clone();
+        chunks[0][0][0] ^= 0x01;
+        let checkpoints = crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(
+            &binding.job_context,
+            &binding.shape_profile,
+            &binding.checkpoint_profile,
+            &chunks,
+        )
+        .expect("the corrupted leg still builds");
+        let tiles = crate::legs::Base0StepTilesV1 {
+            tiles: honest.1.clone(),
+            leaves: {
+                let ctx_hash = binding.job_context.context_hash();
+                let profile_hash = binding.shape_profile.shape_profile_id();
+                let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
+                for (at, leaf) in &honest.1 {
+                    if let Some(slot) = leaves.get_mut(*at as usize) {
+                        *slot = step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+                    }
+                }
+                leaves
+            },
+        };
+        let lying = crate::legs::base0_binding_from_capture_v1(
+            &binding.shape_profile,
+            &binding.job_context,
+            &tiles,
+            &checkpoints,
+            binding.full_logits_trace_root,
+            binding.activation_leg_root,
+        )
+        .expect("the liar's own binding");
+        let claim = PalwClaimRootsV1 {
+            execution_root: lying.committed_execution_root,
+            trace_root: lying.full_logits_trace_root,
+            anchor: lying.job_context.job_id,
+        };
+        let material: Base0RetainedMaterialV1 = (lying, honest.1.clone(), honest.2.clone(), honest.3.clone(), chunks);
+        let opening = base0_open_fp_interval_chunkless_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("the liar serves an opening");
+        let state = seat_state(&material, &artifact, &ids, covered);
+        let verdict = base0_verify_fp_interval_opening_with_state_v1(
+            &opening,
+            claim,
+            index,
+            &ids,
+            material.0.step_leaf_count,
+            PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+            Some(&state),
+            &FloorKernels(&artifact),
+        );
+        match verdict {
+            Base0FpIntervalSeatVerdictV1::CheckpointRootMismatch { checkpoint_index, covered_decode_call, committed, recomputed } => {
+                assert_eq!(covered_decode_call, covered, "the refusal names the call the checkpoint covers");
+                assert_eq!(checkpoint_index, 0, "the fixture's first checkpoint is the one that was tampered with");
+                assert_ne!(committed, recomputed, "the two roots the refusal carries are the two that disagree");
+                assert_eq!(recomputed, state.state_chunks_root, "the recomputed root is the seat's own");
+            }
+            other => panic!("a checkpoint the job does not reach must be named, not {other:?}"),
+        }
+        // And the ONE thing it is not: a conviction. The seam sees a verdict that files nothing.
+        assert_eq!(verdict.to_consensus_v1(), PalwFpIntervalVerdictV1::Unverifiable);
+    }
+
+    /// **(c) Z5's bytes: what a seat fetches does not carry the history, and the history is what
+    /// grows with the context.**
+    ///
+    /// Measured at two contexts on real captures. The assertion is an INEQUALITY, not a number:
+    /// the flat opening's growth from the narrow context to the wide one is strictly smaller than
+    /// the carried form's, by at least the state both checkpoints hold — and the flat form carries
+    /// no state at all, which is the structural half of the same statement.
+    #[test]
+    fn the_bytes_a_seat_fetches_do_not_carry_the_history() {
+        let measure = |prefill: u32, decode: u32| {
+            let (material, _claim, ids, _artifact) = floor_material(prefill, decode);
+            let index = 1;
+            let chunked = base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("the chunked form opens");
+            let flat = base0_open_fp_interval_chunkless_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("the flat form opens");
+            let decoded = Base0FpIntervalOpeningV2::decode_v1(&flat).expect("the flat form decodes");
+            let state_bytes: usize = Base0FpIntervalOpeningV1::decode_v1(&chunked)
+                .expect("decodes")
+                .anchor
+                .map(|a| a.chunks.iter().map(Vec::len).sum())
+                .unwrap_or(0);
+            assert!(decoded.anchor.is_some(), "the interval is checkpoint-anchored at both contexts");
+            (chunked.len(), flat.len(), state_bytes)
+        };
+        let (chunked_narrow, flat_narrow, state_narrow) = measure(3, 4);
+        let (chunked_wide, flat_wide, state_wide) = measure(11, 4);
+
+        assert!(state_wide > state_narrow, "the fixture must actually widen the history ({state_narrow} → {state_wide})");
+        // **The difference between the two forms IS the history**, at both contexts: the flat one
+        // is the carried one minus the state, plus the few bytes borsh spends on lengths.
+        const ENCODING_SLACK: usize = 256;
+        for (chunked, flat, state) in [(chunked_narrow, flat_narrow, state_narrow), (chunked_wide, flat_wide, state_wide)] {
+            assert!(
+                chunked - flat >= state && chunked - flat <= state + ENCODING_SLACK,
+                "the flat form must drop exactly the state ({chunked} − {flat} against {state})"
+            );
+        }
+        // …so what a seat fetches grows strictly more slowly with the context than the history
+        // does. An inequality, not a number: the remaining growth is the committed ROWS and the
+        // paths, which are the two terms Z5 names, and neither is the state.
+        assert!(
+            flat_wide.saturating_sub(flat_narrow) < chunked_wide.saturating_sub(chunked_narrow),
+            "what a seat fetches must grow more slowly with the context than the history does \
+             (flat {flat_narrow} → {flat_wide}, carried {chunked_narrow} → {chunked_wide})"
+        );
+    }
+
+    /// **(d) A family that cannot serve the class refuses BY NAME, and the seat files
+    /// `Incapable`.**
+    ///
+    /// The shipped hybrid is exactly this class: it registers the checkpoint sentinel, commits no
+    /// checkpoint leg, and therefore has no state root for a seat to compare against. Saying so is
+    /// the honest verdict (ADR-0075: a row nobody can seat certifies nothing); inventing a root
+    /// would be the dishonest one.
+    #[test]
+    fn a_class_that_commits_no_checkpoint_refuses_by_name() {
+        let (artifact, mut profile, ctx, prompt) = floor_job(3, 4);
+        profile.state_chunk_map_id = Hash64::default();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut kernels = FloorRecompute::new(&artifact);
+        let refusal = base0_fp_recompute_state_v1(&profile, &ctx, &ids, &[1, 2, 3, 4], 1, &mut kernels).expect_err("refused");
+        assert_eq!(refusal, Base0FpRecomputeError::NoStateChunkMapRegistered);
+        assert!(
+            refusal.to_string().contains("no state chunk map"),
+            "the refusal a seat turns into `Incapable` must say what is missing: {refusal}"
+        );
+    }
+
+    /// **The ids the recompute is teacher-forced on are checked, not taken.**
+    ///
+    /// A prompt that is not the job's is refused before a single forward runs — the same rule the
+    /// opener and the refutation both state — because a seat that recomputed from another list
+    /// would compare honest arithmetic on a different job against this claim's checkpoint and call
+    /// the producer a liar.
+    #[test]
+    fn a_recompute_refuses_ids_that_are_not_the_jobs() {
+        let (artifact, profile, ctx, prompt) = floor_job(3, 4);
+        let mut wrong: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        wrong[0] = wrong[0].wrapping_add(1);
+        let mut kernels = FloorRecompute::new(&artifact);
+        assert_eq!(
+            base0_fp_recompute_state_v1(&profile, &ctx, &wrong, &[1, 2, 3, 4], 1, &mut kernels).expect_err("refused"),
+            Base0FpRecomputeError::PromptIdsAreNotTheJobs
+        );
+        // And an answer too short to teacher-force the calls asked for is a refusal too, rather
+        // than a run that quietly fed zeros.
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut kernels = FloorRecompute::new(&artifact);
+        assert_eq!(
+            base0_fp_recompute_state_v1(&profile, &ctx, &ids, &[], 1, &mut kernels).expect_err("refused"),
+            Base0FpRecomputeError::OutputIdsTooShort { need: 1, got: 0 }
+        );
+    }
+
+    /// **A graph-v5 class refuses an opening that carries the history** — which form the class
+    /// requires is the class's own declaration (the tiled map), not a server's preference.
+    #[test]
+    fn a_tiled_class_refuses_an_opening_that_carries_the_history() {
+        let (material, claim, ids, artifact) = floor_material(3, 4);
+        let binding = &material.0;
+        let index = 1;
+        let chunked = base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("the chunked form opens");
+        let mut decoded = Base0FpIntervalOpeningV1::decode_v1(&chunked).expect("decodes");
+        // The class declares the tiled map — Decision 4's graph-v5 declaration.
+        decoded.binding.shape_profile.state_chunk_map_id =
+            kaspa_consensus_core::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3();
+        assert!(base0_fp_class_requires_flat_openings_v1(&decoded.binding.shape_profile));
+        let state = seat_state(&material, &artifact, &ids, 1);
+        assert_eq!(
+            base0_verify_fp_interval_opening_with_state_v1(
+                &decoded.encode_v1().expect("re-encodes"),
+                claim,
+                index,
+                &ids,
+                binding.step_leaf_count,
+                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+                Some(&state),
+                &FloorKernels(&artifact),
+            ),
+            Base0FpIntervalSeatVerdictV1::HistoryNotAdmissible,
+            "a class whose map is the tiled one is not served the history, and a seat that took it \
+             would have spent the bytes Decision 9 exists to save"
+        );
+    }
 }
