@@ -9,7 +9,7 @@ court grades the evidence in the transition, and the transaction fee is the rent
 
 * A node of this build synced to the network (`kaspad`), with a funded key file for fees.
 * The model's catalog id (a row `misaka-palw-sdk` can express; `palw-class list` shows them).
-* The `palw-certify` and `misaka-cli` binaries from the same build.
+* The `palw-certify` and `misaka` binaries (the crate is `misaka-cli`; the BINARY it builds is `misaka`) from the same build.
 
 ## Steps
 
@@ -20,18 +20,38 @@ kaspad ... --palw-register-class "<model id>" --palw-producer-bond <txid>:<index
 
 # 2. Post the drill of the family that covers the model's kernels (once per family per lane).
 palw-certify drill --model-id "<model id>" --lane attempt --out family-attempt.obj
-misaka-cli palw submit-object --key-file <seed> --object family-attempt.obj --yes
+misaka palw submit-object --key-file <seed> --object family-attempt.obj --yes
 
 # 3. Bind the class to that family: seated at the floor share, weight-bearing.
 palw-certify bind --model-id "<model id>" --lane attempt --out class-attempt.obj
-misaka-cli palw submit-object --key-file <seed> --object class-attempt.obj --yes
+misaka palw submit-object --key-file <seed> --object class-attempt.obj --yes
 
 # 4. (Optional) The free-prompt lane, the same way.
 palw-certify drill --model-id "<model id>" --lane fp --out family-fp.obj
-misaka-cli palw submit-object --key-file <seed> --object family-fp.obj --yes
+misaka palw submit-object --key-file <seed> --object family-fp.obj --yes
 palw-certify bind --model-id "<model id>" --lane fp --out class-fp.obj
-misaka-cli palw submit-object --key-file <seed> --object class-fp.obj --yes
+misaka palw submit-object --key-file <seed> --object class-fp.obj --yes
 ```
+
+**A `FamilyCertified` does not fit one carrier, and the `--object <file>` lines above are only
+half the story.** A drill's evidence is far larger than a standard transaction: the integer
+floor's free-prompt family object is **214,243 bytes** against a 100,000-byte carrier. When that
+happens `palw-certify` writes the pieces beside the file it was asked for —
+`family-fp.obj.chunk0`, `.chunk1`, `.chunk2` — and says so, and `submit-object` must be given
+each of them, in index order:
+
+```bash
+palw-certify drill --model-id "<model id>" --lane fp --out family-fp.obj
+# -> wrote family-fp.obj.chunk0 .chunk1 .chunk2 — submit the chunks in order
+for c in family-fp.obj.chunk*; do
+  misaka palw submit-object --key-file <seed> --object "$c" --yes
+done
+```
+
+The chain assembles the group and applies the object **in the block that completes it**, so the
+acceptance you are waiting for appears once, after the last chunk, and not after each. Submitting
+the un-chunked `family-fp.obj` is refused — it is over the carrier — and a partial group simply
+never applies. `palw-certify inspect` reads a chunk as well as a whole object.
 
 `palw-certify inspect --object <file>` shows what a file carries and whether this build's court
 grades it. `submit-object` grades a `FamilyCertified` locally before spending a fee, and refuses a
