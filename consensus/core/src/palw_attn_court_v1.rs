@@ -359,7 +359,10 @@ pub struct PalwAttnBottomBindingV1 {
 /// layer the node sits at, and — when a checkpoint is in evidence — the layout that checkpoint's
 /// chunks are enumerated under, together with the position count the anchor covers.
 ///
-/// `anchor_positions` is `integer_kv_positions_at_v1(job context, anchor.leaf.covered_decode_call)`.
+/// `anchor_positions` is `palw_checkpoint_positions_at_v1(profile, job context, covered)` — the
+/// class's OWN cadence: on a per-decode-call map that is `integer_kv_positions_at_v1`, on a
+/// per-position map the counter IS the position count (the two differ by `prefill`, so naming
+/// the per-call rule here would describe a history `prefill` rows too long for a graph-v5 row).
 /// It is here because a geometry and an anchor that describe different histories would let a
 /// chunk index point at another position's rows, and this is the field that says they are one.
 ///
