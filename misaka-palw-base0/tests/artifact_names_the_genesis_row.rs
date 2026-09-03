@@ -223,3 +223,45 @@ fn a_width_no_row_spells_refuses_and_says_what_is_offered() {
         other => panic!("n_ctx 16 is spelled by more than one A16 row and must refuse, got {other:?}"),
     }
 }
+
+/// **The artifact route resolves without a `--model-id` because of the TABLE, not because of the
+/// code — so the table's shape is asserted here rather than left as a note.**
+///
+/// `a16_row_for_artifact_shape_v1` picks by width and refuses when two rows share one. Today the
+/// A16 rows sit at n_ctx 16, 18, 16, 16 and 512, so the graph-v5 row is alone at its width and
+/// `bind --artifact` lands on it with nothing else said. That is a property of the catalog, and a
+/// sixth A16 row added at 512 would silently turn the working bind into an `AmbiguousAtWidth`
+/// refusal — arriving as "certify suddenly refuses" on the day someone registers the row.
+///
+/// It fails loudly rather than binding the wrong class, so it is a liveness risk and not a safety
+/// one. But it is the shape of thing this repository keeps discovering as prose in a card, and a
+/// card cannot fail. This can: a row added at 512 for any reason turns this red at build time,
+/// with the reason and the fix in the message.
+///
+/// If a second row at this width is ever genuinely wanted, the repair is not to delete this test —
+/// it is to give `palw-certify`'s artifact form a way to disambiguate, because at that point the
+/// header alone stops naming a class.
+#[test]
+fn the_genesis_row_is_the_only_a16_row_at_its_width() {
+    let genesis = a16_graph_v5_row_v1().expect("the graph-v5 dense row projects");
+    let width = genesis.profile.n_ctx;
+
+    let at_width: Vec<(&str, u32)> = canonical_classes_v1(&court())
+        .into_iter()
+        .filter(|c| matches!(c.source, ArtifactSourceV1::ConvertedA16))
+        .filter(|c| c.profile.n_ctx == width)
+        .map(|c| (c.model_id, c.profile.n_ctx))
+        .collect();
+
+    assert_eq!(
+        at_width.len(),
+        1,
+        "n_ctx {width} is now spelled by {} A16 rows: {at_width:?}. `palw-certify bind --artifact` \
+         picks by width and REFUSES on ambiguity, so the shipped artifact stops naming a class the \
+         moment a second row shares this width — the operator sees `AmbiguousAtWidth` where a bind \
+         used to succeed. Either move the new row to its own width, or give the artifact form a way \
+         to disambiguate; do not delete this test.",
+        at_width.len()
+    );
+    assert_eq!(at_width[0].0, genesis.model_id, "the one row at this width is not the one genesis registers");
+}
