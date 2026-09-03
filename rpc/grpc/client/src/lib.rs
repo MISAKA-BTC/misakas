@@ -295,6 +295,7 @@ impl RpcApi for GrpcClient {
     route!(get_palw_producer_facts_call, GetPalwProducerFacts);
     route!(get_palw_derived_artifacts_call, GetPalwDerivedArtifacts);
     route!(get_palw_free_prompt_claim_call, GetPalwFreePromptClaim);
+    route!(get_palw_pending_chunk_group_call, GetPalwPendingChunkGroup);
     route!(get_token_supply_call, GetTokenSupply);
     route!(get_token_emission_info_call, GetTokenEmissionInfo);
     route!(submit_evm_transaction_call, SubmitEvmTransaction);

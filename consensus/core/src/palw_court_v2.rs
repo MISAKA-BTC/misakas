@@ -93,6 +93,22 @@ pub const PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT: &[u8] = b"misaka-palw/co
 /// parties with opposite interests.
 pub const PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT: &[u8] = b"misaka-palw/court-v2/attn-dissect/challenger/mldsa87/v1";
 
+/// **What a side signs to DECLARE a split close** (ADR-0080 design A, W6).
+///
+/// A declaration is a court move like any other: it asserts a verdict on behalf of one of the two
+/// bonds the session id binds, it pins every byte that will follow it, and it suspends the mover's
+/// rung while the chunks ride behind it. Until this constant existed there was nothing for that
+/// side's key to bind, so `palw_v2_validate_objects` refused every `CourtCloseDeclared` outright
+/// rather than trusting one — the state machine behind it being complete enough to act on a forgery
+/// is exactly why the refusal was the right answer to have shipped.
+///
+/// Its own family domain, for the reason the disclosure and the verdict each have one: the two
+/// parties have opposite interests, and one shared court context would let a responder's signature
+/// over its own move be replayed as the other side's. Here the replay it forbids is narrower and
+/// worse — a declaration is attributed to a SIDE, so one context shared with the rung messages
+/// would let a challenger's verdict signature stand as the executor's close.
+pub const PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT: &[u8] = b"misaka-palw/court-v2/close-declaration/mldsa87/v1";
+
 pub const PALW_COURT_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_COURT_V2_DOMAIN_PARTY_ID,
     // The OPEN context was missing from its own uniqueness check (audit M2-23) — the one court
@@ -102,6 +118,7 @@ pub const PALW_COURT_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
     PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT,
     PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT,
+    PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT,
 ];
 
 /// The two message tags that keep the responder's OWN two move kinds apart inside one context.
@@ -255,6 +272,27 @@ pub enum PalwCourtV2Error {
     NoAdmissibleArity { window_court: u64 },
     #[error("the root claim declares dissection arity {declared}; this ruleset derives {derived} at this block")]
     ArityIsNotTheDerivedOne { declared: u8, derived: u8 },
+    // ---------------------------------------------------------------------------------------
+    // ADR-0080 design A, W6 — the split close's declaration
+    // ---------------------------------------------------------------------------------------
+    /// Named apart from [`Self::RungSignatureInvalid`] because the two are acted on differently by
+    /// whoever reads the log: a rung's bad signature is one refused move in a live ladder, and this
+    /// one is a whole carriage — a declaration plus every chunk behind it — that will never open a
+    /// group.
+    #[error(
+        "court {session}: the {side} side's close declaration is not signed by that side's bond \
+         — either party could otherwise write the other's close and pin it to a verdict it never asserted"
+    )]
+    CloseDeclarationSignatureInvalid { session: Hash64, side: &'static str },
+    /// **The ruleset's own count.** The transition enforces the structural bound the `u64` bitmap
+    /// can address ([`crate::palw_state_v2::PALW_COURT_CLOSE_MAX_CHUNKS`]); this is the NETWORK's,
+    /// which is inside `palw_ruleset_id_v2` and is 1 on devnet — where a legal close still has to
+    /// fit one carrier and the split path must be refused rather than engaged.
+    #[error(
+        "court {session}: a close declared in {count} chunks, and this ruleset pays to carry {ceiling} \
+         (PalwCourtParamsV2::max_close_chunks, inside the ruleset id)"
+    )]
+    CloseDeclaresTooManyChunks { session: Hash64, count: u64, ceiling: u64 },
 }
 
 /// May THIS `CourtOpened` object be accepted at THIS chain point?
@@ -508,6 +546,109 @@ where
     let message = borsh::to_vec(choice).expect("a dissection choice is borsh-serializable");
     if !verify_mldsa87(&bond.pubkey, &message, signature, PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT) {
         return Err(PalwCourtV2Error::RungSignatureInvalid);
+    }
+    Ok(())
+}
+
+/// **What a `CourtCloseDeclared` binds** (ADR-0080 design A, W6).
+///
+/// Every field of the object except the signature itself, in the object's own order, borsh-encoded
+/// — the same construction the two rung messages use ("the message signed is the canonical encoding
+/// of the rung itself"). Each term is load-bearing and none of them is decoration:
+///
+/// * `session_id` and `side` are WHO: the pair is the group's key, and a signature that did not
+///   carry both could be lifted from one side of a session onto the other;
+/// * `count` and `chunk_digests` are the BYTES: they are what makes a chunk's arrival checkable
+///   against something the declarer committed to, and a signature over the count alone would let
+///   anyone re-pin the parts;
+/// * `close_digest` is the WHOLE, so a declaration cannot pin consistent parts of an inconsistent
+///   whole and disown the assembly;
+/// * `verdict` is the CLAIM: it is what W7 compares against what the assembled proof actually
+///   adjudicates, so a declarer signs the outcome it says its own evidence produces.
+///
+/// A digest is deliberately not taken here. The signing context is the domain separation (ML-DSA-87
+/// binds it into the signature), and hashing first would put a second keyed domain in the way of a
+/// reader trying to check by hand what a declaration actually said.
+pub fn palw_court_close_declaration_message_v1(
+    session_id: &Hash64,
+    side: crate::palw_state_v2::PalwCourtSideV1,
+    count: u8,
+    chunk_digests: &[Hash64],
+    close_digest: &Hash64,
+    verdict: PalwCourtVerdictV2,
+) -> Vec<u8> {
+    borsh::to_vec(&(*session_id, side, count, chunk_digests.to_vec(), *close_digest, verdict))
+        .expect("every field of a close declaration is borsh-serializable")
+}
+
+/// **Who may declare a split close, and under whose key** (ADR-0080 design A, W6 — P0-9's forgery
+/// half, in the one place the split close had left open).
+///
+/// The transition READS the declarer from the two bonds the session id already binds — the
+/// challenger from the session record, the executor from the claim — so a declaration can never
+/// name a third party and the row can never be squatted. What it cannot do is prove the side
+/// AUTHORISED it, because the bond registry's keys live in the candidate state and the transition
+/// arm has no verifier. That is this function, and it is the same split
+/// [`check_court_disclosure_acceptance_v2`] and [`check_court_verdict_acceptance_v2`] already use.
+///
+/// Unsigned, the split close is strictly worse than absent. A declaration suspends the mover's rung
+/// while the bytes ride behind it, is singular per `(session, side)` for the life of the session,
+/// and pins a verdict; so either party could open the OTHER's group, spend its one declaration on a
+/// count it cannot assemble, and take the failure the sweep hands a declarer that does not finish —
+/// which for an executor is `void_and_slash`. One unsigned object would convict an honest producer.
+///
+/// The key is the bond's own registered `pubkey`, exactly as the rung checks read it: neither party
+/// names its own key, and a bond that is not in the registry at this chain point is refused before
+/// any signature is verified.
+#[allow(clippy::too_many_arguments)]
+pub fn check_court_close_declaration_acceptance_v2<V>(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    side: crate::palw_state_v2::PalwCourtSideV1,
+    count: u8,
+    chunk_digests: &[Hash64],
+    close_digest: &Hash64,
+    verdict: PalwCourtVerdictV2,
+    signature: &[u8],
+    verify_mldsa87: V,
+) -> Result<(), PalwCourtV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    use crate::palw_state_v2::PalwCourtSideV1;
+    let (session, claim) = resolve_court_session_v2(state, session_id)?;
+    let declarer = match side {
+        PalwCourtSideV1::Challenger => session.challenger_bond,
+        PalwCourtSideV1::Executor => claim.bond,
+    };
+    let bond = state.bond(&declarer).ok_or(PalwCourtV2Error::ChallengerMissing(declarer))?;
+    let message = palw_court_close_declaration_message_v1(session_id, side, count, chunk_digests, close_digest, verdict);
+    if !verify_mldsa87(&bond.pubkey, &message, signature, PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT) {
+        return Err(PalwCourtV2Error::CloseDeclarationSignatureInvalid { session: *session_id, side: side.name() });
+    }
+    Ok(())
+}
+
+/// **The ruleset's own carriage count, applied to a declaration** (ADR-0080 design A, W6).
+///
+/// `PalwCourtParamsV2::max_close_chunks` is inside `palw_ruleset_id_v2`, it is what class admission
+/// prices a class against, and W5 deliberately did not compare it: the transition has no court
+/// parameters and enforces only the structural bound its `u64` bitmap can address
+/// (`PALW_COURT_CLOSE_MAX_CHUNKS = 32`). So the network's number is checked HERE, where the ruleset
+/// is in hand — and it is the tighter of the two on both shipped bundles (27 on the RC, **1 on
+/// devnet**, where the pre-ADR-0080 byte ceiling frames to a single carrier and a close that does
+/// not fit one is refused rather than split).
+pub fn check_close_declared_chunk_count_v2(
+    session_id: &Hash64,
+    count: u8,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+) -> Result<(), PalwCourtV2Error> {
+    if u64::from(count) > court.max_close_chunks() {
+        return Err(PalwCourtV2Error::CloseDeclaresTooManyChunks {
+            session: *session_id,
+            count: u64::from(count),
+            ceiling: court.max_close_chunks(),
+        });
     }
     Ok(())
 }
@@ -2231,7 +2372,11 @@ mod tests {
         // collision test reads the list itself.
         // Six: the party id, the opening, the two ladder rungs, and ADR-0082's two dissection
         // contexts (the responder's moves and the challenger's).
-        assert_eq!(PALW_COURT_V2_ALL_DOMAINS.len(), 6);
+        assert_eq!(PALW_COURT_V2_ALL_DOMAINS.len(), 7);
+        assert!(
+            PALW_COURT_V2_ALL_DOMAINS.contains(&PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT),
+            "misaka-cli probes this list for the close context; a constant that is not IN it is a context nothing can be signed under"
+        );
         let unique: std::collections::BTreeSet<_> = PALW_COURT_V2_ALL_DOMAINS.iter().collect();
         assert_eq!(unique.len(), PALW_COURT_V2_ALL_DOMAINS.len(), "a repeated domain is a collision inside one family");
         // The two rung contexts in particular: the parties have opposite interests, so one shared
