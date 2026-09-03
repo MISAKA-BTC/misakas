@@ -164,8 +164,45 @@ def check_pin():
     if bad:
         print(f"PIN FAILED: {len(bad)} job(s) do not honour rust-toolchain.toml", file=sys.stderr)
         return 1
+    report_container_bases(chan)
     print(f"PIN OK: {steps} toolchain step(s) in {len(files)} workflow file(s) all install {chan}")
     return 0
+
+
+def report_container_bases(chan):
+    """**What this check does NOT cover, said out loud.**
+
+    `docker/Dockerfile.*` choose a compiler with `FROM rust:X.Y-alpine@sha256:...`. That is a
+    different lever from the workflows' and this function does not fail on it, for a reason worth
+    stating: `rust-toolchain.toml` arrives in the build context with `COPY . .`, so cargo inside
+    the container installs the pinned toolchain anyway and the base tag becomes a bootstrap
+    rather than the compiler. It is reported rather than ignored because a silent gap is how a
+    pin stops meaning anything, and because a mismatch has a real cost here: `cargo chef cook`
+    runs BEFORE `COPY . .`, so the dependency layer is compiled by the base image's rustc and
+    then thrown away when the app layer compiles with a different one.
+    """
+    import glob
+
+    docker = sorted(glob.glob(os.path.join(ROOT, "docker", "Dockerfile*")))
+    rows = []
+    for path in docker:
+        with open(path, encoding="utf-8") as fh:
+            for i, line in enumerate(fh):
+                m = re.match(r"\s*FROM\s+rust:(\d+\.\d+(?:\.\d+)?)", line)
+                if m:
+                    rows.append((os.path.relpath(path, ROOT), i + 1, m.group(1)))
+    if not rows:
+        print("  container images: no `FROM rust:` base found under docker/")
+        return
+    agree = [r for r in rows if chan.startswith(r[2] + ".") or r[2] == chan]
+    print(f"  container images: {len(rows)} `FROM rust:` base(s) under docker/, {len(agree)} on {chan}")
+    for rel, ln, ver in rows:
+        note = "matches the pin" if (rel, ln, ver) in agree else (
+            f"base is {ver}; the toml still forces {chan} inside the container, but `cargo chef cook` "
+            f"runs before the toml is copied, so the cached dependency layer is built by {ver} and rebuilt"
+        )
+        print(f"    {rel}:{ln}  rust:{ver}  -- {note}")
+    print("  (not a violation: this check governs .github/workflows only)")
 
 
 # The build gates in `ci-gates.sh` are one-liners of the form
