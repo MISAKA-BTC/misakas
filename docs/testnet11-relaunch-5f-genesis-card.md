@@ -549,6 +549,29 @@ is JUDGEMENT and a derived value carries none.
 a set that was typed rather than drilled — the exact defect the field exists to close. If the two
 turn out equal, that is a result to be observed, not a shortcut to be taken.
 
+### The short function name is the genesis-anchored one, and it answers the wrong court
+
+**Measured against myself: I reached for the wrong variant six times in one day**, and every time the
+wrong answer looked like a finding rather than a mistake. The pattern is mechanical enough to state:
+
+| the short name | what it silently assumes | the one that asks the ruleset |
+|---|---|---|
+| `derive_court_cost_v1(profile)` | `PALW_STEP_MAX_LEAVES` = 2^22, `kv_checkpoint_bytes: 0`, `dissection: None` — the cache-write route | `derive_court_cost_shaped_v1(profile, shape)` |
+| `worst_case_step_leaf_count_v1(profile)` | 2^22 | `worst_case_step_leaf_count_capped_v1(profile, ladder)` |
+| `step_merkle_root(leaves)` and its five siblings | `PALW_STEP_LEG_MAX_LEAVES` | the `_capped_v1` form |
+| `PalwCourtCostShapeV1::genesis_anchored_v1` | the genesis ladder, not the ruleset's | build the shape from the ruleset's rules |
+
+**Every one of these is correct for its own purpose and wrong as a measurement of the shipped
+network.** The failures they produced today, in order: both dense rows "refused at 512" (they were
+priced at 2^22); the 512 close "arity-invariant" (priced on a route the ruleset does not play, where
+the binding node is not the fused one and `shape.dissection` is read only for `AttnFused`); and
+every A16 row "REFUSED at 512" a second time from the leaf count.
+
+*The tell is a result that is identical across inputs that should change it, or a refusal whose
+`max` is a number the ruleset does not use.* `classes.rs` states the rule for its own case — "a test
+that swapped the route by hand would be pricing a route the ruleset no longer plays" — and the
+general form is: **the convenience wrapper is the easiest to call and it answers a different court.**
+
 ### The tell for "is this a chain change?"
 
 **A change that moves a value the chain commits to is a chain change, and its cost is measured on a
