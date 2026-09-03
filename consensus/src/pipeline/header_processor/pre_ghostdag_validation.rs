@@ -229,7 +229,7 @@ pub(crate) fn palw_carriage_stateless_v1(
 ) -> Result<(), String> {
     use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_RECEIPT_V3, is_palw_attempt_algo_id};
     let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
-    let reason = match header.pow_algo_id {
+    match header.pow_algo_id {
         // **EITHER attempt id** (ADR-0072 SA-4). Naming only algo-6 here is how the launch
         // blockers §5 hole comes back on the new lane: past the fence every attempt block
         // carries algo-9, and an arm that does not name it falls to the `_` below — no
@@ -302,9 +302,8 @@ pub(crate) fn palw_carriage_stateless_v1(
                         .map_err(|e| e.to_string())
                 })
         }
-        _ => return Ok(()),
-    };
-    reason
+        _ => Ok(()),
+    }
 }
 
 impl HeaderProcessor {

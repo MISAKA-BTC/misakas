@@ -1,0 +1,61 @@
+# **The compiler is a pin, not a rumour.**
+#
+# Until this file existed, `.github/workflows/*.yaml` installed the toolchain with
+# `dtolnay/rust-toolchain@29eef336...  # stable`. The ACTION is pinned by that sha; the TOOLCHAIN
+# is not — the action's own `action.yml` gives its `toolchain` input `default: stable`, so every
+# job compiled with whatever `stable` happened to be that morning, and the release binaries this
+# fleet runs were built by a compiler nobody chose. One job was the exception: `Lints` passed
+# `toolchain: 1.93.0`, which is why the lint gate and every other gate were on different
+# compilers.
+#
+# This repository has already paid for that skew: six consecutive CI reds were reported as green
+# because local clippy and CI clippy were different versions and disagreed about what to warn on.
+#
+# ## Why 1.93.0 and not 1.98.0, measured rather than preferred
+#
+# `cargo clippy --tests --benches --examples` — the exact Lints-job command — run over this tree
+# on both toolchains, counted by unique (lint, file:line:col). Re-measured after the merge of
+# `palw-testnet-5f` at bd0e38bb, on the SAME tree for both, 886 compiler-artifact units each:
+#
+#     1.93.0    11 findings  (18 diagnostic messages; a finding is reported once per target)
+#     1.98.0   163 findings (276 diagnostic messages)
+#     only on 1.93.0:    0
+#     only on 1.98.0:  152, from 15 lints that did not exist or did not fire in 1.93 —
+#                      chunks_exact_to_as_chunks (58), unnecessary_sort_by (33),
+#                      useless_borrows_in_formatting (22), manual_checked_ops (8),
+#                      unneeded_wildcard_pattern (7), needless_return_with_question_mark (6),
+#                      useless_conversion (4), explicit_counter_loop (3), for_kv_map (3),
+#                      byte_char_slices (2), collapsible_match (2), unnecessary_cast (1),
+#                      unused_format_specs (1), useless_format (1), while_let_loop (1).
+#
+# The 1.93.0 figure was 38 findings / 50 messages when this file was written; 27 of them were
+# fixed (see the `fix(clippy)` commit) and the remaining 11 are listed there with the reason each
+# needs a decision rather than an edit. CI runs `-D warnings`, so those 11 still fail the Lints
+# job: they are outstanding work, not an accepted baseline.
+#
+# 1.93.0's finding set is a strict SUBSET of 1.98.0's, so pinning 1.93.0 loses no signal that the
+# gate was already giving, and pinning 1.98.0 would add 152 findings to a gate that already has
+# 11 outstanding. The tree compiles clean on 1.93.0 and on 1.98.0. `cargo fmt --all -- --check`
+# is byte-identically clean on BOTH versions, so the fmt gate is indifferent to this choice. The
+# workspace's `rust-version = "1.88.0"` is satisfied.
+#
+# Raising this is a deliberate act with a measured cost, which is the point of writing the number
+# down: whoever moves it to 1.98.0 owes the tree those 152 findings first.
+#
+# ## Rules for editing this file
+#
+# * `channel` must stay an EXACT version. "stable" here would reintroduce exactly the drift this
+#   file removes, and `scripts/ci-toolchain-pin-check.py` refuses anything that is not `X.Y[.Z]`.
+# * Every workflow job passes this value explicitly (see the `toolchain` job in ci.yaml). That is
+#   belt AND braces: rustup honours this file as a directory override for `cargo`, but the action
+#   would still spend a job's worth of network installing the wrong toolchain first.
+# * `profile = "minimal"` matches what `dtolnay/rust-toolchain` installs. `rustdoc` ships inside
+#   the `rustc` component, so `cargo doc` and `cargo test --doc` work under it.
+# * `components` is what the gates need. Contributors get them on first `cargo` invocation; CI
+#   asks for them by name as well, because a toolchain already present on a runner image is not
+#   re-profiled by a later install.
+
+[toolchain]
+channel = "1.93.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

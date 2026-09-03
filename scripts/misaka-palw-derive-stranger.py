@@ -978,7 +978,12 @@ def _pinned_from_test_file(path: str):
     m = re.search(r'const SOURCE_TREE: &str = "([0-9a-f]{64})"', text)
     if not m:
         raise Refused(f"{path} does not spell `const SOURCE_TREE`")
-    pins = dict(re.findall(r'\("([a-z0-9/]+)",\s*"([0-9a-f]{128})"\)', text))
+    # `\s*` after the opening paren, not just between the fields: rustfmt puts each pin on three
+    # lines the moment the 128-hex id pushes the entry past the width, and a regex that demanded
+    # `("name"` on one line read the reformatted table as an EMPTY table. That is the failure this
+    # whole file exists to make impossible -- a checker whose silence is indistinguishable from a
+    # pass -- so the count is asserted against the registry below, not merely against zero.
+    pins = dict(re.findall(r'\(\s*"([a-z0-9/]+)",\s*"([0-9a-f]{128})"\s*,?\s*\)', text))
     if not pins:
         raise Refused(f"{path} carries no transformer id pins")
     return m.group(1), pins
