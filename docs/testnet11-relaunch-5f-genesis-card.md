@@ -120,19 +120,29 @@ none of them is in this cut.
 |---|---|---|---|
 | BASE-0 floor | yes | yes | the floor must have a producer or DAA stops and the chain cannot leave the state by itself |
 | dense A16 **512 row** | **yes** | yes | the only wide row registered — see the width argument below, which is not the one this card first gave |
-| hybrid QWEN36 | **NO** | — | see below — this is now a correctness decision, not a margin one |
+| hybrid QWEN36 | **YES** | — | registered at 489‰ declared (957‰ after dense dilution). **This card excluded it for a reason that expired twice — see below.** |
 | demonstration class | yes | **SEAT AT GENESIS** | a class registered post-genesis has NO epoch budget until the next boundary |
 
-**Why the hybrid row is not registered — and the reason is not the one either of us gave first.**
-Two weaker arguments were on the table: a 0.43% admission margin, and graph-v4's composition being
-`NotPriceable`. Both invite someone to re-open the question with a tighter geometry. The binding
-reason does not:
+**Why the hybrid row IS registered, after this card spent two revisions saying it should not be.**
+Two weak arguments were on the table first — a 0.43% admission margin, and graph-v4's composition
+being `NotPriceable` — and were replaced by one that felt binding and was not:
 
     hybrid graph-v5, n_ctx   128:  200,604 bytes = 3 carriers
     hybrid graph-v5, n_ctx   256:  200,668 bytes = 3 carriers
     hybrid graph-v5, n_ctx   512:  200,732 bytes = 3 carriers
 
-**The hybrid is three carriers at 128 tokens.** This is not a wide-row problem — it is the
+**Three carriers, at every width — against a ceiling of TWENTY-SEVEN.** That is 24 to spare, and
+the argument dies there. It was written when a class needing more than one carrier could not file at
+all; W6's two acceptance checks are in `palw_court_v2` and the split path is open. **I carried the
+conclusion past the change that falsified it, twice, restating it each time as though restating were
+checking.** Removing the row now would move the dilution and collateral arithmetic to satisfy a
+paragraph, which is the worst reason there is to move a genesis input.
+
+*The superseded argument is kept below, because the shape of the mistake is the useful part: a
+disqualification that was true, became false, and went on reading as true because nothing in the
+sentence expired.*
+
+Superseded — this is not a wide-row problem — it is the
 recurrence's interval replay evidence, which does not shrink at any context. So the hybrid cannot
 close on a shipped build at ANY width until W6/W7 open the split path (§5), and a registered class
 whose disputes cannot be defended is worse than an absent one: the honest party loses by deadline.
