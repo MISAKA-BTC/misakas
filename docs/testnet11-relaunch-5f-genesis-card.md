@@ -468,6 +468,29 @@ rounds back.
 
 ## 4. The freeze and the single re-pin — ORDER MATTERS
 
+**The agreed sequence, as of the last fixer. Every step's owner is named and every arrow is a
+dependency, not a preference.**
+
+    1  palw-merge-resolved 4205f535  -> impl     1c's three-way (5f + impl + the artifact branch)
+    2  palw-launch-consolidated f7f56498 -> impl the four verifier fixes; ONE conflict,
+                                                 host_security.rs, doc-only, pre-ruled in §3
+    3  FH   the derived-artifact binding          on top of 2, because 2 already edits derive/src
+    4  FG   the graph-v5 512 registration         profile/params only; merges impl at its end
+    5  cargo +1.93.0 fmt --all                    ONCE, on the merged tree, LAST source change
+    6  scripts/check-derive-freeze.sh             after 2 and again after 5 — until it prints nothing
+    7  "frozen"                                   5b says it only after 6 prints nothing
+    8  the re-pins                                mine, last, and nothing touches derive/src after
+
+**Steps 3 and 4 are in that order for a reason that is not obvious.** FH writes in
+`misaka-palw-derive/src/`, which `palw-launch-consolidated` also edits (`5e369d10`, `928b4081`,
+`ce9a6a24`, `e2341aec`), so FH must land *after* the merge or it collides with four fixes it agrees
+with. FG touches only the profile, params and test files, so it can come last and merge impl at its
+end without racing anything.
+
+**Step 6 is the only thing that makes step 7 sayable.** "Frozen" is a sweep, never a recollection —
+see 3b below. It is run twice because step 5 is itself a change to the crate being frozen.
+
+
 `transformer_id` is a function of `source_tree_sha256`, which covers **every byte** under
 `misaka-palw-derive/src/` — comments included. It moves silently and everything stays green when it
 does. A published derivation whose id no longer reproduces is unverifiable, so this is the last
