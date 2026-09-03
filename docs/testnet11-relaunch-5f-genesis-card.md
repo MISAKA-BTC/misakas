@@ -3019,3 +3019,34 @@ was made before three of those movements were known.*
 rule, and the first thing it printed on going green was a correction to its author's own
 arithmetic. **A test that asks the shipped question answers more than the question it was written
 for.**
+
+### The ceremony guard, exercised in all four directions before it is needed
+
+A guard that has only been seen to refuse is indistinguishable from a guard that always
+refuses. All four paths run, on real trees:
+
+```
+1  no `extracted_from` line          STOP  "five values from an unnamed run prove nothing"
+2  all five values CORRECT, but      STOP  table says   4b0e15675c07ec1d…
+   extracted from 4b0e1567 while           checking     3f9526d343892a48…  (palw-adr0082-impl)
+   checking 3f9526d3                       "values from another run are not evidence about
+                                            this one, however right they look"
+3  correct table, correct tree       PASS  all five predictions hold
+4  one value mutated                 STOP  DIFF t11 fingerprint, both values printed
+```
+
+**Case 2 is the one worth having built.** Every value in that table is correct — it is the same
+five hex strings the ceremony expects — and the guard refuses anyway, because *correct values
+from the wrong run are not evidence.* Before this the guard would have printed `all five
+predictions hold` over exactly that table, which is how it was found: **run green against a
+`4b0e1567` table while checking `3f9526d3`.**
+
+5b wired the emitter to take `extracted_from` from **the finalize log's own closing `impl head:`
+line, never from the current HEAD**, and to exit 2 without exactly one such line. *That is the
+join belonging to the run rather than to the typist* — a table cannot claim a tree it was not
+computed on, even by accident, and the failure mode where someone regenerates the header without
+regenerating the values is closed by construction.
+
+> **The discipline is "has it been seen to fail AND to pass", and case 2 says that is not enough
+> either.** This guard passed on a table it should have refused, and every value in it was right.
+> *Seeing it pass is only evidence if you also know what it would have refused.*
