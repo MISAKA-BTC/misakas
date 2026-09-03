@@ -670,8 +670,6 @@ pub fn base0_open_fp_interval_v1(
 
     let count = leaves_geometry.range_end - leaves_geometry.range_first;
     let (span_first, span_end) = tree.span_for_range(leaves_geometry.range_first, count)?;
-    let range =
-        tree.range_opening_v1(span_first, &leaves[span_first as usize..span_end as usize], leaves_geometry.range_first, count)?;
 
     // The anchor call's logits tiles travel with their preimages; every other leaf of the range is
     // a hash the seat recomputes for itself.
@@ -698,6 +696,45 @@ pub fn base0_open_fp_interval_v1(
         Some(covered) => Some(base0_checkpoint_operands_v1(binding, chunks, covered)?),
     };
 
+    base0_assemble_fp_interval_opening_v1(
+        binding,
+        &tree,
+        &leaves_geometry,
+        index,
+        span_first,
+        &leaves[span_first as usize..span_end as usize],
+        seed_row_tiles,
+        anchor,
+    )
+}
+
+/// **The opening, assembled** — the half that is the same whichever retention served it.
+///
+/// `span_leaves` are the leaf hashes of `[span_first, span_first + span_leaves.len())`: sliced out
+/// of a dense capture, or re-derived by replay from a fold. Everything after that is one
+/// derivation, so an opening's SHAPE, its cost and its verification do not know which retention
+/// the executor kept — which is the property that lets Decision 7 change the retention without
+/// changing what a seat checks.
+#[allow(clippy::too_many_arguments)]
+fn base0_assemble_fp_interval_opening_v1(
+    binding: &PalwStepBindingV2,
+    tree: &crate::fp_capture::Base0SparseStepTreeV1,
+    leaves_geometry: &Base0FpIntervalLeavesV1,
+    index: u32,
+    span_first: u64,
+    span_leaves: &[Hash64],
+    seed_row_tiles: Vec<PalwStepTileLeafV1>,
+    anchor: Option<PalwCheckpointKvOperandsV1>,
+) -> Result<Vec<u8>, Base0FpIntervalError> {
+    let count = leaves_geometry.range_end - leaves_geometry.range_first;
+    let range = tree.range_opening_v1(span_first, span_leaves, leaves_geometry.range_first, count)?;
+    // **The opening must reproduce the committed root, checked before it is served.** On the dense
+    // route the leaves came out of the capture the tree was built from and this is an identity; on
+    // the folded route they came out of a REPLAY, and an executor whose replay diverged from its
+    // own commitment would otherwise learn it from a seat's `Fault` against itself.
+    if step_range_opening_root_v1(binding.step_leaf_count, &range).ok() != Some(binding.step_merkle_root) {
+        return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
+    }
     Base0FpIntervalOpeningV1 {
         version: PALW_BASE0_FP_INTERVAL_VERSION_V1,
         interval_index: index,
@@ -728,6 +765,205 @@ pub fn base0_open_fp_interval_chunkless_v1(
     let bytes = base0_open_fp_interval_v1(material, index, prompt_token_ids, family_checkpoint_interval)?;
     let chunked = Base0FpIntervalOpeningV1::decode_v1(&bytes)?;
     Base0FpIntervalOpeningV2::from_chunked_v1(&chunked).encode_v1()
+}
+
+/// **Strip the history from an assembled opening** — the chunked form → the flat form, in bytes.
+///
+/// ADR-0082 Decisions 7 and 9 meet here: the FOLDED retention's opening is assembled by replay
+/// ([`base0_open_fp_interval_sparse_v1`]) and a graph-v5 seat wants it WITHOUT the anchor's chunks
+/// ([`Base0FpIntervalOpeningV2`]). One strip for both retention forms, so the two routes cannot
+/// disagree about what a flat opening is.
+pub fn base0_strip_fp_interval_history_v1(chunked_bytes: &[u8]) -> Result<Vec<u8>, Base0FpIntervalError> {
+    let chunked = Base0FpIntervalOpeningV1::decode_v1(chunked_bytes)?;
+    Base0FpIntervalOpeningV2::from_chunked_v1(&chunked).encode_v1()
+}
+
+/// The interval whose replay REACHES `call` — the inverse of [`Base0FpIntervalGeometryV1::calls_for`].
+fn interval_of_call_v1(geometry: &Base0FpIntervalGeometryV1, call: u32) -> u32 {
+    if call == 0 { 0 } else { (call - 1) / geometry.checkpoint_interval.max(1) }
+}
+
+/// **The span's leaf hashes, re-derived by replay** (ADR-0082 Decision 7).
+///
+/// The fold keeps one node per `2^retain_level` leaves; every leaf hash an opening's siblings are
+/// folded from is recomputed here, by running the class's own kernels over the calls the span
+/// touches, resumed from the checkpoint that anchors the first of them. That is the same replay a
+/// seat performs to CHECK the opening (`base0_fp_replay_interval_v1`), run by the executor to
+/// PRODUCE it — one loop, so a re-derived opening cannot be a different execution from the one a
+/// seat will compare it against.
+///
+/// The window is at most two checkpoint intervals: the span's left edge can reach back into the
+/// anchor call (whose logits row the opening carries as its seed), which the previous interval's
+/// checkpoint anchors, and its right edge can round up into the call after the interval's last.
+fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
+    kernels: &K,
+    binding: &PalwStepBindingV2,
+    chunks: &[Vec<Vec<u8>>],
+    generated: &[u32],
+    prompt_token_ids: &[u32],
+    geometry: &Base0FpIntervalGeometryV1,
+    span_first: u64,
+    span_end: u64,
+) -> Result<Vec<Hash64>, Base0FpIntervalError> {
+    let profile = &binding.shape_profile;
+    let ctx = &binding.job_context;
+    let call_of = |leaf: u64| -> Result<u32, Base0FpIntervalError> {
+        kaspa_consensus_core::palw_step::canonical_step_coordinates(profile, ctx, leaf)
+            .map(|c| c.call_index)
+            .ok_or_else(|| Base0FpIntervalError::StepSpace(format!("leaf {leaf} is not a main step coordinate")))
+    };
+    let first_needed = call_of(span_first)?;
+    let last_needed = call_of(span_end - 1)?;
+    let interval = interval_of_call_v1(geometry, first_needed);
+    let (first_call, _) = geometry
+        .calls_for(interval)
+        .ok_or(Base0FpIntervalError::IntervalOutOfRange { index: interval, count: geometry.interval_count })?;
+
+    let prompt_usize: Vec<usize> = prompt_token_ids.iter().map(|t| *t as usize).collect();
+    let operands = match geometry.anchor_covered_call(interval) {
+        None => None,
+        Some(covered) => Some(base0_checkpoint_operands_v1(binding, chunks, covered)?),
+    };
+    let start = match (&operands, geometry.anchor_covered_call(interval)) {
+        (None, _) => Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt_usize },
+        (Some(anchor), Some(covered)) => {
+            // The id the anchored call consumes is the one the CHECKPOINT's own call produced, and
+            // the executor is the party that produced it. A seat derives the same id from the
+            // committed row instead of being told it (the module doc's rule); here the two are the
+            // same value, and the range opening's root check below is what says so.
+            let seed_token = *generated
+                .get(covered as usize)
+                .ok_or_else(|| Base0FpIntervalError::Replay(format!("the retention has no id for call {covered}")))?;
+            Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: &anchor.chunks, seed_token }
+        }
+        (Some(_), None) => return Err(Base0FpIntervalError::NoCheckpointAt { covered: 0 }),
+    };
+
+    let replayed = kernels.replay_interval(profile, ctx, &start, first_call, last_needed).map_err(Base0FpIntervalError::Replay)?;
+    let width = (span_end - span_first) as usize;
+    let mut span = vec![None; width];
+    for (at, hash) in replayed {
+        if let Some(offset) = at.checked_sub(span_first).filter(|o| (*o as usize) < width) {
+            span[offset as usize] = Some(hash);
+        }
+    }
+    span.into_iter()
+        .enumerate()
+        .map(|(offset, hash)| {
+            hash.ok_or(Base0FpIntervalError::Sparse(crate::fp_capture::Base0SparseCaptureError::SpanDoesNotCoverTheRange {
+                index: span_first + offset as u64,
+                span_first,
+                span_end,
+            }))
+        })
+        .collect()
+}
+
+/// **Open interval `index` of a FOLDED retention** (ADR-0082 Decision 7, executor half).
+///
+/// The dense twin above reads its span's leaf hashes out of the tiles it kept; this one has no
+/// tiles and re-derives them ([`base0_replay_span_leaves_v1`]). The seed row's PREIMAGES cannot be
+/// re-derived from hashes, and they are not carried a second time either: they are cut from the
+/// retained logits rows — the rows the decode pin already keeps — and then CHECKED against the
+/// hashes the replay produced for the same leaves, so a retention whose rows are not the ones its
+/// leg committed is refused here rather than served as evidence.
+pub fn base0_open_fp_interval_sparse_v1<K: Base0FpIntervalKernelsV1>(
+    material: &crate::produce::Base0FpMaterialV2,
+    index: u32,
+    prompt_token_ids: &[u32],
+    family_checkpoint_interval: u32,
+    kernels: &K,
+) -> Result<Vec<u8>, Base0FpIntervalError> {
+    let binding = &material.binding;
+    let profile = &binding.shape_profile;
+    let ctx = &binding.job_context;
+
+    // The ids are an INPUT on this lane and are refused unless they are the job's — the dense
+    // route's rule, for the dense route's reason.
+    if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != ctx.prompt_token_ids_hash {
+        return Err(Base0FpIntervalError::PromptIdsAreNotTheJobs);
+    }
+    if profile.state_chunk_map_id == Hash64::default() && index > 0 {
+        return Err(Base0FpIntervalError::NoStateChunkMapRegistered { index });
+    }
+    let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, family_checkpoint_interval)?;
+    let leaves_geometry = base0_fp_interval_leaves_v1(profile, ctx, &geometry, index)?;
+
+    let tree = &material.step_tree;
+    if tree.leaf_count() != binding.step_leaf_count || tree.root()? != binding.step_merkle_root {
+        return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
+    }
+    let count = leaves_geometry.range_end - leaves_geometry.range_first;
+    let (span_first, span_end) = tree.span_for_range(leaves_geometry.range_first, count)?;
+    let span_leaves = base0_replay_span_leaves_v1(
+        kernels,
+        binding,
+        &material.checkpoint_chunks,
+        &material.generated_token_ids,
+        prompt_token_ids,
+        &geometry,
+        span_first,
+        span_end,
+    )?;
+
+    let seed_row_tiles = base0_seed_row_tiles_from_rows_v1(binding, &material.logits_rows, &leaves_geometry, &geometry, index)?;
+    // The preimages must hash to the leaves the replay just recomputed — the retained rows and the
+    // committed leg are two records of one execution, and this is where they are compared.
+    let ctx_hash = ctx.context_hash();
+    let profile_hash = profile.shape_profile_id();
+    for (offset, leaf) in seed_row_tiles.iter().enumerate() {
+        let at = leaves_geometry.range_first + offset as u64;
+        let recomputed = step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+        let derived = span_leaves.get((at - span_first) as usize).ok_or(Base0FpIntervalError::CaptureHasNoTile { index: at })?;
+        if recomputed != *derived {
+            return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
+        }
+    }
+
+    let anchor = match geometry.anchor_covered_call(index) {
+        None => None,
+        Some(covered) => Some(base0_checkpoint_operands_v1(binding, &material.checkpoint_chunks, covered)?),
+    };
+    base0_assemble_fp_interval_opening_v1(binding, tree, &leaves_geometry, index, span_first, &span_leaves, seed_row_tiles, anchor)
+}
+
+/// The anchor call's logits row, cut into the tiles the leg commits it as.
+///
+/// The row is the retained one (`Base0FpMaterialV2::logits_rows`, one per call, the row its token
+/// was selected from); the coordinates are the enumeration's own. The caller checks the result
+/// against the leg — this only cuts.
+fn base0_seed_row_tiles_from_rows_v1(
+    binding: &PalwStepBindingV2,
+    logits_rows: &[Vec<i32>],
+    leaves_geometry: &Base0FpIntervalLeavesV1,
+    geometry: &Base0FpIntervalGeometryV1,
+    index: u32,
+) -> Result<Vec<PalwStepTileLeafV1>, Base0FpIntervalError> {
+    let Some(anchor_call) = geometry.anchor_covered_call(index) else {
+        return Ok(Vec::new()); // interval 0 resumes from the prompt and carries no seed row
+    };
+    let profile = &binding.shape_profile;
+    let slot = logits_node_slot_v1(profile);
+    let (node, _) = profile
+        .resolve_node_slot(slot)
+        .ok_or_else(|| Base0FpIntervalError::StepSpace(format!("this class has no node at slot {slot}")))?;
+    let row = logits_rows
+        .get(anchor_call as usize)
+        .ok_or_else(|| Base0FpIntervalError::Replay(format!("the retention has no logits row for call {anchor_call}")))?;
+    let tile_len = node.tile_len as usize;
+    if tile_len == 0 || row.len().div_ceil(tile_len) as u64 != leaves_geometry.seed_row_leaves {
+        return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
+    }
+    Ok(row
+        .chunks(tile_len)
+        .enumerate()
+        .map(|(tile_index, chunk)| PalwStepTileLeafV1 {
+            version: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_OBJECT_VERSION_V1,
+            coord: PalwStepCoordinateV1 { call_index: anchor_call, node_slot: slot, position: 0, tile_index: tile_index as u32 },
+            value_count: chunk.len() as u32,
+            values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
+        })
+        .collect())
 }
 
 /// **The committed checkpoint covering `covered`, as the operands an anchored replay resumes
