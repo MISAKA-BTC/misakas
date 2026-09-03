@@ -74,7 +74,7 @@
 //! closed one term and left three would otherwise read as success.
 
 use crate::config::constants::consensus::NETWORK_DELAY_BOUND;
-use crate::palw_class_admission_v2::{derive_court_cost_shaped_v1, PalwClassAdmissionError, PalwCourtCostShapeV1, PalwCourtCostV1};
+use crate::palw_class_admission_v2::{PalwClassAdmissionError, PalwCourtCostShapeV1, PalwCourtCostV1, derive_court_cost_shaped_v1};
 use crate::palw_fp_devnet_v3::PalwLatticeWindowsV1;
 use crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
 use crate::palw_step::{PalwShapeProfileV3, PalwStepError};
@@ -324,11 +324,7 @@ pub const fn palw_court_replay_floor_daa_v1(row: &PalwCourtRowCostV1, interval_p
     let replay = interval.saturating_mul(row.replay_ms_per_position());
     let total = replay.saturating_add(PALW_COURT_ROUND_TRIP_MS);
     let daa = total.div_ceil(PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS);
-    if daa == 0 {
-        1
-    } else {
-        daa
-    }
+    if daa == 0 { 1 } else { daa }
 }
 
 /// **The turn deadline a window and a ladder DERIVE** (ADR-0077 SA-4; the earlier proposal
@@ -395,11 +391,7 @@ pub const fn palw_court_turn_deadline_v1(
         return None;
     }
     let deadline = (window_court - reserve - 1) / moves;
-    if deadline == 0 {
-        None
-    } else {
-        Some(deadline)
-    }
+    if deadline == 0 { None } else { Some(deadline) }
 }
 
 /// **W4, as a predicate:**
@@ -471,11 +463,7 @@ pub const PALW_CONTEXT_LADDER_INTERVAL_DIVISOR: u32 = 32;
 /// Decisions 11 and 13).
 pub const fn palw_checkpoint_interval_v1(n_ctx: u32) -> u32 {
     let derived = n_ctx / PALW_CONTEXT_LADDER_INTERVAL_DIVISOR;
-    if derived == 0 {
-        1
-    } else {
-        derived
-    }
+    if derived == 0 { 1 } else { derived }
 }
 
 /// What ONE checkpoint-chunk opening of the RECURRENCE costs under the gdn **v1** map: one head's
@@ -668,11 +656,7 @@ pub const PALW_CONTEXT_LADDER_MAX_QUANTA_PER_RECEIPT: u32 = 64;
 /// written for.
 pub const fn palw_canonical_footprint_floor_v1(n_ctx: u32) -> u64 {
     let floor = (n_ctx / PALW_CONTEXT_LADDER_QUANTA_PER_CANONICAL_JOB) as u64;
-    if floor == 0 {
-        1
-    } else {
-        floor
-    }
+    if floor == 0 { 1 } else { floor }
 }
 
 /// The enumeration's own footprint for a job: `prefill + max(1, decode) − 1` cached positions.
@@ -1310,7 +1294,7 @@ mod tests {
     /// is not standing in for one that was already there.
     #[test]
     fn the_fenced_gate_refuses_a_row_whose_canonical_job_is_under_its_floor() {
-        use crate::palw_class_admission_v2::{verify_class_admission_v4, PalwClassAdmissionError};
+        use crate::palw_class_admission_v2::{PalwClassAdmissionError, verify_class_admission_v4};
         let params = crate::config::params::palw_rc_shipped_params();
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
             panic!("the RC card carries no V2 bundle");
@@ -1753,7 +1737,7 @@ mod tests {
     #[test]
     fn the_anchored_recurrence_opens_the_window_and_not_the_history() {
         use crate::palw_step::kernel_semantics_id_v1;
-        use crate::palw_step_refute::{canonical_input_leaves_v1_anchored, KDESC_Q36_GDN_STEP};
+        use crate::palw_step_refute::{KDESC_Q36_GDN_STEP, canonical_input_leaves_v1_anchored};
         let mapped = recurrent_row_v2(512);
         let gdn_kernel = kernel_semantics_id_v1(KDESC_Q36_GDN_STEP);
         let slot = (0..u32::MAX)
@@ -1800,9 +1784,9 @@ mod tests {
     #[test]
     fn the_recurrence_map_id_is_the_executors_own_spelling() {
         use crate::palw_state_chunk_map::{
-            gdn_state_chunk_map_id_v1, gdn_state_chunk_map_id_v2, hybrid_state_chunk_map_id_v1, hybrid_state_chunk_map_id_v2,
-            integer_kv_state_chunk_map_id_v2, palw_hybrid_state_chunk_map_name_v1, palw_hybrid_state_chunk_map_name_v2,
-            PALW_GDN_STATE_CHUNK_MAP_NAME_V1, PALW_GDN_STATE_CHUNK_MAP_NAME_V2,
+            PALW_GDN_STATE_CHUNK_MAP_NAME_V1, PALW_GDN_STATE_CHUNK_MAP_NAME_V2, gdn_state_chunk_map_id_v1, gdn_state_chunk_map_id_v2,
+            hybrid_state_chunk_map_id_v1, hybrid_state_chunk_map_id_v2, integer_kv_state_chunk_map_id_v2,
+            palw_hybrid_state_chunk_map_name_v1, palw_hybrid_state_chunk_map_name_v2,
         };
         assert_eq!(
             PALW_GDN_STATE_CHUNK_MAP_NAME_V1,
@@ -1882,7 +1866,7 @@ mod tests {
     /// of claim this tree has watched go stale.
     #[test]
     fn the_anchored_recurrence_replay_agrees_with_the_long_form() {
-        use crate::palw_step_refute::{gdn_core_anchored_replay_v1, DotStructure};
+        use crate::palw_step_refute::{DotStructure, gdn_core_anchored_replay_v1};
         let mut profile = recurrent_row(64);
         profile.gdn_heads = 2;
         profile.gdn_head_k_dim = 16;
@@ -1912,7 +1896,7 @@ mod tests {
     /// the guard the shipped genesis arm never needed because it had no anchor to be handed.
     #[test]
     fn a_mis_shaped_recurrence_anchor_is_refused_by_name() {
-        use crate::palw_step_refute::{gdn_core_anchored_replay_v1, DotStructure, PalwStepRefuteError};
+        use crate::palw_step_refute::{DotStructure, PalwStepRefuteError, gdn_core_anchored_replay_v1};
         let mut profile = recurrent_row(64);
         profile.gdn_heads = 2;
         profile.gdn_head_k_dim = 16;

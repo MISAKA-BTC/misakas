@@ -1389,17 +1389,31 @@ pub fn canonical_step_coordinates(
     // a four-billion-iteration walk on EVERY validating node, in virtual processing — the block is
     // stored and relayed first, and every node re-walks it on restart.
     //
-    // The bound is the executor's own rule, not a new one: `fp_worker::run_one_job_v1` refuses a
-    // job unless `prefill + decode <= n_ctx`, so no honestly produced context can fail this and no
-    // honest close changes its verdict. A context that fails it could not have been executed by
-    // any conforming worker, which is why refusing it here is a refusal of the impossible rather
-    // than a rule change — and `None` becomes `CloseIsNotTheNarrowedStep`, a refusal, never a panic.
+    // **The bound is the class gate's, spelled the way the class gate spells it**, and the spelling
+    // is the whole of it: the FOOTPRINT is `prefill + decode - 1`, not `prefill + decode`. The last
+    // decode call reuses the position the prefill's final token already occupies — which is exactly
+    // what the loop below counts, `prefill` positions on call 0 and one each for `decode - 1`
+    // further calls. `palw_class_admission_v2`'s
+    // `the_canonical_job_is_bounded_by_the_registered_context_in_the_enumerations_form` states it
+    // as an equality and admits it: "a job whose footprint is exactly n_ctx is the declared worst
+    // case, not a violation".
+    //
+    // The first version of this guard wrote `prefill + decode > n_ctx` and so refused the declared
+    // worst case by one. That is not a cosmetic off-by-one: the hybrid class's own canonical job is
+    // (7, 2) against `n_ctx` 8, so `every_qwen36_leaf_adjudicates_and_a_tampered_one_convicts` went
+    // red — the QWEN36 tier could not adjudicate its OWN honest capture, which is the property the
+    // court rests on for that tier. A guard against the impossible that also refuses the maximum is
+    // a denial of service against the honest, wearing the same clothes as the fix.
+    //
+    // A context past this bound could not have been produced by any conforming worker, so refusing
+    // it changes no honest verdict — and `None` becomes `CloseIsNotTheNarrowedStep`, a refusal,
+    // never a panic.
     let prefill = context.declared_prefill_tokens as u64;
     let decode_calls = context.exact_decode_tokens.saturating_sub(1) as u64;
     if context.exact_decode_tokens == 0 {
         return None;
     }
-    if prefill.saturating_add(context.exact_decode_tokens as u64) > u64::from(profile.n_ctx) {
+    if prefill.saturating_add(decode_calls) > u64::from(profile.n_ctx) {
         return None;
     }
     let mut cursor = leaf_index;
@@ -1723,13 +1737,29 @@ mod tests {
         // and this is the assertion that goes red FAST when the guard is reverted, which is what
         // makes the red demonstrable at all. The two hostile cases below cannot do that job: with
         // the guard gone they do not fail, they run for four billion positions.
+        // The footprint is `prefill + decode - 1`, because the last decode call reuses the position
+        // the prefill's final token already holds. `palw_class_admission_v2` admits equality by
+        // name — "a job whose footprint is exactly n_ctx is the declared worst case, not a
+        // violation" — so the admissible edge is one position WIDER than this test first claimed,
+        // and claiming it narrowly made the hybrid class unable to adjudicate its own capture.
         let mut edge = tiny_context();
         edge.declared_prefill_tokens = profile.n_ctx - 1;
-        edge.exact_decode_tokens = 1;
-        assert!(canonical_step_coordinates(&profile, &edge, 0).is_some(), "prefill + decode == n_ctx must be admissible");
+        edge.exact_decode_tokens = 2; // footprint = (n_ctx - 1) + 2 - 1 = n_ctx
+        assert!(
+            canonical_step_coordinates(&profile, &edge, 0).is_some(),
+            "a footprint of exactly n_ctx is the declared worst case and must resolve"
+        );
         let mut over = edge.clone();
-        over.exact_decode_tokens = 2;
+        over.exact_decode_tokens = 3; // footprint = n_ctx + 1
         assert_eq!(canonical_step_coordinates(&profile, &over, 0), None, "one position past the profile is refused");
+        // and the hybrid's own canonical shape, which is what went red: (7, 2) against n_ctx 8
+        let mut hybrid_shaped = tiny_context();
+        hybrid_shaped.declared_prefill_tokens = profile.n_ctx - 1;
+        hybrid_shaped.exact_decode_tokens = 2;
+        assert!(
+            canonical_step_coordinates(&profile, &hybrid_shaped, 0).is_some(),
+            "the registered hybrid job's own footprint must not be refused by a guard against the impossible"
+        );
 
         // The shape a close can declare and no executor can produce.
         let mut hostile = tiny_context();
