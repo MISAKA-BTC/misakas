@@ -65,8 +65,13 @@ use crate::palw_attn_dissect::{
 use crate::palw_base0_a16::{A16AttnFusedParamsV1, PalwA16OpError, a16_attn_finalize_v1, a16_attn_tile_triple_v1};
 use crate::palw_bisect::{PalwBisectNoShowV1, PalwBisectPartyV1, PalwBisectTurnV1};
 use crate::palw_mode_v2::PalwCourtParamsV2;
+use crate::palw_state_chunk_map::{
+    PalwStateChunkGeometryV1, PalwStateChunkKindV1, integer_kv_state_chunk_entry_v1, integer_kv_state_locate_v1,
+    integer_kv_state_row_v1,
+};
 use crate::palw_step_leg::{
-    PalwStepLegError, PalwStepOpeningV1, PalwStepTileLeafV1, step_opening_root_capped_v1, step_tile_leaf_hash_v1,
+    PalwCheckpointLeafV2, PalwStepLegError, PalwStepOpeningV1, PalwStepTileLeafV1, checkpoint_leaf_hash_v2, state_chunk_leaf_hash_v1,
+    state_chunk_opening_root_v1, step_opening_root_capped_v1, step_tile_leaf_hash_v1,
 };
 
 /// Wire version of every object in this module.
@@ -126,6 +131,30 @@ pub enum PalwAttnCourtError {
     RowNotCommitted,
     #[error("an opened row carries {got} lanes where the geometry says {expected}")]
     RowWidthMismatch { got: usize, expected: usize },
+    #[error("the bottom reads a tile from a checkpoint and carries no anchor for it")]
+    AnchorMissing,
+    #[error("the bottom reads a tile from a checkpoint and the class's tiled geometry was not supplied")]
+    AnchorGeometryMissing,
+    #[error("the anchor's checkpoint leaf is not in the claim's checkpoint leg")]
+    AnchorNotCommitted,
+    #[error("the anchor covers {positions} positions and the geometry describes {geometry} — two histories, not one")]
+    AnchorGeometryDoesNotDescribeTheAnchor { positions: u32, geometry: u32 },
+    #[error("the checkpoint declares {declared} chunks and the class's map has {derived}")]
+    AnchorChunkCountMismatch { declared: u32, derived: u64 },
+    #[error("the class's map tiles the cache {map} positions at a time and the court dissects {court}")]
+    MapTileIsNotTheCourtTile { map: u32, court: u32 },
+    #[error("the bottom opens chunk {got}; the tile at position {position} lives in chunk {expected}")]
+    WrongChunk { got: u32, expected: u64, position: u64 },
+    #[error("chunk {chunk} starts at position {start} and the disputed tile starts at {tile_start}")]
+    ChunkIsNotTheTile { chunk: u32, start: u32, tile_start: u64 },
+    #[error("the opened chunk is not in the checkpoint's state: it rebuilds {folded}, the leaf says {claimed}")]
+    ChunkNotInCheckpoint { folded: Hash64, claimed: Hash64 },
+    #[error("the opened chunk does not hold position {position} in the shape the map declares")]
+    ChunkRowUnreadable { position: u64 },
+    #[error("the checkpoint covers {covered} of the tile's {width} positions and {got} rows were opened after it")]
+    RowsAfterMismatch { covered: usize, width: usize, got: usize },
+    #[error("the checkpoint covers none of the disputed tile — the cache-write route is the only one here")]
+    AnchorCoversNothing,
     #[error("this court admits no arity that fits its window: the widest row needs more moves than {window_court} DAA buys")]
     NoAdmissibleArity { window_court: u64 },
     #[error(
@@ -176,28 +205,65 @@ pub struct PalwAttnRowOpeningV1 {
     pub opening: PalwStepOpeningV1,
 }
 
+/// **One chunk of a checkpoint's state, opened by membership in its `state_chunks_root`.**
+///
+/// Under the graph-v4 tiled map (`tiled_kv_state_geometry_v3`) a chunk IS a history tile, so this
+/// is the whole of what the bottom needs from a checkpoint: `tile × kv_row` bytes and a path of
+/// `⌈log₂ chunks⌉` siblings, at every context. `state_chunk_opening_root_v1` is what makes it
+/// checkable without the other chunks — before it existed, the only evidence about a checkpoint's
+/// state was `PalwCheckpointKvOperandsV1`, which carries every chunk of it.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwAttnChunkOpeningV1 {
+    pub chunk_index: u32,
+    pub chunk_bytes: Vec<u8>,
+    /// The path to the checkpoint leaf's `state_chunks_root`.
+    pub siblings: Vec<Hash64>,
+}
+
+/// **The checkpoint a tile is read from**: the leaf, and its opening against the claim's
+/// checkpoint leg root.
+///
+/// One anchor serves both K and V — they are two slices of the same checkpoint — so it rides the
+/// bottom once rather than once per kind.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwAttnCheckpointAnchorV1 {
+    pub leaf: PalwCheckpointLeafV2,
+    pub opening: PalwStepOpeningV1,
+}
+
+/// **Where a tile's K (or V) rows come from** — ADR-0082 Decision 2's two routes, as one type.
+///
+/// A history tile is either wholly after the last checkpoint (every row is a committed
+/// cache-write leaf) or reaches into it (one chunk opening, plus the rows the checkpoint does not
+/// cover when the tile STRADDLES its edge — which is the case whenever the anchor's position count
+/// is not a multiple of the map's tile).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwAttnTileEvidenceV1 {
+    /// Every row of the tile, opened as a committed cache-write leaf of the step tree.
+    CacheWrites { rows: Vec<PalwAttnRowOpeningV1> },
+    /// The tile read from ONE chunk of the anchor, plus the rows past the anchor's edge.
+    Checkpoint { chunk: PalwAttnChunkOpeningV1, rows_after: Vec<PalwAttnRowOpeningV1> },
+}
+
 /// **The bottom of the dissection**: the head's query slice, the tile's K and V rows, and the
-/// output tile the root claim was checked against — every one of them an opening against the
-/// claim's own committed step root.
+/// output tile the root claim was checked against — every one of them opened against something
+/// the claim committed.
 ///
 /// # What this carries and what it does not
 ///
-/// It carries ONE tile: `PALW_ATTN_HISTORY_TILE_V4` positions of K and of V for the disputed
-/// head's slice, the query row, and the paths that prove them. That is flat in the context, which
-/// is the whole of ADR-0082 R4 at this site. It does NOT carry the history, the probability row,
-/// the score row, or any checkpoint chunk list.
+/// It carries ONE tile: `PALW_ATTN_HISTORY_TILE_V4` positions of K and of V, the query row, the
+/// output tile, and the paths that prove them. That is flat in the context, which is the whole of
+/// ADR-0082 R4 at this site. It does NOT carry the history, the probability row, the score row,
+/// or a checkpoint's chunk list.
 ///
-/// # The route that is here, and the one that is not
+/// # Both routes are here
 ///
-/// ADR-0082 Decision 2 names two ways to reach a tile's K and V rows: the cache-write leaves of
-/// the step tree (this object), and the graph-v4 checkpoint chunk at or before the tile. Only the
-/// first is implemented, and deliberately: `PalwCheckpointKvOperandsV1` carries `chunks:
-/// Vec<Vec<u8>>` — **every** chunk of the checkpoint — so the checkpoint route as it exists today
-/// would carry the whole history to open one tile, which is the thing this ADR exists to stop.
-/// Tiling the MAP (`tiled_kv_state_geometry_v3`) made the chunk a tile; it did not make a chunk
-/// individually openable, and the missing primitive is a membership proof into
-/// `state_chunks_root_v1`'s tree. Until that exists the bottom uses the step tree, which already
-/// has openings, and the refusal is honest rather than silent.
+/// ADR-0082 Decision 2 names two ways to reach a tile's K and V rows and this object carries
+/// both, per kind ([`PalwAttnTileEvidenceV1`]): the cache-write leaves of the step tree, and one
+/// chunk of the checkpoint at or before the tile under the class's tiled map. The second is what
+/// Decision 4 is FOR — "the bottom of the dissection opens tiles, so the anchor is tile-addressed
+/// and priced as such" — and it is the cheaper of the two whenever it applies, because one chunk
+/// opening replaces sixteen row openings and their sixteen paths.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwAttnDissectBottomV1 {
     pub version: u16,
@@ -206,10 +272,12 @@ pub struct PalwAttnDissectBottomV1 {
     pub tile: u64,
     /// The head's rotated query slice: `d_head` codes.
     pub query: PalwAttnRowOpeningV1,
-    /// The tile's K rows, position-major, one opening per position.
-    pub k_rows: Vec<PalwAttnRowOpeningV1>,
+    /// The checkpoint both tile evidences read from, when either of them does.
+    pub anchor: Option<PalwAttnCheckpointAnchorV1>,
+    /// The tile's K rows, position-major.
+    pub k: PalwAttnTileEvidenceV1,
     /// The tile's V rows, in the same order.
-    pub v_rows: Vec<PalwAttnRowOpeningV1>,
+    pub v: PalwAttnTileEvidenceV1,
     /// The committed output tile the root claim finalizes to.
     pub out_tile: PalwAttnRowOpeningV1,
 }
@@ -227,6 +295,44 @@ pub struct PalwAttnBottomBindingV1 {
     pub step_root: Hash64,
     pub step_leaf_count: u64,
     pub max_step_leaf_count: u64,
+    /// The claim's checkpoint leg: the root an anchor's opening proves against, the leaf count
+    /// that root was built over, and the two hashes a checkpoint leaf is bound to.
+    pub checkpoint_merkle_root: Hash64,
+    pub checkpoint_leaf_count: u64,
+    pub checkpoint_profile_hash: Hash64,
+    pub state_chunk_map_id: Hash64,
+}
+
+/// **The site under dispute, as the registered CLASS describes it** — never as the wire does.
+///
+/// Every field is read off the class's profile and its registered map by the caller: the fused
+/// site's four narrowings, the cache row's width and the head's slice within it, the attention
+/// layer the node sits at, and — when a checkpoint is in evidence — the layout that checkpoint's
+/// chunks are enumerated under, together with the position count the anchor covers.
+///
+/// `anchor_positions` is `integer_kv_positions_at_v1(job context, anchor.leaf.covered_decode_call)`.
+/// It is here because a geometry and an anchor that describe different histories would let a
+/// chunk index point at another position's rows, and this is the field that says they are one.
+///
+/// **What this module does NOT decide**: WHICH checkpoint is this step's anchor. That rule —
+/// `covered_decode_call == disputed_call − 1`, exactly — is `palw_step_refute::verify_kv_anchor`'s
+/// and stays there; a challenger choosing among anchors would be choosing which positions the
+/// court never sees, and one refusal for that belongs in one place.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwAttnBottomSiteV1 {
+    pub params: A16AttnFusedParamsV1,
+    /// `attn_kv_heads × attn_head_dim` — the cache row's width in codes.
+    pub kv_dim: usize,
+    /// The disputed head's slice within a cache row.
+    pub kv_off: usize,
+    pub d_head: usize,
+    /// The attention layer in the PROFILE's numbering, which is what the map indexes by.
+    pub attn_layer: u16,
+    /// The anchor's layout under the class's TILED map (`tiled_kv_state_geometry_v3`), at
+    /// `anchor_positions` positions. `None` when no checkpoint precedes the disputed position, and
+    /// then a `Checkpoint` evidence arm is refused by name rather than guessed at.
+    pub anchor_geometry: Option<PalwStateChunkGeometryV1>,
+    pub anchor_positions: u32,
 }
 
 // =================================================================================================
@@ -387,6 +493,12 @@ impl PalwAttnDissectPhaseV1 {
         (self.m_star, self.s_star)
     }
 
+    /// Positions a history tile holds — the court's tile, which the class's map must agree with
+    /// for a checkpoint chunk to serve the bottom (ADR-0082 Decision 4).
+    pub fn tile_positions(&self) -> u32 {
+        self.tile_positions
+    }
+
     /// The rounds this dissection is allowed to take — the contract's own recurrence over the
     /// tile count, so the bound and the cut can never disagree.
     pub fn round_budget(&self) -> u32 {
@@ -538,27 +650,153 @@ fn opened_lanes_v1(
     Ok(row.leaf.values_le.chunks_exact(4).map(|q| i32::from_le_bytes([q[0], q[1], q[2], q[3]])).collect())
 }
 
+/// **Verify the anchor's checkpoint leaf against the claim's checkpoint leg**, and answer with
+/// the leaf. What it does NOT answer is whether this is the RIGHT checkpoint for the disputed
+/// step — see [`PalwAttnBottomSiteV1`].
+fn verified_anchor_v1<'a>(
+    anchor: Option<&'a PalwAttnCheckpointAnchorV1>,
+    binding: &PalwAttnBottomBindingV1,
+    site: &'a PalwAttnBottomSiteV1,
+) -> Result<(&'a PalwCheckpointLeafV2, &'a PalwStateChunkGeometryV1), PalwAttnCourtError> {
+    let anchor = anchor.ok_or(PalwAttnCourtError::AnchorMissing)?;
+    let geometry = site.anchor_geometry.as_ref().ok_or(PalwAttnCourtError::AnchorGeometryMissing)?;
+    if geometry.positions != site.anchor_positions {
+        return Err(PalwAttnCourtError::AnchorGeometryDoesNotDescribeTheAnchor {
+            positions: site.anchor_positions,
+            geometry: geometry.positions,
+        });
+    }
+    if u64::from(anchor.leaf.state_chunk_count) != geometry.chunk_count() {
+        return Err(PalwAttnCourtError::AnchorChunkCountMismatch {
+            declared: anchor.leaf.state_chunk_count,
+            derived: geometry.chunk_count(),
+        });
+    }
+    if anchor.opening.leaf_index != u64::from(anchor.leaf.checkpoint_index) {
+        return Err(PalwAttnCourtError::AnchorNotCommitted);
+    }
+    if checkpoint_leaf_hash_v2(&binding.job_context_hash, &binding.checkpoint_profile_hash, &binding.state_chunk_map_id, &anchor.leaf)
+        != anchor.opening.leaf_hash
+    {
+        return Err(PalwAttnCourtError::AnchorNotCommitted);
+    }
+    let root = step_opening_root_capped_v1(binding.checkpoint_leaf_count, &anchor.opening, binding.max_step_leaf_count)?;
+    if root != binding.checkpoint_merkle_root {
+        return Err(PalwAttnCourtError::AnchorNotCommitted);
+    }
+    Ok((&anchor.leaf, geometry))
+}
+
+/// **The tile's rows of one kind, however the bottom reaches them** (ADR-0082 Decision 2, step 3).
+///
+/// Returns `width × kv_dim` codes, position-major — the layout `a16_attn_tile_triple_v1` reads,
+/// and the layout the cache itself has, so a tile opened from the checkpoint is handed over
+/// unchanged.
+fn tile_rows_v1(
+    evidence: &PalwAttnTileEvidenceV1,
+    kind: PalwStateChunkKindV1,
+    anchor: Option<&PalwAttnCheckpointAnchorV1>,
+    binding: &PalwAttnBottomBindingV1,
+    site: &PalwAttnBottomSiteV1,
+    first_position: u64,
+    width: usize,
+    court_tile: u32,
+) -> Result<Vec<i32>, PalwAttnCourtError> {
+    match evidence {
+        PalwAttnTileEvidenceV1::CacheWrites { rows } => {
+            if rows.len() != width {
+                return Err(PalwAttnCourtError::RowsAfterMismatch { covered: 0, width, got: rows.len() });
+            }
+            let mut out = Vec::with_capacity(width * site.kv_dim);
+            for row in rows {
+                out.extend(opened_lanes_v1(row, binding, site.kv_dim)?);
+            }
+            Ok(out)
+        }
+        PalwAttnTileEvidenceV1::Checkpoint { chunk, rows_after } => {
+            let (leaf, geometry) = verified_anchor_v1(anchor, binding, site)?;
+            // **The map's tile IS the court's tile.** Decision 4 in one comparison: a class whose
+            // map chunks the cache at another granularity cannot serve a dissection's bottom from
+            // it, and saying so here is cheaper than reading the wrong rows out of a chunk that
+            // happens to contain the right ones.
+            if geometry.positions_per_chunk != court_tile {
+                return Err(PalwAttnCourtError::MapTileIsNotTheCourtTile { map: geometry.positions_per_chunk, court: court_tile });
+            }
+            if geometry.row_bytes as usize != site.kv_dim * 4 {
+                return Err(PalwAttnCourtError::RowWidthMismatch { got: geometry.row_bytes as usize / 4, expected: site.kv_dim });
+            }
+            // How much of the tile this checkpoint actually holds. The rest is past its edge —
+            // the STRADDLE, which happens whenever the anchor's position count is not a multiple
+            // of the tile.
+            let covered = (site.anchor_positions as u64).saturating_sub(first_position).min(width as u64) as usize;
+            if covered == 0 {
+                return Err(PalwAttnCourtError::AnchorCoversNothing);
+            }
+            if rows_after.len() != width - covered {
+                return Err(PalwAttnCourtError::RowsAfterMismatch { covered, width, got: rows_after.len() });
+            }
+            let position =
+                u32::try_from(first_position).map_err(|_| PalwAttnCourtError::ChunkRowUnreadable { position: first_position })?;
+            let (expected, _) = integer_kv_state_locate_v1(geometry, kind, site.attn_layer, position)
+                .ok_or(PalwAttnCourtError::ChunkRowUnreadable { position: first_position })?;
+            if u64::from(chunk.chunk_index) != expected {
+                return Err(PalwAttnCourtError::WrongChunk { got: chunk.chunk_index, expected, position: first_position });
+            }
+            // Membership: this chunk, at this index, is in THIS checkpoint's state — proved
+            // without the other chunks, which is the whole of Decision 4.
+            let chunk_hash = state_chunk_leaf_hash_v1(&binding.state_chunk_map_id, chunk.chunk_index, &chunk.chunk_bytes);
+            let folded =
+                state_chunk_opening_root_v1(geometry.chunk_count() as usize, chunk.chunk_index, &chunk_hash, &chunk.siblings)?;
+            if folded != leaf.state_chunks_root {
+                return Err(PalwAttnCourtError::ChunkNotInCheckpoint { folded, claimed: leaf.state_chunks_root });
+            }
+            let entry = integer_kv_state_chunk_entry_v1(geometry, expected)
+                .ok_or(PalwAttnCourtError::ChunkRowUnreadable { position: first_position })?;
+            if u64::from(entry.position_start) != first_position {
+                return Err(PalwAttnCourtError::ChunkIsNotTheTile {
+                    chunk: chunk.chunk_index,
+                    start: entry.position_start,
+                    tile_start: first_position,
+                });
+            }
+            let mut out = Vec::with_capacity(width * site.kv_dim);
+            for i in 0..covered {
+                let p = position + i as u32;
+                let bytes = integer_kv_state_row_v1(&entry, &chunk.chunk_bytes, p)
+                    .ok_or(PalwAttnCourtError::ChunkRowUnreadable { position: u64::from(p) })?;
+                out.extend(bytes.chunks_exact(4).map(|q| i32::from_le_bytes([q[0], q[1], q[2], q[3]])));
+            }
+            for row in rows_after {
+                out.extend(opened_lanes_v1(row, binding, site.kv_dim)?);
+            }
+            Ok(out)
+        }
+    }
+}
+
 /// **The bottom of the dissection: open one tile and recompute its triple** (ADR-0082 Decision 2,
 /// step 3).
 ///
-/// `kv_dim` is the cache row's width and `kv_off` the disputed head's slice within it — both
-/// facts about the registered class, read from its profile by the caller, never from the wire.
-/// `params` are the class's registered narrowings for the fused site, for the same reason.
+/// The site is the registered CLASS's description ([`PalwAttnBottomSiteV1`]) — the cache row's
+/// width, the head's slice, the layer, the fused narrowings, and the anchor's tiled layout — never
+/// the wire's.
 ///
 /// The recompute is [`a16_attn_tile_triple_v1`] — the shipped kernels — against the ROOT's
 /// `(m*, S*)`, and all three fields are compared. Returns `ExecutorGuilty` when any of them
 /// disagrees with the claim the dissection narrowed to, and `ChallengerDefeated` when all three
 /// agree: at that point the responder has stood behind its claim at every level and reproduced it
 /// from committed material, which is what an honest execution looks like from the court's side.
-#[allow(clippy::too_many_arguments)]
+///
+/// **The two routes give the same answer or neither is used.** Whether a row arrives as a
+/// cache-write leaf or out of a checkpoint chunk, it is the same bytes — the engine pushes one
+/// `k_rot` into the cache and records the same vector as a step row — so the verdict cannot depend
+/// on which one the challenger could afford. `the_two_routes_convict_and_acquit_alike` is what
+/// says so.
 pub fn check_attn_dissect_bottom_v1(
     phase: &PalwAttnDissectPhaseV1,
     bottom: &PalwAttnDissectBottomV1,
     binding: &PalwAttnBottomBindingV1,
-    params: A16AttnFusedParamsV1,
-    kv_dim: usize,
-    kv_off: usize,
-    d_head: usize,
+    site: &PalwAttnBottomSiteV1,
     kary_court_active: bool,
 ) -> Result<PalwAttnCourtVerdictV1, PalwAttnCourtError> {
     if !kary_court_active {
@@ -576,29 +814,20 @@ pub fn check_attn_dissect_bottom_v1(
     if bottom.tile != expected_tile {
         return Err(PalwAttnCourtError::WrongTile { got: bottom.tile, expected: expected_tile });
     }
-    let (_first_position, width) =
+    let (first_position, width) =
         phase.terminal_tile_positions().ok_or(PalwAttnCourtError::WrongTile { got: bottom.tile, expected: expected_tile })?;
-    if bottom.k_rows.len() != width || bottom.v_rows.len() != width {
-        return Err(PalwAttnCourtError::WrongTileWidth {
-            got: bottom.k_rows.len(),
-            expected: width,
-            tile: bottom.tile,
-            history_positions: phase.history_positions,
-        });
-    }
 
-    // Every operand is opened against the claim's own step root before a multiply happens.
-    let qh = opened_lanes_v1(&bottom.query, binding, d_head)?;
-    let mut k_tile = Vec::with_capacity(width * kv_dim);
-    let mut v_tile = Vec::with_capacity(width * kv_dim);
-    for (k_row, v_row) in bottom.k_rows.iter().zip(&bottom.v_rows) {
-        k_tile.extend(opened_lanes_v1(k_row, binding, kv_dim)?);
-        v_tile.extend(opened_lanes_v1(v_row, binding, kv_dim)?);
-    }
+    // Every operand is opened against something the claim committed before a multiply happens.
+    let qh = opened_lanes_v1(&bottom.query, binding, site.d_head)?;
+    let tile = phase.tile_positions();
+    let k_tile =
+        tile_rows_v1(&bottom.k, PalwStateChunkKindV1::Key, bottom.anchor.as_ref(), binding, site, first_position, width, tile)?;
+    let v_tile =
+        tile_rows_v1(&bottom.v, PalwStateChunkKindV1::Value, bottom.anchor.as_ref(), binding, site, first_position, width, tile)?;
 
     let (m_star, s_star) = phase.root_scale();
     let lanes = (phase.lane_first as usize, phase.lane_count as usize);
-    let recomputed = a16_attn_tile_triple_v1(&qh, &k_tile, &v_tile, kv_dim, kv_off, lanes, params, m_star, s_star)?;
+    let recomputed = a16_attn_tile_triple_v1(&qh, &k_tile, &v_tile, site.kv_dim, site.kv_off, lanes, site.params, m_star, s_star)?;
     Ok(if recomputed == *phase.claim() { PalwAttnCourtVerdictV1::ChallengerDefeated } else { PalwAttnCourtVerdictV1::ExecutorGuilty })
 }
 
@@ -662,8 +891,12 @@ mod tests {
     use crate::palw_base0_a16::{A16QuantParams, a16_attn_root_claim_v1};
     use crate::palw_mode_v2::{PalwCourtParamsV2, palw_close_bytes_for_chunks_v1, palw_court_arity_v1};
     use crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4;
+    use crate::palw_state_chunk_map::PalwStateChunkKindV1;
     use crate::palw_step::PalwStepCoordinateV1;
-    use crate::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, step_merkle_path_v1, step_merkle_root_v1};
+    use crate::palw_step_leg::{
+        PALW_STEP_LEG_OBJECT_VERSION_V1, checkpoint_genesis_prev_v2, state_chunk_path_v1, state_chunks_root_v1, step_merkle_path_v1,
+        step_merkle_root_v1,
+    };
 
     const TILE: u32 = PALW_ATTN_HISTORY_TILE_V4;
 
@@ -696,6 +929,7 @@ mod tests {
     /// were committed in.
     struct Fixture {
         d_head: usize,
+        kv_dim: usize,
         positions: usize,
         lanes: (usize, usize),
         q: Vec<i32>,
@@ -754,6 +988,7 @@ mod tests {
         let step_root = step_merkle_root_v1(&leaf_hashes).expect("a tree over the committed rows");
         Fixture {
             d_head,
+            kv_dim,
             positions,
             lanes,
             q,
@@ -767,10 +1002,145 @@ mod tests {
                 step_root,
                 step_leaf_count: leaf_hashes.len() as u64,
                 max_step_leaf_count: 1 << 32,
+                // Filled in per anchor: a fixture with no checkpoint carries a leg root nothing
+                // opens against, which is exactly what `AnchorNotCommitted` is for.
+                checkpoint_merkle_root: h64(0),
+                checkpoint_leaf_count: 2,
+                checkpoint_profile_hash: h64(CKPT),
+                state_chunk_map_id: crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3(),
             },
             leaf_hashes,
         }
     }
+
+    const CKPT: u8 = 0x33;
+
+    /// A checkpoint over the fixture's first `anchor_positions` positions, enumerated under the
+    /// class's TILED map — the material ADR-0082 Decision 4's bottom reads one chunk of.
+    struct Anchor {
+        geometry: PalwStateChunkGeometryV1,
+        chunk_bytes: Vec<Vec<u8>>,
+        chunk_hashes: Vec<Hash64>,
+        anchor: PalwAttnCheckpointAnchorV1,
+        checkpoint_merkle_root: Hash64,
+        positions: u32,
+    }
+
+    impl Fixture {
+        /// Build the checkpoint. The geometry is the v3 map's shape stated for this synthetic
+        /// head: `positions_per_chunk` is the registered tile, the row is `kv_dim × 4` i32-LE
+        /// bytes, and the chunks are kind-major then layer-asc then position-asc — the enumeration
+        /// `integer_kv_state_chunk_entry_v1` walks, which is what builds the bytes below.
+        fn anchor(&self, anchor_positions: u32) -> Anchor {
+            let geometry = PalwStateChunkGeometryV1 {
+                row_bytes: (self.kv_dim * 4) as u32,
+                positions_per_chunk: TILE,
+                attn_layers: vec![LAYER],
+                positions: anchor_positions,
+                chunks_per_slice: anchor_positions.div_ceil(TILE),
+            };
+            let mut chunk_bytes = Vec::new();
+            for index in 0..geometry.chunk_count() {
+                let entry = integer_kv_state_chunk_entry_v1(&geometry, index).expect("in range");
+                let series = match entry.kind {
+                    PalwStateChunkKindV1::Key => &self.k,
+                    PalwStateChunkKindV1::Value => &self.v,
+                };
+                let mut bytes = Vec::with_capacity(entry.byte_len() as usize);
+                for p in entry.position_start..entry.position_start + entry.position_count {
+                    for lane in &series[p as usize * self.kv_dim..(p as usize + 1) * self.kv_dim] {
+                        bytes.extend_from_slice(&lane.to_le_bytes());
+                    }
+                }
+                chunk_bytes.push(bytes);
+            }
+            let map_id = crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3();
+            let chunk_hashes: Vec<Hash64> =
+                chunk_bytes.iter().enumerate().map(|(i, b)| state_chunk_leaf_hash_v1(&map_id, i as u32, b)).collect();
+            let leaf = PalwCheckpointLeafV2 {
+                version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                checkpoint_index: 0,
+                covered_decode_call: 0,
+                prev_checkpoint_leaf_hash: checkpoint_genesis_prev_v2(&h64(JOB)),
+                state_chunk_count: chunk_hashes.len() as u32,
+                state_chunks_root: state_chunks_root_v1(&chunk_hashes).expect("a chunks root"),
+            };
+            let leaf_hash = checkpoint_leaf_hash_v2(&h64(JOB), &h64(CKPT), &map_id, &leaf);
+            // Two checkpoints in the leg, so the opening carries a real sibling.
+            let leg = vec![leaf_hash, h64(0xee)];
+            Anchor {
+                checkpoint_merkle_root: step_merkle_root_v1(&leg).expect("a leg root"),
+                anchor: PalwAttnCheckpointAnchorV1 {
+                    leaf,
+                    opening: PalwStepOpeningV1 { leaf_index: 0, leaf_hash, siblings: step_merkle_path_v1(&leg, 0).expect("a path") },
+                },
+                geometry,
+                chunk_bytes,
+                chunk_hashes,
+                positions: anchor_positions,
+            }
+        }
+
+        /// The class's description of the disputed site, with no checkpoint in evidence.
+        fn site(&self) -> PalwAttnBottomSiteV1 {
+            PalwAttnBottomSiteV1 {
+                params: params(),
+                kv_dim: self.kv_dim,
+                kv_off: 0,
+                d_head: self.d_head,
+                attn_layer: LAYER,
+                anchor_geometry: None,
+                anchor_positions: 0,
+            }
+        }
+
+        /// The same, with the anchor's tiled layout.
+        fn site_anchored(&self, anchor: &Anchor) -> PalwAttnBottomSiteV1 {
+            PalwAttnBottomSiteV1 { anchor_geometry: Some(anchor.geometry.clone()), anchor_positions: anchor.positions, ..self.site() }
+        }
+
+        /// The binding, with the anchor's checkpoint leg root.
+        fn binding_anchored(&self, anchor: &Anchor) -> PalwAttnBottomBindingV1 {
+            PalwAttnBottomBindingV1 { checkpoint_merkle_root: anchor.checkpoint_merkle_root, ..self.binding }
+        }
+
+        /// **The bottom on the CHECKPOINT route**: one chunk opening per kind, plus the rows past
+        /// the anchor's edge when the tile straddles it.
+        fn bottom_anchored(&self, session_id: Hash64, tile: u64, anchor: &Anchor) -> PalwAttnDissectBottomV1 {
+            let first = tile as usize * TILE as usize;
+            let width = (self.positions - first).min(TILE as usize);
+            let covered = (anchor.positions as usize).saturating_sub(first).min(width);
+            let evidence = |kind: PalwStateChunkKindV1, series: &[i32], slot: u32| {
+                let (index, _) = integer_kv_state_locate_v1(&anchor.geometry, kind, LAYER, first as u32).expect("in the map");
+                let chunk = PalwAttnChunkOpeningV1 {
+                    chunk_index: index as u32,
+                    chunk_bytes: anchor.chunk_bytes[index as usize].clone(),
+                    siblings: state_chunk_path_v1(&anchor.chunk_hashes, index as usize).expect("a chunk path"),
+                };
+                let rows_after = (first + covered..first + width)
+                    .map(|p| {
+                        let leaf_index = if slot == 1 { leaf_index_k(p) } else { leaf_index_v(p) };
+                        self.row_opening(leaf_index, &series[p * self.kv_dim..(p + 1) * self.kv_dim], slot, p as u32)
+                    })
+                    .collect();
+                PalwAttnTileEvidenceV1::Checkpoint { chunk, rows_after }
+            };
+            PalwAttnDissectBottomV1 {
+                version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                session_id,
+                tile,
+                query: self.row_opening(leaf_index_query(), &self.q, 0, 0),
+                anchor: Some(anchor.anchor.clone()),
+                k: evidence(PalwStateChunkKindV1::Key, &self.k, 1),
+                v: evidence(PalwStateChunkKindV1::Value, &self.v, 2),
+                out_tile: self.row_opening(self.leaf_hashes.len() - 1, &self.out_tile, 3, 0),
+            }
+        }
+    }
+
+    /// The one attention layer these fixtures have. It is the PROFILE's numbering, which is what
+    /// the map indexes by — a fact the checker reads off the site rather than counting.
+    const LAYER: u16 = 0;
 
     impl Fixture {
         fn tile_count(&self) -> u64 {
@@ -838,8 +1208,9 @@ mod tests {
                 session_id,
                 tile,
                 query: self.row_opening(leaf_index_query(), &self.q, 0, 0),
-                k_rows,
-                v_rows,
+                anchor: None,
+                k: PalwAttnTileEvidenceV1::CacheWrites { rows: k_rows },
+                v: PalwAttnTileEvidenceV1::CacheWrites { rows: v_rows },
                 out_tile: self.row_opening(self.leaf_hashes.len() - 1, &self.out_tile, 3, 0),
             }
         }
@@ -917,9 +1288,7 @@ mod tests {
         }
         let tile = phase.terminal_tile().expect("a narrowed dissection");
         let bottom = fx.bottom(h64(9), tile);
-        match check_attn_dissect_bottom_v1(phase, &bottom, &fx.binding, params(), fx.d_head, 0, fx.d_head, true)
-            .expect("the bottom's openings verify")
-        {
+        match check_attn_dissect_bottom_v1(phase, &bottom, &fx.binding, &fx.site(), true).expect("the bottom's openings verify") {
             PalwAttnCourtVerdictV1::ExecutorGuilty => Played::Convicted,
             PalwAttnCourtVerdictV1::ChallengerDefeated => Played::Acquitted,
         }
@@ -1081,16 +1450,17 @@ mod tests {
         }
         let tile = phase.terminal_tile().expect("narrowed");
         let mut bottom = fx.bottom(h64(9), tile);
-        bottom.k_rows[0].leaf.values_le[0] ^= 0xff;
+        let PalwAttnTileEvidenceV1::CacheWrites { rows } = &mut bottom.k else { panic!("the cache-write route") };
+        rows[0].leaf.values_le[0] ^= 0xff;
         assert_eq!(
-            check_attn_dissect_bottom_v1(&phase, &bottom, &fx.binding, params(), fx.d_head, 0, fx.d_head, true),
+            check_attn_dissect_bottom_v1(&phase, &bottom, &fx.binding, &fx.site(), true),
             Err(PalwAttnCourtError::RowNotCommitted)
         );
         // And the same bottom against the wrong tile is refused by name rather than recomputed.
         let mut elsewhere = fx.bottom(h64(9), tile);
         elsewhere.tile = tile + 1;
         assert!(matches!(
-            check_attn_dissect_bottom_v1(&phase, &elsewhere, &fx.binding, params(), fx.d_head, 0, fx.d_head, true),
+            check_attn_dissect_bottom_v1(&phase, &elsewhere, &fx.binding, &fx.site(), true),
             Err(PalwAttnCourtError::WrongTile { .. })
         ));
     }
@@ -1152,6 +1522,275 @@ mod tests {
             .expect("an honest round");
         assert_eq!(phase.turn(), PalwBisectTurnV1::AwaitVerdict);
         assert_eq!(phase.declare_no_show(231).expect("the challenger is now due").silent_party, PalwBisectPartyV1::Challenger);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // ADR-0082 Decision 4 — the bottom opens a TILE of the checkpoint, and the anchored fused
+    // refutation is driven end to end
+    // ---------------------------------------------------------------------------------------
+
+    /// Walk an honest dissection to a NAMED tile — the challenger steering toward the tile the
+    /// test wants to open, which is what a real one does toward its divergence.
+    fn walk_to(fx: &Fixture, phase: &mut PalwAttnDissectPhaseV1, target: u64) {
+        let (m, s) = phase.root_scale();
+        let mut daa = 400u64;
+        while phase.turn() != PalwBisectTurnV1::Terminal {
+            let ranges = phase.child_ranges();
+            let children: Vec<_> = ranges.iter().map(|&(f, c)| fx.range_claim(f, c, m, s)).collect();
+            daa += 1;
+            phase
+                .apply_round(&PalwAttnDissectRoundV1 { version: PALW_ATTN_DISSECT_OBJECT_VERSION_V1, children }, daa, 30)
+                .expect("an honest round folds");
+            let child = ranges.iter().position(|&(f, c)| target >= f && target < f + c).expect("the target is inside the range") as u8;
+            daa += 1;
+            phase
+                .apply_choice(
+                    &PalwAttnDissectChoiceV1 {
+                        version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                        session_id: h64(9),
+                        round: phase.round(),
+                        child,
+                    },
+                    daa,
+                    30,
+                )
+                .expect("a child inside the arity");
+        }
+        assert_eq!(phase.terminal_tile(), Some(target), "the walk did not reach the tile it steered for");
+    }
+
+    /// **The anchored fused refutation, driven** — ADR-0082 Decision 4, and the worry stream D
+    /// left open ("an anchored fused refutation was never driven").
+    ///
+    /// The checkpoint covers 40 of the job's 50 positions, so of the four history tiles: tile 0
+    /// and tile 1 are wholly inside it and open as ONE chunk each; **tile 2 STRADDLES its edge** —
+    /// eight rows out of the chunk and eight from cache-write leaves after it — and tile 3 is
+    /// wholly past it and has only the cache-write route. Every one of them recomputes the same
+    /// triple the dissection narrowed to, so an honest execution is acquitted through whichever
+    /// route the evidence took.
+    #[test]
+    fn the_checkpoint_route_opens_one_tile_at_the_anchor_and_across_its_edge() {
+        let fx = fixture(8, 50, 4, 53);
+        assert_eq!(fx.tile_count(), 4);
+        let anchor = fx.anchor(40);
+        let binding = fx.binding_anchored(&anchor);
+        let site = fx.site_anchored(&anchor);
+        for (tile, straddles) in [(0u64, false), (1, false), (2, true)] {
+            let mut phase = open_phase(&fx, 4, fx.root.clone()).expect("an honest root");
+            walk_to(&fx, &mut phase, tile);
+            let bottom = fx.bottom_anchored(h64(9), tile, &anchor);
+            let PalwAttnTileEvidenceV1::Checkpoint { chunk, rows_after } = &bottom.k else { panic!("the checkpoint route") };
+            assert_eq!(!rows_after.is_empty(), straddles, "tile {tile}: the straddle is not where the anchor's edge is");
+            if straddles {
+                assert_eq!(rows_after.len(), 8, "tile 2 reaches eight positions past a 40-position checkpoint");
+                assert_eq!(chunk.chunk_bytes.len(), 8 * fx.kv_dim * 4, "the last chunk of a ragged checkpoint is short");
+            } else {
+                assert_eq!(chunk.chunk_bytes.len(), TILE as usize * fx.kv_dim * 4, "a full chunk is one whole tile of rows");
+            }
+            assert_eq!(
+                check_attn_dissect_bottom_v1(&phase, &bottom, &binding, &site, true).expect("the anchored openings verify"),
+                PalwAttnCourtVerdictV1::ChallengerDefeated,
+                "tile {tile}: an honest execution was convicted through the checkpoint route"
+            );
+        }
+        // The tile past the anchor has only the cache-write route, and it acquits too.
+        let mut phase = open_phase(&fx, 4, fx.root.clone()).expect("an honest root");
+        walk_to(&fx, &mut phase, 3);
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &fx.bottom(h64(9), 3), &binding, &site, true).expect("verifies"),
+            PalwAttnCourtVerdictV1::ChallengerDefeated
+        );
+    }
+
+    /// **The two routes convict and acquit alike.** A row is the same bytes whether it arrives as
+    /// a cache-write leaf or out of a checkpoint chunk — the engine pushes one `k_rot` into the
+    /// cache and records the same vector as a step row — so a verdict may not depend on which
+    /// route the challenger could afford. Honest and forged, at every tile inside the anchor.
+    #[test]
+    fn the_two_routes_convict_and_acquit_alike() {
+        let fx = fixture(8, 50, 4, 57);
+        let anchor = fx.anchor(48);
+        let binding = fx.binding_anchored(&anchor);
+        let site = fx.site_anchored(&anchor);
+        // Honest.
+        for tile in [0u64, 1, 2] {
+            let mut phase = open_phase(&fx, 4, fx.root.clone()).expect("an honest root");
+            walk_to(&fx, &mut phase, tile);
+            let cache = check_attn_dissect_bottom_v1(&phase, &fx.bottom(h64(9), tile), &binding, &site, true).expect("cache-write");
+            let ckpt = check_attn_dissect_bottom_v1(&phase, &fx.bottom_anchored(h64(9), tile, &anchor), &binding, &site, true)
+                .expect("chunk");
+            assert_eq!((cache, ckpt), (PalwAttnCourtVerdictV1::ChallengerDefeated, PalwAttnCourtVerdictV1::ChallengerDefeated));
+        }
+        // Forged: the lie is moved into tile 1 and compensated in tile 0, so every level folds
+        // and only a recompute can tell — through either route.
+        let mut phase = open_phase(&fx, 4, fx.root.clone()).expect("an honest root");
+        let (m, s) = phase.root_scale();
+        let claims = |f: u64, c: u64| {
+            let mut claim = fx.range_claim(f, c, m, s);
+            if f <= 1 && 1 < f + c {
+                claim.v_acc[0] += 1_000;
+            }
+            if f == 0 {
+                claim.v_acc[0] -= 1_000;
+            }
+            claim
+        };
+        let mut daa = 500u64;
+        while phase.turn() != PalwBisectTurnV1::Terminal {
+            let ranges = phase.child_ranges();
+            let children: Vec<_> = ranges.iter().map(|&(f, c)| claims(f, c)).collect();
+            daa += 1;
+            phase
+                .apply_round(
+                    &PalwAttnDissectRoundV1 { version: PALW_ATTN_DISSECT_OBJECT_VERSION_V1, children: children.clone() },
+                    daa,
+                    30,
+                )
+                .expect("a compensated round folds");
+            let child = ranges
+                .iter()
+                .zip(&children)
+                .position(|(&(f, c), claimed)| *claimed != fx.range_claim(f, c, m, s))
+                .expect("a forged child exists") as u8;
+            daa += 1;
+            phase
+                .apply_choice(
+                    &PalwAttnDissectChoiceV1 {
+                        version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                        session_id: h64(9),
+                        round: phase.round(),
+                        child,
+                    },
+                    daa,
+                    30,
+                )
+                .expect("a child");
+        }
+        let tile = phase.terminal_tile().expect("narrowed");
+        assert!(tile <= 1, "the forgery lives in tile 0 or 1, inside the checkpoint");
+        let cache = check_attn_dissect_bottom_v1(&phase, &fx.bottom(h64(9), tile), &binding, &site, true).expect("cache-write");
+        let ckpt =
+            check_attn_dissect_bottom_v1(&phase, &fx.bottom_anchored(h64(9), tile, &anchor), &binding, &site, true).expect("chunk");
+        assert_eq!(
+            (cache, ckpt),
+            (PalwAttnCourtVerdictV1::ExecutorGuilty, PalwAttnCourtVerdictV1::ExecutorGuilty),
+            "the two routes disagreed about a forgery"
+        );
+    }
+
+    /// **What the checkpoint route may not be**, each refused by name and before any arithmetic:
+    /// a chunk that is not in the checkpoint, a chunk from another index, an anchor that is not in
+    /// the claim's leg, a missing anchor or geometry, a map whose tile is not the court's, and a
+    /// checkpoint that covers none of the disputed tile.
+    #[test]
+    fn the_checkpoint_route_refuses_what_the_checkpoint_does_not_hold() {
+        let fx = fixture(8, 50, 4, 61);
+        let anchor = fx.anchor(40);
+        let binding = fx.binding_anchored(&anchor);
+        let site = fx.site_anchored(&anchor);
+        let mut phase = open_phase(&fx, 4, fx.root.clone()).expect("an honest root");
+        walk_to(&fx, &mut phase, 1);
+        let honest = fx.bottom_anchored(h64(9), 1, &anchor);
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &honest, &binding, &site, true).expect("honest"),
+            PalwAttnCourtVerdictV1::ChallengerDefeated
+        );
+
+        // A flipped byte is a chunk the checkpoint never held.
+        let mut forged = honest.clone();
+        let PalwAttnTileEvidenceV1::Checkpoint { chunk, .. } = &mut forged.k else { panic!() };
+        chunk.chunk_bytes[0] ^= 0xff;
+        assert!(matches!(
+            check_attn_dissect_bottom_v1(&phase, &forged, &binding, &site, true),
+            Err(PalwAttnCourtError::ChunkNotInCheckpoint { .. })
+        ));
+
+        // Another chunk of the SAME checkpoint, at its own index, is still the wrong tile.
+        let mut elsewhere = honest.clone();
+        let PalwAttnTileEvidenceV1::Checkpoint { chunk, .. } = &mut elsewhere.k else { panic!() };
+        chunk.chunk_index = 0;
+        chunk.chunk_bytes = anchor.chunk_bytes[0].clone();
+        chunk.siblings = state_chunk_path_v1(&anchor.chunk_hashes, 0).expect("a path");
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &elsewhere, &binding, &site, true),
+            Err(PalwAttnCourtError::WrongChunk { got: 0, expected: 1, position: 16 })
+        );
+
+        // The anchor must be in the claim's own checkpoint leg. `fx.binding` carries a leg root
+        // nothing opens against.
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &honest, &fx.binding, &site, true),
+            Err(PalwAttnCourtError::AnchorNotCommitted)
+        );
+        // And no anchor, and no geometry, are two different absences.
+        let mut orphan = honest.clone();
+        orphan.anchor = None;
+        assert_eq!(check_attn_dissect_bottom_v1(&phase, &orphan, &binding, &site, true), Err(PalwAttnCourtError::AnchorMissing));
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &honest, &binding, &fx.site(), true),
+            Err(PalwAttnCourtError::AnchorGeometryMissing)
+        );
+
+        // A geometry that describes another history than the anchor's.
+        let mut mismatched = site.clone();
+        mismatched.anchor_positions = 41;
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &honest, &binding, &mismatched, true),
+            Err(PalwAttnCourtError::AnchorGeometryDoesNotDescribeTheAnchor { positions: 41, geometry: 40 })
+        );
+
+        // A map whose tile is not the court's cannot serve a dissection's bottom (Decision 4).
+        let mut narrow = site.clone();
+        let g = narrow.anchor_geometry.as_mut().expect("a geometry");
+        g.positions_per_chunk = 8;
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &honest, &binding, &narrow, true),
+            Err(PalwAttnCourtError::MapTileIsNotTheCourtTile { map: 8, court: TILE })
+        );
+
+        // A checkpoint that covers none of the disputed tile: the cache-write route is the only
+        // one there, and saying so is cheaper than reading rows out of a chunk that predates it.
+        let short = fx.anchor(16);
+        let mut past = fx.bottom_anchored(h64(9), 0, &short);
+        past.tile = 1;
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &past, &fx.binding_anchored(&short), &fx.site_anchored(&short), true),
+            Err(PalwAttnCourtError::AnchorCoversNothing)
+        );
+    }
+
+    /// **A bottom's wire size, pinned PER ROUTE.** The checkpoint route is what Decision 4 buys:
+    /// one chunk opening and one path replace sixteen row openings and sixteen paths, per kind.
+    #[test]
+    fn a_bottoms_wire_size_is_pinned_per_route() {
+        let carrier = palw_close_bytes_for_chunks_v1(1);
+        let mut sizes = Vec::new();
+        for d_head in [128usize, 256] {
+            let fx = fixture(d_head, 64, d_head.min(PALW_ATTN_DISSECT_MAX_LANES), 59);
+            let anchor = fx.anchor(64);
+            let cache = borsh::to_vec(&fx.bottom(h64(9), 1)).expect("serializes").len() as u64;
+            let ckpt = borsh::to_vec(&fx.bottom_anchored(h64(9), 1, &anchor)).expect("serializes").len() as u64;
+            assert!(cache <= carrier, "d_head {d_head}: the cache-write bottom is {cache} against a carrier of {carrier}");
+            assert!(ckpt <= carrier, "d_head {d_head}: the anchored bottom is {ckpt} against a carrier of {carrier}");
+            assert!(ckpt < cache, "d_head {d_head}: the tile route must be the cheaper one, and it is {ckpt} against {cache}");
+            sizes.push((d_head, cache, ckpt));
+        }
+        assert_eq!(sizes, vec![(128usize, 37_985u64, 19_027u64), (256, 55_393, 36_435)]);
+        // **What the derivation must be evaluated at.** ADR-0082 §4 sizes the bottom's tiles as
+        // `2 × 16 × 4 × d_head` — one HEAD's slice — and stream F's derived 25,120 / 42,016 follow
+        // it. The object carries `2 × 16 × 4 × kv_dim`, because a checkpoint chunk holds the whole
+        // cache ROW and cannot be narrowed to one head: the map addresses `(kind, layer,
+        // position)`, not `(kind, layer, position, head)`. These fixtures set `kv_heads = 1`, so
+        // the two coincide here and the measured object is inside the derived bound; on a
+        // registered row with `kv_heads > 1` the chunk is `kv_heads` times wider and the
+        // derivation has to read `attn_kv_heads × attn_head_dim`, not `attn_head_dim`.
+        for d_head in [128usize, 256] {
+            let fx = fixture(d_head, 64, d_head.min(PALW_ATTN_DISSECT_MAX_LANES), 59);
+            let anchor = fx.anchor(64);
+            let PalwAttnTileEvidenceV1::Checkpoint { chunk, .. } = &fx.bottom_anchored(h64(9), 1, &anchor).k else { panic!() };
+            assert_eq!(chunk.chunk_bytes.len() as u64, u64::from(TILE) * fx.kv_dim as u64 * 4);
+            assert_eq!(fx.kv_dim, d_head, "these fixtures are one kv head, which is where the two sizings agree");
+        }
     }
 
     /// **The dissection and the whole-row arm are the same arithmetic** — stream D's hook comment
@@ -1310,10 +1949,10 @@ mod tests {
         // The 256-lane row costs exactly 512 bytes more, thirty-four times over.
         assert_eq!(
             bottoms,
-            vec![(128usize, 37_982u64), (256, 55_390)],
+            vec![(128usize, 37_985u64), (256, 55_393)],
             "the bottom's measured wire size at the two registered head widths"
         );
-        assert_eq!(55_390 - 37_982, 34 * 128 * 4, "the whole difference between the two tiers is the lanes");
+        assert_eq!(55_393 - 37_985, 34 * 128 * 4, "the whole difference between the two tiers is the lanes");
     }
 
     /// **The bottom does not grow with the context.** The same tile at 64 positions of history and
