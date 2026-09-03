@@ -702,6 +702,10 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
         max_context_tokens: request.max_context_tokens,
         privacy_mode: request.privacy_mode,
         prompt_mode: request.prompt_mode,
+        // ADR-0082 Decision 11: the requester's, verbatim. A worker that substituted its own would
+        // bind its trace to a job id nobody else can rebuild.
+        sampling_seed: request.sampling_seed,
+        temperature_q: request.temperature_q,
     };
     let binding = fp_job_id_v3(&job);
 
@@ -1148,6 +1152,8 @@ mod tests {
             max_context_tokens: manifest.n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             input,
             model_profile_id: manifest.model_profile_id,
             runtime_manifest_hash: manifest.runtime_manifest_hash,
