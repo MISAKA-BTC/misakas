@@ -121,6 +121,39 @@ context-linear term that this release does not anchor.
 
 ## What the evidence does NOT cover
 
+**No shipped verifier ties a derived artifact to the inference it names.** This is the most
+important sentence in this document and it was nearly not in it.
+
+`palw-derive verify` recomputes two things and joins them nowhere:
+
+    dsl_hash / artifact_hash   recomputed from the ANSWER BYTES you hand it
+    output_root                recomputed from the TOKEN IDS you hand it
+
+Both arms pass, `verdict: consistent`, exit 0 — for an artifact whose DSL has nothing to do with
+those ids. Reproduced with the shipped binary: a `music/smf/v1` DSL verified `consistent` against
+six unrelated token ids. The family's third input to `output_commitment_v2` is itself a hash of the
+ids rather than of the rendered text, so `output_root` carries **no** information about the answer
+bytes, and the two recomputations cannot meet.
+
+The consequence, stated plainly: **an executor can attach any artifact of any kind to any of its own
+claims, and every verifier in this release will call it consistent.** The forger has to be the
+claim's own executor — the chain checks that — which is exactly the party you should not have to
+trust.
+
+So: *"this MIDI is a derivation of that claim's committed tokens"* is **not** something this release
+lets you check. What you can check is everything else on the list above — that the artifact bytes
+follow from the DSL, in two languages, and that foreign libraries accept the result.
+
+**The fix is not deep and it is not done.** The tokenizer is pinned on chain inside the job context
+a consumer is already handed, and a renderer exists, so `canonicalize(render(ids)) == dsl_hash` is a
+well-defined check that is simply never performed. Until it is, this document does not claim the
+binding, and neither should anyone quoting it.
+
+*Found by an adversarial audit of this release, not by its authors, three days before the cut. It is
+in this section rather than fixed quietly because a reader deciding whether to trust the chain needs
+the boundary more than they need the reassurance.*
+
+
 **"The QWEN36 lane produced a grammar-valid description" is what the evidence carries. "Qwen3.6
 wrote this file" is a different sentence.** The second tier's lane — its graph, executor, tokenizer
 and prompt assembly — has been run end to end and produces artifacts three foreign libraries accept.
