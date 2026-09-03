@@ -39,6 +39,11 @@ pub struct Version {
 }
 
 impl Version {
+    // The argument list IS the wire message's field list (`protocol::Version`), one parameter per
+    // field in the message's own order; a builder struct would be a second spelling of the
+    // protocol's fields, kept in step by hand. Checkable against the message definition:
+    // `grep -n 'pub ' protocol/p2p/src/convert/model/version.rs` lists the same fields.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         address: Option<NetAddress>,
         id: PeerId,

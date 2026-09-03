@@ -53,7 +53,9 @@ pub enum PalwSyncV2Error {
     #[error("palw v2 sync store error: {0}")]
     Store(#[from] StoreError),
     #[error("palw v2 transition failed at block {block}: {source}")]
-    State { block: BlockHash, source: PalwStateV2Error },
+    // Boxed: the transition error is the largest thing this enum can carry (272 bytes), and every
+    // `Result` on the sync walk would otherwise be that wide on its Ok path too.
+    State { block: BlockHash, source: Box<PalwStateV2Error> },
     #[error("retreat expects the current tip {expected:?} first, got {got}")]
     NotAtTip { expected: Option<BlockHash>, got: BlockHash },
     #[error("the sync has no tip — install genesis before advancing or retreating")]
@@ -186,7 +188,7 @@ impl PalwStateSyncV2 {
                 self.uncertified_weightless.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
                 self.da_court.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
             )
-            .map_err(|source| PalwSyncV2Error::State { block: step.ctx.block, source })?;
+            .map_err(|source| PalwSyncV2Error::State { block: step.ctx.block, source: Box::new(source) })?;
             store.insert_delta_batch(batch, step.ctx.block, next.state_root(), &delta)?;
             current = next;
         }
@@ -232,7 +234,8 @@ impl PalwStateSyncV2 {
             }
             let (_, delta) = store.delta_of(*block)?;
             current =
-                revert_delta_v2(&current, &delta, &self.params).map_err(|source| PalwSyncV2Error::State { block: *block, source })?;
+                revert_delta_v2(&current, &delta, &self.params)
+                    .map_err(|source| PalwSyncV2Error::State { block: *block, source: Box::new(source) })?;
             store.delete_delta_batch(batch, *block)?;
         }
         if let Some(point) = current.last_point()
