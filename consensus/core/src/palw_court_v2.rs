@@ -1196,8 +1196,17 @@ pub fn palw_attn_dispute_site_v2(
             if profile.state_chunk_map_id != crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3() {
                 return Err(PalwCourtV2Error::NotTheTiledMap);
             }
-            let positions =
-                crate::palw_state_chunk_map::integer_kv_positions_at_v1(&binding.job_context, anchor.leaf.covered_decode_call);
+            // **At the cadence the CLASS's map runs** (ADR-0082 Decision 4, amended). On a
+            // per-decode-call class this IS `integer_kv_positions_at_v1`; on a class whose map
+            // addresses history tiles the leaf's counter already IS a position count, and reading
+            // it through the per-call rule would describe a history `prefill` rows longer than the
+            // checkpoint holds — a chunk index pointing at another position's rows, which is the
+            // mismatch `verified_anchor_v1` exists to refuse.
+            let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(
+                profile,
+                &binding.job_context,
+                anchor.leaf.covered_decode_call,
+            );
             let geometry = crate::palw_state_chunk_map::tiled_kv_state_geometry_v3(profile, positions)
                 .map_err(|e| PalwCourtV2Error::TiledGeometryUnavailable { positions, why: e.to_string() })?;
             (Some(geometry), positions)
@@ -1215,6 +1224,14 @@ pub fn palw_attn_dispute_site_v2(
                 .ok_or(PalwCourtV2Error::FusedGeometryUnservable("a fused site outside a layer table has no cache layer"))?,
             anchor_geometry,
             anchor_positions,
+            // **Read from the class, never from the wire** (ADR-0082 Decision 4, amended). A class
+            // whose map addresses history tiles has a checkpoint after every position, so the
+            // unsound cache-write evidence route has no position left to serve and the bottom
+            // checker refuses it.
+            every_position_is_checkpointed: matches!(
+                crate::palw_context_ladder::palw_checkpoint_cadence_v1(profile),
+                crate::palw_context_ladder::PalwCheckpointCadenceV1::PerPosition
+            ),
         },
         head_lanes: (as_u16(head, "the head index")?, as_u16(lane_first, "the lane offset")?, as_u16(lane_span, "the lane count")?),
         history_positions,

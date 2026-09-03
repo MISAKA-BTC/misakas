@@ -1803,7 +1803,6 @@ mod tests {
     /// have produced. Reverting the guard makes this test hang rather than fail, which is the
     /// point: the defect is unbounded work, and a test that merely returned the wrong answer would
     /// be measuring something else.
-    #[test]
     /// **Which ruleset ladder the registered class needs, as a table rather than as a choice.**
     ///
     /// `PalwCourtParamsV2::max_step_leaf_count` is a genesis input, and until this test existed it
@@ -1883,6 +1882,43 @@ mod tests {
         );
     }
 
+    /// **A test that lost its `#[test]` is a test that passes by not existing.**
+    ///
+    /// `a_context_wider_than_the_profile_is_refused_before_it_is_walked` spent several hours
+    /// without its attribute, and nothing noticed: the suite went from 19 tests to 19 tests, every
+    /// one green. It lost it to a mechanical insertion that matched on the `fn` line while the
+    /// attribute sat on the line above, so the new test adopted it and the old one was left as a
+    /// private function nobody calls — which the compiler does not warn about inside a test module.
+    ///
+    /// The test it silenced was the boundary assertion for a guard whose off-by-one had just made
+    /// the hybrid class unable to adjudicate its own capture. So the commit that fixed a defect
+    /// disabled the check that proves the fix, in the same edit, invisibly.
+    ///
+    /// The rule: inside `mod tests`, a zero-argument function returning nothing is a test. Helpers
+    /// here return something — `walk` a `Walk`, `glb` a `Vec<u8>`, `tiny_profile` a profile — so
+    /// the shape is unambiguous, and anything matching it without an attribute is a test that will
+    /// not run.
+    #[test]
+    fn every_test_in_this_module_still_carries_its_attribute() {
+        let src = include_str!("palw_step.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let mut orphans = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            let t = line.trim();
+            // a test's shape: `fn name(...) {` with no arguments and no return type
+            if !(t.starts_with("fn ") && t.ends_with("() {")) {
+                continue;
+            }
+            // the two lines above carry the attribute — `#[test]`, or `#[ignore]` beneath it
+            let attributed = (1..=2).any(|back| i.checked_sub(back).map(|j| lines[j].trim()).is_some_and(|p| p.starts_with("#[")));
+            if !attributed {
+                orphans.push(format!("line {}: {t}", i + 1));
+            }
+        }
+        assert!(orphans.is_empty(), "these look like tests and will never run:\n  {}", orphans.join("\n  "));
+    }
+
+    #[test]
     fn a_context_wider_than_the_profile_is_refused_before_it_is_walked() {
         let profile = tiny_profile();
         let honest = tiny_context();

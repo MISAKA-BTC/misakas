@@ -469,6 +469,220 @@ pub const fn palw_checkpoint_interval_v1(n_ctx: u32) -> u32 {
     if derived == 0 { 1 } else { derived }
 }
 
+// =================================================================================================
+// ADR-0082 Decision 4 (amended) — a tiled-map class commits an attention checkpoint at EVERY
+// position, so every dissection bottom fits one carrier
+// =================================================================================================
+
+/// **What one checkpoint of the ATTENTION cache is taken AFTER**, as the class's own map decides
+/// it (ADR-0082 Decision 4, amended).
+///
+/// Two units, and the class's registered `state_chunk_map_id` is what chooses between them —
+/// nothing is declared and nothing is inferred from the graph:
+///
+/// * [`Self::PerDecodeCall`]: the shipped cadence. A checkpoint after every
+///   `checkpoint_interval` DECODE CALLS, and none over the prefill at all
+///   (`decode_calls / interval` of them, `palw_step_leg`'s `CheckpointCountNotCanonical` rule).
+/// * [`Self::PerPosition`]: one checkpoint after every POSITION of the cache, prefill positions
+///   included.
+///
+/// # Why the second one exists
+///
+/// Decision 2's dissection bottoms out at one history TILE, and the bottom reaches that tile's K
+/// and V rows by one of two routes (`PalwAttnTileEvidenceV1`): one chunk opening out of the
+/// checkpoint at or before the tile, or one committed cache-write leaf per row. Measured on the
+/// real objects, the first is 41,997 bytes on the dense tier and 75,277 on the hybrid — one
+/// carrier — and the second is 175,297 / 139,777, which is over the 83,333-byte carrier and makes
+/// the whole close three chunks that the genesis card's ruleset cannot file (ADR-0082 §5, and the
+/// close is split at ONE until W5 is in the ruleset).
+///
+/// Under the per-CALL cadence the cache-write route is not the challenger's choice, it is its only
+/// option, at two kinds of position: every PREFILL position (no checkpoint covers any of them),
+/// and any tile straddling the last checkpoint's edge. So the amendment is not an optimisation —
+/// it is what makes a dispute at those positions FILEABLE.
+///
+/// # Why it is free to the executor
+///
+/// The attention cache is prefix-stable: the K or V row written at position `j` is the same bytes
+/// in every later checkpoint (`A16Cache::state_chunk_bytes_v1` reads
+/// `layer[position_start .. position_start + position_count]` out of whatever cache it is handed).
+/// So a per-position cadence costs the executor NOTHING to retain — the cache once, every earlier
+/// checkpoint's chunk roots re-derivable from it — and one ragged tile's hash to commit, because
+/// every complete tile's chunk hash is the same value it had at the checkpoint before.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PalwCheckpointCadenceV1 {
+    /// `(index + 1) × checkpoint_interval` decode calls covered; the prefill is uncovered.
+    PerDecodeCall,
+    /// `index + 1` POSITIONS covered, counting from the first prefill position.
+    PerPosition,
+}
+
+/// **The cadence THIS class's checkpoint leg runs at** — the one dispatch, for the reason
+/// [`crate::palw_state_chunk_map::palw_map_addresses_history_tiles_v1`] is the one dispatch under
+/// it: the alternative is every reader writing `if map == v3 { … }`, and the first one to forget
+/// counts a leg at one cadence while the producer filed it at another.
+///
+/// Read off the registered map, which is inside `shape_profile_id` and therefore inside the class
+/// id: a registrant cannot buy a cheaper leg by declaring a coarser cadence, and a court cannot
+/// judge one class's leg at another's rule.
+pub fn palw_checkpoint_cadence_v1(profile: &PalwShapeProfileV3) -> PalwCheckpointCadenceV1 {
+    if crate::palw_state_chunk_map::palw_map_addresses_history_tiles_v1(profile) {
+        PalwCheckpointCadenceV1::PerPosition
+    } else {
+        PalwCheckpointCadenceV1::PerDecodeCall
+    }
+}
+
+/// **The value a checkpoint leaf's `covered_decode_call` canonically carries at `index`.**
+///
+/// The field's NAME is the shipped one and its bytes are unchanged — `PalwCheckpointLeafV2` is not
+/// re-versioned, and could not usefully be: what the counter counts is a function of
+/// `state_chunk_map_id`, which `checkpoint_leaf_hash_v2` already binds into the leaf's preimage
+/// beside it. A v2-mapped leaf and a v3-mapped leaf carrying the same number hash differently, so
+/// the cadence is authenticated without a second field to disagree with.
+///
+/// On the shipped classes (`PerDecodeCall`, interval 1) this is `index + 1`, which is exactly what
+/// they file today — the property `the_shipped_rows_checkpoint_legs_do_not_move` holds.
+pub fn palw_checkpoint_covered_at_index_v1(profile: &PalwShapeProfileV3, index: u32, interval: u32) -> Option<u32> {
+    match palw_checkpoint_cadence_v1(profile) {
+        PalwCheckpointCadenceV1::PerDecodeCall => index.checked_add(1)?.checked_mul(interval),
+        // One position a leaf. The registered `checkpoint_interval` still exists and still means
+        // something — it is the RECURRENCE's spacing, [`palw_anchored_interval_for_profile_v1`] —
+        // but it does not space the attention cache's leaves.
+        PalwCheckpointCadenceV1::PerPosition => index.checked_add(1),
+    }
+}
+
+/// **How many checkpoints a job of this shape canonically files** — the count
+/// `palw_step_leg`'s shape pass recomputes and `Base0CheckpointCaptureV1::finish` is sealed at.
+///
+/// `PerDecodeCall`: `decode_calls / interval`, the shipped rule verbatim.
+/// `PerPosition`: `prefill + decode_calls`, which is every position the cache ever holds — the
+/// same `prefill + decode_calls` count [`crate::palw_step::kv_aux_leaf_count`] derives for the KV
+/// aux series, because they are counting the same rows.
+pub fn palw_checkpoint_count_v1(profile: &PalwShapeProfileV3, context: &PalwJobContextV2, interval: u32) -> u32 {
+    let decode_calls = context.exact_decode_tokens.saturating_sub(1);
+    match palw_checkpoint_cadence_v1(profile) {
+        PalwCheckpointCadenceV1::PerDecodeCall => {
+            if interval == 0 {
+                0
+            } else {
+                decode_calls / interval
+            }
+        }
+        PalwCheckpointCadenceV1::PerPosition => context.declared_prefill_tokens.saturating_add(decode_calls),
+    }
+}
+
+/// **How many POSITIONS of the cache the checkpoint carrying `covered` covers** — the cadence-aware
+/// twin of [`crate::palw_state_chunk_map::integer_kv_positions_at_v1`], and the number every
+/// geometry a court or a capture derives is taken at.
+///
+/// `PerDecodeCall`: `prefill + covered`, the shipped rule verbatim (the prefill always ran).
+/// `PerPosition`: `covered` — the counter already IS a position count.
+pub fn palw_checkpoint_positions_at_v1(profile: &PalwShapeProfileV3, context: &PalwJobContextV2, covered: u32) -> u32 {
+    match palw_checkpoint_cadence_v1(profile) {
+        PalwCheckpointCadenceV1::PerDecodeCall => crate::palw_state_chunk_map::integer_kv_positions_at_v1(context, covered),
+        PalwCheckpointCadenceV1::PerPosition => covered,
+    }
+}
+
+/// **The absolute cache position a step coordinate sits at.**
+///
+/// The capture's call numbering is `call 0 = the prefill, position p` and `call c ≥ 1 = decode
+/// call c, position 0`; the cache is written in one ascending run over both. Stating the map here
+/// keeps the anchor rule, the residue rule and the recompute from each inventing it.
+pub fn palw_absolute_position_v1(context: &PalwJobContextV2, call_index: u32, position: u32) -> Option<u32> {
+    if call_index == 0 {
+        return Some(position);
+    }
+    context.declared_prefill_tokens.checked_add(call_index.checked_sub(1)?)
+}
+
+/// **WHICH checkpoint is this step's anchor** — the `covered` value, exactly, that a refutation of
+/// the step at `(call_index, position)` must carry.
+///
+/// Exactly, not "at most", for `verify_kv_anchor`'s own reason: a further-back checkpoint would
+/// leave positions the evidence does not cover, and a challenger choosing among anchors would be
+/// choosing which positions the court never sees.
+///
+/// # The two cadences anchor at two ENDS of the disputed position, and that is the whole saving
+///
+/// `PerDecodeCall` anchors BEFORE the step: `covered = c − 1`, the state after call `c − 1`. The
+/// disputed call's own cache write is not in it and rides as a step opening — the residue. There is
+/// no other choice, because a per-call leg has no checkpoint at the disputed call's own position
+/// while the prefill has none at all.
+///
+/// `PerPosition` anchors AFTER it: `covered = p + 1`, the state once position `p`'s own K and V
+/// rows have been written. Attention at `p` reads exactly positions `0..=p`, which is exactly what
+/// that checkpoint holds, so the residue is EMPTY and the bottom is one chunk opening per kind with
+/// nothing beside it. It is sound for the reason the anchored form is sound at all: the anchor's
+/// rows and the cache-write leaves are two encodings of the same committed values (a lie in the
+/// row at `p` is the cache-write node's fault and is disputed at that leaf, on either route), and
+/// it is EXACT rather than "at most" for `verify_kv_anchor`'s own reason — a challenger choosing
+/// among anchors would be choosing which positions the court never sees.
+///
+/// That is the difference between a dense graph-v5 close of 93,367 bytes and one of 82,719: two
+/// chunks against one, and the genesis card's ruleset files one.
+///
+/// `None` where no anchor exists and the long form is the only route: the prefill call under
+/// `PerDecodeCall`, which no checkpoint covers at all. Under `PerPosition` there is always one,
+/// position 0 included — its checkpoint is the leg's first leaf.
+pub fn palw_checkpoint_covered_for_step_v1(
+    profile: &PalwShapeProfileV3,
+    context: &PalwJobContextV2,
+    call_index: u32,
+    position: u32,
+) -> Option<u32> {
+    match palw_checkpoint_cadence_v1(profile) {
+        PalwCheckpointCadenceV1::PerDecodeCall => call_index.checked_sub(1).filter(|_| call_index > 0),
+        PalwCheckpointCadenceV1::PerPosition => palw_absolute_position_v1(context, call_index, position)?.checked_add(1),
+    }
+}
+
+/// **The spacing the RECURRENCE half of a checkpoint is committed at, from the PROFILE alone.**
+///
+/// [`palw_anchored_interval_for_court_v1`] is the same number read off the ruleset, and it is the
+/// one the ADMISSION side prices with (it has the ruleset in hand). The refutation side does not:
+/// `check_execution_step_refutation_opened_v1` is handed a binding and a weight oracle and no
+/// consensus params at all. Deriving it from the profile there rather than passing `None` is what
+/// makes the evidence a refutation assembles the evidence the class was charged for — stream F's
+/// patch note 2: with `palw_checkpoint_interval_v1` called directly, the GDN window is `n_ctx / 32`
+/// positions while the class is priced at one tile.
+///
+/// The two spellings can only disagree for a fused profile under an UNARMED court, and such a
+/// class is refused at admission by name (`PalwClassAdmissionError::FusedSiteWithNoDissection`),
+/// so no class that can be prosecuted is priced by one and prosecuted by the other.
+/// `the_two_anchored_intervals_agree_wherever_a_class_is_admissible` holds it.
+pub fn palw_anchored_interval_for_profile_v1(profile: &PalwShapeProfileV3) -> u32 {
+    if crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(profile) {
+        return crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4.min(profile.n_ctx.max(1));
+    }
+    palw_checkpoint_interval_v1(profile.n_ctx)
+}
+
+/// **Does the leaf at `index` carry the RECURRENCE section of a hybrid checkpoint?**
+///
+/// Under `PerPosition` the attention half is committed at every position and the recurrence half
+/// is NOT: a `gdn` state is `heads × k_dim × v_dim × 4` bytes that no prefix-stability makes free,
+/// so committing one per position would be a hash of the whole state at every token — 2 MiB a
+/// position on the shipped hybrid geometry. The recurrence keeps the derived spacing
+/// ([`palw_anchored_interval_for_profile_v1`]), which is exactly the window
+/// `gdn_anchored_positions_v1` replays after an anchor, so every recurrence dispute still has an
+/// anchor at most one window back.
+///
+/// Always true under `PerDecodeCall`: a leg at the per-call cadence commits the whole composition
+/// at every leaf, which is what every shipped reader expects.
+pub fn palw_checkpoint_leaf_carries_recurrence_v1(profile: &PalwShapeProfileV3, covered_positions: u32) -> bool {
+    match palw_checkpoint_cadence_v1(profile) {
+        PalwCheckpointCadenceV1::PerDecodeCall => true,
+        PalwCheckpointCadenceV1::PerPosition => {
+            let spacing = palw_anchored_interval_for_profile_v1(profile).max(1);
+            covered_positions % spacing == 0
+        }
+    }
+}
+
 /// What ONE checkpoint-chunk opening of the RECURRENCE costs under the gdn **v1** map: one head's
 /// delta state, the whole layer's convolution window, and the path that proves them. Constant in
 /// `n_ctx` — that is the whole content of Decision 11's widening.
@@ -714,6 +928,43 @@ pub const fn palw_job_footprint_v1(prefill: u32, decode: u32) -> u64 {
     (prefill as u64).saturating_add(decode as u64).saturating_sub(1)
 }
 
+/// **ADR-0082 Decision 10 restates ADR-0077 Decision 14's floor in the unit that now earns**: the
+/// canonical job's DECODE CALLS, `exact_decode_tokens − 1`
+/// ([`crate::palw_step::job_leaf_split_capped_v1`]).
+///
+/// # Why the floor has to move with the unit
+///
+/// Decision 14's floor is `n_ctx / 8` CACHED POSITIONS, and a cached position used to be a unit of
+/// earning: the numerator was the whole leaf count, prefill included. Past
+/// `Params::palw_fp_decode_rules` it is not — a claim earns on its DECODE leaves — and the floor
+/// becomes enterable from the other side. A canonical job of 4,000 prefill and 2 decode tokens has
+/// a footprint of 4,001 at `n_ctx` 4,096 and clears the v1 floor of 512 comfortably, on ONE decode
+/// call: the row is admitted, and then every honest job on it parks at the 64-quantum cap, which is
+/// Decision 14's own 86 % loss arrived at from the opposite direction. Restating the floor in
+/// decode calls is not a second gate, it is the SAME gate read in the unit the receipt is now
+/// counted in.
+pub const fn palw_job_decode_footprint_v1(decode_tokens: u32) -> u64 {
+    (decode_tokens as u64).saturating_sub(1)
+}
+
+/// **Does this row's canonical job meet Decision 14's floor, in the unit that earns?**
+///
+/// `decode_rules` is `Params::palw_fp_decode_rules`, read by the CALLER and passed in — never read
+/// inside a derivation. Off, this is [`palw_footprint_meets_the_row_v1`] byte for byte, which is
+/// what every shipped preset gets. On, the footprint is the decode calls.
+pub fn palw_footprint_meets_the_row_for_rules_v1(
+    profile: &PalwShapeProfileV3,
+    canonical: &PalwJobContextV2,
+    decode_rules: bool,
+) -> bool {
+    let footprint = if decode_rules {
+        palw_job_decode_footprint_v1(canonical.exact_decode_tokens)
+    } else {
+        palw_job_footprint_v1(canonical.declared_prefill_tokens, canonical.exact_decode_tokens)
+    };
+    footprint >= palw_canonical_footprint_floor_v1(profile.n_ctx)
+}
+
 /// **W3's gate, as a predicate**: does this row's canonical job meet Decision 14's floor?
 pub fn palw_footprint_meets_the_row_v1(profile: &PalwShapeProfileV3, canonical: &PalwJobContextV2) -> bool {
     palw_job_footprint_v1(canonical.declared_prefill_tokens, canonical.exact_decode_tokens)
@@ -767,20 +1018,20 @@ pub fn palw_class_ladder_rules_v1(profile: &PalwShapeProfileV3) -> Option<crate:
 /// not two to three carriers at any width above the 512 row (where `512 / 32` and the tile happen
 /// to be the same 16).
 ///
-/// **This is the one place the number is spelled, and it is NOT yet the only reader.**
-/// `palw_step_refute.rs`'s recurrence window (`gdn_anchored_positions_v1`'s interval argument)
-/// still calls [`palw_checkpoint_interval_v1`] directly, so on a graph-v5 hybrid the evidence a
-/// refutation assembles would be `n_ctx / 32` positions while this prices one tile — an
-/// under-charge, which is the direction that admits a class whose disputes nobody can carry. It is
-/// dormant on every shipped preset (`palw_kary_court` is `None` and no class carries `AttnFused`),
-/// and arming the fence without pointing that call site here is a consensus defect rather than a
-/// rounding.
+/// **This is the one place the number is spelled, and every reader now reads it.** The recurrence
+/// window in `palw_step_refute` (`gdn_anchored_positions_v1`'s interval argument) called
+/// [`palw_checkpoint_interval_v1`] directly, so on a graph-v5 hybrid the evidence a refutation
+/// assembled was `n_ctx / 32` positions while this priced one tile — an under-charge, which is the
+/// direction that admits a class whose disputes nobody can carry. That call site now reads
+/// [`palw_anchored_interval_for_profile_v1`], which is this function with the ruleset argument the
+/// refutation path does not have; the two can only disagree for a fused profile under an unarmed
+/// court, and such a class is refused at admission by name.
 pub fn palw_anchored_interval_for_court_v1(
     profile: &PalwShapeProfileV3,
     court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
 ) -> u32 {
-    if court.is_some() && crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(profile) {
-        return crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4.min(profile.n_ctx.max(1));
+    if court.is_some() {
+        return palw_anchored_interval_for_profile_v1(profile);
     }
     palw_checkpoint_interval_v1(profile.n_ctx)
 }
@@ -2596,42 +2847,42 @@ mod u00_tiled_attention_measurement {
         );
     }
 
-    /// **`the_v3_map_is_not_priced_by_the_ladder_rule` lived here, and ADR-0082 U-04 closed the gap
-    /// it measured.**
-    ///
-    /// It asserted that `palw_class_ladder_rules_v1` charged a tiled class the v2 map's
-    /// whole-history opening — 526,336 bytes against the 18,432 its evidence carries, 28.6x — and
-    /// its own message said what to do when that stopped being true: *"if it now reads the class's
-    /// own map, delete this test and re-pin the ones above at the cheaper price."* The cache half
-    /// has its `_for_map_v1` twin now
-    /// ([`palw_kv_checkpoint_opening_bytes_for_map_v1`], Decision 4), the ladder rule reads it, and
-    /// both halves of what this test pinned are asserted from the gate's own functions at the end
-    /// of `the_tile_moves_the_widest_dense_row_from_thirty_to_two_hundred_and_twenty_three`. The
-    /// note is kept rather than the test because the next reader of "30 → 223" needs to know that
-    /// the 223 was once a measurement no shipped function could reproduce.
+    // **`the_v3_map_is_not_priced_by_the_ladder_rule` lived here, and ADR-0082 U-04 closed the gap
+    // it measured.**
+    //
+    // It asserted that `palw_class_ladder_rules_v1` charged a tiled class the v2 map's
+    // whole-history opening — 526,336 bytes against the 18,432 its evidence carries, 28.6x — and
+    // its own message said what to do when that stopped being true: *"if it now reads the class's
+    // own map, delete this test and re-pin the ones above at the cheaper price."* The cache half
+    // has its `_for_map_v1` twin now
+    // ([`palw_kv_checkpoint_opening_bytes_for_map_v1`], Decision 4), the ladder rule reads it, and
+    // both halves of what this test pinned are asserted from the gate's own functions at the end
+    // of `the_tile_moves_the_widest_dense_row_from_thirty_to_two_hundred_and_twenty_three`. The
+    // note is kept rather than the test because the next reader of "30 → 223" needs to know that
+    // the 223 was once a measurement no shipped function could reproduce.
 
-    /// **`the_graph_v4_hybrid_composition_has_no_priced_recurrence_anchor` lived here, and
-    /// ADR-0082 U-04 closed the gap it measured.**
-    ///
-    /// It recorded a **mainnet blocker**: `gdn_state_terms_for_map_v1` dispatched on the whole
-    /// composition id and knew `hybrid_state_chunk_map_id_v1` and `…_v2` but not `…_v3`, so it
-    /// answered `None`, `palw_class_ladder_rules_v1` turned that into `.unwrap_or(0)`, and a hybrid
-    /// class registering the tiled attention map was admitted with its recurrence anchor charged
-    /// at ZERO — "a v1 class priced at v2's … the direction that admits a class whose disputes
-    /// nobody can raise", quoting the comment it quoted. Its own message said the remedy: *"the v4
-    /// composition is priced now — close this gap in `palw_class_ladder_rules_v1` and delete this
-    /// test."*
-    ///
-    /// It was dormant while nothing registered the v3 composition. ADR-0082 Decision 4 makes that
-    /// composition the map a graph-v5 hybrid registers, which turned it live, and
-    /// `gdn_state_terms_for_map_v1` has the arm now. What it cost, measured: the hybrid graph-v5
-    /// row's close moved 200,732 → 274,460 bytes and 3 carriers → 4, the delta being exactly the
-    /// 71,680-byte head-sliced opening plus its 2,048-byte path. Both halves of what it pinned are
-    /// asserted from the gate's own functions in
-    /// `palw_state_chunk_map::hybrid_composition_tests::the_recurrence_chunks_are_what_the_anchor_is_priced_at`.
-    ///
-    /// The note is kept rather than the test because ADR-0082 Decision 6 sizes the hybrid v5 row at
-    /// "two to three" carriers, and the next reader needs to know that the fourth is this charge.
+    // **`the_graph_v4_hybrid_composition_has_no_priced_recurrence_anchor` lived here, and
+    // ADR-0082 U-04 closed the gap it measured.**
+    //
+    // It recorded a **mainnet blocker**: `gdn_state_terms_for_map_v1` dispatched on the whole
+    // composition id and knew `hybrid_state_chunk_map_id_v1` and `…_v2` but not `…_v3`, so it
+    // answered `None`, `palw_class_ladder_rules_v1` turned that into `.unwrap_or(0)`, and a hybrid
+    // class registering the tiled attention map was admitted with its recurrence anchor charged
+    // at ZERO — "a v1 class priced at v2's … the direction that admits a class whose disputes
+    // nobody can raise", quoting the comment it quoted. Its own message said the remedy: *"the v4
+    // composition is priced now — close this gap in `palw_class_ladder_rules_v1` and delete this
+    // test."*
+    //
+    // It was dormant while nothing registered the v3 composition. ADR-0082 Decision 4 makes that
+    // composition the map a graph-v5 hybrid registers, which turned it live, and
+    // `gdn_state_terms_for_map_v1` has the arm now. What it cost, measured: the hybrid graph-v5
+    // row's close moved 200,732 → 274,460 bytes and 3 carriers → 4, the delta being exactly the
+    // 71,680-byte head-sliced opening plus its 2,048-byte path. Both halves of what it pinned are
+    // asserted from the gate's own functions in
+    // `palw_state_chunk_map::hybrid_composition_tests::the_recurrence_chunks_are_what_the_anchor_is_priced_at`.
+    //
+    // The note is kept rather than the test because ADR-0082 Decision 6 sizes the hybrid v5 row at
+    // "two to three" carriers, and the next reader needs to know that the fourth is this charge.
 
     /// **The carrier binds long before the ladder does** — 223 against 11,477, a factor of 51.
     ///
@@ -2680,7 +2931,7 @@ mod u04_flat_close {
     use crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1;
     use crate::palw_mode_v2::{DEFAULT_MAX_CLOSE_CHUNKS, palw_close_bytes_for_chunks_v1, palw_close_chunks_for_bytes_v1};
     use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
-    use crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4;
+    use crate::palw_state_chunk_map::{PALW_ATTN_HISTORY_TILE_V4, tiled_kv_state_chunk_map_id_v3};
 
     /// The court the RC would arm: Decision 3's worked arity, Decision 5's id form, the RC's own
     /// court window. The arity is a PARAMETER here rather than a constant — `palw_court_arity_v1`
@@ -2690,6 +2941,30 @@ mod u04_flat_close {
             dissection_arity: arity,
             prompt_ids_form: PalwPromptIdsFormV1::MerkleV1,
             window_court_daa: PALW_RC_WINDOWS_V1.window_court,
+        }
+    }
+
+    /// A job context shaped like the class's, for the cadence rules — every field but the two
+    /// token counts is irrelevant to them and is the type's own default.
+    fn job() -> PalwJobContextV2 {
+        PalwJobContextV2 {
+            version: crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
+            network_id: b"misaka-palw-rc".to_vec(),
+            job_id: crate::Hash64::default(),
+            job_nullifier: crate::Hash64::default(),
+            assignment_id: crate::Hash64::default(),
+            execution_seed: [0; 32],
+            model_profile_id: crate::Hash64::default(),
+            runtime_manifest_hash: crate::Hash64::default(),
+            runtime_class_id: crate::Hash64::default(),
+            shape_profile_id: crate::Hash64::default(),
+            trace_scheme_id: crate::Hash64::default(),
+            cu_ruleset_id: crate::Hash64::default(),
+            tokenizer_id: crate::Hash64::default(),
+            prompt_token_ids_hash: crate::Hash64::default(),
+            declared_prefill_tokens: 7,
+            exact_decode_tokens: 5,
+            max_context_tokens: 512,
         }
     }
 
@@ -2748,36 +3023,41 @@ mod u04_flat_close {
         for row in &v5 {
             println!("v5: {} bytes = {} chunks; binds {}", row.0, row.1, row.2);
         }
-        // The dense tier: the fused site itself, because the bottom is charged at the cache-write
-        // route (90,110 bytes at `d_head` 128) rather than at Decision 4's tile route (25,610).
-        // Charged at the tile route the binding node is `ffn_down` at 80,504 — ADR-0082 Decision
-        // 6's own number for this family — and the row is ONE carrier.
-        assert_eq!((v5[0].0, v5[0].1), (216_019, 3), "the dense graph-v5 512 row's close moved");
+        // **The dense tier is ONE carrier, and this is the number the genesis card turns on.**
+        //
+        // It was `(216_019, 3)` — three chunks, which the card's ruleset cannot file, because the
+        // bottom was charged at the CACHE-WRITE route: under the per-DECODE-CALL cadence a dispute
+        // at a prefill position had no checkpoint to anchor on at all, and a decode dispute's tile
+        // could straddle the last checkpoint's edge, so the route a challenger could actually file
+        // was the long one at 175,297 bytes.
+        //
+        // ADR-0082 Decision 4 as amended puts a checkpoint after EVERY position of a class whose
+        // map addresses history tiles, and anchors a dispute at position `p` on the checkpoint at
+        // `p + 1` — the state once `p`'s own K and V rows are written, which is exactly the
+        // `0..=p` the attention at `p` reads. So the tile route is available at every position with
+        // an EMPTY residue, the bottom is 41,997 bytes, and the close is one chunk. The rule that
+        // moved this number is `palw_checkpoint_cadence_v1`; nothing about the graph, the map or
+        // the arithmetic changed.
+        assert_eq!((v5[0].0, v5[0].1), (82_719, 1), "the dense graph-v5 512 row's close moved");
         assert!(v5[0].2.contains("AttnFused"), "the dense v5 row stopped binding on its fused site: {}", v5[0].2);
-        // **And what the row costs if only the CHECKPOINT route can be filed** — the number the
-        // relaunch's registration decision turns on, stated here rather than reasoned about. The
-        // walk charges the larger of the two routes at the binding node, so swapping the route is
-        // exactly this difference and nothing else.
+        // **And what the row would cost if only the CACHE-WRITE route could be filed** — the number
+        // the amendment removes, kept so the size of what it bought stays attributable.
         {
             use crate::palw_class_admission_v2::{palw_attn_bottom_cache_write_bytes_v1, palw_attn_bottom_tile_route_bytes_v1};
             let (d_head, kv_dim, tile, src, path) = (128u64, 256u64, 8u64, 128u64, 64 * 32u64);
             let positions = PALW_ATTN_HISTORY_TILE_V4 as u64;
             let cache = palw_attn_bottom_cache_write_bytes_v1(d_head, kv_dim, positions, tile, src, path).expect("derives");
             let ckpt = palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, positions, tile, path).expect("derives");
-            let tile_route_close = v5[0].0 - cache + ckpt;
+            let cache_route_close = v5[0].0 - ckpt + cache;
             println!(
-                "dense v5 @ 512: {} bytes = {} chunks charged (cache-write route); {tile_route_close} bytes = {} chunks on the \
-                 checkpoint route alone",
+                "dense v5 @ 512: {} bytes = {} chunks charged (checkpoint route, per-position cadence); {cache_route_close} bytes \
+                 = {} chunks on the cache-write route alone",
                 v5[0].0,
                 v5[0].1,
-                palw_close_chunks_for_bytes_v1(tile_route_close)
+                palw_close_chunks_for_bytes_v1(cache_route_close)
             );
-            assert_eq!(tile_route_close, 82_719, "the dense v5 row's checkpoint-route close moved");
-            assert_eq!(
-                palw_close_chunks_for_bytes_v1(tile_route_close),
-                1,
-                "the dense graph-v5 row stopped being ONE carrier on the checkpoint route — the relaunch's cut turns on this"
-            );
+            assert_eq!(cache_route_close, 216_019, "the cache-write route's close moved");
+            assert_eq!(palw_close_chunks_for_bytes_v1(cache_route_close), 3, "the cache-write route is three chunks");
         }
         // The hybrid: the recurrence's replay evidence, `interval x 5 refs`, plus the head-sliced
         // anchor. Decision 6 names this term and sizes it at two to three; it is four.
@@ -2797,6 +3077,386 @@ mod u04_flat_close {
         let ffn_flat = flat.iter().find(|r| r.weight_name.ends_with("ffn_down.weight")).expect("present");
         assert_eq!(ffn_flat.close_bytes, 82_080, "ADR-0082 Decision 6's '82,080 bytes with the flat ids' moved");
         assert_eq!(palw_close_chunks_for_bytes_v1(ffn.close_bytes), 1, "the dense model width is one carrier");
+    }
+
+    // =============================================================================================
+    // ADR-0082 Decision 4, amended — a tiled-map class checkpoints EVERY position
+    // =============================================================================================
+
+    /// **The cadence is the class's own map, and the shipped rows keep theirs.**
+    ///
+    /// The one property every other test here stands on: nothing a shipped class files moves,
+    /// because `palw_map_addresses_history_tiles_v1` is false for every map they register and the
+    /// per-call arm is the shipped arithmetic verbatim.
+    #[test]
+    fn the_checkpoint_cadence_is_the_classs_own_map() {
+        use crate::palw_state_chunk_map::{integer_kv_state_chunk_map_id_v1, integer_kv_state_chunk_map_id_v2};
+
+        let ctx = |prefill: u32, decode: u32| PalwJobContextV2 { declared_prefill_tokens: prefill, exact_decode_tokens: decode, ..job() };
+
+        // The shipped maps: per DECODE CALL, and every rule is the one shipped today.
+        let mut v2 = PALW_LADDER_FAMILIES_V5[0](512).expect("projects");
+        for map in [integer_kv_state_chunk_map_id_v1(), integer_kv_state_chunk_map_id_v2()] {
+            v2.state_chunk_map_id = map;
+            assert_eq!(palw_checkpoint_cadence_v1(&v2), PalwCheckpointCadenceV1::PerDecodeCall);
+            let c = ctx(7, 5); // prefill 7, decode_calls 4
+            assert_eq!(palw_checkpoint_count_v1(&v2, &c, 1), 4, "decode_calls / interval, the shipped rule");
+            assert_eq!(palw_checkpoint_count_v1(&v2, &c, 2), 2);
+            assert_eq!(palw_checkpoint_covered_at_index_v1(&v2, 0, 1), Some(1));
+            assert_eq!(palw_checkpoint_covered_at_index_v1(&v2, 3, 2), Some(8), "(index + 1) x interval");
+            assert_eq!(palw_checkpoint_positions_at_v1(&v2, &c, 2), 9, "prefill + covered");
+            assert_eq!(
+                palw_checkpoint_positions_at_v1(&v2, &c, 2),
+                crate::palw_state_chunk_map::integer_kv_positions_at_v1(&c, 2),
+                "the cadence-aware twin IS integer_kv_positions_at_v1 on a per-call class"
+            );
+            // The prefill has no anchor at all, which is the whole defect the amendment removes.
+            assert_eq!(palw_checkpoint_covered_for_step_v1(&v2, &c, 0, 3), None);
+            assert_eq!(palw_checkpoint_covered_for_step_v1(&v2, &c, 1, 0), Some(0));
+            assert_eq!(palw_checkpoint_covered_for_step_v1(&v2, &c, 4, 0), Some(3), "disputed_call - 1, exactly");
+        }
+
+        // The tiled map: per POSITION, prefill included.
+        let v5 = PALW_LADDER_FAMILIES_V5[0](512).expect("projects");
+        assert_eq!(v5.state_chunk_map_id, tiled_kv_state_chunk_map_id_v3(), "the dense v5 row registers the tiled map");
+        assert_eq!(palw_checkpoint_cadence_v1(&v5), PalwCheckpointCadenceV1::PerPosition);
+        let c = ctx(7, 5);
+        assert_eq!(palw_checkpoint_count_v1(&v5, &c, 1), 11, "prefill 7 + 4 decode calls = every position the cache holds");
+        assert_eq!(
+            palw_checkpoint_count_v1(&v5, &c, 16),
+            11,
+            "the registered interval does not space the ATTENTION leaves — it spaces the recurrence"
+        );
+        assert_eq!(palw_checkpoint_covered_at_index_v1(&v5, 0, 16), Some(1), "index + 1 POSITIONS");
+        assert_eq!(palw_checkpoint_covered_at_index_v1(&v5, 10, 16), Some(11));
+        assert_eq!(palw_checkpoint_positions_at_v1(&v5, &c, 6), 6, "the counter already IS a position count");
+        // The anchor exists at every position but the first, and it is the same HISTORY the
+        // per-call rule names at a decode call — read at a different index.
+        // **After the position, not before it.** The checkpoint at `p + 1` holds exactly the
+        // `0..=p` rows attention at `p` reads, so the residue is empty and the bottom is one chunk
+        // per kind — which is the difference between a two-chunk close and a one-chunk one.
+        assert_eq!(palw_checkpoint_covered_for_step_v1(&v5, &c, 0, 0), Some(1), "even position 0 has an anchor: the first leaf");
+        assert_eq!(palw_checkpoint_covered_for_step_v1(&v5, &c, 0, 3), Some(4), "a PREFILL position now has an anchor");
+        assert_eq!(palw_checkpoint_covered_for_step_v1(&v5, &c, 1, 0), Some(8), "decode call 1 writes position 7");
+        // The anchor never names a checkpoint the leg does not have: `p + 1` is at most the count.
+        for call in 0..=4u32 {
+            let positions: Vec<u32> = if call == 0 { (0..c.declared_prefill_tokens).collect() } else { vec![0] };
+            for position in positions {
+                let covered = palw_checkpoint_covered_for_step_v1(&v5, &c, call, position).expect("an anchor at every position");
+                assert!(covered <= palw_checkpoint_count_v1(&v5, &c, 1), "the anchor names leaf {covered}, past the leg's end");
+                // And it holds exactly the rows the step reads: `kv_len` of them.
+                let kv_len = if call == 0 { position + 1 } else { c.declared_prefill_tokens + call };
+                assert_eq!(palw_checkpoint_positions_at_v1(&v5, &c, covered), kv_len, "the anchor is the step's own kv_len");
+            }
+        }
+        // The hybrid composition answers the same way: what the question is about is the ATTENTION
+        // cache, and a hybrid has one.
+        let hybrid = PALW_LADDER_FAMILIES_V5[1](512).expect("projects");
+        assert_eq!(hybrid.state_chunk_map_id, crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3());
+        assert_eq!(palw_checkpoint_cadence_v1(&hybrid), PalwCheckpointCadenceV1::PerPosition);
+    }
+
+    /// **The recurrence keeps the derived spacing, and the composition says so.**
+    ///
+    /// A `heads x k_dim x v_dim x 4` state is not prefix-stable, so a per-position commitment of it
+    /// would hash the whole state at every token. The attention half rides every leaf; the
+    /// recurrence half rides the leaves at `palw_anchored_interval_for_profile_v1`.
+    #[test]
+    fn the_recurrence_half_rides_the_derived_spacing_and_the_attention_half_every_position() {
+        let hybrid = PALW_LADDER_FAMILIES_V5[1](512).expect("projects");
+        let spacing = palw_anchored_interval_for_profile_v1(&hybrid);
+        assert_eq!(spacing, PALW_ATTN_HISTORY_TILE_V4, "a fused row's anchored window is one history tile");
+        for positions in 1..=64u32 {
+            let carries = palw_checkpoint_leaf_carries_recurrence_v1(&hybrid, positions);
+            assert_eq!(carries, positions % spacing == 0, "the recurrence rides the leaves at its own spacing");
+            let geometry = crate::palw_state_chunk_map::hybrid_state_geometry_for_covered_v1(&hybrid, positions).expect("derives");
+            assert_eq!(geometry.gdn_chunk_count() > 0, carries, "the composition enumerates the section the cadence names");
+            assert!(geometry.attn.chunk_count() > 0, "the attention half is on EVERY leaf");
+            assert_eq!(
+                geometry.attn,
+                crate::palw_state_chunk_map::tiled_kv_state_geometry_v3(&hybrid, positions).expect("derives"),
+                "the attention half is the standalone map verbatim"
+            );
+        }
+        // A per-CALL class's leaves all carry the whole composition, which is what every shipped
+        // reader of `hybrid_state_geometry_v3` expects.
+        let mut per_call = hybrid.clone();
+        per_call.state_chunk_map_id = crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v2();
+        for positions in [1u32, 7, 16, 33] {
+            assert!(palw_checkpoint_leaf_carries_recurrence_v1(&per_call, positions));
+        }
+    }
+
+    /// **The two spellings of the anchored interval agree wherever a class is admissible.**
+    ///
+    /// The price side reads the ruleset (`palw_anchored_interval_for_court_v1`); the refutation
+    /// side has no ruleset and reads the profile. They differ only for a fused profile under an
+    /// unarmed court, and such a class is refused at admission by name — so no class that can be
+    /// prosecuted is priced by one number and prosecuted at another.
+    #[test]
+    fn the_two_anchored_intervals_agree_wherever_a_class_is_admissible() {
+        for build in PALW_LADDER_FAMILIES_V5 {
+            for n_ctx in [512u32, 4_096] {
+                let Ok(profile) = build(n_ctx) else { continue };
+                assert!(crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&profile));
+                assert_eq!(
+                    palw_anchored_interval_for_court_v1(&profile, Some(kary(16))),
+                    palw_anchored_interval_for_profile_v1(&profile),
+                    "armed, the two spellings are one number"
+                );
+            }
+        }
+        // A graph-v2 row: both spellings are the shipped interval at every arming.
+        let v2 = palw_a16_context_row_profile_v1(512).expect("projects");
+        assert!(!crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&v2));
+        for court in [None, Some(kary(16))] {
+            assert_eq!(palw_anchored_interval_for_court_v1(&v2, court), palw_checkpoint_interval_v1(512));
+        }
+        assert_eq!(palw_anchored_interval_for_profile_v1(&v2), palw_checkpoint_interval_v1(512));
+    }
+
+    /// **The bottom is inside ONE carrier at every position class, at the ruleset's OWN ladder.**
+    ///
+    /// The position classes are not a sample: they are every shape the disputed position can have
+    /// relative to the map's tile and to the job's phases — the first position of all, a prefill
+    /// position, the first decode call, a tile-aligned position, one straddling a tile boundary,
+    /// and the last. Under the per-position cadence the bottom is the SAME object at all of them,
+    /// which is the property being asserted; before the amendment three of the six had no anchor
+    /// at all and the seventh column below (the cache-write route) was the only route they had.
+    ///
+    /// **The ladder is read, never typed.** A Merkle path is `64 × ⌈log₂ ladder⌉` bytes, so every
+    /// number here moves with `PalwCourtParamsV2::max_step_leaf_count`. Both are stated: the RC
+    /// bundle's own ladder (`PALW_RC_COURT_MAX_STEP_LEAF_COUNT`), which is what a dispute on the
+    /// genesis card is actually filed under, and the fence's
+    /// [`PALW_CONTEXT_LADDER_MAX_STEP_LEAVES`], which is what `palw_class_ladder_rules_v1`
+    /// provisions the close at.
+    #[test]
+    fn the_bottom_is_one_carrier_at_every_position_class() {
+        use crate::palw_class_admission_v2::{
+            PALW_RC_COURT_MAX_STEP_LEAF_COUNT, palw_attn_bottom_bytes_for_cadence_v1, palw_attn_bottom_cache_write_bytes_v1,
+            palw_attn_bottom_tile_route_bytes_v1,
+        };
+        let carrier = palw_close_bytes_for_chunks_v1(1);
+        assert_eq!(carrier, 83_333, "one carrier's counted budget moved");
+
+        let mut table: Vec<(&str, u64, u64, u64, u64)> = Vec::new();
+        for (name, build) in [("dense", PALW_LADDER_FAMILIES_V5[0]), ("hybrid", PALW_LADDER_FAMILIES_V5[1])] {
+            let n_ctx = 512u32;
+            let profile = build(n_ctx).expect("projects");
+            assert_eq!(palw_checkpoint_cadence_v1(&profile), PalwCheckpointCadenceV1::PerPosition);
+            let d_head = profile.attn_head_dim as u64;
+            let kv_dim = profile.attn_kv_heads as u64 * d_head;
+            let node = profile
+                .attn_nodes
+                .iter()
+                .find(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused)
+                .expect("a v5 row has a fused site");
+            let out_w = match node.out_len {
+                crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
+                crate::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => multiplier as u64 * n_ctx as u64,
+            };
+            let tile = (node.tile_len as u64).min(out_w);
+            let src = profile
+                .attn_nodes
+                .iter()
+                .find(|n| n.role == crate::palw_step::PalwStepNodeRoleV1::KCacheWrite)
+                .map_or(tile, |n| n.tile_len as u64);
+            let history_tile = (PALW_ATTN_HISTORY_TILE_V4 as u64).min(n_ctx as u64);
+
+            for (ladder_name, ladder) in
+                [("RC bundle", PALW_RC_COURT_MAX_STEP_LEAF_COUNT), ("ladder fence", PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)]
+            {
+                let path = step_path_bytes_v1(ladder);
+                assert_eq!(path, 64 * u64::from(ladder.next_power_of_two().trailing_zeros()), "a path is 64 bytes a level");
+                let per_position =
+                    palw_attn_bottom_bytes_for_cadence_v1(d_head, kv_dim, history_tile, tile, src, path, true).expect("derives");
+                let per_call =
+                    palw_attn_bottom_bytes_for_cadence_v1(d_head, kv_dim, history_tile, tile, src, path, false).expect("derives");
+                assert_eq!(
+                    per_position,
+                    palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, history_tile, tile, path).expect("derives"),
+                    "the per-position bottom IS the tile route, with no residue"
+                );
+
+                // **Every position class, and the anchor each of them stands on.** The job runs the
+                // whole row: `n_ctx − 1` prefill positions and one decode call, so every class below
+                // is a coordinate this job actually has.
+                let ctx = PalwJobContextV2 {
+                    declared_prefill_tokens: n_ctx - 1,
+                    exact_decode_tokens: 2,
+                    max_context_tokens: n_ctx,
+                    ..job()
+                };
+                let prefill = ctx.declared_prefill_tokens;
+                let classes: [(&str, u32, u32); 6] = [
+                    ("the first position", 0, 0),
+                    ("a prefill position", 0, 5),
+                    ("tile-aligned", 0, 16 * 7),
+                    ("straddling a tile", 0, 16 * 7 + 9),
+                    ("the first decode call", 1, 0),
+                    ("the last position", 1, 0),
+                ];
+                for (what, call, position) in classes {
+                    let covered = palw_checkpoint_covered_for_step_v1(&profile, &ctx, call, position)
+                        .unwrap_or_else(|| panic!("{name} @ {ladder_name}: {what} has no anchor"));
+                    // The anchor holds exactly the rows this step reads — no more, no fewer.
+                    let kv_len = if call == 0 { position + 1 } else { prefill + call };
+                    assert_eq!(palw_checkpoint_positions_at_v1(&profile, &ctx, covered), kv_len, "{name}: {what}");
+                    assert!(covered <= palw_checkpoint_count_v1(&profile, &ctx, 1), "{name}: {what} names a leaf past the leg");
+                    // And the bottom at that position is the one object, inside one carrier.
+                    assert!(
+                        per_position <= carrier,
+                        "{name} @ {ladder_name}: {what} files a bottom of {per_position} against a carrier of {carrier}"
+                    );
+                }
+
+                let cache_write =
+                    palw_attn_bottom_cache_write_bytes_v1(d_head, kv_dim, history_tile, tile, src, path).expect("derives");
+                assert_eq!(per_call, per_position.max(cache_write), "the per-call price is the larger of the two routes");
+                println!(
+                    "{name} @ {ladder_name} (ladder 2^{}, path {path}): per-position bottom {per_position}, per-call {per_call}, \
+                     cache-write route {cache_write}, carrier {carrier}",
+                    ladder.next_power_of_two().trailing_zeros()
+                );
+                table.push((name, ladder, per_position, per_call, cache_write));
+            }
+        }
+
+        // **The numbers, pinned at BOTH ladders.** The RC bundle's is what a dispute on the genesis
+        // card is filed under; the fence's is what the close is provisioned at.
+        let at = |family: &str, ladder: u64| {
+            *table.iter().find(|(n, l, ..)| *n == family && *l == ladder).unwrap_or_else(|| panic!("{family} @ {ladder}"))
+        };
+        let (_, _, dense_rc, dense_rc_call, dense_rc_cache) = at("dense", PALW_RC_COURT_MAX_STEP_LEAF_COUNT);
+        let (_, _, dense_fence, _, dense_fence_cache) = at("dense", PALW_CONTEXT_LADDER_MAX_STEP_LEAVES);
+        let (_, _, hybrid_rc, _, hybrid_rc_cache) = at("hybrid", PALW_RC_COURT_MAX_STEP_LEAF_COUNT);
+        let (_, _, hybrid_fence, _, hybrid_fence_cache) = at("hybrid", PALW_CONTEXT_LADDER_MAX_STEP_LEAVES);
+        // Every per-position bottom is one carrier, at every ladder and both families.
+        for (family, ladder, bottom, ..) in &table {
+            assert!(bottom <= &carrier, "{family} @ ladder {ladder}: a bottom of {bottom} is over one carrier of {carrier}");
+        }
+        // **The cache-write route is over the carrier at every ladder and both families** — which
+        // is the finding the per-position cadence answers, not a claim that route B got cheaper.
+        for (family, ladder, _, _, cache_write) in &table {
+            assert!(
+                cache_write > &carrier,
+                "{family} @ ladder {ladder}: the cache-write bottom ({cache_write}) is inside one carrier now — the finding moved"
+            );
+        }
+        assert_eq!(
+            (dense_fence, dense_fence_cache, hybrid_fence, hybrid_fence_cache),
+            (41_997, 175_297, 75_277, 139_777),
+            "the bottom's two routes at the ladder FENCE (2^32, a 32-element path) moved"
+        );
+        assert_eq!(dense_rc_call, dense_rc_cache, "a per-call class is priced at the route it can file");
+        // The RC's ladder is shallower, so every path is shorter and every number is smaller. The
+        // ORDER is what matters and it does not move: per-position inside the carrier, cache-write
+        // outside it, at both.
+        assert!(dense_rc < dense_fence && hybrid_rc < hybrid_fence, "a shallower ladder cannot cost more");
+        println!(
+            "PINNED: dense per-position {dense_rc} (RC) / {dense_fence} (fence); hybrid {hybrid_rc} / {hybrid_fence}; \
+             cache-write dense {dense_rc_cache} / {dense_fence_cache}, hybrid {hybrid_rc_cache} / {hybrid_fence_cache}"
+        );
+    }
+
+    /// **The one number the 5f genesis card's central claim turns on**: what a dispute at a PREFILL
+    /// position on the dense graph-v5 row costs on the CACHE-WRITE route, at the RC bundle's own
+    /// ladder.
+    ///
+    /// That is the route a prefill dispute had before ADR-0082 Decision 4 was amended — the only
+    /// one, because a per-call leg commits no checkpoint over the prefill at all — and it is stated
+    /// as ONE number rather than as an average because the card's claim is that every position is
+    /// prosecutable, not that most are.
+    #[test]
+    fn the_cache_write_bottom_at_a_prefill_position_is_the_cards_number() {
+        use crate::palw_class_admission_v2::{
+            PALW_RC_COURT_MAX_STEP_LEAF_COUNT, palw_attn_bottom_cache_write_bytes_v1, palw_attn_bottom_tile_route_bytes_v1,
+        };
+        let carrier = palw_close_bytes_for_chunks_v1(1);
+        let profile = PALW_LADDER_FAMILIES_V5[0](512).expect("projects");
+        let d_head = profile.attn_head_dim as u64;
+        let kv_dim = profile.attn_kv_heads as u64 * d_head;
+        let node = profile
+            .attn_nodes
+            .iter()
+            .find(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused)
+            .expect("a fused site");
+        let tile = node.tile_len as u64;
+        let src = profile
+            .attn_nodes
+            .iter()
+            .find(|n| n.role == crate::palw_step::PalwStepNodeRoleV1::KCacheWrite)
+            .map_or(tile, |n| n.tile_len as u64);
+        let history_tile = PALW_ATTN_HISTORY_TILE_V4 as u64;
+        let path = step_path_bytes_v1(PALW_RC_COURT_MAX_STEP_LEAF_COUNT);
+
+        let cache_write = palw_attn_bottom_cache_write_bytes_v1(d_head, kv_dim, history_tile, tile, src, path).expect("derives");
+        let per_position = palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, history_tile, tile, path).expect("derives");
+        println!(
+            "THE CARD'S NUMBER: a prefill dispute on the dense graph-v5 row at the RC ladder (2^{}, path {path} bytes) costs \
+             {cache_write} bytes on the CACHE-WRITE route against a carrier of {carrier} — {:.2} carriers; with a checkpoint at \
+             every position it is {per_position}, one carrier, at that position and at every other.",
+            PALW_RC_COURT_MAX_STEP_LEAF_COUNT.next_power_of_two().trailing_zeros(),
+            cache_write as f64 / carrier as f64
+        );
+        assert!(cache_write > carrier, "the cache-write route at a prefill position is over one carrier — the card's premise moved");
+        assert!(per_position <= carrier, "the checkpoint route at a prefill position is NOT one carrier — say so plainly");
+        // **And at the 2^26 ladder the release branch raises the RC bundle to** — derived here so
+        // the card's number is stated for the ruleset that ships whichever of the two lands first,
+        // and so this test says the same thing before and after that merge.
+        for ladder in [1u64 << 22, 1 << 26, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES] {
+            let p = step_path_bytes_v1(ladder);
+            let c = palw_attn_bottom_cache_write_bytes_v1(d_head, kv_dim, history_tile, tile, src, p).expect("derives");
+            let t = palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, history_tile, tile, p).expect("derives");
+            println!(
+                "  at ladder 2^{} (path {p}): cache-write {c} ({:.2} carriers), per-position {t} ({:.2})",
+                ladder.next_power_of_two().trailing_zeros(),
+                c as f64 / carrier as f64,
+                t as f64 / carrier as f64
+            );
+            assert!(c > carrier && t <= carrier, "ladder 2^{}", ladder.next_power_of_two().trailing_zeros());
+        }
+    }
+
+    /// **ADR-0082 Decision 10 restates Decision 14's floor in the unit that earns.**
+    ///
+    /// Off the fence (every shipped preset) the floor is cached positions and the gate is the one
+    /// that ships. On it, a canonical job that clears the floor on its PREFILL alone — the whole
+    /// context as prompt and one decode call — is refused, because past `palw_fp_decode_rules` a
+    /// claim earns on its decode leaves and such a row would park every honest job at the
+    /// 64-quantum cap.
+    #[test]
+    fn the_footprint_floor_reads_the_unit_that_earns() {
+        let profile = palw_a16_context_row_profile_v1(512).expect("projects");
+        let floor = palw_canonical_footprint_floor_v1(profile.n_ctx);
+        assert_eq!(floor, 64, "n_ctx / 8");
+        // A job that is all prompt: 500 prefill, 2 decode tokens = ONE decode call.
+        let all_prompt = PalwJobContextV2 {
+            declared_prefill_tokens: 500,
+            exact_decode_tokens: 2,
+            max_context_tokens: 512,
+            ..job()
+        };
+        assert_eq!(palw_job_footprint_v1(500, 2), 501, "it clears the positions floor eight times over");
+        assert_eq!(palw_job_decode_footprint_v1(2), 1, "on one decode call");
+        assert!(palw_footprint_meets_the_row_for_rules_v1(&profile, &all_prompt, false), "the shipped gate admits it");
+        assert!(!palw_footprint_meets_the_row_for_rules_v1(&profile, &all_prompt, true), "the decode-rules gate refuses it");
+        // A job whose ANSWER meets the floor passes both.
+        let real = PalwJobContextV2 { declared_prefill_tokens: 8, exact_decode_tokens: 65, ..all_prompt.clone() };
+        assert_eq!(palw_job_decode_footprint_v1(65), 64);
+        for rules in [false, true] {
+            assert!(palw_footprint_meets_the_row_for_rules_v1(&profile, &real, rules), "decode_rules {rules}");
+        }
+        // Off the fence the two forms are the same function, which is what makes every shipped
+        // preset unchanged.
+        for (prefill, decode) in [(7u32, 5u32), (500, 2), (8, 65)] {
+            let c = PalwJobContextV2 { declared_prefill_tokens: prefill, exact_decode_tokens: decode, ..all_prompt.clone() };
+            assert_eq!(
+                palw_footprint_meets_the_row_for_rules_v1(&profile, &c, false),
+                palw_footprint_meets_the_row_v1(&profile, &c),
+                "off the fence the restated floor IS the shipped one"
+            );
+        }
     }
 
     /// **Z3, the bytes half.** The bottom of a fused dispute, both routes, at every registered

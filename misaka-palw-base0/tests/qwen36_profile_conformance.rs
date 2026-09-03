@@ -114,7 +114,7 @@ fn shared_gate_is_declared_at_a_width_the_artifact_cannot_supply() {
         .tensor_names()
         .into_iter()
         .find(|n| n.ends_with("ffn_shared_gate.weight"))
-        .map(|n| art.tensor(&n).map(|t| t.len()).unwrap_or(0))
+        .map(|n| art.tensor(n).map(|t| t.len()).unwrap_or(0))
         .unwrap_or(0);
     let suppliable = if d == 0 { 0 } else { len / d };
 

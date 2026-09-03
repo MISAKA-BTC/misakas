@@ -195,6 +195,78 @@ pub fn base0_fp_recompute_state_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
     }
 
     let positions = kaspa_consensus_core::palw_state_chunk_map::integer_kv_positions_at_v1(ctx, decode_calls);
+    seat_state_here_v1(profile, decode_calls, positions, kernels)
+}
+
+/// **Run the job's prefix and return the state a seat holds at absolute POSITION `positions`**
+/// (ADR-0082 Decision 4, amended, on the seat's side).
+///
+/// [`base0_fp_recompute_state_v1`] counts in decode CALLS, which is the unit the per-call cadence
+/// commits in and the only unit that had a checkpoint to compare against. A class whose map
+/// addresses history tiles commits one after every position, prefill included, so its seat has to
+/// be able to stop at a prefill position too — and its `covered_decode_call` field IS a position
+/// count, which is what makes the returned state comparable to the committed leaf.
+///
+/// `positions` is the number of cache rows to stop after (`covered`), so `positions = 0` is a
+/// state with nothing in it and is refused rather than served: a root over an empty map is not the
+/// root of a state, it is the root of nothing.
+pub fn base0_fp_recompute_state_at_position_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    prompt_token_ids: &[u32],
+    output_token_ids: &[u32],
+    positions: u32,
+    kernels: &mut K,
+) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
+    if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != ctx.prompt_token_ids_hash {
+        return Err(Base0FpRecomputeError::PromptIdsAreNotTheJobs);
+    }
+    let prefill = ctx.declared_prefill_tokens as usize;
+    if prompt_token_ids.len() != prefill {
+        return Err(Base0FpRecomputeError::PromptIsNotTheJobsLength {
+            declared: ctx.declared_prefill_tokens,
+            got: prompt_token_ids.len(),
+        });
+    }
+    let job_decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
+    let job_positions = ctx.declared_prefill_tokens.saturating_add(job_decode_calls);
+    if positions > job_positions || positions == 0 {
+        return Err(Base0FpRecomputeError::DecodeCallsBeyondTheJob {
+            asked: positions,
+            job: job_positions,
+        });
+    }
+    if profile.state_chunk_map_id == Hash64::default() {
+        return Err(Base0FpRecomputeError::NoStateChunkMapRegistered);
+    }
+    // The decode calls this position count implies — zero while the walk is still inside the
+    // prefill, which is the case the per-call form could not express at all.
+    let decode_calls = (positions as usize).saturating_sub(prefill) as u32;
+    if (output_token_ids.len() as u64) < decode_calls as u64 {
+        return Err(Base0FpRecomputeError::OutputIdsTooShort { need: decode_calls as usize, got: output_token_ids.len() });
+    }
+
+    // The executor's own walk, stopped at `positions` rows: the prefill in order, then decode call
+    // `c` consuming the id call `c − 1` produced.
+    for (position, token) in prompt_token_ids.iter().enumerate().take((positions as usize).min(prefill)) {
+        kernels.forward_no_capture(*token as usize, position)?;
+    }
+    for call in 1..=decode_calls {
+        let token = output_token_ids[call as usize - 1];
+        let position = prefill + call as usize - 1;
+        kernels.forward_no_capture(token as usize, position)?;
+    }
+    seat_state_here_v1(profile, decode_calls, positions, kernels)
+}
+
+/// The state serialisation both entries share — one spelling of "chunk what the kernels hold and
+/// root it", so a position-stopped walk and a call-stopped one cannot root the same state two ways.
+fn seat_state_here_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
+    profile: &PalwShapeProfileV3,
+    decode_calls: u32,
+    positions: u32,
+    kernels: &K,
+) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
     let chunks = kernels.state_chunks(profile, positions)?;
     let state_chunks_root = crate::fp_interval::base0_state_chunks_root_v1(&profile.state_chunk_map_id, &chunks)
         .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?;
@@ -309,6 +381,38 @@ impl<'a> Qwen36RecomputeKernelsV1<'a> {
         }
         (layers, states)
     }
+
+    /// **This cache's bytes for one ATTENTION chunk of the v3 composition** — the hybrid's
+    /// analogue of `A16Cache::state_chunk_bytes_v1`, and the same discipline: the width is read
+    /// off the entry rather than assumed, and a row that does not fit the declared width is
+    /// refused instead of narrowed.
+    ///
+    /// The composition's attention half is `tiled_kv_state_geometry_v3` verbatim, whose rows are
+    /// little-endian `i32` at `attn_kv_heads × attn_head_dim × 4` bytes — the width the `i32` cache
+    /// this engine holds actually is. A checkpoint that opened to a state the producer never held
+    /// is worse than a missing one, and the producer has signed for it.
+    fn attn_chunk_bytes_v1(
+        &self,
+        entry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1,
+    ) -> Option<Vec<u8>> {
+        use kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1;
+        let side = match entry.kind {
+            PalwStateChunkKindV1::Key => &self.cache.keys,
+            PalwStateChunkKindV1::Value => &self.cache.values,
+        };
+        let layer = side.get(entry.attn_layer as usize)?;
+        let mut out = Vec::with_capacity((entry.position_count as usize) * (entry.row_bytes as usize));
+        for p in entry.position_start..entry.position_start + entry.position_count {
+            let row = layer.get(p as usize)?;
+            if entry.row_bytes as usize != row.len().checked_mul(4)? {
+                return None;
+            }
+            for value in row {
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        Some(out)
+    }
 }
 
 impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
@@ -328,7 +432,7 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
             .map_err(|e| Base0FpRecomputeError::Engine(format!("forward at {position}: {e}")))
     }
 
-    fn state_chunks(&self, profile: &PalwShapeProfileV3, _positions: u32) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
+    fn state_chunks(&self, profile: &PalwShapeProfileV3, positions: u32) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
         use kaspa_consensus_core::palw_state_chunk_map as map;
         let declared = profile.state_chunk_map_id;
         let (layers, states) = self.recurrence_state();
@@ -347,13 +451,75 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
             return crate::fp_capture::base0_gdn_state_chunks_v1(&geometry, &states)
                 .map_err(|e| Base0FpRecomputeError::Map(e.to_string()));
         }
-        if declared == map::hybrid_state_chunk_map_id_v1()
-            || declared == map::hybrid_state_chunk_map_id_v2()
-            || declared == map::hybrid_state_chunk_map_id_v3()
-        {
+        // **The v3 composition, in the order its own NAME spells** (ADR-0082 Decision 4; stream
+        // G's patch note 5). The order is not this function's opinion:
+        // `palw_hybrid_state_chunk_map_name_v3` is `palw-hybrid-state/attn=…/gdn=…/v3` — `attn=`
+        // before `gdn=` — and `hybrid_state_chunk_entry_v3` is the enumeration that reads it. This
+        // walks THAT enumeration rather than restating it, so a seat's chunks are the executor's
+        // chunks by construction; a second derivation that merely agreed is how a producer and a
+        // court come to open different bytes.
+        //
+        // The two halves run at two cadences and this function does not choose between them:
+        // `hybrid_state_geometry_for_covered_v1` asks
+        // `palw_checkpoint_leaf_carries_recurrence_v1` whether THIS checkpoint carries the
+        // recurrence at all — every position for the attention tiles, the derived spacing for the
+        // recurrence state, because a `heads × k_dim × v_dim × 4` state is not prefix-stable and a
+        // per-position commitment of it would hash 2 MiB a token.
+        if declared == map::hybrid_state_chunk_map_id_v3() {
+            let geometry = map::hybrid_state_geometry_for_covered_v1(profile, positions)
+                .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")))?;
+            let gdn_geometry = crate::fp_capture::base0_gdn_state_geometry_v2(&layers, heads, dim, dim, kernel)
+                .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?;
+            // The composition promises ONE chunk per `(kind, layer, head)`; the executor's own v2
+            // geometry splits a head only when its slice does not fit a chunk, which
+            // `hybrid_state_geometry_v3` refuses outright. Checked rather than assumed: two
+            // enumerations of one state that disagree about their chunk count is a leg nobody can
+            // open at the index the other named.
+            let gdn_chunks = if geometry.gdn_chunk_count() == 0 {
+                // This leaf does not carry the recurrence at all: under the per-position cadence
+                // the attention half rides every position and the recurrence rides its own
+                // spacing, so the executor's recurrence geometry is not the thing to compare
+                // against here — there is nothing to compare it to.
+                Vec::new()
+            } else {
+                if gdn_geometry.chunk_count() != geometry.gdn_chunk_count() {
+                    return Err(Base0FpRecomputeError::Map(format!(
+                        "the recurrence enumerates {} chunks and the composition names {}",
+                        gdn_geometry.chunk_count(),
+                        geometry.gdn_chunk_count()
+                    )));
+                }
+                crate::fp_capture::base0_gdn_state_chunks_v2(&gdn_geometry, &states)
+                    .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?
+            };
+            let mut out = Vec::with_capacity(geometry.chunk_count() as usize);
+            for index in 0..geometry.chunk_count() {
+                let entry = map::hybrid_state_chunk_entry_v3(&geometry, index)
+                    .ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
+                match entry {
+                    map::PalwHybridChunkEntryV1::AttentionCache(entry) => {
+                        out.push(self.attn_chunk_bytes_v1(&entry).ok_or(Base0FpRecomputeError::StateIsNotTheMaps {
+                            chunk_index: index,
+                        })?);
+                    }
+                    map::PalwHybridChunkEntryV1::RecurrenceState { .. } => {
+                        let within = (index - geometry.attn.chunk_count()) as usize;
+                        let bytes =
+                            gdn_chunks.get(within).ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
+                        if bytes.len() as u64 != entry.byte_len() {
+                            return Err(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index });
+                        }
+                        out.push(bytes.clone());
+                    }
+                }
+            }
+            return Ok(out);
+        }
+        if declared == map::hybrid_state_chunk_map_id_v1() || declared == map::hybrid_state_chunk_map_id_v2() {
             return Err(Base0FpRecomputeError::NoStateSerializer {
-                why: "a hybrid map names an attention half and a recurrence half, and no side of the tree spells the order they \
-                      compose in — the class that registers the composed map is the side that does (ADR-0082 Decision 9)",
+                why: "the v1 and v2 hybrid compositions name an attention half and a recurrence half and no side of the tree \
+                      enumerates them; the v3 composition does (palw_state_chunk_map::hybrid_state_chunk_entry_v3) and is what a \
+                      graph-v5 hybrid registers (ADR-0082 Decision 4)",
             });
         }
         Err(Base0FpRecomputeError::Map(format!("this family serves no geometry for the map {declared}")))
@@ -617,6 +783,197 @@ mod tests {
             );
             assert_eq!(state.positions, ctx.declared_prefill_tokens + leaf.covered_decode_call);
         }
+    }
+
+    /// **Z5 at every POSITION, not only at every decode call** (ADR-0082 Decision 4, amended).
+    ///
+    /// The graph-v5 dense row registers the tiled map, so its leg commits a checkpoint after every
+    /// position — prefill included — and its `covered_decode_call` counts POSITIONS. A seat has to
+    /// reach those roots too, which is what `base0_fp_recompute_state_at_position_v1` exists for:
+    /// the per-call entry cannot stop inside the prefill at all, and before this the prefill
+    /// checkpoints simply did not exist to be compared against.
+    ///
+    /// The comparison is the same one Z5 has always made — the seat's OWN arithmetic against the
+    /// committed leaf — and it now covers the positions where the amendment's whole benefit is.
+    #[test]
+    fn the_dense_tiers_recompute_reaches_its_committed_checkpoints_at_every_position() {
+        use kaspa_consensus_core::palw_context_ladder::{PalwCheckpointCadenceV1, palw_checkpoint_cadence_v1};
+        use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v2};
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 8,
+            ffn_dim: 8,
+            attn_heads: 2,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 32,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        // **The v2 GRAPH with the v5 MAP.** The registered graph-v5 row is what will run this in
+        // production, but its fused attention node is a kernel the shipped A16 engine does not
+        // execute yet (`a16_execute_for_attempt_v1` refuses it by name: "per-layer declares 24
+        // against 27 recorded"), so a real v5 capture is not available on this base. The cadence is
+        // a property of the MAP, not of the graph — `palw_checkpoint_cadence_v1` reads
+        // `state_chunk_map_id` and nothing else — so overriding the map puts a runnable class on
+        // the per-position cadence and exercises exactly the rule under test. What this does NOT
+        // exercise is the fused site's own arithmetic, which is stream I's court and not the seat's.
+        let mut profile = qwen25_a16_profile_v2(geometry).expect("a valid A16 profile");
+        profile.state_chunk_map_id = kaspa_consensus_core::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3();
+        assert_eq!(palw_checkpoint_cadence_v1(&profile), PalwCheckpointCadenceV1::PerPosition, "the tiled map is per-position");
+        let shape = crate::artifact::Base0ShapeV1 {
+            n_layers: geometry.layer_count as usize,
+            n_heads: geometry.attn_heads as usize,
+            n_kv_heads: geometry.attn_kv_heads as usize,
+            d_head: geometry.attn_head_dim as usize,
+            d_ff: geometry.ffn_dim as usize,
+            vocab: geometry.vocab_size as usize,
+            max_position: geometry.n_ctx as usize,
+            ln_theta_gen_q: crate::artifact::LN_THETA_10000_GEN_Q,
+            eps_q: geometry.rms_eps_q,
+        };
+        let artifact = crate::artifact::Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+            .expect("a valid shape")
+            .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
+            .expect("the derived store is sorted and unique");
+        let (ctx, prompt) =
+            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0xA16_5EA7), geometry.vocab_size as usize, 3, 4);
+        let run = crate::qwen25_a16_backend::a16_execute_for_attempt_v1(&artifact, &profile, None, &ctx, &prompt)
+            .expect("the dense v5 fixture runs");
+
+        // Every position the cache ever holds has a checkpoint, prefill included.
+        let expected = ctx.declared_prefill_tokens + ctx.exact_decode_tokens.saturating_sub(1);
+        assert_eq!(run.checkpoints.leaves.len() as u32, expected, "prefill {} + decode calls", ctx.declared_prefill_tokens);
+        assert!(ctx.declared_prefill_tokens >= 2, "the fixture must have prefill positions to check");
+
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut prefill_checked = 0u32;
+        for leaf in &run.checkpoints.leaves {
+            let positions = leaf.covered_decode_call; // POSITIONS, on this cadence
+            let mut kernels = A16RecomputeKernelsV1::new(&artifact, None).expect("the dense kernels");
+            let state =
+                base0_fp_recompute_state_at_position_v1(&profile, &ctx, &ids, &run.generated_token_ids, positions, &mut kernels)
+                    .expect("the seat can stop at any position");
+            assert_eq!(
+                state.state_chunks_root, leaf.state_chunks_root,
+                "checkpoint {} (covering {positions} positions): the seat's recompute must reach the committed state root",
+                leaf.checkpoint_index
+            );
+            assert_eq!(state.positions, positions);
+            if positions <= ctx.declared_prefill_tokens {
+                prefill_checked += 1;
+            }
+        }
+        assert_eq!(prefill_checked, ctx.declared_prefill_tokens, "every PREFILL position's checkpoint was compared");
+
+        // A tampered root names the checkpoint, which is Z5's second half.
+        let leaf = &run.checkpoints.leaves[1];
+        let mut kernels = A16RecomputeKernelsV1::new(&artifact, None).expect("the dense kernels");
+        let state = base0_fp_recompute_state_at_position_v1(
+            &profile,
+            &ctx,
+            &ids,
+            &run.generated_token_ids,
+            leaf.covered_decode_call + 1,
+            &mut kernels,
+        )
+        .expect("a neighbouring position also recomputes");
+        assert_ne!(state.state_chunks_root, leaf.state_chunks_root, "two positions must not share a state root");
+    }
+
+    /// **The hybrid composition has a serializer, and it is stream F's own enumeration**
+    /// (ADR-0082 Decision 4; stream G's patch note 5).
+    ///
+    /// `Qwen36RecomputeKernelsV1::state_chunks` refused the v3 hybrid map by NAME — "no side of the
+    /// tree spells the order they compose in" — and `hybrid_state_chunk_entry_v3` now does. This
+    /// walks it: the attention tiles first, at the per-position cadence, with the chunk lengths the
+    /// composition declares and the sections in the order the map's own name spells.
+    ///
+    /// # What this test does NOT reach, and why
+    ///
+    /// The RECURRENCE half at a spacing boundary. The gdn v2 map's gather
+    /// (`conv-head-gather=[q:h*k, k:heads*k+h*k, v:2*heads*k+h*v]`) is written over ONE head count,
+    /// so `base0_gdn_state_geometry_v2`'s `conv_width` is `(2·k_dim + v_dim) · heads` — which equals
+    /// the engine's own `2·linear_k_dim + linear_v_dim` only when `gdn_k_heads == gdn_v_heads`. The
+    /// only hybrid fixture in this crate (`qwen36_dev_fixture`) has 2 and 4, so the recurrence
+    /// serializer refuses it, and it refuses it identically through the gdn-only maps that shipped
+    /// before this arm existed. That is a finding about the MAP, recorded rather than papered over;
+    /// this test asserts the refusal names the geometry rather than the composition, so a fixture
+    /// with matching head counts turns it green without editing the assertion.
+    #[test]
+    fn the_hybrid_composition_serializes_in_the_order_its_map_name_spells() {
+        use kaspa_consensus_core::palw_context_ladder::{
+            PalwCheckpointCadenceV1, palw_anchored_interval_for_profile_v1, palw_checkpoint_cadence_v1,
+            palw_checkpoint_leaf_carries_recurrence_v1,
+        };
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+
+        let (artifact, profile) = crate::fuzz_qwen36::tiny_class_v5_for_tests();
+        assert_eq!(profile.state_chunk_map_id, map::hybrid_state_chunk_map_id_v3(), "a v5 hybrid registers the composition");
+        assert_eq!(palw_checkpoint_cadence_v1(&profile), PalwCheckpointCadenceV1::PerPosition);
+
+        let engine = crate::qwen36::Qwen36Engine::new(&artifact);
+        let plan = engine.plan_from_profile(&profile).expect("the fixture's declaration is its program");
+        let mut kernels = Qwen36RecomputeKernelsV1::new(&artifact, &plan);
+        let spacing = palw_anchored_interval_for_profile_v1(&profile);
+        let run_to = spacing.max(1) as usize;
+        for position in 0..run_to {
+            kernels.forward_no_capture(position % artifact.shape.vocab, position).expect("the fixture runs");
+        }
+
+        // **The attention half, at every position it rides — which is all of them.**
+        let mut reached_a_boundary = false;
+        for positions in 1..=run_to as u32 {
+            let carries = palw_checkpoint_leaf_carries_recurrence_v1(&profile, positions);
+            let geometry = map::hybrid_state_geometry_for_covered_v1(&profile, positions).expect("the composition derives");
+            assert_eq!(geometry.gdn_chunk_count() > 0, carries, "the recurrence rides only its own spacing");
+            assert!(geometry.attn.chunk_count() > 0, "the attention half is on EVERY leaf");
+            // The order the NAME spells: `attn=` before `gdn=`, checked against the enumeration.
+            for index in 0..geometry.chunk_count() {
+                let entry = map::hybrid_state_chunk_entry_v3(&geometry, index).expect("the entry");
+                let want = if index < geometry.attn.chunk_count() {
+                    map::PalwHybridChunkSectionV1::AttentionCache
+                } else {
+                    map::PalwHybridChunkSectionV1::RecurrenceState
+                };
+                assert_eq!(entry.section(), want, "chunk {index} is in the wrong section");
+            }
+
+            match kernels.state_chunks(&profile, positions) {
+                Ok(chunks) => {
+                    assert_eq!(chunks.len() as u64, geometry.chunk_count(), "one chunk per entry the composition names");
+                    for (index, bytes) in chunks.iter().enumerate() {
+                        let entry = map::hybrid_state_chunk_entry_v3(&geometry, index as u64).expect("the entry");
+                        assert_eq!(bytes.len() as u64, entry.byte_len(), "chunk {index} is not the length the map declares");
+                    }
+                    assert!(!carries, "a leaf carrying the recurrence serialized on a fixture whose head counts do not match");
+                }
+                Err(why) => {
+                    // The ONLY refusal this arm may still make on a v3 map is the recurrence
+                    // geometry's, and it must name the geometry — never the composition.
+                    assert!(carries, "the attention-only composition must serialize, and it refused: {why}");
+                    let text = why.to_string();
+                    assert!(
+                        text.contains("convolution window") || text.contains("geometry"),
+                        "the refusal must name the recurrence geometry, not the composition: {text}"
+                    );
+                    assert!(
+                        !text.contains("no side of the tree"),
+                        "the composition is still refused BY NAME — patch note 5 did not land: {text}"
+                    );
+                    reached_a_boundary = true;
+                }
+            }
+        }
+        assert!(reached_a_boundary, "the sweep must reach a position the recurrence rides");
+        // And the fixture's own head counts are why: recorded here so the refusal above is
+        // attributable to the MAP rather than to this arm.
+        assert_ne!(
+            artifact.shape.linear_k_heads, artifact.shape.linear_v_heads,
+            "this fixture's head counts now match — the recurrence half should serialize and this test's Err arm is dead"
+        );
     }
 
     /// **The memo answers the second question with the first question's pass.**

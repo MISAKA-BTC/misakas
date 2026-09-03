@@ -40,7 +40,7 @@ impl FuzzRng {
     pub fn new(seed: u64) -> Self {
         Self(seed.max(1))
     }
-    pub fn next(&mut self) -> u64 {
+    pub fn next_u64(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x >> 12;
         x ^= x << 25;
@@ -49,7 +49,7 @@ impl FuzzRng {
         x.wrapping_mul(0x2545F4914F6CDD1D)
     }
     pub(crate) fn below(&mut self, n: u64) -> u64 {
-        self.next() % n.max(1)
+        self.next_u64() % n.max(1)
     }
 }
 
@@ -122,6 +122,7 @@ fn tiny_class() -> (Base0ArtifactV1, PalwShapeProfileV3) {
 /// The SAME artifact and the same geometry as [`tiny_class`], projected as ADR-0082's graph v5:
 /// one fused attention node per layer instead of four. The artifact is unchanged, which is what
 /// makes this a second GRAPH over one model rather than a second fixture.
+#[cfg(test)]
 fn tiny_class_v5() -> (Base0ArtifactV1, PalwShapeProfileV3) {
     let (artifact, v2) = tiny_class();
     let geometry = PalwQwen25GeometryV1 {
@@ -328,17 +329,14 @@ pub fn fuzz_a16_profiles_from_v1(seed: u64, iterations: u64, artifact: &Base0Art
         // admits must also be one whose worst dispute fits the carrier the network has — the
         // ceiling is a fact about adjudicability, not about execution, so a fuzzer that only
         // executed would report a clean run over classes nobody could ever police.
-        match kaspa_consensus_core::palw_class_admission_v2::derive_court_cost_v1(&profile) {
-            Ok(cost) => {
-                tally.court_costed += 1;
-                tally.max_close_bytes_seen = tally.max_close_bytes_seen.max(cost.max_close_bytes);
-                if cost.max_close_bytes > kaspa_consensus_core::palw_class_admission_v2::PALW_RC_COURT_MAX_CLOSE_BYTES {
-                    tally.closes_over_ceiling += 1;
-                }
+        // A cost the derivation refuses is a profile the gate would have refused too; it is not a
+        // finding, and it is not silently counted as costed either -- hence no `else`.
+        if let Ok(cost) = kaspa_consensus_core::palw_class_admission_v2::derive_court_cost_v1(&profile) {
+            tally.court_costed += 1;
+            tally.max_close_bytes_seen = tally.max_close_bytes_seen.max(cost.max_close_bytes);
+            if cost.max_close_bytes > kaspa_consensus_core::palw_class_admission_v2::PALW_RC_COURT_MAX_CLOSE_BYTES {
+                tally.closes_over_ceiling += 1;
             }
-            // A cost the derivation refuses is a profile the gate would have refused too; it is
-            // not a finding, and it is not silently counted as costed either.
-            Err(_) => {}
         }
 
         // A caller's prompt, twice; the bits must not care which run it was.
@@ -533,8 +531,8 @@ fn mutate_adversarially(rng: &mut FuzzRng, profile: &mut PalwShapeProfileV3) {
             // dependency this space can express. What it hunts is a resolver that recurses per
             // edge instead of walking the table once.
             let t: &mut Vec<PalwStepNodeV1> = unsafe { &mut *pick(rng, profile) };
-            for i in 1..t.len() {
-                t[i].input_refs = vec![(i - 1) as u16];
+            for (i, node) in t.iter_mut().enumerate().skip(1) {
+                node.input_refs = vec![(i - 1) as u16];
             }
         }
         _ => {
@@ -646,7 +644,7 @@ mod tests {
     /// printed so a drift in the gate/plan gap is visible in the log.
     #[test]
     fn a_bounded_fuzz_run_finds_no_panic_and_no_nondeterminism() {
-        let tally = fuzz_a16_profiles_v1(0x0067_2026_08_31, 400);
+        let tally = fuzz_a16_profiles_v1(0x0067_2026_0831, 400);
         println!("fuzz tally: {tally:?}");
         assert_eq!(tally.panics, 0, "a panic inside the interpreter is the fence staying down");
         assert_eq!(tally.nondeterminism, 0, "two runs of one plan must be one bitstream");
@@ -706,7 +704,7 @@ mod tests {
     /// not having one.
     #[test]
     fn the_fuzz_corpus_digest_is_the_same_on_every_machine() {
-        let tally = fuzz_a16_profiles_v1(0x0067_2026_08_31, 400);
+        let tally = fuzz_a16_profiles_v1(0x0067_2026_0831, 400);
         assert_eq!(
             faster_hex::hex_string(&tally.corpus_digest),
             CORPUS_DIGEST_400,

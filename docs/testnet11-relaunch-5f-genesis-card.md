@@ -398,6 +398,44 @@ gate above is the one that would have caught all three.
   court — `shape_profile_id` hashes the profile's borsh and no court field is in that struct, and
   `canonical_classes_v1`'s second line is `let _ = court;`, so the court parameter is decorative
   with respect to class identity. W3's `max_close_chunks` is not implicated.
+- **Re-bind the dense artifact's tokenizer — from the INSTRUCT checkpoint, not the base one.** The
+  shipped `qwen25-1.5b-a16.palwart` carries 64 zero bytes where the tokenizer commitment goes, and a
+  zero commitment pins nothing: a replay with a different `tokenizer.json` produces the same
+  artifact. Re-binding needs a re-conversion.
+
+  **It must be `Qwen2.5-1.5B-Instruct`, sha256 `dd924a11…`, not the base checkpoint.** The file on
+  this Mac is the BASE model — `a961db72…`, `config.json` 684 bytes; Instruct is `dd924a11…` with a
+  660-byte config. **Both safetensors are exactly 3,087,467,144 bytes, so size does not distinguish
+  them**, and the `tokenizer.json` is identical in both repos, so a tokenizer commitment computed
+  from either reproduces the same value and confirms nothing about which weights were read.
+
+  Converting the base checkpoint produces a *valid, faithful, deterministic* artifact — same size,
+  same 434,440 operands, same class id `8d2e6f16…` through `bind --artifact` — whose weight body
+  differs from the shipped one in **484,183,979 bytes as ±1 in int8**, which is exactly what a
+  fine-tune delta looks like after quantization. Its inventory root is `2246a380…` against the
+  shipped `1a7457f1…`.
+
+  **Nothing derived from the base checkpoint may be registered.** Expect digest `c00faa48…` from the
+  Instruct conversion, with only the commitment field moving.
+
+  **Do it on `ibm`, where the inputs already are** — `/root/palw-class/qwen25-src/` holds the Instruct
+  config (660 B), safetensors (3,087,467,144 B, sha256 `dd924a11…` confirmed on the machine that ran
+  the original conversion) and tokenizer (7,031,645 B), and `/root/qwen25-pipeline.sh` is the script
+  that produced the shipped file. Nobody downloads 3 GB.
+
+  **Provenance, closed except one line.** The conversion ran **2026-08-27 17:10–17:20** on ibm from
+  `Qwen2.5-1.5B-Instruct`, and the artifact was then distributed as a binary — identical sha256 on
+  ibm, C and the operator box. The 08-30 23:21 timestamp on this Mac is the *copy landing*, three
+  days later, which is why a local mtime said nothing about provenance. **What is still unrecorded is
+  the converter REVISION**: the pipeline log records the build succeeding, not what it built from.
+  That is answerable by walking `/root/misakas-t11r`'s reflog — unknown rather than unknowable — and
+  the quantization code has not moved since.
+
+  *Recorded because the trap is well disguised: two checkpoints of identical size, a shared
+  tokenizer, and a converter that is deterministic and correct on both. The class id survives the
+  swap — it hashes the PROFILE, and no weight is in the profile — so `bind --artifact` reports the
+  same class for the wrong model. Only a weight-derived value, or the checkpoint's own sha256,
+  tells them apart.*
 - **Toolchain pinned** and the CI gates runnable in one local command
 - **The single re-pin**, in the order of §4
 
@@ -416,6 +454,13 @@ gate above is the one that would have caught all three.
   80,696 at 4,096, **192 bytes for eight times the context**. At 32,768 the binding node becomes
   the embedding gather and the generated-token ids are a second context-linear term ADR-0082 D5
   does not anchor; it Merkle-izes the prompt ids only.
+- **The dense tier's faithfulness is 45 of 57, not 57 of 57.** The shipped artifact's own conversion
+  log records `a16 top-1 agree 45/57`, `top-5 contains 56/57`, `rank corr (100) 0.8932` against the
+  float reference, and calls that FAITHFUL — which is the bar the class passed, measured at
+  conversion time rather than asserted. Say the number if the subject comes up; do not let a page
+  imply the quantized class reproduces the reference exactly. (An independent conversion here of the
+  *base* checkpoint landed at 44/57 and 0.8627, so the figure is characteristic of the quantization
+  rather than of one lucky run.)
 - **The model's answer IS the artifact's source, canonicalized** — this is the central claim and it
   is now re-runnable: `palw-model-gate` and `palw-qwen36-model-gate` ship, and
   `docs/evidence-qwen36-model-gate/` carries the answer bytes and the artifacts derived from them.

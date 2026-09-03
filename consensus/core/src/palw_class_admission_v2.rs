@@ -49,7 +49,7 @@ use kaspa_hashes::Hash64;
 use crate::palw_catalog_coverage::{PalwReachableKernelSetV1, verify_catalog_coverage_v1};
 use crate::palw_mode_v2::{PalwClassCatalogEntryV2, PalwConsensusParamsV2};
 use crate::palw_state_v2::{PalwConsensusObjectV2, PalwPwuRuleV2};
-use crate::palw_step::{PalwShapeProfileV3, step_leaf_count, worst_case_step_leaf_count_v1};
+use crate::palw_step::{PalwShapeProfileV3, step_leaf_count};
 use crate::palw_step_refute::catalogued_kernel_ids_v1;
 use crate::palw_v2::PalwJobContextV2;
 
@@ -771,8 +771,26 @@ fn derive_court_cost_walk_v1(
                 // The cache-write route opens each row at the CACHE-WRITE node's tile, not at this
                 // node's — the same rule `source_tile_len_v1` states for every other opened run.
                 let source_tile = source_tile_len_v1(table, node, PALW_STEP_INPUT_KV_K);
-                let bottom =
-                    palw_attn_bottom_bytes_v1(d_head, kv_dim, history_tile, tile, source_tile, step_path_bytes).ok_or_else(over)?;
+                // **Which routes the class's own CADENCE leaves open** (ADR-0082 Decision 4,
+                // amended). A class whose map addresses history tiles has a checkpoint at every
+                // position, so its bottom is the tile route plus one position's residue at every
+                // position — prefill, first decode, tile-aligned, straddling and last alike. A
+                // per-call class has no anchor at a prefill position and is priced at the larger
+                // of the two routes, which is what it will actually have to file.
+                let per_position = matches!(
+                    crate::palw_context_ladder::palw_checkpoint_cadence_v1(profile),
+                    crate::palw_context_ladder::PalwCheckpointCadenceV1::PerPosition
+                );
+                let bottom = palw_attn_bottom_bytes_for_cadence_v1(
+                    d_head,
+                    kv_dim,
+                    history_tile,
+                    tile,
+                    source_tile,
+                    step_path_bytes,
+                    per_position,
+                )
+                .ok_or_else(over)?;
                 let move_bytes = crate::palw_attn_dissect::palw_attn_dissect_move_bytes_v1(arity, disputed_lanes as usize);
                 // The committed output tile is inside `bottom` (both routes carry it), so the
                 // generic seed this arm was added after would double-count it.
@@ -1134,12 +1152,53 @@ pub fn palw_attn_bottom_cache_write_bytes_v1(
         .checked_add(PALW_ATTN_BOTTOM_ENVELOPE_BYTES)
 }
 
-/// **What a fused leaf's bottom costs: the LARGER of the two routes** (ADR-0082 Z3).
+/// **What a fused leaf's bottom costs, at the routes the CLASS's cadence leaves open** (ADR-0082
+/// Z3, Decision 4 as amended).
+///
+/// `per_position` is [`crate::palw_context_ladder::palw_checkpoint_cadence_v1`] of the profile, and
+/// it decides which routes exist rather than which is cheaper:
+///
+/// * **False** — the shipped cadence. A checkpoint exists only after a whole decode call, so at a
+///   prefill position, and at any tile straddling the last checkpoint's edge, the cache-write route
+///   is not the challenger's choice but its only option. The price is the LARGER of the two, and on
+///   the dense graph-v5 row that is 175,297 bytes: three chunks, and the split close is shut at
+///   acceptance on the genesis card.
+/// * **True** — a class whose map addresses history tiles. Every position has an anchor AFTER it,
+///   so every bottom is route A with an empty residue and the cache-write route is never the only
+///   one available.
+///   A challenger may still file the longer route if it likes; it is filing more bytes than it
+///   needs, and a court that priced the class for that would be charging every class for the worst
+///   evidence any challenger might choose rather than for the evidence the class's own leg makes
+///   available. What the ceiling must cover is the cheapest FILEABLE bottom, and per position that
+///   is one carrier.
+pub fn palw_attn_bottom_bytes_for_cadence_v1(
+    d_head: u64,
+    kv_dim: u64,
+    tile_positions: u64,
+    out_lanes: u64,
+    source_tile: u64,
+    step_path_bytes: u64,
+    per_position: bool,
+) -> Option<u64> {
+    if per_position {
+        // **Route A alone, with no residue.** A per-position leg's anchor for a dispute at
+        // position `p` is the checkpoint at `p + 1` — the state once `p`'s own rows are written —
+        // and attention at `p` reads exactly the positions `0..=p` it holds. Every tile of the
+        // dissection, the ragged last one included, is one chunk opening per kind and nothing
+        // beside it.
+        return palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, tile_positions, out_lanes, step_path_bytes);
+    }
+    palw_attn_bottom_bytes_v1(d_head, kv_dim, tile_positions, out_lanes, source_tile, step_path_bytes)
+}
+
+/// **What a fused leaf's bottom costs where NO cadence makes the checkpoint route available: the
+/// LARGER of the two routes** (ADR-0082 Z3).
 ///
 /// A challenger picks the route it can file, and the court must be able to carry whichever that
 /// is; a derivation that priced only the cheaper one would admit a class at a price its disputes
-/// cannot be brought at. When `state_chunk_opening_root_v1` lands, route A becomes playable and
-/// this is where the choice stops being a max and becomes the ruleset's.
+/// cannot be brought at. [`palw_attn_bottom_bytes_for_cadence_v1`] is the form the cost walk takes:
+/// under a per-position cadence the checkpoint route is available at every position, and then this
+/// max charges a class for evidence its own leg makes unnecessary.
 pub fn palw_attn_bottom_bytes_v1(
     d_head: u64,
     kv_dim: u64,
@@ -1281,6 +1340,33 @@ pub fn verify_class_admission_v5(
     ladder: Option<PalwClassLadderRulesV1>,
     court: Option<PalwKaryCourtV1>,
 ) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
+    verify_class_admission_v6(bundle, profile, canonical, registration, certified, chain_certified, ladder, court, false)
+}
+
+/// [`verify_class_admission_v5`] under ADR-0082 Decision 10's earning unit.
+///
+/// `decode_rules` is `Params::palw_fp_decode_rules`, read by the CALLER (a derivation that read a
+/// fence would be a rule deciding its own activation) and `false` on every shipped preset, where
+/// this is [`verify_class_admission_v5`] byte for byte. Past it exactly one thing moves: ADR-0077
+/// Decision 14's canonical-footprint floor is compared in DECODE CALLS rather than in cached
+/// positions, because that is the unit a claim now earns in
+/// ([`crate::palw_context_ladder::palw_job_decode_footprint_v1`]).
+///
+/// Nothing else in the gate is a function of the earning unit: the ladder depth, the close ceiling
+/// and the court window are all properties of the widest JOB the row admits, and Decision 10 does
+/// not change which jobs those are.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_class_admission_v6(
+    bundle: &PalwConsensusParamsV2,
+    profile: &PalwShapeProfileV3,
+    canonical: &PalwJobContextV2,
+    registration: &PalwConsensusObjectV2,
+    certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    chain_certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    ladder: Option<PalwClassLadderRulesV1>,
+    court: Option<PalwKaryCourtV1>,
+    decode_rules: bool,
+) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
     let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, share_permille, .. } = registration else {
         return Err(PalwClassAdmissionError::NotARegistration);
     };
@@ -1337,10 +1423,22 @@ pub fn verify_class_admission_v5(
     // canonical job too LONG for the row; this refuses one too SHORT for it, which is the failure
     // that costs a class 86 % of its certified work rather than refusing it outright — invisible,
     // and therefore the one that needs a gate.
+    //
+    // **In the unit that EARNS** (ADR-0082 Decision 10). Past `Params::palw_fp_decode_rules` a
+    // claim earns on its decode leaves, and a floor measured in cached positions is enterable from
+    // the other side: 4,000 prefill and 2 decode at `n_ctx` 4,096 has a footprint of 4,001 against
+    // a floor of 512 and ONE decode call, so the row is admitted and every honest job on it parks
+    // at the 64-quantum cap. The fence arrives as an argument because a rule that read its own
+    // activation would be deciding when it applies.
+    let floor_footprint =
+        if decode_rules { crate::palw_context_ladder::palw_job_decode_footprint_v1(canonical.exact_decode_tokens) } else { footprint };
     if let Some(rules) = ladder
-        && footprint < rules.canonical_footprint_floor
+        && floor_footprint < rules.canonical_footprint_floor
     {
-        return Err(PalwClassAdmissionError::CanonicalFootprintUnderTheRow { footprint, floor: rules.canonical_footprint_floor });
+        return Err(PalwClassAdmissionError::CanonicalFootprintUnderTheRow {
+            footprint: floor_footprint,
+            floor: rules.canonical_footprint_floor,
+        });
     }
 
     // A4 first: a class whose disputes cannot be adjudicated must not reach any later check, so
@@ -1619,7 +1717,10 @@ mod tests {
     use crate::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
     use crate::palw_mode_v2::{PalwCourtParamsV2, tests::conforming_bundle};
     use crate::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, QWEN25_3B, qwen25_profile_v1};
-    use crate::palw_step::PALW_STEP_MAX_LEAVES;
+    // `worst_case_step_leaf_count_v1` is used only from this module, so the import lives here:
+    // at the top of the file it was dead in the non-test build (`-D warnings` refused it)
+    // while the `--tests` target needed it -- one name, two targets, opposite answers.
+    use crate::palw_step::{PALW_STEP_MAX_LEAVES, worst_case_step_leaf_count_v1};
     use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, trace_scheme_id_v2};
 
     /// The measured Qwen2.5-1.5B graph, at the `tile_len` that actually admits its own declared
@@ -2091,10 +2192,41 @@ mod tests {
         // All three clear.
         admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, RC_TURN_DEADLINE), court)
             .expect("the dense graph-v5 512 row clears the close, the ladder and the window");
-        // The CLOSE alone refuses, and says so: the row needs two carriers (its bottom is charged
-        // at the cache-write route) and one is what the ruleset pays for.
-        let err = admit(court_at(1, RC_TURN_DEADLINE), court).expect_err("one carrier does not carry this row");
-        assert!(format!("{err}").contains("court close chunks"), "the close must name itself: {err}");
+        // **The dense row now clears ONE carrier, and that is ADR-0082 Decision 4's amendment.**
+        //
+        // This assertion was `expect_err("one carrier does not carry this row")`: the row's bottom
+        // was charged at the CACHE-WRITE route, because under the per-decode-call cadence a dispute
+        // at a prefill position had no checkpoint to anchor on at all. Its close was 216,019 bytes
+        // — three chunks — and a ruleset paying for one refused it by name.
+        //
+        // A class whose map addresses history tiles now commits a checkpoint after every position
+        // and anchors a dispute at position `p` on the one at `p + 1`, which holds exactly the
+        // `0..=p` rows the attention at `p` reads. The bottom is one chunk opening per kind with an
+        // empty residue, the close is 82,719 at the row's own canonical job (81,759 at this test's
+        // 510/2 job), and one carrier carries it. The rule that moved this golden is
+        // `palw_checkpoint_cadence_v1`; the graph, the map and the arithmetic are untouched.
+        let entry = admit(court_at(1, RC_TURN_DEADLINE), court).expect("one carrier now carries the dense graph-v5 row");
+        assert!(
+            entry.court_cost.max_close_bytes <= crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(1),
+            "the row was admitted at a close of {} against one carrier",
+            entry.court_cost.max_close_bytes
+        );
+        // The CLOSE still refuses when it must, and still says so — on the HYBRID row, whose
+        // binding term is its recurrence rather than its attention and which the amendment does not
+        // touch.
+        {
+            let hybrid = crate::palw_context_ladder::palw_qwen36_context_row_profile_v5(512).expect("projects");
+            let hybrid_rules =
+                crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&hybrid, Some(court)).expect("mapped");
+            let hybrid_job = context(&hybrid, 510, 2);
+            let counted = crate::palw_step::step_leaf_count_capped_v1(&hybrid, &hybrid_job, hybrid_rules.ladder).expect("counts");
+            let reg = weightless_registration(hybrid.shape_profile_id(), counted);
+            let mut bundle = conforming_bundle();
+            bundle.court = court_at(1, RC_TURN_DEADLINE);
+            let err = verify_class_admission_v5(&bundle, &hybrid, &hybrid_job, &reg, &[], &[], Some(hybrid_rules), Some(court))
+                .expect_err("one carrier does not carry the hybrid row");
+            assert!(format!("{err}").contains("court close chunks"), "the close must name itself: {err}");
+        }
         // The WINDOW alone refuses, and says so.
         let err = admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, RC_TURN_DEADLINE), PalwKaryCourtV1 {
             window_court_daa: 100,

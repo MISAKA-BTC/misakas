@@ -327,6 +327,16 @@ fn a16_execute_streaming_v1(
             rows.retain(|r| r.table != kaspa_consensus_core::palw_step::PalwStepTableV1::Post);
         }
         capture.push_call(profile, ctx, 0, position as u32, &rows).map_err(|e| format!("{e:?}"))?;
+        // **A checkpoint after a PREFILL position, when the class's cadence says so** (ADR-0082
+        // Decision 4, amended). A per-call class wants none of these and this is `false` at every
+        // prefill position; a class whose map addresses history tiles wants one after every
+        // position, because a dispute at a prefill position with no anchor opens `p + 1` cache
+        // rows per kind and its bottom is three chunks no carrier can file.
+        if checkpoints.wants_checkpoint_after_v1(0, position as u32) {
+            checkpoints
+                .push_with_v1(|entry| cache.state_chunk_bytes_v1(entry))
+                .map_err(|e| format!("the prefill checkpoint at position {position}: {e:?}"))?;
+        }
         last_logits = logits;
     }
     let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits) as u32;
@@ -347,29 +357,19 @@ fn a16_execute_streaming_v1(
         generated.push(next);
         on_token(next);
         logits_rows.push(logits);
-        if call as u32 == checkpoints.next_covered_decode_call() {
-            // Through the CACHE's own serializer, at the width the class declares. Under a map
-            // that cannot describe this state — the v1 one-byte map over an `i32` cache — this
-            // refuses, and the run fails here rather than committing a checkpoint that opens to a
-            // state it never held.
-            let geometry = checkpoints.next_geometry().map_err(|e| format!("{e:?}"))?;
-            let mut chunks = Vec::with_capacity(geometry.chunk_count() as usize);
-            for index in 0..geometry.chunk_count() {
-                let entry =
-                    map::integer_kv_state_chunk_entry_v1(&geometry, index).ok_or_else(|| format!("the map has no chunk {index}"))?;
-                chunks.push(cache.state_chunk_bytes_v1(&entry).ok_or_else(|| {
-                    format!(
-                        "this cache does not fit the state map the class declares (chunk {index}, {} bytes per row)",
-                        entry.row_bytes
-                    )
-                })?);
-            }
-            checkpoints.push_chunks(chunks).map_err(|e| format!("{e:?}"))?;
+        // Through the CACHE's own serializer, at the width the class declares. Under a map that
+        // cannot describe this state — the v1 one-byte map over an `i32` cache — this refuses, and
+        // the run fails here rather than committing a checkpoint that opens to a state it never
+        // held. The boundary is the capture's own predicate, so the prefill arm above and this one
+        // cannot drift into two cadences.
+        if checkpoints.wants_checkpoint_after_v1(call as u32, 0) {
+            checkpoints
+                .push_with_v1(|entry| cache.state_chunk_bytes_v1(entry))
+                .map_err(|e| format!("the checkpoint after decode call {call}: {e:?}"))?;
         }
     }
 
-    let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
-    let checkpoints = checkpoints.finish(decode_calls / checkpoint_profile.checkpoint_interval).map_err(|e| format!("{e:?}"))?;
+    let checkpoints = checkpoints.finish_canonical_v1().map_err(|e| format!("{e:?}"))?;
     let captured = capture.finish(max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
 
     // **This class's own trace scheme, not the floor's.** The retained rows ARE the selecting

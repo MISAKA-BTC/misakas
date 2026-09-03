@@ -14413,7 +14413,7 @@ pub(crate) mod tests {
         assert!(matches!(err, Err(PalwStateV2Error::DerivedSignerIsNotTheExecutor { .. })), "{err:?}");
 
         let first = derived_object(0xFC, 0x71, output_root, fp_executor_key());
-        let (s3, _) = apply(&s2, &p, &point, &[first.clone()], None);
+        let (s3, _) = apply(&s2, &p, &point, std::slice::from_ref(&first), None);
         let err = apply_palw_transition_v2(&s3, &p, &ctx(4, 103, 4), &[first], None);
         assert!(matches!(err, Err(PalwStateV2Error::DuplicateDerivation { .. })), "{err:?}");
 
@@ -15200,10 +15200,10 @@ pub(crate) mod tests {
         assert!(matches!(c2.claim(&h64(0xFC)).unwrap().phase, PalwClaimPhaseV2::Provisional), "a certified class takes the claim");
     }
 
-    /// **Admission item 8 reaches the free-prompt lane** (review of ADR-0074 Decision 5): what a
-    /// bond already backs plus what a commitment would reserve may not exceed collateral × ratio.
-    /// At a 500‰ ceiling over 1,000 of collateral, one 300-sompi claim fits and a second does not;
-    /// at the default 1000‰ both do. The refusal names the numbers, and nothing was reserved.
+    // **Admission item 8 reaches the free-prompt lane** (review of ADR-0074 Decision 5): what a
+    // bond already backs plus what a commitment would reserve may not exceed collateral × ratio.
+    // At a 500‰ ceiling over 1,000 of collateral, one 300-sompi claim fits and a second does not;
+    // at the default 1000‰ both do. The refusal names the numbers, and nothing was reserved.
 
     /// ADR-0075: a class the CHAIN certified for the free-prompt lane takes commitments under a
     /// genesis gate that does not name it — the genesis set and the chain's are one gate — and the
@@ -17856,7 +17856,7 @@ pub(crate) mod tests {
             let PalwClaimPhaseV2::DefaultDisputed { resumed, .. } = &mut claim.phase else {
                 panic!("the claim must be disputed");
             };
-            *resumed = Box::new(bad);
+            **resumed = bad;
             let refused = PalwStateCarriageV2::from_state(&forged).into_state(&p, None).map(|_| ());
             assert!(
                 matches!(refused, Err(PalwStateV2Error::CarriageInconsistent(_))),
@@ -17930,9 +17930,18 @@ pub(crate) mod tests {
         let (s3, claim_id, _, preimages, hashes) = da_setup(&p, 999_999);
 
         for object in [da_accuse(claim_id, 0), da_disclose(claim_id, 0, &preimages, &hashes)] {
-            let refused =
-                apply_palw_transition_v2_with_policies(&s3, &p, &ctx(4, 103, 4), &[object.clone()], None, false, false, false, false)
-                    .expect_err("a dormant fence refuses both DA objects");
+            let refused = apply_palw_transition_v2_with_policies(
+                &s3,
+                &p,
+                &ctx(4, 103, 4),
+                std::slice::from_ref(&object),
+                None,
+                false,
+                false,
+                false,
+                false,
+            )
+            .expect_err("a dormant fence refuses both DA objects");
             assert!(matches!(refused, PalwStateV2Error::DaCourtDormant), "got {refused:?}");
             // …and the v2 face every pre-ADR caller and fixture uses says exactly the same thing.
             let legacy =
@@ -18927,7 +18936,18 @@ pub(crate) mod tests {
                 let leaf = PalwCheckpointLeafV2 {
                     version: PALW_STEP_LEG_OBJECT_VERSION_V1,
                     checkpoint_index: 0,
-                    covered_decode_call: positions - context.declared_prefill_tokens,
+                    // ADR-0082 Decision 4 as amended by stream K: a per-position class anchors AFTER
+                    // the disputed position — `covered = p + 1`, the state once position p's own K
+                    // and V rows are written — and the court reads the anchor's coverage through
+                    // the same rule (`palw_checkpoint_positions_at_v1`), so the fixture spells it
+                    // through the rule's own function rather than as a decode-call count.
+                    covered_decode_call: crate::palw_context_ladder::palw_checkpoint_covered_for_step_v1(
+                        profile,
+                        context,
+                        0,
+                        positions - 1,
+                    )
+                    .expect("the anchor after the disputed prefill position"),
                     prev_checkpoint_leaf_hash: checkpoint_genesis_prev_v2(&context_hash),
                     state_chunk_count: chunk_hashes.len() as u32,
                     state_chunks_root: state_chunks_root_v1(&chunk_hashes).expect("a chunks root"),
@@ -19120,11 +19140,11 @@ pub(crate) mod tests {
 
         /// Play the dissection to its bottom through `apply_object`, and return the verdict the close
         /// adjudicates plus the state at the moment before it.
-        fn play_to_the_bottom(
+        /// Open the dissection and narrow it to its terminal tile — every move through the chain.
+        fn narrow_to_the_terminal(
             p: &PalwStateParamsV2,
             drill: &Drill,
-            anchored: bool,
-        ) -> (PalwChainStateV2, Hash64, Hash64, PalwCourtVerdictV2, u64) {
+        ) -> (PalwChainStateV2, Hash64, Hash64, u64, u64) {
             let (mut state, claim_id, sid, mut daa) = court_at_the_fused_leaf(p, drill);
             let (next, _) = apply(&state, p, &ctx(daa, daa, daa), &[root_claimed(sid, drill, 2)], None);
             daa += 1;
@@ -19152,10 +19172,30 @@ pub(crate) mod tests {
             }
             let phase = state.court_session(&sid).unwrap().dissection.as_ref().unwrap();
             let tile = phase.terminal_tile().expect("a narrowed dissection");
+            (state, claim_id, sid, tile, daa)
+        }
+
+        /// The bottom's adjudication, as the court answers it — a refusal is a value here, so a
+        /// test can name the route it refused.
+        fn adjudicate_the_bottom(
+            state: &PalwChainStateV2,
+            sid: Hash64,
+            drill: &Drill,
+            anchored: bool,
+            tile: u64,
+        ) -> Result<PalwCourtVerdictV2, crate::palw_court_v2::PalwCourtV2Error> {
             let bottom = if anchored { drill.bottom_anchored(sid, tile) } else { drill.bottom(sid, tile) };
             let court = crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 22, 20, 2).unwrap();
-            let verdict = crate::palw_court_v2::adjudicate_court_close_v2(&state, &sid, &dissection_close(drill, bottom), &court)
-                .expect("the bottom adjudicates");
+            crate::palw_court_v2::adjudicate_court_close_v2(state, &sid, &dissection_close(drill, bottom), &court)
+        }
+
+        fn play_to_the_bottom(
+            p: &PalwStateParamsV2,
+            drill: &Drill,
+            anchored: bool,
+        ) -> (PalwChainStateV2, Hash64, Hash64, PalwCourtVerdictV2, u64) {
+            let (state, claim_id, sid, tile, daa) = narrow_to_the_terminal(p, drill);
+            let verdict = adjudicate_the_bottom(&state, sid, drill, anchored, tile).expect("the bottom adjudicates");
             (state, claim_id, sid, verdict, daa)
         }
 
@@ -19165,7 +19205,12 @@ pub(crate) mod tests {
         #[test]
         fn the_dissection_acquits_an_honest_execution_and_convicts_a_forged_one() {
             let p = params_with_ladder();
-            for anchored in [false, true] {
+            // The drill's class registers the tiled map, so it checkpoints every position and the
+            // cache-write evidence route is refused by name (ADR-0082 Decision 4 as amended by
+            // stream K: that route cannot bind a row to its own K or V series, and this class has
+            // a sound route at every position). Only the anchored arm is playable for it; the
+            // refusal itself is pinned by the test below.
+            for anchored in [true] {
                 let honest = Drill::new(false);
                 let (_, _, _, verdict, _) = play_to_the_bottom(&p, &honest, anchored);
                 assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "anchored={anchored}: an honest execution was convicted");
@@ -19193,6 +19238,30 @@ pub(crate) mod tests {
                     "anchored={anchored}: a convicted claim is voided"
                 );
             }
+        }
+
+        /// **The cache-write route is refused BY NAME for a class that checkpoints every position**
+        /// (ADR-0082 Decision 4 as amended by stream K). Stream I measured why: a bottom on that
+        /// route can swap the K and V series wholesale, every opening verifies, and an honest
+        /// executor is convicted. The refusal is the court's answer through the chain, on the same
+        /// narrowed dissection the anchored route adjudicates.
+        #[test]
+        fn the_cache_write_route_is_refused_by_name_where_every_position_is_checkpointed() {
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+            let (state, _, sid, tile, _) = narrow_to_the_terminal(&p, &drill);
+            let err = adjudicate_the_bottom(&state, sid, &drill, false, tile).expect_err("the cache-write route is refused");
+            assert!(
+                matches!(
+                    err,
+                    crate::palw_court_v2::PalwCourtV2Error::AttnCourt(
+                        crate::palw_attn_court_v1::PalwAttnCourtError::CacheWriteRouteRefused
+                    )
+                ),
+                "the refusal must name the route: {err}"
+            );
+            // And the anchored route, on the same tile, still adjudicates.
+            assert_eq!(adjudicate_the_bottom(&state, sid, &drill, true, tile).expect("anchored adjudicates"), PalwCourtVerdictV2::ChallengerDefeated);
         }
 
         /// **The site is the CLASS's, and a root claim about another head is refused.**

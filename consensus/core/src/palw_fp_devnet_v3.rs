@@ -43,8 +43,14 @@ const BETA_PERMILLE: u16 = 100;
 /// ruleset id — the windows never had wall-clock meaning on their own, and this constant block
 /// is where the two are read together. A shorter devnet cycle is a decision about these
 /// numbers, made in daylight; it is not something the cadence should be bent for.
+// Read only by the `#[cfg(test)] mod tests` below (and by the prose above); `#[cfg(test)]`
+// rather than `#[allow(dead_code)]` so that a non-test USE of one of these is a compile error
+// and not a silently-revived constant.
+#[cfg(test)]
 const WINDOW_BIND: u64 = PALW_RC_WINDOWS_V1.window_bind;
+#[cfg(test)]
 const WINDOW_RECEIPT: u64 = PALW_RC_WINDOWS_V1.window_receipt;
+#[cfg(test)]
 const WINDOW_CHALLENGE: u64 = PALW_RC_WINDOWS_V1.window_challenge;
 
 /// **The lattice's windows, as ONE named set** (ADR-0077 Decision 7).
@@ -223,6 +229,7 @@ const DEVNET_COURT_MAX_CLOSE_BYTES: u64 = 81_920;
 /// backstop closes on the challenger's side — a dispute lost for being played correctly. 3,000
 /// leaves ~9 % margin and keeps the startup invariant that refuses a bundle where the window cannot
 /// hold its own ladder.
+#[cfg(test)]
 const WINDOW_COURT: u64 = PALW_RC_WINDOWS_V1.window_court;
 
 /// Class-production epoch / retarget span.
@@ -436,6 +443,7 @@ const BUDGET_TOLERANCE_PERMILLE: u32 = 1_000;
 /// keeps its collateral reserved. One bind window (600) — the span the producer had to bind and
 /// chose not to use, which is the natural price for declining it, and long enough that a redraw
 /// loop needs a fresh reservation per attempt rather than recycling one.
+#[cfg(test)]
 const FP_ABANDON_HOLD: u64 = PALW_RC_WINDOWS_V1.fp_abandon_hold;
 
 /// **How long a terminal claim is kept before it is removed** (launch blockers §8, third bullet).

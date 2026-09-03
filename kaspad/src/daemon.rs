@@ -505,15 +505,15 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         // families is on a different ruleset — the same discipline `court_catalog_root` follows.
         // Said here rather than left to the handshake because "no peers" is what an operator would
         // otherwise see, and the cause would be nowhere in their logs.
-        if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode {
-            if bundle.court_e2e_root != built {
-                warn!(
-                    "this build certifies end-to-end family set {built}, and network {} commits to {}. Peers on that \
-                     network will refuse the handshake, and no class can be granted weight here. This is a BUILD \
-                     mismatch, not a networking fault (ADR-0069).",
-                    network, bundle.court_e2e_root
-                );
-            }
+        if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode
+            && bundle.court_e2e_root != built
+        {
+            warn!(
+                "this build certifies end-to-end family set {built}, and network {} commits to {}. Peers on that \
+                 network will refuse the handshake, and no class can be granted weight here. This is a BUILD \
+                 mismatch, not a networking fault (ADR-0069).",
+                network, bundle.court_e2e_root
+            );
         }
     }
 
