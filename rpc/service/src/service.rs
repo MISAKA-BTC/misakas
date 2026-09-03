@@ -1014,6 +1014,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             fp_certified: facts.fp_certified,
             fp_quanta_per_canonical_job,
             fp_max_quanta_per_receipt,
+            // **ADR-0082 Decisions 10/11's fence, at the point these facts were read.** The
+            // fence lives on `Params`, not in chain state, so it is read off the config this node
+            // booted with — and at `facts.daa_score`, the CANDIDATE's score, because every other
+            // fact in this response was derived at that point and a readiness answer assembled
+            // from two chain points is the defect this file already records for the free-prompt
+            // price. `palw_fp_decode_rules_active_at` folds in the ConsensusV2 mode condition, so
+            // a hash-only network answers false without a second check here.
+            fp_decode_rules_armed: self.config.params.palw_fp_decode_rules_active_at(facts.daa_score),
             chain_point: facts.chain_point.to_string(),
             daa_score: facts.daa_score,
             class_id: facts.class_id.to_string(),

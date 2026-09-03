@@ -1214,21 +1214,33 @@ mod tests {
     // The fence: nothing here is on any shipped preset
     // ---------------------------------------------------------------------------------------
 
-    /// **The dormancy claim, checked rather than asserted in prose.** Every shipped preset leaves
-    /// `palw_context_ladder` unset, so no rule in this module is reachable from any consensus path
-    /// and the shipped constants are the ones they were.
+    /// **Which presets arm this fence, checked rather than asserted in prose.**
+    ///
+    /// It was "no shipped preset", and DEVNET now arms it at genesis (ADR-0082 / the 5f genesis
+    /// card §1 rehearsal: the graph-v5 512 row cannot be priced without the ladder). The property
+    /// worth keeping is not "nobody arms it" — that is a claim about a decision somebody made —
+    /// but that arming is DELIBERATE and per-preset, so the three networks that did not arm it
+    /// still cannot acquire it by upgrading, and devnet's value is the one the card names.
     #[test]
-    fn no_shipped_preset_arms_the_context_ladder() {
+    fn only_devnet_arms_the_context_ladder() {
         for (name, params) in [
             ("mainnet", crate::config::params::MAINNET_PARAMS),
             ("testnet", crate::config::params::TESTNET_PARAMS),
-            ("devnet", crate::config::params::DEVNET_PARAMS),
             ("simnet", crate::config::params::SIMNET_PARAMS),
         ] {
             assert!(params.palw_context_ladder.is_none(), "{name} arms the context ladder");
         }
         assert!(crate::config::params::palw_rc_shipped_params().palw_context_ladder.is_none(), "the RC card arms it");
-        assert!(crate::config::params::devnet_shipped_params().palw_context_ladder.is_none(), "the devnet card arms it");
+        assert_eq!(
+            crate::config::params::DEVNET_PARAMS.palw_context_ladder,
+            Some(crate::config::params::ForkActivation::always()),
+            "devnet arms the ladder at GENESIS — a scheduled ladder would price two different rows on one chain"
+        );
+        assert_eq!(
+            crate::config::params::devnet_shipped_params().palw_context_ladder,
+            Some(crate::config::params::ForkActivation::always()),
+            "the bundled devnet carries the literal's fence"
+        );
         // And the two constants the fence stands in front of.
         //
         // `PALW_STEP_MAX_LEAVES` is still 2^22 and is no longer the ladder: after ADR-0080 W1b the

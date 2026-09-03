@@ -207,15 +207,24 @@ impl PalwModelLineageV1 for DenseLineageV1 {
             if let Some(artifact) =
                 holdings.iter().filter_map(artifact_of).find(|a| entry.artifact_root(a).is_ok_and(|root| root == artifact_root))
             {
-                return Some(Ok(Box::new(
+                // **The compile IS the resolve's answer** (ADR-0082 audit E, H-1). `::new` now
+                // compiles the class's declaration into the program it executes — one authority,
+                // the same one `from_registered_profile` uses — so a graph this build cannot serve
+                // is a named refusal here instead of a backend that quietly runs a different
+                // program from the one the class declares. It is also what lets a dense row move
+                // to ADR-0082's fused attention site at all: the plan-less route is the compiled
+                // twenty-seven-row v2 program and refuses a v5 declaration by name.
+                return Some(
                     misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
                         artifact,
                         network_id.to_vec(),
                         entry.profile.clone(),
                         entry.canonical_job,
                     )
-                    .with_step_ladder_cap(court.max_step_leaf_count()),
-                )));
+                    .map(|backend| -> Box<dyn PalwExecutionBackendV1> {
+                        Box::new(backend.with_step_ladder_cap(court.max_step_leaf_count()))
+                    }),
+                );
             }
             return Some(Err(format!(
                 "the chain names the {} class and this node holds no artifact whose registered root form is {artifact_root} \

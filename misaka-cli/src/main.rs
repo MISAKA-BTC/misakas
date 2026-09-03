@@ -436,6 +436,22 @@ enum PalwCmd {
         #[arg(long)]
         yes: bool,
     },
+    /// **ADR-0075 / ADR-0082: the two free-prompt lane facts a builder must know before it
+    /// builds.** Is this class SEATED on the free-prompt lane (`fp_certified` — the genesis
+    /// certified set union the chain set, the same two `FreePromptCommitted` refuses on), and is
+    /// ADR-0082's decode ruleset in force (`fp_decode_rules_armed` — past that fence a job carries
+    /// its sampling seed and temperature inside its context hash and decode leaves are what earn)?
+    ///
+    /// A job on an uncertified class is still answered and its commitment is unsubmittable; a job
+    /// built for the wrong decode ruleset is honest and unreproducible. Neither is guessable and
+    /// both are one read. Nothing signs, nothing spends.
+    Certified {
+        /// 128-hex class id (`execution_class_id`, the shape profile id).
+        class_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
     /// ADR-0078 Decision 5: read what the chain holds about a free-prompt claim's DERIVATIONS —
     /// the grammar, the transformer, the DSL and artifact hashes, and the claim's own output_root.
     /// The answer's token ids are on no chain; hold them from the gateway response.
@@ -991,6 +1007,7 @@ async fn main() -> std::process::ExitCode {
             )
             .await
         }
+        Command::Palw(PalwCmd::Certified { class_id, json }) => palw_fp::certified(&ctx, &class_id, json).await,
         Command::Palw(PalwCmd::Derived { claim_id, json }) => palw_derived::show(&ctx, &claim_id, json).await,
         Command::Palw(PalwCmd::DerivedVerify { claim_id, answer, dsl, job_context_hash, family, json }) => {
             palw_derived::verify(&ctx, &claim_id, &answer, dsl.as_deref(), job_context_hash.as_deref(), family.as_deref(), json).await

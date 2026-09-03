@@ -438,8 +438,10 @@ pub fn qwen25_a16_artifact_row_profile_v5(geometry: PalwQwen25GeometryV1) -> Res
 /// norms with the ARTIFACT's constant. So the declared epsilon is not the executed one, and
 /// `A16Engine::plan_from_profile`'s geometry gate refuses the row over its own class's weights:
 /// `GeometryMismatch { what: "rms_eps_q", profile: 1, artifact: 256 }`. The shipped worker never
-/// saw it because it takes `Qwen25A16Backend::new`, which compiles no plan and lets the artifact's
-/// epsilon execute — the asymmetry is exactly why nobody noticed.
+/// saw it while `Qwen25A16Backend::new` compiled no plan and let the artifact's epsilon execute —
+/// that asymmetry is exactly why nobody noticed, and it is closed: since ADR-0082's audit (fix E,
+/// H-1) BOTH constructors compile the plan, so a worker on this row now refuses at boot with the
+/// mismatch named instead of producing claims that lose every step-leg dispute.
 ///
 /// **This constant does not move a registered class.** `QWEN25_1_5B` and [`QWEN25_1_5B_A16`] stay
 /// exactly as testnet-11's genesis registered them (`params.rs` derives the registration from

@@ -2528,7 +2528,11 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
         )
         .expect("a valid A16 profile"),
         QWEN25_A16_CANONICAL,
-    );
+    )
+    // Fallible since ADR-0082 audit E's H-1: the constructor compiles the class's declaration into
+    // the program it executes, so a declaration this artifact cannot serve is a named refusal here
+    // instead of a forward pass under arithmetic nobody declared.
+    .expect("the dense drill's declaration is the program this artifact runs");
     // The work, and the draw (ADR-0072): the execution IS the ticket, so a lost draw is re-rolled
     // by the next bucket — a different job, a second real inference — never by moving the nonce.
     let mut won = None;
