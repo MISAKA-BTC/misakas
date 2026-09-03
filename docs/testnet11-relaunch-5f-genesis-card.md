@@ -176,12 +176,22 @@ last checkpoint, is the three-chunk close, which §5 cannot file.
 route happens to cover, and that is not "prosecutable".** The honest sentence until this closes is:
 *three carriers on the cache-write route, one on the checkpoint route.*
 
-The fix is structural and cheap because the attention cache is prefix-stable: a tiled-map class
-commits a checkpoint at EVERY position, prefill included, and then every bottom opens at most one
-chunk per kind plus the disputed position's own two rows — about 48 KB, one carrier, at every
-position. That is ADR-0082 stream K, started; it moves the checkpoint leg's leaf version, the
-anchored replay's rule, the cost arm and the fold's capture. **Stream K joins §7's must-land list**
-— without it, §3's central claim holds only for a subset of positions nobody chooses.
+**Stream K has landed and the claim is now unconditional.** With a checkpoint at every position the
+bottom opening is **40,461 bytes = 0.49 carriers at EVERY position class** — prefill, first decode,
+tile-aligned, straddling a tile boundary, and last — measured per class rather than averaged. The
+close falls from 216,019 (3 chunks) to **82,719 = ONE chunk**, binding `attn[7] AttnFused`, and
+82,911 at n_ctx 4,096. Per-position retention is **zero**: the fold keeps no chunk bytes, where a
+chunk-retaining capture at 16 positions would have held 1,114,112.
+
+**And the cache-write route was not merely expensive — it was unsound.** K found a K/V series swap
+admissible on it, which convicts an honest executor. It is REFUSED now for any class that
+checkpoints every position, so the route that could not be carried is also the route that could not
+be trusted, and removing it closes the arming blocker for `palw_kary_court` rather than working
+around it.
+
+One design fact to carry: the anchor sits at **p+1** — the checkpoint written once position p's own
+K/V rows exist — not at p−1 plus a residue. That single change took the dense close from 93,367
+(2 chunks) to 82,719 (1).
 
 Hybrid graph-v5 is 274,460 = 4 chunks on the same derivation, bound by the recurrence replay
 evidence. It is unregistered at genesis (§2) and will need W6/W7's split acceptance regardless.
@@ -254,6 +264,12 @@ thing done before the cut and it is done ONCE.
 | `shipped_presets_have_pinned_fingerprints` | `consensus/core/src/config/params.rs` | here, at the cut |
 | `golden_vector_ids_are_frozen` | `consensus/core/src/palw_freeprompt_v3.rs` — ADR-0082 stream H gave the job two fields | here, at the cut |
 | state version 18 → 19, ADR-0043 goldens | `palw-adr0082-impl` | 5b, on that branch |
+
+**The fingerprint moves under you, so re-pin LAST and never early.** Measured twice a few hours
+apart on this branch: `a7baab79…` was the pin, one reading gave `d201a54f…`, and the next gave
+`4e0fe90b…` (devnet `84153175…` → `b84ea8cf…` → `6dbad795…`). Nothing was wrong either time — the
+value is a function of the consensus parameters and every merge moves it. A re-pin taken before the
+last merge lands is a value that was true when it was read and false when it shipped.
 
 **Careful with the third**: `golden_vector_ids_are_frozen` exists TWICE — `palw_freeprompt_v3.rs:1521`
 and `palw_derived_v1.rs:441`. One name, two homes, in the same crate. Only the free-prompt one moved.
@@ -369,9 +385,6 @@ gate above is the one that would have caught all three.
   `assistant\n`. Under the shipped assembly **4 of 8 correct answers were refused at column 1** and
   2 more burned their budget on an open reasoning trace. The preamble must be `Special(id)` — as
   text it becomes BPE pieces through ADR-0079 D7's `encode_without_specials`.
-- **ADR-0082 stream K — per-position checkpoints.** Without it the registered row is prosecutable
-  only at positions the checkpoint route covers; a dispute at any prefill position is a three-chunk
-  close and §5 cannot file it. See §3.
 - **A way to certify the 512 row.** The A16 catalog is a fixed three-row table — `Qwen/Qwen2.5-1.5B`
   at n_ctx 16, `Qwen/Qwen2.5-Coder-1.5B-Instruct` at 18, `Qwen/Qwen2.5-1.5B/graph-v2` at 16 — and
   `palw-certify bind` takes only `--model-id`, with no `--n-ctx`, no `--class-id` and no
