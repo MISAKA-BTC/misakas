@@ -5344,8 +5344,7 @@ pub fn palw_v2_params_with_classes_on_base(
             "the genesis set registers a fused-attention row and the preset leaves palw_kary_court dormant: the \
              court that can try that row must be STATED on the preset (ForkActivation::always()) — a fence armed \
              by derivation alone would be an arming nobody decided",
-        )
-        .into());
+        ));
     }
 
     // Both gates again, from scratch, over the network actually being shipped.

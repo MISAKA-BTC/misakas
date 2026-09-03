@@ -939,6 +939,11 @@ fn handle_chat(
     // ADR-0078 Decision 6: derive from the FULL committed rendering (never the display trim —
     // a DSL hashed from a trimmed answer is one no verifier holding the ids can reach).
     //
+    // The bytes handed to the derivation are `result.rendered` ITSELF, not the lossy string above:
+    // `misaka_palw_derive::render_answer_v1` (the join a bound verifier recomputes) returns the raw
+    // rendering, and an answer that ends mid-sequence or spells an id to invalid UTF-8 would give
+    // the lossy form a different `dsl_hash` — a MISMATCH against an honest executor.
+    //
     // **Gated on `commit_refusal.is_none()`.** A derivation names a claim, and consensus refuses a
     // `DerivedArtifactV1` whose claim never entered the state (`DerivedClaimMissing`). Deriving
     // for a commitment this gateway has just declined to write would put an object in the outbox
@@ -953,7 +958,7 @@ fn handle_chat(
                 output_root: result.output_root,
                 executor_pubkey: identity.executor_pubkey.clone(),
             },
-            rendered_string.as_bytes(),
+            &result.rendered,
             &config.outbox,
             &artifact_stem,
         )?),
