@@ -5,6 +5,16 @@
 This is the card the cut is made from. Every number here is derived or measured; where a value is
 someone's decision rather than an arithmetic consequence, it says so and says whose.
 
+> **Every `file.rs:NNNN` citation below resolves against `palw-adr0082-impl` at `aa049f96`, not
+> against this branch.** The card describes the POST-MERGE cut, so it necessarily cites code 5f does
+> not have yet — `palw_attn_court_v1.rs` does not exist here at all, and `prompt_ids_merkle` appears
+> zero times in this branch's `params.rs`. That is legitimate and it is also exactly how six wrong
+> citations got written in one sitting: read from one tree, committed to another, and wrong in a way
+> no test suite can see. **`scripts/check-doc-citations.sh <doc> <tree>` resolves every citation and
+> prints the line it lands on**; run it against the merged tree at the freeze and read the output,
+> because a citation that resolves is not the same as a citation that is right. Caught by the
+> session verifying this card, not by the one writing it.
+
 ---
 
 ## 0. This is a RE-GENESIS, not an upgrade
@@ -60,7 +70,7 @@ at genesis and the rest stay `None`.
 | `palw_context_ladder` | **ARM** | without it the registered class cannot price a wide row; the ladder is the whole point of the 512 registration |
 | `palw_uncertified_weightless` | **ARM, `ForkActivation::always()`** | genesis is the ONLY moment this can be armed — `validate_palw_v2` refuses any other height |
 | `palw_kary_court` | **ARM, `ForkActivation::always()`** | **ADR-0082's, does not exist yet.** Without it the registered row is admitted and UNPROSECUTABLE — see §3. A bare fence: no companion value, no bundle field. `dissection_arity` stays 2 on every preset and the fence overrides it with the derived arity. |
-| `palw_prompt_ids_merkle` | `None` — **and it cannot be armed** | ADR-0082's. Not needed at the registered width: flat ids are 82,080 against a budget of 83,333. It becomes REQUIRED above about n_ctx 1,024 — but as of FD it is no longer a fence anyone may arm at that point: **`validate_palw_v2` REFUSES a ruleset that arms it** (`config/params.rs:2310`), because the commitment form it selects does not ship. Registering a wider row is therefore blocked on implementing the form, not on flipping the fence. |
+| `palw_prompt_ids_merkle` | `None` — **and it cannot be armed** | ADR-0082's. Not needed at the registered width: flat ids are 82,080 against a budget of 83,333. It becomes REQUIRED above about n_ctx 1,024 — but as of FD it is no longer a fence anyone may arm at that point: **`validate_palw_v2` REFUSES a ruleset that arms it** (`config/params.rs:1595`, on impl; 2310 is only the doc comment about it), because the commitment form it selects does not ship. Registering a wider row is therefore blocked on implementing the form, not on flipping the fence. |
 | `palw_fp_decode_rules` | `None` | ADR-0082 stream H's (decode leaves earn, seeded argmax). Not a prosecutability condition and not on the acceptance path; deferred so the cut arms only what it must. |
 | the other nine | `None` | nothing in this cut needs them; a fence armed without a shipping thing to obey it is the ADR-0065 D1 mistake |
 
@@ -535,6 +545,7 @@ green except the known pin" said this week was a statement about jobs that never
 | derive | `cargo test -p misaka-palw-derive` | **NOT `--lib`** — `--lib` builds no binaries, `palw-evm-runner` is absent, and ADR-0079's confinement gate refuses rather than falling back in-process. Those seven reds are the gate HOLDING. |
 | cli | `cargo test -p misaka-cli` | 73/0 |
 | artifact selftest | `scripts/misaka-palw-artifact-conformance.py selftest` | five damaged artifacts, each refused BY NAME — a test on the exit code alone would call four-of-five a pass |
+| doc citations | `scripts/check-doc-citations.sh docs/testnet11-relaunch-5f-genesis-card.md <merged-tree>` | every `file.rs:NNNN` in this card, resolved against the tree it claims. A REPORT, not a verdict — it exits non-zero only on a missing file or line, so the lines have to be read. |
 | stranger | `scripts/misaka-palw-derive-stranger.py selftest` | recomputes the bytes in Python, independently of the Rust. **RED right now, and correctly so — read its two halves separately** (below). |
 | third party | `scripts/misaka-palw-artifact-thirdparty.py --require` | mido / pygltflib / numpy-stl; compares MEANING (enclosed volume, playback duration) against the DSL |
 | model gate, dense | `palw-model-gate` | A16 lane only — declared in advance |
