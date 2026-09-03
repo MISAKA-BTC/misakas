@@ -591,7 +591,8 @@ Every guard that could catch the second one is looking somewhere else:
 | guard | what it actually covers |
 |---|---|
 | `every_genesis_commits_to_the_premine_this_build_mints` | **`utxo_commitment` only** — and it DOES name `PALW_RC_GENESIS` (`genesis.rs:469`). Goes green on a commitment-only paste. |
-| `config::premine::tests::print_premine_commitment` — the ceremony tool the card names | prints `*_PREMINE_UTXO_COMMITMENT` and `*.utxo_commitment` lines. **Never a genesis hash.** |
+| `config::premine::tests::print_premine_commitment` — the printer the FAILURE MESSAGE names | printed `*_PREMINE_UTXO_COMMITMENT` and `*.utxo_commitment` lines. **Never a genesis hash.** Fixed at `68f0a1b6`. |
+| `repin::print_repinned_rc_genesis` — the printer the RUNBOOK names | **always printed both**: it assigns the new commitment into `params.genesis` and *then* derives the header, so `REPIN hash` is the hash the new commitment implies. Never had the gap. |
 | `test_genesis_hashes` — the test that recomputes each genesis' own hash | iterates `[GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS, SIMNET_GENESIS, DEVNET_GENESIS]` (`genesis.rs:499`). **`PALW_RC_GENESIS` is not in that list.** |
 
 **The precise shape is worse than "an unchecked constant", and the difference matters.**
@@ -636,9 +637,20 @@ genesis object moves — FG's v5 registration will move it — so a hash printed
 hash for a genesis nobody ships. Run `config::premine::tests::print_premine_commitment` on the
 frozen tree and paste what it prints, both lines.
 
-*The card said this re-pin was safe because a ceremony tool did it rather than a hand edit. The
-ceremony tool did not print the value. The tool prints it now — which is the repair the reassurance
-was always describing.*
+**There are TWO ceremony printers, and the defect was which one the failure message pointed at.**
+`repin::print_repinned_rc_genesis` (kaspa-consensus, named by the runbook) has always printed both
+values, correctly — it substitutes the new commitment into `params.genesis` before deriving the
+header. `print_premine_commitment` (kaspa-consensus-core, named by the *test failure message*)
+printed commitments only, until `68f0a1b6`.
+
+So an operator following the **runbook** was safe; one following the **failure message the first
+gate prints at them** was not. That is the live-site-versus-search-order defect exactly: the message
+wrote an address, and the tool at that address was the incomplete one. Both print both now, and both
+derive the hash the same way, so they cannot disagree.
+
+*I first recorded this as "the ceremony tool does not print the value", which was true of one of two
+tools. Corrected after reading the runbook's printer in full rather than a grep of selected lines
+from it — the assignment that made it correct was on a line my pattern did not match.*
 
 ### The re-pin list is SEVEN items and only FOUR have a red test — here is where the other three went
 
