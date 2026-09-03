@@ -290,6 +290,39 @@ thing done before the cut and it is done ONCE.
 | `PALW_RC_COURT_E2E_ROOT_BYTES` | `consensus/core/src/palw_e2e_adjudicability.rs` | here, **FIRST** — see the ordering below |
 | state version 18 → 19, ADR-0043 goldens | `palw-adr0082-impl` | 5b, on that branch |
 
+### The certified-set root is regenerated TWICE, and that is correct
+
+It is not a freeze-time chore. With the covering type change in, **no node can register a class at
+all**: the registration pricing path compares the supplied certified set against the network's
+commitment before it prices anything, so a stale root stops an acceptance drill at stage 2 and
+nothing downstream can be measured. Found by running a chain, not by a suite.
+
+    now, on the owning branch    provisional, tree sha in the commit message, so the drill can measure
+    at the freeze, here          once, from the final tree
+
+**The pair is a measurement of the interval between them.** If the freeze's value matches the
+provisional one, nothing that landed in between touched a family digest; if it differs, the
+difference names exactly what did. Two regenerations handle staleness better than one at a moment
+nobody can identify in advance — and there is no re-pin hazard here, because the hazard in a re-pin
+is JUDGEMENT and a derived value carries none.
+
+**The regeneration must come from the DRILL, not from the profile.** Writing
+`drilled_kernel_ids = profile.reachable_kernel_ids_v1()` would compile, would be green, and would be
+a set that was typed rather than drilled — the exact defect the field exists to close. If the two
+turn out equal, that is a result to be observed, not a shortcut to be taken.
+
+### The tell for "is this a chain change?"
+
+**A change that moves a value the chain commits to is a chain change, and its cost is measured on a
+chain.** But the useful half is the tell, because knowing the rule did not prevent this one:
+
+> **It is not "did something move". It is "does anything OUTSIDE this crate compare it to
+> something".**
+
+The value that moved was nameable — `palw_court_e2e_root_v1` — and the cost was still reported in
+tests, because the comparison that makes it expensive lives in the registration pricing path against
+a genesis commitment, and one side of that comparison is a chain. No suite can hold it.
+
 **The e2e root is re-pinned BEFORE the fingerprint, because it is INSIDE it.** `consensus_params_id`
 reads the pinned `PALW_RC_COURT_E2E_ROOT_BYTES`, so re-pinning the fingerprint first produces a
 value computed from a stale root — correct-looking, self-consistent, and wrong. Order: e2e root,
