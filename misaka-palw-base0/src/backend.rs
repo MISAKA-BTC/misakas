@@ -185,8 +185,10 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
         let mut cache = match start {
             crate::fp_interval::Base0FpIntervalStartV1::Genesis { .. } => KvCache::new(self.artifact),
             crate::fp_interval::Base0FpIntervalStartV1::Checkpoint { covered_decode_call, chunks, .. } => {
-                let positions = kaspa_consensus_core::palw_state_chunk_map::integer_kv_positions_at_v1(ctx, *covered_decode_call);
-                let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions).map_err(|e| format!("{e:?}"))?;
+                // The one spelling of a checkpoint's geometry at its counter, cadence-aware (a
+                // per-call class reads `covered` as a call, a per-position class as positions).
+                let geometry =
+                    crate::legs::base0_checkpoint_geometry_at_v1(profile, ctx, *covered_decode_call).map_err(|e| format!("{e:?}"))?;
                 KvCache::from_state_chunks(self.artifact, &geometry, chunks).map_err(|e| format!("{e:?}"))?
             }
         };

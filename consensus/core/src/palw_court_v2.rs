@@ -1151,10 +1151,13 @@ pub fn palw_attn_dispute_site_v2(
         .ok_or(PalwCourtV2Error::FusedGeometryUnservable("the head's cache slice overflows the row"))?;
     let kv_dim = kv_heads.checked_mul(d_head).ok_or(PalwCourtV2Error::FusedGeometryUnservable("the cache row overflows"))?;
 
-    // The history at this coordinate, from the SAME rule the canonical enumeration walks:
-    // position + 1 inside the prefill, prefill + call afterwards.
-    let prefill = u64::from(binding.job_context.declared_prefill_tokens);
-    let history_positions = if coord.call_index == 0 { u64::from(coord.position) + 1 } else { prefill + u64::from(coord.call_index) };
+    // ONE spelling of the absolute position (`palw_absolute_position_v1`): the history a fused
+    // site at this coordinate reads is every position up to and including its own.
+    let history_positions = u64::from(
+        crate::palw_context_ladder::palw_absolute_position_v1(&binding.job_context, coord.call_index, coord.position)
+            .and_then(|p| p.checked_add(1))
+            .ok_or(PalwCourtV2Error::NotACanonicalLeaf(narrowed_leaf))?,
+    );
     let history_positions =
         u32::try_from(history_positions).map_err(|_| PalwCourtV2Error::FusedGeometryUnservable("the history is wider than a u32"))?;
     if history_positions == 0 {
@@ -1180,20 +1183,100 @@ pub fn palw_attn_dispute_site_v2(
     // **The court's tile is the CLASS's**, at the disputed history — the same `min(tile, positions)`
     // the tiled map derives, so a checkpoint chunk and a dissection child are the same span by
     // construction rather than by a shared constant two files spell separately.
-    let court_geometry = crate::palw_state_chunk_map::tiled_kv_state_geometry_v3(profile, history_positions)
-        .map_err(|e| PalwCourtV2Error::TiledGeometryUnavailable { positions: history_positions, why: e.to_string() })?;
-    let tile_positions = court_geometry.positions_per_chunk;
+    // The court's tile is the CLASS's map's tile, not the tiled map's assumed: a fused class that
+    // registered a map addressing no attention cache is refused by name rather than dissected at
+    // a tile its map cannot open.
+    let tile_positions = u32::try_from(history_positions)
+        .ok()
+        .and_then(|positions| crate::palw_state_chunk_map::palw_map_history_tile_positions_v1(profile, positions))
+        .ok_or(PalwCourtV2Error::FusedGeometryUnservable("this class's map addresses no attention cache"))?;
 
     // The anchor's layout, only when one is in evidence. `anchor_positions` is the checkpoint's
     // own coverage; a geometry that described a different history would let a chunk index point
     // at another position's rows, and `verified_anchor_v1` refuses exactly that mismatch.
+    // **The rotated-query node, and where this head's slice lives in its committed row** (audit
+    // A C-3 / E C-3). The fused node's first input ref IS the query row (the fusion writes
+    // `nodes[i].input_refs[0]` there, and the projection test asserts it), so the slot, the tile
+    // and the offset inside that tile are all facts of the CLASS. Without them the bottom read
+    // any committed `d_head`-wide leaf as the query: another head's row, another position's.
+    let q_ref = *node.input_refs.first().ok_or(PalwCourtV2Error::FusedGeometryUnservable("a fused node with no query input"))?;
+    if q_ref >= crate::palw_step::PALW_STEP_INPUT_SENTINEL_MIN {
+        return Err(PalwCourtV2Error::FusedGeometryUnservable("the fused node's query input is a sentinel, not a committed row"));
+    }
+    let layer_index =
+        layer.ok_or(PalwCourtV2Error::FusedGeometryUnservable("a fused site outside a layer table has no cache layer"))?;
+    let table = profile.layer_table(layer_index);
+    let q_node = table
+        .get(q_ref as usize)
+        .ok_or(PalwCourtV2Error::FusedGeometryUnservable("the fused node's query input names no node of this layer"))?;
+    let query_slot = profile
+        .global_node_slot(crate::palw_step::PalwStepTableV1::Attn, layer_index, q_ref as usize)
+        .ok_or(PalwCourtV2Error::FusedGeometryUnservable("the query node has no global slot"))?;
+    let crate::palw_step::PalwStepOutLenV1::Fixed { elements: q_row_len } = q_node.out_len else {
+        return Err(PalwCourtV2Error::FusedGeometryUnservable(
+            "the query row is context-shaped; a graph-v5 class commits no such row",
+        ));
+    };
+    let q_tile_len = u64::from(q_node.tile_len);
+    if q_tile_len == 0 || u64::from(q_row_len) < row {
+        return Err(PalwCourtV2Error::FusedGeometryUnservable("the query row is narrower than the heads it must supply"));
+    }
+    let q_lane = head.checked_mul(d_head).ok_or(PalwCourtV2Error::FusedGeometryUnservable("the head's query offset overflows"))?;
+    let query_tile_index = q_lane / q_tile_len;
+    let query_lane_offset = q_lane % q_tile_len;
+    let query_tile_lanes = q_tile_len.min(u64::from(q_row_len) - query_tile_index * q_tile_len);
+    // **One opening, one head.** A tile narrower than `d_head` — or a head straddling two tiles —
+    // makes the head's query slice several openings, which this bottom cannot carry: refused by
+    // name here rather than surfacing as a width mismatch at the first dispute (the shape is a
+    // property of the registered class, so the admission gate should refuse it too — patch note).
+    if query_lane_offset + d_head > query_tile_lanes {
+        return Err(PalwCourtV2Error::FusedGeometryUnservable(
+            "the head's query slice is not inside one tile of the rotated-query row: a bottom carries one query opening",
+        ));
+    }
+
+    // **The nodes that WRITE the two caches**, by the role the graph declares — the same
+    // resolution `palw_step_refute` gives the `KV_K` / `KV_V` input sentinels. Exactly one node
+    // may hold each role; two would make "the K cache" ambiguous and a court that had to choose
+    // would be choosing the evidence.
+    let by_role = |want: crate::palw_step::PalwStepNodeRoleV1| -> Option<(u32, u32)> {
+        let mut found = table.iter().enumerate().filter(|(_, n)| n.role == want);
+        let (idx, n) = found.next()?;
+        if found.next().is_some() {
+            return None;
+        }
+        profile.global_node_slot(crate::palw_step::PalwStepTableV1::Attn, layer_index, idx).map(|slot| (slot, n.tile_len))
+    };
+    let k_writer = by_role(crate::palw_step::PalwStepNodeRoleV1::KCacheWrite);
+    let v_writer = by_role(crate::palw_step::PalwStepNodeRoleV1::VCacheWrite);
+    // The two writers must tile alike or their leaves are not the same kind of row; the court
+    // reads one width, and a class whose two series disagree about it has no cache-write route.
+    let kv_tile_lanes = match (k_writer, v_writer) {
+        (Some((_, kt)), Some((_, vt))) if kt == vt => kt as usize,
+        _ => 0,
+    };
+
+    // **Which checkpoint this step's evidence must anchor at** — the one rule for it, asked here
+    // and refused at the bottom by name.
+    let anchor_covered = crate::palw_context_ladder::palw_checkpoint_covered_for_step_v1(
+        profile,
+        &binding.job_context,
+        coord.call_index,
+        coord.position,
+    );
+
     let (anchor_geometry, anchor_positions) = match anchor {
         None => (None, 0),
-        Some(anchor) => {
+        Some(_) => {
             // Only the pure attention map enumerates chunks the way the bottom reads them. A
             // hybrid's composed map interleaves recurrence chunks, so its indices are not this
             // enumeration's — refused by name rather than read through the wrong layout.
-            if profile.state_chunk_map_id != crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3() {
+            // The composed hybrid map's attention slice IS the tiled map's enumeration, at chunk
+            // indices `0..attn.chunk_count()`; its recurrence chunks follow and this bottom never
+            // reads them — so the v5 hybrid row carries a dissection anchor like the dense one.
+            if profile.state_chunk_map_id != crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3()
+                && profile.state_chunk_map_id != crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3()
+            {
                 return Err(PalwCourtV2Error::NotTheTiledMap);
             }
             // **At the cadence the CLASS's map runs** (ADR-0082 Decision 4, amended). On a
@@ -1202,11 +1285,16 @@ pub fn palw_attn_dispute_site_v2(
             // it through the per-call rule would describe a history `prefill` rows longer than the
             // checkpoint holds — a chunk index pointing at another position's rows, which is the
             // mismatch `verified_anchor_v1` exists to refuse.
-            let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(
-                profile,
-                &binding.job_context,
-                anchor.leaf.covered_decode_call,
-            );
+            // **From the DERIVED anchor, never from the one in evidence** (ADR-0082 Decision 4;
+            // audit A C-4). Reading the coverage off the supplied leaf made the geometry a
+            // function of the challenger's choice — every anchor "described" its own history, so
+            // the shape checks below could never disagree with it. The anchor a step's evidence
+            // must carry is `palw_checkpoint_covered_for_step_v1`, exactly, and the bottom refuses
+            // any other by name (`WrongAnchor`).
+            let covered = anchor_covered.ok_or(PalwCourtV2Error::FusedGeometryUnservable(
+                "no checkpoint of this class covers the disputed position, so a checkpoint-route bottom has no anchor",
+            ))?;
+            let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, &binding.job_context, covered);
             let geometry = crate::palw_state_chunk_map::tiled_kv_state_geometry_v3(profile, positions)
                 .map_err(|e| PalwCourtV2Error::TiledGeometryUnavailable { positions, why: e.to_string() })?;
             (Some(geometry), positions)
@@ -1214,14 +1302,24 @@ pub fn palw_attn_dispute_site_v2(
     };
 
     let as_u16 = |v: u64, what: &'static str| u16::try_from(v).map_err(|_| PalwCourtV2Error::FusedGeometryUnservable(what));
+    let as_u32 = |v: u64, what: &'static str| u32::try_from(v).map_err(|_| PalwCourtV2Error::FusedGeometryUnservable(what));
     Ok(PalwAttnDisputeSiteV2 {
         site: crate::palw_attn_court_v1::PalwAttnBottomSiteV1 {
             params,
             kv_dim: kv_dim as usize,
             kv_off: kv_off as usize,
             d_head: d_head as usize,
-            attn_layer: layer
-                .ok_or(PalwCourtV2Error::FusedGeometryUnservable("a fused site outside a layer table has no cache layer"))?,
+            attn_layer: layer_index,
+            disputed: coord,
+            prefill_positions: binding.job_context.declared_prefill_tokens,
+            query_slot,
+            query_tile_index: as_u32(query_tile_index, "the query tile index")?,
+            query_tile_lanes: query_tile_lanes as usize,
+            query_lane_offset: query_lane_offset as usize,
+            k_slot: k_writer.map(|(slot, _)| slot),
+            v_slot: v_writer.map(|(slot, _)| slot),
+            kv_tile_lanes,
+            anchor_covered_decode_call: anchor_covered,
             anchor_geometry,
             anchor_positions,
             // **Read from the class, never from the wire** (ADR-0082 Decision 4, amended). A class

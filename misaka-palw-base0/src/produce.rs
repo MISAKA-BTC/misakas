@@ -335,6 +335,13 @@ pub fn base0_execute_for_attempt_streaming_capped_v1(
             rows.retain(|r| r.table != PalwStepTableV1::Post);
         }
         capture.push_call(profile, ctx, 0, p as u32, &rows).map_err(ProduceError::Leg)?;
+        // **The prefill arm the other two producers have** (ADR-0082 Decision 4, amended; audit
+        // B, M-1). `false` at every prefill position on the floor's own per-call map — and the
+        // moment any class routed through here registers a tiled one, this is where its
+        // checkpoints come from instead of nowhere.
+        if checkpoints.wants_checkpoint_after_v1(0, p as u32) {
+            checkpoints.push(&cache).map_err(ProduceError::Leg)?;
+        }
         last_logits = logits;
     }
     let mut next = argmax_lowest(&last_logits);
@@ -354,15 +361,20 @@ pub fn base0_execute_for_attempt_streaming_capped_v1(
         generated.push(next as u32);
         on_token(next as u32);
         logits_rows.push(logits);
-        // A checkpoint after this call if the cadence says so. `call` IS the covered decode call —
-        // the cache now holds `prefill + call` positions, which is what the map derives for it.
-        if call as u32 == checkpoints.next_covered_decode_call() {
+        // A checkpoint after this call if the cadence says so — the capture's OWN predicate, not a
+        // second spelling of the per-call rule (audit B, M-1). `call == next_covered_decode_call()`
+        // is that rule written out, and under a tiled map `next_covered_decode_call()` returns a
+        // POSITION: the test would then fire at the wrong coordinates and never during the prefill.
+        if checkpoints.wants_checkpoint_after_v1(call as u32, 0) {
             checkpoints.push(&cache).map_err(ProduceError::Leg)?;
         }
     }
 
-    let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
-    let checkpoints = checkpoints.finish(decode_calls / checkpoint_profile.checkpoint_interval).map_err(ProduceError::Leg)?;
+    // **Sealed at the count the CLASS's cadence says the job has** (audit B, M-1).
+    // `finish_canonical_v1` exists precisely to remove the `decode_calls / interval` spelling from
+    // the producers; the floor was the last one still carrying it, and it is the same number on
+    // the map the floor registers.
+    let checkpoints = checkpoints.finish_canonical_v1().map_err(ProduceError::Leg)?;
     let tiles = capture.finish().map_err(ProduceError::Leg)?;
     let trace_root = base0_logits_trace_root_v1(ctx, &logits_rows, &generated);
     let activation_leg_root = base0_activation_leg_root_v1(ctx);
@@ -488,9 +500,17 @@ pub const PALW_BASE0_FP_MATERIAL_VERSION_V2: u16 = 2;
 ///   cannot re-derive its own execution can answer no court move. 4 bytes a token, against the
 ///   ~50 MB a position the tiles were.
 /// * `checkpoint_chunks` — the cache at each committed checkpoint, in map order. **The one term
-///   that still grows with the job**, and the one Decision 4 addresses (the attention cache is
-///   prefix-stable, so a family may retain it once); that is not this unit's change and is named
-///   in the report rather than half-made here.
+///   that still grows with the job**, and the one Decision 4 addresses: on a class whose map
+///   addresses history tiles this is EMPTY, because retaining a chunk per position is `Θ(n²)`
+///   (13.5 GB on a 4,096-position dense job) and the cache is prefix-stable, so the executor keeps
+///   the cache once and re-derives any checkpoint's chunks from it.
+/// * `checkpoint_leaves` — the leg's own leaves, which is what the fold retains INSTEAD of that
+///   state (`Base0CheckpointRetentionV1::Fold`: "the leaves and their hashes, and NOT one byte of
+///   state"). A leaf is 140 bytes and a chunk set is the whole cache, so this is the term that
+///   makes the per-position cadence affordable: a seat re-derives the leg from them
+///   (`Base0CheckpointCaptureV1::from_leaves_v1`) and compares its root to the binding's, and the
+///   one thing leaves cannot decide — whether `state_chunks_root` is the root of a state the job
+///   reaches — is arithmetic, which is what Decision 9 has the seat recompute for itself.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct Base0FpMaterialV2 {
     pub version: u16,
@@ -500,6 +520,7 @@ pub struct Base0FpMaterialV2 {
     pub generated_token_ids: Vec<u32>,
     pub prompt_token_ids: Vec<u32>,
     pub checkpoint_chunks: Vec<Vec<Vec<u8>>>,
+    pub checkpoint_leaves: Vec<kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2>,
 }
 
 /// Encode a FOLDED run's retention. Refuses a dense one by name: two encodings of one commitment
@@ -524,6 +545,7 @@ pub fn base0_fp_material_encode_v2(run: &Base0ExecutionV1, prompt_token_ids: &[u
         generated_token_ids: run.generated_token_ids.clone(),
         prompt_token_ids: prompt_token_ids.to_vec(),
         checkpoint_chunks: run.checkpoints.chunks.clone(),
+        checkpoint_leaves: run.checkpoints.leaves.clone(),
     };
     let body = borsh::to_vec(&material).map_err(|_| ProduceError::Internal("the execution material is not serializable"))?;
     let mut out = Vec::with_capacity(body.len() + PALW_BASE0_FP_MATERIAL_MAGIC_V2.len());
@@ -623,6 +645,7 @@ pub fn base0_fp_material_matches_claim_v2(
         &material.logits_rows,
         &material.generated_token_ids,
         &material.checkpoint_chunks,
+        &material.checkpoint_leaves,
         committed_execution_root,
         committed_trace_root,
     )
@@ -863,18 +886,16 @@ pub fn base0_replay_from_checkpoint_capped_v1(
     calls: u32,
     step_ladder_cap: u64,
 ) -> Result<Base0CheckpointReplayV1, ProduceError> {
-    use kaspa_consensus_core::palw_state_chunk_map as map;
     let prefill = ctx.declared_prefill_tokens;
     let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
     let covered = checkpoint.covered_decode_call;
     if covered > decode_calls || calls == 0 || covered.saturating_add(calls) > decode_calls {
         return Err(ProduceError::Internal("the replay window is not inside this job's decode calls"));
     }
-    let positions = map::integer_kv_positions_at_v1(ctx, covered);
-    // **The map the CLASS declares, not the one this function knew first** — see
-    // `crate::legs::base0_state_chunk_geometry_v1`. Chunking at capture and un-chunking at replay
-    // are one decision; they were two, and the second one ignored the class.
-    let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions).map_err(ProduceError::Leg)?;
+    // **The map the CLASS declares, at the cadence the CLASS counts in** — see
+    // `crate::legs::base0_checkpoint_geometry_at_v1`. Chunking at capture and un-chunking at
+    // replay are one decision; they were two, and the second one ignored the class.
+    let geometry = crate::legs::base0_checkpoint_geometry_at_v1(profile, ctx, covered).map_err(ProduceError::Leg)?;
     let mut cache = KvCache::from_state_chunks(artifact, &geometry, chunks).map_err(ProduceError::Engine)?;
 
     let leaf_count = step_leaf_count_capped_v1(profile, ctx, step_ladder_cap).map_err(ProduceError::StepSpace)?;
@@ -975,7 +996,17 @@ pub fn base0_material_matches_claim_v1(
     if root != binding.step_merkle_root {
         return Ok(false);
     }
-    base0_material_tail_matches_v1(binding, logits_rows, generated, checkpoint_chunks, committed_execution_root, committed_trace_root)
+    // The DENSE retention is the per-call one and carries no leaf vector: its leg comes from its
+    // chunks, which is the arm this hands the empty slice to.
+    base0_material_tail_matches_v1(
+        binding,
+        logits_rows,
+        generated,
+        checkpoint_chunks,
+        &[],
+        committed_execution_root,
+        committed_trace_root,
+    )
 }
 
 /// **Everything a retained material must reproduce that is not the step leg**: the logits trace
@@ -990,6 +1021,7 @@ pub fn base0_material_tail_matches_v1(
     logits_rows: &[Vec<i32>],
     generated: &[u32],
     checkpoint_chunks: &[Vec<Vec<u8>>],
+    checkpoint_leaves: &[kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2],
     committed_execution_root: Hash64,
     committed_trace_root: Hash64,
 ) -> Result<bool, ProduceError> {
@@ -1029,12 +1061,44 @@ pub fn base0_material_tail_matches_v1(
     // Without this the checkpoint leg was unchecked material: a seat signed `Valid` over a claim
     // whose checkpoints it had never reproduced, and the first thing to notice would have been a
     // court that could not open one.
-    let Ok(rebuilt) = crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(
-        &binding.job_context,
-        &binding.shape_profile,
-        &binding.checkpoint_profile,
-        checkpoint_chunks,
-    ) else {
+    //
+    // **From WHICH bytes is the cadence's question, not the caller's** (ADR-0082 Decision 4,
+    // amended; audit B, C-1). A per-call class retains its chunks and the leg is rebuilt from
+    // them, exactly as before — no shipped material changes shape. A per-position class retains
+    // NONE: a chunk per position is `Θ(n²)` and the cache is prefix-stable, so what it keeps is
+    // the leg's leaves, and the leg is rebuilt from those. `from_leaves_v1` applies every
+    // structural rule `palw_step_leg`'s own `checkpoint_fault` recomputes — the index, the
+    // cadence's canonical counter, the chain — so a leaf vector that is not a leg this class could
+    // have filed is refused rather than "rebuilt".
+    //
+    // What the leaves cannot say is that `state_chunks_root` is the root of a state this job
+    // reaches. Nothing served can: it is arithmetic, and a producer that shipped bytes for it
+    // would be shipping its own opinion. Decision 9 puts that question where it can be answered —
+    // the seat's OWN recompute, compared against this same leaf at the interval it draws.
+    let rebuilt = match kaspa_consensus_core::palw_context_ladder::palw_checkpoint_cadence_v1(&binding.shape_profile) {
+        kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1::PerDecodeCall => {
+            crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(
+                &binding.job_context,
+                &binding.shape_profile,
+                &binding.checkpoint_profile,
+                checkpoint_chunks,
+            )
+        }
+        kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1::PerPosition => {
+            // A folded class that nevertheless served state is not this class's retention: the
+            // bytes it would be serving are the history Decision 9 exists to keep off the wire.
+            if !checkpoint_chunks.is_empty() {
+                return Ok(false);
+            }
+            crate::legs::Base0CheckpointCaptureV1::from_leaves_v1(
+                &binding.job_context,
+                &binding.shape_profile,
+                &binding.checkpoint_profile,
+                checkpoint_leaves,
+            )
+        }
+    };
+    let Ok(rebuilt) = rebuilt else {
         return Ok(false);
     };
     if rebuilt.merkle_root != binding.checkpoint_merkle_root || rebuilt.leaf_hashes.len() as u32 != binding.checkpoint_count {
@@ -1440,6 +1504,7 @@ mod tests {
             leaf_hashes: run.checkpoints.leaf_hashes.clone(),
             merkle_root: run.checkpoints.merkle_root,
             chunks: run.checkpoints.chunks.clone(),
+            bytes_serialised: run.checkpoints.bytes_serialised,
         };
         thinned.leaves.remove(0);
         thinned.leaf_hashes.remove(0);

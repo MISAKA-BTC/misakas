@@ -919,6 +919,16 @@ impl Qwen25A16Backend {
 /// loop — and this supplies only what the family owns: restoring the cache the interval resumes
 /// from and running one forward call, through the SAME plan-or-traced dispatch the capture uses.
 /// A replay that took the other arm would recompute rows the capture never committed.
+/// The dense tier's interval kernels, for tests in sibling modules that need to replay an interval
+/// the way this backend does. Not a second implementation — the same struct the backend uses.
+#[cfg(test)]
+pub(crate) fn a16_interval_kernels_for_tests_v1<'a>(
+    artifact: &'a Base0ArtifactV1,
+    plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
+) -> impl crate::fp_interval::Base0FpIntervalKernelsV1 + 'a {
+    A16IntervalKernels { artifact, plan }
+}
+
 struct A16IntervalKernels<'a> {
     artifact: &'a Base0ArtifactV1,
     plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
@@ -939,8 +949,8 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
         let mut cache = match start {
             crate::fp_interval::Base0FpIntervalStartV1::Genesis { .. } => A16Cache::new(layers),
             crate::fp_interval::Base0FpIntervalStartV1::Checkpoint { covered_decode_call, chunks, .. } => {
-                let positions = kaspa_consensus_core::palw_state_chunk_map::integer_kv_positions_at_v1(ctx, *covered_decode_call);
-                let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions).map_err(|e| format!("{e:?}"))?;
+                let geometry =
+                    crate::legs::base0_checkpoint_geometry_at_v1(profile, ctx, *covered_decode_call).map_err(|e| format!("{e:?}"))?;
                 A16Cache::from_state_chunks_v1(layers, row_elements, &geometry, chunks).map_err(|e| format!("{e:?}"))?
             }
         };
@@ -1357,7 +1367,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
         prompt_token_ids: &[u32],
         output_token_ids: &[u32],
-        decode_calls: u32,
+        covered: u32,
     ) -> Result<Hash64, String> {
         use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
         self.artifact_read_probe_v1()?;
@@ -1388,11 +1398,25 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             &ctx,
             prompt_token_ids,
             output_token_ids,
-            decode_calls,
+            covered,
             &mut kernels,
         )
         .map(|state| state.state_chunks_root)
         .map_err(|e| e.to_string())
+    }
+
+    /// **The largest `covered` this class's leg carries, in the class's own cadence unit**
+    /// (audit B, C-2). Per decode call: `decode_calls`, the seam's default. Per position:
+    /// `prefill + decode_calls`, every row the cache ever holds — the count
+    /// `palw_checkpoint_count_v1` derives for the leg, whose last leaf is
+    /// `palw_checkpoint_covered_at_index_v1(count - 1)` and therefore that number.
+    fn fp_checkpoint_covered_bound_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3) -> u32 {
+        use kaspa_consensus_core::palw_context_ladder::{PalwCheckpointCadenceV1, palw_checkpoint_cadence_v1};
+        let decode_calls = job.decode_token_limit.saturating_sub(1);
+        match palw_checkpoint_cadence_v1(&self.profile) {
+            PalwCheckpointCadenceV1::PerDecodeCall => decode_calls,
+            PalwCheckpointCadenceV1::PerPosition => job.prompt_tokens.saturating_add(decode_calls),
+        }
     }
 
     fn operand_openings_for(

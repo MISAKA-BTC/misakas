@@ -516,8 +516,13 @@ pub struct Base0CheckpointsV1 {
     /// Per checkpoint, its chunk bytes in map order.
     ///
     /// Retained for exactly the reason the step tiles are: a producer that discarded them could not
-    /// answer a checkpoint challenge and would lose its bond by default.
+    /// answer a checkpoint challenge and would lose its bond by default. EMPTY under the
+    /// per-position cadence, whose retention is the leaves (`Base0CheckpointRetentionV1::Fold`).
     pub chunks: Vec<Vec<Vec<u8>>>,
+    /// **Payload bytes this capture actually serialised**, over every push — the H-3 measurement,
+    /// carried onto the finished leg so a test can read it without holding the capture. Not a
+    /// consensus quantity and not in any hash.
+    pub bytes_serialised: u64,
 }
 
 /// **The state layout the CLASS declares, at `positions`** — the one dispatch on
@@ -567,6 +572,140 @@ pub fn base0_state_chunk_geometry_v1(
     geometry.map_err(LegError::CheckpointStateMap)
 }
 
+/// **The cache layout the checkpoint carrying `covered` was chunked at** (audit B, C-2).
+///
+/// The one spelling of "un-chunk what that checkpoint chunked", which four replay sites were each
+/// writing as `integer_kv_state_geometry_*(profile, integer_kv_positions_at_v1(ctx, covered))` —
+/// the PER-CALL conversion. Under the per-position cadence `covered` already IS the row count, so
+/// that spelling asks for `prefill + covered` rows, `from_state_chunks_v1` is handed chunks for a
+/// shorter state, and an honest seat's replay refuses an honest producer.
+///
+/// Chunking at capture and un-chunking at replay are one decision; deriving it here is what keeps
+/// them one.
+pub fn base0_checkpoint_geometry_at_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    covered: u32,
+) -> Result<kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1, LegError> {
+    let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, ctx, covered);
+    base0_state_chunk_geometry_v1(profile, positions)
+}
+
+/// **The layout ONE checkpoint of this class is taken under** — the attention cache alone, or the
+/// whole composition a hybrid's map names (ADR-0082 Decision 4; audit B, H-1).
+///
+/// [`base0_state_chunk_geometry_v1`] answers about the CACHE half and is what the seat's A16
+/// kernels and the court's row reads take. A hybrid's registered map is not the cache half: its
+/// name is `palw-hybrid-state/attn=…/gdn=…/v3`, and a producer that enumerated only the `attn=`
+/// part would commit `attn.chunk_count()` chunks under a root the seat rebuilds over
+/// `attn + gdn` — a `CheckpointRootMismatch` against an honest producer, and a recurrence
+/// committed by nobody and adjudicable by nobody. One enumeration, here, for both directions.
+pub enum Base0CaptureGeometryV1 {
+    /// A class whose checkpoint is the attention cache (or the recurrence's own standalone map).
+    Flat(kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1),
+    /// A class whose checkpoint is the composition, in the order its map's NAME spells.
+    Hybrid(kaspa_consensus_core::palw_state_chunk_map::PalwHybridStateGeometryV1),
+}
+
+impl Base0CaptureGeometryV1 {
+    /// Chunks this checkpoint has, under the class's own map.
+    pub fn chunk_count(&self) -> u64 {
+        match self {
+            Self::Flat(g) => g.chunk_count(),
+            Self::Hybrid(g) => g.chunk_count(),
+        }
+    }
+
+    /// The attention half's geometry — the same object either way, so a caller that only reads
+    /// cache rows (`integer_kv_state_locate_v1`) does not have to know which shape it has.
+    pub fn attn(&self) -> &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1 {
+        match self {
+            Self::Flat(g) => g,
+            Self::Hybrid(g) => &g.attn,
+        }
+    }
+
+    /// The entry at `index`, or `None` past the end — [`kaspa_consensus_core::palw_state_chunk_map::hybrid_state_chunk_entry_v3`]
+    /// for the composition and the flat enumeration wrapped in its attention arm otherwise, so one
+    /// walk serves both.
+    pub fn entry(&self, index: u64) -> Option<kaspa_consensus_core::palw_state_chunk_map::PalwHybridChunkEntryV1> {
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+        match self {
+            Self::Flat(g) => map::integer_kv_state_chunk_entry_v1(g, index).map(map::PalwHybridChunkEntryV1::AttentionCache),
+            Self::Hybrid(g) => map::hybrid_state_chunk_entry_v3(g, index),
+        }
+    }
+}
+
+/// **The layout of one checkpoint at `positions`, composition included** — the dispatch every
+/// capture takes, and the twin of [`base0_state_chunk_geometry_v1`] for the classes whose map
+/// names two halves.
+///
+/// The recurrence section is not a caller's choice: `hybrid_state_geometry_for_covered_v1` asks
+/// `palw_checkpoint_leaf_carries_recurrence_v1` whether THIS checkpoint carries it, so a
+/// per-position leg commits the attention tiles at every position and the recurrence at its
+/// derived spacing — the same answer the seat's `Qwen36RecomputeKernelsV1::state_chunks` gets from
+/// the same function.
+pub fn base0_capture_geometry_v1(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+) -> Result<Base0CaptureGeometryV1, LegError> {
+    use kaspa_consensus_core::palw_state_chunk_map as map;
+    if profile.state_chunk_map_id == map::hybrid_state_chunk_map_id_v3() {
+        return map::hybrid_state_geometry_for_covered_v1(profile, positions)
+            .map(Base0CaptureGeometryV1::Hybrid)
+            .map_err(LegError::CheckpointStateMap);
+    }
+    base0_state_chunk_geometry_v1(profile, positions).map(Base0CaptureGeometryV1::Flat)
+}
+
+/// **The one walk of a class's checkpoint layout** — producer and seat (audit B, H-1).
+///
+/// `attn` serializes one attention-cache entry out of whatever cache the caller holds;
+/// `gdn_chunks` are the recurrence's chunks in its own map's order, consumed in the order the
+/// composition enumerates them. The enumeration is
+/// [`Base0CaptureGeometryV1::entry`] — `hybrid_state_chunk_entry_v3` for a composed map and the
+/// flat one otherwise — so the executor's chunk `i` and the seat's chunk `i` are the same bytes by
+/// construction. Before this there were three spellings: the producer and the court enumerated the
+/// attention half alone and the seat enumerated attention plus recurrence, which is a
+/// `CheckpointRootMismatch` against an honest producer at every checkpoint that carries the
+/// recurrence.
+pub fn base0_composed_state_chunks_v1<F>(
+    geometry: &Base0CaptureGeometryV1,
+    mut attn: F,
+    gdn_chunks: &[Vec<u8>],
+) -> Result<Vec<Vec<u8>>, LegError>
+where
+    F: FnMut(&kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>>,
+{
+    use kaspa_consensus_core::palw_state_chunk_map::PalwHybridChunkEntryV1;
+    let attn_count = geometry.attn().chunk_count();
+    let mut out = Vec::with_capacity(geometry.chunk_count() as usize);
+    for index in 0..geometry.chunk_count() {
+        let entry = geometry.entry(index).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?;
+        let bytes = match entry {
+            PalwHybridChunkEntryV1::AttentionCache(entry) => {
+                attn(&entry).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?
+            }
+            PalwHybridChunkEntryV1::RecurrenceState { byte_len, .. } => {
+                let bytes: Vec<u8> = gdn_chunks
+                    .get((index - attn_count) as usize)
+                    .cloned()
+                    .ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?;
+                // The composition's own length for the slice, checked where the bytes are picked
+                // up rather than two layers later: a recurrence chunk of another width is a leaf
+                // nothing can open at the index the map named.
+                if bytes.len() as u64 != byte_len {
+                    return Err(LegError::CheckpointStateUnavailable { chunk_index: index });
+                }
+                bytes
+            }
+        };
+        out.push(bytes);
+    }
+    Ok(out)
+}
+
 /// **What a finished capture holds on to** (ADR-0082 Decision 4, amended).
 ///
 /// Not a caller's choice — [`Base0CheckpointCaptureV1::new`] derives it from the class's cadence,
@@ -604,6 +743,27 @@ pub struct Base0CheckpointCaptureV1 {
     leaves: Vec<kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2>,
     leaf_hashes: Vec<Hash64>,
     chunks: Vec<Vec<Vec<u8>>>,
+    /// **The previous checkpoint's chunk hashes, and the attention geometry they were taken at**
+    /// (ADR-0082 Decision 4, amended; audit B, H-3).
+    ///
+    /// The fold's economy was a RETENTION economy only: each push re-serialised and re-hashed the
+    /// WHOLE cache, so a per-position leg cost `Σ 2·layers·(p+1)·row` bytes — 7.5 GB on a
+    /// 512-position dense row, 1.9 TB at the ladder's top — on the block-producing path. The
+    /// attention cache is prefix-stable, so a COMPLETE tile's chunk hash is the value it already
+    /// had; only the ragged last tile of each `(kind, layer)` slice moves. Kept here so that
+    /// property is used rather than merely stated.
+    prev_chunk_hashes: Vec<Hash64>,
+    prev_attn: Option<Base0PrevAttnGeometryV1>,
+    bytes_serialised: u64,
+}
+
+/// What the previous push's ATTENTION geometry was, in the three numbers the reuse rule needs.
+#[derive(Clone, Copy, Debug)]
+struct Base0PrevAttnGeometryV1 {
+    positions_per_chunk: u32,
+    chunks_per_slice: u32,
+    positions: u32,
+    layers: usize,
 }
 
 impl Base0CheckpointCaptureV1 {
@@ -632,7 +792,17 @@ impl Base0CheckpointCaptureV1 {
             leaves: Vec::new(),
             leaf_hashes: Vec::new(),
             chunks: Vec::new(),
+            prev_chunk_hashes: Vec::new(),
+            prev_attn: None,
+            bytes_serialised: 0,
         }
+    }
+
+    /// **Bytes this capture has actually SERIALISED**, over every push — the measurement H-3 is
+    /// about, and the number `the_per_position_capture_touches_one_tile_a_position` prints. It
+    /// counts payload handed to the leaf hash, not the tree's own 128-byte nodes.
+    pub fn bytes_serialised_v1(&self) -> u64 {
+        self.bytes_serialised
     }
 
     /// What this capture holds after each push — derived from the class's cadence at construction.
@@ -680,14 +850,7 @@ impl Base0CheckpointCaptureV1 {
     /// cache that is a row short would otherwise be committed as a shorter state, and the shortfall
     /// would look like a job that ran fewer calls.
     pub fn push(&mut self, cache: &crate::engine::KvCache) -> Result<(), LegError> {
-        let geometry = self.next_geometry()?;
-        let mut chunk_bytes = Vec::with_capacity(geometry.chunk_count() as usize);
-        for index in 0..geometry.chunk_count() {
-            let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
-                .ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?;
-            chunk_bytes.push(cache.state_chunk_bytes(&entry).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?);
-        }
-        self.push_chunks(chunk_bytes)
+        self.push_with_v1(|entry| cache.state_chunk_bytes(entry))
     }
 
     /// The map this capture's NEXT checkpoint is taken under — the geometry the CLASS declares,
@@ -697,12 +860,23 @@ impl Base0CheckpointCaptureV1 {
     /// ([`kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1`]), which on
     /// every per-call class is `integer_kv_positions_at_v1` verbatim.
     pub fn next_geometry(&self) -> Result<kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1, LegError> {
-        let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(
+        base0_state_chunk_geometry_v1(&self.profile, self.next_positions_v1())
+    }
+
+    /// The positions the NEXT checkpoint's state covers, at the class's cadence.
+    pub fn next_positions_v1(&self) -> u32 {
+        kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(
             &self.profile,
             &self.ctx,
             self.next_covered_decode_call(),
-        );
-        base0_state_chunk_geometry_v1(&self.profile, positions)
+        )
+    }
+
+    /// **The whole layout of the next checkpoint, composition included** — what `push_chunks`
+    /// prices and validates against, so a hybrid's recurrence half is part of the leaf rather than
+    /// a section the producer enumerated and the seat did not (audit B, H-1).
+    pub fn next_capture_geometry_v1(&self) -> Result<Base0CaptureGeometryV1, LegError> {
+        base0_capture_geometry_v1(&self.profile, self.next_positions_v1())
     }
 
     /// **Take the next checkpoint from a chunk serializer** — the entry both backends use, so
@@ -712,35 +886,136 @@ impl Base0CheckpointCaptureV1 {
     /// `KvCache::state_chunk_bytes`); `None` from it is a state the class's declared map cannot
     /// describe, and the run fails here rather than committing a checkpoint that opens to a state
     /// the producer never held.
-    pub fn push_with_v1<F>(&mut self, mut chunk: F) -> Result<(), LegError>
+    pub fn push_with_v1<F>(&mut self, chunk: F) -> Result<(), LegError>
     where
         F: FnMut(&kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>>,
     {
-        let geometry = self.next_geometry()?;
-        let mut chunk_bytes = Vec::with_capacity(geometry.chunk_count() as usize);
-        for index in 0..geometry.chunk_count() {
-            let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
-                .ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?;
-            chunk_bytes.push(chunk(&entry).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?);
+        self.push_composed_v1(chunk, &[])
+    }
+
+    /// **Take the next checkpoint of a class whose map names TWO halves** (audit B, H-1 and C-3).
+    ///
+    /// `attn` is the cache's own serializer, as in [`Self::push_with_v1`]; `gdn_chunks` are the
+    /// recurrence's chunks in ITS map's order (`base0_gdn_state_chunks_v2`), which the composition
+    /// enumerates after the attention tiles because
+    /// `palw-hybrid-state/attn=…/gdn=…/v3` spells them in that order. The walk is
+    /// `hybrid_state_chunk_entry_v3` itself, so the producer's enumeration IS the seat's
+    /// (`Qwen36RecomputeKernelsV1::state_chunks` walks the same function) rather than a second
+    /// derivation that agrees until it does not.
+    ///
+    /// A checkpoint whose leaf does not carry the recurrence at all (the per-position cadence,
+    /// away from the derived spacing) enumerates zero recurrence chunks and `gdn_chunks` is
+    /// ignored — the section question is `palw_checkpoint_leaf_carries_recurrence_v1`'s and no
+    /// caller answers it.
+    pub fn push_composed_v1<F>(&mut self, mut attn: F, gdn_chunks: &[Vec<u8>]) -> Result<(), LegError>
+    where
+        F: FnMut(&kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>>,
+    {
+        use kaspa_consensus_core::palw_state_chunk_map::PalwHybridChunkEntryV1;
+        let geometry = self.next_capture_geometry_v1()?;
+        let attn_geometry = geometry.attn().clone();
+        let attn_count = attn_geometry.chunk_count();
+        let total = geometry.chunk_count();
+        // A retaining capture needs every chunk's BYTES, so there is nothing to skip; the reuse
+        // exists exactly where the bytes are thrown away, which is the per-position cadence.
+        let retains = self.retention == Base0CheckpointRetentionV1::Chunks;
+        let mut chunk_hashes = Vec::with_capacity(total as usize);
+        let mut kept: Vec<Vec<u8>> = Vec::new();
+        for index in 0..total {
+            if !retains
+                && index < attn_count
+                && let Some(hash) = self.reusable_attn_hash_v1(&attn_geometry, index)
+            {
+                chunk_hashes.push(hash);
+                continue;
+            }
+            let entry = geometry.entry(index).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?;
+            let bytes = match entry {
+                PalwHybridChunkEntryV1::AttentionCache(entry) => {
+                    attn(&entry).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?
+                }
+                PalwHybridChunkEntryV1::RecurrenceState { .. } => gdn_chunks
+                    .get((index - attn_count) as usize)
+                    .cloned()
+                    .ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?,
+            };
+            if bytes.len() as u64 != entry.byte_len() {
+                return Err(LegError::CheckpointStateUnavailable { chunk_index: index });
+            }
+            self.bytes_serialised = self.bytes_serialised.saturating_add(bytes.len() as u64);
+            chunk_hashes.push(kaspa_consensus_core::palw_step_leg::state_chunk_leaf_hash_v1(
+                &self.state_chunk_map_id,
+                index as u32,
+                &bytes,
+            ));
+            if retains {
+                kept.push(bytes);
+            }
         }
-        self.push_chunks(chunk_bytes)
+        self.push_chunk_hashes_v1(chunk_hashes, kept, &attn_geometry)
+    }
+
+    /// **Is chunk `index`'s hash the value it already had?** (audit B, H-3, with M-3's exception.)
+    ///
+    /// True only when the previous push took the attention half at the SAME `positions_per_chunk`
+    /// and this chunk's `(kind, layer, block)` was a COMPLETE tile then. Complete is the load-
+    /// bearing word: the cache is append-only, so a tile whose every position was already written
+    /// holds the same bytes in every later state (`A16Cache::state_chunk_bytes_v1` reads
+    /// `layer[start .. start + count]`), while the ragged last tile of a slice grows by a row.
+    ///
+    /// The `positions_per_chunk` equality is M-3: `tiled_kv_state_geometry_v3` pins the width to
+    /// `min(16, positions)`, so below 16 positions the tile boundaries themselves move with every
+    /// position and NO tile is prefix-stable. That is why the rule is a comparison and not an
+    /// assumption — a memo keyed by chunk index alone would produce a wrong root for every job
+    /// whose prefill starts inside the first tile.
+    fn reusable_attn_hash_v1(
+        &self,
+        geometry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1,
+        index: u64,
+    ) -> Option<Hash64> {
+        let prev = self.prev_attn?;
+        if prev.positions_per_chunk != geometry.positions_per_chunk
+            || prev.layers != geometry.attn_layers.len()
+            || geometry.positions_per_chunk == 0
+        {
+            return None;
+        }
+        let per_kind = geometry.attn_layers.len() as u64 * geometry.chunks_per_slice as u64;
+        let kind = index / per_kind;
+        let within_kind = index % per_kind;
+        let layer_ordinal = within_kind / geometry.chunks_per_slice as u64;
+        let block = within_kind % geometry.chunks_per_slice as u64;
+        // Complete in the PREVIOUS state, which is what makes its bytes final.
+        let covered_then = block.checked_add(1)?.checked_mul(prev.positions_per_chunk as u64)?;
+        if covered_then > prev.positions as u64 || block >= prev.chunks_per_slice as u64 {
+            return None;
+        }
+        // …and the leaf hash binds the chunk INDEX, so a tile whose index moved is a different
+        // leaf even though its bytes did not.
+        let prev_index = kind * (prev.layers as u64 * prev.chunks_per_slice as u64)
+            + layer_ordinal * prev.chunks_per_slice as u64
+            + block;
+        if prev_index != index {
+            return None;
+        }
+        self.prev_chunk_hashes.get(index as usize).copied()
     }
 
     /// **The leaf rule, in one place.** Serializing a cache and re-deriving from served bytes must
     /// produce the same leaf or a producer and a seat would disagree about what was committed, so
     /// both go through here rather than each hashing for itself.
     pub fn push_chunks(&mut self, chunk_bytes: Vec<Vec<u8>>) -> Result<(), LegError> {
-        let geometry = self.next_geometry()?;
+        let geometry = self.next_capture_geometry_v1()?;
         if chunk_bytes.len() as u64 != geometry.chunk_count() {
             return Err(LegError::CheckpointStateUnavailable { chunk_index: chunk_bytes.len() as u64 });
         }
-        let covered_decode_call = self.next_covered_decode_call();
         let mut chunk_hashes = Vec::with_capacity(chunk_bytes.len());
         for (index, bytes) in chunk_bytes.iter().enumerate() {
             // The map's own length for this chunk, checked here: bytes of the wrong length hash to
             // a leaf nothing can open, and a producer that committed one could not answer for it.
-            let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index as u64)
-                .ok_or(LegError::CheckpointStateUnavailable { chunk_index: index as u64 })?;
+            // Through the COMPOSITION's enumeration, so a hybrid's recurrence chunk is priced by
+            // its own head slice and not by an attention tile's width.
+            let entry = geometry.entry(index as u64).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index as u64 })?;
             if bytes.len() as u64 != entry.byte_len() {
                 return Err(LegError::CheckpointStateUnavailable { chunk_index: index as u64 });
             }
@@ -750,6 +1025,33 @@ impl Base0CheckpointCaptureV1 {
                 bytes,
             ));
         }
+        let attn_geometry = geometry.attn().clone();
+        // Every chunk was serialised on this route, so the measurement counts them here too.
+        self.bytes_serialised = self.bytes_serialised.saturating_add(chunk_bytes.iter().map(|b| b.len() as u64).sum::<u64>());
+        let kept = match self.retention {
+            Base0CheckpointRetentionV1::Chunks => chunk_bytes,
+            Base0CheckpointRetentionV1::Fold => Vec::new(),
+        };
+        self.push_chunk_hashes_v1(chunk_hashes, kept, &attn_geometry)
+    }
+
+    /// **The leaf rule itself** — one place, whether the hashes came from bytes just serialised or
+    /// from the previous checkpoint's memo (audit B, H-3). A capture that built its leaf two ways
+    /// would be two producers.
+    ///
+    /// `kept` is the bytes to retain, already empty for a fold: **the fold retains nothing**
+    /// (ADR-0082 Decision 4, amended). The bytes were needed to compute the leaf and are not
+    /// needed again — the cache they came from is prefix-stable, so
+    /// [`base0_checkpoint_chunks_at_v1`] re-derives this checkpoint's chunks from the cache the
+    /// executor is holding anyway. Retaining them would make the per-position cadence quadratic in
+    /// the job's length, which is the one cost this amendment must not have.
+    fn push_chunk_hashes_v1(
+        &mut self,
+        chunk_hashes: Vec<Hash64>,
+        kept: Vec<Vec<u8>>,
+        attn_geometry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1,
+    ) -> Result<(), LegError> {
+        let covered_decode_call = self.next_covered_decode_call();
         let state_chunks_root =
             kaspa_consensus_core::palw_step_leg::state_chunks_root_v1(&chunk_hashes).map_err(|_| LegError::EmptySpace)?;
 
@@ -770,14 +1072,15 @@ impl Base0CheckpointCaptureV1 {
         self.prev = hash;
         self.leaves.push(leaf);
         self.leaf_hashes.push(hash);
-        // **The fold retains nothing** (ADR-0082 Decision 4, amended). The bytes were needed to
-        // compute the leaf and are not needed again: the cache they came from is prefix-stable, so
-        // `base0_checkpoint_chunks_at_v1` re-derives this checkpoint's chunks from the cache the
-        // executor is holding anyway. Retaining them would make the per-position cadence quadratic
-        // in the job's length, which is the one cost this amendment must not have.
-        match self.retention {
-            Base0CheckpointRetentionV1::Chunks => self.chunks.push(chunk_bytes),
-            Base0CheckpointRetentionV1::Fold => drop(chunk_bytes),
+        self.prev_attn = Some(Base0PrevAttnGeometryV1 {
+            positions_per_chunk: attn_geometry.positions_per_chunk,
+            chunks_per_slice: attn_geometry.chunks_per_slice,
+            positions: attn_geometry.positions,
+            layers: attn_geometry.attn_layers.len(),
+        });
+        self.prev_chunk_hashes = chunk_hashes;
+        if !kept.is_empty() {
+            self.chunks.push(kept);
         }
         Ok(())
     }
@@ -807,6 +1110,52 @@ impl Base0CheckpointCaptureV1 {
         capture.finish(count)
     }
 
+    /// **Re-derive the whole leg from its LEAVES alone** — the fold's entry, and the half that
+    /// makes a per-position class checkable without one byte of state (ADR-0082 Decision 4,
+    /// amended; audit B, C-1).
+    ///
+    /// [`Self::from_chunks_v1`] rebuilds a leg from the bytes its leaves are hashes of. A
+    /// per-position class has no such bytes to hand anyone — retaining a chunk per position is the
+    /// `Θ(n²)` term the amendment removes — and it does not need them for THIS question: a leaf is
+    /// `(index, covered, prev, chunk_count, state_chunks_root)`, and whether a vector of leaves is
+    /// the leg the binding committed is decided by chaining and hashing them. What the leaves
+    /// cannot establish is that `state_chunks_root` is the root of a state the job actually
+    /// reaches — no served bytes can, because that is arithmetic — and under Decision 9 that is
+    /// exactly what the seat's own recompute answers instead.
+    ///
+    /// Every structural rule the court's own `checkpoint_fault` recomputes is applied here rather
+    /// than trusted: the index is its position, the counter is the cadence's canonical value, and
+    /// the chain is the previous leaf's hash. A leaf that fails one is refused, so this can never
+    /// "rebuild" a leg the producer could not have filed.
+    pub fn from_leaves_v1(
+        ctx: &PalwJobContextV2,
+        profile: &PalwShapeProfileV3,
+        checkpoint_profile: &kaspa_consensus_core::palw_legs::PalwCheckpointProfileV1,
+        leaves: &[kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2],
+    ) -> Result<Base0CheckpointsV1, LegError> {
+        let mut capture = Self::new(ctx, profile, checkpoint_profile);
+        for (index, leaf) in leaves.iter().enumerate() {
+            if leaf.checkpoint_index as usize != index
+                || leaf.covered_decode_call != capture.next_covered_decode_call()
+                || leaf.prev_checkpoint_leaf_hash != capture.prev
+                || leaf.state_chunk_count == 0
+            {
+                return Err(LegError::CheckpointCaptureIncomplete { got: index as u32, expected: leaves.len() as u32 });
+            }
+            let hash = kaspa_consensus_core::palw_step_leg::checkpoint_leaf_hash_v2(
+                &capture.ctx_hash,
+                &capture.checkpoint_profile_hash,
+                &capture.state_chunk_map_id,
+                leaf,
+            );
+            capture.prev = hash;
+            capture.leaves.push(leaf.clone());
+            capture.leaf_hashes.push(hash);
+        }
+        let count = leaves.len() as u32;
+        capture.finish(count)
+    }
+
     /// **Seal the capture at the count the CLASS's cadence says the job has** — the count
     /// `palw_step_leg`'s shape pass recomputes, derived rather than passed in.
     ///
@@ -821,8 +1170,13 @@ impl Base0CheckpointCaptureV1 {
 
     /// Seal the capture at the count the job canonically has.
     ///
-    /// `expected` is `decode_calls / interval`, which the court recomputes; a producer that sealed
-    /// a different number would be committing to checkpoints it never took (or hiding ones it did).
+    /// `expected` is the count the CLASS's cadence gives the job — `decode_calls / interval` under
+    /// `PerDecodeCall` and `prefill + decode_calls` under `PerPosition`
+    /// ([`kaspa_consensus_core::palw_context_ladder::palw_checkpoint_count_v1`], which the court
+    /// recomputes). A producer that sealed a different number would be committing to checkpoints it
+    /// never took (or hiding ones it did), and one that spelled the per-call rule for itself would
+    /// seal a per-position leg at zero: [`Self::finish_canonical_v1`] is the producer's entry for
+    /// exactly that reason.
     pub fn finish(self, expected: u32) -> Result<Base0CheckpointsV1, LegError> {
         let got = self.leaves.len() as u32;
         if got != expected {
@@ -833,7 +1187,13 @@ impl Base0CheckpointCaptureV1 {
         } else {
             step_merkle_root_v1(&self.leaf_hashes).map_err(|_| LegError::EmptySpace)?
         };
-        Ok(Base0CheckpointsV1 { leaves: self.leaves, leaf_hashes: self.leaf_hashes, merkle_root, chunks: self.chunks })
+        Ok(Base0CheckpointsV1 {
+            leaves: self.leaves,
+            leaf_hashes: self.leaf_hashes,
+            merkle_root,
+            chunks: self.chunks,
+            bytes_serialised: self.bytes_serialised,
+        })
     }
 }
 
@@ -1107,13 +1467,25 @@ pub fn base0_checkpoint_chunks_at_v1<F>(
 where
     F: FnMut(&kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>>,
 {
+    use kaspa_consensus_core::palw_state_chunk_map::PalwHybridChunkEntryV1;
     let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, ctx, covered);
-    let geometry = base0_state_chunk_geometry_v1(profile, positions)?;
+    let geometry = base0_capture_geometry_v1(profile, positions)?;
     let mut out = Vec::with_capacity(geometry.chunk_count() as usize);
     for index in 0..geometry.chunk_count() {
-        let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
-            .ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?;
-        out.push(chunk(&entry).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?);
+        match geometry.entry(index).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })? {
+            PalwHybridChunkEntryV1::AttentionCache(entry) => {
+                out.push(chunk(&entry).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?)
+            }
+            // **The recurrence is not prefix-stable and is not re-derivable from a later state.**
+            // That is the whole reason it rides at a derived spacing rather than at every position
+            // (`palw_checkpoint_leaf_carries_recurrence_v1`): a `heads × k_dim × v_dim` delta
+            // matrix at position `p` is not a prefix of the one at `p + 1`. A producer answering
+            // for such a checkpoint must have retained it, and saying so is better than serving an
+            // attention half under a root that was taken over both.
+            PalwHybridChunkEntryV1::RecurrenceState { .. } => {
+                return Err(LegError::CheckpointStateUnavailable { chunk_index: index });
+            }
+        }
     }
     Ok(out)
 }
@@ -1140,15 +1512,24 @@ pub fn base0_kv_anchor_for_call_v1(
 /// court will demand. On a per-position class this answers for a PREFILL position too, which is
 /// the whole point: before the amendment a prefill dispute had no anchor and its bottom was three
 /// chunks that no carrier can file.
-pub fn base0_kv_anchor_for_step_v1(
+/// **The chunks come from the LIVE CACHE when the leg retained none** (audit B, C-1). `chunk` is
+/// the executor's own serializer — the cache it is holding to run, which is prefix-stable, so it
+/// answers for an earlier checkpoint byte-identically ([`base0_checkpoint_chunks_at_v1`]). A
+/// retaining leg ignores it and serves what it kept, so the two retentions produce the same
+/// operand and the caller does not have to know which one it has.
+pub fn base0_kv_anchor_for_step_v1<F>(
     checkpoints: &Base0CheckpointsV1,
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     call_index: u32,
     position: u32,
-) -> Option<kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1> {
+    chunk: F,
+) -> Option<kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1>
+where
+    F: FnMut(&kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>>,
+{
     let want = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_covered_for_step_v1(profile, ctx, call_index, position)?;
-    base0_kv_anchor_at_covered_v1(checkpoints, want)
+    base0_kv_anchor_at_covered_with_v1(checkpoints, profile, ctx, want, chunk)
 }
 
 fn base0_kv_anchor_at_covered_v1(
@@ -1161,6 +1542,30 @@ fn base0_kv_anchor_at_covered_v1(
         leaf: checkpoints.leaves[at].clone(),
         opening,
         chunks: checkpoints.chunks.get(at)?.clone(),
+    })
+}
+
+/// The same anchor, with a chunk source for the leg that folded its bytes away.
+fn base0_kv_anchor_at_covered_with_v1<F>(
+    checkpoints: &Base0CheckpointsV1,
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    want: u32,
+    chunk: F,
+) -> Option<kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1>
+where
+    F: FnMut(&kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>>,
+{
+    let at = checkpoints.leaves.iter().position(|l| l.covered_decode_call == want)?;
+    let opening = kaspa_consensus_core::palw_step_leg::step_opening_v1(&checkpoints.leaf_hashes, at as u64).ok()?;
+    let chunks = match checkpoints.chunks.get(at) {
+        Some(kept) => kept.clone(),
+        None => base0_checkpoint_chunks_at_v1(profile, ctx, want, chunk).ok()?,
+    };
+    Some(kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1 {
+        leaf: checkpoints.leaves[at].clone(),
+        opening,
+        chunks,
     })
 }
 
@@ -1677,6 +2082,135 @@ mod a16_row_tests {
             assert_eq!((row.layer, row.index), (0, i));
             assert_eq!(row.row, trace.post[i]);
         }
+    }
+
+    /// **H-3, plan item 7: the per-position capture touches ONE ragged tile a position, not the
+    /// whole cache.**
+    ///
+    /// The fold's economy was a RETENTION economy only: `push` enumerated every chunk and
+    /// serialized it, so checkpoint `p` wrote `2 · layers · (p+1) · row` bytes and the job's total
+    /// was `Θ(n²)` — 7.5 GB on the dense graph-v5 row at `n_ctx` 512, 1.9 TB at the ladder's top,
+    /// on the block-producing path. The attention cache is append-only, so a COMPLETE tile's chunk
+    /// hash is the value it already had; only the ragged last tile of each `(kind, layer)` slice
+    /// moves.
+    ///
+    /// Measured on the shape the report names (28 attention layers, `kv_row = 2·128·4 = 1024 B`)
+    /// and asserted against derived bounds rather than against a constant.
+    ///
+    /// # What does NOT go away, and why it is the map's and not this memo's
+    ///
+    /// The leaf hash binds the chunk's INDEX (`state_chunk_leaf_hash_v1(map_id, index, bytes)`),
+    /// and the tiled map's index is `(kind · layers + layer_ordinal) · chunks_per_slice + block`.
+    /// So when a slice grows a block — once every `PALW_ATTN_HISTORY_TILE_V4` positions — every
+    /// index above the first slice MOVES, and a chunk whose bytes did not change is nevertheless a
+    /// different leaf. Its hash cannot be reused, and hashing it needs its bytes, so that
+    /// checkpoint re-serialises the whole cache. That leaves a `2 · layers · row · n² / (2 · tile)`
+    /// term, which is `tile` times smaller than the `Θ(n²/2)` it replaced and is a fact about the
+    /// MAP: only a second copy of the cache (a full retention) or an index scheme that does not
+    /// move could remove it, and this capture is allowed neither.
+    ///
+    /// So the assertion is the ORDER, stated in both directions: an order below the whole-cache
+    /// form, and at most the map's own residual.
+    #[test]
+    fn the_per_position_capture_touches_one_tile_a_position() {
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+        let mut profile = per_position_profile();
+        profile.layer_count = 28;
+        profile.full_attention_interval = 1; // every layer is an attention layer, as the dense tier's are
+        profile.attn_kv_heads = 2;
+        profile.attn_head_dim = 128;
+        profile.n_ctx = 512;
+        let n: u32 = 512;
+        let shape = base0_state_chunk_geometry_v1(&profile, n).expect("the tiled map describes this shape");
+        let row_bytes = shape.row_bytes as u64;
+        let layers = shape.attn_layers.len() as u64;
+        assert_eq!((layers, row_bytes), (28, 1024), "the shape the report's number is derived over");
+        let ctx = {
+            let mut ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, n - 1, 2);
+            ctx.job_id = Hash64::from_u64_word(0x0082_43);
+            ctx
+        };
+        assert_eq!(
+            kaspa_consensus_core::palw_context_ladder::palw_checkpoint_count_v1(&profile, &ctx, 1),
+            n,
+            "the leg is one checkpoint a position"
+        );
+        let cp = map::integer_kv_checkpoint_profile_v1(map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
+        let mut capture = Base0CheckpointCaptureV1::new(&ctx, &profile, &cp);
+        assert_eq!(capture.retention(), Base0CheckpointRetentionV1::Fold);
+        // The bytes are not a cache's — nothing here runs a model — but they are exactly the
+        // lengths the map declares, which is all the capture's arithmetic reads.
+        for _ in 0..n {
+            capture.push_with_v1(|entry| Some(vec![0u8; entry.byte_len() as usize])).expect("the fold takes every position");
+        }
+        let leg = capture.finish_canonical_v1().expect("sealed at the canonical count");
+        assert_eq!(leg.leaves.len() as u32, n);
+
+        let touched = leg.bytes_serialised;
+        let tile = map::PALW_ATTN_HISTORY_TILE_V4 as u64;
+        let quadratic = 2 * layers * row_bytes * (n as u64) * (n as u64 + 1) / 2;
+        // One ragged tile per `(kind, layer)` slice at every position…
+        let linear_bound = 2 * layers * row_bytes * (n as u64) * tile;
+        // …plus the whole cache once at every slice-growth boundary, where every chunk index above
+        // the first slice moves and its leaf hash therefore moves with it.
+        let residual = 2 * layers * row_bytes * (n as u64) * (n as u64 + tile) / (2 * tile);
+        eprintln!(
+            "H-3 at n_ctx {n}, {layers} attention layers, kv_row {row_bytes} B: {touched} bytes serialised \
+             ({:.2} MB) against {quadratic} ({:.2} GB) for the whole-cache form — {:.0}x less",
+            touched as f64 / 1e6,
+            quadratic as f64 / 1e9,
+            quadratic as f64 / touched.max(1) as f64
+        );
+        assert!(touched < quadratic / 8, "the whole-cache term must be gone by an order: {touched} against {quadratic}");
+        assert!(
+            touched <= linear_bound + residual,
+            "what may remain is one ragged tile a position plus the map's index-shift term: {touched} against {}",
+            linear_bound + residual
+        );
+    }
+
+    /// **M-3 is the guard, and it is measured rather than assumed.**
+    ///
+    /// `tiled_kv_state_geometry_v3` pins `positions_per_chunk = min(16, positions)`, so below 16
+    /// positions the tile boundaries move with every position and NO complete tile is prefix-
+    /// stable. A memo keyed by chunk index that assumed otherwise would produce a wrong root for
+    /// every job whose prefill starts inside the first tile — so the roots the memoising capture
+    /// commits are compared, position by position, against a capture that reuses nothing.
+    #[test]
+    fn the_memo_agrees_with_a_capture_that_reuses_nothing_across_the_sixteen_position_boundary() {
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+        let profile = per_position_profile();
+        let n = 3 * map::PALW_ATTN_HISTORY_TILE_V4 + 1; // across two boundaries and past them
+        let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, n - 1, 2);
+        let cp = map::integer_kv_checkpoint_profile_v1(map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
+
+        // The bytes are a function of (kind, layer, position) alone — which is what "the cache is
+        // append-only" means — so a chunk's content is the same however the geometry is tiled.
+        let byte_of = |entry: &map::PalwStateChunkEntryV1, offset: usize| -> u8 {
+            let position = entry.position_start as usize + offset / entry.row_bytes as usize;
+            let within = offset % entry.row_bytes as usize;
+            (position as u8).wrapping_mul(31).wrapping_add(within as u8).wrapping_add(entry.attn_layer as u8) ^ (entry.kind as u8)
+        };
+        let fill = |entry: &map::PalwStateChunkEntryV1| -> Option<Vec<u8>> {
+            Some((0..entry.byte_len() as usize).map(|o| byte_of(entry, o)).collect())
+        };
+
+        let mut memoising = Base0CheckpointCaptureV1::new(&ctx, &profile, &cp);
+        let mut naive = Base0CheckpointCaptureV1::new(&ctx, &profile, &cp);
+        for _ in 0..n {
+            memoising.push_with_v1(fill).expect("the memoising capture takes it");
+            // `push_chunks` is the route that reuses nothing: it is handed every chunk's bytes.
+            let geometry = naive.next_geometry().expect("a geometry");
+            let chunks: Vec<Vec<u8>> = (0..geometry.chunk_count())
+                .map(|i| fill(&map::integer_kv_state_chunk_entry_v1(&geometry, i).expect("an entry")).expect("bytes"))
+                .collect();
+            naive.push_chunks(chunks).expect("the naive capture takes it");
+        }
+        let a = memoising.finish_canonical_v1().expect("sealed");
+        let b = naive.finish_canonical_v1().expect("sealed");
+        assert_eq!(a.leaf_hashes, b.leaf_hashes, "the memo must commit exactly what a full re-hash commits");
+        assert_eq!(a.merkle_root, b.merkle_root);
+        assert!(a.bytes_serialised < b.bytes_serialised, "…and it must do less work to get there");
     }
 }
 
