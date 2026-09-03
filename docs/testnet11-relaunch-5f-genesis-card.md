@@ -561,9 +561,14 @@ gate above is the one that would have caught all three.
   the conversion has to be bit-reproducible"* — is a property this build has, demonstrated on two
   machines with two binaries.
 
-  The bound artifact is at `scratchpad/reconvert/instruct-bound.palwart` and must replace the
-  shipped one at the cut; `from_registered_profile` refuses the unbound file, so the dense SDK path
-  does not work until it does.
+  **The swap is verified, not assumed.** The bound file was put through `palw-certify bind
+  --artifact` and it decodes — 1,795,427,276 bytes, declared digest recomputed over every byte —
+  and **names the same class as the shipped one**, with the same twelve reachable kernels covered by
+  the same family. So binding the tokenizer does not move the class the artifact names, which is
+  exactly what the replacement needed in order to be safe.
+
+  The bound artifact must replace the shipped one at the cut; `from_registered_profile` refuses the
+  unbound file, so the dense SDK path does not work until it does.
 - **Toolchain pinned** and the CI gates runnable in one local command
 - **The single re-pin**, in the order of §4
 
