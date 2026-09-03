@@ -2655,22 +2655,24 @@ mod tests {
         let court = court_at(2);
         let ladder_only = palw_attn_court_admits_row_v1(&court, 0, TILE, 3_000).expect("the shipped ladder fits the RC window");
         assert_eq!(ladder_only, (2 * 22 + 2) * 20, "22 binary rounds at the fixture's 20-DAA clock");
-        // The same court with a 131,072-position history: 22 ladder rounds and 13 history rounds
-        // at arity 2, which the RC window still holds at this fixture's 20-DAA clock — and a
-        // narrower window does not, with the arithmetic in the refusal.
-        let wide = palw_attn_court_admits_row_v1(&court, 131_072, TILE, 3_000).expect("72 moves at 20 DAA is 1,440");
-        assert_eq!(wide, (2 * (22 + 13) + 2) * 20);
+        // The same court with a 131,072-position history: 22 BINARY ladder rounds (the ladder a
+        // session plays is `PalwBisectLadderV1`, whatever the dissection's arity — audit D H-2)
+        // and 13 history rounds at arity 2, plus the terminal moves and the ROOT CLAIM (audit A
+        // M-2). The RC window still holds it at this fixture's 20-DAA clock; a narrower one does
+        // not, with the arithmetic in the refusal.
+        let wide = palw_attn_court_admits_row_v1(&court, 131_072, TILE, 3_000).expect("73 moves at 20 DAA is 1,460");
+        assert_eq!(wide, (2 * (22 + 13) + 2 + 1) * 20);
         assert_eq!(
             palw_attn_court_admits_row_v1(&court, 131_072, TILE, 1_500),
-            Err(PalwAttnCourtError::OverrunsWindow { moves: 72, deadline: 20, reserve: 216, window_court: 1_500 }),
-            "the reserve is the ruleset's 27 carriers, and it is what puts 1,440 over 1,500"
+            Err(PalwAttnCourtError::OverrunsWindow { moves: 73, deadline: 20, reserve: 216, window_court: 1_500 }),
+            "the reserve is the ruleset's 27 carriers, and it is what puts 1,460 over 1,500"
         );
-        // Sixteen children a round buys the same row 22 moves instead of 72, which is the whole
-        // content of Decision 3.
+        // Sixteen children a round buys the same row 9 fewer history rounds — 55 moves instead of
+        // 73 — which is the whole content of Decision 3 once the leaf ladder is priced honestly.
         let sixteen = court_at(16);
         let worst = palw_attn_court_admits_row_v1(&sixteen, 131_072, TILE, 3_000).expect("16-ary fits");
-        assert_eq!(worst, (2 * (6 + 4) + 2) * 20, "6 ladder rounds at 2^22 and 4 history rounds at 8,192 tiles");
-        assert_eq!(palw_attn_court_admits_row_v1(&sixteen, 131_072, TILE, 1_500), Ok(440), "and it fits the narrow window too");
+        assert_eq!(worst, (2 * (22 + 4) + 2 + 1) * 20, "22 binary ladder rounds at 2^22 and 4 history rounds at 8,192 tiles");
+        assert_eq!(palw_attn_court_admits_row_v1(&sixteen, 131_072, TILE, 1_500), Ok(1_100), "and it fits the narrow window too");
     }
 
     /// **The arity is DERIVED, and the derivation is the ADR's own inequality.**
@@ -2685,15 +2687,19 @@ mod tests {
         const LADDER: u64 = 1 << 32;
         const HISTORY: u64 = 131_072;
         const WINDOW: u64 = 3_000;
-        // The ADR's table, from the contract's own recurrence.
+        // The table, from the contract's own recurrence — with the LEAF ladder at the arity a
+        // session actually plays (2) and the root claim counted. ADR-0082 §3's own table reads
+        // `log_k` on both search spaces; the tree has one k-ary search, and pricing the other one
+        // k-ary reported 34 moves for a dispute that takes 60 (audit D H-2, audit A M-2).
         let moves = |k: u8| -> u64 {
-            2 * (u64::from(palw_kary_rounds_v1(LADDER, k).unwrap())
+            2 * (u64::from(palw_kary_rounds_v1(LADDER, crate::palw_mode_v2::PALW_COURT_LEAF_LADDER_ARITY_V1).unwrap())
                 + u64::from(crate::palw_attn_dissect::palw_attn_dissection_rounds_v1(HISTORY, TILE, k).unwrap()))
                 + 2
+                + 1
         };
-        assert_eq!((moves(2), moves(4), moves(8), moves(16), moves(32), moves(64)), (92, 48, 34, 26, 22, 20));
-        assert_eq!(moves(16) * 45, 1_170, "ADR-0082 §4: 26 moves at the 45-DAA deadline");
-        assert_eq!(moves(2) * 45, 4_140, "and the binary ladder at the same deadline is over the 3,000-DAA window");
+        assert_eq!((moves(2), moves(4), moves(8), moves(16), moves(32), moves(64)), (93, 81, 77, 75, 73, 73));
+        assert_eq!(moves(16) * 45, 3_375, "75 moves at the 45-DAA deadline — past the 3,000-DAA window, where the ADR read 1,170");
+        assert_eq!(moves(2) * 45, 4_185, "and the widest search at the same deadline is further over it");
 
         // The derivation, at a 128-lane output tile where the carrier bound binds nothing.
         let pick = |deadline: u64, lanes: usize| palw_court_arity_v1(WINDOW, deadline, LADDER, HISTORY, TILE, 2, lanes);
@@ -2704,58 +2710,87 @@ mod tests {
         assert_eq!(pick(WINDOW / moves(4), 128), Some(4));
         assert_eq!(pick(WINDOW / moves(2), 128), Some(2), "a short enough clock needs no wider round");
         assert_eq!(pick(WINDOW, 128), None, "no arity fits a deadline the size of the whole window");
-        // And the carrier bound refuses from ABOVE: at 256 lanes the arity a very long deadline
-        // would need does not fit a carrier, so the court is refused rather than priced.
-        assert_eq!(pick(WINDOW / moves(64), 256), None, "arity 64 at 256 lanes is 132,102 bytes a move");
-        assert_eq!(pick(WINDOW / moves(64), 128), Some(64));
+        // The carrier bound still refuses from ABOVE, and the deepest history search is where it
+        // binds: 64 children of a 256-lane tile is 132,102 bytes a move against an 83,333-byte
+        // carrier. It no longer BITES at these deadlines, because the honest move count never
+        // needs an arity above 32 — 32 at 256 lanes is 66,054 bytes and fits.
+        assert_eq!(pick(WINDOW / moves(32), 256), Some(32), "arity 32 at 256 lanes is 66,054 bytes a move");
+        assert_eq!(
+            palw_attn_dissect_move_bytes_v1(64, 256) > palw_close_bytes_for_chunks_v1(1),
+            true,
+            "and 64 at 256 lanes is still past one carrier, which is what the pair bound is for"
+        );
         // A ruleset with no fused site derives from the ladder alone.
         assert_eq!(palw_court_arity_v1(WINDOW, 45, LADDER, 0, TILE, 2, 128), Some(2), "66 moves at 45 DAA is 2,970");
     }
 
-    /// **The RC's own numbers, derived rather than quoted — and what they select.**
+    /// **The RC's own numbers, derived rather than quoted — and what they now select.**
     ///
     /// ADR-0082 Decision 3 works its table at `k = 16` and says the derivation "selects" it for
-    /// the RC windows. Run against the tree's own SA-4 derivation it does not: at the deadline
-    /// `palw_court_turn_deadline_v1` returns for a `2^32` ladder — 42 DAA at the RC's 27-carrier
-    /// close ceiling, 45 at the ONE carrier ADR-0082 U-00 leaves in force until the chunk arm
-    /// lands — the SMALLEST power of two whose moves fit 3,000 DAA is **4**, not 16, because 48
-    /// moves at 45 DAA is 2,160 and the window is 3,000. Sixteen is selected only for a deadline
-    /// in `[89, 115]`, the band in which eight no longer fits and sixteen still does.
+    /// the RC windows; the previous version of this test found 4 instead and pinned that. Both
+    /// numbers came from a formula that priced the LEAF ladder k-ary. It is not: a session plays
+    /// `PalwBisectLadderV1`, binary (audit D H-2), and the root claim is a move nobody counted
+    /// (audit A M-2). With both corrected the answers move, and they move in the direction that
+    /// matters — the derivation now reports what the dispute actually costs.
     ///
-    /// This test pins the whole band rather than the ADR's single value, because the derivation
-    /// is the rule and the ADR's 16 is a worked example of it that does not come out of it. The
-    /// consequence is cheaper, not more expensive: arity 4 carries a quarter of arity 16's bytes
-    /// a move and spends 2,160 of a 3,000-DAA window instead of 1,170 — which is exactly the
-    /// trade "smallest" is written to make.
+    /// Two configurations, because they give opposite answers and only one of them ships:
+    ///
+    /// * **The RC as it is** — its own `2^26` ladder and the widest row its genesis registers, a
+    ///   512-position graph-v5 row (32 history tiles) — admits **arity 2**: `2 × (26 + 5) + 2 + 1
+    ///   = 65` moves at the RC's 42-DAA clock is 2,730, and with the 216-DAA assembly reserve
+    ///   2,946 against a 3,000-DAA window. It fits, with 54 DAA of room.
+    /// * **The `2^32` context-ladder fence with a 131,072-position row** — the configuration
+    ///   ADR-0082 §3's table is worked in — admits **NO arity at all**: the cheapest honest move
+    ///   count is 73 (arity 32 or 64), and `73 × 42 = 3,066` is already past 3,000 before the
+    ///   reserve. That is a genesis decision, not a bug in this function: at that ladder and that
+    ///   width the window has to grow, the clock has to shrink, or the leaf ladder has to become
+    ///   k-ary for real. The refusal is `None`, which is what Z4 asks for.
     #[test]
-    fn the_rcs_derived_deadline_selects_arity_four_and_sixteen_is_a_band_above_it() {
-        use crate::palw_context_ladder::palw_court_turn_deadline_v1;
+    fn the_rcs_derived_deadline_selects_an_arity_for_its_own_row_and_none_for_the_fences() {
+        use crate::palw_context_ladder::palw_close_assembly_daa_v1;
         use crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1;
-        const LADDER: u64 = 1 << 32;
-        const HISTORY: u64 = 131_072;
         let window = PALW_RC_WINDOWS_V1.window_court;
-        assert_eq!(window, 3_000);
-        // The SA-4 deadline at the `2^32` ladder, at both close ceilings the ADR discusses.
-        let at_27 = palw_court_turn_deadline_v1(window, LADDER, 2, 27).expect("a clock");
-        let at_1 = palw_court_turn_deadline_v1(window, LADDER, 2, 1).expect("a clock");
-        assert_eq!((at_27, at_1), (42, 45), "the RC's derived clock at 27 carriers and at one");
-        for deadline in [at_27, at_1] {
-            assert_eq!(
-                palw_court_arity_v1(window, deadline, LADDER, HISTORY, TILE, 2, 128),
-                Some(4),
-                "at {deadline} DAA the smallest arity whose 48 moves fit 3,000 is four"
-            );
-        }
-        // The band in which the ADR's sixteen IS the smallest fitting arity.
-        assert_eq!(palw_court_arity_v1(window, 88, LADDER, HISTORY, TILE, 2, 128), Some(8));
-        assert_eq!(palw_court_arity_v1(window, 89, LADDER, HISTORY, TILE, 2, 128), Some(16));
-        assert_eq!(palw_court_arity_v1(window, 115, LADDER, HISTORY, TILE, 2, 128), Some(16));
-        assert_eq!(palw_court_arity_v1(window, 116, LADDER, HISTORY, TILE, 2, 128), Some(32));
-        // And the ADR's own worked cost at sixteen, which every one of these shares.
-        let sixteen = PalwCourtParamsV2::new(LADDER, 45, 2).expect("a court").with_dissection_arity(16).expect("legal");
-        assert_eq!(sixteen.worst_case_duration_with_history_daa(HISTORY, TILE), Some(1_170));
-        let four = PalwCourtParamsV2::new(LADDER, 45, 2).expect("a court").with_dissection_arity(4).expect("legal");
-        assert_eq!(four.worst_case_duration_with_history_daa(HISTORY, TILE), Some(2_160));
+        let deadline = PALW_RC_WINDOWS_V1.court_turn_deadline;
+        assert_eq!((window, deadline), (3_000, 42));
+        let rc_ladder = crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT;
+        assert_eq!(rc_ladder, 1 << 26);
+
+        // The RC's own row: 512 positions, 32 tiles of 16.
+        let arity = palw_court_arity_v1(window, deadline, rc_ladder, 512, TILE, 2, 128).expect("the RC's own row admits an arity");
+        assert_eq!(arity, 2, "26 binary ladder rounds and 5 history rounds is the cheapest exchange that fits");
+        let court = PalwCourtParamsV2::new(rc_ladder, deadline, 2).expect("a court").with_dissection_arity(arity).expect("legal");
+        assert_eq!(court.worst_case_duration_with_history_daa(512, TILE), Some((2 * (26 + 5) + 2 + 1) * deadline));
+        assert_eq!(court.worst_case_duration_with_history_daa(512, TILE), Some(2_730));
+        assert_eq!(palw_close_assembly_daa_v1(court.max_close_chunks()), 216, "the RC's 27-carrier reserve");
+        assert_eq!(palw_attn_court_admits_row_v1(&court, 512, TILE, window), Ok(2_730), "2,730 + 216 is inside 3,000");
+
+        // **A 4,096-position row shows that the derivation and the GATE are two inequalities.**
+        // `palw_court_arity_v1` selects on `moves x deadline <= window_court`;
+        // `palw_attn_court_admits_row_v1` admits on `moves x deadline + assembly_reserve <
+        // window_court` (Z4's own form). At 4,096 positions arity 2 clears the first and fails the
+        // second by 198 DAA, while arity 4 clears both — so the derivation hands admission a value
+        // admission then refuses, and the row is rejected although a legal arity for it exists.
+        // Pinned rather than fixed here: the repair is one argument (`max_close_chunks`) on the
+        // derivation, and it moves a signature two streams call. See the patch note.
+        assert_eq!(palw_court_arity_v1(window, deadline, rc_ladder, 4_096, TILE, 2, 128), Some(2));
+        let at_two = PalwCourtParamsV2::new(rc_ladder, deadline, 2).expect("a court").with_dissection_arity(2).expect("legal");
+        assert_eq!(at_two.worst_case_duration_with_history_daa(4_096, TILE), Some((2 * (26 + 8) + 2 + 1) * deadline));
+        assert_eq!(
+            palw_attn_court_admits_row_v1(&at_two, 4_096, TILE, window),
+            Err(PalwAttnCourtError::OverrunsWindow { moves: 71, deadline, reserve: 216, window_court: window }),
+            "2,982 + 216 is past 3,000, and the derivation above selected this arity anyway"
+        );
+        let at_four = PalwCourtParamsV2::new(rc_ladder, deadline, 2).expect("a court").with_dissection_arity(4).expect("legal");
+        assert_eq!(palw_attn_court_admits_row_v1(&at_four, 4_096, TILE, window), Ok(2_646), "and four would have fitted");
+
+        // The fence's ladder at the ADR's own width: nothing fits, and the derivation says so.
+        const FENCE_LADDER: u64 = 1 << 32;
+        assert_eq!(palw_court_arity_v1(window, deadline, FENCE_LADDER, 131_072, TILE, 2, 128), None);
+        assert_eq!(palw_court_arity_v1(window, 45, FENCE_LADDER, 131_072, TILE, 2, 128), None);
+        // The cheapest honest count at that ladder, so the gap is a number rather than a verdict.
+        let cheapest = PalwCourtParamsV2::new(FENCE_LADDER, deadline, 2).expect("a court").with_dissection_arity(32).expect("legal");
+        assert_eq!(cheapest.worst_case_duration_with_history_daa(131_072, TILE), Some(73 * deadline));
+        assert_eq!(73 * deadline, 3_066, "past the 3,000-DAA window before the assembly reserve is counted");
     }
 
     /// **Every shipped preset's court still fits its own window with the dissection at zero
