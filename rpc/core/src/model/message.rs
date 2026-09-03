@@ -5722,6 +5722,49 @@ mod palw_producer_facts_wire_tests {
         assert_eq!(back.not_ready_reason, response.not_ready_reason);
     }
 
+    /// **ADR-0080 design A: a declared close's arrival bitmap survives the wRPC wire.**
+    ///
+    /// `present` is the field a resume is decided on and it is a BITMAP because chunks arrive in any
+    /// order — so an encoding that lost a bit, or that carried a count of parts instead, would send
+    /// a mover under a court deadline to re-pay for a carrier the chain already holds and leave the
+    /// hole that convicts it. A sparse pattern with a gap in the middle and the top index set is the
+    /// one that catches that; a full or empty bitmap round-trips through either shape.
+    #[test]
+    fn the_declared_close_survives_the_wrpc_round_trip() {
+        let response = GetPalwPendingChunkGroupResponse {
+            found: true,
+            session_id: "5e".repeat(64),
+            side: "executor".to_string(),
+            count: 27,
+            present: 0b1011 | (1u64 << 26),
+            parts_present: 4,
+            complete: false,
+            declared_daa: 91_300,
+            assembly_deadline_daa: 91_408,
+            close_digest: "c1".repeat(64),
+            verdict: "executor_guilty".to_string(),
+            declarer_bond: format!("{}:1", "b0".repeat(32)),
+            deposit: 33_750_000,
+        };
+        let mut bytes = Vec::new();
+        Serializer::serialize(&response, &mut bytes).unwrap();
+        let back = <GetPalwPendingChunkGroupResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert_eq!(back.present, response.present, "the arrival bitmap did not survive the wire");
+        assert_eq!(back.count, 27);
+        assert_eq!(back.parts_present, 4);
+        assert!(!back.complete);
+        assert_eq!(back.side, "executor");
+        assert_eq!(back.close_digest, response.close_digest);
+        assert_eq!(back.assembly_deadline_daa, 91_408);
+        assert_eq!(back.declarer_bond, response.declarer_bond);
+        assert_eq!(back.deposit, 33_750_000);
+        // The default is the honest negative every non-ConsensusV2 node answers with.
+        let mut bytes = Vec::new();
+        Serializer::serialize(&GetPalwPendingChunkGroupResponse::default(), &mut bytes).unwrap();
+        let back = <GetPalwPendingChunkGroupResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert!(!back.found && back.count == 0 && back.present == 0);
+    }
+
     /// **An older writer is read fail-CLOSED.** A version-2 peer knows nothing about the free-prompt
     /// lane; reading its silence as "certified" would make a gateway submit on a peer's ignorance.
     /// Uncertified and unpriced is the safe reading, and it costs a retry, not a fee.

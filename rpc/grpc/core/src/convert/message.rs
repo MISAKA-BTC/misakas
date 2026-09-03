@@ -1931,13 +1931,7 @@ mod palw_derived_artifacts_tests {
         assert_eq!(back.declarer_bond, response.declarer_bond);
         assert_eq!(back.deposit, 33_750_000);
         assert_eq!(back.verdict, "executor_guilty");
-        // The borsh-ish `Serializer`/`Deserializer` path the wRPC client uses, on the same value.
-        let mut bytes = Vec::new();
-        kaspa_rpc_core::Serializer::serialize(&response, &mut bytes).unwrap();
-        let round: GetPalwPendingChunkGroupResponse =
-            <GetPalwPendingChunkGroupResponse as kaspa_rpc_core::Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
-        assert_eq!(round.present, response.present);
-        assert_eq!(round.count, response.count);
-        assert_eq!(round.close_digest, response.close_digest);
+        // The wRPC half of the same wire is `the_declared_close_survives_the_wrpc_round_trip`, in
+        // `rpc/core`, where the `Serializer`/`Deserializer` traits live.
     }
 }
