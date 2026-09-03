@@ -319,6 +319,42 @@ pub struct PalwCourtCostShapeV1 {
     /// this split changes no shipped price; `the_prompt_id_term_is_the_openings_size_past_the_fence`
     /// is what says the other reading is a reading and not a rewrite.
     pub prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    /// **Whether a fused attention leaf is tried by DISSECTION, and at what arity** (ADR-0082
+    /// Decisions 2 and 3).
+    ///
+    /// `None` — every court built before ADR-0082 — prices a fused site by the WHOLE-ROW route:
+    /// the query row plus the K and V series over [`Self::history_positions`], which is the same
+    /// run the four separate nodes are charged today and is design A's width. `Some(k)` prices it
+    /// by Decision 2's bottom opening plus the widest disclosure one `k`-ary move carries, which is
+    /// flat in `n_ctx`.
+    ///
+    /// A property of the RULESET like every field beside it: `k` is
+    /// `PalwCourtParamsV2::dissection_arity`, inside `palw_ruleset_id_v2`, and whether the arm is
+    /// admissible at all is `Params::palw_kary_court`. The fence is never read from inside the
+    /// walk — a cost derivation that consulted a DAA score would price one class two ways
+    /// depending on when it was asked. The caller reads the fence and says.
+    pub dissection: Option<u8>,
+}
+
+/// **What a `palw_kary_court`-armed ruleset has turned on** (ADR-0082 Decisions 3 and 5).
+///
+/// Both fields are read off the ruleset by the CALLER — `dissection_arity` from
+/// `PalwCourtParamsV2`, the id form from `Params::palw_prompt_ids_form_at` — and neither is
+/// guessed here. They travel together because Decision 5 arms the Merkle prompt ids "in the same
+/// ruleset move as the rows", and because the two move the price in OPPOSITE directions: the
+/// dissection makes the attention term flat and the Merkle form makes the id term logarithmic, so
+/// a derivation that assumed one from the other would either over-charge (safe) or under-charge (
+/// the direction that admits a class whose disputes nobody can carry). Stating both makes which
+/// one a caller armed a fact rather than an inference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwKaryCourtV1 {
+    /// `PalwCourtParamsV2::dissection_arity` — a power of two in `2..=64`.
+    pub dissection_arity: u8,
+    /// `Params::palw_prompt_ids_form_at` at the block the registration is judged in.
+    pub prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    /// `window_court` from the lattice this ruleset runs — what the whole dispute must fit inside
+    /// (ADR-0082 Decision 3, Z4/Z11). In DAA.
+    pub window_court_daa: u64,
 }
 
 impl PalwCourtCostShapeV1 {
@@ -332,6 +368,7 @@ impl PalwCourtCostShapeV1 {
             path_from_ladder: false,
             count_ids: true,
             prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            dissection: None,
         }
     }
 
@@ -348,6 +385,7 @@ impl PalwCourtCostShapeV1 {
             path_from_ladder: true,
             count_ids: true,
             prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            dissection: None,
         }
     }
 
@@ -357,6 +395,17 @@ impl PalwCourtCostShapeV1 {
     /// field stays exactly what the ruleset already froze.
     pub fn with_prompt_ids_form_v1(mut self, form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Self {
         self.prompt_ids_form = form;
+        self
+    }
+
+    /// **The dissection court** (ADR-0082 Decisions 2 and 3): the same anchored shape, with a
+    /// fused attention leaf priced by its bottom opening and one move rather than by the history
+    /// it never carries. Separate from the constructors above for the reason
+    /// [`Self::with_prompt_ids_form_v1`] is separate: the arity is the one field here a running
+    /// network arms on its own fence (`Params::palw_kary_court`) while every other stays what the
+    /// ruleset already froze.
+    pub fn with_dissection_v1(mut self, arity: u8) -> Self {
+        self.dissection = Some(arity);
         self
     }
 }
@@ -440,6 +489,22 @@ fn derive_court_cost_walk_v1(
                 Some(r) => input_width_v1(*r, table, profile).ok_or_else(over)?,
                 None => 0,
             };
+            // **ADR-0082 Decisions 1-3: is THIS node a fused attention site tried by dissection?**
+            // Read off the node's kind and the RULESET's shape, never off a fence — see
+            // `PalwCourtCostShapeV1::dissection`. A fused node under a court with no dissection
+            // falls through to the whole-row arms below, which is design A's width and the honest
+            // price of a court that cannot play the short protocol.
+            let fused_dissection = if node.op_kind == Op::AttnFused { shape.dissection } else { None };
+            // One head's dimension, and the lanes ONE dispute puts in question: a fused leaf is
+            // disputed a head at a time (`PalwAttnRootClaimV1::lane_first/lane_count`), so a tile
+            // wider than a head still disputes at most a head's lanes — which is also why the
+            // dissection's wire cap is `attn_head_dim` and not `PALW_STEP_MAX_TILE_LEN`.
+            let d_head = profile.attn_head_dim as u64;
+            let disputed_lanes = tile.min(d_head.max(1));
+            // The bottom's width: `PALW_ATTN_HISTORY_TILE_V4` positions, or the whole context when
+            // the context is shorter than one tile. A CONSTANT past the tile — the property
+            // Decision 2 buys and the one Z0 sweeps for.
+            let history_tile = (crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4 as u64).min(n_ctx.max(1));
 
             // The artifact bytes this node's parameters occupy, per catalogued kernel. A node with
             // no weight operand opens nothing from the artifact — its inputs ride the leg.
@@ -466,6 +531,14 @@ fn derive_court_cost_walk_v1(
                     // scores step, which was the class's binding node for one whole round of the
                     // derivation.
                     Op::MatMulQuant if attn_reduction => 17,
+                    // **The fused site opens the same narrowings the four nodes opened, once**
+                    // (ADR-0082 Decision 1): W9's score triple, the probability requantization's
+                    // and W10's value triple, plus the softmax's widening byte —
+                    // `A16AttnFusedParamsV1`'s own fields, priced at the wire size the triple
+                    // serialises at. Like the reductions above it multiplies ACTIVATIONS, so its
+                    // named tensor is a narrowing record and not a matrix; charging `tile × in_w`
+                    // here would price a matmul against the cache.
+                    Op::AttnFused => 3 * crate::palw_base0_a16::A16QuantParams::WIRE_BYTES as u64 + 1,
                     // The head-sliced recurrence opens its head's four registered triples.
                     Op::GatedDeltaNet if head_sliced_gdn => 4 * 17,
                     // Tile-local since Decision B: the tile's own weight rows, one byte per int8.
@@ -577,7 +650,13 @@ fn derive_court_cost_walk_v1(
             // node the runs below are.
             let reads_history = node.op_kind == Op::GatedDeltaNet
                 || node.input_refs.iter().any(|r| *r == PALW_STEP_INPUT_KV_K || *r == PALW_STEP_INPUT_KV_V);
-            for (ordinal, r) in node.input_refs.iter().enumerate() {
+            // **A dissected fused site opens no ref's ROW.** Its three refs are the query, the K
+            // cache and the V cache, and Decision 2's protocol never carries any of them whole:
+            // what it carries is the bottom below. Emptied here rather than branched around the
+            // whole loop so the two forms stay one walk — a second walk that merely agreed with
+            // this one is how a class gets admitted at one price and prosecuted at another.
+            let priced_refs: &[u16] = if fused_dissection.is_some() { &[] } else { node.input_refs.as_slice() };
+            for (ordinal, r) in priced_refs.iter().enumerate() {
                 let mut width = input_width_v1(*r, table, profile).ok_or_else(over)?;
                 if head_sliced_gdn {
                     // Ref order is the kernel's: [unit_k, conv, unit_q, decay, beta] — one head's
@@ -633,6 +712,36 @@ fn derive_court_cost_walk_v1(
                     .and_then(|v| v.checked_add(24u64.checked_mul(run_tiles)?))
                     .ok_or_else(over)?;
                 evidence = evidence.checked_add(runs.checked_mul(per_run).ok_or_else(over)?).ok_or_else(over)?;
+            }
+
+            // **The bottom of the dissection, and one move** (ADR-0082 Decision 2 and §4).
+            //
+            // A fused attention leaf is not recomputed whole: the terminal adjudication opens the
+            // head's query slice, ONE tile of K rows and ONE tile of V rows, and recomputes the
+            // tile's `(max, exp_sum, v_acc)` against the root's `(m*, S*)`. The committed output
+            // tile and its path are already `evidence`'s seed, so this adds the three openings the
+            // bottom puts beside it — each its own lanes plus one Merkle path, the same units
+            // every other opening on this close is counted in. Every term is a MODEL width times a
+            // CONSTANT tile, so the whole of it is flat in `n_ctx` (Z0).
+            //
+            // Plus the widest disclosure ONE round carries. A move rides a carrier exactly as a
+            // close does, and an arity whose round no carrier holds is not a shorter court but an
+            // unplayable one — `palw_attn_dissect_arity_fits_carrier_v1` states the bound and the
+            // arity derivation applies it; charging it here is what makes the CLASS's admission
+            // depend on it rather than the court's configuration alone.
+            if let Some(arity) = fused_dissection {
+                let opened = |lanes: u64| -> Option<u64> { lanes.checked_mul(4)?.checked_add(step_path_bytes) };
+                let tile_lanes = history_tile.checked_mul(d_head).ok_or_else(over)?;
+                let query = opened(d_head).ok_or_else(over)?;
+                let k_tile = opened(tile_lanes).ok_or_else(over)?;
+                let v_tile = opened(tile_lanes).ok_or_else(over)?;
+                let move_bytes = crate::palw_attn_dissect::palw_attn_dissect_move_bytes_v1(arity, disputed_lanes as usize);
+                evidence = evidence
+                    .checked_add(query)
+                    .and_then(|e| e.checked_add(k_tile))
+                    .and_then(|e| e.checked_add(v_tile))
+                    .and_then(|e| e.checked_add(move_bytes))
+                    .ok_or_else(over)?;
             }
 
             // **The routing appendix.** A routed reader's canonical set appends the layer's
@@ -702,6 +811,14 @@ fn derive_court_cost_walk_v1(
             if reads_history {
                 let charge = if node.op_kind == Op::GatedDeltaNet {
                     shape.gdn_checkpoint_bytes
+                } else if node.op_kind == Op::AttnFused {
+                    // TWO anchored objects, counted by name rather than by ref count: the K series
+                    // and the V series each stand on their own checkpoint chunk, and the query ref
+                    // is a committed step row with no checkpoint to open. `refs.len()` would have
+                    // billed a fused site three cache openings for two caches.
+                    let series =
+                        node.input_refs.iter().filter(|r| **r == PALW_STEP_INPUT_KV_K || **r == PALW_STEP_INPUT_KV_V).count() as u64;
+                    series.checked_mul(shape.kv_checkpoint_bytes).ok_or_else(over)?
                 } else {
                     let refs = node.input_refs.len().max(1) as u64;
                     refs.checked_mul(shape.kv_checkpoint_bytes).ok_or_else(over)?
@@ -722,6 +839,19 @@ fn derive_court_cost_walk_v1(
             // estimate.
             let macs = match node.op_kind {
                 Op::MatMulQuant => tile.checked_mul(in_w).ok_or_else(over)?,
+                // **The bottom recomputes ONE tile** (ADR-0082 Decision 2): `history_tile` scores,
+                // each a dot of `d_head`, and `history_tile` weighted contributions per disputed
+                // lane. The exponent and the probability are per element given the root's
+                // `(m*, S*)` — one table lookup and one multiply-shift each — which is exactly
+                // what makes the tile recomputable without the row, so they ride the same count.
+                Op::AttnFused if fused_dissection.is_some() => history_tile
+                    .checked_mul(d_head.checked_add(disputed_lanes).ok_or_else(over)?)
+                    .ok_or_else(over)?,
+                // Without the dissection the court has no bottom to stand on and recomputes the
+                // whole row: the history's scores and the history's weighted sum.
+                Op::AttnFused => {
+                    history.checked_mul(d_head.checked_add(disputed_lanes).ok_or_else(over)?).ok_or_else(over)?
+                }
                 // The head-sliced form divides the recomputation by the head count: the court
                 // replays ONE head's `k_dim x v_dim` state, which is what lets a 40-layer hybrid
                 // have a context at all (the whole-graph form priced 536 M at the declared

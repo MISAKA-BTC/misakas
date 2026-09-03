@@ -172,6 +172,19 @@ pub fn tiled_kv_chunk_bytes_v3(profile: &PalwShapeProfileV3) -> Option<u64> {
     row.checked_mul(positions)
 }
 
+/// **Does this class's cache map address the history a TILE at a time?** (ADR-0082 Decision 4.)
+///
+/// The one dispatch, here, for the reason [`gdn_state_terms_for_map_v1`] gives about the
+/// recurrence half: the alternative is every caller writing `if map == v3 { … }` and the first one
+/// to forget prices a tiled class at the whole history (or the reverse, which is worse). Both
+/// compositions that carry the v3 attention half answer `true` — the standalone map and the
+/// hybrid's `attn=` half — because what the question is about is the ATTENTION cache and a hybrid
+/// has one.
+pub fn palw_map_addresses_history_tiles_v1(profile: &PalwShapeProfileV3) -> bool {
+    let declared = profile.state_chunk_map_id;
+    declared == tiled_kv_state_chunk_map_id_v3() || declared == hybrid_state_chunk_map_id_v3()
+}
+
 /// **A hybrid's map with its attention half tiled** — [`palw_hybrid_state_chunk_map_name_v2`] with
 /// `attn=` at v3, spelled as its two parts for the reason both earlier compositions are.
 pub fn palw_hybrid_state_chunk_map_name_v3() -> String {
