@@ -905,6 +905,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Qwen36IntervalKernels<'_> 
         start: &crate::fp_interval::Base0FpIntervalStartV1<'_>,
         first_call: u32,
         last_call: u32,
+        step_leaf_count: u64,
     ) -> Result<Vec<(u64, Hash64)>, String> {
         let crate::fp_interval::Base0FpIntervalStartV1::Genesis { .. } = start else {
             return Err(
@@ -916,7 +917,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Qwen36IntervalKernels<'_> 
         let mut cache = Qwen36Cache::new(&self.artifact.shape);
         let vocab = self.artifact.shape.vocab;
         let max_position = self.artifact.shape.max_position;
-        crate::fp_interval::base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, |token, position| {
+        crate::fp_interval::base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, step_leaf_count, |token, position| {
             if token >= vocab {
                 return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
             }
@@ -1164,7 +1165,12 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             if decoded.0.shape_profile.shape_profile_id() != self.class_profile_id {
                 return PalwMaterialVerdictV1::Unverifiable;
             }
-            return match crate::produce::base0_material_matches_claim_v1(&decoded, claim.execution_root, claim.trace_root) {
+            return match crate::produce::base0_material_matches_claim_capped_v1(
+                &decoded,
+                claim.execution_root,
+                claim.trace_root,
+                self.step_ladder_cap,
+            ) {
                 Ok(true) => PalwMaterialVerdictV1::Matches,
                 Ok(false) => PalwMaterialVerdictV1::Mismatch,
                 Err(_) => PalwMaterialVerdictV1::Unverifiable,
@@ -1254,7 +1260,9 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     fn fp_interval_count(&self, capture: &[u8]) -> Option<u32> {
         let interval = self.checkpoint_interval()?;
         let retention = crate::produce::base0_material_decode_any_v1(capture).ok()?;
-        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(retention.binding(), interval).ok().map(|g| g.interval_count)
+        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_capped_v1(retention.binding(), interval, self.step_ladder_cap)
+            .ok()
+            .map(|g| g.interval_count)
     }
 
     fn fp_interval_count_for(&self, prompt_tokens: u32, decode_tokens_executed: u32) -> Option<u32> {
@@ -1267,24 +1275,28 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             .ok_or_else(|| "this backend serves no registered graph, so it opens no interval".to_string())?;
         // Two retention forms, one opening, the class's map deciding whether the history travels —
         // ADR-0082 Decisions 7 and 9, exactly as the dense tier composes them.
-        let chunked =
-            match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
-                crate::produce::Base0RetentionV1::Folded(material) => {
-                    let plan = self.plan.as_ref().ok_or_else(|| "this backend serves no registered graph".to_string())?;
-                    crate::fp_interval::base0_open_fp_interval_sparse_v1(
-                        &material,
-                        index,
-                        prompt_token_ids,
-                        interval,
-                        &Qwen36IntervalKernels { artifact: &self.artifact, plan },
-                    )
-                    .map_err(|e| e.to_string())?
-                }
-                crate::produce::Base0RetentionV1::Dense(material) => {
-                    crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, interval)
-                        .map_err(|e| e.to_string())?
-                }
-            };
+        let chunked = match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
+            crate::produce::Base0RetentionV1::Folded(material) => {
+                let plan = self.plan.as_ref().ok_or_else(|| "this backend serves no registered graph".to_string())?;
+                crate::fp_interval::base0_open_fp_interval_sparse_capped_v1(
+                    &material,
+                    index,
+                    prompt_token_ids,
+                    interval,
+                    self.step_ladder_cap,
+                    &Qwen36IntervalKernels { artifact: &self.artifact, plan },
+                )
+                .map_err(|e| e.to_string())?
+            }
+            crate::produce::Base0RetentionV1::Dense(material) => crate::fp_interval::base0_open_fp_interval_capped_v1(
+                &material,
+                index,
+                prompt_token_ids,
+                interval,
+                self.step_ladder_cap,
+            )
+            .map_err(|e| e.to_string())?,
+        };
         if self.profile.as_ref().is_some_and(crate::fp_interval::base0_fp_class_requires_flat_openings_v1) {
             return crate::fp_interval::base0_strip_fp_interval_history_v1(&chunked).map_err(|e| e.to_string());
         }
@@ -1302,14 +1314,20 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let (Some(interval), Some(plan)) = (self.checkpoint_interval(), self.plan.as_ref()) else {
             return kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1::Unverifiable;
         };
-        let state = crate::fp_interval::base0_fp_interval_opening_seat_state_v1(opening, prompt_token_ids, interval);
-        crate::fp_interval::base0_verify_fp_interval_opening_with_state_v1(
+        let state = crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+            opening,
+            prompt_token_ids,
+            interval,
+            self.step_ladder_cap,
+        );
+        crate::fp_interval::base0_verify_fp_interval_opening_with_state_capped_v1(
             opening,
             claim,
             index,
             prompt_token_ids,
             work_leaves,
             interval,
+            self.step_ladder_cap,
             state.as_ref(),
             &Qwen36IntervalKernels { artifact: &self.artifact, plan },
         )

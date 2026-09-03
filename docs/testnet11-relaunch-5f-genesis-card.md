@@ -237,6 +237,52 @@ ladder and weightless fences armed is admitted and **unprosecutable**, and the n
 otherwise was measured under a court the build would not be running. `palw_kary_court` is what
 makes the table true, which is why §1 arms it.
 
+**§3's central claim is now MEASURED, not argued** — priced at the ruleset's own 2^26 ladder on
+`5f + impl(4ffb2b26)`, which is the first time the "precondition, not optimisation" line has had a
+number under it:
+
+    RC ceiling                        2,250,000 B = 27 chunks
+    graph-v2/v3 @ 512                 1,999,729 B = 24 chunks   FITS
+    graph-v5    @ 512, no dissection  3,446,708 B = 42 chunks   OVER THE CEILING
+    graph-v5    @ 512, dissection     (FD's derivation)  4 chunks
+
+So "a graph-v5 row registered with only the ladder and weightless fences armed is admitted and
+unprosecutable" is **42 against 27** — refused at acceptance, by fifteen carriers. The dissection
+court is what takes it to 4. That is the whole of §1's reason for arming `palw_kary_court`, in one
+line, and it can now be re-derived by anyone rather than believed.
+
+**The certification vector cap does not bind either row, and v5 is the cheaper of the two.** Measured
+as an upper bound from the profile alone (`2 × |distinct (table, kernel) pairs|`, the 2 being prefill
+and decode; the drill's real count can only be lower, since a leaf whose capture the material does
+not hold is skipped):
+
+    graph-v2/v3 @ 512   12 kernels, 16 (table,kernel) pairs, vectors <= 32   cap 32  FITS
+    graph-v5    @ 512   10 kernels, 14 (table,kernel) pairs, vectors <= 28   cap 32  FITS
+
+Fusing the four-node attention site into one **removes two distinct kernels**, so the row this
+genesis registers needs fewer vectors than the graph-v2 row that sits exactly at the cap. An upper
+bound is the right instrument here: at or below the cap it cannot bind, and only a number above
+would have needed the full drill. So `PALW_CERTIFICATION_MAX_VECTORS` stays 32 and the hybrid's 74
+is deferred with its refusal asserted by name — see §5.
+
+*(That deferral is load-bearing rather than lazy: `PALW_CERTIFICATION_MASS_PER_VECTOR` is
+`(CHUNK_MAX_BYTES × CHUNK_MAX_COUNT) / MAX_VECTORS`, so the per-vector price is DERIVED FROM THE
+CAP. Raising the cap does not raise the fee — it lowers the price of each re-execution and leaves
+the total identical, buying validators 2.31× the grading work for the same payment. Any future raise
+must decouple the mass rule in the same change, or it is a fee cut wearing a bound's clothes.)*
+
+**And the same table answers a real strategic question, which is why it is worth having.** A
+graph-v2/v3 row at 512 **fits without ADR-0082 at all** — 24 chunks against 27, no fused site, no
+court arming, and its 12 kernels are already covered by the shipped A16 family. So 0082 is not a
+precondition for *a 512 class*; it is a precondition for *the v5 512 class*. The card said the
+former and meant the latter, and the distinction is only visible once both rows are priced.
+
+**We stay with graph-v5, and the reason is the close, not the fusion.** 24 carriers is a 0.3375 MSK
+assembly deposit and a 192-DAA reserve on every close, against 4 carriers and 32 DAA — and that
+reserve is charged to the court window whether or not anyone ever files, which is what compressed
+the turn deadline in the first place. A v2 row would ship a class every honest dispute of which
+costs six times what it needs to.
+
 *(This correction is the same defect class as everything else on this card: a figure measured under
 one configuration, quoted as if it held under another. It was caught by the session that derived
 it, reading its own label — "dissection court, arity 16, Merkle prompt ids".)*
@@ -749,6 +795,33 @@ gate above is the one that would have caught all three.
   `palw_kary_court` fence itself (§1), and stream E's court wiring: the dissection phase on the
   court session, the `AttnDissection` close-proof arm, the deadline read, and a **state version bump
   18 → 19** because the session record gains a field.
+- **THE 512 ROW HAS NO GENESIS BUILDER, AND §2 SAYS IT IS REGISTERED.** Checked by looking rather
+  than assumed: the class this entire card is about appears in **zero** `.rs` files on
+  `palw-testnet-5f`, `palw-adr0082-impl` or `palw-artifact-names-genesis-row` — no constant, no
+  `ClassRegistered`, no builder. §2's table lists it as registered at genesis and nothing registers
+  it. The three that DO exist live in the profile modules, not `params.rs`, and that is where the
+  fourth belongs:
+
+      consensus/core/src/palw_qwen25_profile.rs:616   qwen25_a16_registration_v2   <- params.rs:4796
+      consensus/core/src/palw_qwen36_profile.rs:1411  qwen36_registration_v3       <- params.rs:4789
+      consensus/core/src/palw_base0_profile.rs:764    palw_rc_base0_registration_v1
+
+  **It must carry a carriage**, because `verify_palw_genesis_v2` now refuses a fused row minted at
+  genesis whose `ClassRegistered` has `admission: None` — `GenesisFusedRowCarriesNoProfile`,
+  `GenesisCarriageIsNotTheClass`, `GenesisFusedDisagreesWithCatalog`. **Its signature is empty and
+  that is correct, not a concession**: genesis verification never reads `.signature` (the only
+  verifier is the acceptance layer at `consensus/src/pipeline/virtual_processor/processor.rs:6099`),
+  a signature authenticates *who moved a permille from every incumbent* and at genesis nobody did,
+  and it would anyway be checked against a `registrant_bond` key that the same genesis object list
+  is creating.
+
+  **The class id must be DERIVED and reported, never quoted into the builder.** `shape_profile_id`
+  is `keyed64` over the borsh of the profile, so the id is whatever the profile derives to — and
+  three adjacent ids are loose in this project's notes for three different things: `4277d84f…` from
+  the registration/certification/artifact chain, `71bbb755…` which is what the panel actually
+  registered at n_ctx 16, and `8d2e6f16…` which `palw-certify bind` produced from the artifact's own
+  512 row. Reconcile the derived value against the artifact and the certification path before the
+  freeze. *A class id quoted from a summary is what burned `n_ctx 17` on 2026-08-28.*
 - **The 2^22 sweep (fixer FD2).** The ladder went to 2^26, but `2^22` survives as a bare literal at
   a set of sites the ladder change did not reach — and the 512 row's canonical job is **6,630,544
   leaves**, so until they move, *every honest claim of the class this genesis registers is refused
@@ -801,6 +874,32 @@ gate above is the one that would have caught all three.
 
       registered by the panel   71bbb755…   the catalog's graph-v2 row at n_ctx 16
       certified by bind         8d2e6f16…   the artifact's own row at 512
+
+  **And `--artifact` alone does NOT fix it — that prescription was wrong.** All four ids derived and
+  printed on the merged tree, which is what turned a suspicion into a defect:
+
+      a16 graph-v2/v3  n_ctx  16   7a76d29b…  fused false
+      a16 graph-v5     n_ctx  16   1ae17978…  fused true
+      a16 graph-v2/v3  n_ctx 512   8d2e6f16…  fused false   <- what `bind` produces
+      a16 graph-v5     n_ctx 512   4277d84f…  fused true    <- what genesis registers
+
+  `8d2e6f16…` is **graph-v2 at 512**. So `bind` is not merely binding the wrong WIDTH, which is what
+  this section assumed — it binds the wrong GRAPH, at the right width, differing only by the fused
+  site. Deriving from the artifact does not help by itself: the artifact header declares geometry
+  (family, width, eps) and **no graph**, so `bind --artifact` projects it through
+  `a16_row_for_artifact_shape_v1` → `palw_a16_context_row_profile_v1` and lands on v2 again.
+
+  **The correct derivation already exists and is already tested.** J shipped
+  `classes::a16_artifact_row_v1`, which projects the same header through
+  `palw_fuse_attention_site_v5` over the graph-v3 dense row with the artifact's own epsilon and the
+  tiled v3 map — **with an equality test pinning that it derives the same `shape_profile_id` as the
+  genesis row.** The fix is that `bind` calls the other one. *The forcing test existed and the
+  production path took the other spelling anyway*, which is this project's fourth instance of one
+  class root spelled twice with nothing making them equal.
+
+  **The test to add is not "the two derivations agree" — J has that and it did not help.** It is
+  that `bind --artifact` over `instruct-bound.palwart`, through the binary's own argument parsing,
+  prints `4277d84f…`. A unit test that builds both ends from one source of truth checks nothing.
 
   The registered value is printed by the panel that computed it rather than scraped from a log —
   an earlier reading came from `grep -oE '[0-9a-f]{128}' | tail -1` and was returning block hashes.

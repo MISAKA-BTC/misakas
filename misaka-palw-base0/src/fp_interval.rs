@@ -190,6 +190,61 @@ impl From<crate::fp_capture::Base0SparseCaptureError> for Base0FpIntervalError {
 // Interval geometry
 // ---------------------------------------------------------------------------------------------
 
+/// **The step space a binding PRICES, checked against the ladder the caller was handed.**
+///
+/// One rule, in one place, because three different questions need the same number and each of
+/// them used to answer it for itself: the geometry a seat checks an opening's shape against
+/// ([`Base0FpIntervalGeometryV1::from_binding_capped_v1`]), the leaf vector an executor sizes from
+/// a capture's tiles ([`leaves_from_tiles_v1`]), and the capture a replay allocates
+/// ([`base0_fp_replay_interval_v1`]).
+///
+/// # The bound is `min(the declared price, the ruleset's ladder)`, and both halves are load-bearing
+///
+/// `verify_binding_v1` checks that the carried profile is the DECLARED one and that the roots
+/// recompute; it does not check that `step_leaf_count` is `step_leaf_count(profile, context)`,
+/// because that value is a leg INPUT rather than a derived one. Every path below sizes a replay
+/// from the profile and compares it against a range priced by the field, so an opening whose two
+/// numbers disagree would have a seat replay one step space and compare it to another — and, on a
+/// hostile opening, allocate a capture the size of whatever the field says to do it.
+///
+/// So:
+///
+/// * the declared price is refused above `max_step_leaf_count` FIRST, by name
+///   ([`Base0FpIntervalError::LeafCountOutOfRange`]) and before any allocation — a plain `u64`
+///   inside a borsh blob asking for `2^48` leaves is a `2^54`-byte request, which is
+///   `handle_alloc_error` and a process ABORT rather than a catchable panic;
+/// * the enumeration is then counted with the DECLARED price as its own cap, which is exact
+///   because the rule is an EQUALITY: a geometry that overruns the declared price cannot equal it,
+///   so counting past it buys nothing and a `TooManyLeaves` is simply the inequality reported
+///   under its other name.
+///
+/// **`max_step_leaf_count` is the ruleset's, never the executor's constant.** The RC ruleset
+/// freezes `2^26` and the graph-v5 dense 512 row's canonical job is 6,630,544 leaves, so a seat
+/// that re-derived at [`PALW_STEP_LEG_MAX_LEAVES`] (`2^22`) refused an honest opening of a class
+/// the chain admits — and a class no seat will license is a class no panel can certify. The number
+/// reaches a family through `with_step_ladder_cap` (ADR-0080 W1b), which is
+/// `PalwCourtParamsV2::max_step_leaf_count` off the bundle the node runs.
+pub fn base0_fp_binding_step_space_v1(binding: &PalwStepBindingV2, max_step_leaf_count: u64) -> Result<u64, Base0FpIntervalError> {
+    if binding.step_leaf_count == 0 || binding.step_leaf_count > max_step_leaf_count {
+        return Err(Base0FpIntervalError::LeafCountOutOfRange { got: binding.step_leaf_count, max: max_step_leaf_count });
+    }
+    match kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(
+        &binding.shape_profile,
+        &binding.job_context,
+        binding.step_leaf_count,
+    ) {
+        Ok(derived) if derived == binding.step_leaf_count => Ok(derived),
+        Ok(derived) => Err(Base0FpIntervalError::PriceIsNotTheGeometrys { declared: binding.step_leaf_count, derived }),
+        // The cap the count was taken against IS the declared price, so this arm is the strict
+        // inequality `derived > declared` and never a ruleset refusal — `got` is the running total
+        // at the first step that passed the price, which is the same payload the loop reported.
+        Err(kaspa_consensus_core::palw_step::PalwStepError::TooManyLeaves { got, .. }) => {
+            Err(Base0FpIntervalError::PriceIsNotTheGeometrys { declared: binding.step_leaf_count, derived: got })
+        }
+        Err(e) => Err(Base0FpIntervalError::StepSpace(format!("{e:?}"))),
+    }
+}
+
 /// **Which calls each checkpoint interval covers.**
 ///
 /// Interval 0 is the prefill call plus the decode calls up to the first checkpoint, replayed from
@@ -243,23 +298,29 @@ impl Base0FpIntervalGeometryV1 {
     /// The same geometry read off a capture's own binding — the executor's side. It must agree
     /// with [`Self::from_chain_facts_v1`] on every capture this family produces, and
     /// `the_two_interval_counts_agree_on_every_capture` is what pins that.
+    ///
+    /// **The DEFAULT ladder, for a caller that holds no ruleset.** The rule is
+    /// [`Self::from_binding_capped_v1`]; this passes [`PALW_STEP_LEG_MAX_LEAVES`], which is what
+    /// every shipped preset froze — and which is the EXECUTOR's constant, not the court's. A seat
+    /// on a network whose `PalwCourtParamsV2::max_step_leaf_count` is wider must pass that number:
+    /// see [`base0_fp_binding_step_space_v1`].
     pub fn from_binding_v1(binding: &PalwStepBindingV2, family_interval: u32) -> Result<Self, Base0FpIntervalError> {
+        Self::from_binding_capped_v1(binding, family_interval, PALW_STEP_LEG_MAX_LEAVES)
+    }
+
+    /// [`Self::from_binding_v1`] against the ladder top the CALLER states — the ruleset's
+    /// `PalwCourtParamsV2::max_step_leaf_count`, which reaches a family through
+    /// `with_step_ladder_cap` (ADR-0080 W1b).
+    pub fn from_binding_capped_v1(
+        binding: &PalwStepBindingV2,
+        family_interval: u32,
+        max_step_leaf_count: u64,
+    ) -> Result<Self, Base0FpIntervalError> {
         let committed = binding.checkpoint_profile.checkpoint_interval;
         if committed != family_interval {
             return Err(Base0FpIntervalError::CheckpointIntervalIsNotTheCommittedOne { family: family_interval, committed });
         }
-        // **The binding's price must be the price its own geometry implies.** `verify_binding_v1`
-        // checks that the carried profile is the DECLARED one and that the roots recompute; it
-        // does not check that `step_leaf_count` is `step_leaf_count(profile, context)`, because
-        // that value is a leg input rather than a derived one. Every path below sizes a replay
-        // from the profile and compares against a range priced by the field, so an opening whose
-        // two numbers disagree would have a seat replay one step space and compare it to another —
-        // and, on a hostile opening, allocate a 2^22-leaf capture to do it.
-        let derived = kaspa_consensus_core::palw_step::step_leaf_count(&binding.shape_profile, &binding.job_context)
-            .map_err(|e| Base0FpIntervalError::StepSpace(format!("{e:?}")))?;
-        if derived != binding.step_leaf_count {
-            return Err(Base0FpIntervalError::PriceIsNotTheGeometrys { declared: binding.step_leaf_count, derived });
-        }
+        base0_fp_binding_step_space_v1(binding, max_step_leaf_count)?;
         Self::from_chain_facts_v1(
             binding.job_context.declared_prefill_tokens,
             binding.job_context.exact_decode_tokens,
@@ -377,16 +438,26 @@ pub struct Base0FpIntervalLeavesV1 {
 /// positions, so no single interval owns one. This family registers `kv_chunk_calls = 0` on every
 /// shipped class, so the aux region is empty; a class that grew one is refused BY NAME rather than
 /// silently opened with an interval boundary that cuts a chunk in half.
-fn first_leaf_of_call_v1(profile: &PalwShapeProfileV3, ctx: &PalwJobContextV2, call: u32) -> Result<u64, Base0FpIntervalError> {
+///
+/// **`step_leaf_count` is passed in rather than re-derived**, and that is the whole of the fix at
+/// this site: "one past the last leaf" is the step space's own size, the caller has already
+/// obtained it from [`base0_fp_binding_step_space_v1`] against the ruleset's ladder, and the
+/// re-derivation here was a second count taken against the EXECUTOR's constant — so on the
+/// graph-v5 512 row (6,630,544 leaves) it answered `TooManyLeaves` while the number it was
+/// re-deriving sat in the caller's hand.
+fn first_leaf_of_call_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    call: u32,
+    step_leaf_count: u64,
+) -> Result<u64, Base0FpIntervalError> {
     let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
     let aux = kv_aux_leaf_count(profile, ctx);
     if aux != 0 {
         return Err(Base0FpIntervalError::AuxLeavesAreNotIntervalScoped { got: aux });
     }
     if call > decode_calls {
-        let total = kaspa_consensus_core::palw_step::step_leaf_count(profile, ctx)
-            .map_err(|e| Base0FpIntervalError::StepSpace(format!("{e:?}")))?;
-        return Ok(total);
+        return Ok(step_leaf_count);
     }
     canonical_step_leaf_index(profile, ctx, &PalwStepCoordinateV1 { call_index: call, node_slot: 0, position: 0, tile_index: 0 })
         .ok_or_else(|| Base0FpIntervalError::StepSpace(format!("call {call} has no first leaf in this step space")))
@@ -405,16 +476,20 @@ fn logits_node_slot_v1(profile: &PalwShapeProfileV3) -> u32 {
 }
 
 /// Where interval `index`'s opening reaches in the step space.
+///
+/// `step_leaf_count` is the space's size, from [`base0_fp_binding_step_space_v1`] — the caller
+/// holds it because the caller is the one that holds the ladder.
 pub fn base0_fp_interval_leaves_v1(
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     geometry: &Base0FpIntervalGeometryV1,
     index: u32,
+    step_leaf_count: u64,
 ) -> Result<Base0FpIntervalLeavesV1, Base0FpIntervalError> {
     let (first_call, last_call) =
         geometry.calls_for(index).ok_or(Base0FpIntervalError::IntervalOutOfRange { index, count: geometry.interval_count })?;
-    let interval_first = first_leaf_of_call_v1(profile, ctx, first_call)?;
-    let range_end = first_leaf_of_call_v1(profile, ctx, last_call + 1)?;
+    let interval_first = first_leaf_of_call_v1(profile, ctx, first_call, step_leaf_count)?;
+    let range_end = first_leaf_of_call_v1(profile, ctx, last_call + 1, step_leaf_count)?;
     // The seed row is a step COORDINATE, so it is named by the anchor's CALL and never by the
     // checkpoint leaf's counter — the two are the same number only under `PerDecodeCall`.
     let range_first = match geometry.anchor_seed_call_v1(index) {
@@ -618,6 +693,26 @@ pub fn base0_fp_interval_opening_seat_state_v1(
     prompt_token_ids: &[u32],
     family_checkpoint_interval: u32,
 ) -> Option<crate::fp_recompute::Base0FpSeatStateV1> {
+    base0_fp_interval_opening_seat_state_capped_v1(
+        opening_bytes,
+        prompt_token_ids,
+        family_checkpoint_interval,
+        PALW_STEP_LEG_MAX_LEAVES,
+    )
+}
+
+/// [`base0_fp_interval_opening_seat_state_v1`] against the ladder top the CALLER states.
+///
+/// The geometry is built only to name the covered checkpoint, but building it prices the binding —
+/// so at the executor's constant this returned `None` for every honest graph-v5 512 opening, and
+/// `None` here is the difference between a seat that resumes from its OWN state and one that files
+/// `Unverifiable` on an honest producer.
+pub fn base0_fp_interval_opening_seat_state_capped_v1(
+    opening_bytes: &[u8],
+    prompt_token_ids: &[u32],
+    family_checkpoint_interval: u32,
+    max_step_leaf_count: u64,
+) -> Option<crate::fp_recompute::Base0FpSeatStateV1> {
     let any = base0_fp_interval_opening_decode_any_v1(opening_bytes).ok()?;
     let binding = match &any {
         Base0FpIntervalOpeningAnyV1::WithHistory(o) => &o.binding,
@@ -627,7 +722,7 @@ pub fn base0_fp_interval_opening_seat_state_v1(
         Base0FpIntervalOpeningAnyV1::WithHistory(o) => o.interval_index,
         Base0FpIntervalOpeningAnyV1::Recomputed(o) => o.interval_index,
     };
-    let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, family_checkpoint_interval).ok()?;
+    let geometry = Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count).ok()?;
     // The memo is keyed by the LEAF's counter, which is the unit the recompute was ordered in
     // (`PalwBackend::fp_recompute_checkpoint_root`) and the unit the row check compares against.
     // Keying it in calls while the class counts positions is audit B's C-2 on the lookup side: the
@@ -688,10 +783,12 @@ pub fn base0_state_chunks_root_v1(map_id: &Hash64, chunks: &[Vec<u8>]) -> Result
 fn leaves_from_tiles_v1(
     binding: &PalwStepBindingV2,
     tiles: &[(u64, PalwStepTileLeafV1)],
+    max_step_leaf_count: u64,
 ) -> Result<Vec<Hash64>, Base0FpIntervalError> {
-    if binding.step_leaf_count == 0 || binding.step_leaf_count > PALW_STEP_LEG_MAX_LEAVES {
-        return Err(Base0FpIntervalError::LeafCountOutOfRange { got: binding.step_leaf_count, max: PALW_STEP_LEG_MAX_LEAVES });
-    }
+    // The same bound, from the RULESET rather than from the executor's constant — the vector this
+    // sizes is `step_leaf_count` `Hash64`s and the number is a stranger's, so the check stays; it
+    // is the ceiling that moves. See [`base0_fp_binding_step_space_v1`].
+    base0_fp_binding_step_space_v1(binding, max_step_leaf_count)?;
     let ctx_hash = binding.job_context.context_hash();
     let profile_hash = binding.shape_profile.shape_profile_id();
     let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
@@ -719,6 +816,20 @@ pub fn base0_open_fp_interval_v1(
     prompt_token_ids: &[u32],
     family_checkpoint_interval: u32,
 ) -> Result<Vec<u8>, Base0FpIntervalError> {
+    base0_open_fp_interval_capped_v1(material, index, prompt_token_ids, family_checkpoint_interval, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`base0_open_fp_interval_v1`] against the ladder top the CALLER states — the ruleset's
+/// `PalwCourtParamsV2::max_step_leaf_count`, which a backend holds through `with_step_ladder_cap`
+/// (ADR-0080 W1b). The un-capped name above passes the executor's default, so a caller with no
+/// ruleset in scope keeps exactly the behaviour it had.
+pub fn base0_open_fp_interval_capped_v1(
+    material: &Base0RetainedMaterialV1,
+    index: u32,
+    prompt_token_ids: &[u32],
+    family_checkpoint_interval: u32,
+    max_step_leaf_count: u64,
+) -> Result<Vec<u8>, Base0FpIntervalError> {
     let (binding, tiles, _logits_rows, _generated, chunks) = material;
     let profile = &binding.shape_profile;
     let ctx = &binding.job_context;
@@ -740,12 +851,17 @@ pub fn base0_open_fp_interval_v1(
     if base0_fp_class_requires_flat_openings_v1(profile) && index > 0 {
         return Err(Base0FpIntervalError::DenseRetentionCarriesNoCheckpointLeaves);
     }
-    let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, family_checkpoint_interval)?;
-    let leaves_geometry = base0_fp_interval_leaves_v1(profile, ctx, &geometry, index)?;
+    let step_leaf_count = base0_fp_binding_step_space_v1(binding, max_step_leaf_count)?;
+    let geometry = Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count)?;
+    let leaves_geometry = base0_fp_interval_leaves_v1(profile, ctx, &geometry, index, step_leaf_count)?;
 
-    let leaves = leaves_from_tiles_v1(binding, tiles)?;
+    let leaves = leaves_from_tiles_v1(binding, tiles, max_step_leaf_count)?;
     let tree =
-        crate::fp_capture::Base0SparseStepTreeV1::from_leaves_v1(&leaves, crate::fp_capture::PALW_BASE0_SPARSE_RETAIN_LEVEL_V1)?;
+        crate::fp_capture::Base0SparseStepTreeV1::from_leaves_capped_v1(
+            &leaves,
+            crate::fp_capture::PALW_BASE0_SPARSE_RETAIN_LEVEL_V1,
+            max_step_leaf_count,
+        )?;
     // The capture must be the one the binding committed, checked before anything is served: an
     // opening assembled from a leaf vector that does not reproduce `step_merkle_root` is an
     // opening no seat can verify, and the executor would rather learn that here.
@@ -958,7 +1074,9 @@ fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
         (Some(_), None) => return Err(Base0FpIntervalError::NoCheckpointAt { covered: 0 }),
     };
 
-    let replayed = kernels.replay_interval(profile, ctx, &start, first_call, last_needed).map_err(Base0FpIntervalError::Replay)?;
+    let replayed = kernels
+        .replay_interval(profile, ctx, &start, first_call, last_needed, binding.step_leaf_count)
+        .map_err(Base0FpIntervalError::Replay)?;
     let width = (span_end - span_first) as usize;
     let mut span = vec![None; width];
     for (at, hash) in replayed {
@@ -993,6 +1111,26 @@ pub fn base0_open_fp_interval_sparse_v1<K: Base0FpIntervalKernelsV1>(
     family_checkpoint_interval: u32,
     kernels: &K,
 ) -> Result<Vec<u8>, Base0FpIntervalError> {
+    base0_open_fp_interval_sparse_capped_v1(
+        material,
+        index,
+        prompt_token_ids,
+        family_checkpoint_interval,
+        PALW_STEP_LEG_MAX_LEAVES,
+        kernels,
+    )
+}
+
+/// [`base0_open_fp_interval_sparse_v1`] against the ladder top the CALLER states. The un-capped
+/// name passes the executor's default.
+pub fn base0_open_fp_interval_sparse_capped_v1<K: Base0FpIntervalKernelsV1>(
+    material: &crate::produce::Base0FpMaterialV2,
+    index: u32,
+    prompt_token_ids: &[u32],
+    family_checkpoint_interval: u32,
+    max_step_leaf_count: u64,
+    kernels: &K,
+) -> Result<Vec<u8>, Base0FpIntervalError> {
     let binding = &material.binding;
     let profile = &binding.shape_profile;
     let ctx = &binding.job_context;
@@ -1005,8 +1143,9 @@ pub fn base0_open_fp_interval_sparse_v1<K: Base0FpIntervalKernelsV1>(
     if profile.state_chunk_map_id == Hash64::default() && index > 0 {
         return Err(Base0FpIntervalError::NoStateChunkMapRegistered { index });
     }
-    let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, family_checkpoint_interval)?;
-    let leaves_geometry = base0_fp_interval_leaves_v1(profile, ctx, &geometry, index)?;
+    let step_leaf_count = base0_fp_binding_step_space_v1(binding, max_step_leaf_count)?;
+    let geometry = Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count)?;
+    let leaves_geometry = base0_fp_interval_leaves_v1(profile, ctx, &geometry, index, step_leaf_count)?;
 
     let tree = &material.step_tree;
     if tree.leaf_count() != binding.step_leaf_count || tree.root()? != binding.step_merkle_root {
@@ -1175,6 +1314,14 @@ pub enum Base0FpIntervalStartV1<'a> {
 /// class's registered arithmetic and nothing that resembles it. Each family implements this over
 /// its own engine and cache; [`base0_fp_replay_interval_v1`] is the shared loop, so the ordering
 /// and the coordinates a replay commits to are one implementation across the three families.
+/// **`step_leaf_count` is a parameter, and that is where the ladder stops travelling.** The
+/// replay places its rows at ABSOLUTE coordinates, so it sizes a capture from the step space's
+/// size — and re-deriving that size here would be a second count taken against whatever constant
+/// this crate happens to hold. The callers ([`base0_replay_span_leaves_v1`] and
+/// [`base0_verify_fp_interval_opening_with_state_capped_v1`]) both hold the binding, and both have
+/// already checked its price against the ruleset's ladder
+/// ([`base0_fp_binding_step_space_v1`]) before a byte is replayed. So a family implementing this
+/// needs no ruleset of its own: the number it is handed is the claim's, already priced.
 pub trait Base0FpIntervalKernelsV1 {
     fn replay_interval(
         &self,
@@ -1183,6 +1330,7 @@ pub trait Base0FpIntervalKernelsV1 {
         start: &Base0FpIntervalStartV1<'_>,
         first_call: u32,
         last_call: u32,
+        step_leaf_count: u64,
     ) -> Result<Vec<(u64, Hash64)>, String>;
 }
 
@@ -1194,12 +1342,14 @@ pub trait Base0FpIntervalKernelsV1 {
 /// here, because a family that re-implemented the coordinate rule would commit its replay at
 /// coordinates the leg does not use, and every comparison would fail for a reason that is not the
 /// producer's.
+#[allow(clippy::too_many_arguments)]
 pub fn base0_fp_replay_interval_v1<F>(
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     start: &Base0FpIntervalStartV1<'_>,
     first_call: u32,
     last_call: u32,
+    step_leaf_count: u64,
     mut forward: F,
 ) -> Result<Vec<(u64, Hash64)>, String>
 where
@@ -1207,8 +1357,11 @@ where
 {
     use kaspa_consensus_core::palw_step::PalwStepTableV1;
     let prefill = ctx.declared_prefill_tokens as usize;
-    let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count(profile, ctx).map_err(|e| format!("{e:?}"))?;
-    let mut capture = crate::legs::Base0StepCaptureV1::new(leaf_count).map_err(|e| format!("{e:?}"))?;
+    // **The size is the caller's, priced against the ruleset's ladder before this was reached.**
+    // It used to be re-derived from `(profile, ctx)` at the EXECUTOR's `PALW_STEP_MAX_LEAVES`,
+    // which refused the graph-v5 512 row's 6,630,544-leaf honest job outright: no seat could
+    // replay an interval of a class the chain admits, so no panel could license one.
+    let mut capture = crate::legs::Base0StepCaptureV1::new(step_leaf_count).map_err(|e| format!("{e:?}"))?;
 
     let mut next: usize = match start {
         Base0FpIntervalStartV1::Genesis { prompt_tokens } => {
@@ -1287,13 +1440,41 @@ pub fn base0_verify_fp_interval_opening_v1<K: Base0FpIntervalKernelsV1>(
     family_checkpoint_interval: u32,
     kernels: &K,
 ) -> PalwFpIntervalVerdictV1 {
-    base0_verify_fp_interval_opening_with_state_v1(
+    base0_verify_fp_interval_opening_with_state_capped_v1(
         opening_bytes,
         claim,
         index,
         prompt_token_ids,
         work_leaves,
         family_checkpoint_interval,
+        PALW_STEP_LEG_MAX_LEAVES,
+        None,
+        kernels,
+    )
+    .to_consensus_v1()
+}
+
+/// [`base0_verify_fp_interval_opening_v1`] against the ladder top the CALLER states — the seat's
+/// entry point on a network whose ruleset froze a wider court than the executor's constant.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_verify_fp_interval_opening_capped_v1<K: Base0FpIntervalKernelsV1>(
+    opening_bytes: &[u8],
+    claim: PalwClaimRootsV1,
+    index: u32,
+    prompt_token_ids: &[u32],
+    work_leaves: u64,
+    family_checkpoint_interval: u32,
+    max_step_leaf_count: u64,
+    kernels: &K,
+) -> PalwFpIntervalVerdictV1 {
+    base0_verify_fp_interval_opening_with_state_capped_v1(
+        opening_bytes,
+        claim,
+        index,
+        prompt_token_ids,
+        work_leaves,
+        family_checkpoint_interval,
+        max_step_leaf_count,
         None,
         kernels,
     )
@@ -1378,6 +1559,39 @@ pub fn base0_verify_fp_interval_opening_with_state_v1<K: Base0FpIntervalKernelsV
     state: Option<&crate::fp_recompute::Base0FpSeatStateV1>,
     kernels: &K,
 ) -> Base0FpIntervalSeatVerdictV1 {
+    base0_verify_fp_interval_opening_with_state_capped_v1(
+        opening_bytes,
+        claim,
+        index,
+        prompt_token_ids,
+        work_leaves,
+        family_checkpoint_interval,
+        PALW_STEP_LEG_MAX_LEAVES,
+        state,
+        kernels,
+    )
+}
+
+/// [`base0_verify_fp_interval_opening_with_state_v1`] against the ladder top the CALLER states.
+///
+/// **This is the site the class's licensability turns on.** `work_leaves` is a CHAIN number (the
+/// accepted commitment's), the binding's price must equal it, and the geometry re-derives the same
+/// count from `(profile, context)` — so a seat that re-derived at the executor's `2^22` refused
+/// every honest opening of the graph-v5 512 row by `PriceIsNotTheGeometrys`, which the seam
+/// projects to `Mismatch`: "this opening is not about the claim in hand", said about an opening
+/// that was. A class no seat licenses is a class no panel can certify.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_verify_fp_interval_opening_with_state_capped_v1<K: Base0FpIntervalKernelsV1>(
+    opening_bytes: &[u8],
+    claim: PalwClaimRootsV1,
+    index: u32,
+    prompt_token_ids: &[u32],
+    work_leaves: u64,
+    family_checkpoint_interval: u32,
+    max_step_leaf_count: u64,
+    state: Option<&crate::fp_recompute::Base0FpSeatStateV1>,
+    kernels: &K,
+) -> Base0FpIntervalSeatVerdictV1 {
     // Bytes that are not this family's are bytes this seat cannot check — never an accusation.
     let Ok(any) = base0_fp_interval_opening_decode_any_v1(opening_bytes) else {
         return Base0FpIntervalSeatVerdictV1::Unverifiable;
@@ -1423,10 +1637,14 @@ pub fn base0_verify_fp_interval_opening_with_state_v1<K: Base0FpIntervalKernelsV
     if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != ctx.prompt_token_ids_hash {
         return Base0FpIntervalSeatVerdictV1::Mismatch;
     }
-    let Ok(geometry) = Base0FpIntervalGeometryV1::from_binding_v1(binding, family_checkpoint_interval) else {
+    let Ok(step_leaf_count) = base0_fp_binding_step_space_v1(binding, max_step_leaf_count) else {
         return Base0FpIntervalSeatVerdictV1::Mismatch;
     };
-    let Ok(leaves_geometry) = base0_fp_interval_leaves_v1(profile, ctx, &geometry, index) else {
+    let Ok(geometry) = Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count)
+    else {
+        return Base0FpIntervalSeatVerdictV1::Mismatch;
+    };
+    let Ok(leaves_geometry) = base0_fp_interval_leaves_v1(profile, ctx, &geometry, index, step_leaf_count) else {
         return Base0FpIntervalSeatVerdictV1::Mismatch;
     };
     let (Some((first_call, last_call)), count) = (geometry.calls_for(index), leaves_geometry.range_end - leaves_geometry.range_first)
@@ -1514,7 +1732,7 @@ pub fn base0_verify_fp_interval_opening_with_state_v1<K: Base0FpIntervalKernelsV
         }
     };
 
-    let Ok(recomputed) = kernels.replay_interval(profile, ctx, &start, first_call, last_call) else {
+    let Ok(recomputed) = kernels.replay_interval(profile, ctx, &start, first_call, last_call, step_leaf_count) else {
         // The seat could not run the interval — its honest `Unverifiable`, and never an
         // accusation against a producer whose material may be perfectly good.
         return Base0FpIntervalSeatVerdictV1::Unverifiable;
@@ -1786,6 +2004,7 @@ mod tests {
             start: &Base0FpIntervalStartV1<'_>,
             first_call: u32,
             last_call: u32,
+            step_leaf_count: u64,
         ) -> Result<Vec<(u64, Hash64)>, String> {
             use crate::engine::{Base0Engine, KvCache};
             let engine = Base0Engine::new(self.0);
@@ -1797,7 +2016,7 @@ mod tests {
                     KvCache::from_state_chunks(self.0, &geometry, chunks).map_err(|e| format!("{e:?}"))?
                 }
             };
-            base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, |token, position| {
+            base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, step_leaf_count, |token, position| {
                 let (logits, probe) = engine.forward_token_probed(&mut cache, token, position).map_err(|e| format!("{e:?}"))?;
                 Ok((logits, crate::legs::base0_captured_rows_v1(&probe)))
             })
@@ -1907,6 +2126,7 @@ mod tests {
             &material.0.job_context,
             &Base0FpIntervalGeometryV1::from_binding_v1(&material.0, interval).expect("a geometry"),
             index,
+            material.0.step_leaf_count,
         )
         .expect("a leaf range");
         let target = leaves_geometry.interval_first;
@@ -2526,7 +2746,7 @@ mod tests {
     /// C-2's acceptance test are all questions about the same run.
     #[cfg(test)]
     #[allow(clippy::type_complexity)]
-    fn dense_v5_run() -> (
+    pub(super) fn dense_v5_run() -> (
         crate::artifact::Base0ArtifactV1,
         PalwShapeProfileV3,
         PalwJobContextV2,
@@ -2818,4 +3038,186 @@ mod tests {
         assert_eq!(checked, run.checkpoints.leaves.len() as u32, "every committed leaf was reached from some step");
     }
 
+}
+
+// =================================================================================================
+// The acceptance test for the ladder: a class the chain admits must be one a seat can license
+// =================================================================================================
+
+#[cfg(test)]
+mod the_rulesets_ladder {
+    use super::*;
+    use kaspa_consensus_core::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
+    use kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
+    use kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES;
+
+    /// The genesis row's own canonical job, as a binding — the roots are not this test's subject
+    /// (nothing here recomputes them) and the two fields that are, `shape_profile` and
+    /// `job_context`, are the registered row's and the job the chain would pay for.
+    fn v5_512_binding() -> (PalwStepBindingV2, u64) {
+        let row = crate::classes::a16_graph_v5_row_v1().expect("the graph-v5 512 row is in this build");
+        let (prefill, decode) = row.canonical_job;
+        let (job_context, _prompt) = crate::produce::base0_rc_job_v1(
+            &row.profile,
+            Hash64::from_u64_word(0x0000_082B_2512),
+            row.artifact_shape.vocab,
+            prefill,
+            decode,
+        );
+        let step_leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(
+            &row.profile,
+            &job_context,
+            COURT_MAX_STEP_LEAVES,
+        )
+        .expect("the canonical job of an admitted class fits the ruleset it was admitted under");
+        let binding = PalwStepBindingV2 {
+            version: 2,
+            job_context,
+            shape_profile: row.profile.clone(),
+            checkpoint_profile: kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
+                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+            ),
+            state_chunk_map_id: row.profile.state_chunk_map_id,
+            full_logits_trace_root: Hash64::default(),
+            activation_leg_root: Hash64::default(),
+            step_leaf_count,
+            step_merkle_root: Hash64::default(),
+            checkpoint_count: 0,
+            checkpoint_merkle_root: Hash64::default(),
+            committed_execution_root: Hash64::default(),
+        };
+        (binding, step_leaf_count)
+    }
+
+    /// **The class the genesis registers is priced at the ruleset's ladder and NAMED at the
+    /// executor's.**
+    ///
+    /// The real `a16_graph_v5_row_v1()` profile and the real canonical job — no fixture, no
+    /// scaling. Under the ruleset the row was admitted under, a seat derives the same 6,630,544
+    /// leaves the binding declares and proceeds. Under the executor's constant it refuses BY NAME,
+    /// with both numbers in the error: not a panic, not an allocation, and not the silent
+    /// `Mismatch` that made the class unlicensable.
+    #[test]
+    fn the_512_rows_honest_price_clears_the_rulesets_ladder_and_is_named_at_the_executors() {
+        let (binding, leaves) = v5_512_binding();
+        assert!(
+            leaves > PALW_STEP_MAX_LEAVES && leaves <= COURT_MAX_STEP_LEAVES,
+            "the row is only interesting because it is between the two: {leaves} leaves, executor {PALW_STEP_MAX_LEAVES}, ruleset {COURT_MAX_STEP_LEAVES}"
+        );
+        eprintln!(
+            "graph-v5 512 row: canonical job ({}, {}) prices {leaves} step leaves; executor constant {PALW_STEP_MAX_LEAVES}, RC ruleset ladder {COURT_MAX_STEP_LEAVES}",
+            binding.job_context.declared_prefill_tokens, binding.job_context.exact_decode_tokens,
+        );
+
+        assert_eq!(base0_fp_binding_step_space_v1(&binding, COURT_MAX_STEP_LEAVES), Ok(leaves));
+        assert_eq!(
+            base0_fp_binding_step_space_v1(&binding, PALW_STEP_MAX_LEAVES),
+            Err(Base0FpIntervalError::LeafCountOutOfRange { got: leaves, max: PALW_STEP_MAX_LEAVES }),
+            "at the executor's constant the refusal must name the ladder that refused, and the price it refused"
+        );
+
+        // And the same at the seat's own door, which is where the class's licensability lives.
+        assert!(
+            Base0FpIntervalGeometryV1::from_binding_capped_v1(&binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1, COURT_MAX_STEP_LEAVES)
+                .is_ok(),
+            "a seat handed the ruleset's ladder must build a geometry for the row the genesis registers"
+        );
+        assert_eq!(
+            Base0FpIntervalGeometryV1::from_binding_capped_v1(
+                &binding,
+                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+                PALW_STEP_MAX_LEAVES
+            ),
+            Err(Base0FpIntervalError::LeafCountOutOfRange { got: leaves, max: PALW_STEP_MAX_LEAVES }),
+        );
+        // The un-capped name is the executor's default and must still BE the executor's default —
+        // a caller with no ruleset in scope keeps exactly the behaviour it had.
+        assert_eq!(
+            Base0FpIntervalGeometryV1::from_binding_v1(&binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1),
+            Err(Base0FpIntervalError::LeafCountOutOfRange { got: leaves, max: PALW_STEP_MAX_LEAVES }),
+        );
+
+        // A price that is not the geometry's is still refused under its own name at either ladder —
+        // raising the ceiling must not have turned the equality into an inequality.
+        let mut lying = binding.clone();
+        lying.step_leaf_count = leaves - 1;
+        assert!(
+            matches!(
+                base0_fp_binding_step_space_v1(&lying, COURT_MAX_STEP_LEAVES),
+                Err(Base0FpIntervalError::PriceIsNotTheGeometrys { declared, .. }) if declared == leaves - 1
+            ),
+            "a binding that under-prices its own geometry is refused as a price, not as a ladder"
+        );
+        let mut inflated = binding.clone();
+        inflated.step_leaf_count = leaves + 1;
+        assert_eq!(
+            base0_fp_binding_step_space_v1(&inflated, COURT_MAX_STEP_LEAVES),
+            Err(Base0FpIntervalError::PriceIsNotTheGeometrys { declared: leaves + 1, derived: leaves }),
+        );
+        // …and one above the ladder never reaches the enumeration at all.
+        let mut absurd = binding.clone();
+        absurd.step_leaf_count = u64::MAX;
+        assert_eq!(
+            base0_fp_binding_step_space_v1(&absurd, COURT_MAX_STEP_LEAVES),
+            Err(Base0FpIntervalError::LeafCountOutOfRange { got: u64::MAX, max: COURT_MAX_STEP_LEAVES }),
+            "the ladder is checked before the count, so no allocation is sized from a stranger's u64"
+        );
+    }
+
+    /// **A seat licenses an honest graph-v5 opening at the ladder it is HANDED, and refuses it by
+    /// name at a narrower one.**
+    ///
+    /// The 512 row's own artifact is 1.7 GiB and its canonical job allocates a 424 MB capture, so
+    /// the end-to-end half runs on the tiny graph-v5 fixture (`dense_v5_run`, the same class
+    /// declaration at a fixture geometry) — and the LADDER is scaled instead of the leaf count.
+    /// That is the same predicate from the other side: the rule is `count > ladder`, and a fixture
+    /// whose count is above the handed ladder exercises exactly the comparison a 6.6M-leaf job
+    /// makes against `2^22`. What it proves is the thing the constant hid — that the seat reads the
+    /// number it is handed, and that the refusal when the number is too small is a NAME rather than
+    /// a panic or an allocation.
+    #[test]
+    fn a_seat_licenses_an_honest_v5_opening_at_the_ladder_it_is_handed() {
+        let (artifact, profile, ctx, prompt, run) = super::tests::dense_v5_run();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let bytes = crate::produce::base0_fp_material_encode_v2(&run, &ids).expect("the fold retains");
+        let material = crate::produce::base0_fp_material_decode_v2(&bytes).expect("its own retention decodes");
+        let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
+        let plan = engine.plan_from_profile(&profile).expect("the plan");
+        let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
+        let interval = PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
+        let claim = PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor: ctx.job_id };
+
+        let leaves = run.binding.step_leaf_count;
+        let wide = COURT_MAX_STEP_LEAVES;
+        let narrow = leaves - 1;
+        assert!(leaves <= wide);
+        eprintln!("the graph-v5 fixture prices {leaves} leaves; licensed at {wide}, refused at {narrow}");
+
+        // The honest opening, produced at the wide ladder.
+        let opened = base0_open_fp_interval_sparse_capped_v1(&material, 0, &ids, interval, wide, &kernels)
+            .expect("an honest graph-v5 interval opens at the ruleset's ladder");
+
+        assert_eq!(
+            base0_verify_fp_interval_opening_with_state_capped_v1(&opened, claim, 0, &ids, leaves, interval, wide, None, &kernels),
+            Base0FpIntervalSeatVerdictV1::Valid,
+            "a seat handed the ladder the class was admitted under must license its honest opening"
+        );
+
+        // The same bytes, the same seat, one number narrower: refused, and refused BY NAME at the
+        // price rule rather than by panicking or by sizing a capture from the field.
+        assert_eq!(
+            base0_fp_binding_step_space_v1(&run.binding, narrow),
+            Err(Base0FpIntervalError::LeafCountOutOfRange { got: leaves, max: narrow }),
+        );
+        assert_eq!(
+            base0_verify_fp_interval_opening_with_state_capped_v1(&opened, claim, 0, &ids, leaves, interval, narrow, None, &kernels),
+            Base0FpIntervalSeatVerdictV1::Mismatch,
+            "and a seat whose ladder cannot hold the class refuses rather than replaying it"
+        );
+        // The executor cannot serve one either, and says so with the numbers.
+        assert_eq!(
+            base0_open_fp_interval_sparse_capped_v1(&material, 0, &ids, interval, narrow, &kernels),
+            Err(Base0FpIntervalError::LeafCountOutOfRange { got: leaves, max: narrow }),
+        );
+    }
 }

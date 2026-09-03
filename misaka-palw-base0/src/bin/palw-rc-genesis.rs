@@ -153,7 +153,16 @@ fn main() {
             PALW_RC_BASE0_CANONICAL.1,
         );
         let artifact = misaka_palw_base0::rc::palw_rc_base0_artifact_v1().expect("the floor's artifact derives");
-        let leaves = kaspa_consensus_core::palw_step::step_leaf_count(&profile, &job).expect("the job has a step space");
+        // **The ladder is the RULESET's, and the report says which one it counted at.** This was
+        // `step_leaf_count`, which counts against the executor's `PALW_STEP_MAX_LEAVES` — so a
+        // class the chain admits under a wider ruleset printed `TooManyLeaves` here and read as
+        // inadmissible to whoever ran the tool. `--ladder <n>` overrides it for a network that
+        // froze a different one.
+        let ladder = arg("--ladder")
+            .map(|v| v.parse::<u64>().unwrap_or_else(|e| panic!("--ladder: {e}")))
+            .unwrap_or(kaspa_consensus_core::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES);
+        let leaves = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &job, ladder)
+            .expect("the job has a step space inside the ladder it was counted at");
         let started = std::time::Instant::now();
         match misaka_palw_base0::produce::base0_execute_for_attempt_v1(&artifact, &profile, &job, &prompt) {
             Ok(run) => {
@@ -162,7 +171,7 @@ fn main() {
                     "One block's work — canonical job ({} prefill, {} decode):",
                     PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1
                 );
-                println!("  step leaves         {leaves}");
+                println!("  step leaves         {leaves}  (counted at ladder {ladder})");
                 println!(
                     "  wall time           {:.3} s  (one inference per template; the nonce grind is free)",
                     elapsed.as_secs_f64()

@@ -1,6 +1,9 @@
 # ADR-0082: The close is flat in the context — attention is refuted by dissection, the capture is a fold, and the answer is what earns
 
-**Status:** PROPOSED (2026-09-03). Written against two things: the refutation of ADR-0080 and
+**Status:** IMPLEMENTED (2026-09-04) on `palw-adr0082-impl`, pending the testnet-11 Relaunch 5f
+cut. **§10 is the implementation record**, and it is where every figure below that the measurement
+MOVED is corrected in place — struck, restated, with the configuration and the stream that moved
+it. ~~PROPOSED (2026-09-03).~~ Written against two things: the refutation of ADR-0080 and
 ADR-0081 (their own status blocks, verified line by line against the tree), and the state of
 `palw-testnet-5f` at `0c299e7a` read beside `palw-adr0080-verification-segment` at `ee1a7582`.
 The goal it serves is the one ADR-0077 R0 states and ADR-0080/0081 tried to reach: a person types a
@@ -134,7 +137,10 @@ with the 5f integrator):** the transport is ADR-0080 W5 (`palw-adr0080-w5-closeg
 close rides its OWN chunk-group table `court_close_groups` keyed `(session_id, side)`, deliberately
 NOT ADR-0075 D14's `pending_chunks`, whose `PALW_OBJECT_CHUNK_MAX_COUNT = 8` bounds the certification
 lane and prices its slot rent; the court's count is the ruleset's `max_close_chunks`; state v17 → 18
-is W5's. W5 carries four requirements its adversarial judges added, recorded here so they are the
+is W5's. **The implementation added two more version bumps beside it: v18 → 19 for the court
+session's dissection phase (stream I) and v19 → 20 for the class state's `fused_attention` (fixer
+FA2, §10.6); each moved the ADR-0043 state goldens, which are re-pinned at the cut.** W5 carries
+four requirements its adversarial judges added, recorded here so they are the
 ADR's and not a private brief: the declaration's clock is the session BACKSTOP, refused unless
 `daa + 4 × count ≤ deadline` and never extended; a failed declaration loses on its OWN side (a lapse
 at Terminal must not route to the accuser's slash); the chunk bytes live in ROOTED state, never a
@@ -147,7 +153,10 @@ merged on this ADR's integration branch.
 
 Measured on the dense tier's shipped commit path (the model-gate run of 2026-09-03): **5.66 s per
 token captured against 0.060 s per token un-captured — 94×.** The capture holds every tile of every
-node of every position, ~50 MB a position, ~25 GB at 512 (`fp_capture.rs` header). The fold that
+node of every position, ~50 MB a position, ~25 GB at 512 (`fp_capture.rs` header — the header's own
+figures; **U-01 then measured the real dense artifact at 13.46 MB a position retained by the capture
+against 0.74 MB by the fold**, Decision 7, and fixer FB measured what the amended Decision 4's
+per-position cadence SERIALISES, §10.3). The fold that
 replaces it — `Base0SparseStepAccumulatorV1`, one retained node per `2^12` leaves, 64 KiB at `2^22`
 and 64 MiB at `2^32`, tiles re-derived by replay — is written, tested against
 `step_merkle_root_v1` for every leaf count, and **called by nothing outside its own module** (one
@@ -232,13 +241,19 @@ and stay exactly as narrow as they are. Consequence for the leaf count: an atten
 `⌈heads × d_head / tile_len⌉` leaves a position at every context — 24 on the dense tier at a 64-lane
 tile, 32 on the hybrid at 128 — and the job's leaf count returns to the BASE count ADR-0077
 Decision 12 was sized against: `~43,000` dense and `~14,000` hybrid positions under `2^32`
-(measured by U-04 at the fence's ladder: dense 41,695, hybrid 13,105). **A width clears the close
+(~~measured by U-04 at the fence's ladder: dense 41,695, hybrid 13,105~~ — **corrected 2026-09-04,
+fixer FD, audit D H-5: swept through the gate's own door instead of derived beside it
+(`the_widest_context_each_family_admits`, `2^32` context-ladder fence, dissection court at the
+derived arity, Merkle prompt ids, the joint clock), the graph-v5 families admit `n_ctx` 16,384
+dense and 13,105 hybrid, and the refusal one position wider is the LADDER or the WINDOW and never
+the close — which is the property Decisions 1–4 exist to buy, asserted rather than hoped**).
+**A width clears the close
 AND the ladder, and the two are different caps**: the RC bundle the 5f genesis freezes carries a
-`2^26` ladder, not the fence's `2^32`, and at `2^26` the widest admissible dense graph-v5 row is
-**574** positions — which is the code's measurement for the graph-**v2** row
-(`palw_step.rs`'s `palw_a16_context_row_profile_v1` sweep), quoted here for the v5 row it was not
-measured on; no v5 sweep exists, and §9's own rule says a figure is quoted under the configuration
-it was measured in. 512 fits with about twelve per cent of margin,
+`2^26` ladder, not the fence's `2^32`, and at `2^26` the widest admissible dense **graph-v2** row is
+**574** positions (`palw_class_admission_v2.rs`'s own ladder table, the
+`palw_a16_context_row_profile_v1` sweep). The first draft quoted that number for the v5 row it was
+not measured on; it stays here as the v2 figure it always was, and the v5 sweep is the corrected
+line above. 512 fits with about twelve per cent of margin,
 and 1,024 is not the next rung on the ladder side but a different cap (`2^28`). So on the close
 side 1,024 costs 64 bytes more than 512; on the ladder side it needs a re-genesis. Every figure in
 this ADR that quotes a 32-element Merkle path is the fence's number; the ruleset's is read from the
@@ -290,17 +305,28 @@ node — `log₂ k` binary levels at once, authenticated by hashing them back up
 `rounds = ⌈log₂ space / log₂ k⌉`, at `k × 64` bytes a move for the leaf space and
 `k × (4 + 8 + 8 × tile_len)` for the history (a max, a sum and `tile_len` partial sums per child).
 Worked at `k = 16`, the band the ADR was drafted against; the derivation below selects the
-SMALLEST legal arity that fits, which at the RC windows is **4** (measured by U-03's pin:
-`2^32` in 16 rounds plus 131,072 positions in 7, `(2 × 23 + 2) × 45 = 2,160` DAA — sixteen is the
-band above it, and a smaller arity is a smaller move):
+SMALLEST legal arity that fits, ~~which at the RC windows is **4** (measured by U-03's pin:
+`2^32` in 16 rounds plus 131,072 positions in 7, `(2 × 23 + 2) × 45 = 2,160` DAA)~~ — **corrected
+2026-09-04 (audit D H-2, audit A M-2, fixers FA and FD): only the HISTORY search is k-ary. A
+session plays the shipped `PalwBisectLadderV1` over the leaf space, which is BINARY, and the
+responder's root claim is a move nobody counted. With both corrected the honest count is
+`2 × (⌈log₂ L⌉ + ⌈log_k (n / 16)⌉) + 2 + 1`, and what the RC's own configuration selects is
+arity 2, not 4 or 16 — §10.4 has the derivation and the two configurations that disagree.** The
+table below is the ADR's original worked band, with the two rows the correction moves restated
+beneath the strike:
 
 | space | binary rounds | 16-ary rounds |
 |---|---|---|
-| leaf space `2^32` | 32 | 8 |
+| leaf space `2^32` (searched BINARY in the shipped ladder — the 16-ary column is what the first draft assumed) | 32 | ~~8~~ |
 | history at 131,072 positions, 8,192 tiles | 13 | 4 |
-| moves, both, plus terminal | 92 | 26 |
-| DAA at the 45-DAA deadline | 4,140 — over | 1,170 |
+| moves, both, plus terminal ~~92 / 26~~ → **93 / 75** (binary leaf ladder, plus the root claim) | 93 | 75 |
+| DAA at the 45-DAA deadline ~~4,140 / 1,170~~ → **4,185 / 3,375 — BOTH over the 3,000-DAA window** | 4,185 | 3,375 |
 | bytes a move: leaf space / history at a 64-lane tile | 128 / 1,048 | 1,024 / 8,384 |
+
+The RC's own row is the configuration that ships, and it is a different one: `2^26` ladder, a
+512-position history (32 tiles of 16), the RC's 42-DAA clock, an 8-lane disputed site →
+**arity 2, 65 moves, 2,730 DAA, plus the 216-DAA assembly reserve = 2,946 of 3,000**
+(`the_rcs_derived_deadline_selects_an_arity_for_its_own_row_and_none_for_the_fences`).
 
 `k` is a `PalwCourtParamsV2` quantity (`dissection_arity`, binary on every court built today) —
 inside `palw_ruleset_id_v2` like the ladder — and it is DERIVED at genesis as the smallest power of
@@ -329,11 +355,38 @@ PREFIX-STABLE: a K or V row written at position `j` is the same bytes in every l
 so the executor retains the cache once and recomputes any checkpoint's tiled root from it; no
 per-checkpoint copy of the history exists to retain or to serve.
 
+**Amended 2026-09-04 (stream K, audit A C-4/H-1, fixers FA and FB) — a tiled-map class commits a
+checkpoint at EVERY position, prefill included, and the cache-write route is then REFUSED for it.**
+The shipped cadence checkpoints per DECODE CALL, so no checkpoint covers any prefill position and
+none covers a tile straddling the last checkpoint; at those positions the bottom's only route is
+the cache-write one, and that route was measured at **149,953 bytes = 1.80 carriers** for a prefill
+dispute (dense graph-v5 @ 512, RC `2^26` ladder, tiled v3 map, dissection court: 133,057 at `2^22`,
+175,297 at the `2^32` fence). A checkpoint after every position takes the same dispute to
+**40,461 bytes = 0.49 carriers at EVERY position class** — prefill, first decode, tile-aligned,
+straddling, last — and the hybrid to 73,741. The cadence is read off the registered
+`state_chunk_map_id` (`PalwCheckpointCadenceV1::PerPosition`), never declared, so a registrant
+cannot buy a coarser leg. And the route is not the challenger's choice either: for a class whose
+site says `every_position_is_checkpointed`, the cache-write route is refused by name
+(`the_cache_write_route_is_refused_by_name_where_every_position_is_checkpointed`), because audit A
+found a K/V SERIES SWAP admissible on it — a route that convicts an honest executor. The anchor is
+at `p + 1`, not `p − 1` plus a residue: the residue is then empty and position 0 is anchored, which
+is what took the dense close from 93,367 (2 chunks) to 82,719 (1) at arity 16. **What "the
+executor retains the cache once" costs is §10.3, and it is not nothing**: retention is 0 state
+bytes a position (142 leaf bytes), but the leaf hash binds the chunk INDEX, so a per-position
+capture re-serialises 696,516,608 bytes a job at `n_ctx` 512 where the naive whole-cache form is
+7,530,872,832.
+
 **Decision 5 — the prompt ids ride as a Merkle root, armed with the first graph-v5 row.**
 ADR-0081 Decision 3 as implemented (`palw_prompt_ids_v1.rs`), no longer optional: at 131,072 ids the
 flat term is 524,288 bytes on EVERY close, and Decisions 1–4 leave it as the only context-linear
-term of the PROMPT. The fence `palw_prompt_ids_merkle` is armed in the same ruleset move as the
-rows, every moved id is re-pinned and listed, and `PalwFpMaterialV1` keeps carrying the ids whole
+term of the PROMPT. ~~The fence `palw_prompt_ids_merkle` is armed in the same ruleset move as the
+rows~~ — **corrected at the cut (2026-09-04): it is NOT armed with the first row.** At `n_ctx` 512
+the flat ids are 82,080 bytes against an 83,333-byte carrier, so the registered row fits in either
+form, and arming the fence moves every free-prompt job id for nothing. The Merkle form becomes
+REQUIRED above about `n_ctx` 1,024, which is the width to arm it at; until then the fence refuses
+arming until its inputs exist rather than sitting dormant and armable (fixer FD, audit D M-2), so
+the dormancy is a rule and not an omission. Every moved id is re-pinned and listed when it does
+arm, and `PalwFpMaterialV1` keeps carrying the ids whole
 for the seats (ADR-0081 Y7). **Measured limit (U-04, Z0):** with the prompt ids Merkle-ized a
 graph-v5 dense close is flat only to about `n_ctx` 4,096; at 32,768 the binding node becomes the
 embedding gather, whose GENERATED-token ids (`decode × 4` bytes, the decode pin's flat id list)
@@ -349,22 +402,45 @@ MODEL width, not a context: on the dense tier the SwiGLU down projection's opera
 with the Merkle ones), on the hybrid one head's recurrence state (`k_dim × v_dim × 4 = 65,536`,
 charged once since `4f859f9a`). `DEFAULT_MAX_CLOSE_CHUNKS` is therefore
 `palw_close_chunks_for_bytes_v1(max over the registered families of the widest term)` — a
-derivation, evaluated at genesis over the rows the genesis set registers. Stated for BOTH genesis
+derivation, evaluated at genesis over the rows the genesis set registers. **Not at this cut
+(2026-09-04 ruling, audit D M-5): the builder and its reporting test ship UNWIRED and
+`DEFAULT_MAX_CLOSE_CHUNKS` stays the hand-supplied 27, because the genesis set now derives to 1
+(dense) — and a ceiling tightened to the genesis set permanently refuses any later permissionless
+class whose close exceeds 333,333 bytes, on a network whose whole admission story is that anyone
+may register. Post-5f the builder reads `palw_shipped_court_rows_v1()`; the derivation is written,
+tested and inert, which is the honest state and is §10.7's open item, not a claim in this
+sentence.** Stated for BOTH genesis
 sets, because two of them are on the table: for the graph-v2/v3 context rows design A was written
 for, the widest term is still the context-linear attention close, and the derivation returns
 design A's own numbers — **14** for `{floor, A16 dense 512}` (`ceil(1,154,673 × 1.2 / 100,000)`),
 **27** with the QWEN36-v3 512 row, 1 for the floor alone; for graph-v5 rows (Decisions 1–5) the
 widest term is a MODEL width and the derivation returns — measured by U-04's test
 `the_close_ceiling_is_the_derivation_over_the_genesis_set` at `n_ctx` 512 under the dissection
-court with Merkle prompt ids — **80,504 bytes = 1 chunk** on the dense tier (binding node
+court with Merkle prompt ids — ~~**80,504 bytes = 1 chunk** on the dense tier (binding node
 `ffn_down`; 82,080 with flat ids) and **200,732 bytes = 3 chunks** on the hybrid (binding node the
-recurrence `GatedDeltaNet`: its `interval × 5 refs` replay evidence, not attention), the set → 3;
-the fused dispute's bottom opening is 25,120 bytes dense and 42,016 hybrid on the checkpoint-tile
-route (derived), 37,982 and 55,390 on the cache-write route (measured by borsh on the real object,
+recurrence `GatedDeltaNet`: its `interval × 5 refs` replay evidence, not attention), the set → 3~~
+— **restated 2026-09-04 with the route and the arity that make each number true (stream K, stream
+J, §10.1): the row the genesis registers closes at 81,599 bytes = ONE carrier, binding node
+`attn[7]` `AttnFused`, at arity 2 (the arity the RC and devnet rulesets DERIVE with that row in
+`genesis_objects`, off a `2^26` ruleset ladder and a 42-DAA clock), checkpoint evidence route,
+tiled v3 map, Merkle ids, openings priced at the `2^32` ladder rules; the same
+row at arity 16 is 82,719, and the whole 1,120-byte difference is one move's disclosure. The
+binding node moved from `ffn_down` to the fused site because the bottom is now priced at the
+checkpoint route (216,019 = 3 chunks was the same row priced at the cache-write route). The
+hybrid is 274,460 bytes = 4 chunks at arity 16, still bound by the recurrence's replay evidence and
+still unregistered.** The
+fused dispute's bottom opening is ~~25,120 bytes dense and 42,016 hybrid on the checkpoint-tile
+route (derived), 37,982 and 55,390 on the cache-write route~~ — **the first draft priced one head's
+slice, and a checkpoint chunk holds the whole cache ROW (stream E): on the real registered row at
+the `2^32` fence it is 41,997 dense and 75,277 hybrid on the checkpoint route, 175,297 and 139,777
+on the cache-write one** (measured by borsh on the real object,
 34 rows with their paths), flat at 512 / 4,096 / 32,768. "Flat" as a measurement rather than an
 adjective (verified independently by a second session on a detached checkout): the dense graph-v5
-close is **80,504 bytes at `n_ctx` 512 and 80,696 at 4,096 — 192 bytes for eight times the
-context**; at 32,768 it is 303,640 with the binding node moved to `EmbedLookup` (Decision 5's
+close is ~~**80,504 bytes at `n_ctx` 512 and 80,696 at 4,096**~~ **82,719 at 512 and 82,911 at
+4,096 under the amended Decision 4 at arity 16 (81,599 at 512 at the derived arity 2) — 192 bytes
+for eight times the context either way: the SLOPE is what the measurement holds, and the intercept
+moves with the evidence route and the arity**; at 32,768 it is 303,640 with the binding node moved
+to `EmbedLookup` (Decision 5's
 measured limit). Whatever it evaluates to, a row is admitted at a chunk count only when the transport
 carries it — W5's own table (§1.4), never the certification lane's `pending_chunks` and its 8. The
 CODE CONDITION, not a schedule: until W5 is in the ruleset, `max_close_chunks` is ONE and the
@@ -493,23 +569,38 @@ the dissection.
 * **Chain bytes.** Per claim: unchanged (`out` rows are the rows `ATTN_VALUES` commits today;
   three context-wide rows per site are REMOVED from the step space). Per close: bounded by
   Decision 6's flat terms — one or two carriers on the shipped families, re-derived at genesis.
-* **Court moves.** `2 × (⌈log_k L⌉ + ⌈log_k (n / 16)⌉) + 2`: 26 at `k = 16`, `L = 2^32`,
+* **Court moves.** ~~`2 × (⌈log_k L⌉ + ⌈log_k (n / 16)⌉) + 2`: 26 at `k = 16`, `L = 2^32`,
   `n = 131,072`; 1,170 DAA at the 45-DAA deadline against 3,000. A dispute at 131,072 positions
-  costs the court FEWER moves than a dispute at 512 costs it today.
+  costs the court FEWER moves than a dispute at 512 costs it today.~~ **Corrected 2026-09-04
+  (audit D H-2, audit A M-2): the leaf ladder is binary and the root claim is a move, so it is
+  `2 × (⌈log₂ L⌉ + ⌈log_k (n / 16)⌉) + 2 + 1` — 75 moves at `k = 16`, `L = 2^32`, `n = 131,072`,
+  3,375 DAA at the 45-DAA deadline, which is PAST the 3,000-DAA window; the RC's shipped
+  configuration (`2^26`, its 512 row, the 42-DAA clock) is 65 moves and 2,730 DAA, 2,946 with the
+  assembly reserve. And the last sentence inverts: a dispute at 131,072 positions costs the court
+  MORE moves than one at 512 — thirteen history rounds against five at arity 2 — what is bounded
+  is the GROWTH, logarithmic in the history, and at the `2^32` fence that growth no longer fits the
+  RC's window at any arity (§10.4).**
 * **The bottom opening.** `4 × d_head` (the query slice) + `2 × 16 × 4 × kv_dim` (one K tile, one V
   tile — a checkpoint chunk holds the whole cache ROW, `attn_kv_heads × attn_head_dim`, because the
   map addresses `(kind, layer, position)` and not the head; the ADR's first draft priced one head's
   slice, which under-bounds the object by `kv_heads`) + `4 × tile_len` (the output tile) + paths at
   the ladder's depth. Measured on the real objects (U-03, borsh, `kv_heads` 1, 64-position history):
   the checkpoint route 19,027 bytes at `d_head` 128 and 36,435 at 256; the cache-write route
-  (one leaf per row, for the rows after the last checkpoint) 37,985 and 55,393. Inside one carrier
-  at every context on both routes; the derivation prices the larger.
+  (one leaf per row, for the rows after the last checkpoint) 37,985 and 55,393. ~~Inside one carrier
+  at every context on both routes; the derivation prices the larger.~~ **Not on both routes, on the
+  real registered row: at the `2^32` fence the cache-write route is 175,297 dense and 139,777
+  hybrid, over the 83,333-byte carrier — Z3 was FALSE there, which is what the amended Decision 4
+  answers. With a checkpoint at every position the whole prefill dispute is 40,461 bytes = 0.49
+  carriers at every position class (RC `2^26` ladder), the cache-write route is refused for such a
+  class, and the derivation prices the route the ruleset can actually play.**
 * **Executor time.** The forward pass plus hashing the base leaf count — `~1.3 × 10¹⁰` leaf hashes
   for a 131,072-position dense job, the same order as the forward's own work. U-01 gives the ratio.
 * **Executor retention.** The KV cache for the claim's life (`claim_retirement`, 3,000 DAA on the
   RC): 7.5 GB dense, 5.4 GB hybrid attention at 131,072 (Decision 9's arithmetic); plus a
   recurrent family's sparse checkpoints at `heads × k_dim × v_dim × 4` each — 65,536 bytes a
-  head — at the derived spacing.
+  head — at the derived spacing. **The amended Decision 4's per-position cadence retains 0 state
+  bytes a position on top of that (142 leaf bytes) and SERIALISES 696,516,608 bytes a job at
+  `n_ctx` 512 — a cost the first draft did not price at all (§10.3).**
 * **Seat time.** One forward pass of the job plus `k` interval replays — at 131,072 positions on
   the hybrid's shipped CPU path, hours; on the dense tier, minutes. Decision 9's derivation makes
   that the width the row admits rather than a surprise the panel discovers.
@@ -576,8 +667,9 @@ design and are its precondition.
 | U-04 | Decision 6 — `max_close_chunks` derived from the flat terms; `derive_court_cost_v1` prices `AttnFused` by its bottom opening and its per-move disclosure | Z0 green at all four contexts on both families |
 | U-05 | Decision 9 — the seat's recompute path (`kaspad/src/palw_panel.rs`), the checkpoint-root check, the per-class `rate_seat_prefill` in the row and at admission | Z5, Z11 green on devnet with three seats |
 | U-06 | Decisions 10, 11, 12 as TESTS before features: the decode-leaf numerator, `decode_token_select_v2`, the published ceiling | Z7, Z8 green; the census's rows re-asserted |
-| U-07 | Decision 5 — the prompt-id fence armed with the rows; every moved id re-pinned and listed | the u04 blast-radius test passes at the new pins |
-| U-08 | the graph-v5 rows registered through ADR-0075's route and drilled (`misaka-palw-fp-devnet-e2e.sh`): dense and hybrid at 512, then 8,192, then the width Z11 admits | ONE job id in three places (ADR-0077 §6's gate) at each width, with a dispute drilled to the bottom tile at the widest |
+| U-07 | Decision 5 — the prompt-id fence armed with the rows; every moved id re-pinned and listed | the u04 blast-radius test passes at the new pins. **Landed as the FORM, not the arming: the fence is dormant at the 512 row and refuses arming until its inputs exist (§10.7)** |
+| U-07b | Decision 5's symmetric half — the OUTPUT ids as a tiled Merkle root, without which the close stops being flat above `n_ctx` ~4,096 (§8) | **open; not in this cut** |
+| U-08 | the graph-v5 rows registered through ADR-0075's route and drilled (`misaka-palw-fp-devnet-e2e.sh`): dense and hybrid at 512, then 8,192, then the width Z11 admits | ONE job id in three places (ADR-0077 §6's gate) at each width, with a dispute drilled to the bottom tile at the widest. **Partly: the DENSE 512 row is registered and the devnet drill's stages 1–3 pass; 4–8 are blocked by name on the shipped artifact's all-zero tokenizer commitment; the hybrid is not registered at all (§10.7)** |
 | U-09 | the pages: `testnet11-join-mining.md`'s prompt section states the three bounds, the stages, the ceiling of Decision 12, and what "private unless disputed" means | no page promises a width a bound refuses |
 
 **Done when** a person gives a graph-v5 row a prompt and receives an answer whose combined length
@@ -594,9 +686,9 @@ arrangement left.
 |---|---|
 | ADR-0080 §3 Decisions 1, 2, 4, 5, 6, 7 — one job as N verification segments | **withdrawn** (refuted before implementation; §1.1). Decision 5's "tile-addressed anchor" survives as Decision 4 here, in its honest role: the bottom of a dissection |
 | ADR-0080 §1 and Decision 3 | kept: the measurement is §1.2's starting point and the invariant is Z7, as the census tests it |
-| ADR-0080 design A (`DEFAULT_MAX_CLOSE_CHUNKS = 27`) | kept as the BRIDGE and re-derived (Decision 6): the count is `chunks(widest term over the genesis set)` — 14/27 for the graph-v2/v3 context rows, one to three for graph-v5 rows; the transport is W5's own table, the 5f integrator's |
+| ADR-0080 design A (`DEFAULT_MAX_CLOSE_CHUNKS = 27`) | kept as the BRIDGE and re-derived (Decision 6): the count is `chunks(widest term over the genesis set)` — 14/27 for the graph-v2/v3 context rows, ~~one to three~~ **1 (dense, 81,599 B at arity 2) and 4 (hybrid, 274,460 B)** for graph-v5 rows; the transport is W5's own table, the 5f integrator's. **The constant stays 27 by hand at this cut and the derivation ships inert — Decision 6, audit D M-5** |
 | ADR-0081 §3 Decisions 1, 2, 4–9 — the prompt as a prefill state chain | **withdrawn**. What a long prompt needed was never a chain of prefill segments; it was a court that never carries the history (Decision 2) and a seat that recomputes it (Decision 9) |
-| ADR-0081 Decision 3 — Merkle prompt ids | kept and ARMED with the rows (Decision 5) |
+| ADR-0081 Decision 3 — Merkle prompt ids | kept; ~~ARMED with the rows~~ **implemented and DORMANT at the cut — the flat ids are 82,080 B against an 83,333-byte carrier at `n_ctx` 512, and the fence refuses arming until its inputs exist (Decision 5, corrected)** |
 | ADR-0081 §1.1 — "graph-v4 makes a per-leaf attention opening tile-sized" | half right, as its own status block found: the OPENING is tile-sized, the CLOSE was not; Decision 2 is what makes the close tile-sized |
 | ADR-0077 Decision 8 — the seat asks the executor for the interval's checkpoint chunk | amended by Decision 9: the seat recomputes the state and fetches the rows it compares; the draw, the exactness and the verdict's weight are unchanged |
 | ADR-0077 Decision 11 — admission prices the checkpoint interval | kept for the recurrence; for attention the interval is not the price — the dissection's bottom is (Decision 4, 6) |
@@ -614,6 +706,12 @@ arrangement left.
 
 ## 8. What is deliberately not decided
 
+* **The output ids as a tiled Merkle root — U-07b**, the symmetric half of ADR-0081 Decision 3
+  (Decision 5 names it and does not take it). Measured limit, U-04's Z0 sweep at the `2^32` fence
+  with Merkle prompt ids: the dense graph-v5 close is flat to about `n_ctx` 4,096 and is 303,640
+  bytes at 32,768, where the binding node becomes `EmbedLookup` and the GENERATED ids (`decode × 4`
+  bytes) are the term. Linear in the ANSWER, not the prompt, so "thousands of tokens" holds and
+  "tens of thousands" does not. Not in this cut, not fenced, listed in §10.7.
 * **KV continuation across jobs** (`ContinueFrom{parent_receipt}`). ADR-0077 §8's exclusion stands.
   Decision 10 removes the reason it looked urgent — a re-sent history no longer earns anything —
   and Decision 9 removes the reason it looked cheap: a seat would have to trust a parent's cache
@@ -639,3 +737,233 @@ arrangement left.
 This is ADR-0082; ADR-0081 is the last on this branch (`palw-adr0080-verification-segment`), and
 `main`'s README records 0080 as the next free number with 0080 and 0081 resident on branches. A
 concurrent claimant renumbers the later writer, per ADR-0036 Decision 5.
+
+## 10. Implementation record — 2026-09-03 / 2026-09-04
+
+Numbered 10 and not 8: §8 and §9 were already spent, on what is not decided and on the numbering,
+and renumbering a section other documents cite is how a reference stops resolving.
+
+Built on `palw-adr0082-impl` by thirteen streams and seven fixers over two days, from a base of
+`palw-testnet-5f` plus `palw-adr0080-verification-segment`. Head at writing `76b790f4`:
+consensus-core **1,814 passed / 3 failed** — the three are the genesis pins the 5f integrator
+re-pins at the freeze — misaka-palw-base0 **328 / 0 / 2**, cli 74/0, kaspad lib 67/0.
+
+**§1's discipline applied to this section: every figure below names the COURT (shipped binary, or
+the dissection court and its arity), the LADDER, the class's MAP, the EVIDENCE ROUTE, the PROMPT-ID
+FORM, and the stream that measured it.** Several figures in the first draft were wrong for exactly
+the reason §1 gives — quoted under a configuration they were not measured in — and every one of
+them is struck in place above and restated, never overwritten: Decision 1's fence widths and its
+574, Decision 3's selected arity and its move table, Decision 5's arming, Decision 6's close and
+bottom-opening figures and its "flat" sweep, §4's move and bottom-opening bullets, §7's two rows.
+
+### 10.1 The close: one carrier, and the arity is part of the number
+
+Dense graph-v5, the row the genesis registers, all under: dissection court, tiled v3 state chunk
+map, checkpoint evidence route, Merkle prompt ids, per-position checkpoints (Decision 4 as
+amended), Merkle output ids NOT taken.
+
+All five rows below price openings at the same ladder rules (`PALW_CONTEXT_LADDER_MAX_STEP_LEAVES`,
+`2^32`); what differs is the ARITY and the route.
+
+| row | arity | close | carriers | binding node |
+|---|---|---|---|---|
+| dense graph-v5 @ 512 — **the registered row**, priced under the ruleset that registers it | **2**, derived | **81,599 B** | **1** | `attn[7]` `AttnFused` |
+| the same row, priced under the sweep's court | 16 | 82,719 B | 1 | `attn[7]` `AttnFused` |
+| the same row at `n_ctx` 4,096 | 16 | 82,911 B | 1 | `attn[7]` `AttnFused` |
+| the same row, bottom charged at the **cache-write** route (before stream K) | 16 | 216,019 B | 3 | — |
+| hybrid graph-v5 @ 512 — **unregistered** | 16 | 274,460 B | 4 | the recurrence's replay evidence |
+
+`82,719 − 81,599 = 1,120` bytes, and the row's own test attributes the whole of it to the per-move
+disclosure at arity 16: the arity is not a footnote on a close figure, it is a term in it. The RC
+and the devnet rulesets both DERIVE 2 with the v5 row in `genesis_objects` (window 3,000, turn
+deadline 42, ruleset ladder `2^26`, 512 positions at a 16-position tile, an 8-lane disputed site) —
+not the 4 an earlier sweep reported, not the 16 the ADR worked its table at — and the test prints
+its whole configuration on the line beside the number
+(`misaka-palw-base0/src/classes.rs`, `consensus/core/src/palw_context_ladder.rs`), so a reader who
+moves the arity is told by how much.
+
+Corrected above: Decision 6's 80,504 / 200,732 and its "flat" sweep; §4's bottom-opening bullet.
+
+### 10.2 Decision 4 amended: a checkpoint at every position, and one route refused
+
+Stream K, audit A, fixers FA and FB. Measured at the RC's `2^26` ladder on the dense graph-v5 row
+with the tiled v3 map:
+
+| the dispute's bottom opening at | route | bytes | carriers |
+|---|---|---|---|
+| a PREFILL position (the shipped per-decode-call cadence covers none of them) | cache-write | **149,953** | 1.80 |
+| the same at the `2^22` / `2^32` ladders | cache-write | 133,057 / 175,297 | 1.60 / 2.10 |
+| every position class — prefill, first decode, tile-aligned, straddling, last | **per-position checkpoint** | **40,461** | **0.49** |
+| the hybrid, same | per-position checkpoint | 73,741 | 0.89 |
+
+The anchor is at `p + 1` (residue empty, position 0 anchored), which took the close from 93,367
+(2 chunks) to 82,719 (1) at arity 16. Retention is **0 state bytes a position** — the fold keeps
+no chunk list at all (`the_folds_retention_is_constant_and_the_alternative_is_quadratic`; a
+chunk-retaining capture at 16 positions would hold 1,114,112 B) — and 142 leaf bytes a position.
+
+**And the cache-write evidence route is REFUSED for a class that checkpoints every position.**
+Audit A found a K/V SERIES SWAP admissible on that route: the openings were bound to the query but
+to no coordinate of their own, so an executor could answer with the wrong series and a correct
+recompute would convict an honest responder. The fix binds the series to the `KCacheWrite` /
+`VCacheWrite` roles and refuses the route by name where `every_position_is_checkpointed`
+(`the_cache_write_route_is_refused_by_name_where_every_position_is_checkpointed`). This closed the
+arming blocker on `palw_kary_court`: the checkpoint route is sound, and it is now the only route a
+graph-v5 class plays. Z3, which was FALSE on the cache-write route at the `2^32` fence
+(175,297 dense / 139,777 hybrid), holds.
+
+### 10.3 What the capture costs — the half Decision 4 asserted and did not price
+
+Fixer FB, audit B H-3, measured at `n_ctx` 512 on the dense shape (28 attention layers,
+`kv_row = 2 × 128 × 4 = 1,024` B), `the_per_position_capture_touches_one_tile_a_position`:
+
+| form | bytes serialised per job |
+|---|---|
+| whole-cache, one checkpoint's chunks re-serialised at every position | **7,530,872,832** |
+| with per-chunk hash memoisation | **696,516,608** — 11× less |
+
+**The residual is the MAP's, not the memo's.** The leaf hash binds the chunk INDEX
+(`state_chunk_leaf_hash_v1(map_id, index, bytes)`) and the tiled map indexes
+`(kind · layers + layer) · chunks_per_slice + block`, so when a slice grows a block — once every
+`PALW_ATTN_HISTORY_TILE_V4 = 16` positions — every later index MOVES and a chunk whose bytes did
+not change is a different leaf. Only a second copy of the cache or an index scheme that does not
+move could remove it, and this capture is allowed neither. Decision 4's claim that the cadence
+"costs the executor nothing" is corrected here and in the code's own doc: it costs 696.5 MB of
+serialisation a job at 512, retains none of it, and the arithmetic that says so is asserted as an
+ORDER against derived bounds rather than pinned to a constant.
+
+### 10.4 The ladder, the clock and the arity, derived jointly
+
+Fixers FA and FD, audit A M-2 / audit D H-2b/H-2c. Two corrections compose: the leaf ladder is
+BINARY (a session plays the shipped `PalwBisectLadderV1`; only the history search is k-ary), and
+the responder's root claim is a move. Honest count:
+`2 × (⌈log₂ L⌉ + ⌈log_k (n / 16)⌉) + 2 + 1`, and the derivation selects on
+`moves × deadline + assembly_reserve ≤ window_court` — the same inequality admission admits on,
+which is what it was not before (the derivation handed admission a value admission then refused).
+
+| configuration | arity | moves | DAA | verdict |
+|---|---|---|---|---|
+| **RC as it ships** — `2^26`, its own 512 row (32 tiles), 42-DAA clock, 27-carrier reserve | **2** | 65 | 2,730 + 216 = **2,946** | fits, 54 DAA of room |
+| the RC at a 4,096 row | 4 | 63 | 2,646 + 216 | fits (arity 2 is 71 moves, 2,982 + 216 — misses by 198) |
+| **`2^32` fence, 131,072 row** — the configuration §3's table is worked in | **none** | 73 (cheapest, arity 32/64) | 3,066 before the reserve | **refused, `None`** |
+| every shipped preset, zero history | 2 | its own worst case | inside its own window | unchanged by this ADR |
+
+The RC's 42-DAA clock is not typed anywhere: `palw_court_turn_deadline_for_history_v1(3,000, 2^26,
+2, 27, 512, 16)` returns `(2, 42)` — the joint form, counting the history rounds and the root claim
+in its divisor. The older `palw_court_turn_deadline_v1` returns 51 for the same window, which is
+the clock for a ruleset with NO history to dissect, and at 51 no arity fits at all. Both are kept,
+because a ruleset without a fused row genuinely derives the second one.
+
+The class WIDTHS under this court (fixer FD, audit D H-5, `2^32` fence, swept through the gate's
+own door): graph-v5 dense admits `n_ctx` **16,384**, hybrid **13,105**, and the refusal one wider
+is `DeeperThanTheLadder` or `CourtWindowTooShort` — never the close. `574` is and always was the
+**graph-v2** row's width at `2^26`.
+
+### 10.5 What a fused row costs with NO dissection court
+
+Measured by the 5f integrator at `2^26` through `derive_court_cost_shaped_v1` (the shaped entry;
+the plain walk at `2^22` refused both rows, which is what made the `2^22` sweep of §10.6 D2
+load-bearing):
+
+| row | close under a court with no dissection | chunks | against the RC's 2,250,000-byte ceiling |
+|---|---|---|---|
+| graph-v2/v3 dense @ 512 | 1,999,729 | 24 | fits |
+| **graph-v5 dense @ 512** | **3,446,708** | **42** | **over by fifteen carriers** |
+
+So the sentence this ADR and the genesis card both carried — a fused row on a ruleset whose
+`palw_kary_court` is dormant is "admitted and unprosecutable" — is not what the code does. It is
+**refused at acceptance**, twice over: by name before anything is priced
+(`FusedAttentionNeedsTheKaryCourt` — *"the class carries a fused attention site and this ruleset's
+court has no dissection to try it with"*), and by fifteen carriers if it ever reached the walk.
+`PricedForADifferentCourt { priced, court }` refuses the other direction, a row priced for an arity
+the court does not run.
+
+### 10.6 The audit of 2026-09-03, and what closed it
+
+Five auditors on a read-only checkout of `89a991ab` — A court soundness, B capture and checkpoints,
+C economics and the split close, D admission, fences and layering, E the fused op and the engine —
+then the fixers FA and FA2, FB, FC, FD and FD2, FE. Criticals and their closures:
+
+* **A (court), five criticals, all bindings that were missing.** The root claim's history length is
+  DERIVED, never read off the wire (truncation acquitted, over-declaration was a DoS); `S*` is
+  validated into a band and the kernel moved to `i128` (an unvalidated `S*` overflowed `e × recip`
+  and PANICKED inside block validation — a one-block network kill); bottom openings carry full
+  COORDINATES on query, K and V (decode rows addressed by call), so a query bound to nothing is
+  refused; the anchor is DERIVED (`palw_checkpoint_covered_for_step_v1`, `WrongAnchor` and
+  `RowsAfterOnAPerPositionClass`) rather than "any checkpoint in the leg"; and the root claim has a
+  CLOCK at Terminal, so silence no longer wins challenger-side. Beside them: `MixedEvidenceRoutes`,
+  `out_tile` verified, and the move count of §10.4.
+* **B (capture), three criticals.** The fold now ANSWERS for chunks — `base0_checkpoint_chunks_at_v1`
+  had no caller, so every graph-v5 seat's material check would have been `Mismatch`, no interval
+  would open and no anchor would exist; ONE cadence unit — the interval, the seat and the panel
+  counted DECODE CALLS where the leg counts POSITIONS, which is `CheckpointRootMismatch` on every
+  honest v5 claim (a fifth site was found by the tests written for the first four); and the hybrid
+  v5 producer PUSHES its checkpoints (`qwen36_push_checkpoint_v1`) instead of filing
+  `CheckpointCaptureIncomplete`.
+* **C (economics), one critical and the close's economics.** The court's one slot a block is spent
+  only by an ADMITTED move — it was spent by an unauthenticated object before validation, so one
+  transaction a block starved every close completion and convicted the honest declarer; the
+  declaration is legal at Terminal only; the assembly deposit (`palw_close_assembly_deposit_v1(n)` =
+  1,250,000 sompi × n) is charged on EVERY non-delivering ending, through the removal funnel rather
+  than at two of five sites; chunk deltas are O(1) in the group (26 arrivals journal 2,611,201 bytes
+  against 67,709,897 in the swap form); and one prompt is one live claim per bond —
+  `fp_work_id_v1` is `(class, prompt, bond)` with `decode_tokens_executed` DROPPED, so one
+  inference truncated twice is one work id and not two tickets.
+* **D (admission and fences), no criticals, five highs.** One spelling of the arity; the v6 gate on
+  the acceptance path AND on the genesis door (a fused row under a dormant fence is refused at
+  both); and the two dormant fences `palw_fp_decode_rules` and `palw_prompt_ids_merkle` REFUSE
+  arming until their inputs exist, rather than being armable against a transition that would refuse
+  by name.
+* **D2, the sweep that followed it: the executor's `2^22` no longer bounds the chain.** Six more
+  sites carried `PALW_STEP_MAX_LEAVES` where they meant the ruleset's ladder — the free-prompt
+  door, the walk's `validate_*_under_ruleset_v3`, the certificate count, the catalog entry and
+  `derive_court_cost_v1`'s six callers, the schedule, and the step leg. The last one was
+  CONVICTING an honest 512-row producer by name (`StepLeafCountNotCanonical` above `2^22`), and the
+  registration helper counted the same way, so no chain could have registered the row at all
+  ("4223328 exceeds 4194304").
+* **E (fused op and engine), three criticals shared with A.** The shipped constructor now COMPILES
+  THE PLAN: `Qwen25A16Backend::new` had `plan: None` and refused the v5 row by traced route
+  ("per-layer declares 24 against 27 recorded"), so the fused node executed only through
+  `from_registered_profile`. A second cross-machine determinism digest pins the fused corpus
+  (a16 `236888781074c28a…`, qwen36 `7e5f14c2b0d66fc5…`).
+
+**State version 19 → 20**: the class state records `fused_attention`, written at the one
+construction site and carried on `ClassRegistered`, because the court has to answer "is the
+terminal leaf `AttnFused`" from chain state to give the root claim its clock. The genesis door
+refuses a fused row without an admission carriage, one disagreeing with the catalog, or one whose
+carriage is not the class.
+
+### 10.7 Status, and what is open — by name
+
+The ADR is **IMPLEMENTED on `palw-adr0082-impl`, pending the testnet-11 Relaunch 5f cut.** The
+genesis registers the **graph-v5 dense 512 row** (`a16_graph_v5_row_v1`, model id
+`Qwen/Qwen2.5-1.5B/graph-v5@512`, canonical job (63, 2), 6,630,544 leaves, class id derived and
+printed by its own test rather than typed). It REPLACES the graph-v2 `n_ctx` 16 dense row, which
+can serve no free-prompt job at all — the shortest real prompt is 134 tokens — and it takes the
+existing dense share constant; no new one is minted. The hybrid stays unregistered (4 chunks, and
+the split acceptance is not in this cut). At genesis `palw_kary_court` is armed (`always()`;
+without it §10.5 refuses the row), `palw_context_ladder` and `palw_uncertified_weightless` are
+armed, and `palw_prompt_ids_merkle` and `palw_fp_decode_rules` are dormant and refuse arming.
+
+Open, each by its own name, so none of them is discovered:
+
+* **U-07b — the output ids as a tiled Merkle root** (§8's new bullet). Not in this cut.
+* **Derive the worker's class from the artifact it loads.** The worker names it with a `MODEL_ID`
+  constant today; the artifact is what decides which graph it can execute, and the constant is the
+  sixth instance this cycle of one quantity spelled in two places.
+* **Wire the close-chunk derivation to the shipped rows** (`palw_shipped_court_rows_v1()`).
+  Decision 6's builder is written, tested and INERT; `DEFAULT_MAX_CLOSE_CHUNKS` stays 27 by hand
+  for the reason recorded at Decision 6.
+* **The seat's replay from the prompt under zero retention.** A folded interval's executor replays
+  from the prompt for each opening it serves — one forward pass per opening. The alternative keeps
+  the live cache across the claim's life, which is a retention shape change at the anchored branch
+  of `base0_open_fp_interval_sparse_v1`, and it is not in this cut.
+* **The drill's stages 4–8.** Stages 1–3 pass; 4 onward are blocked BY NAME on the shipped
+  artifact's all-zero tokenizer commitment, and need the re-bound artifact.
+* **The fourth family `PALW-QWEN25-A16-V5`.** Fusion replaces four kernels with one, so no profile
+  reaches both kernel sets and a union family cannot be drilled; the family's kernel ids are read
+  off the fused fixture's own profile. Until it merges, the row's coverage gate is red by an
+  equality naming family `PALW-QWEN25-A16` / kernel `09b81d17ed5a73ef`, and the row would register
+  weightless.
+* **Two fixers were in flight when this section was written** (2026-09-04, 18:35 JST): the genesis
+  registration BUILDER that mints the row's `ClassRegistered` with its admission carriage, and the
+  remaining `2^22` sites on the base0 seat, replay, drill and tool paths.

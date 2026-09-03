@@ -39,6 +39,15 @@ pub struct Version {
 }
 
 impl Version {
+    // Eleven parameters, each one a field of the wire message (`protocol::Version`); the
+    // remaining four fields (`services`, `timestamp`, `user_agent`, `disable_relay_tx`) are filled
+    // by the constructor itself rather than by the caller. A builder struct would be a second
+    // spelling of the protocol's fields, kept in step by hand — and the handshake exists to say
+    // WHICH fact a peer disagrees about, so a bundle would hide the thing the message is for.
+    // Checkable: every parameter name below appears as a field of the struct above
+    // (`grep -n 'pub ' protocol/p2p/src/convert/model/version.rs`). The long-term shape — the six
+    // consensus-identity fields as one struct — is a handshake edit and not a cut-day change.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         address: Option<NetAddress>,
         id: PeerId,

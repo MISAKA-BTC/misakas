@@ -328,9 +328,9 @@ impl PalwPanelService {
             .map(|c| c.entry.class_id())
     }
 
-    /// **This network's price for a job shape** — the same arithmetic the chain used to open the
-    /// claim (`fp_cu_v3` then `derive_quanta_and_pwu`), read from the bundle rather than
-    /// re-spelled, so a seat and the chain cannot come to two prices for one job.
+    // **This network's price for a job shape** — the same arithmetic the chain used to open the
+    // claim (`fp_cu_v3` then `derive_quanta_and_pwu`), read from the bundle rather than
+    // re-spelled, so a seat and the chain cannot come to two prices for one job.
 
     /// The panel's one resolve door: the tables, then — armed — the chain's own registration,
     /// read from this session (ADR-0067). Every duty path resolves through here so a
