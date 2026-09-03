@@ -367,6 +367,16 @@ impl PalwPanelService {
                 // exact wrong thing to read while waiting for that worker to report.
                 if config.register_bond {
                     info!("[{PALW_PANEL}] no bond yet; registering one (--palw-register-bond)");
+                } else if config.register_class.is_some() {
+                    // A class is registered UNDER a bond, so this one really does need an
+                    // outpoint — but "panel service disabled" tells a class registrant nothing
+                    // about the flag it is missing, and the worker then prints "not running",
+                    // which reads like patience. Say what to pass.
+                    warn!(
+                        "[{PALW_PANEL}] --palw-register-class needs a bond to register the class under, and \
+                         --palw-producer-bond is {err}. Pass --palw-producer-bond <txid>:<index> for a bond this \
+                         key already holds, or --palw-register-bond to obtain one first. Nothing will be registered."
+                    );
                 } else {
                     warn!("[{PALW_PANEL}] --palw-producer-bond: {err} — panel service disabled");
                 }
