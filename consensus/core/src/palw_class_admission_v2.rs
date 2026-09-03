@@ -901,14 +901,12 @@ fn derive_court_cost_walk_v1(
                 // lane. The exponent and the probability are per element given the root's
                 // `(m*, S*)` — one table lookup and one multiply-shift each — which is exactly
                 // what makes the tile recomputable without the row, so they ride the same count.
-                Op::AttnFused if fused_dissection.is_some() => history_tile
-                    .checked_mul(d_head.checked_add(disputed_lanes).ok_or_else(over)?)
-                    .ok_or_else(over)?,
+                Op::AttnFused if fused_dissection.is_some() => {
+                    history_tile.checked_mul(d_head.checked_add(disputed_lanes).ok_or_else(over)?).ok_or_else(over)?
+                }
                 // Without the dissection the court has no bottom to stand on and recomputes the
                 // whole row: the history's scores and the history's weighted sum.
-                Op::AttnFused => {
-                    history.checked_mul(d_head.checked_add(disputed_lanes).ok_or_else(over)?).ok_or_else(over)?
-                }
+                Op::AttnFused => history.checked_mul(d_head.checked_add(disputed_lanes).ok_or_else(over)?).ok_or_else(over)?,
                 // The head-sliced form divides the recomputation by the head count: the court
                 // replays ONE head's `k_dim x v_dim` state, which is what lets a 40-layer hybrid
                 // have a context at all (the whole-graph form priced 536 M at the declared
@@ -1103,9 +1101,8 @@ pub fn palw_attn_bottom_tile_route_bytes_v1(
     out_lanes: u64,
     step_path_bytes: u64,
 ) -> Option<u64> {
-    let opening = |lanes: u64| -> Option<u64> {
-        lanes.checked_mul(4)?.checked_add(step_path_bytes)?.checked_add(PALW_STEP_OPENING_FRAME_BYTES)
-    };
+    let opening =
+        |lanes: u64| -> Option<u64> { lanes.checked_mul(4)?.checked_add(step_path_bytes)?.checked_add(PALW_STEP_OPENING_FRAME_BYTES) };
     // **`kv_dim`, not `d_head`.** ADR-0082 §4 sizes this term as `2 x 16 x 4 x d_head` — one
     // HEAD's slice — and a checkpoint chunk cannot be narrowed to a head: the map addresses
     // `(kind, layer, position)` and a chunk holds the whole cache ROW
@@ -1609,8 +1606,8 @@ pub fn verify_class_admission_v6(
         // The rule lives beside the protocol whose cost it is (stream E), and it counts the
         // ruleset's own assembly reserve — a window that is exactly full leaves no DAA to file the
         // close in.
-        crate::palw_attn_court_v1::palw_attn_court_admits_row_v1(&bundle.court, history, tile, k.window_court_daa).map_err(|e| {
-            match e {
+        crate::palw_attn_court_v1::palw_attn_court_admits_row_v1(&bundle.court, history, tile, k.window_court_daa).map_err(
+            |e| match e {
                 crate::palw_attn_court_v1::PalwAttnCourtError::OverrunsWindow { moves, deadline, reserve, window_court } => {
                     PalwClassAdmissionError::CourtWindowTooShort {
                         needed: moves.saturating_mul(deadline).saturating_add(reserve),
@@ -1618,8 +1615,8 @@ pub fn verify_class_admission_v6(
                     }
                 }
                 _ => PalwClassAdmissionError::CourtWindowTooShort { needed: u64::MAX, window: k.window_court_daa },
-            }
-        })?;
+            },
+        )?;
     }
 
     let counted = match ladder {
@@ -2216,8 +2213,7 @@ mod tests {
         // touch.
         {
             let hybrid = crate::palw_context_ladder::palw_qwen36_context_row_profile_v5(512).expect("projects");
-            let hybrid_rules =
-                crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&hybrid, Some(court)).expect("mapped");
+            let hybrid_rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&hybrid, Some(court)).expect("mapped");
             let hybrid_job = context(&hybrid, 510, 2);
             let counted = crate::palw_step::step_leaf_count_capped_v1(&hybrid, &hybrid_job, hybrid_rules.ladder).expect("counts");
             let reg = weightless_registration(hybrid.shape_profile_id(), counted);
@@ -2228,10 +2224,10 @@ mod tests {
             assert!(format!("{err}").contains("court close chunks"), "the close must name itself: {err}");
         }
         // The WINDOW alone refuses, and says so.
-        let err = admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, RC_TURN_DEADLINE), PalwKaryCourtV1 {
-            window_court_daa: 100,
-            ..court
-        })
+        let err = admit(
+            court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, RC_TURN_DEADLINE),
+            PalwKaryCourtV1 { window_court_daa: 100, ..court },
+        )
         .expect_err("a 100-DAA court window prosecutes nothing");
         assert!(matches!(err, PalwClassAdmissionError::CourtWindowTooShort { .. }), "the window must name itself: {err}");
         // And a shape priced for a court the ruleset does not play is refused rather than corrected.

@@ -146,11 +146,11 @@ pub mod palw_admission_v2;
 #[cfg(test)]
 pub mod palw_adversarial;
 pub mod palw_artifact;
+pub mod palw_attempt_v2;
 /// ADR-0082 Decision 2 / U-03: the dissection as a court phase, and its window gate.
 pub mod palw_attn_court_v1;
 /// ADR-0082 Decisions 2–3: the history dissection's objects, fold and round arithmetic.
 pub mod palw_attn_dissect;
-pub mod palw_attempt_v2;
 pub mod palw_backend;
 pub mod palw_base0;
 pub mod palw_base0_a16;

@@ -678,7 +678,7 @@ pub fn palw_checkpoint_leaf_carries_recurrence_v1(profile: &PalwShapeProfileV3, 
         PalwCheckpointCadenceV1::PerDecodeCall => true,
         PalwCheckpointCadenceV1::PerPosition => {
             let spacing = palw_anchored_interval_for_profile_v1(profile).max(1);
-            covered_positions % spacing == 0
+            covered_positions.is_multiple_of(spacing)
         }
     }
 }
@@ -3092,7 +3092,8 @@ mod u04_flat_close {
     fn the_checkpoint_cadence_is_the_classs_own_map() {
         use crate::palw_state_chunk_map::{integer_kv_state_chunk_map_id_v1, integer_kv_state_chunk_map_id_v2};
 
-        let ctx = |prefill: u32, decode: u32| PalwJobContextV2 { declared_prefill_tokens: prefill, exact_decode_tokens: decode, ..job() };
+        let ctx =
+            |prefill: u32, decode: u32| PalwJobContextV2 { declared_prefill_tokens: prefill, exact_decode_tokens: decode, ..job() };
 
         // The shipped maps: per DECODE CALL, and every rule is the one shipped today.
         let mut v2 = PALW_LADDER_FAMILIES_V5[0](512).expect("projects");
@@ -3376,11 +3377,8 @@ mod u04_flat_close {
         let profile = PALW_LADDER_FAMILIES_V5[0](512).expect("projects");
         let d_head = profile.attn_head_dim as u64;
         let kv_dim = profile.attn_kv_heads as u64 * d_head;
-        let node = profile
-            .attn_nodes
-            .iter()
-            .find(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused)
-            .expect("a fused site");
+        let node =
+            profile.attn_nodes.iter().find(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused).expect("a fused site");
         let tile = node.tile_len as u64;
         let src = profile
             .attn_nodes
@@ -3431,12 +3429,7 @@ mod u04_flat_close {
         let floor = palw_canonical_footprint_floor_v1(profile.n_ctx);
         assert_eq!(floor, 64, "n_ctx / 8");
         // A job that is all prompt: 500 prefill, 2 decode tokens = ONE decode call.
-        let all_prompt = PalwJobContextV2 {
-            declared_prefill_tokens: 500,
-            exact_decode_tokens: 2,
-            max_context_tokens: 512,
-            ..job()
-        };
+        let all_prompt = PalwJobContextV2 { declared_prefill_tokens: 500, exact_decode_tokens: 2, max_context_tokens: 512, ..job() };
         assert_eq!(palw_job_footprint_v1(500, 2), 501, "it clears the positions floor eight times over");
         assert_eq!(palw_job_decode_footprint_v1(2), 1, "on one decode call");
         assert!(palw_footprint_meets_the_row_for_rules_v1(&profile, &all_prompt, false), "the shipped gate admits it");

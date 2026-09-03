@@ -19141,10 +19141,7 @@ pub(crate) mod tests {
         /// Play the dissection to its bottom through `apply_object`, and return the verdict the close
         /// adjudicates plus the state at the moment before it.
         /// Open the dissection and narrow it to its terminal tile — every move through the chain.
-        fn narrow_to_the_terminal(
-            p: &PalwStateParamsV2,
-            drill: &Drill,
-        ) -> (PalwChainStateV2, Hash64, Hash64, u64, u64) {
+        fn narrow_to_the_terminal(p: &PalwStateParamsV2, drill: &Drill) -> (PalwChainStateV2, Hash64, Hash64, u64, u64) {
             let (mut state, claim_id, sid, mut daa) = court_at_the_fused_leaf(p, drill);
             let (next, _) = apply(&state, p, &ctx(daa, daa, daa), &[root_claimed(sid, drill, 2)], None);
             daa += 1;
@@ -19210,7 +19207,11 @@ pub(crate) mod tests {
             // stream K: that route cannot bind a row to its own K or V series, and this class has
             // a sound route at every position). Only the anchored arm is playable for it; the
             // refusal itself is pinned by the test below.
-            for anchored in [true] {
+            // Was `for anchored in [true]` — the genesis-anchored arm is the only one this class
+            // can play, and the loop was the shape left behind when the other arm was removed. A
+            // binding says the same thing without a loop that runs once.
+            {
+                let anchored = true;
                 let honest = Drill::new(false);
                 let (_, _, _, verdict, _) = play_to_the_bottom(&p, &honest, anchored);
                 assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "anchored={anchored}: an honest execution was convicted");
@@ -19261,7 +19262,10 @@ pub(crate) mod tests {
                 "the refusal must name the route: {err}"
             );
             // And the anchored route, on the same tile, still adjudicates.
-            assert_eq!(adjudicate_the_bottom(&state, sid, &drill, true, tile).expect("anchored adjudicates"), PalwCourtVerdictV2::ChallengerDefeated);
+            assert_eq!(
+                adjudicate_the_bottom(&state, sid, &drill, true, tile).expect("anchored adjudicates"),
+                PalwCourtVerdictV2::ChallengerDefeated
+            );
         }
 
         /// **The site is the CLASS's, and a root claim about another head is refused.**
