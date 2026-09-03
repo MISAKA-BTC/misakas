@@ -659,13 +659,58 @@ fi
 # ---------------------------------------------------------------------------------------------
 short="${CLAIM_ID:0:16}"
 [ -n "$CLAIM_ID" ] || short="$JOB_ID"
+# **Ask each node for the claim's PHASE; do not grep for it.** The node's lifecycle line reads
+# `Block <hash>: PALW lifecycle carried 1× FreePromptCommitted` — the kind and the block, never the
+# claim id — so a regex that wants `<Kind>.*<claim id>` on one line can never match, and run 4
+# (2026-09-04) printed "FreePromptCommitted — NOT on every node" for a commitment all three nodes
+# had carried in block e7a1c9c7…. `misaka palw derived --json` is `GetPalwFreePromptClaim`; its
+# `phase` walks provisional → panel_bound → receipt_licensed → final on the node's own state.
+#
+# The arithmetic a reader should hold: on this preset PanelBound lands anchor_delay (20) DAA after
+# acceptance, ReceiptLicensed inside window_bind + window_receipt (1,200 DAA) and Final after
+# window_challenge more (2,400 DAA in all); at one DAA per ~2.5-minute block that is days, so a
+# drill session PROVES "carried" and "panel bound" and only WATCHES the rest.
+MISAKA_BIN="${MISAKA_BIN:-$REPO_ROOT/target/release/misaka}"
+claim_phase_on_node() {  # $1 = node index → prints the phase, or "absent"
+  local out
+  out=$("$MISAKA_BIN" --network devnet --rpc "127.0.0.1:$((RPC_BASE + $1))" palw derived --json "$CLAIM_ID" 2>/dev/null) || { echo absent; return; }
+  printf '%s' "$out" | python3 -c '
+import json,sys
+try:
+    d = json.load(sys.stdin)
+    print(d.get("phase") or ("absent" if not d.get("found", True) else "unknown"))
+except Exception:
+    print("absent")'
+}
+all_nodes_reached() {  # $1 = phase name; $2 = wait factor. The walk is monotone, so "at or past" is the test.
+  local want="$1" factor="${2:-1}" order="provisional panel_bound receipt_licensed final" i ok have
+  local deadline=$((SECONDS + STEP_WAIT * factor))
+  while :; do
+    ok=1
+    for ((i=0; i<NODES; i++)); do
+      have=$(claim_phase_on_node "$i")
+      case "$have" in
+        final) ;;
+        receipt_licensed) [ "$want" != final ] || ok=0 ;;
+        panel_bound) case "$want" in receipt_licensed|final) ok=0 ;; esac ;;
+        provisional) [ "$want" = provisional ] || ok=0 ;;
+        voided) log "  node-$i holds the claim as VOIDED"; return 1 ;;
+        *) ok=0 ;;
+      esac
+    done
+    [ "$ok" = 1 ] && return 0
+    [ $SECONDS -lt $deadline ] || { log "not every node reached \"$want\" within $((STEP_WAIT * factor))s — continuing to the verdict"; return 1; }
+    sleep 5
+  done
+}
 stage_ok=1
-for stage in FreePromptCommitted PanelBound ReceiptLicensed Final; do
-  if all_nodes_logged "$stage.*${short}|${short}.*$stage"; then
-    log "  $stage — every node"
+for stage in provisional:FreePromptCommitted panel_bound:PanelBound receipt_licensed:ReceiptLicensed final:Final; do
+  phase="${stage%%:*}"; label="${stage#*:}"
+  if all_nodes_reached "$phase"; then
+    log "  $label — every node (phase $phase)"
   else
     stage_ok=0
-    log "  $stage — NOT on every node"
+    log "  $label — NOT on every node"
     incapable=$(grep -ho 'Incapable' "$WORK_DIR"/node-*.log 2>/dev/null | wc -l | tr -d ' ')
     unavail=$(grep -ho 'Unavailable' "$WORK_DIR"/node-*.log 2>/dev/null | wc -l | tr -d ' ')
     if [ "$incapable" -gt 0 ]; then
