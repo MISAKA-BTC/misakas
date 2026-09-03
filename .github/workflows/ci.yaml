@@ -338,6 +338,19 @@ jobs:
         env:
           MISAKA_PALW_POW_FIXTURE: "1"
 
+      # **`--lib` is absent on purpose. Do not add it.**
+      #
+      # `cargo test -p misaka-palw-derive --lib` builds no BINARIES, so `palw-evm-runner` is not on
+      # disk when the suite runs — and ADR-0079's confinement gate is written to REFUSE when the
+      # runner it must confine is missing, rather than quietly falling back to in-process
+      # execution. The seven tests that cover that refusal go red under `--lib` and green here,
+      # and the red means the opposite of what it looks like: the gate working, not the tree
+      # broken. The whole package is the unit the genesis card's §6 table cites.
+      - name: Run the misaka-palw-derive suite with its binaries
+        run: cargo test -p misaka-palw-derive
+        env:
+          MISAKA_PALW_POW_FIXTURE: "1"
+
       - name: Run cargo doc tests
         run: cargo test --doc
         env:

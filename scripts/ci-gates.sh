@@ -55,7 +55,7 @@ export MISAKA_PALW_POW_FIXTURE="${MISAKA_PALW_POW_FIXTURE:-1}"
 # and is what a pre-commit hook or an impatient human should run. `build` needs a toolchain and
 # a compiled workspace.
 # ---------------------------------------------------------------------------------------------
-GATE_IDS="toolchain-pin workflow-parity artifact-conformance artifact-stranger artifact-roundtrip artifact-thirdparty fmt clippy pq-guard check build-devnet-prealloc check-evm-send nextest doctest hashes-no-asm doctest-hashes-no-asm doc example-kip10"
+GATE_IDS="toolchain-pin workflow-parity artifact-conformance artifact-stranger artifact-roundtrip artifact-thirdparty fmt clippy pq-guard check build-devnet-prealloc check-evm-send nextest derive-suite doctest hashes-no-asm doctest-hashes-no-asm doc example-kip10"
 
 gate_group() {
     case "$1" in
@@ -90,6 +90,7 @@ gate_desc() {
         build-devnet-prealloc) echo "the devnet-prealloc feature compiles, tests and benches included" ;;
         check-evm-send)       echo "misaka-cli's evm-send feature compiles" ;;
         nextest)              echo "cargo nextest run" ;;
+        derive-suite)         echo "misaka-palw-derive WITH its binaries — the confinement gate needs palw-evm-runner" ;;
         doctest)              echo "cargo test --doc" ;;
         hashes-no-asm)        echo "kaspa-hashes without asm, lib + benches" ;;
         doctest-hashes-no-asm) echo "kaspa-hashes without asm, doctests" ;;
@@ -101,11 +102,21 @@ gate_desc() {
 # ---------------------------------------------------------------------------------------------
 # The runner.
 #
-# `run_gate <id> <evidence-regex> -- <argv...>`
+# `run_gate <id> <evidence> -- <argv...>`
 #
-# `evidence-regex` is what the log MUST contain for the gate to count as having run. An empty
-# regex means "no output is the pass" (rustfmt). This is rule 1: `cargo nextest run` that
-# selected zero tests exits 0, and a gate that accepts that is measuring nothing.
+# `evidence` is what the log MUST contain for the gate to count as having run: one or more
+# extended regexes joined by `@@`, ALL of which must match. An empty evidence means "no output is
+# the pass" (rustfmt). This is rule 1: `cargo nextest run` that selected zero tests exits 0, and a
+# gate that accepts that is measuring nothing.
+#
+# `@@` exists because one regex is not enough for the checkers that refuse a LIST of things. The
+# conformance selftest refuses five named injuries; an evidence of `every injury refused` (its
+# last line) passes a build in which one of the five was quietly dropped -- the checker's coverage
+# shrinks and no number a reader sees shrinks with it. So the five names ARE the evidence. The
+# same failure was seen elsewhere in this tree today: a fuzz gate reported `gate_refused 400/400`
+# while gating nothing, and only a tally assertion caught it.
+#
+# The count of required patterns is printed on every run, passing or failing (rule 2).
 # ---------------------------------------------------------------------------------------------
 FAILED=0
 PASSED=0
@@ -125,15 +136,33 @@ run_gate() {
     local rc=$?
 
     local verdict="ok"
+    local ev rest found=0 want=0 missing=""
+    rest="$evidence"
+    while [ -n "$rest" ]; do
+        case "$rest" in
+            *"@@"*) ev="${rest%%@@*}"; rest="${rest#*@@}" ;;
+            *)      ev="$rest";       rest="" ;;
+        esac
+        want=$((want + 1))
+        if grep -Eq "$ev" "$log"; then
+            found=$((found + 1))
+        else
+            missing="$missing$(printf '\n    MISSING EVIDENCE  /%s/' "$ev")"
+        fi
+    done
+    [ "$want" -gt 0 ] && printf '    evidence: %d of %d required pattern(s) found in the log\n' "$found" "$want"
+
     if [ "$rc" -ne 0 ]; then
         verdict="FAILED rc=$rc"
-    elif [ -n "$evidence" ] && ! grep -Eq "$evidence" "$log"; then
-        # Rule 1: exit 0 with no evidence in the log is a failure, not a pass.
-        verdict="FAILED rc=0 but the log never matched /$evidence/ -- this gate did not run"
+    elif [ -n "$missing" ]; then
+        # Rule 1: exit 0 with the evidence absent is a failure, not a pass.
+        verdict="FAILED rc=0 and $((want - found)) of $want required pattern(s) never appeared -- this gate did not run, or ran less than it claims"
+        printf '%s\n' "$missing"
         rc=1
     fi
 
     gate_coverage "$id" "$log"
+    expected_reds "$log"
     missing_tool_hint "$log"
 
     if [ "$rc" -eq 0 ]; then
@@ -148,6 +177,28 @@ run_gate() {
     fi
     SUMMARY="$SUMMARY$(printf '\n  %-22s %s' "$id" "$verdict")"
     return $rc
+}
+
+# **The reds that are somebody else's, named rather than tolerated.**
+#
+# Three failures in this tree close at the cut's SINGLE `transformer_id` / preset re-pin, which
+# belongs to the integrator. A contributor who "fixes" one of them moves a published derivation's
+# id a second time. They are still FAILURES here -- nothing below suppresses a red -- but a reader
+# who cannot tell a known red from a new one ends up ignoring the colour, which is how a gate goes
+# quiet without going green.
+#
+# `palw_freeprompt_v3::tests::golden_vector_ids_are_frozen` is matched by its MODULE PATH: there is
+# a namesake `golden_vector_ids_are_frozen` in `palw_derived_v1.rs` that is NOT expected to fail,
+# and matching the bare name would excuse it.
+expected_reds() {
+    local log="$1"
+    grep -q "shipped_presets_have_pinned_fingerprints" "$log" 2>/dev/null &&
+        printf '    known red: shipped_presets_have_pinned_fingerprints -- closes at the cut'"'"'s single re-pin (integrator)\n'
+    grep -q "palw_freeprompt_v3::tests::golden_vector_ids_are_frozen" "$log" 2>/dev/null &&
+        printf '    known red: palw_freeprompt_v3::tests::golden_vector_ids_are_frozen -- same re-pin. NOT the namesake in palw_derived_v1.rs\n'
+    grep -q "source_tree_sha256" "$log" 2>/dev/null && grep -q "MISMATCH" "$log" 2>/dev/null &&
+        printf '    known red: the transformer_id pins -- a87cc282 rustfmt-ed misaka-palw-derive/src/kinds/scene.rs, which moved all eight ids. Same re-pin.\n'
+    return 0
 }
 
 # A gate that fails because a TOOL is absent is still a failure -- "skipped" is how a gate goes
@@ -191,7 +242,23 @@ gate_coverage() {
         doc)
             printf '    coverage: %s crate(s) documented\n' "$(grep -cE '^ +(Documenting|Compiling|Checking) ' "$log" 2>/dev/null || echo 0)"
             ;;
-        nextest|hashes-no-asm)
+        nextest)
+            grep -E '^ +Summary ' "$log" 2>/dev/null | sed 's/^ */    coverage: /' || true
+            # The genesis card's SS6 table cites four suites by crate. They are all in
+            # `default-members`, so `cargo nextest run` runs them -- but "it should be covered" is
+            # the claim this project keeps being wrong about, so COUNT them out of the log instead.
+            printf '    coverage: the card'"'"'s four cited suites, counted from this run:\n'
+            local c
+            for c in kaspa-consensus-core misaka-palw-base0 misaka-cli kaspad; do
+                printf '      %-22s %s test(s)\n' "$c" "$(grep -cE "^ +(PASS|FAIL|TRY|SKIP|LEAK)[^ ]* +\[[^]]*\] +$c(::| )" "$log" 2>/dev/null || echo 0)"
+            done
+            ;;
+        derive-suite)
+            printf '    coverage: %s suite(s) reported a test result line; %s binary target(s) built\n' \
+                   "$(grep -c '^test result:' "$log" 2>/dev/null || echo 0)" \
+                   "$(grep -cE '^ +Running .*(palw-evm-runner|palw-derive)' "$log" 2>/dev/null || echo 0)"
+            ;;
+        hashes-no-asm)
             grep -E '^ +Summary ' "$log" 2>/dev/null | sed 's/^ */    coverage: /' || true
             ;;
         doctest|doctest-hashes-no-asm)
@@ -314,6 +381,12 @@ gate_clippy()        { cargo clippy --tests --benches --examples -- -D warnings;
 gate_pq_guard()      { bash scripts/pq-ci-guard.sh; }
 gate_check()         { cargo check --tests --benches; }
 gate_nextest()       { cargo nextest run; }
+# **No `--lib`, deliberately, and do not "optimise" it back in.**
+# `--lib` builds no binaries, so `palw-evm-runner` is not on disk, and ADR-0079's confinement gate
+# REFUSES rather than falling back in-process — seven reds that a `--lib` run hides and that mean
+# the opposite of what they look like (they are the gate working, not the tree broken). The whole
+# package is the unit that reproduces what the genesis card's SS6 table cites.
+gate_derive_suite()  { cargo test -p misaka-palw-derive; }
 gate_doctest()       { cargo test --doc; }
 gate_hashes_no_asm() { cargo nextest run -p kaspa-hashes --features=no-asm --benches; }
 gate_doc()           { cargo doc --no-deps; }
@@ -330,10 +403,16 @@ dispatch() {
     case "$1" in
         toolchain-pin)        run_gate "$1" 'PIN OK'                    -- gate_toolchain_pin ;;
         workflow-parity)      run_gate "$1" 'PARITY OK'                 -- gate_workflow_parity ;;
-        artifact-conformance) run_gate "$1" 'every injury refused'      -- gate_artifact_conformance ;;
-        artifact-stranger)    run_gate "$1" 'checks agree|SELFTEST'     -- gate_artifact_stranger ;;
-        artifact-roundtrip)   run_gate "$1" 'covered kinds:'            -- gate_artifact_roundtrip ;;
-        artifact-thirdparty)  run_gate "$1" 'agreed,'                   -- gate_artifact_thirdparty ;;
+        # The five injuries BY NAME, not the summary line: losing one shrinks the checker's
+        # coverage and shrinks no number a reader sees.
+        artifact-conformance) run_gate "$1" 'refused +midi: header declares 2 tracks@@refused +midi: end-of-track short of the chunk end@@refused +glb: declared total length is 4 bytes over@@refused +stl: count says 3, file holds 1@@refused +glb: alpha 0.5 with the OPAQUE default@@selftest: every injury refused by name' -- gate_artifact_conformance ;;
+        # All four oracles, not just a verdict: oracle 1 is the id pins, 2 the corpus goldens, 3
+        # that nothing derives unnamed, 4 the verify path round-tripped and then tampered with.
+        artifact-stranger)    run_gate "$1" '== oracle 1:@@== oracle 2:@@== oracle 3:@@== oracle 4:@@dsl_hash\+artifact_hash MATCH@@a tampered artifact_hash is caught' -- gate_artifact_stranger ;;
+        artifact-roundtrip)   run_gate "$1" 'covered kinds:@@[0-9]+ MIDI, [0-9]+ STL@@OK .*\.mid@@OK .*\.stl'  -- gate_artifact_roundtrip ;;
+        # `--require` makes a missing library a red; the library VERSIONS must be in the log too,
+        # or the oracle that answered is unknown.
+        artifact-thirdparty)  run_gate "$1" 'libraries: mido [0-9]@@numpy-stl [0-9]@@AGREE .*mido:@@AGREE .*numpy-stl:@@[0-9]+ agreed, 0 disagreed' -- gate_artifact_thirdparty ;;
         fmt)                  run_gate "$1" ''                          -- gate_fmt ;;
         clippy)               run_gate "$1" 'Finished|Checking'         -- gate_clippy ;;
         pq-guard)             run_gate "$1" '.'                         -- gate_pq_guard ;;
@@ -341,6 +420,7 @@ dispatch() {
         build-devnet-prealloc) run_gate "$1" 'Finished|Compiling'        -- gate_build_devnet_prealloc ;;
         check-evm-send)       run_gate "$1" 'Finished|Checking'         -- gate_check_evm_send ;;
         nextest)              run_gate "$1" 'Summary \['                -- gate_nextest ;;
+        derive-suite)         run_gate "$1" 'test result:@@running [0-9]+ test'  -- gate_derive_suite ;;
         doctest)              run_gate "$1" 'test result:'              -- gate_doctest ;;
         hashes-no-asm)        run_gate "$1" 'Summary \['                -- gate_hashes_no_asm ;;
         doctest-hashes-no-asm) run_gate "$1" 'test result:'             -- gate_doctest_hashes_no_asm ;;
@@ -368,6 +448,17 @@ usage_list() {
     done
     printf '\nNot covered here (they need a runner this is not): Check (x86_64-pc-windows-msvc),\n'
     printf 'Check no_std, Check/Test/Build WASM32, Build Linux Release (musl).\n'
+    printf '\nMANUAL, declared in advance rather than left as a gap -- both need model artifacts on\n'
+    printf 'disk that neither CI nor a clean checkout has, so no runner can honestly claim them:\n'
+    printf '  palw-model-gate           the dense lane, against a real GGUF\n'
+    printf '  palw-qwen36-model-gate    the QWEN36 lane, likewise\n'
+    printf '  misaka-palw-artifact-conformance.py demo --derive-bin target/debug/palw-derive\n'
+    printf '                            a REAL GLB read semantically; the CI gate covers glTF only\n'
+    printf '                            through the selftest injuries (0 GLB is printed each run)\n'
+    printf '\nKnown reds, all closing at the cut'"'"'s single re-pin (integrator, not a contributor):\n'
+    printf '  shipped_presets_have_pinned_fingerprints\n'
+    printf '  palw_freeprompt_v3::tests::golden_vector_ids_are_frozen  (NOT the palw_derived_v1.rs namesake)\n'
+    printf '  artifact-stranger oracle 1 -- the eight transformer_id pins, moved by a87cc282\n'
 }
 
 SELECTED=""
