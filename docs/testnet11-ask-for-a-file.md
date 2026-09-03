@@ -103,13 +103,26 @@ cargo build -p misaka-palw-derive --bin palw-evm-runner --bin palw-derive
 
 ```
 transformers:
-  music/smf/v1  kind 6 (music)  grammar music/v1  discipline integer  writer standard-midi-file/1.0/canonical-v1  id 9067320c50e96f9d
+  music/smf/v1  kind 6 (music)  grammar music/v1  discipline integer  writer standard-midi-file/1.0/canonical-v1  id <16 hex — this build's>
       bounds: dsl 4194304 B  artifact 16777216 B  work 65536 midi-note  named inputs 0 (0 B)
-  cad/stl/v1  kind 3 (cad)  grammar cad/v1  discipline exact-rational  writer stl-binary/1.0/zero-normal-rh-winding-sorted-v1  id ccbbc7e5707104f5
+  cad/stl/v1  kind 3 (cad)  grammar cad/v1  discipline exact-rational  writer stl-binary/1.0/zero-normal-rh-winding-sorted-v1  id <16 hex — this build's>
       bounds: dsl 65536 B  artifact 1048576 B  work 4000000 exact-predicate  named inputs 0 (0 B)
-  scene/glb/v1  kind 1 (scene)  grammar scene/v1  discipline integer  writer gltf-binary/2.0/canonical-v1  id 11ee290060baf502
+  scene/glb/v1  kind 1 (scene)  grammar scene/v1  discipline integer  writer gltf-binary/2.0/canonical-v1  id <16 hex — this build's>
       bounds: dsl 262144 B  artifact 2097152 B  work 65536 mesh vertices  named inputs 0 (0 B)
 ```
+
+**The ids are elided above on purpose, and the ones this page used to print were already
+wrong.** A `transformer_id` is a hash of the transformer's SOURCE TREE — every file under
+`misaka-palw-derive/src/`, comments included — so it moves whenever that code is edited, including
+by an edit that changes no behaviour at all. The repository's own `transformer_id_pin` test exists
+to record each move. A page that prints today's ids as though they were constants is a page that
+is wrong after the next commit, and the reader who compares them concludes their build is broken.
+
+**Take yours from `palw-derive list`, which is the only answer that cannot be stale**, and expect
+it to differ from any id written down anywhere. What does NOT move with the source tree is
+everything the artifact is made of: `dsl_hash`, `artifact_hash` and the artifact bytes are
+functions of the DSL and the writer, so a 157-byte MIDI stays a 157-byte MIDI with the same
+content hash across builds whose ids differ. If those disagree, something real disagrees.
 
 Eight are registered in this build: music (`.mid`), CAD (`.stl`), 3D scenes (`.glb`), images
 (`.png`), maps, simulations, and two that compile and run contract code.
@@ -132,18 +145,18 @@ It prints one JSON line and writes three files:
 {"artifact_bytes":157,
  "artifact_hash":"6e27611c2ee15af0…",
  "dsl_hash":"b2600b65189e277d…",
- "derived_id":"9b08286e6a021ac7…",
+ "derived_id":"<16 hex — this build's>",
  "kind":6,"kind_name":"music","transformer":"music/smf/v1",
- "files":{"artifact":"./out/derived-9b08286e6a021ac7.artifact.mid",
-          "dsl":"./out/derived-9b08286e6a021ac7.dsl",
-          "object":"./out/derived-9b08286e6a021ac7.derived-unsigned.borsh"}}
+ "files":{"artifact":"./out/derived-<16 hex>.artifact.mid",
+          "dsl":"./out/derived-<16 hex>.dsl",
+          "object":"./out/derived-<16 hex>.derived-unsigned.borsh"}}
 ```
 
 And it is a real MIDI file — not a blob with the right extension:
 
 ```console
-$ file ./out/derived-9b08286e6a021ac7.artifact.mid
-./out/derived-9b08286e6a021ac7.artifact.mid: Standard MIDI data (format 1) using 2 tracks at 1/192
+$ file ./out/derived-<16 hex>.artifact.mid
+./out/derived-<16 hex>.artifact.mid: Standard MIDI data (format 1) using 2 tracks at 1/192
 ```
 
 The same for a 3D scene: `file` reports `glTF binary model, version 2`, and the container holds up
