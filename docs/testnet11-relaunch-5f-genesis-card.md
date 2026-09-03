@@ -4720,3 +4720,42 @@ have been red there rather than found by three base0 tests afterwards — which 
 does not. Sent to 3e as a location for the cover tip: *for every family the genesis assembly
 pins, `vectors ≤ MAX_VECTORS` and `evidence bytes ≤ CHUNK_MAX_BYTES × CHUNK_MAX_COUNT`, through
 the acceptance path's own refusals.*
+
+### The assertion exists on the tip, and the cover's numbers
+
+`every_pinned_family_is_certifiable_through_the_chain` (base0 pin test): for every family the
+genesis pins, on both lanes, build the `FamilyCertified` object from the drill's own evidence and
+ask the acceptance path's own two rules — `vectors ≤ PALW_CERTIFICATION_MAX_VECTORS` and
+`palw_object_chunks_v1(&object)`, the chain's own chunker — printing each family's vectors, bytes
+and carrier count. **Red on the triple rule (QWEN36 74 / 1,442,857 B); expected green on the
+cover.** B's core test inverted per its own instruction
+(`every_pinned_family_shows_every_kernel_it_declares_as_drilled`: non-empty, declared ⊆ drilled,
+equal), with base0's drilled-vs-pinned equality tests as the measurement that keeps it honest.
+
+```
+with the cover, both lanes identical:
+BASE-0   14 vectors  (10/10 kernels)     QWEN36   29  (23/23 — under the cap of 32)
+A16      16          (12/12)             A16-V5   14  (10/10)
+court_e2e_root  e649e7c08de4e1dc3abc3ca3b5ab8e503f2d64b9fa1e909bfd7baa18afbfa651
+                9711f7723bcea53523bddcc8a5690ad70a9b3aa39ce98d07d9c0391dee31de4a   PALW_RC_COURT_E2E_ROOT_BYTES
+```
+
+Suites running on it → the family commit → finalize → the six-row table with `extracted_from` on
+that tip → the word. The t11 fingerprint stays withdrawn until the table spells it.
+
+### A second computation of the tokenizer id, and one zero explained
+
+5e ran the shipped worker in manifest mode against `bound-candidate.palwart` with the drill's
+tokenizer: `shape_profile_id 4277d84f…` (the registered class, byte for byte), `model_profile_id
+158314b5…` (the bound artifact's digest), `n_ctx 512`, **`tokenizer_id fa9a43521e324f84…`** —
+the value this project's notes carried as the tokenizer commitment, now shown to be the
+*derived id* (sha256 and blake2b of the file match neither), from a tree that never saw the table.
+The file: ibm's `/root/palw-class/qwen25-src/tokenizer.json` is sha256 `c0382117ea329cdf…`,
+7,031,645 B, **byte-identical** to the Mac's `models/qwen2.5-1.5b/tokenizer.json` — Qwen2.5-1.5B
+base and Instruct ship one tokenizer, so the base checkpoint on the Mac never mattered for the
+tokenizer, only for the weights. Stage 4's tokenizer gate is open before the drill reaches it.
+
+`runtime_manifest_hash` is all zeros in manifest mode — and in every mode for the A16 family:
+`fp_worker.rs:442 runtime_manifest_hash: Hash64::default()`, and `/health` printed `0000…` in
+serve mode during this session's runs. A seat comparing it compares zero to zero. Named, not a
+problem tonight.
