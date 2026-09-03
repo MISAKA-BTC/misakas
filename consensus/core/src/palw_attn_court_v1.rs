@@ -110,6 +110,8 @@ pub enum PalwAttnCourtError {
     Leg(#[from] PalwStepLegError),
     #[error("a root claim of {history_positions} positions at {lanes} lanes is outside the court's bounds")]
     RootClaimOutOfRange { history_positions: u32, lanes: usize },
+    #[error("the root claim is about head {got_head} lanes {got_first}..+{got_count}; the ladder terminated on head {head} lanes {first}..+{count}")]
+    WrongSite { got_head: u16, got_first: u16, got_count: u16, head: u16, first: u16, count: u16 },
     #[error("the root claim's value partials finalize to a tile the execution did not commit")]
     RootDoesNotFinalize,
     #[error("the bottom opens tile {got} and the dissection narrowed to tile {expected}")]
@@ -273,10 +275,18 @@ impl PalwAttnDissectPhaseV1 {
     ///
     /// `kary_court_active` is `Params::palw_kary_court_active_at(daa)`. It is an ARGUMENT because
     /// the fence is the caller's to read; what this module owns is refusing to run without it.
+    ///
+    /// **`site` is the leaf the LADDER terminated on**, as `(head, lane_first, lane_count)` read
+    /// off that leaf's step coordinate by the caller. Without it a responder could answer a
+    /// dispute about one head with a truthful claim about another and be acquitted for it: the
+    /// root claim names its own head, so something outside the claim has to say which head was
+    /// asked about. The caller derives it from the terminal leaf and the class's profile; this
+    /// machine refuses the mismatch by name.
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         session_id: Hash64,
         root: &PalwAttnRootClaimV1,
+        site: (u16, u16, u16),
         out_tile: &[i32],
         values: crate::palw_base0_a16::A16QuantParams,
         court: &PalwCourtParamsV2,
@@ -305,6 +315,16 @@ impl PalwAttnDissectPhaseV1 {
         }
         if w_round == 0 {
             return Err(PalwAttnCourtError::ZeroRungWindow);
+        }
+        if (root.head, root.lane_first, root.lane_count) != site {
+            return Err(PalwAttnCourtError::WrongSite {
+                got_head: root.head,
+                got_first: root.lane_first,
+                got_count: root.lane_count,
+                head: site.0,
+                first: site.1,
+                count: site.2,
+            });
         }
         // **The claim is checked against the execution before it is played against.**
         if out_tile.len() != lanes || a16_attn_finalize_v1(&root.claim.v_acc, values) != out_tile {
@@ -836,7 +856,8 @@ mod tests {
             history_positions: fx.positions as u32,
             claim: root_claim,
         };
-        PalwAttnDissectPhaseV1::open(h64(9), &root, &fx.out_tile, params().values, &court_at(arity), TILE, 100, 30, true)
+        let site = (root.head, root.lane_first, root.lane_count);
+        PalwAttnDissectPhaseV1::open(h64(9), &root, site, &fx.out_tile, params().values, &court_at(arity), TILE, 100, 30, true)
     }
 
     /// What one full dissection decided, and how it got there.
@@ -1076,16 +1097,22 @@ mod tests {
             history_positions: 32,
             claim: fx.root.clone(),
         };
+        let site = (0u16, 0u16, 4u16);
         assert_eq!(
-            PalwAttnDissectPhaseV1::open(h64(9), &root, &fx.out_tile, params().values, &court_at(16), TILE, 100, 30, false),
+            PalwAttnDissectPhaseV1::open(h64(9), &root, site, &fx.out_tile, params().values, &court_at(16), TILE, 100, 30, false),
             Err(PalwAttnCourtError::FenceDormant)
         );
         // A root claim that does not finalize to the opened tile never reaches a round.
         let mut wrong = root.clone();
         wrong.claim.v_acc[0] = i64::MAX / 4;
         assert_eq!(
-            PalwAttnDissectPhaseV1::open(h64(9), &wrong, &fx.out_tile, params().values, &court_at(16), TILE, 100, 30, true),
+            PalwAttnDissectPhaseV1::open(h64(9), &wrong, site, &fx.out_tile, params().values, &court_at(16), TILE, 100, 30, true),
             Err(PalwAttnCourtError::RootDoesNotFinalize)
+        );
+        // And a truthful claim about ANOTHER head does not answer this dispute.
+        assert_eq!(
+            PalwAttnDissectPhaseV1::open(h64(9), &root, (1, 0, 4), &fx.out_tile, params().values, &court_at(16), TILE, 100, 30, true),
+            Err(PalwAttnCourtError::WrongSite { got_head: 0, got_first: 0, got_count: 4, head: 1, first: 0, count: 4 })
         );
     }
 
@@ -1110,6 +1137,69 @@ mod tests {
             .expect("an honest round");
         assert_eq!(phase.turn(), PalwBisectTurnV1::AwaitVerdict);
         assert_eq!(phase.declare_no_show(231).expect("the challenger is now due").silent_party, PalwBisectPartyV1::Challenger);
+    }
+
+    /// **What it costs a challenger to name a child — the ADR's own worry, counted.**
+    ///
+    /// The fold binds a disclosure to the parent's claim and to nothing else: a responder is free
+    /// to state children that fold but are not the tiles', moving a lie from one child into
+    /// another. Nothing catches that at the fold, and nothing is meant to — what catches it is
+    /// the challenger, who recomputes each child and names the first that is not what it
+    /// computed, and then the bottom, where a recompute is exact.
+    ///
+    /// So the question is what that recompute costs. The children PARTITION the disputed range,
+    /// so computing all `k` of them is ONE pass over the range — not `k` passes — and the ranges
+    /// shrink geometrically. The total is `n + n/k + n/k² + … < n·k/(k−1)`, which is at most TWO
+    /// passes over the history at the worst arity (2) and 1.07 at sixteen. This test counts the
+    /// tile recomputes a whole dissection costs the challenger and holds that bound.
+    ///
+    /// It is also the argument that a wider `k` is not paid for by the challenger: sixteen
+    /// children cost it strictly LESS total work than two, because the rounds fall faster than
+    /// the per-round work rises (it does not rise at all).
+    #[test]
+    fn the_challengers_cost_to_name_a_child_is_under_two_passes_over_the_history() {
+        use std::cell::Cell;
+        let fx = fixture(8, 4_096, 4, 43);
+        let tiles = fx.tile_count();
+        assert_eq!(tiles, 256);
+        let mut costs = Vec::new();
+        for arity in [2u8, 4, 16, 64] {
+            let mut phase = open_phase(&fx, arity, fx.root.clone()).expect("an honest root");
+            let (m, s) = phase.root_scale();
+            let counted = Cell::new(0u64);
+            while phase.turn() != PalwBisectTurnV1::Terminal {
+                let ranges = phase.child_ranges();
+                let children: Vec<_> = ranges.iter().map(|&(f, c)| fx.range_claim(f, c, m, s)).collect();
+                phase
+                    .apply_round(&PalwAttnDissectRoundV1 { version: PALW_ATTN_DISSECT_OBJECT_VERSION_V1, children }, 300, 30)
+                    .expect("an honest round folds");
+                // The challenger's move: recompute every child. That is one pass over the range.
+                for &(_, c) in &ranges {
+                    counted.set(counted.get() + c);
+                }
+                phase
+                    .apply_choice(
+                        &PalwAttnDissectChoiceV1 {
+                            version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                            session_id: h64(9),
+                            round: phase.round(),
+                            child: 0,
+                        },
+                        310,
+                        30,
+                    )
+                    .expect("child 0 exists");
+            }
+            let passes = counted.get();
+            assert!(
+                passes < 2 * tiles,
+                "arity {arity}: naming a child cost {passes} tile recomputes against a history of {tiles} tiles — over two passes"
+            );
+            costs.push((arity, passes));
+        }
+        // A wider round is CHEAPER for the challenger, not dearer: the rounds fall and the
+        // per-round work does not rise.
+        assert_eq!(costs, vec![(2u8, 510u64), (4, 340), (16, 272), (64, 260)]);
     }
 
     // ---------------------------------------------------------------------------------------
