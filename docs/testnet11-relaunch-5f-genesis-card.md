@@ -49,7 +49,7 @@ looks armed and prices the old row.
 | class | registered | seated | note |
 |---|---|---|---|
 | BASE-0 floor | yes | yes | the floor must have a producer or DAA stops and the chain cannot leave the state by itself |
-| dense A16 **512 row** | **yes** | yes | the only wide row registered; both model gates needed 256, and at 512 the decode budget is 503 against grammar floors of 38 / 60 / 104 — all three fit with room |
+| dense A16 **512 row** | **yes** | yes | the only wide row registered — see the width argument below, which is not the one this card first gave |
 | hybrid QWEN36 | **NO** | — | see below — this is now a correctness decision, not a margin one |
 | demonstration class | yes | **SEAT AT GENESIS** | a class registered post-genesis has NO epoch budget until the next boundary |
 
@@ -70,6 +70,44 @@ Flat correctness fact, not a margin. *(Swept by 1c on a detached `palw-adr0082-f
 
 **No operator pubkey may appear in two `BondRegistered` rows.** The genesis tool PANICS on this,
 it does not warn.
+
+### Why 512, and why the first two answers were the wrong quantity
+
+Three different numbers are all "tokens for a kind", and this card quoted the wrong one twice:
+
+| quantity | value | what it actually answers |
+|---|---|---|
+| grammar floor | cad 38, music 60, scene 104 | the shortest legal non-degenerate answer — fits at n_ctx **128** |
+| what the model gates needed | 256, both tiers | the width at which a checkpoint's own answers parsed |
+| **what the shipped corpus costs** | cad 66, **music 261, scene 286** | **the answers a demonstration actually publishes** |
+
+Only the third is binding. At n_ctx 256 the decode budget is 247, and **both the MIDI and the GLB
+that were derived, validated through mido / pygltflib / numpy-stl and shown to a human are over
+it** — 261 and 286 against 247. A launch sized on the floors or on the gates registers a class that
+can express every kind and **cannot emit the artifacts the announcement is about**, and the failure
+arrives as a worker refusal, after the announcement, on the one request the announcement invites.
+
+At 512 the budget is 503 and the demonstration set closes. Whole corpus, for whoever revisits this:
+
+    budget   119 (n_ctx  128)  ->   9/34 answers fit
+    budget   247 (n_ctx  256)  ->  21/34
+    budget   503 (n_ctx  512)  ->  24/34
+    budget 1,015 (n_ctx 1024)  ->  25/34
+    budget 2,039 (n_ctx 2048)  ->  28/34
+
+The tail is grammar coverage rather than demonstration: `map/05-large-dungeon` is 11,222 tokens and
+the `9x-*` entries exist to be refused.
+
+**And the flatness makes the choice free** (§3): 80,440 bytes at 256 against 80,504 at 512 — one
+carrier either way, both prosecutable, sixty-four bytes apart. There is no trade. 1,024 would cost
+64 more and buy one more answer; 512 is taken because that is the width a demonstration has actually
+been measured against, and registering a width nobody has measured is how this card got the previous
+two answers wrong.
+
+**Third confirmation, from the artifact itself:** `qwen25-1.5b-a16.palwart` declares
+`max_position = 512` in its own header. The registered row, the artifact on disk, and the
+demonstration corpus all agree at 512. *(Corpus token counts measured by 1c with the shipped Qwen2.5
+tokenizer; header decoded here.)*
 
 ---
 
