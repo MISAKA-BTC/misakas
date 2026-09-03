@@ -668,12 +668,13 @@ mod tests {
     /// the other three derive from. A mutation that rewrites that name, that width or those refs
     /// must be refused or planned — never panicked on, and never nondeterministic.
     ///
-    /// No corpus digest is pinned for this base: the digest's whole discipline is that it moves
-    /// only in a commit that says why, and a v5 row is not registered anywhere yet.
+    /// The corpus digest for THIS base is pinned separately, by
+    /// `the_v5_fuzz_corpus_digest_is_the_same_on_every_machine` below — two bases, two pins,
+    /// neither hiding the other.
     #[test]
     fn a_bounded_fuzz_run_over_the_v5_graph_finds_no_panic_and_no_nondeterminism() {
         let (artifact, base) = tiny_class_v5();
-        let tally = fuzz_a16_profiles_from_v1(0x0082_2026_09_03, 400, &artifact, &base);
+        let tally = fuzz_a16_profiles_from_v1(0x0082_2026_0903, 400, &artifact, &base);
         println!("v5 fuzz tally: {tally:?}");
         assert_eq!(tally.panics, 0, "a panic inside the interpreter is the fence staying down");
         assert_eq!(tally.nondeterminism, 0, "two runs of one plan must be one bitstream");
@@ -714,6 +715,33 @@ mod tests {
 
     /// Seed `0x0067_2026_08_31`, 400 iterations. See the test above.
     const CORPUS_DIGEST_400: &str = "90939894923247d3e1eb18478b0495744e9ff0416bb9a20d16d01f0c411ff5eb";
+
+    /// **The same clause over the FUSED base** (ADR-0082 audit E, M-2).
+    ///
+    /// The pin above is folded over the graph-v2 space and cannot see the fused site at all, and
+    /// the fused site is where this ADR puts new arithmetic on the executor's hot path: `int_exp`
+    /// and `int_recip` per position per head, inside `PlanOp::AttnFused`. The v5 gate beside it
+    /// runs each plan twice IN ONE PROCESS, which is a check that agrees with itself — a machine
+    /// that computes the fused row differently passes it. So the v5 base gets its OWN pin rather
+    /// than the v2 one being widened: two bases, two numbers, and a disagreement names which
+    /// space it is in.
+    ///
+    /// The re-pin discipline is the v2 pin's, verbatim: a deliberate change that moves this value
+    /// re-pins it in ONE commit that says which change moved it and why it was intended.
+    #[test]
+    fn the_v5_fuzz_corpus_digest_is_the_same_on_every_machine() {
+        let (artifact, base) = tiny_class_v5();
+        let tally = fuzz_a16_profiles_from_v1(0x0082_2026_0903, 400, &artifact, &base);
+        assert_eq!(
+            faster_hex::hex_string(&tally.corpus_digest),
+            V5_CORPUS_DIGEST_400,
+            "this machine computed a different fused corpus than the pinned one — see the doc above before touching the pin"
+        );
+        assert_ne!(V5_CORPUS_DIGEST_400, CORPUS_DIGEST_400, "two bases must not fold to one number, or one of them is unpinned");
+    }
+
+    /// Seed `0x0082_2026_0903`, 400 iterations, over the graph-v5 base. See the test above.
+    const V5_CORPUS_DIGEST_400: &str = "236888781074c28a61cbae304c77cb3915729663cfc695ae182447d213c58a86";
 
     /// **ADR-0067 SA-1, first half: the corpus contains profiles built to exhaust memory and to
     /// recurse, and driving them finds no panic.**

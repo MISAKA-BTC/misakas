@@ -50,6 +50,17 @@ WAIT="${WAIT:-900}"
 # re-sized at least once. A poll is right at whatever cadence the seed produces next.
 STEP_WAIT="${STEP_WAIT:-600}"
 GATEWAY_PORT="${GATEWAY_PORT:-18795}"
+# **The port bases are a parameter, and an occupied one is a refusal BY NAME.**
+#
+# They were literals (16410 / 17710) inside the node loop and inside stage 2's registrar
+# (`reg_rpc + 100`, `+ 200`). On a host running a second devnet — which is what a shared build
+# machine is — stage 1 came up on whatever was free, ran for two minutes, and then the REGISTRAR
+# died with "Address already in use" on a port nothing had said it would need; the drill reported
+# "the registrar exited before the class reached a block", which is the truth about the symptom and
+# says nothing about the cause. Every port this run binds is now derived from these two and checked
+# before a single process starts.
+P2P_BASE="${P2P_BASE:-16410}"
+RPC_BASE="${RPC_BASE:-17710}"
 PROMPT="${PROMPT:-Name one property of a hash function.}"
 MAX_TOKENS="${MAX_TOKENS:-4}"
 # The class the gateway's worker embodies. `palw-a16-fp-worker` serves exactly this catalog row.
@@ -88,6 +99,31 @@ done
 [ -n "${MISAKA_DEVNET_GENESIS:-}" ] || die "MISAKA_DEVNET_GENESIS must be the devnet genesis hash, 128 hex chars (consensus/core/src/config/genesis.rs, DEVNET_GENESIS). A guessed value silently produces claims no seat can replay."
 [ "${#MISAKA_DEVNET_GENESIS}" -eq 128 ] || die "MISAKA_DEVNET_GENESIS is ${#MISAKA_DEVNET_GENESIS} chars, not 128"
 command -v python3 >/dev/null || die "python3 is required (key derivation and the HTTP client)"
+
+# Every port this run binds, derived from the two bases and the node count exactly as the stages
+# below derive them — never a second list, or a stage could bind a port this check never saw. The
+# registrar's two are `RPC_BASE + 100` (registration) and `+ 200` (the class-table dump).
+port_in_use() {
+  python3 -c 'import socket,sys
+s = socket.socket()
+try:
+    s.bind(("127.0.0.1", int(sys.argv[1])))
+except OSError:
+    sys.exit(0)
+finally:
+    s.close()
+sys.exit(1)' "$1"
+}
+busy=""
+for ((i=0; i<NODES; i++)); do
+  for port in $((P2P_BASE + i)) $((RPC_BASE + i)); do
+    port_in_use "$port" && busy="$busy $port"
+  done
+done
+for port in $((RPC_BASE + 100)) $((RPC_BASE + 200)) "$GATEWAY_PORT"; do
+  port_in_use "$port" && busy="$busy $port"
+done
+[ -z "$busy" ] || die "these ports are already bound:$busy — another devnet is running on this host. Re-run with P2P_BASE / RPC_BASE / GATEWAY_PORT set to a free range; a collision discovered at stage 2 reads as 'the registrar exited' and names nothing."
 
 rm -rf "$WORK_DIR"; mkdir -p "$WORK_DIR/keys" "$WORK_DIR/obj" "$WORK_DIR/outbox" "$WORK_DIR/traces"
 
@@ -138,7 +174,7 @@ for ((i=0; i<NODES; i++)); do
   addr="$("$CLI_BIN" --network devnet key address --key-file "$WORK_DIR/keys/bond-$i.seed" | tail -1 | awk '{print $NF}')"
   [ -n "$addr" ] || die "cannot derive bond $i's address"
   ADDRS[$i]="$addr"
-  p2p=$((16410 + i)); rpc=$((17710 + i))
+  p2p=$((P2P_BASE + i)); rpc=$((RPC_BASE + i))
   # --nogrpc: every node would otherwise bind the same default gRPC port and the later ones exit.
   # --enable-unsynced-mining: a chain with only a genesis is "not synced"; the producer still
   # requires peers and open participation, so the gate's other clauses are not waived.
@@ -151,7 +187,7 @@ for ((i=0; i<NODES; i++)); do
   # node-0 also holds the class artifact: it is the node that registers the class, and a registrar
   # must be able to derive the artifact root it is about to pin.
   if [ "$i" -eq 0 ]; then args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT"); fi
-  if [ "$i" -gt 0 ]; then args+=(--connect=127.0.0.1:16410); fi
+  if [ "$i" -gt 0 ]; then args+=(--connect=127.0.0.1:$P2P_BASE); fi
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
   # `$!` into a variable rather than `${pids[-1]}`: macOS ships bash 3.2, which rejects a negative
   # array index at PARSE time — the whole script fails to load, not the line.
@@ -160,19 +196,32 @@ for ((i=0; i<NODES; i++)); do
   log "node-$i pid $node_pid rpc 127.0.0.1:$rpc bond $PREMINE_TXID:$i"
 done
 
-CLI=("$CLI_BIN" --network devnet --rpc 127.0.0.1:17710)
+CLI=("$CLI_BIN" --network devnet --rpc 127.0.0.1:$RPC_BASE)
 blocks_of() { grep -c "produced block #" "$WORK_DIR/node-$1.log" 2>/dev/null || true; }
+# **The chain's progress is the SET's, not node-0's.**
+#
+# Every wait below wants the same thing: DAA has moved, so the next window can open. Reading it off
+# node-0 alone asks a different question — did THIS producer win a draw — and the draw is a seeded,
+# per-bond, per-class quantity (ADR-0076). Measured on this host at load 44: node-1 produced four
+# blocks and node-2 one while node-0 produced none, the chain advanced five blocks, carried a PALW
+# lifecycle object and had a panel file a "Valid" receipt — and the drill died with "node-0 produced
+# no blocks within 900s". That is a true sentence about node-0 and a false one about the chain.
+chain_blocks() {
+  local i total=0
+  for ((i=0; i<NODES; i++)); do total=$((total + $(blocks_of "$i"))); done
+  echo "$total"
+}
 
 # Wait for node-0 to gain `n` more blocks than it had on entry. Returns after the deadline rather
 # than dying: the verdict at the end is what decides PASS/FAIL, and a step that timed out should
 # reach it carrying its evidence instead of hiding the reason inside a wait.
 advance() {
   local want="${1:-1}" from now deadline
-  from=$(blocks_of 0); deadline=$((SECONDS + STEP_WAIT))
+  from=$(chain_blocks); deadline=$((SECONDS + STEP_WAIT))
   while :; do
-    now=$(blocks_of 0)
+    now=$(chain_blocks)
     [ $((now - from)) -ge "$want" ] && return 0
-    [ $SECONDS -lt $deadline ] || { log "node-0 gained $((now - from))/$want block(s) in ${STEP_WAIT}s — continuing to the verdict"; return 0; }
+    [ $SECONDS -lt $deadline ] || { log "the chain gained $((now - from))/$want block(s) in ${STEP_WAIT}s — continuing to the verdict"; return 0; }
     sleep 2
   done
 }
@@ -189,11 +238,17 @@ all_nodes_logged() {
 }
 
 deadline=$((SECONDS + WAIT))
-until [ "$(blocks_of 0)" -ge 3 ]; do
-  [ $SECONDS -lt $deadline ] || { tail -40 "$WORK_DIR/node-0.log" >&2; die "node-0 produced no blocks within ${WAIT}s"; }
+until [ "$(chain_blocks)" -ge 3 ]; do
+  [ $SECONDS -lt $deadline ] || {
+    for ((i=0; i<NODES; i++)); do log "  node-$i produced $(blocks_of $i)"; done
+    tail -40 "$WORK_DIR/node-0.log" >&2
+    die "the chain produced fewer than 3 blocks within ${WAIT}s — see the per-node counts above and node-0.log"
+  }
   sleep 3
 done
-log "stage 1 OK — node-0 produced $(blocks_of 0) blocks; waiting for the peers to follow"
+per_node=""
+for ((i=0; i<NODES; i++)); do per_node="$per_node node-$i=$(blocks_of $i)"; done
+log "stage 1 OK — the chain produced $(chain_blocks) blocks ($per_node); waiting for every node to follow"
 advance 1
 
 # ---------------------------------------------------------------------------------------------
@@ -212,7 +267,7 @@ log "stage 2 — registering $MODEL_ID from the artifact"
 # the real shape: one party puts a class on the chain, another executes it.
 REGISTRAR_ADDR="$("$CLI_BIN" --network devnet key address --key-file "$WORK_DIR/keys/bond-$REGISTRAR_BOND.seed" | tail -1 | awk '{print $NF}')"
 [ -n "$REGISTRAR_ADDR" ] || die "cannot derive the registrar bond ($REGISTRAR_BOND) address"
-reg_rpc=17710
+reg_rpc=$RPC_BASE
 # **The registrar is a DAEMON, so it is backgrounded and watched, not waited on.** kaspad does not
 # stop when a registration lands — the panel submits the object and goes on validating, which is
 # what a node should do. Running it in the foreground made a successful registration and a silent
@@ -221,9 +276,10 @@ reg_rpc=17710
 # chain has the class rather than that a transaction was built.
 MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg" \
       --rpclisten-borsh=127.0.0.1:$((reg_rpc + 100)) --nogrpc --nodnsseed --disable-upnp \
-      --connect=127.0.0.1:16410 --utxoindex \
+      --connect=127.0.0.1:$P2P_BASE --utxoindex \
       --palw-register-class="$MODEL_ID" --palw-class-artifact="$MISAKA_PALW_ARTIFACT" \
       --palw-producer-key="$WORK_DIR/keys/bond-$REGISTRAR_BOND.seed" --palw-producer-pay-address="$REGISTRAR_ADDR" \
+      --palw-producer-bond="$PREMINE_TXID:$REGISTRAR_BOND" \
       --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + REGISTRAR_BOND))" \
       >"$WORK_DIR/register-class.log" 2>&1 &
 # `$!` into a variable rather than `${pids[-1]}`: macOS ships bash 3.2, which rejects a negative
@@ -239,6 +295,14 @@ while :; do
   if grep -q "service not started" "$WORK_DIR/register-class.log" 2>/dev/null; then
     reg_outcome="no-service"; break
   fi
+  # **A registration needs a BOND, and the panel says so in a WARN and then goes on running.**
+  # Measured 2026-09-03: this invocation passed the key, the pay address and the fee outpoint and
+  # not the bond, so the panel logged "Nothing will be registered" and the drill waited fifteen
+  # minutes for a block that was never going to carry anything. A daemon that declines by warning
+  # is invisible to a watcher that only greps for success, so the decline is watched for too.
+  if grep -q "needs a bond to register the class under" "$WORK_DIR/register-class.log" 2>/dev/null; then
+    reg_outcome="no-bond"; break
+  fi
   kill -0 "$reg_pid" 2>/dev/null || { reg_outcome="died"; break; }
   [ $SECONDS -lt $reg_deadline ] || break
   sleep 3
@@ -247,6 +311,9 @@ kill "$reg_pid" 2>/dev/null || true
 wait "$reg_pid" 2>/dev/null || true
 case "$reg_outcome" in
   ok) : ;;
+  no-bond)
+    grep -n "needs a bond to register the class under" "$WORK_DIR/register-class.log" >&2
+    die "the registrar was started without --palw-producer-bond, so the panel declined to register anything — see the line above" ;;
   no-service)
     grep -n "service not started" "$WORK_DIR/register-class.log" >&2
     die "the node built no registration service, so --palw-register-class was read by nobody — see the line above for which flag it wanted" ;;
@@ -273,7 +340,7 @@ class_table() {
   local pid deadline
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg" \
     --rpclisten-borsh=127.0.0.1:$((reg_rpc + 200)) --nogrpc --nodnsseed --disable-upnp \
-    --connect=127.0.0.1:16410 --utxoindex --palw-dump-classes >"$WORK_DIR/class-table.log" 2>&1 &
+    --connect=127.0.0.1:$P2P_BASE --utxoindex --palw-dump-classes >"$WORK_DIR/class-table.log" 2>&1 &
   pid=$!
   deadline=$((SECONDS + STEP_WAIT))
   while :; do
@@ -382,12 +449,18 @@ cat >"$WORK_DIR/identity.json" <<JSON
 JSON
 
 log "stage 4 — starting the gateway on 127.0.0.1:$GATEWAY_PORT"
+# **The worker's own stderr, on.** ADR-0079 SA-7 withholds it by default — right for a production
+# gateway parsing a stranger's HTTP text, wrong for a drill, whose entire job is to say WHY a stage
+# failed. Measured: the worker refused its artifact by name (no tokenizer commitment) and the drill
+# reported "the worker exited before announcing its manifest" over three withheld log lines. A
+# refusal nobody can read is a refusal that costs the same as a hang.
 MISAKA_PALW_ARTIFACT="$MISAKA_PALW_ARTIFACT" MISAKA_PALW_TOKENIZER="$MISAKA_PALW_TOKENIZER" \
+MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1 \
 MISAKA_PALW_NETWORK_ID="devnet" \
 "$GATEWAY_BIN" --listen "127.0.0.1:$GATEWAY_PORT" --worker "$WORKER_BIN" \
   --outbox "$WORK_DIR/outbox" --identity "$WORK_DIR/identity.json" \
   --class-leaves "$CLASS_LEAVES" \
-  --rpc 127.0.0.1:17710 >"$WORK_DIR/gateway.log" 2>&1 &
+  --rpc 127.0.0.1:$RPC_BASE >"$WORK_DIR/gateway.log" 2>&1 &
 pids+=($!)
 
 # The health probe is also the Decision 3 assertion: /health must name all four chain-side reasons.
@@ -481,7 +554,7 @@ if "$RAIL_BIN" --artifact "$ARTIFACT_STEM" \
      --funding-amount "$BOND_FEE_FLOAT_SOMPI" \
      --class-id "$CLASS_ID" --class-leaves "$CLASS_LEAVES" \
      --retention-dir "$WORK_DIR/traces" \
-     --submit --rpc 127.0.0.1:17710 >"$WORK_DIR/rail-submit.log" 2>&1; then
+     --submit --rpc 127.0.0.1:$RPC_BASE >"$WORK_DIR/rail-submit.log" 2>&1; then
   # Exit 0 is necessary and not sufficient — this tree's own rule. Every failure inside the rail's
   # submit path calls `die` and exits 1, so a zero here is meaningful, but the thing that says a
   # TRANSACTION REACHED THE NODE is `"submitted": "<txid>"` in the summary, and reading it costs

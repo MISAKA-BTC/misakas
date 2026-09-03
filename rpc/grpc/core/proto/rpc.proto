@@ -1360,6 +1360,11 @@ message GetPalwProducerFactsResponseMessage {
   // fpMaxQuantaPerReceipt of them. Zero on a network that prices no free-prompt lane.
   uint32 fpQuantaPerCanonicalJob = 23;
   uint32 fpMaxQuantaPerReceipt = 24;
+  // ADR-0082 Decisions 10/11: is the free-prompt decode ruleset (`palw_fp_decode_rules`) in force
+  // at daaScore? Past the fence a job carries (sampling_seed, temperature_q) inside its context
+  // hash and decode leaves are what earn, so a builder must know before it builds. False whenever
+  // `available` is false.
+  bool fpDecodeRulesArmed = 25;
   RPCError error = 1000;
 }
 
