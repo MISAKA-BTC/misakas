@@ -63,10 +63,20 @@ impl std::fmt::Display for PalwDrillError {
 struct Candidate {
     leaf: u64,
     table: PalwStepTableV1,
+    /// **The unit a certificate is granted in.** The dedup key used to be `table` alone, which is
+    /// four buckets against however many distinct kernels the profile reaches — so a graph with a
+    /// fused attention op beside a split one drilled whichever slot the walk hit first and the
+    /// certificate declared both.
+    kernel: kaspa_consensus_core::Hash64,
     decode: bool,
 }
 
-/// **The leaves the drill will plant faults at: one per `(table, call class)` the profile reaches.**
+/// **The leaves the drill will plant faults at: one per `(table, kernel, call class)` the profile
+/// reaches.** A certificate is granted in KERNELS (`reachable_kernels_v1` maps every node's
+/// `kernel_semantics_id`), and dedup by table alone covered four buckets while declaring N — on
+/// graph-v5@512 the fused attention kernel went undrilled inside a table already ticked, so the
+/// family declared a kernel whose adjudication nobody watched (5e, 1fd6a30a). Dedup by kernel alone
+/// drops a table two kernels share while the court's covering check is by TABLE; the drill owes both.
 ///
 /// # Why this is a probe and no longer a walk
 ///
@@ -125,35 +135,56 @@ fn drill_candidates_v1(
     // Probed in whatever order the points come, then SORTED into the enumeration's own order —
     // "first leaf carrying this pair" is a statement about leaf index, and a probe that reported
     // its finds in probe order would answer it with whichever point was asked first.
-    let mut probes: Vec<(u64, PalwStepTableV1, bool)> = Vec::new();
+    let mut probes: Vec<(u64, PalwStepTableV1, kaspa_consensus_core::Hash64, bool)> = Vec::new();
     for (call, position) in points {
         for slot in 0..profile.global_node_count() {
             let Some(table) = table_of_slot_v1(profile, slot) else { continue };
+            let Some(kernel) = kaspa_consensus_core::palw_e2e_adjudicability::kernel_of_slot_v1(profile, slot) else { continue };
             let coord = PalwStepCoordinateV1 { call_index: call, node_slot: slot, position, tile_index: 0 };
             let Some(leaf) = canonical_step_leaf_index(profile, ctx, &coord) else { continue };
             if leaf >= step_leaf_count {
                 continue;
             }
-            probes.push((leaf, table, call > 0));
+            probes.push((leaf, table, kernel, call > 0));
         }
     }
     // By leaf index alone, and STABLY: `PalwStepTableV1` carries no ordering (it is a classifier,
     // not a scale), and two probe points never produce the same leaf, so the key is total.
     probes.sort_by_key(|(leaf, ..)| *leaf);
 
+    // A leaf is only drillable if the capture HOLDS it — `execute_with_injected_fault` corrupts a
+    // tile the material carries, and a coordinate the capture never filled has none. Asked of the
+    // backend rather than assumed, because which leaves a family retains is a family fact.
+    probes.retain(|(leaf, ..)| drillable(*leaf));
+    select_candidates_v1(probes)
+}
+
+/// **The cover the drill owes, and no more: every `(table, call class)` for the court, then every
+/// kernel the certificate declares, each at its first drillable leaf.**
+///
+/// The court's covering check is by TABLE and call class; the certificate is granted in KERNELS.
+/// Drilling every `(table, kernel, call class)` triple satisfies both but is not the smallest set
+/// that does — on the QWEN36 hybrid it is 74 vectors, 1.44 MB of evidence, past both the court's
+/// `PALW_CERTIFICATION_MAX_VECTORS` (32) and the 800,000-byte carriage ceiling, so the family could
+/// be pinned at genesis and never certified through the chain. Two passes, both in leaf order: the
+/// first takes one leaf per `(table, call class)`; the second adds, for each declared kernel no
+/// chosen leaf carries, the first leaf that does. Every table, every call class, every kernel —
+/// once each — sorted by leaf so "which leaf" is a statement about the enumeration, not the pass.
+fn select_candidates_v1(probes: Vec<(u64, PalwStepTableV1, kaspa_consensus_core::Hash64, bool)>) -> Vec<Candidate> {
     let mut candidates: Vec<Candidate> = Vec::new();
-    for (leaf, table, decode) in probes {
-        if candidates.iter().any(|c| c.table == table && c.decode == decode) {
+    for (leaf, table, kernel, decode) in &probes {
+        if candidates.iter().any(|c| c.table == *table && c.decode == *decode) {
             continue;
         }
-        // A leaf is only drillable if the capture HOLDS it — `execute_with_injected_fault` corrupts
-        // a tile the material carries, and a coordinate the capture never filled has none. Asked of
-        // the backend rather than assumed, because which leaves a family retains is a family fact.
-        if !drillable(leaf) {
-            continue;
-        }
-        candidates.push(Candidate { leaf, table, decode });
+        candidates.push(Candidate { leaf: *leaf, table: *table, kernel: *kernel, decode: *decode });
     }
+    for (leaf, table, kernel, decode) in &probes {
+        if candidates.iter().any(|c| c.kernel == *kernel) {
+            continue;
+        }
+        candidates.push(Candidate { leaf: *leaf, table: *table, kernel: *kernel, decode: *decode });
+    }
+    candidates.sort_by_key(|c| c.leaf);
     candidates
 }
 
@@ -1871,6 +1902,65 @@ mod pin_tests {
         }
     }
 
+    /// **Route agreement for "certifiable": every family the genesis pins must be one the chain
+    /// would accept as evidence.** The genesis commits a family by ROOT and grades nothing; the
+    /// acceptance path grades a `FamilyCertified` object under two caps it never applied to the
+    /// genesis set — `PALW_CERTIFICATION_MAX_VECTORS` (`TooManyDrillVectors`) and the carriage
+    /// ceiling (`ObjectTooLargeToChunk`, `PALW_OBJECT_CHUNK_MAX_BYTES × PALW_OBJECT_CHUNK_MAX_COUNT`).
+    /// The (table, kernel, call class) rule pinned a QWEN36 family of 74 vectors / 1,442,857 B that
+    /// no chain could ever certify (2026-09-04); this asks the chain's own chunker and the court's
+    /// own cap about every pinned family, on both lanes, so a family cannot be pinned
+    /// uncertifiable again — the third time tonight the genesis route could mint what the
+    /// acceptance path refuses (44).
+    #[test]
+    fn every_pinned_family_is_certifiable_through_the_chain() {
+        use super::{PalwRcFamilyV1, rc_attempt_evidence_v1, rc_free_prompt_evidence_v1};
+        use kaspa_consensus_core::palw_state_v2::{
+            PALW_CERTIFICATION_MAX_VECTORS, PALW_OBJECT_CHUNK_MAX_BYTES, PALW_OBJECT_CHUNK_MAX_COUNT, PalwCertificationEvidenceV1,
+            PalwConsensusObjectV2 as Obj, palw_object_chunks_v1,
+        };
+        let ceiling = PALW_OBJECT_CHUNK_MAX_BYTES * PALW_OBJECT_CHUNK_MAX_COUNT as usize;
+        // Every family is measured before any is judged, so one refusal does not hide the sizes of
+        // the rest — the report names all of them.
+        let mut refused: Vec<String> = Vec::new();
+        for family in PalwRcFamilyV1::ALL {
+            let attempt = rc_attempt_evidence_v1(family).unwrap_or_else(|e| panic!("{} drills its attempt lane: {e}", family.name()));
+            let fp =
+                rc_free_prompt_evidence_v1(family).unwrap_or_else(|e| panic!("{} drills its free-prompt lane: {e}", family.name()));
+            for (lane, vectors, object) in [
+                (
+                    "attempt",
+                    attempt.vectors.len(),
+                    Obj::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(attempt.clone())) },
+                ),
+                (
+                    "free-prompt",
+                    fp.evidence.vectors.len(),
+                    Obj::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::FreePrompt(fp.clone())) },
+                ),
+            ] {
+                let bytes = borsh::to_vec(&object).expect("the object serializes").len();
+                let carriage = palw_object_chunks_v1(&object);
+                let carriers = match &carriage {
+                    Ok(chunks) => chunks.as_ref().map_or(1, |c| c.len()).to_string(),
+                    Err(e) => format!("REFUSED {e:?}"),
+                };
+                println!(
+                    "{} ({lane}): {vectors} vectors, {bytes} B = {carriers} carrier(s); caps {PALW_CERTIFICATION_MAX_VECTORS} vectors, {ceiling} B",
+                    family.name()
+                );
+                if vectors > PALW_CERTIFICATION_MAX_VECTORS {
+                    refused
+                        .push(format!("{} ({lane}): {vectors} vectors > the court's {PALW_CERTIFICATION_MAX_VECTORS}", family.name()));
+                }
+                if let Err(e) = carriage {
+                    refused.push(format!("{} ({lane}): {bytes} B cannot ride the chain ({e:?}; ceiling {ceiling})", family.name()));
+                }
+            }
+        }
+        assert!(refused.is_empty(), "families the genesis pins that the chain would refuse to certify:\n  {}", refused.join("\n  "));
+    }
+
     #[test]
     fn the_pinned_rc_e2e_root_is_what_this_build_certifies() {
         super::register_builtin_certified_families_v1();
@@ -2209,29 +2299,37 @@ mod candidate_probe {
         let leaf_count = backend.capture_shape(&honest.material).expect("the capture states its shape").step_leaf_count;
         assert!(leaf_count > 0);
 
-        let probed: Vec<(u64, PalwStepTableV1, bool)> =
+        let probed: Vec<(u64, PalwStepTableV1, kaspa_consensus_core::Hash64, bool)> =
             drill_candidates_v1(&profile, &job, leaf_count, |leaf| backend.refutation_for_index(&honest.material, leaf).is_ok())
                 .into_iter()
-                .map(|c| (c.leaf, c.table, c.decode))
+                .map(|c| (c.leaf, c.table, c.kernel, c.decode))
                 .collect();
 
-        // The walk this replaced, verbatim.
-        let mut walked: Vec<(u64, PalwStepTableV1, bool)> = Vec::new();
+        // The walk enumerates EVERY drillable leaf, then applies the one selection rule the probe
+        // applies (`select_candidates_v1`): a probe that answered a different question would show
+        // here as a different list.
+        let mut all: Vec<(u64, PalwStepTableV1, kaspa_consensus_core::Hash64, bool)> = Vec::new();
         for leaf in 0..leaf_count {
             let Some(coord) = kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &job, leaf) else { continue };
             let Some(table) = table_of_slot_v1(&profile, coord.node_slot) else { continue };
-            let decode = coord.call_index > 0;
-            if walked.iter().any(|(_, t, d)| *t == table && *d == decode) {
+            let Some(kernel) = kaspa_consensus_core::palw_e2e_adjudicability::kernel_of_slot_v1(&profile, coord.node_slot) else {
                 continue;
-            }
+            };
             if backend.refutation_for_index(&honest.material, leaf).is_err() {
                 continue;
             }
-            walked.push((leaf, table, decode));
+            all.push((leaf, table, kernel, coord.call_index > 0));
         }
+        let walked: Vec<(u64, PalwStepTableV1, kaspa_consensus_core::Hash64, bool)> =
+            select_candidates_v1(all).into_iter().map(|c| (c.leaf, c.table, c.kernel, c.decode)).collect();
 
         assert!(!walked.is_empty(), "the floor's own capture must yield candidates at all");
         assert_eq!(probed, walked, "the probe and the walk must name the same leaves, in the same order");
+        // And the cover is complete in both currencies: every declared kernel, every (table, call class).
+        let kernels = kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&profile);
+        for k in &kernels {
+            assert!(probed.iter().any(|(_, _, kk, _)| kk == k), "a declared kernel {k} has no drill leaf");
+        }
     }
 
     /// **What the walk would have cost on the class the genesis registers, measured.**
