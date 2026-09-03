@@ -95,9 +95,13 @@ disagreed, five injuries each refused by name, ladder gate 2/2, stranger RED pen
 
 > **The close's byte count moved and must be taken from the cut, not from this draft.** It has read
 > 81,599, then 82,719, and on `5f + impl` today it is **81,312 bytes**. Each was correct when taken.
-> Publish the number the cut's own tree produces:
->
->     cargo test -p kaspa-consensus-core --lib -- the_512_close_is_one_carrier --nocapture
+> Publish the number the cut's own tree produces. **There is no one-line test for it yet and this
+> draft briefly claimed there was** — `the_512_close_is_one_carrier` does not exist; I wrote the
+> command before writing the test, which is the defect this release has spent the day finding in
+> other people's documents. Until it lands (must-land, below), the figure comes from
+> `derive_court_cost_shaped_v1` over `palw_a16_context_row_profile_v5(512)` at
+> `PALW_RC_COURT_MAX_STEP_LEAF_COUNT`, and **no number goes in this announcement that a reader
+> cannot reproduce with a command printed beside it.**
 >
 > **And the count is one carrier at every legal arity** — measured at 2, 4, 8, 16, 32 and 64, all
 > 81,312 bytes. That matters because the genesis derives **arity 2**, not the 16 an early sweep

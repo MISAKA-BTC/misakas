@@ -944,6 +944,13 @@ gate above is the one that would have caught all three.
   registered at n_ctx 16, and `8d2e6f16…` which `palw-certify bind` produced from the artifact's own
   512 row. Reconcile the derived value against the artifact and the certification path before the
   freeze. *A class id quoted from a summary is what burned `n_ctx 17` on 2026-08-28.*
+- **A one-line test for the 512 close, so the announcement can cite a command instead of a number.**
+  `the_512_close_is_one_carrier`: assert `derive_court_cost_shaped_v1` over
+  `palw_a16_context_row_profile_v5(512)` at `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` is **one carrier**,
+  and print the byte figure with `--nocapture`. Assert the CARRIER COUNT (stable, and the claim that
+  matters); print the bytes (moved three times: 81,599 → 82,719 → 81,312). *This item exists because
+  the announcement cited that test before it was written — the card-without-the-test defect, made by
+  the person who had spent the day naming it, in the public-facing document.*
 - **The 2^22 sweep (fixer FD2).** The ladder went to 2^26, but `2^22` survives as a bare literal at
   a set of sites the ladder change did not reach — and the 512 row's canonical job is **6,630,544
   leaves**, so until they move, *every honest claim of the class this genesis registers is refused
