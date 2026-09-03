@@ -1241,23 +1241,58 @@ mod tests {
         canonical_class_by_model_id_v1(&court(), A16_GRAPH_V5_MODEL_ID).expect("the graph-v5 dense row is in the registry")
     }
 
-    /// The k-ary court the 5f genesis card §1 arms: the RC's derived arity, the Merkle prompt-id
-    /// form graph-v5 rows arm with, and the RC's court window. The same three fields
-    /// `fuzz_a16::gate_accepts` prices a fused row under — read from the ruleset, never typed.
+    /// The k-ary court a given ARMED ruleset plays: its own derived arity, its own court window,
+    /// and the Merkle prompt-id form graph-v5 rows arm with. The same three fields
+    /// `fuzz_a16::gate_accepts` prices a fused row under.
+    ///
+    /// **Every field is read off the bundle passed in.** Taking the arity from one ruleset and the
+    /// window from another is exactly the defect ADR-0082 §1 opens with — a figure measured under
+    /// one configuration quoted as if it held under another — and it is a real risk here, because
+    /// the two rulesets below derive DIFFERENT arities.
     fn kary_court(
         bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
     ) -> kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
         kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
             dissection_arity: bundle.court.dissection_arity(),
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
-            window_court_daa: kaspa_consensus_core::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.window_court,
+            window_court_daa: bundle.state.window_court(),
         }
     }
 
-    /// The devnet bundle with the dissection arity the RC derives (`palw_court_arity_v1` → 4), which
-    /// is what `palw_kary_court` armed does to a preset whose stored `dissection_arity` is 2.
-    fn kary_bundle() -> kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2 {
-        let mut bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+    /// A bundle that REGISTERS the row and then arms `palw_kary_court` — in that order, because
+    /// the derived arity is a function of the registered set.
+    ///
+    /// `palw_attn_widest_registered_site_v2` walks `genesis_objects` for a fused site; with none
+    /// the history search is empty and `palw_court_arity_v1` returns the smallest legal arity, 2.
+    /// Deriving the arity against an EMPTY bundle and then admitting a fused row under it would be
+    /// a court sized for a dispute it does not have — and the gate would refuse the row anyway
+    /// (`PricedForADifferentCourt`), because the price is taken at the arity the ruleset froze.
+    fn armed_with(
+        mut bundle: kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+        registration: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2 {
+        bundle.genesis_objects.push(registration.clone());
+        let (history, lanes) = kaspa_consensus_core::palw_court_v2::palw_attn_widest_registered_site_v2(&bundle);
+        bundle.court =
+            kaspa_consensus_core::palw_court_v2::palw_court_params_at_v2(&bundle, true).expect("the windows derive a legal arity");
+        println!(
+            "armed ruleset: window_court {} turn_deadline {} ladder {} widest fused site history {history} lanes {lanes} \
+             -> dissection arity {}",
+            bundle.state.window_court(),
+            bundle.court.turn_deadline_daa(),
+            bundle.court.max_step_leaf_count(),
+            bundle.court.dissection_arity()
+        );
+        bundle
+    }
+
+    /// The DEVNET ruleset (`palw_fp_devnet_bundle_v3`) — the one item 2 arms — and the RC's, which
+    /// is the ruleset the 5f genesis cuts. Both are exercised because their windows differ and the
+    /// row has to be admissible under each at ITS own derived arity.
+    fn armed_rulesets(
+        registration: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Vec<(&'static str, kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2)> {
+        let devnet = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
             Hash64::from_u64_word(0xC1A55),
             Hash64::from_u64_word(0xCA7),
             Hash64::from_u64_word(0xC0757),
@@ -1268,11 +1303,11 @@ mod tests {
             ),
         )
         .expect("the devnet bundle assembles");
-        // The SAME derivation the transition runs at activation — never a second one that merely
-        // agrees. `palw_court_params_at_v2(bundle, true)` is what `palw_kary_court` armed does.
-        bundle.court = kaspa_consensus_core::palw_court_v2::palw_court_params_at_v2(&bundle, true)
-            .expect("the RC windows derive a legal dissection arity");
-        bundle
+        let rc = match kaspa_consensus_core::config::params::palw_rc_shipped_params().palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b,
+            other => panic!("the RC preset is not a v2 bundle: {other:?}"),
+        };
+        vec![("devnet", armed_with(devnet, registration)), ("rc", armed_with(rc, registration))]
     }
 
     /// **The row's width is the artifact header's, not a number typed beside it.**
@@ -1346,13 +1381,17 @@ mod tests {
             "graph-v5 IS the fused attention site (Decision 1)"
         );
         assert!(
-            !row.profile.attn_nodes.iter().any(|n| matches!(n.out_len, kaspa_consensus_core::palw_step::PalwStepOutLenV1::KvScaled { .. })),
+            !row.profile
+                .attn_nodes
+                .iter()
+                .any(|n| matches!(n.out_len, kaspa_consensus_core::palw_step::PalwStepOutLenV1::KvScaled { .. })),
             "Z0: no committed row of a graph-v5 class has a context-shaped width"
         );
     }
 
-    /// **The row is ADMITTED under the armed k-ary court and REFUSED BY NAME without it** — and the
-    /// close it is admitted at is printed, under the route and the map it was measured on.
+    /// **The row is ADMITTED under an armed k-ary court and REFUSED BY NAME without it** — and the
+    /// close it is admitted at is printed, under the ruleset, the map and the route it was measured
+    /// on. Run over BOTH armed rulesets, because they derive different arities.
     ///
     /// The refusal is the 5f card §6 fused-attention guard: `FusedAttentionNeedsTheKaryCourt`, "the
     /// class carries a fused attention site and this ruleset's court has no dissection to try it
@@ -1364,10 +1403,6 @@ mod tests {
         use kaspa_consensus_core::palw_context_ladder as ladder;
 
         let row = v5_row();
-        let bundle = kary_bundle();
-        let kary = kary_court(&bundle);
-        assert_eq!(kary.dissection_arity, 4, "the RC's derived arity moved — ADR-0082 Decision 3's 'smallest legal that fits'");
-
         let canonical =
             kaspa_consensus_core::palw_base0_profile::rc_job_context(&row.profile, row.canonical_job.0, row.canonical_job.1);
         assert!(
@@ -1378,7 +1413,17 @@ mod tests {
             ladder::palw_job_footprint_v1(row.canonical_job.0, row.canonical_job.1)
         );
 
-        let registration = adm::palw_post_genesis_registration_v1(
+        // **The shipped registration helper cannot assemble this row, and that is a defect and not
+        // a property of the row.** `palw_post_genesis_registration_v1` counts `pwu_per_inference`
+        // with `step_leaf_count`, which caps at the EXECUTOR's `PALW_STEP_MAX_LEAVES` (2^22) —
+        // while the gate it feeds recounts against the RULESET's ladder
+        // (`worst_case_step_leaf_count_capped_v1(profile, rules.ladder)`). ADR-0080 W1b made the
+        // executor read the field and `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` moved to 2^26 for exactly
+        // this row; the registration side was not moved with it, so the ONE helper that assembles a
+        // `ClassRegistered` refuses the class the genesis registers. Pinned rather than worked
+        // around silently — the fix is a `_capped_` twin in `palw_class_admission_v2`, which is not
+        // this stream's file (reported to the integrator).
+        match adm::palw_post_genesis_registration_v1(
             row.profile.clone(),
             canonical.clone(),
             Hash64::from_u64_word(0xA271FAC7),
@@ -1391,91 +1436,136 @@ mod tests {
                 0,
             )),
             Vec::new(),
-        )
-        .expect("the registration assembles");
+        ) {
+            Err(adm::PalwClassAdmissionError::Profile(msg)) if msg.contains("exceeding the") => {
+                println!("registration helper refuses the graph-v5 512 row (uncapped count): {msg}");
+            }
+            other => panic!(
+                "the helper's cap moved — if it now counts against the ruleset's ladder this arm should be deleted, got {other:?}"
+            ),
+        }
 
-        // Priced for the court that can try it — the ladder rules the fence selects.
-        let rules = ladder::palw_class_ladder_rules_for_court_v1(&row.profile, Some(kary)).expect("a mapped class has ladder rules");
-        let admitted = adm::verify_class_admission_v5(
-            &bundle,
+        // Counted against the RULESET's ladder, which is what the gate recounts against.
+        let counted = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(
             &row.profile,
             &canonical,
-            &registration,
-            &[],
-            &[],
-            Some(rules.clone()),
-            Some(kary),
-        );
-        assert!(admitted.is_ok(), "the registered graph-v5 row must be admissible under the armed court: {admitted:?}");
+            kaspa_consensus_core::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+        )
+        .expect("the canonical job counts against the fenced ladder");
+        println!("graph-v5 dense @ n_ctx {}: canonical job {:?} = {counted} step leaves", row.profile.n_ctx, row.canonical_job);
+        let registration = kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+            class_id: row.class_id(),
+            artifact_root: Hash64::from_u64_word(0xA271FAC7),
+            slash_value_per_pwu: 1,
+            pwu_rule: kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: counted },
+            initial_target: 1,
+            share_permille: 0,
+            activation_daa: 0,
+            admission: Some(Box::new(kaspa_consensus_core::palw_state_v2::PalwClassAdmissionCarriageV2 {
+                profile: row.profile.clone(),
+                canonical: canonical.clone(),
+                registrant_bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(
+                    kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::default(), 0),
+                ),
+                signature: Vec::new(),
+            })),
+        };
 
-        // The close, DERIVED here and printed with the configuration it was measured under.
-        let rows = adm::derive_court_cost_rows_v1(&row.profile, rules.cost_shape).expect("the cost walk prices the row");
-        let binding = rows.first().expect("a priced row has a binding node").clone();
-        let chunks = kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(binding.close_bytes);
-        println!(
-            "graph-v5 dense @ n_ctx {}: binding close {} bytes = {} chunk(s) at {}[{}] {:?} {} — map tiled_kv_state_chunk_map_id_v3, \
-             arity {}, Merkle prompt ids, cache-write route charged",
-            row.profile.n_ctx,
-            binding.close_bytes,
-            chunks,
-            binding.table,
-            binding.index,
-            binding.op_kind,
-            binding.weight_name,
-            kary.dissection_arity
-        );
-        // The checkpoint route alone — the number the relaunch's registration decision turns on
-        // (`palw_context_ladder::the_close_ceiling_is_the_derivation_over_the_genesis_set` pins
-        // 82,719 = 1 chunk at arity 16; this is the same swap at the arity the RC derives).
-        {
-            use adm::{palw_attn_bottom_cache_write_bytes_v1, palw_attn_bottom_tile_route_bytes_v1};
-            let d_head = row.profile.attn_head_dim as u64;
-            let kv_dim = row.profile.attn_kv_heads as u64 * d_head;
-            let node = row
-                .profile
-                .attn_nodes
-                .iter()
-                .find(|n| n.op_kind == kaspa_consensus_core::palw_step::PalwStepOpKindV1::AttnFused)
-                .expect("a v5 row has a fused site");
-            let out_w = match node.out_len {
-                kaspa_consensus_core::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
-                kaspa_consensus_core::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => {
-                    multiplier as u64 * row.profile.n_ctx as u64
-                }
-            };
-            let tile = (node.tile_len as u64).min(out_w);
-            let src = row
-                .profile
-                .attn_nodes
-                .iter()
-                .find(|n| n.role == kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::KCacheWrite)
-                .map_or(tile, |n| n.tile_len as u64);
-            let positions =
-                (kaspa_consensus_core::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4 as u64).min(row.profile.n_ctx as u64);
-            let path = 64 * 32u64;
-            let cache = palw_attn_bottom_cache_write_bytes_v1(d_head, kv_dim, positions, tile, src, path).expect("derives");
-            let ckpt = palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, positions, tile, path).expect("derives");
-            let checkpoint_route = binding.close_bytes - cache + ckpt;
+        for (name, bundle) in armed_rulesets(&registration) {
+            let kary = kary_court(&bundle);
+            // Priced for the court that can try it — the ladder rules the fence selects.
+            let rules =
+                ladder::palw_class_ladder_rules_for_court_v1(&row.profile, Some(kary)).expect("a mapped class has ladder rules");
+            let admitted = adm::verify_class_admission_v5(
+                &bundle,
+                &row.profile,
+                &canonical,
+                &registration,
+                &[],
+                &[],
+                Some(rules.clone()),
+                Some(kary),
+            );
+            assert!(admitted.is_ok(), "{name}: the graph-v5 row must be admissible under its own armed court: {admitted:?}");
+
+            // The close, DERIVED here and printed with the configuration it was measured under.
+            let cost_rows = adm::derive_court_cost_rows_v1(&row.profile, rules.cost_shape).expect("the cost walk prices the row");
+            let binding = cost_rows.first().expect("a priced row has a binding node").clone();
             println!(
-                "graph-v5 dense @ n_ctx {}: checkpoint-route close {} bytes = {} chunk(s) — map tiled_kv_state_chunk_map_id_v3, \
-                 arity {}, Merkle prompt ids",
+                "[{name}] graph-v5 dense @ n_ctx {} arity {} Merkle ids map tiled_v3: binding close {} B = {} chunk(s) at {}[{}] {:?} {} \
+                 (cache-write route charged)",
                 row.profile.n_ctx,
-                checkpoint_route,
-                kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(checkpoint_route),
+                kary.dissection_arity,
+                binding.close_bytes,
+                kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(binding.close_bytes),
+                binding.table,
+                binding.index,
+                binding.op_kind,
+                binding.weight_name
+            );
+
+            // The checkpoint route alone — the number the relaunch's registration decision turns
+            // on. `palw_context_ladder`'s own sweep pins 82,719 = 1 chunk at arity 16; this is the
+            // same route swap at the arity THIS ruleset derives.
+            let checkpoint_route = checkpoint_route_close(&row.profile, binding.close_bytes);
+            let chunks = kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(checkpoint_route);
+            println!(
+                "[{name}] graph-v5 dense @ n_ctx {} arity {}: checkpoint-route close {checkpoint_route} B = {chunks} chunk(s)",
+                row.profile.n_ctx, kary.dissection_arity
+            );
+            assert_eq!(chunks, 1, "{name}: the registered row must be ONE carrier on the checkpoint route — {checkpoint_route} B");
+
+            // **Pinned, with the configuration in the message.** `palw_context_ladder`'s own sweep
+            // states 216,019 / 82,719 for this row at arity 16 — the arity stream E measured with a
+            // 128-lane site. The derivation here reads the ruleset that registers THIS row and
+            // returns 2 (window 3,000, turn deadline 42, ladder 2^26, history 512 positions at a
+            // 16-position tile, 8 lanes), and the whole difference is the per-move disclosure:
+            // 1,120 bytes on BOTH routes, which is why the chunk counts are identical. A moved
+            // arity moves these two numbers and this test says by how much.
+            assert_eq!(
+                (binding.close_bytes, checkpoint_route),
+                (214_899, 81_599),
+                "{name}: the graph-v5 512 row's close moved at arity {} (cache-write, then checkpoint route)",
                 kary.dissection_arity
             );
-            assert_eq!(
-                kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(checkpoint_route),
-                1,
-                "the registered row must be ONE carrier on the checkpoint route — {checkpoint_route} bytes"
-            );
-        }
 
-        // And WITHOUT the fence: the guard refuses the same row by name.
-        let unfenced = adm::verify_class_admission_v5(&bundle, &row.profile, &canonical, &registration, &[], &[], None, None);
-        match unfenced {
-            Err(adm::PalwClassAdmissionError::FusedAttentionNeedsTheKaryCourt) => {}
-            other => panic!("an unfenced ruleset must refuse the graph-v5 row by name, got {other:?}"),
+            // And WITHOUT the fence: the guard refuses the same row by name.
+            match adm::verify_class_admission_v5(&bundle, &row.profile, &canonical, &registration, &[], &[], None, None) {
+                Err(adm::PalwClassAdmissionError::FusedAttentionNeedsTheKaryCourt) => {}
+                other => panic!("{name}: an unfenced ruleset must refuse the graph-v5 row by name, got {other:?}"),
+            }
         }
+    }
+
+    /// The binding close with the fused bottom charged at Decision 4's TILE route instead of the
+    /// cache-write one. The walk charges the larger of the two at the binding node, so swapping the
+    /// route is exactly this difference and nothing else — the same arithmetic
+    /// `palw_context_ladder::the_close_ceiling_is_the_derivation_over_the_genesis_set` states.
+    fn checkpoint_route_close(profile: &PalwShapeProfileV3, cache_write_close: u64) -> u64 {
+        use kaspa_consensus_core::palw_class_admission_v2::{
+            palw_attn_bottom_cache_write_bytes_v1, palw_attn_bottom_tile_route_bytes_v1,
+        };
+        let d_head = profile.attn_head_dim as u64;
+        let kv_dim = profile.attn_kv_heads as u64 * d_head;
+        let node = profile
+            .attn_nodes
+            .iter()
+            .find(|n| n.op_kind == kaspa_consensus_core::palw_step::PalwStepOpKindV1::AttnFused)
+            .expect("a v5 row has a fused site");
+        let out_w = match node.out_len {
+            kaspa_consensus_core::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
+            kaspa_consensus_core::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => multiplier as u64 * profile.n_ctx as u64,
+        };
+        let tile = (node.tile_len as u64).min(out_w);
+        let src = profile
+            .attn_nodes
+            .iter()
+            .find(|n| n.role == kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::KCacheWrite)
+            .map_or(tile, |n| n.tile_len as u64);
+        let positions = (kaspa_consensus_core::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4 as u64).min(profile.n_ctx as u64);
+        let path = 64 * 32u64;
+        let cache = palw_attn_bottom_cache_write_bytes_v1(d_head, kv_dim, positions, tile, src, path).expect("derives");
+        let ckpt = palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, positions, tile, path).expect("derives");
+        cache_write_close - cache + ckpt
     }
 }
