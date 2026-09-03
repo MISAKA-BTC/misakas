@@ -749,6 +749,33 @@ gate above is the one that would have caught all three.
   `palw_kary_court` fence itself (§1), and stream E's court wiring: the dissection phase on the
   court session, the `AttnDissection` close-proof arm, the deadline read, and a **state version bump
   18 → 19** because the session record gains a field.
+- **THE 512 ROW HAS NO GENESIS BUILDER, AND §2 SAYS IT IS REGISTERED.** Checked by looking rather
+  than assumed: the class this entire card is about appears in **zero** `.rs` files on
+  `palw-testnet-5f`, `palw-adr0082-impl` or `palw-artifact-names-genesis-row` — no constant, no
+  `ClassRegistered`, no builder. §2's table lists it as registered at genesis and nothing registers
+  it. The three that DO exist live in the profile modules, not `params.rs`, and that is where the
+  fourth belongs:
+
+      consensus/core/src/palw_qwen25_profile.rs:616   qwen25_a16_registration_v2   <- params.rs:4796
+      consensus/core/src/palw_qwen36_profile.rs:1411  qwen36_registration_v3       <- params.rs:4789
+      consensus/core/src/palw_base0_profile.rs:764    palw_rc_base0_registration_v1
+
+  **It must carry a carriage**, because `verify_palw_genesis_v2` now refuses a fused row minted at
+  genesis whose `ClassRegistered` has `admission: None` — `GenesisFusedRowCarriesNoProfile`,
+  `GenesisCarriageIsNotTheClass`, `GenesisFusedDisagreesWithCatalog`. **Its signature is empty and
+  that is correct, not a concession**: genesis verification never reads `.signature` (the only
+  verifier is the acceptance layer at `consensus/src/pipeline/virtual_processor/processor.rs:6099`),
+  a signature authenticates *who moved a permille from every incumbent* and at genesis nobody did,
+  and it would anyway be checked against a `registrant_bond` key that the same genesis object list
+  is creating.
+
+  **The class id must be DERIVED and reported, never quoted into the builder.** `shape_profile_id`
+  is `keyed64` over the borsh of the profile, so the id is whatever the profile derives to — and
+  three adjacent ids are loose in this project's notes for three different things: `4277d84f…` from
+  the registration/certification/artifact chain, `71bbb755…` which is what the panel actually
+  registered at n_ctx 16, and `8d2e6f16…` which `palw-certify bind` produced from the artifact's own
+  512 row. Reconcile the derived value against the artifact and the certification path before the
+  freeze. *A class id quoted from a summary is what burned `n_ctx 17` on 2026-08-28.*
 - **The 2^22 sweep (fixer FD2).** The ladder went to 2^26, but `2^22` survives as a bare literal at
   a set of sites the ladder change did not reach — and the 512 row's canonical job is **6,630,544
   leaves**, so until they move, *every honest claim of the class this genesis registers is refused
