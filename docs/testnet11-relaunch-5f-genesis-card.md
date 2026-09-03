@@ -238,6 +238,20 @@ thing done before the cut and it is done ONCE.
 4. Nothing under `misaka-palw-derive/src/` may be touched after step 3, for any reason, including a
    typo in a comment.
 
+**The re-pins, by owner. Nothing touches both sides.**
+
+| pin | where | owner |
+|---|---|---|
+| `transformer_id_pin` | `misaka-palw-derive/tests/` | here, at the cut |
+| `shipped_presets_have_pinned_fingerprints` | `consensus/core/src/config/params.rs` | here, at the cut |
+| `golden_vector_ids_are_frozen` | `consensus/core/src/palw_freeprompt_v3.rs` — ADR-0082 stream H gave the job two fields | here, at the cut |
+| state version 18 → 19, ADR-0043 goldens | `palw-adr0082-impl` | 5b, on that branch |
+
+**Careful with the third**: `golden_vector_ids_are_frozen` exists TWICE — `palw_freeprompt_v3.rs:1521`
+and `palw_derived_v1.rs:441`. One name, two homes, in the same crate. Only the free-prompt one moved.
+Re-pinning by name rather than by module is how the wrong one gets rewritten, and this is the same
+one-thing-two-homes shape that produced the two ladder caps and the class root spelled two ways.
+
 **Two re-pins, two owners, no overlap.** The state version goes 18 → 19 on `palw-adr0082-impl` (the
 court session gains its dissection phase) and the ADR-0043 goldens move with it — those are re-pinned
 there, by the session that moves them. `transformer_id_pin` and
@@ -280,7 +294,7 @@ green except the known pin" said this week was a statement about jobs that never
 |---|---|---|
 | format | `cargo +<pinned> fmt --all -- --check` | runs FIRST in CI; run it first locally |
 | clippy | `cargo clippy --tests --benches --examples -- -D warnings` | must be the pinned toolchain, or it measures a different lint set |
-| consensus core | `cargo test -p kaspa-consensus-core --lib` | 1645/1 — the one red is the fingerprint re-pin, which §4 closes |
+| consensus core | `cargo test -p kaspa-consensus-core --lib` | **1646/2, and both reds are load-bearing** — see below |
 | base0 | `cargo test -p misaka-palw-base0 --lib` | 264/0 |
 | derive | `cargo test -p misaka-palw-derive` | **NOT `--lib`** — `--lib` builds no binaries, `palw-evm-runner` is absent, and ADR-0079's confinement gate refuses rather than falling back in-process. Those seven reds are the gate HOLDING. |
 | cli | `cargo test -p misaka-cli` | 73/0 |
@@ -289,7 +303,41 @@ green except the known pin" said this week was a statement about jobs that never
 | third party | `scripts/misaka-palw-artifact-thirdparty.py --require` | mido / pygltflib / numpy-stl; compares MEANING (enclosed volume, playback duration) against the DSL |
 | model gate, dense | `palw-model-gate` | A16 lane only — declared in advance |
 | model gate, QWEN36 | `palw-qwen36-model-gate` | needs the ChatML fix (§7) to pass through the production assembly |
+| fused-attention guard | `verify_class_admission_v5` | Refuses an `AttnFused` profile unless `palw_kary_court_active_at` — `FusedAttentionNeedsTheKaryCourt`, *"the class carries a fused attention site and this ruleset's court has no dissection to try it with"*; and `PricedForADifferentCourt { priced, court }` when the registered cost shape's arity is not the court's. **A guard on the way in, beside the drill and not instead of it.** |
 | **prosecutability** | ADR-0082 stream I's end-to-end court drill | **This is the gate, and admission is not.** A graph-v5 leaf disputed to the bottom under the ARMED fence set, through `apply_object`: honest acquitted, forged convicted. F's admission arm refusing an unfenced `AttnFused` profile by name is a guard on the way in — useful, and not the property. The property is that a dispute can be carried to a verdict, and only the drill asserts it. |
+
+**The two expected reds, and the condition that closes each.** A branch with unexplained reds has
+no gate; a branch with reds nobody wrote down has a worse one, because the next person greens them.
+
+| red | closes when |
+|---|---|
+| `shipped_presets_have_pinned_fingerprints` | §4's single re-pin, after the freeze. Owned here. |
+| `the_shipped_ruleset_admits_the_row_the_genesis_registers` | the ruleset's `COURT_MAX_STEP_LEAVES` moves to a cap that admits n_ctx 512 — **2^26 is the smallest**. Owned by whoever makes that change; it goes green by measurement, not by assertion. |
+
+**The second red is the whole width story and it deserves its own sentence.** W1b made the executor
+read the ruleset's ladder instead of a hardcoded constant — and the ruleset's field is *set to that
+same constant*, `COURT_MAX_STEP_LEAVES = PALW_STEP_MAX_LEAVES`. So **W1b moved no width at all.** It
+converted a constant nobody could choose into a value somebody has to choose, which is exactly the
+half it was supposed to do. "W1b landed" and "the width moved" are two claims and only the first is
+true today. Until the second is, the registered class is capped at **39 positions** — below `cad`'s
+38-token floor once any prefill is counted, and nowhere near music 60 or scene 104.
+
+Measured, and reproduced independently from two crates by two sessions:
+
+| ruleset cap | widest admissible n_ctx (A16) | admits the registered 512 row |
+|---|---|---|
+| 2^22 (shipped today) | **39** | no — needs 59,000,848, has 4,194,304 |
+| 2^23 | 79 | no |
+| 2^24 | 156 | no — opens every grammar floor, at a class narrower than the registered one |
+| **2^26** | **574** | **yes**, with 12% headroom |
+| 2^28 | 1,833 | yes |
+
+2^24 is the trap: it opens cad 38, music 60 and scene 104 and still tops out at 156, so it would
+open MIDI and 3D **at a narrower class than the one being registered** — which means deriving a
+third class id, which is the loop §2 exists to end.
+
+`the_registered_row_names_the_ladder_it_needs` pins that table and is GREEN; it is arithmetic about
+profiles and holds whatever any network froze. The red one is the other question.
 
 **Why this row exists at all.** Every wrong turn on this card came from measuring admissibility and
 reading it as usability: the 512 row, the hybrid's margin, the court the close was priced under.

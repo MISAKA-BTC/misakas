@@ -69,8 +69,14 @@ mod linux;
 /// **`PATH` is not on this list and must not be added** (SA-4). Neither is `HOME`, `TMPDIR`,
 /// `SSH_AUTH_SOCK`, nor anything else: a capability the arithmetic does not need is not granted
 /// "for now" — its absence is a property the court already relies on.
-pub const PALW_WORKER_ENV_ALLOWLIST: &[&str] =
-    &["MISAKA_PALW_GGUF", "MISAKA_PALW_GOLDEN", "MISAKA_PALW_ARTIFACT", "MISAKA_PALW_TOKENIZER", "MISAKA_PALW_MODEL_ID", "MISAKA_PALW_NETWORK_ID"];
+pub const PALW_WORKER_ENV_ALLOWLIST: &[&str] = &[
+    "MISAKA_PALW_GGUF",
+    "MISAKA_PALW_GOLDEN",
+    "MISAKA_PALW_ARTIFACT",
+    "MISAKA_PALW_TOKENIZER",
+    "MISAKA_PALW_MODEL_ID",
+    "MISAKA_PALW_NETWORK_ID",
+];
 
 /// Values PINNED by this constant rather than inherited — the locale pins the determinism rules
 /// already require. Inheriting them would make the child's number formatting a function of the

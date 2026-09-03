@@ -98,7 +98,13 @@ impl CanonicalClassV1 {
     /// than by digest, so the error can say WHICH field disagrees — a digest comparison on a
     /// 1.7 GiB artifact says only "no".
     pub fn shape_matches(&self, artifact: &Base0ArtifactV1) -> Result<(), ClassResolveError> {
-        let a = &artifact.shape;
+        self.shape_matches_shape_v1(&artifact.shape)
+    }
+
+    /// [`Self::shape_matches`] against a header on its own. The whole check reads
+    /// `artifact.shape`, so the two are one spelling and a caller that holds only the header (a
+    /// certification tool deciding which family a file belongs to) runs the identical comparison.
+    pub fn shape_matches_shape_v1(&self, a: &Base0ShapeV1) -> Result<(), ClassResolveError> {
         let w = &self.artifact_shape;
         let fields: [(&'static str, i128, i128); 9] = [
             ("n_layers", a.n_layers as i128, w.n_layers as i128),
@@ -255,6 +261,169 @@ pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> 
         });
     }
     out
+}
+
+// =================================================================================================
+// The A16 dense row an ARTIFACT names — the width that is not in the table above
+// =================================================================================================
+
+/// Why an artifact (or a width) names no bindable A16 dense class.
+#[derive(Debug)]
+pub enum A16ArtifactRowError {
+    /// The file's header is not this family's arithmetic. Carries the FIRST field that disagrees,
+    /// from [`CanonicalClassV1::shape_matches`] — the same check the panel pairs with.
+    NotThisFamily(ClassResolveError),
+    /// This build tables no A16 row at all, so there is nothing to check a header against.
+    NoA16Rows,
+    /// A width of zero is not a graph.
+    ZeroWidth,
+    /// The width asked for is wider than the artifact's own rotary table. The file cannot serve
+    /// that row, so a certificate for it would be about weights that cannot execute it.
+    WiderThanTheArtifact { asked: u64, span: u64 },
+    /// The width projects no graph, so no class id exists for it.
+    Projection(kaspa_consensus_core::palw_step::PalwStepError),
+}
+
+impl std::fmt::Display for A16ArtifactRowError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotThisFamily(e) => write!(f, "not an artifact of the A16 dense family: {e}"),
+            Self::NoA16Rows => write!(f, "this build tables no A16 dense row, so no header can be paired against one"),
+            Self::ZeroWidth => write!(f, "n_ctx 0 is not a graph"),
+            Self::WiderThanTheArtifact { asked, span } => write!(
+                f,
+                "n_ctx {asked} is wider than the artifact's own rotary span ({span} positions) — these weights cannot serve that row"
+            ),
+            Self::Projection(e) => write!(f, "the width projects no dense A16 graph: {e:?}"),
+        }
+    }
+}
+
+impl std::error::Error for A16ArtifactRowError {}
+
+/// The A16 dense class an artifact header names, and what was checked to get there.
+#[derive(Clone, Debug)]
+pub struct A16ArtifactRowV1 {
+    /// The graph. `shape_profile_id()` is the class id.
+    pub profile: PalwShapeProfileV3,
+    /// The width the profile is at.
+    pub n_ctx: u32,
+    /// The artifact's own rotary span (`max_position`) — the widest row this file can serve, and
+    /// the width taken when the caller names none.
+    pub artifact_span: u32,
+    /// Whether `n_ctx` came from the header (`false`) or from the caller narrowing it (`true`).
+    pub narrowed: bool,
+    /// The A16 rows whose declared artifact shape this header matches. These are the FAMILY, not
+    /// the class: every row of the family declares the same artifact shape, which is precisely
+    /// why a model id cannot name a width.
+    pub family_rows: Vec<&'static str>,
+}
+
+/// **The dense A16 class an ARTIFACT can serve, at a width the artifact itself states.**
+///
+/// The A16 table above is three fixed widths (16, 18, 16), so `palw-certify bind --model-id`
+/// could only ever produce those three classes. `n_ctx` is inside `PalwShapeProfileV3` and
+/// therefore inside `shape_profile_id`, so **a model id does not determine a class**: the
+/// testnet-11 5f genesis registers the dense tier at n_ctx 512 and no row here spells it.
+///
+/// **The obvious repair — a fourth row at 512 — is the one thing that must not be done**, and the
+/// reason is falsifiability rather than taste. A row makes the width a CONSTANT again, so a wrong
+/// width binds to the wrong class in silence; naming the width, or naming the file that states
+/// it, makes a wrong width fail to bind. That difference is the whole design. This table has
+/// already failed in exactly that direction: `n_ctx` 17 is marked BURNED in its own comment above
+/// by the 2026-08-28 mispairing that registered a class on chain against the genesis constant,
+/// past a green suite.
+///
+/// Deeper: the defect is one class root spelled twice — once derived from the artifact's own
+/// inventory, once from a constant — with nothing forcing the two equal (the A16 genesis root
+/// defect). This removes the second spelling for this path rather than adding a third, so nothing
+/// new about the graph is written here. Every part is borrowed:
+///
+/// * the **family** is identified by [`CanonicalClassV1::shape_matches`] against this table's A16
+///   rows — the same call `DenseLineageV1::pair` makes when the panel pairs a holding with a class;
+/// * the **width** is the header's `max_position`, the rotary table's span, which is the widest row
+///   the file can serve — and is the number `palw_context_ladder`'s 512 already is ("the dense
+///   artifact's rotary table covers 512 positions, the converter's default");
+/// * the **graph** is `palw_a16_context_row_profile_v1`, the shipped ladder projection, under the
+///   epsilon the artifact executes (`qwen25_a16_artifact_row_profile_v1`).
+///
+/// `n_ctx` may narrow the row below the header's span (a 256-wide row on a 512-position artifact
+/// is a class those weights can serve); it may never widen it, because a rotary table that does
+/// not reach the position cannot be executed at it.
+///
+/// **This does not register anything.** The chain must already carry the derived id as an Active
+/// class; a `ClassLaneCertified` binds a lane of a class, it cannot create one.
+pub fn a16_artifact_row_v1(
+    court: &PalwCourtParamsV2,
+    artifact: &Base0ArtifactV1,
+    n_ctx: Option<u32>,
+) -> Result<A16ArtifactRowV1, A16ArtifactRowError> {
+    a16_row_for_artifact_shape_v1(court, &artifact.shape, n_ctx)
+}
+
+/// [`a16_artifact_row_v1`] over the header alone — every check the derivation makes reads the
+/// header and nothing else, and a test that had to build 1.5B parameters to exercise a width
+/// check would not be run.
+pub fn a16_row_for_artifact_shape_v1(
+    court: &PalwCourtParamsV2,
+    shape: &Base0ShapeV1,
+    n_ctx: Option<u32>,
+) -> Result<A16ArtifactRowV1, A16ArtifactRowError> {
+    let rows: Vec<CanonicalClassV1> =
+        canonical_classes_v1(court).into_iter().filter(|c| matches!(c.source, ArtifactSourceV1::ConvertedA16)).collect();
+    if rows.is_empty() {
+        return Err(A16ArtifactRowError::NoA16Rows);
+    }
+    // The panel's own pairing check, per row, so the refusal names the field that disagrees
+    // rather than saying only "no". Every A16 row declares the same artifact shape, so this
+    // either matches all of them or none — the assertion below is that fact, not an assumption.
+    let mut family_rows = Vec::new();
+    let mut first_mismatch: Option<ClassResolveError> = None;
+    for row in &rows {
+        match row.shape_matches_shape_v1(shape) {
+            Ok(()) => family_rows.push(row.model_id),
+            Err(e) => {
+                let _ = first_mismatch.get_or_insert(e);
+            }
+        }
+    }
+    if family_rows.is_empty() {
+        return Err(A16ArtifactRowError::NotThisFamily(first_mismatch.expect("a non-empty row set that matched nothing errored")));
+    }
+
+    let span = shape.max_position as u64;
+    let asked = n_ctx.map(u64::from).unwrap_or(span);
+    if asked == 0 {
+        return Err(A16ArtifactRowError::ZeroWidth);
+    }
+    if asked > span {
+        return Err(A16ArtifactRowError::WiderThanTheArtifact { asked, span });
+    }
+    let width = u32::try_from(asked).map_err(|_| A16ArtifactRowError::WiderThanTheArtifact { asked, span })?;
+    let profile =
+        kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v1(width).map_err(A16ArtifactRowError::Projection)?;
+    Ok(A16ArtifactRowV1 {
+        profile,
+        n_ctx: width,
+        artifact_span: u32::try_from(span).unwrap_or(u32::MAX),
+        narrowed: asked != span,
+        family_rows,
+    })
+}
+
+/// **The dense A16 row at a width nothing on this machine states** — the lighter form, for an
+/// operator who has no artifact where the certificate is being cut.
+///
+/// The same projection [`a16_artifact_row_v1`] ends at, with the artifact's two contributions
+/// removed: nothing confirms the family and nothing bounds the width. That is exactly the
+/// difference the doc on [`a16_artifact_row_v1`] argues about — a width taken on the operator's
+/// word can be wrong in a way a file's own header cannot — so the artifact form is the primary
+/// one and this exists for the case where the 1.7 GiB file is somewhere else.
+pub fn a16_ladder_row_v1(n_ctx: u32) -> Result<PalwShapeProfileV3, A16ArtifactRowError> {
+    if n_ctx == 0 {
+        return Err(A16ArtifactRowError::ZeroWidth);
+    }
+    kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v1(n_ctx).map_err(A16ArtifactRowError::Projection)
 }
 
 /// **One class of the qwen36 lineage this build knows the canonical form of.**
