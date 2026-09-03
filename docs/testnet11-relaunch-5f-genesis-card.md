@@ -988,6 +988,22 @@ FH closes the hole the audit found. Verified here, not read: `misaka-palw-derive
 `instruct-bound.palwart` (1,795,427,276 B) at the path the fixtures name and `qwen25-tokenizer.json`
 where they expect it.
 
+**A LOUD SKIP STILL COUNTS AS PASSED, and `cargo test` captures the announcement.** Measured on the
+sibling suite the same evening:
+
+    without the artifact   ...SKIPPED: set MISAKA_PALW_ARTIFACT…   9 passed   0.01s
+    with the artifact      (no SKIPPED line)                       9 passed   9.70s
+
+The skip prints — it was built to print — and **only `--nocapture --test-threads=1` surfaces it**,
+which nobody runs by default. So "9 passed" included a test that checked nothing about the real
+weights, and the captured log could not have said otherwise. *The duration is the evidence; the
+count cannot be.*
+
+**The design fix, for after the freeze: absence should be a DECISION, not a default.** An
+artifact-dependent test should **fail** when its file is missing in CI and skip only on an explicit
+opt-out. A skip that is the default state is indistinguishable from a check nobody wanted, and it
+passes.
+
 **The 18.40s is the evidence, and the dot count was not.** These fixtures decode a 1.79 GB artifact;
 a skipped test is milliseconds. A green suite whose artifact-dependent cases quietly skipped would
 print the same ten dots and the same `ok`. *So the instrument for "did the expensive check actually
