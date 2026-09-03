@@ -651,8 +651,10 @@ pub fn palw_checkpoint_covered_for_step_v1(
 /// positions while the class is priced at one tile.
 ///
 /// The two spellings can only disagree for a fused profile under an UNARMED court, and such a
-/// class is refused at admission by name (`PalwClassAdmissionError::FusedSiteWithNoDissection`),
-/// so no class that can be prosecuted is priced by one and prosecuted by the other.
+/// class is refused by name — [`crate::palw_class_admission_v2::PalwClassAdmissionError::FusedAttentionNeedsTheKaryCourt`]
+/// at registration and `Params::validate_palw_v2` for a row minted at genesis (audit D L-1: this
+/// named a `FusedSiteWithNoDissection` variant that does not exist) — so no class that can be
+/// prosecuted is priced by one and prosecuted by the other.
 /// `the_two_anchored_intervals_agree_wherever_a_class_is_admissible` holds it.
 pub fn palw_anchored_interval_for_profile_v1(profile: &PalwShapeProfileV3) -> u32 {
     if crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(profile) {
@@ -777,7 +779,7 @@ const fn step_path_bytes_v1(ladder: u64) -> u64 {
 /// price would read as approval — so this returns `None` for the sentinel rather than quietly
 /// answering the anchored question about an unanchored class.
 pub fn palw_anchored_court_cost_v1(profile: &PalwShapeProfileV3) -> Option<Result<PalwCourtCostV1, PalwClassAdmissionError>> {
-    palw_anchored_court_cost_for_court_v1(profile, None)
+    palw_anchored_court_cost_for_court_v1(profile, None, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
 }
 
 /// [`palw_anchored_court_cost_v1`] under a `palw_kary_court`-armed ruleset (ADR-0082 Decisions 2-5).
@@ -791,8 +793,9 @@ pub fn palw_anchored_court_cost_v1(profile: &PalwShapeProfileV3) -> Option<Resul
 pub fn palw_anchored_court_cost_for_court_v1(
     profile: &PalwShapeProfileV3,
     court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
+    ladder: u64,
 ) -> Option<Result<PalwCourtCostV1, PalwClassAdmissionError>> {
-    let rules = palw_class_ladder_rules_for_court_v1(profile, court)?;
+    let rules = palw_class_ladder_rules_for_court_v1(profile, court, ladder)?;
     Some(derive_court_cost_shaped_v1(profile, rules.cost_shape))
 }
 
@@ -999,7 +1002,7 @@ pub fn palw_row_earns_at_most_the_cap_v1(canonical_leaves: u64, widest_leaves: u
 /// not deepen either — a class that cannot anchor gains nothing from rungs it cannot afford to
 /// climb, and giving it the deeper ladder would admit a depth its close cannot pay for.
 pub fn palw_class_ladder_rules_v1(profile: &PalwShapeProfileV3) -> Option<crate::palw_class_admission_v2::PalwClassLadderRulesV1> {
-    palw_class_ladder_rules_for_court_v1(profile, None)
+    palw_class_ladder_rules_for_court_v1(profile, None, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
 }
 
 /// **How many positions an anchored replay opens, under the court the ruleset actually runs**
@@ -1043,9 +1046,23 @@ pub fn palw_anchored_interval_for_court_v1(
 /// site is priced by its bottom rather than by the row, and the prompt-id term takes the form the
 /// ruleset armed (Decision 5). `None` reproduces the shipped rule byte for byte, which is what
 /// makes every existing caller unchanged.
+///
+/// **`ladder` is the RULESET's, and it is a parameter because it is not a constant** (audit D
+/// M-3). This read [`PALW_CONTEXT_LADDER_MAX_STEP_LEAVES`] — `2^32`, the FENCE's default — while
+/// the RC bundle the 5f genesis freezes carries `2^26`, and the shape it builds has
+/// `path_from_ladder: true`, so every opened run was charged a 32-element Merkle path (2,048
+/// bytes) on a ruleset whose paths are 26 elements (1,664). ADR-0082 Decision 1 states the rule
+/// verbatim — "every figure in this ADR that quotes a 32-element Merkle path is the fence's
+/// number; the ruleset's is read from the bundle, never typed" — and the over-charge is the safe
+/// direction on the close, but it made every derived quantity that stands on this walk (Decision
+/// 6's chunk count, the "one carrier carries the dense v5 row" measurement) a figure quoted under
+/// a configuration it was not measured in. Callers hold the bundle:
+/// `bundle.court.max_step_leaf_count()`. [`palw_class_ladder_rules_v1`] passes the constant,
+/// which is the fence's default and the only place it still stands.
 pub fn palw_class_ladder_rules_for_court_v1(
     profile: &PalwShapeProfileV3,
     court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
+    ladder: u64,
 ) -> Option<crate::palw_class_admission_v2::PalwClassLadderRulesV1> {
     if !palw_long_form_is_refused_v1(profile) {
         return None;
@@ -1058,7 +1075,6 @@ pub fn palw_class_ladder_rules_for_court_v1(
         ) || profile.full_attention_interval == 0,
         "a class with attention layers registered the recurrence map alone — its attention anchors have no geometry"
     );
-    let ladder = PALW_CONTEXT_LADDER_MAX_STEP_LEAVES;
     let interval = palw_anchored_interval_for_court_v1(profile, court);
     let mut cost_shape = PalwCourtCostShapeV1::checkpoint_anchored_v1(profile, interval, ladder, 0);
     // **The map the class REGISTERED, on the cache half too** (ADR-0082 Decision 4). This read
@@ -1109,12 +1125,13 @@ pub fn palw_widest_close_over_the_ladder_v1(
     families: &[PalwLadderFamilyV1],
     rows: &[u32],
     court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
+    ladder: u64,
 ) -> Option<(usize, u32, PalwCourtCostRowV1)> {
     let mut best: Option<(usize, u32, PalwCourtCostRowV1)> = None;
     for (index, build) in families.iter().enumerate() {
         for row in rows {
             let Ok(profile) = build(*row) else { continue };
-            let Some(rules) = palw_class_ladder_rules_for_court_v1(&profile, court) else { continue };
+            let Some(rules) = palw_class_ladder_rules_for_court_v1(&profile, court, ladder) else { continue };
             let Ok(mut breakdown) = derive_court_cost_rows_v1(&profile, rules.cost_shape) else { continue };
             if breakdown.is_empty() {
                 continue;
@@ -1145,8 +1162,9 @@ pub fn palw_close_chunks_for_ladder_v1(
     families: &[PalwLadderFamilyV1],
     rows: &[u32],
     court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
+    ladder: u64,
 ) -> Option<u64> {
-    let (_, _, binding) = palw_widest_close_over_the_ladder_v1(families, rows, court)?;
+    let (_, _, binding) = palw_widest_close_over_the_ladder_v1(families, rows, court, ladder)?;
     Some(crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(binding.close_bytes))
 }
 
@@ -2970,7 +2988,7 @@ mod u04_flat_close {
         let v23: Vec<(u64, u64, String)> = PALW_LADDER_FAMILIES_V1
             .iter()
             .map(|build| {
-                let (_, _, binding) = palw_widest_close_over_the_ladder_v1(&[*build], &[512], None).expect("the 512 row prices");
+                let (_, _, binding) = palw_widest_close_over_the_ladder_v1(&[*build], &[512], None, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("the 512 row prices");
                 (
                     binding.close_bytes,
                     palw_close_chunks_for_bytes_v1(binding.close_bytes),
@@ -2987,7 +3005,7 @@ mod u04_flat_close {
             assert!(row.2.contains("attn_values.a16"), "the context-linear attention close stopped binding the v2/v3 rows: {}", row.2);
         }
         assert_eq!(
-            palw_close_chunks_for_ladder_v1(&PALW_LADDER_FAMILIES_V1, &[512], None),
+            palw_close_chunks_for_ladder_v1(&PALW_LADDER_FAMILIES_V1, &[512], None, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES),
             Some(DEFAULT_MAX_CLOSE_CHUNKS),
             "the shipped close ceiling is no longer the derivation over the genesis set it was chosen for"
         );
@@ -3000,7 +3018,7 @@ mod u04_flat_close {
             .iter()
             .map(|build| {
                 let (_, _, binding) =
-                    palw_widest_close_over_the_ladder_v1(&[*build], &[512], Some(kary(16))).expect("the v5 512 row prices");
+                    palw_widest_close_over_the_ladder_v1(&[*build], &[512], Some(kary(16)), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("the v5 512 row prices");
                 (
                     binding.close_bytes,
                     palw_close_chunks_for_bytes_v1(binding.close_bytes),
@@ -3051,12 +3069,12 @@ mod u04_flat_close {
         // anchor. Decision 6 names this term and sizes it at two to three; it is four.
         assert_eq!((v5[1].0, v5[1].1), (274_460, 4), "the hybrid graph-v5 512 row's close moved");
         assert!(v5[1].2.contains("GatedDeltaNet"), "the hybrid v5 row stopped binding on its recurrence: {}", v5[1].2);
-        assert_eq!(palw_close_chunks_for_ladder_v1(&PALW_LADDER_FAMILIES_V5, &[512], Some(kary(16))), Some(4));
+        assert_eq!(palw_close_chunks_for_ladder_v1(&PALW_LADDER_FAMILIES_V5, &[512], Some(kary(16)), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES), Some(4));
 
         // ---- and what Decision 6's own numbers ARE, so the difference is attributable rather than
         // a disagreement: the dense model width at the tile route, both id forms.
         let dense = PALW_LADDER_FAMILIES_V5[0](512).expect("projects");
-        let rules = palw_class_ladder_rules_for_court_v1(&dense, Some(kary(16))).expect("mapped");
+        let rules = palw_class_ladder_rules_for_court_v1(&dense, Some(kary(16)), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("mapped");
         let rows = derive_court_cost_rows_v1(&dense, rules.cost_shape).expect("derives");
         let ffn = rows.iter().find(|r| r.weight_name.ends_with("ffn_down.weight")).expect("the dense row has a down projection");
         assert_eq!(ffn.close_bytes, 80_504, "ADR-0082 Decision 6's '~80,504 with the Merkle ones' moved");
@@ -3651,7 +3669,7 @@ mod u04_flat_close {
                 for n_ctx in [512u32, 4_096, 32_768, 131_072] {
                     let Ok(profile) = build(n_ctx) else { continue };
                     let court = PalwKaryCourtV1 { prompt_ids_form: form, ..kary(16) };
-                    let Some(rules) = palw_class_ladder_rules_for_court_v1(&profile, Some(court)) else { continue };
+                    let Some(rules) = palw_class_ladder_rules_for_court_v1(&profile, Some(court), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES) else { continue };
                     let Ok(rows) = derive_court_cost_rows_v1(&profile, rules.cost_shape) else { continue };
                     let whole = rows.first().expect("a non-empty walk").close_bytes;
                     let fused = rows
@@ -3686,7 +3704,7 @@ mod u04_flat_close {
                     if !by_ids {
                         let profile = build(b.0).expect("projects");
                         let court = PalwKaryCourtV1 { prompt_ids_form: form, ..kary(16) };
-                        let rules = palw_class_ladder_rules_for_court_v1(&profile, Some(court)).expect("mapped");
+                        let rules = palw_class_ladder_rules_for_court_v1(&profile, Some(court), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("mapped");
                         let rows = derive_court_cost_rows_v1(&profile, rules.cost_shape).expect("derives");
                         let binding = rows.first().expect("non-empty");
                         assert_eq!(
@@ -3723,7 +3741,7 @@ mod u04_flat_close {
         // Decision 5's form is the one a `palw_kary_court`-armed ruleset carries into the shape.
         let dense = PALW_LADDER_FAMILIES_V5[0](512).expect("projects");
         assert_eq!(
-            palw_class_ladder_rules_for_court_v1(&dense, Some(kary(16))).expect("mapped").cost_shape.prompt_ids_form,
+            palw_class_ladder_rules_for_court_v1(&dense, Some(kary(16)), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("mapped").cost_shape.prompt_ids_form,
             PalwPromptIdsFormV1::MerkleV1
         );
         // And with no court the shape is the shipped one, unchanged.
