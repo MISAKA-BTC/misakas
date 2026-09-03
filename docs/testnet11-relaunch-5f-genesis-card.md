@@ -497,6 +497,36 @@ gate above is the one that would have caught all three.
 
 ---
 
+## 7b. Arming `palw_kary_court` — a checklist, not a sentence
+
+§1 arms this fence at genesis. It must not be armed until every line here is closed, and each one
+is a finding from the audit wave rather than a precaution.
+
+- [ ] **Five criticals in the dissection court's bindings.** All one shape — *a derived value
+      computed and not compared*: the root claim's `history_positions` taken from the wire; `S*`
+      unvalidated, giving an i64 overflow panic **inside block validation**; bottom openings unbound
+      to coordinates; the anchor unbound to the derived checkpoint; and no clock on the responder's
+      root claim, so silence at Terminal wins challenger-side.
+- [ ] **The engine executes the real fused node on the registered artifact, not only synthetic
+      material.** The refusal — "per-layer declares 24 against 27 recorded" — is
+      `profile.attn_nodes.len()` of a graph-v5 layer table (**27 − 3, the fusion's net removal**)
+      against a hard-coded 27-row v4 program in the plan-LESS route. The PLANNED route already
+      executes the fused site and is bit-equal to the reference on real geometry; only
+      `Qwen25A16Backend::new` refuses, and chain-registered classes go through
+      `from_registered_profile`, which plans. Until it lands, a `FamilyCertified` would cover a
+      kernel nothing has executed on the row the genesis registers.
+- [ ] **`(v − max) << up` wraps i64 before the clamp** in `softmax_shifted` and `a16_attn_exp_one`
+      for `up_bits ≥ 47` — a key 40,000 below the maximum receives full weight. It moves committed
+      values only for classes at that width, so **the fix is free exactly now and not after a v5 row
+      is registered.** Confirm the shipped artifact's `up_bits` either way.
+- [ ] **A second pinned cross-machine determinism digest for the v5 base** (ADR-0067 D5 is pinned
+      only for the v2 fuzz corpus). A new pin produced by a run, not a moved one.
+
+*The 27 − 3 above also settles §2's family ruling by measurement: the fusion removes four kernels
+and adds one, so a family derived from the v5 row alone would drop `ATTN_SCORES` and `ATTN_VALUES`
+and stop covering the rows already on chain. The family's `kernel_ids` are the UNION over every row
+the lineage ships.*
+
 ## 8. Announcement wording — the claims the evidence actually carries
 
 - **"The QWEN36 lane produced a grammar-valid description" is what the evidence carries.
