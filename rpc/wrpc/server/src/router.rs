@@ -82,6 +82,7 @@ impl Router {
                 GetPalwProducerFacts,
                 GetPalwDerivedArtifacts,
                 GetPalwFreePromptClaim,
+                GetPalwPendingChunkGroup,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 GetValidatorAttestationTarget,
