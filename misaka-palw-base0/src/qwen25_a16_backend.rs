@@ -1820,11 +1820,12 @@ mod free_prompt_tests {
     /// `qwen25-convert` writes is refused by its own declaration:
     /// `GeometryMismatch { what: "rms_eps_q", profile: 1, artifact: 256 }`.
     ///
-    /// It went unseen because the shipped worker takes [`Qwen25A16Backend::new`], which compiles
-    /// no plan and lets the artifact's epsilon execute, while the ADR-0080 ladder row, the SDK and
-    /// any chain-registered class go through [`Qwen25A16Backend::from_registered_profile`]. This
-    /// test drives the second one, over an artifact built at the converter's epsilon, which is
-    /// the asymmetry made visible.
+    /// It went unseen because the shipped worker took [`Qwen25A16Backend::new`], which compiled no
+    /// plan and let the artifact's epsilon execute, while the ADR-0080 ladder row, the SDK and any
+    /// chain-registered class go through [`Qwen25A16Backend::from_registered_profile`]. That
+    /// asymmetry is closed — since ADR-0082 audit E's H-1 `::new` compiles the same plan and
+    /// refuses the same mismatch — and this test keeps driving the registered constructor over an
+    /// artifact built at the converter's epsilon, which is where the split was first made visible.
     ///
     /// Both directions are pinned: the corrected projection PLANS, and a declaration carrying the
     /// frozen `rms_eps_q: 1` still refuses on exactly that field and no other — the dense twin of
