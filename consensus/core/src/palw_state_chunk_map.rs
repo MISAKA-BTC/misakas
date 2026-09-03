@@ -441,6 +441,44 @@ pub fn hybrid_state_chunk_entry_v3(geometry: &PalwHybridStateGeometryV1, chunk_i
     Some(PalwHybridChunkEntryV1::RecurrenceState { kind, gdn_layer: geometry.gdn_layers[layer_ordinal], head, byte_len })
 }
 
+/// **How many chunks a checkpoint of THIS class canonically has at `positions`** (audit B, M-4).
+///
+/// The one spelling of the count, for the two readers that need it and were each deriving their
+/// own: `verify_kv_anchor`'s "the carried chunk count is not the map's for this state", and
+/// `palw_step_leg`'s shape pass, which checked only that `state_chunk_count` was in `[1, 2^16]` —
+/// so a leg declaring one chunk per checkpoint (the whole cache as one blob) was not a shape
+/// fault, and every anchor built on it was `Unadjudicable`: a leg that advertises a route it
+/// cannot serve, which on a per-position class leaves the attention site with no route at all.
+///
+/// `None` for a map this crate cannot enumerate — the standalone recurrence maps, whose geometry
+/// is `misaka-palw-base0`'s (`base0_gdn_state_geometry_v*`). A `None` is "not decidable here", and
+/// the shape pass must treat it as no fault rather than as a fault: refusing a leg because this
+/// crate cannot count it would convict a class for the court's own missing arithmetic.
+pub fn palw_state_chunk_count_at_v1(profile: &PalwShapeProfileV3, positions: u32) -> Option<u64> {
+    let declared = profile.state_chunk_map_id;
+    if declared == integer_kv_state_chunk_map_id_v1() {
+        return integer_kv_state_geometry_v1(profile, positions).ok().map(|g| g.chunk_count());
+    }
+    if declared == integer_kv_state_chunk_map_id_v2()
+        || declared == hybrid_state_chunk_map_id_v1()
+        || declared == hybrid_state_chunk_map_id_v2()
+    {
+        // The v1 and v2 hybrid compositions name a `gdn=` half nothing enumerates, so what is
+        // decidable here is the attention half — the same half `verify_kv_anchor` reads for them.
+        return integer_kv_state_geometry_v2(profile, positions).ok().map(|g| g.chunk_count());
+    }
+    if declared == tiled_kv_state_chunk_map_id_v3() {
+        return tiled_kv_state_geometry_v3(profile, positions).ok().map(|g| g.chunk_count());
+    }
+    if declared == hybrid_state_chunk_map_id_v3() {
+        // The COMPOSITION, at the cadence this checkpoint's own position count implies — the
+        // recurrence rides its derived spacing, so two checkpoints of one leg can honestly have
+        // different chunk counts and the rule has to be asked per checkpoint.
+        return hybrid_state_geometry_for_covered_v1(profile, positions).ok().map(|g| g.chunk_count());
+    }
+    None
+}
+
 /// **The RECURRENCE's map: a state, not a history** (ADR-0077 Decision 10).
 ///
 /// The two integer-KV maps above chunk the *cache*, and a cache is the whole history: at position

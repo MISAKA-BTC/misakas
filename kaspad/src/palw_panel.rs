@@ -3540,7 +3540,14 @@ impl PalwPanelService {
             trace_root: duty.trace_root,
             anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job),
         };
-        let job_decode_calls = job.decode_token_limit.saturating_sub(1);
+        // **The bound is the CLASS's, in the class's own cadence unit** (audit B, C-2). A
+        // checkpoint leaf's `covered_decode_call` counts decode calls on a per-call class and
+        // cache POSITIONS on a per-position one, and the two differ by the prefill — so a panel
+        // that bounded every opening by the job's decode count refused every honest graph-v5
+        // anchor before recomputing anything, and no quorum was reachable for the class. The
+        // backend answers because the backend holds the profile; the real guard is still the
+        // geometry re-derivation inside `verify_fp_interval_opening`.
+        let covered_bound = backend.fp_checkpoint_covered_bound_v1(job);
         let mut unanswered: Vec<u32> = Vec::new();
 
         for index in &draw.intervals {
@@ -3556,9 +3563,10 @@ impl PalwPanelService {
                 if let Some((checkpoint_index, covered, committed)) =
                     misaka_palw_base0::fp_interval::base0_fp_interval_opening_anchor_v1(&bytes)
                 {
-                    if covered == 0 || covered > job_decode_calls {
-                        // An anchor outside the job's own decode count. Refused before a forward
-                        // pass is spent on it: the cheap half of the guard the replay does anyway.
+                    if covered == 0 || covered > covered_bound {
+                        // An anchor outside the leg this job's class canonically files. Refused
+                        // before a forward pass is spent on it: the cheap half of the guard the
+                        // replay does anyway.
                         continue;
                     }
                     let (job_owned, prompt_owned, output_owned) = (job.clone(), prompt_ids.to_vec(), output_ids.to_vec());
@@ -3585,7 +3593,7 @@ impl PalwPanelService {
                     };
                     if recomputed != committed {
                         warn!(
-                            "[{PALW_PANEL}] claim {}: checkpoint {checkpoint_index} (covering decode call {covered}) commits state \
+                            "[{PALW_PANEL}] claim {}: checkpoint {checkpoint_index} (covering {covered}, the class's cadence unit) commits state \
                              root {committed} and this seat's own recompute reaches {recomputed} — filing nothing; the fault is the \
                              court's question, and this node holds the refutation's inputs",
                             duty.claim_id

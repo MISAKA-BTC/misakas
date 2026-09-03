@@ -39,13 +39,18 @@
 //!
 //! # What is NOT decided here
 //!
-//! The composition of a HYBRID class's checkpoint — the attention half's chunks beside the
-//! recurrence's — has no committed spelling anywhere in the tree, because the shipped hybrid class
-//! registers the checkpoint sentinel and takes no checkpoints at all
-//! ([`crate::qwen36_backend::qwen36_checkpoint_profile_v1`]). This module refuses such a class BY
-//! NAME rather than inventing an order: an enumeration invented on the seat side would be a second
-//! opinion about a consensus object, and the class that registers the composed map is the side
-//! that gets to spell it.
+//! The v1 and v2 HYBRID compositions. Their names pair an attention half with a recurrence half
+//! and nothing in the tree enumerates them, so this module refuses those two BY NAME rather than
+//! inventing an order: an enumeration invented on the seat side would be a second opinion about a
+//! consensus object.
+//!
+//! The **v3** composition is a different matter and this module no longer refuses it: it is
+//! enumerated by `palw_state_chunk_map::hybrid_state_chunk_entry_v3` — the consensus side, which
+//! is the side that gets to spell it — and a graph-v5 hybrid registers it (ADR-0082 Decision 4).
+//! The walk here is not a second derivation either: both this seat and the PRODUCER's capture go
+//! through `crate::legs::base0_composed_state_chunks_v1`, so the chunk at index `i` is the same
+//! bytes on both sides by construction. (The header used to say this module refuses "such a class"
+//! outright while implementing the v3 composition four hundred lines below — audit B, L-1.)
 
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
@@ -113,10 +118,15 @@ impl std::error::Error for Base0FpRecomputeError {}
 /// are never compared against an executor's chunks, because no executor chunk is ever fetched.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Base0FpSeatStateV1 {
-    /// The decode call this state is the state after — `index × checkpoint_interval` for the
-    /// interval a seat drew.
+    /// **The checkpoint leaf's own counter for this state**, in the unit the class's cadence
+    /// counts in: `index × checkpoint_interval` decode calls on a per-call class,
+    /// `prefill + index × checkpoint_interval` POSITIONS on a per-position one. The name is the
+    /// leaf field's and is kept so the comparison against an opening is field against field.
     pub covered_decode_call: u32,
-    /// Positions folded into it: `declared_prefill_tokens + covered_decode_call`.
+    /// Positions folded into it —
+    /// `palw_checkpoint_positions_at_v1(profile, ctx, covered_decode_call)`, which is
+    /// `declared_prefill_tokens + covered_decode_call` on a per-call class and
+    /// `covered_decode_call` itself on a per-position one.
     pub positions: u32,
     /// The committed root of those bytes under the class's map — the 64 bytes that replace the
     /// history on the wire.
@@ -259,6 +269,32 @@ pub fn base0_fp_recompute_state_at_position_v1<K: Base0FpRecomputeKernelsV1 + ?S
     seat_state_here_v1(profile, decode_calls, positions, kernels)
 }
 
+/// **The state the checkpoint carrying `covered` is the state of** (ADR-0082 Decision 4, amended;
+/// audit B, C-2) — the entry every SEAT takes, because `covered` is the only number an opening
+/// carries.
+///
+/// One conversion, in one place: `palw_checkpoint_positions_at_v1` is what turns the class's own
+/// counter into cache rows, and the walk stops after that many. On a per-call class it is
+/// `prefill + covered` and this is [`base0_fp_recompute_state_v1`] verbatim; on a per-position
+/// class the counter already IS the row count and the walk can stop inside the prefill — the case
+/// the per-call entry cannot express at all, and the case audit B measured as a guaranteed
+/// state-root mismatch (a 403-position state compared against a 3-position root).
+///
+/// The returned `covered_decode_call` is the LEAF's counter, not the decode call, so a caller
+/// comparing it against the checkpoint an opening names compares like with like.
+pub fn base0_fp_recompute_state_at_covered_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    prompt_token_ids: &[u32],
+    output_token_ids: &[u32],
+    covered: u32,
+    kernels: &mut K,
+) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
+    let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, ctx, covered);
+    let state = base0_fp_recompute_state_at_position_v1(profile, ctx, prompt_token_ids, output_token_ids, positions, kernels)?;
+    Ok(Base0FpSeatStateV1 { covered_decode_call: covered, ..state })
+}
+
 /// The state serialisation both entries share — one spelling of "chunk what the kernels hold and
 /// root it", so a position-stopped walk and a call-stopped one cannot root the same state two ways.
 fn seat_state_here_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
@@ -367,52 +403,72 @@ impl<'a> Qwen36RecomputeKernelsV1<'a> {
 
     /// The recurrence layers' live state, in the shape [`crate::fp_capture`] chunks.
     fn recurrence_state(&self) -> (Vec<u16>, Vec<crate::fp_capture::Base0GdnLayerStateV1>) {
-        let mut layers = Vec::new();
-        let mut states = Vec::new();
-        for (index, kind) in self.shape.layer_types.iter().enumerate() {
-            if *kind != crate::qwen36::Qwen36LayerKind::LinearAttention {
-                continue;
-            }
-            layers.push(index as u16);
-            states.push(crate::fp_capture::Base0GdnLayerStateV1 {
-                heads: self.cache.gdn.get(index).cloned().unwrap_or_default(),
-                conv: self.cache.conv.get(index).cloned().unwrap_or_default(),
-            });
-        }
-        (layers, states)
+        qwen36_recurrence_state_v1(self.shape, &self.cache)
     }
 
-    /// **This cache's bytes for one ATTENTION chunk of the v3 composition** — the hybrid's
-    /// analogue of `A16Cache::state_chunk_bytes_v1`, and the same discipline: the width is read
-    /// off the entry rather than assumed, and a row that does not fit the declared width is
-    /// refused instead of narrowed.
-    ///
-    /// The composition's attention half is `tiled_kv_state_geometry_v3` verbatim, whose rows are
-    /// little-endian `i32` at `attn_kv_heads × attn_head_dim × 4` bytes — the width the `i32` cache
-    /// this engine holds actually is. A checkpoint that opened to a state the producer never held
-    /// is worse than a missing one, and the producer has signed for it.
     fn attn_chunk_bytes_v1(
         &self,
         entry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1,
     ) -> Option<Vec<u8>> {
-        use kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1;
-        let side = match entry.kind {
-            PalwStateChunkKindV1::Key => &self.cache.keys,
-            PalwStateChunkKindV1::Value => &self.cache.values,
-        };
-        let layer = side.get(entry.attn_layer as usize)?;
-        let mut out = Vec::with_capacity((entry.position_count as usize) * (entry.row_bytes as usize));
-        for p in entry.position_start..entry.position_start + entry.position_count {
-            let row = layer.get(p as usize)?;
-            if entry.row_bytes as usize != row.len().checked_mul(4)? {
-                return None;
-            }
-            for value in row {
-                out.extend_from_slice(&value.to_le_bytes());
-            }
-        }
-        Some(out)
+        qwen36_attn_chunk_bytes_v1(&self.cache, entry)
     }
+}
+
+/// **The hybrid cache's recurrence layers, in the order the gdn map enumerates them** — one
+/// spelling for the seat (above) and the PRODUCER (`qwen36_execute_for_attempt_capped_v1`), so a
+/// checkpoint the executor commits and the one a seat recomputes are the same object.
+pub fn qwen36_recurrence_state_v1(
+    shape: &crate::qwen36::Qwen36ShapeV1,
+    cache: &crate::qwen36::Qwen36Cache,
+) -> (Vec<u16>, Vec<crate::fp_capture::Base0GdnLayerStateV1>) {
+    let mut layers = Vec::new();
+    let mut states = Vec::new();
+    for (index, kind) in shape.layer_types.iter().enumerate() {
+        if *kind != crate::qwen36::Qwen36LayerKind::LinearAttention {
+            continue;
+        }
+        layers.push(index as u16);
+        states.push(crate::fp_capture::Base0GdnLayerStateV1 {
+            heads: cache.gdn.get(index).cloned().unwrap_or_default(),
+            conv: cache.conv.get(index).cloned().unwrap_or_default(),
+        });
+    }
+    (layers, states)
+}
+
+/// **This cache's bytes for one ATTENTION chunk of the v3 composition** — the hybrid's analogue of
+/// `A16Cache::state_chunk_bytes_v1`, and the same discipline: the width is read off the entry
+/// rather than assumed, and a row that does not fit the declared width is refused instead of
+/// narrowed.
+///
+/// The composition's attention half is `tiled_kv_state_geometry_v3` verbatim, whose rows are
+/// little-endian `i32` at `attn_kv_heads × attn_head_dim × 4` bytes — the width the `i32` cache
+/// this engine holds actually is. A checkpoint that opened to a state the producer never held is
+/// worse than a missing one, and the producer has signed for it.
+///
+/// A free function because the producer serializes the same cache with the same rule; two copies
+/// of it is how a producer and a seat come to commit different bytes for one state.
+pub fn qwen36_attn_chunk_bytes_v1(
+    cache: &crate::qwen36::Qwen36Cache,
+    entry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1,
+) -> Option<Vec<u8>> {
+    use kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1;
+    let side = match entry.kind {
+        PalwStateChunkKindV1::Key => &cache.keys,
+        PalwStateChunkKindV1::Value => &cache.values,
+    };
+    let layer = side.get(entry.attn_layer as usize)?;
+    let mut out = Vec::with_capacity((entry.position_count as usize) * (entry.row_bytes as usize));
+    for p in entry.position_start..entry.position_start + entry.position_count {
+        let row = layer.get(p as usize)?;
+        if entry.row_bytes as usize != row.len().checked_mul(4)? {
+            return None;
+        }
+        for value in row {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    Some(out)
 }
 
 impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
@@ -492,28 +548,16 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
                 crate::fp_capture::base0_gdn_state_chunks_v2(&gdn_geometry, &states)
                     .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?
             };
-            let mut out = Vec::with_capacity(geometry.chunk_count() as usize);
-            for index in 0..geometry.chunk_count() {
-                let entry = map::hybrid_state_chunk_entry_v3(&geometry, index)
-                    .ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
-                match entry {
-                    map::PalwHybridChunkEntryV1::AttentionCache(entry) => {
-                        out.push(self.attn_chunk_bytes_v1(&entry).ok_or(Base0FpRecomputeError::StateIsNotTheMaps {
-                            chunk_index: index,
-                        })?);
-                    }
-                    map::PalwHybridChunkEntryV1::RecurrenceState { .. } => {
-                        let within = (index - geometry.attn.chunk_count()) as usize;
-                        let bytes =
-                            gdn_chunks.get(within).ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
-                        if bytes.len() as u64 != entry.byte_len() {
-                            return Err(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index });
-                        }
-                        out.push(bytes.clone());
-                    }
-                }
-            }
-            return Ok(out);
+            // **The walk is the PRODUCER's** (audit B, H-1). `base0_composed_state_chunks_v1` is
+            // the one enumeration of a class's checkpoint layout and
+            // `Base0CheckpointCaptureV1::push_composed_v1` takes it too, so a seat's chunk `i` is
+            // the executor's chunk `i` by construction rather than by two derivations agreeing.
+            return crate::legs::base0_composed_state_chunks_v1(
+                &crate::legs::Base0CaptureGeometryV1::Hybrid(geometry),
+                |entry| self.attn_chunk_bytes_v1(entry),
+                &gdn_chunks,
+            )
+            .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")));
         }
         if declared == map::hybrid_state_chunk_map_id_v1() || declared == map::hybrid_state_chunk_map_id_v2() {
             return Err(Base0FpRecomputeError::NoStateSerializer {
@@ -556,7 +600,12 @@ struct SeatStateKeyV1 {
     class_id: Hash64,
     context_hash: Hash64,
     prompt_ids_hash: Hash64,
-    decode_calls: u32,
+    /// **The checkpoint LEAF's own counter**, not a decode call — the unit the class's cadence
+    /// counts in (`palw_checkpoint_covered_at_index_v1`). Both askers name a checkpoint and both
+    /// name it by this number, so the key holds it verbatim; keying it in calls while the class
+    /// counts positions is why a graph-v5 seat could hold the right state and never find it.
+    /// `class_id` carries the registered map, so one number cannot mean two things under one key.
+    covered: u32,
 }
 
 static SEAT_STATE_MEMO: std::sync::Mutex<Option<(SeatStateKeyV1, Hash64, Base0FpSeatStateV1)>> = std::sync::Mutex::new(None);
@@ -565,17 +614,21 @@ fn seat_state_key_v1(
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     prompt_token_ids: &[u32],
-    decode_calls: u32,
+    covered: u32,
 ) -> SeatStateKeyV1 {
     SeatStateKeyV1 {
         class_id: profile.shape_profile_id(),
         context_hash: ctx.context_hash(),
         prompt_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids),
-        decode_calls,
+        covered,
     }
 }
 
-/// [`base0_fp_recompute_state_v1`], with the state kept for the row check that follows it.
+/// [`base0_fp_recompute_state_at_covered_v1`], with the state kept for the row check that follows
+/// it.
+///
+/// `covered` is the checkpoint leaf's own counter — the class's cadence unit — because that is the
+/// number an opening carries and the number the row check will look the state up by.
 ///
 /// `kernels` is built by the caller and only used on a miss, so a family pays for its engine setup
 /// once per real recompute.
@@ -584,10 +637,10 @@ pub fn base0_fp_seat_state_memoized_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
     ctx: &PalwJobContextV2,
     prompt_token_ids: &[u32],
     output_token_ids: &[u32],
-    decode_calls: u32,
+    covered: u32,
     kernels: &mut K,
 ) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
-    let key = seat_state_key_v1(profile, ctx, prompt_token_ids, decode_calls);
+    let key = seat_state_key_v1(profile, ctx, prompt_token_ids, covered);
     let ids = kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(output_token_ids);
     if let Ok(guard) = SEAT_STATE_MEMO.lock()
         && let Some((held, held_ids, state)) = guard.as_ref()
@@ -596,7 +649,7 @@ pub fn base0_fp_seat_state_memoized_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
     {
         return Ok(state.clone());
     }
-    let state = base0_fp_recompute_state_v1(profile, ctx, prompt_token_ids, output_token_ids, decode_calls, kernels)?;
+    let state = base0_fp_recompute_state_at_covered_v1(profile, ctx, prompt_token_ids, output_token_ids, covered, kernels)?;
     if let Ok(mut guard) = SEAT_STATE_MEMO.lock() {
         *guard = Some((key, ids, state.clone()));
     }
@@ -615,9 +668,9 @@ pub fn base0_fp_seat_state_held_v1(
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     prompt_token_ids: &[u32],
-    decode_calls: u32,
+    covered: u32,
 ) -> Option<Base0FpSeatStateV1> {
-    let key = seat_state_key_v1(profile, ctx, prompt_token_ids, decode_calls);
+    let key = seat_state_key_v1(profile, ctx, prompt_token_ids, covered);
     let guard = SEAT_STATE_MEMO.lock().ok()?;
     let (held, _ids, state) = guard.as_ref()?;
     (*held == key).then(|| state.clone())

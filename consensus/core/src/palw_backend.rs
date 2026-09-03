@@ -399,14 +399,40 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// checkpoint instead of fetching a history that grows with the context. Compute is one
     /// forward pass of the job; bytes are none. Defaulted to a refusal: a family without this
     /// verb cannot seat a graph-v5 row, and `Incapable` is the honest verdict.
+    ///
+    /// **`covered` is the checkpoint LEAF's own counter, in the unit the CLASS's cadence counts
+    /// in** — `palw_checkpoint_covered_at_index_v1`'s value, which is a decode call on a per-call
+    /// class and a cache POSITION on a per-position one. It is the number an interval opening
+    /// carries, so it is the number the seam takes; a seam that took decode calls would have every
+    /// caller convert, and the caller that forgot would compare a `prefill + covered`-position
+    /// state against a `covered`-position root — audit B's C-2, and a guaranteed mismatch on every
+    /// honest graph-v5 claim. The family converts once, with
+    /// `palw_checkpoint_positions_at_v1`.
     fn fp_recompute_checkpoint_root(
         &self,
         _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
         _prompt_token_ids: &[u32],
         _output_token_ids: &[u32],
-        _decode_calls: u32,
+        _covered: u32,
     ) -> Result<crate::Hash64, String> {
         Err("this execution family cannot recompute a checkpoint root from the prompt".to_string())
+    }
+
+    /// **The largest `covered` a checkpoint leaf of this job's leg can carry** — the cheap half of
+    /// the guard a panel applies before it spends a forward pass on an opening's claimed anchor.
+    ///
+    /// In the CLASS's cadence unit, like every other `covered` on this seam: `decode_calls` on a
+    /// per-call class, `prefill + decode_calls` on a per-position one. The default is the per-call
+    /// rule spelled out — a DECLARED choice rather than a panel-side assumption, and the honest
+    /// one for a family whose classes all run that cadence. A family with a per-position class
+    /// overrides it, and one that did not would have its panel refuse every honest opening of that
+    /// class before recomputing anything (audit B, C-2).
+    ///
+    /// This is a bound and not the rule: `verify_fp_interval_opening` re-derives the anchor from
+    /// the geometry and refuses an opening that named another one, so a loose bound costs a
+    /// forward pass and a tight one costs the quorum.
+    fn fp_checkpoint_covered_bound_v1(&self, job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3) -> u32 {
+        job.decode_token_limit.saturating_sub(1)
     }
 
     /// **The committed output ids of a retained capture, read by the family that wrote it**

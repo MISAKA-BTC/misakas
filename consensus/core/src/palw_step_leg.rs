@@ -1590,6 +1590,31 @@ fn checkpoint_fault(
     if preimage.state_chunk_count == 0 || preimage.state_chunk_count as usize > PALW_STEP_LEG_MAX_STATE_CHUNKS {
         return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
     }
+    // **And the count must be the CLASS's map's for this state** (audit B, M-4). The range check
+    // above admits any count in `[1, 2^16]`, so a leg whose leaves declare one chunk per
+    // checkpoint — the whole cache as a blob — passed the shape pass and then made every anchor
+    // built on it `Unadjudicable`: a leg that advertises a route it cannot serve, which on a
+    // per-position class leaves the attention site with no route at all, because the cache-write
+    // route is refused there too.
+    //
+    // **The fault is `CheckpointIndexNotCanonical` and not a new discriminant**: `PalwStepFaultV1`
+    // is borsh-serialised with `use_discriminant = true` and its discriminants are wire-frozen, so
+    // a new arm is a consensus object change; the existing arm already carries the other
+    // `state_chunk_count` refusal two lines above, which is the same rule.
+    //
+    // `None` from the map is "this crate cannot enumerate that map" (the standalone recurrence
+    // maps, whose geometry lives in the executor crate) and is not a fault: refusing a leg for the
+    // court's own missing arithmetic would convict an honest class.
+    let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(
+        &binding.shape_profile,
+        &binding.job_context,
+        preimage.covered_decode_call,
+    );
+    if let Some(canonical_chunks) = crate::palw_state_chunk_map::palw_state_chunk_count_at_v1(&binding.shape_profile, positions)
+        && preimage.state_chunk_count as u64 != canonical_chunks
+    {
+        return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
+    }
     None
 }
 
