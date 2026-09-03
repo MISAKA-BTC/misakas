@@ -4946,3 +4946,15 @@ tag.len() == PALW_FP_V3_L1_TAG_BYTES          a constant, not a pin
 **Patch v3 on the dry-run merged tree: 4 files, 24 insertions / 48 deletions; every old value —
 thirteen patterns including both byte-array heads and the probe — grep-checked absent.** The five
 pin tests run on it now; only green there lets it touch 5f.
+
+### The mechanism from the binary, and the guard's t11 line corrected
+
+ibm's un-re-pinned `candidate-4d572142` booted, printed `Consensus params fingerprint: a5291e005aca6068…`
+— the table's value, computed by a node on another machine — then M-07 refused it (`genesis
+utxo_commitment mismatch`), and the corrected rehearsal script reported **`BOOT FAILED (alive=0
+panics=4)`** instead of a green fingerprint line. Three sides, one mechanism: `a5291e00…` is the
+pre-genesis-re-pin fingerprint wherever it is computed; `2222e054…` is the cut's. The guard's t11
+line now holds `2222e054…` with `params.rs:3058` as its cause and the pre-re-pin value kept beside
+it; a table row extracted before the genesis re-pin is *expected* to differ from it.
+
+v3 pin tests on the patched dry-run tree: CORE rc=0, DERIVE rc=0 (read at 01:34).

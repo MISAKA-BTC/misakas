@@ -37,7 +37,16 @@ PREDICTED_SOURCE_TREE_SHA=637858dba5ea5e34b9459a580b2b81d1361aecf450bc615a4ee962
 # NAMED MOVE resolved 2026-09-04 01:20 from the table with extracted_from 4d572142: the per-kernel family's
 # certified-set root (e4f97110). The value is the extractor's, written here only because the cause was named
 # in writing before the extraction.
-PREDICTED_T11_FP=a5291e005aca6068d465434c317e05ad24f054faa04a68c38ec0857566c38fa9
+# CORRECTED 2026-09-04 01:5x, cause in the tree: params.rs:3058 `h.write(genesis.hash.as_bytes())` — the
+# consensus fingerprint hashes GENESIS.hash, so the table's t11 row (a5291e00…, extracted while the genesis
+# was still 08e9c8a4…) is the PRE-genesis-re-pin fingerprint by construction. The cut's value is what
+# shipped_presets_have_pinned_fingerprints prints on the tree that carries the genesis re-pin. Confirmed
+# three ways: that test's `got` on the patched merged tree, the mechanism at params.rs:3058, and ibm's
+# un-re-pinned binary printing a5291e00… then refusing under M-07. A table row named t11_fingerprint
+# from a pre-re-pin extraction is EXPECTED to differ from this line; 3e renames that row
+# t11_fingerprint_pre_genesis_repin so it can never again be read as the cut's.
+#   pre-re-pin (the table):  a5291e005aca6068d465434c317e05ad24f054faa04a68c38ec0857566c38fa9
+PREDICTED_T11_FP=2222e054f87bed7a33e9c017f5403cd52070d0778776b5bd78143e7f82ff92b7
 # WITHDRAWN 2026-09-03: devnet genesis now registers the same class set as testnet-11
 # (floor + graph-v5@512 + QWEN36) so the drill rehearses the chain being cut. That moves this
 # fingerprint by design. The prediction is NOT updated by guessing — the new value comes from
