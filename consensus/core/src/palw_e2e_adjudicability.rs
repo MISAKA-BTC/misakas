@@ -586,11 +586,18 @@ pub fn palw_rc_court_e2e_root_v1() -> Hash64 {
 
 /// The pinned value's bytes. Replaced whenever the certified family set changes — which is an
 /// activation, never a silent edit: the root is inside every RC network's `consensus_params_id`.
+///
+/// **Moved for ADR-0082's fused graph** (`PALW-QWEN25-A16-V5`, the fourth family). Measured
+/// consequence, because the two halves of this doc are easy to read apart: adding the family alone
+/// does NOT move `consensus_params_id` — it moves this constant's COMPUTED twin, and the params id
+/// reads the pin. So the fingerprint is unchanged right up until this array is updated, and then
+/// it moves. Anyone measuring "does a fourth family move the fingerprint" without also updating
+/// the pin measures a build that is not self-consistent and gets "no".
 const PALW_RC_COURT_E2E_ROOT_BYTES: [u8; 64] = [
-    0x58, 0x14, 0x66, 0xda, 0x7a, 0x90, 0xa1, 0xf6, 0x3c, 0xe6, 0xe9, 0xcc, 0xa4, 0x5f, 0x19, 0xef, 0x31, 0x42, 0x1b, 0x0e, 0x6a,
-    0x85, 0xf9, 0x2a, 0x37, 0xce, 0x32, 0x47, 0x16, 0x0f, 0xd4, 0x7a, 0x62, 0x5d, 0x0b, 0x0b, 0x1a, 0xdc, 0x3b, 0xeb, 0xba, 0xd1,
-    0x8a, 0x63, 0x10, 0xcb, 0x7e, 0x4b, 0x2a, 0x9f, 0x9d, 0x26, 0x8b, 0x0a, 0x8b, 0x9f, 0xbb, 0x37, 0x06, 0x08, 0xe5, 0xd2, 0x8f,
-    0xcd,
+    0x9d, 0xf1, 0x1e, 0xdd, 0x12, 0x57, 0x95, 0x20, 0x2c, 0x10, 0xdc, 0x63, 0x2a, 0xa2, 0x46, 0x56, 0x1d, 0x19, 0x4c, 0x65, 0xbf,
+    0x2f, 0x05, 0xbe, 0xe9, 0xff, 0xf2, 0x11, 0xf1, 0x93, 0x03, 0xbb, 0x0b, 0x70, 0xd4, 0x4b, 0x6a, 0x78, 0x23, 0xff, 0xd6, 0xbe,
+    0xa6, 0xe9, 0x12, 0x9c, 0x0e, 0x82, 0xf8, 0xa1, 0x4f, 0x87, 0xb9, 0x9d, 0x0b, 0x1d, 0xe4, 0x7a, 0x7d, 0x7f, 0x09, 0x54, 0xeb,
+    0x8e,
 ];
 
 /// **The certified family set this network COMMITS to — readable without a model runtime.**
@@ -652,8 +659,46 @@ pub fn palw_rc_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
             covering: full(false, 6),
         });
     }
+    // **The fused graph is a FOURTH family, not a wider third one** (ADR-0082 Decision 1).
+    //
+    // `palw_fuse_attention_site_v5` REPLACES the scores/softmax/values kernels with one fused
+    // kernel, so no single profile reaches both the fused kernel and the ones it replaces — a
+    // union `kernel_ids` over the lineage's rows could only ever be a DECLARED superset, which is
+    // a certificate asserting an adjudication nobody performed. Two graphs, two drilled
+    // coverages, one family each; a class IS its graph, and these are two graphs.
+    //
+    // Both fields are read off the SAME projection the drill runs, never written beside it.
+    if let Ok(fused) = crate::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5(PALW_RC_A16_DRILL_GEOMETRY) {
+        out.push(PalwE2eFamilyV1 {
+            family_id: palw_e2e_family_id_v1("PALW-QWEN25-A16-V5"),
+            drilled_class_id: fused.shape_profile_id(),
+            kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&fused),
+            covering: full(false, 6),
+        });
+    }
     out
 }
+
+/// **The fixture geometry the A16 lineage's drills run on — ONE home, read by both sides.**
+///
+/// `misaka-palw-base0`'s `a16_fixture_v1` builds its weights from this and the family entries
+/// below take their `kernel_ids` from a profile projected from it, so the set a family DECLARES
+/// and the graph its drill RUNS cannot come apart. They were separate numbers until the graph-v5
+/// row needed a fused fixture and the two were found to have never been the same shape.
+pub const PALW_RC_A16_DRILL_GEOMETRY: crate::palw_qwen25_profile::PalwQwen25GeometryV1 =
+    crate::palw_qwen25_profile::PalwQwen25GeometryV1 {
+        layer_count: 2,
+        hidden_dim: 8,
+        ffn_dim: 8,
+        attn_heads: 2,
+        attn_kv_heads: 2,
+        attn_head_dim: 4,
+        vocab_size: 64,
+        n_ctx: 32,
+        n_threads: 1,
+        rms_eps_q: 1,
+        tile_len: 4,
+    };
 
 /// A family's build-level name, hashed. Under its own domain so it can never be read as a class id
 /// or an artifact root.
@@ -860,6 +905,16 @@ pub fn palw_rc_fp_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
             family_id: palw_e2e_family_id_v1("PALW-QWEN25-A16"),
             drilled_class_id: Hash64::from_bytes(A16_DRILLED_CLASS_ID),
             kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&dense),
+            covering: full(false, 6),
+        });
+    }
+    // The fused graph's free-prompt twin. Same fixture, same projection, same reason it is a
+    // separate family rather than a wider one — see the attempt lane's comment.
+    if let Ok(fused) = crate::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5(PALW_RC_A16_DRILL_GEOMETRY) {
+        out.push(PalwE2eFamilyV1 {
+            family_id: palw_e2e_family_id_v1("PALW-QWEN25-A16-V5"),
+            drilled_class_id: fused.shape_profile_id(),
+            kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&fused),
             covering: full(false, 6),
         });
     }

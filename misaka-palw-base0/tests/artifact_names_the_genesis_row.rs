@@ -127,3 +127,29 @@ fn an_ambiguous_header_refuses_and_a_model_id_resolves_it() {
         Ok(row) => panic!("n_ctx 300 produced {} — a width no row spells was projected", row.model_id),
     }
 }
+
+/// **The route no longer PROJECTS, so the third spelling cannot arise.**
+///
+/// Measured elsewhere: `palw-certify bind --n-ctx 16` produced `7a76d29b…` while the panel
+/// registers `71bbb755…` — same geometry, same width, different graph, because the ladder-row path
+/// applies the court-capable transform and the catalog path does not. A width and a projection do
+/// not determine a graph either, unless it is the same projection.
+///
+/// Matching rather than projecting removes the question: whatever the caller asks for, the profile
+/// returned is a catalog row's own, so there is no second projection to disagree with the first.
+#[test]
+fn the_route_returns_the_catalog_rows_own_profile_at_every_width() {
+    let genesis = a16_graph_v5_row_v1().expect("the graph-v5 dense row projects");
+    for model_id in ["Qwen/Qwen2.5-1.5B/graph-v2", "Qwen/Qwen2.5-1.5B/graph-v3"] {
+        let Some(row) = canonical_class_by_model_id_v1(&court(), model_id) else { continue };
+        let derived = a16_row_for_artifact_shape_v1(&court(), &genesis.artifact_shape, Some(row.profile.n_ctx), Some(model_id))
+            .unwrap_or_else(|e| panic!("{model_id} at its own width: {e}"));
+        assert_eq!(
+            derived.profile.shape_profile_id(),
+            row.profile.shape_profile_id(),
+            "{model_id}: the route returned a profile that is not the catalog row's — it projected instead of matching, \
+             which is how a third class id for one width comes into existence"
+        );
+        assert_eq!(derived.model_id, model_id);
+    }
+}

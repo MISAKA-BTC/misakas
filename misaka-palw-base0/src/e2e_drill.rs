@@ -418,12 +418,25 @@ fn drill_base0_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
 /// answer that question.
 pub fn register_builtin_certified_families_v1() -> Vec<&'static str> {
     let mut registered = Vec::new();
-    for (name, certificate) in
-        [("PALW-BASE-0", base0_certificate_v1()), ("PALW-QWEN36", qwen36_certificate_v1()), ("PALW-QWEN25-A16", a16_certificate_v1())]
-    {
-        if let Ok(certificate) = certificate {
-            kaspa_consensus_core::palw_e2e_adjudicability::register_certified_family_v1(certificate);
-            registered.push(name);
+    for (name, certificate) in [
+        ("PALW-BASE-0", base0_certificate_v1()),
+        ("PALW-QWEN36", qwen36_certificate_v1()),
+        ("PALW-QWEN25-A16", a16_certificate_v1()),
+        ("PALW-QWEN25-A16-V5", a16_v5_certificate_v1()),
+    ] {
+        match certificate {
+            Ok(certificate) => {
+                kaspa_consensus_core::palw_e2e_adjudicability::register_certified_family_v1(certificate);
+                registered.push(name);
+            }
+            // **Say which family did not drill, and why.** This was `if let Ok(..)`, so a family
+            // whose drill failed simply vanished — and the only symptom was a downstream count
+            // mismatch ("the network commits to 4 families and this build drilled 3") with nothing
+            // naming the one that fell out or the reason. A skip that reads as an absence is the
+            // same defect as a skip that reads as a pass.
+            Err(why) => {
+                eprintln!("[palw-e2e] {name} did not drill and is NOT registered: {why:?}");
+            }
         }
     }
     registered
@@ -599,6 +612,71 @@ fn a16_fixture_v1() -> Result<(crate::qwen25_a16_backend::Qwen25A16Backend, Palw
     Ok((backend, profile, root))
 }
 
+/// The A16 fixture on the FUSED graph — the same weights, projected through
+/// `qwen25_a16_artifact_row_profile_v5`.
+///
+/// **The epsilon is the trap, written here because the next person meets the same refusal.** That
+/// projection applies `qwen25_geometry_artifact_eps`, so the profile's `rms_eps_q` is 256 — the
+/// epsilon the ARTIFACT executes — while `a16_fixture_v1` above builds its shape with `eps_q: 1`.
+/// Reuse that shape and the backend refuses with
+///
+/// ```text
+/// GeometryMismatch { what: "rms_eps_q", profile: 256, artifact: 1 }
+/// ```
+///
+/// which reads as "the backend cannot serve a fused profile" and is nothing of the kind: it is the
+/// same artifact-epsilon mismatch that made the dense catalog row unregistrable, one layer over.
+/// The capability was always there — the backend serves this profile and the drill plants faults
+/// in it. A fixture had simply never been fused.
+fn a16_v5_fixture_v1() -> Result<(crate::qwen25_a16_backend::Qwen25A16Backend, PalwShapeProfileV3, Hash64), PalwDrillError> {
+    use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_A16_ARTIFACT_EPS_Q, qwen25_a16_artifact_row_profile_v5};
+
+    // One home for the geometry: the family entries in `palw_e2e_adjudicability` take their
+    // `kernel_ids` from a projection of this same constant, so what a family DECLARES and what its
+    // drill RUNS cannot drift apart.
+    let geometry = kaspa_consensus_core::palw_e2e_adjudicability::PALW_RC_A16_DRILL_GEOMETRY;
+    let shape = crate::artifact::Base0ShapeV1 {
+        n_layers: geometry.layer_count as usize,
+        n_heads: geometry.attn_heads as usize,
+        n_kv_heads: geometry.attn_kv_heads as usize,
+        d_head: geometry.attn_head_dim as usize,
+        d_ff: geometry.ffn_dim as usize,
+        vocab: geometry.vocab_size as usize,
+        max_position: geometry.n_ctx as usize,
+        ln_theta_gen_q: crate::artifact::LN_THETA_10000_GEN_Q,
+        // NOT `1`, and not the geometry's `rms_eps_q` either — see the doc above.
+        eps_q: QWEN25_A16_ARTIFACT_EPS_Q,
+    };
+    let artifact = crate::artifact::Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+        .map_err(|e| PalwDrillError::Backend { what: "derive its fixture weights", why: format!("{e:?}") })?
+        .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
+        .map_err(|e| PalwDrillError::Backend { what: "derive its A16 parameter store", why: format!("{e:?}") })?;
+    let profile = qwen25_a16_artifact_row_profile_v5(geometry)
+        .map_err(|e| PalwDrillError::Backend { what: "project the fused fixture geometry", why: format!("{e:?}") })?;
+    let root = crate::inventory::a16_inventory_v1(&artifact, &profile)
+        .map_err(|e| PalwDrillError::Backend { what: "root its own fixture inventory", why: format!("{e:?}") })?
+        .root();
+    let backend = crate::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile(
+        std::sync::Arc::new(artifact),
+        b"misaka-palw-rc".to_vec(),
+        profile.clone(),
+        (4, 2),
+    )
+    .map_err(|why| PalwDrillError::Backend { what: "serve its own registered graph", why })?;
+    Ok((backend, profile, root))
+}
+
+/// The fused graph's attempt-lane certificate. Drilled, never declared.
+pub fn a16_v5_certificate_v1() -> Result<&'static PalwE2eCertificateV1, &'static PalwDrillError> {
+    static CERT: std::sync::OnceLock<Result<PalwE2eCertificateV1, PalwDrillError>> = std::sync::OnceLock::new();
+    CERT.get_or_init(drill_a16_v5_v1).as_ref()
+}
+
+fn drill_a16_v5_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
+    let (backend, profile, root) = a16_v5_fixture_v1()?;
+    drill_family_v1(family_id_of("PALW-QWEN25-A16-V5"), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D8255))
+}
+
 fn drill_a16_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
     let (backend, profile, root) = a16_fixture_v1()?;
     drill_family_v1(a16_family_id_v1(), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D825))
@@ -614,16 +692,22 @@ pub enum PalwRcFamilyV1 {
     Base0,
     Qwen36,
     Qwen25A16,
+    /// The A16 lineage's FUSED graph (ADR-0082 Decision 1). A separate family and not a wider
+    /// `Qwen25A16`, because the fusion REPLACES the scores/softmax/values kernels with one — so no
+    /// profile reaches both sets, and a union `kernel_ids` could only be a declared superset: a
+    /// certificate asserting an adjudication nobody performed.
+    Qwen25A16V5,
 }
 
 impl PalwRcFamilyV1 {
-    pub const ALL: [Self; 3] = [Self::Base0, Self::Qwen36, Self::Qwen25A16];
+    pub const ALL: [Self; 4] = [Self::Base0, Self::Qwen36, Self::Qwen25A16, Self::Qwen25A16V5];
 
     pub fn name(self) -> &'static str {
         match self {
             Self::Base0 => "PALW-BASE-0",
             Self::Qwen36 => "PALW-QWEN36",
             Self::Qwen25A16 => "PALW-QWEN25-A16",
+            Self::Qwen25A16V5 => "PALW-QWEN25-A16-V5",
         }
     }
 
@@ -658,6 +742,10 @@ pub fn rc_attempt_evidence_v1(family: PalwRcFamilyV1) -> Result<PalwE2eDrillEvid
             let (backend, profile, root) = a16_fixture_v1()?;
             drill_family_evidence_v1(family.family_id(), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D825))
         }
+        PalwRcFamilyV1::Qwen25A16V5 => {
+            let (backend, profile, root) = a16_v5_fixture_v1()?;
+            drill_family_evidence_v1(family.family_id(), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D8255))
+        }
     }
 }
 
@@ -666,7 +754,7 @@ pub fn rc_attempt_evidence_v1(family: PalwRcFamilyV1) -> Result<PalwE2eDrillEvid
 /// prompt a USER handed the class. The QWEN36 fixture's context is eight tokens.
 pub fn rc_free_prompt_question_v1(family: PalwRcFamilyV1) -> (Vec<u32>, u32) {
     match family {
-        PalwRcFamilyV1::Base0 | PalwRcFamilyV1::Qwen25A16 => (vec![3, 5, 8, 13, 21], 2),
+        PalwRcFamilyV1::Base0 | PalwRcFamilyV1::Qwen25A16 | PalwRcFamilyV1::Qwen25A16V5 => (vec![3, 5, 8, 13, 21], 2),
         PalwRcFamilyV1::Qwen36 => (vec![3, 5, 8, 13], 2),
     }
 }
@@ -717,6 +805,11 @@ pub fn rc_free_prompt_evidence_v1(family: PalwRcFamilyV1) -> Result<PalwE2eFreeP
         }
         PalwRcFamilyV1::Qwen25A16 => {
             let (backend, profile, root) = a16_fixture_v1()?;
+            let job = fp_drill_job_v1(&profile, &ids, decode);
+            drill_free_prompt_evidence_v1(family.family_id(), &backend, &profile, root, &job, &ids)
+        }
+        PalwRcFamilyV1::Qwen25A16V5 => {
+            let (backend, profile, root) = a16_v5_fixture_v1()?;
             let job = fp_drill_job_v1(&profile, &ids, decode);
             drill_free_prompt_evidence_v1(family.family_id(), &backend, &profile, root, &job, &ids)
         }
@@ -792,11 +885,17 @@ pub fn a16_fp_certificate_v1() -> Result<&'static PalwE2eFreePromptCertificateV1
     CERT.get_or_init(|| drill_fp_v1(PalwRcFamilyV1::Qwen25A16)).as_ref()
 }
 
+pub fn a16_v5_fp_certificate_v1() -> Result<&'static PalwE2eFreePromptCertificateV1, &'static PalwDrillError> {
+    static CERT: std::sync::OnceLock<Result<PalwE2eFreePromptCertificateV1, PalwDrillError>> = std::sync::OnceLock::new();
+    CERT.get_or_init(|| drill_fp_v1(PalwRcFamilyV1::Qwen25A16V5)).as_ref()
+}
+
 pub fn rc_fp_certificate_v1(family: PalwRcFamilyV1) -> Result<&'static PalwE2eFreePromptCertificateV1, &'static PalwDrillError> {
     match family {
         PalwRcFamilyV1::Base0 => base0_fp_certificate_v1(),
         PalwRcFamilyV1::Qwen36 => qwen36_fp_certificate_v1(),
         PalwRcFamilyV1::Qwen25A16 => a16_fp_certificate_v1(),
+        PalwRcFamilyV1::Qwen25A16V5 => a16_v5_fp_certificate_v1(),
     }
 }
 
@@ -1730,10 +1829,12 @@ mod registered_class_tests {
         assert_eq!(row.class_id(), entry.class_id, "the registration and the lineage table name one class");
         assert!(covered(&profile), "the drill's certified family covers the class the chain would register");
 
-        // And the certified set really is the three families, not an accident of ordering.
+        // And the certified set really is the four families, not an accident of ordering: the
+        // floor, both model tiers, and the dense tier's FUSED graph — which is a family of its own
+        // because the fusion replaces the kernels it covers, so no one profile reaches both sets.
         let names = super::register_builtin_certified_families_v1();
-        assert_eq!(names.len(), 3, "the floor and both model tiers certify on this build: {names:?}");
-        assert_eq!(certified_families_v1().len(), 3);
+        assert_eq!(names.len(), 4, "the floor, both model tiers and the fused dense graph certify on this build: {names:?}");
+        assert_eq!(certified_families_v1().len(), 4);
     }
 }
 
