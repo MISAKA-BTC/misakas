@@ -1151,10 +1151,13 @@ pub fn palw_attn_dispute_site_v2(
         .ok_or(PalwCourtV2Error::FusedGeometryUnservable("the head's cache slice overflows the row"))?;
     let kv_dim = kv_heads.checked_mul(d_head).ok_or(PalwCourtV2Error::FusedGeometryUnservable("the cache row overflows"))?;
 
-    // The history at this coordinate, from the SAME rule the canonical enumeration walks:
-    // position + 1 inside the prefill, prefill + call afterwards.
-    let prefill = u64::from(binding.job_context.declared_prefill_tokens);
-    let history_positions = if coord.call_index == 0 { u64::from(coord.position) + 1 } else { prefill + u64::from(coord.call_index) };
+    // ONE spelling of the absolute position (`palw_absolute_position_v1`): the history a fused
+    // site at this coordinate reads is every position up to and including its own.
+    let history_positions = u64::from(
+        crate::palw_context_ladder::palw_absolute_position_v1(&binding.job_context, coord.call_index, coord.position)
+            .and_then(|p| p.checked_add(1))
+            .ok_or(PalwCourtV2Error::NotACanonicalLeaf(narrowed_leaf))?,
+    );
     let history_positions =
         u32::try_from(history_positions).map_err(|_| PalwCourtV2Error::FusedGeometryUnservable("the history is wider than a u32"))?;
     if history_positions == 0 {
@@ -1180,9 +1183,13 @@ pub fn palw_attn_dispute_site_v2(
     // **The court's tile is the CLASS's**, at the disputed history — the same `min(tile, positions)`
     // the tiled map derives, so a checkpoint chunk and a dissection child are the same span by
     // construction rather than by a shared constant two files spell separately.
-    let court_geometry = crate::palw_state_chunk_map::tiled_kv_state_geometry_v3(profile, history_positions)
-        .map_err(|e| PalwCourtV2Error::TiledGeometryUnavailable { positions: history_positions, why: e.to_string() })?;
-    let tile_positions = court_geometry.positions_per_chunk;
+    // The court's tile is the CLASS's map's tile, not the tiled map's assumed: a fused class that
+    // registered a map addressing no attention cache is refused by name rather than dissected at
+    // a tile its map cannot open.
+    let tile_positions = u32::try_from(history_positions)
+        .ok()
+        .and_then(|positions| crate::palw_state_chunk_map::palw_map_history_tile_positions_v1(profile, positions))
+        .ok_or(PalwCourtV2Error::FusedGeometryUnservable("this class's map addresses no attention cache"))?;
 
     // The anchor's layout, only when one is in evidence. `anchor_positions` is the checkpoint's
     // own coverage; a geometry that described a different history would let a chunk index point
@@ -1264,7 +1271,12 @@ pub fn palw_attn_dispute_site_v2(
             // Only the pure attention map enumerates chunks the way the bottom reads them. A
             // hybrid's composed map interleaves recurrence chunks, so its indices are not this
             // enumeration's — refused by name rather than read through the wrong layout.
-            if profile.state_chunk_map_id != crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3() {
+            // The composed hybrid map's attention slice IS the tiled map's enumeration, at chunk
+            // indices `0..attn.chunk_count()`; its recurrence chunks follow and this bottom never
+            // reads them — so the v5 hybrid row carries a dissection anchor like the dense one.
+            if profile.state_chunk_map_id != crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3()
+                && profile.state_chunk_map_id != crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3()
+            {
                 return Err(PalwCourtV2Error::NotTheTiledMap);
             }
             // **At the cadence the CLASS's map runs** (ADR-0082 Decision 4, amended). On a
