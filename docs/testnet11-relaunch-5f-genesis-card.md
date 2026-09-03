@@ -5006,3 +5006,8 @@ stale        5.104's misaka-dnsseeder and misaka-miner-c are TESTNET-10's (netwo
 step 6 check whether the bond outpoints (…:0, …:1) and the fee outpoint (…:41) exist in the NEW premine is the
              producer's own refusal at start; it is not assumed here.
 ```
+
+*Card hygiene, post-cut:* `check-doc-citations.sh` resolves all 64 of this card's `file.rs:NNNN`
+citations against HEAD (cited set == resolved set) and still prints its "at least one does not exist"
+summary — the checker's summary logic is wrong, not the citations. A tool built to catch a class of
+defect carrying one of its own in the verdict line; fixed after the announcement, not before.
