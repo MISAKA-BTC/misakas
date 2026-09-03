@@ -1596,4 +1596,189 @@ mod tests {
             );
         }
     }
+
+    // =========================================================================================
+    // U-01 — the capture, measured against the forward (ADR-0082 Decision 7)
+    // =========================================================================================
+
+    /// The largest `exact_decode_tokens` this profile's job of `prefill` tokens fits under `cap`.
+    /// The width the registered row ALLOWS, derived rather than typed: the same
+    /// `step_leaf_count_capped_v1` the executor prices with.
+    fn u01_decode_budget(profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3, prefill: u32, cap: u64) -> (u32, u64) {
+        let price = |decode: u32| -> Option<u64> {
+            let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, prefill, decode);
+            kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, &ctx, cap).ok()
+        };
+        let mut best = (0u32, 0u64);
+        let mut decode = 1u32;
+        while let Some(leaves) = price(decode) {
+            best = (decode, leaves);
+            decode += 1;
+            if decode > 100_000 {
+                break;
+            }
+        }
+        best
+    }
+
+    /// Peak RSS of this process while a phase runs, in bytes — sampled with `ps`, which is the
+    /// one number available on this host without a new dependency. `0` when `ps` cannot answer.
+    struct U01Rss {
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        peak: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl U01Rss {
+        fn start() -> Self {
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let peak = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let (s, p) = (stop.clone(), peak.clone());
+            let pid = std::process::id().to_string();
+            let handle = std::thread::spawn(move || {
+                while !s.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Ok(out) = std::process::Command::new("ps").args(["-o", "rss=", "-p", &pid]).output() {
+                        if let Ok(kb) = String::from_utf8_lossy(&out.stdout).trim().parse::<u64>() {
+                            p.fetch_max(kb * 1024, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            });
+            Self { stop, peak, handle: Some(handle) }
+        }
+
+        fn finish(mut self) -> u64 {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(h) = self.handle.take() {
+                let _ = h.join();
+            }
+            self.peak.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    /// **U-01: what the capture costs, against what the forward costs** (ADR-0082 §1.5, Decision 7).
+    ///
+    /// Off unless `MISAKA_PALW_U01_ARTIFACT` names a converted dense artifact: 1.7 GiB of weights
+    /// and a minute of arithmetic are not a unit test's inputs, and a measurement that ran on
+    /// derived toy weights would be a number about nothing. Run it as
+    ///
+    /// ```text
+    /// MISAKA_PALW_U01_ARTIFACT=/path/qwen25-1.5b-a16.palwart \
+    ///   cargo test --release -p misaka-palw-base0 --lib -- u01_the_capture --nocapture
+    /// ```
+    ///
+    /// The job is the §1.5 one: the registered dense row, a 26-token prefill and the decode the
+    /// ruleset's ladder allows. Three phases, one process, one artifact: the engine's own forward
+    /// with nothing captured, then the shipped capture path, then whatever the executor's capture
+    /// costs after Decision 7.
+    #[test]
+    fn u01_the_capture_is_priced_against_the_forward() {
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3,
+        };
+        use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+        let Ok(path) = std::env::var("MISAKA_PALW_U01_ARTIFACT") else {
+            eprintln!("U-01: skipped — set MISAKA_PALW_U01_ARTIFACT to the dense .palwart to measure");
+            return;
+        };
+        let prefill: u32 = std::env::var("MISAKA_PALW_U01_PREFILL").ok().and_then(|v| v.parse().ok()).unwrap_or(26);
+
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let artifact = crate::artifact::decode_artifact_file_v1(&bytes).unwrap_or_else(|e| panic!("{path}: {e}"));
+        drop(bytes);
+        let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court");
+        let entry = crate::classes::canonical_class_by_model_id_v1(&court, "Qwen/Qwen2.5-1.5B/graph-v2")
+            .expect("this build's catalog has the dense row");
+        let profile = entry.profile.clone();
+        let (decode, leaves) = u01_decode_budget(&profile, prefill, court.max_step_leaf_count());
+        assert!(decode >= 2, "a {prefill}-token prefill leaves no decode budget under this ladder");
+        let positions = prefill as u64 + decode as u64 - 1;
+        eprintln!(
+            "U-01 job: prefill {prefill}, decode {decode}, {leaves} leaves of {} ladder, {positions} forward calls",
+            court.max_step_leaf_count()
+        );
+
+        // Deterministic in-vocabulary ids. The measurement is of arithmetic whose cost does not
+        // depend on WHICH ids they are, and a tokenizer here would only add a file to the recipe.
+        let vocab = artifact.shape.vocab;
+        let prompt: Vec<usize> = (0..prefill as usize).map(|i| (i * 7919 + 1013) % vocab).collect();
+
+        // ---- phase A: the engine's forward, nothing captured -------------------------------
+        let rss = U01Rss::start();
+        let started = std::time::Instant::now();
+        {
+            let engine = crate::engine_a16::A16Engine::new(&artifact).expect("the artifact is an A16 class");
+            let mut cache = crate::engine_a16::A16Cache::new(artifact.shape.n_layers);
+            let mut last = Vec::new();
+            for (position, token) in prompt.iter().enumerate() {
+                last = engine.forward_token(&mut cache, *token, position).expect("a prefill position runs");
+            }
+            let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last);
+            for call in 1..decode as usize {
+                let logits = engine.forward_token(&mut cache, next, prefill as usize + call - 1).expect("a decode call runs");
+                next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits);
+            }
+        }
+        let forward = started.elapsed();
+        let forward_rss = rss.finish();
+
+        // ---- phase B: the shipped capture, through the backend's free-prompt verb ------------
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: profile.shape_profile_id(),
+            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(
+                &prompt.iter().map(|t| *t as u32).collect::<Vec<_>>(),
+            ),
+            prompt_tokens: prefill,
+            decode_token_limit: decode,
+            max_context_tokens: profile.n_ctx,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+        };
+        let backend = crate::qwen25_a16_backend::Qwen25A16Backend::new(
+            std::sync::Arc::new(artifact),
+            b"misaka-palw-rc".to_vec(),
+            profile.clone(),
+            entry.canonical_job,
+        );
+        let rss = U01Rss::start();
+        let started = std::time::Instant::now();
+        let run = kaspa_consensus_core::palw_backend::PalwExecutionBackendV1::execute_free_prompt(&backend, &job, &prompt)
+            .expect("the shipped free-prompt path runs this job");
+        let captured = started.elapsed();
+        let captured_rss = rss.finish();
+        let material = run.outcome.material.len();
+
+        let per = |d: std::time::Duration| d.as_secs_f64() / decode as f64;
+        let per_position = |d: std::time::Duration| d.as_secs_f64() / positions as f64;
+        eprintln!(
+            "U-01 forward   : {:>8.3} s total, {:>7.4} s/token, {:>7.4} s/position, peak RSS {:.2} GiB",
+            forward.as_secs_f64(),
+            per(forward),
+            per_position(forward),
+            forward_rss as f64 / (1 << 30) as f64
+        );
+        eprintln!(
+            "U-01 captured  : {:>8.3} s total, {:>7.4} s/token, {:>7.4} s/position, peak RSS {:.2} GiB, material {} bytes ({:.1} MB/position)",
+            captured.as_secs_f64(),
+            per(captured),
+            per_position(captured),
+            captured_rss as f64 / (1 << 30) as f64,
+            material,
+            material as f64 / positions as f64 / 1e6
+        );
+        eprintln!("U-01 ratio     : {:.1}x the forward", captured.as_secs_f64() / forward.as_secs_f64().max(f64::MIN_POSITIVE));
+        eprintln!("U-01 step leaves: {leaves}, {} per position", leaves / positions.max(1));
+    }
 }
