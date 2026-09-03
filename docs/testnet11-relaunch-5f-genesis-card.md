@@ -5220,3 +5220,28 @@ Each sentence below is tied to the reading that earns it. A sentence whose readi
   next epoch boundary — say so, so nobody reads "no blocks" as "refused".
 
 **Never in the announcement:** block time, "finality", "N nodes" beyond the fleet's six, anything about VLT credit.
+
+### 6e — chain-state readings that changed the seats (18:00–18:05 UTC)
+
+`misaka palw certified <class>` against node0, at daa 40:
+- QWEN36 `5bd9ae3d…`: **free-prompt lane CERTIFIED** — a commitment on this class enters the state.
+- v5 `4277d84f…`: class known; **free-prompt lane uncertified** — `FreePromptCommitted would be refused`. The court
+  certified the a16-v5 *family* in genesis; the class→lane binding (ADR-0075 `ClassLaneCertified`) is not in genesis.
+- seat2's launcher class `71bbb755…`: **this chain does not know it** — a 5e-era id. seat2 had produced nothing and
+  could not. Re-pointed at the v5 class (`c-seat2.sh.pre-5f-v5class` kept), restarted: listening after 343 s, no
+  refusal, producer started on `4277d84f…`, ALIVE at daa 53. **A launcher's class id dies with a re-genesis; read
+  `palw certified <id>` for every producer class at every relaunch.**
+- fp decode rules: `dormant — the pre-ADR-0082 job shape` on this chain (ADR-0082 not armed).
+
+**The v5 lane binding is built and waiting for funds.** `palw-certify bind --artifact bound-candidate.palwart --lane fp`
+wrote `ClassLaneCertified` (3,961 B; row `Qwen/Qwen2.5-1.5B/graph-v5@512` MATCHED in the build's registry, 10
+kernels covered by the RC family's drill, ladder 52,778,128 leaves inside the 67,108,864 cap, seat window 34 ms/pos).
+`misaka palw submit-object` dry run from node0's key: `no mature, unbonded, unspent UTXO at misakatest:qf6hf5v0…` —
+the bond is bonded, the float is the panel's, and no coinbase has matured on an hour-old chain. node0, node1 and
+seat2 all pay coinbase to that address, so the broadcast becomes fundable when the first coinbase matures
+(~daa 110 at the current cadence). Until it lands, free prompts on the public chain are accepted on QWEN36 only.
+
+**Lanes so far:** 59 blocks at daa 57, every one `powAlgoId 3` (`POW_ALGO_ID_BLAKE2B_SHA3`, the hash floor). No
+`8` (heartbeat) and no `9` (`PALW_EXEC_V3`, a model class) yet — QWEN36 since 17:24, v5 since 18:03. The explorer's
+`transactions_outputs` is still empty (the filler writes outputs on acceptance), so the miner census by address
+waits.
