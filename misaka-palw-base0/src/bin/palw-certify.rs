@@ -4,7 +4,7 @@
 //! change, a fingerprint move and a re-genesis. ADR-0075 makes it two lifecycle objects any
 //! transaction can carry, graded by the court in the transition:
 //!
-//! * `drill --family <base0|qwen36|a16> --lane <attempt|fp> --out <file>` runs the family's
+//! * `drill --family <base0|qwen36|a16|a16-v5> --lane <attempt|fp> --out <file>` runs the family's
 //!   fixture drill and writes a `FamilyCertified` object (borsh `PalwConsensusObjectV2`). The
 //!   chain grades the same vectors with the same court and records the family.
 //! * `bind (--artifact <file> [--n-ctx <n>] | --n-ctx <n> | --model-id <catalog id>) --lane
@@ -70,7 +70,7 @@ fn die(msg: impl std::fmt::Display) -> ! {
 fn usage() -> ! {
     eprintln!(
         "usage:\n  \
-         palw-certify drill (--family <base0|qwen36|a16> | --model-id <catalog model id>) --lane <attempt|fp> --out <file>\n  \
+         palw-certify drill (--family <base0|qwen36|a16|a16-v5> | --model-id <catalog model id>) --lane <attempt|fp> --out <file>\n  \
          palw-certify bind --artifact <.palwart> [--n-ctx <n>] --lane <attempt|fp> --out <file>\n  \
          palw-certify bind --n-ctx <n>            --lane <attempt|fp> --out <file>\n  \
          palw-certify bind --model-id <catalog model id> --lane <attempt|fp> --out <file>\n  \
@@ -255,14 +255,13 @@ fn main() {
                     let artifact = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes)
                         .unwrap_or_else(|e| die(format!("{path} is not a readable dense PALW artifact: {e}")));
                     drop(bytes);
-                    let row = misaka_palw_base0::classes::a16_artifact_row_v1(&court, &artifact, asked, wanted.as_deref())
-                        .unwrap_or_else(|e| {
-                            die(format!(
-                                "{path}: {e}\n  \
+                    let row = misaka_palw_base0::classes::a16_artifact_row_v1(&court, &artifact, asked, wanted).unwrap_or_else(|e| {
+                        die(format!(
+                            "{path}: {e}\n  \
                                  no class id was computed and nothing was written — a certificate whose class the weights \
                                  cannot execute is worse than none"
-                            ))
-                        });
+                        ))
+                    });
                     let width_source = if row.narrowed {
                         format!("--n-ctx {}, NARROWED from the artifact's {}-position rotary span", row.n_ctx, row.artifact_span)
                     } else {
