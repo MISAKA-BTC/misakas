@@ -61,14 +61,13 @@ use std::path::{Path, PathBuf};
 
 use kaspa_consensus_core::palw_derived_v1::{PalwDerivedArtifactV1, derived_id_v1, kind};
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
-use kaspa_hashes::Hash64;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
+use kaspa_hashes::Hash64;
 use misaka_palw_base0::artifact::{BASE0_ARTIFACT_FILE_MAGIC, BASE0_ARTIFACT_FILE_MAGIC_V1};
 use misaka_palw_base0::e2e_drill::PalwRcFamilyV1;
 use misaka_palw_base0::tokenizer::QwenTokenizer;
 use misaka_palw_derive::{
-    ClaimBinding, derive_named, opened_tokenizer_id_v1, recompute_output_root, registry, verify, verify_artifact_bytes,
-    verify_bound,
+    ClaimBinding, derive_named, opened_tokenizer_id_v1, recompute_output_root, registry, verify, verify_artifact_bytes, verify_bound,
 };
 
 fn die(msg: String) -> ! {
@@ -149,8 +148,9 @@ fn read_artifact_file(path: &Path) -> ArtifactFile {
     let bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
     let magic = bytes.get(..8).unwrap_or_default();
     if magic == BASE0_ARTIFACT_FILE_MAGIC.as_slice() || magic == BASE0_ARTIFACT_FILE_MAGIC_V1.as_slice() {
-        let artifact = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes)
-            .unwrap_or_else(|e| die(format!("{} declares itself a dense PALW artifact and is not a readable one: {e}", path.display())));
+        let artifact = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).unwrap_or_else(|e| {
+            die(format!("{} declares itself a dense PALW artifact and is not a readable one: {e}", path.display()))
+        });
         return ArtifactFile::Class(Box::new(artifact));
     }
     ArtifactFile::Derived(bytes)
@@ -265,10 +265,11 @@ fn read_job_context(path: &Path) -> PalwJobContextV2 {
     let text = String::from_utf8_lossy(&bytes);
     let trimmed = text.trim();
     let mut raw = vec![0u8; trimmed.len() / 2];
-    if trimmed.len().is_multiple_of(2) && faster_hex::hex_decode(trimmed.as_bytes(), &mut raw).is_ok() {
-        if let Ok(ctx) = borsh::from_slice::<PalwJobContextV2>(&raw) {
-            return ctx;
-        }
+    if trimmed.len().is_multiple_of(2)
+        && faster_hex::hex_decode(trimmed.as_bytes(), &mut raw).is_ok()
+        && let Ok(ctx) = borsh::from_slice::<PalwJobContextV2>(&raw)
+    {
+        return ctx;
     }
     die(format!("{} is not a borsh PalwJobContextV2 (nor the same bytes as hex text)", path.display()))
 }
@@ -440,6 +441,13 @@ fn cmd_verify(mut args: VecDeque<String>) {
 
     if let (Some(ids), Some(ctx), Some(tok), Some(family)) = (&ids, &job_context, &tokenizer, family) {
         let opened = opened_tokenizer_id_v1(tokenizer_bytes.as_ref().expect("a tokenizer was parsed from bytes"));
+        // **Refused here, and not left to `verify_bound`'s Err.** A tokenizer file that is not the
+        // one the claim pins is the CALLER holding the wrong file — the same shape as a `--object`
+        // that is not there — and reporting it down the `MISMATCH` road would file it under "a
+        // demonstrable false object", which accuses the executor of the reader's own mistake.
+        if let Err(e) = misaka_palw_derive::check_tokenizer_pin_v1(ctx, opened) {
+            die(e.to_string());
+        }
         match verify_bound(&object, family, ctx, tok, opened, ids, supplied_answer.as_deref()) {
             Ok(b) => {
                 all_ok &= b.all_match();
@@ -479,8 +487,7 @@ fn cmd_verify(mut args: VecDeque<String>) {
                 all_ok = false;
                 verdict.insert(
                     "derivation_rerun".into(),
-                    format!("could not re-run: {e} — the object names a computation the rendering of those ids does not admit")
-                        .into(),
+                    format!("could not re-run: {e} — the object names a computation the rendering of those ids does not admit").into(),
                 );
             }
         }

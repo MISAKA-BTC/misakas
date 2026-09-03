@@ -23,8 +23,8 @@ use kaspa_hashes::Hash64;
 use misaka_palw_base0::e2e_drill::PalwRcFamilyV1;
 use misaka_palw_base0::tokenizer::QwenTokenizer;
 use misaka_palw_derive::{
-    ClaimBinding, Derivation, check_tokenizer_pin_v1, derive_named, opened_tokenizer_id_v1, recompute_output_root,
-    render_answer_v1, verify, verify_bound, verify_output_root,
+    ClaimBinding, Derivation, check_tokenizer_pin_v1, derive_named, opened_tokenizer_id_v1, recompute_output_root, render_answer_v1,
+    verify, verify_bound, verify_output_root,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -155,16 +155,8 @@ fn the_unbound_verification_covers_only_the_answer_it_was_handed() {
 #[test]
 fn the_bound_verification_renders_the_answer_from_the_claims_own_ids() {
     let h = honest();
-    let b = verify_bound(
-        &h.derivation.object,
-        FAMILY,
-        &h.ctx,
-        &h.tokenizer,
-        opened_tokenizer_id_v1(&h.tokenizer_bytes),
-        &h.ids,
-        None,
-    )
-    .expect("re-runnable");
+    let b = verify_bound(&h.derivation.object, FAMILY, &h.ctx, &h.tokenizer, opened_tokenizer_id_v1(&h.tokenizer_bytes), &h.ids, None)
+        .expect("re-runnable");
     assert!(b.all_match(), "an honest derivation binds to its claim: {:?}", b.mismatches());
     assert!(b.output_root_matches);
     assert_eq!(b.rendered_answer_bytes, h.answer.len());
@@ -273,8 +265,7 @@ fn the_binary_qualifies_its_verdict_when_nothing_bound_the_artifact_to_the_claim
     let h = honest();
     let object = write_object("unbound.derived-unsigned.borsh", &h.derivation.object);
     let answer = write("unbound-answer.json", &h.answer);
-    let (code, verdict, stderr) =
-        run_verify(&["--object", object.to_str().unwrap(), "--answer", answer.to_str().unwrap()]);
+    let (code, verdict, stderr) = run_verify(&["--object", object.to_str().unwrap(), "--answer", answer.to_str().unwrap()]);
 
     assert_eq!(code, 0, "the derivation itself is consistent: {verdict}");
     assert_eq!(verdict["binding_checked"], serde_json::Value::Bool(false));
@@ -335,8 +326,7 @@ fn the_binary_refuses_a_derivation_whose_dsl_is_not_the_rendering_of_its_ids() {
     let tok = write("forged-tokenizer.json", &h.tokenizer_bytes);
 
     // Unbound, exactly as the tool used to be asked: green, with the qualified word.
-    let (code, verdict, _) =
-        run_verify(&["--object", object.to_str().unwrap(), "--answer", answer.to_str().unwrap()]);
+    let (code, verdict, _) = run_verify(&["--object", object.to_str().unwrap(), "--answer", answer.to_str().unwrap()]);
     assert_eq!(code, 0, "the forgery passes the unbound path — that is the defect");
     assert!(word(&verdict).starts_with("consistent-given-the-supplied-answer"));
 
@@ -465,6 +455,41 @@ fn the_binary_binds_through_a_real_dense_artifact_and_a_real_tokenizer() {
         "the verdict names which question the file answered: {verdict}"
     );
     assert!(verdict["class_artifact_digest"].is_string(), "the digest was recomputed on decode: {verdict}");
+}
+
+/// A tokenizer that is not the one the claim pins is a REFUSAL (exit 1), not a `MISMATCH`: the
+/// caller is holding the wrong file, and filing that under "a demonstrable false object" would
+/// accuse the executor of the reader's own mistake.
+#[test]
+fn a_tokenizer_the_claim_does_not_pin_is_refused_rather_than_called_a_forgery() {
+    let h = honest();
+    let object = write_object("wrongtok.derived-unsigned.borsh", &h.derivation.object);
+    let ids = write("wrongtok-ids.json", serde_json::to_string(&h.ids).expect("ids").as_bytes());
+    let ctx = write("wrongtok-job-context.borsh", &borsh::to_vec(&h.ctx).expect("borsh"));
+    // A different, perfectly readable tokenizer.json — over the OTHER corpus answer.
+    let (other_json, _) = tokenizer_over(&corpus("03-overlapping-melody.json"), 24);
+    let tok = write("wrongtok-tokenizer.json", other_json.as_bytes());
+    let out = Command::new(BIN)
+        .args([
+            "verify",
+            "--object",
+            object.to_str().unwrap(),
+            "--output-token-ids",
+            ids.to_str().unwrap(),
+            "--job-context",
+            ctx.to_str().unwrap(),
+            "--tokenizer",
+            tok.to_str().unwrap(),
+            "--family",
+            "qwen25-a16",
+        ])
+        .output()
+        .expect("the tool runs");
+    assert_eq!(out.status.code(), Some(1), "a wrong tokenizer is a refusal, not a verdict");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains(&h.ctx.tokenizer_id.to_string()), "the refusal names what the claim pins: {stderr}");
+    assert!(stderr.contains("tokenizer_id_v2_for_gguf"), "and the lineage it cannot check from a file: {stderr}");
+    assert!(out.stdout.is_empty(), "a refusal prints no verdict at all");
 }
 
 /// A file that is not there is a refusal by name, never a check silently dropped.
