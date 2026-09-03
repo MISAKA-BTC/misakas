@@ -2161,3 +2161,74 @@ host-dependent timing assertion last, with a comment saying the magnitude is *"a
 host's cores, not of this code"*. **The test was built so that a failure of the weak claim comes
 after the strong ones have been established** — that is a design worth copying, and the log
 format is what hides it.
+
+### The third one PASSED, and its pass is the finding — the anti-vacuity guard is weaker than its own comment
+
+```
+the_resident_agent_and_a_fresh_process_compute_the_same_tag ... ok
+one-shot, 3 fresh processes:                        45.749246189s
+resident agent, 1 process including the model load: 44.593963373s
+test result: ok. 1 passed   finished in 90.34s
+```
+
+**Green. And the worker binary contains the string `pow-agent` zero times.** There was no
+resident agent. The driver fell back to one-shot, so the test compared three one-shot tags
+against three one-shot tags and found them equal — which they are, trivially.
+
+The author **knew this failure mode and wrote it into the file**, immediately above the guard:
+
+```rust
+// And the agent was genuinely used. Every failure inside it falls back to the one-shot path,
+// which is the right behaviour and would also make this test pass while proving nothing — so
+// the cost is the evidence: a silent fallback runs the same three processes and lands within
+// noise of the baseline, NOT SEVERAL TIMES UNDER IT.
+assert!(agent_elapsed < one_shot_elapsed, "... it most likely fell back, making the equality above vacuous");
+```
+
+The prose names the right discriminator — *several times under*. The code encodes `<`.
+
+```
+one-shot   45.75 s      agent path 44.59 s
+margin     1.16 s = 2.5%          ratio 1.026x
+guard as WRITTEN    agent < one_shot          -> PASSED
+guard as COMMENTED  several times under       -> would need ~15.2 s
+```
+
+**A silent fallback makes the two numbers two samples of the same distribution, so `agent <
+one_shot` is a coin flip. The guard catches the vacuity it was written to catch about half the
+time, and this run is the other half.** The prose is not decoration here — it is the correct
+specification, sitting one line above an implementation that does not meet it.
+
+> This is [[boundary-tests-pin-the-off-by-one]] in its purest form yet: **the comment states the
+> property and the assertion pins something weaker, so the test's own author left the evidence
+> that the test is wrong inside the test.** And it is *the same defect as a doc comment cited as
+> if it were code* — prose that is right next to code that is not, where the prose is what gets
+> read and the code is what runs.
+
+**Fix, post-cut, one line:** `assert!(agent_elapsed * 2 < one_shot_elapsed, …)` — the comment
+already justifies the constant, and a genuine resident agent pays one model load instead of
+three, so 2x is conservative against the 3x the design implies.
+
+### The three, together — and the shape they make
+
+```
+palw_agent_recovery       FAILED  41.4s   honest red: fixture; no information about the property
+palw_agent_concurrency    FAILED 358.1s   red on SPEED; contains a real green (3 concurrent
+                                          tags == 3 fresh-process tags, non-vacuity guarded)
+palw_agent_equivalence    ok      90.3s   VACUOUS: compared one-shot to one-shot; its own
+                                          guard would have said so with a ratio instead of `<`
+```
+
+**The one that passed is the one that proved nothing, and the two that failed are where the
+evidence is.** Nothing about the colour column is a guide to what the run established.
+
+*What this run actually establishes*, and all it establishes: **three concurrently-computed
+Layer-1 PoW tags each equal an independent fresh process's tag for the same seed** — from the
+concurrency test's pre-speed assertions, on real hardware, with the real 1.2 GB pinned model and
+an anti-vacuity guard that did hold. That is worth having. It is not "the three agent tests
+pass", and §5 keeps its stated gap.
+
+*Caveats, as promised before the run:* the ibm checkout is `8923b354` detached, **not the tree
+being cut**, and every worker involved is three weeks stale. Neither of those weakens the tag
+equality — it is an equality between two paths measured in the same run — and both of them are
+why nothing here is offered as a green for the cut.
