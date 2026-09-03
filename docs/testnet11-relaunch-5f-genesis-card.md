@@ -5373,3 +5373,26 @@ time on these hosts, not the producer loop. `.113`'s node and the pool slot keep
 restarted. Post-cut: the per-host inference time of every registered class belongs in the seat runbook, and a
 producer should log "job N: started / finished in T s / draw lost|won" at INFO — an hour of silence should not need
 a CPU sampler to read.
+
+### 6h — DAA 110, the funding key, the engine's own timing (18:34–18:40 UTC)
+
+- DAA 110 at 18:34:38 UTC: 110 blocks, every one `powAlgoId 3` (heartbeats). No attempt block yet.
+- The funding key (node0's, `misakatest:qf6hf5v0…`, also node1's and seat2's pay address) holds **one immature
+  coinbase of 2,756.28 MSK** — the merged heartbeat rewards paid in one chain block's coinbase (the heartbeat lane's
+  blocks do earn subsidy) — and nothing mature; `submit-object` for the v5 lane binding was refused again at DAA 112
+  for exactly that reason. A retry loop on ibm dry-runs each minute and broadcasts when the refusal stops, then
+  reads `palw certified 4277d84f…`. The binding is therefore a matter of coinbase maturity, not of a missing subsidy.
+- ibm's dense engine, measured from the step-7 pipeline's own work dirs: 56 tokens (147-token prompt) in **172 s**,
+  97 tokens (198-token prompt) in **247 s** — about two seconds per token on this 8-core VM. A 512-context producer
+  job is minutes to tens of minutes here; 3e's Mac produced v5 blocks 2.8–11 min apart on one producer.
+
+**Rail (7b) — the sha.** Series verified locally (parent `4d572142`; exactly `Cargo.lock`, `misaka-palw-gateway/Cargo.toml`,
+`misaka-palw-gateway/src/bin/rail.rs`), carried to ibm as two patches, `git am` over `candidate-6e01ba07` on the branch
+`candidate-6e01ba07+rail-b037cdc2` (HEAD `d272eb57`; 3 files, 46+/9−; 0 files under consensus/, kaspad/,
+kaspa-pq-validator-core/), `cargo build --release --locked -j 2 -p misaka-palw-gateway --bin misaka-palw-fp-rail` in 3 m 25 s:
+
+    misaka-palw-fp-rail   9,168,384 B   sha256 976de9ceabfc0e81…   built 20:36 CEST from d272eb57
+    kaspad (in service)                 sha256 14065c9348a958a1…   unchanged
+    misaka-palw-gateway                 sha256 bd9c91500872…       unchanged
+
+No public on-chain free-prompt claim is attempted before the v5 lane binding lands and 3e's run 2 has read 5b–8.
