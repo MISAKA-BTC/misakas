@@ -1,5 +1,15 @@
 # ADR-0081: Long context — the input is a state chain
 
+**Status: SUPERSEDED IN PART by [ADR-0082](0082-the-close-is-flat-in-the-context.md), 2026-09-03,
+later the same day.** §3 — the prompt as a chain of prefill segments — is withdrawn and is not to be
+implemented, with one exception: Decision 3, the prompt ids as a tiled Merkle root, which is
+implemented (`palw_prompt_ids_v1`, behind the dormant fence `palw_prompt_ids_merkle`) and which
+ADR-0082 Decision 5 arms together with the graph-v5 rows, because at 131,072 ids the flat term is
+524,288 bytes on every close and is the only context-linear term ADR-0082 leaves. §1.2's measurement
+(the flat digest is why the id term is linear) stands. What a long PROMPT actually needed was never a
+segment chain: it was a court that never carries the history (ADR-0082 Decision 2) and a seat that
+recomputes the cache from the prompt it holds instead of fetching it (ADR-0082 Decision 9).
+
 **Status: REFUTED IN PART, 2026-09-03, before any of it was implemented**, together with ADR-0080,
 whose mechanism it builds on — see that ADR's status block for the three findings. Two things here
 survive and one is this ADR's own error, recorded because the error is more instructive than the

@@ -64,6 +64,41 @@ fn tiny_class() -> (Qwen36ArtifactV1, PalwShapeProfileV3) {
     (artifact, profile)
 }
 
+/// The SAME artifact and geometry as [`tiny_class`], projected as ADR-0082's graph v5: one fused
+/// attention node per attention layer instead of four. A second GRAPH over one model, which is
+/// what makes it worth fuzzing — the mutations reach a node whose arity, out width and operand
+/// naming rule differ from every other node in the table.
+fn tiny_class_v5() -> (Qwen36ArtifactV1, PalwShapeProfileV3) {
+    let (artifact, v2) = tiny_class();
+    let geometry = PalwQwen36GeometryV1 {
+        layer_count: 4,
+        full_attention_interval: 4,
+        hidden_dim: 32,
+        attn_heads: 4,
+        attn_kv_heads: 2,
+        attn_head_dim: 16,
+        rope_dims: 4,
+        rope_freq_base_bits: 0x4B18_9680,
+        gdn_k_heads: 2,
+        gdn_v_heads: 4,
+        gdn_head_dim: 8,
+        gdn_conv_kernel: 4,
+        n_experts: 8,
+        experts_per_token: 4,
+        moe_dim: 16,
+        shared_dim: 16,
+        attn_output_gate: 1,
+        vocab_size: 64,
+        n_ctx: 8,
+        n_threads: 1,
+        rms_eps_q: 1,
+        tile_len: 512,
+    };
+    let v5 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v5(geometry).expect("the v5 tables project");
+    assert_ne!(v2.shape_profile_id(), v5.shape_profile_id(), "a different graph is a different class");
+    (artifact, v5)
+}
+
 /// One random edit. The dense harness's vocabulary — structural (order, arity, count) and nominal
 /// (kernels, operands, widths, dtypes) — plus two this family adds: ROLE edits (cache writes are
 /// declared per node here, so a moved role is a moved program) and REAL operand names landing on
@@ -185,7 +220,20 @@ fn gate_accepts(
 /// column must be zero for the ADR's fence to arm for this container.
 pub fn fuzz_qwen36_profiles_v1(seed: u64, iterations: u64) -> FuzzTallyV1 {
     let (artifact, base) = tiny_class();
-    let engine = Qwen36Engine::new(&artifact);
+    fuzz_qwen36_profiles_from_v1(seed, iterations, &artifact, &base)
+}
+
+/// [`fuzz_qwen36_profiles_v1`] over a caller's BASE profile — same schedule, same mutations, same
+/// findings, driven from a different graph. A parameter rather than a second harness, for the
+/// reason `fuzz_a16_profiles_from_v1` gives: graph v5 is a new graph over the same model, and a
+/// gate that only ever saw the four-node attention site says nothing about the one-node one.
+pub fn fuzz_qwen36_profiles_from_v1(
+    seed: u64,
+    iterations: u64,
+    artifact: &Qwen36ArtifactV1,
+    base: &PalwShapeProfileV3,
+) -> FuzzTallyV1 {
+    let engine = Qwen36Engine::new(artifact);
     let bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
         base.shape_profile_id(),
         kaspa_hashes::Hash64::from_u64_word(0xCA7),
@@ -300,6 +348,28 @@ mod tests {
         assert!(tally.executed > 0, "the corpus must actually reach execution, or this test gates nothing");
         assert!(tally.court_costed > 0, "and the court cost must actually be derived, or the ceiling column proves nothing");
         assert!(tally.max_close_bytes_seen > 0, "a zero here would mean the ceiling was never compared against anything");
+    }
+
+    /// **The same gate over ADR-0082's graph v5 on the hybrid** — the fused attention site driven
+    /// through the same mutate → admit → plan → execute-twice schedule. The GDN table is
+    /// untouched by the fusion and still in the corpus, so this is the v2 space with the attention
+    /// site replaced rather than a smaller space.
+    ///
+    /// No corpus digest is pinned for this base: a pin moves only in a commit that says why, and a
+    /// v5 row is not registered anywhere yet.
+    #[test]
+    fn a_bounded_fuzz_run_over_the_v5_graph_finds_no_panic_and_no_nondeterminism() {
+        let (artifact, base) = tiny_class_v5();
+        let tally = fuzz_qwen36_profiles_from_v1(0x0082_2026_09_03, 400, &artifact, &base);
+        println!("qwen36 v5 fuzz tally: {tally:?}");
+        assert_eq!(tally.panics, 0, "a panic inside the interpreter is the fence staying down");
+        assert_eq!(tally.nondeterminism, 0, "two runs of one plan must be one bitstream");
+        assert!(tally.executed > 0, "the v5 corpus must actually reach execution, or this test gates nothing");
+        assert!(tally.court_costed > 0, "and the court cost must actually derive for a v5 row");
+        assert!(tally.max_close_bytes_seen > 0, "a zero here would mean the ceiling was never compared against anything");
+        // Reported, not asserted zero: pricing the fused site down from its whole-row close to the
+        // dissection's bounded one is ADR-0082 Decision 2 / the cost stream's derivation.
+        println!("qwen36 v5 closes over the shipped ceiling: {}", tally.closes_over_ceiling);
     }
 
     /// **The cross-architecture clause for the mmap container, met by the suite** — one seed, one

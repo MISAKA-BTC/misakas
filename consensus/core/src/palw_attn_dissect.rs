@@ -52,9 +52,11 @@ pub const PALW_ATTN_DISSECT_OBJECT_VERSION_V1: u16 = 1;
 pub const PALW_ATTN_DISSECT_MIN_ARITY: u8 = 2;
 
 /// The largest arity a dissection may declare. Sixty-four children of `(4 + 8 + 8 × lanes)` bytes
-/// at a 128-lane tile is 66,304 bytes — the last power of two whose disclosure fits one carrier
-/// beside its own framing. Anything wider is a move no carrier holds, and the derivation refuses
-/// it rather than pricing it.
+/// at a 128-lane tile is 66,560 bytes of children — the last power of two whose disclosure fits
+/// one carrier beside its own framing at that tile. At a 256-lane tile the same arity is 132,096
+/// bytes and does NOT fit; whether an `(arity, lanes)` pair fits is a derivation
+/// ([`palw_attn_dissect_arity_fits_carrier_v1`]) the court's arity derivation must apply for the
+/// widest tile the ruleset registers, never a property of the arity alone.
 pub const PALW_ATTN_DISSECT_MAX_ARITY: u8 = 64;
 
 /// The most children one round may carry on the wire — the arity cap, restated for decoders.
@@ -118,16 +120,23 @@ pub enum PalwAttnDissectError {
 impl core::fmt::Display for PalwAttnDissectError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::UnsupportedVersion { got } => write!(f, "dissection object version {got} is not {PALW_ATTN_DISSECT_OBJECT_VERSION_V1}"),
+            Self::UnsupportedVersion { got } => {
+                write!(f, "dissection object version {got} is not {PALW_ATTN_DISSECT_OBJECT_VERSION_V1}")
+            }
             Self::NoChildren => write!(f, "a dissection round discloses at least one child"),
             Self::TooManyChildren { got, max } => write!(f, "a round discloses {got} children; the arity cap is {max}"),
             Self::LaneCountMismatch { parent, child } => write!(f, "a child claims {child} lanes against the parent's {parent}"),
             Self::TooManyLanes { got, max } => write!(f, "a claim disputes {got} lanes; the cap is {max}"),
             Self::ArityOutOfRange { got } => {
-                write!(f, "dissection arity {got} is outside {PALW_ATTN_DISSECT_MIN_ARITY}..={PALW_ATTN_DISSECT_MAX_ARITY} or not a power of two")
+                write!(
+                    f,
+                    "dissection arity {got} is outside {PALW_ATTN_DISSECT_MIN_ARITY}..={PALW_ATTN_DISSECT_MAX_ARITY} or not a power of two"
+                )
             }
             Self::MaxDoesNotFold { claimed, folded } => write!(f, "the children's max folds to {folded}, the parent claims {claimed}"),
-            Self::SumDoesNotFold { claimed, folded } => write!(f, "the children's exponent sums fold to {folded}, the parent claims {claimed}"),
+            Self::SumDoesNotFold { claimed, folded } => {
+                write!(f, "the children's exponent sums fold to {folded}, the parent claims {claimed}")
+            }
             Self::ValueDoesNotFold { lane, claimed, folded } => {
                 write!(f, "lane {lane}: the children's value partials fold to {folded}, the parent claims {claimed}")
             }
@@ -254,6 +263,15 @@ pub fn palw_attn_dissect_move_bytes_v1(arity: u8, lane_count: usize) -> u64 {
     2 + 4 + (arity as u64) * (per_child + 4)
 }
 
+/// **Does a round at this arity, disputing this many lanes, fit one carrier?** `carrier_bytes` is
+/// the COUNTED budget of one chunk after framing (`palw_close_bytes_for_chunks_v1(1)` on a
+/// shipped ruleset). The derivation that picks the court's arity applies this at the widest
+/// output tile the ruleset registers: an arity whose round no carrier holds is not a shorter
+/// court, it is an unplayable one.
+pub fn palw_attn_dissect_arity_fits_carrier_v1(arity: u8, lane_count: usize, carrier_bytes: u64) -> bool {
+    palw_attn_arity_is_legal_v1(arity) && palw_attn_dissect_move_bytes_v1(arity, lane_count) <= carrier_bytes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,7 +318,10 @@ mod tests {
         let too_many: Vec<_> = (0..=PALW_ATTN_DISSECT_MAX_CHILDREN).map(|_| a.clone()).collect();
         assert_eq!(
             palw_attn_fold_v1(&too_many),
-            Err(PalwAttnDissectError::TooManyChildren { got: PALW_ATTN_DISSECT_MAX_CHILDREN + 1, max: PALW_ATTN_DISSECT_MAX_CHILDREN })
+            Err(PalwAttnDissectError::TooManyChildren {
+                got: PALW_ATTN_DISSECT_MAX_CHILDREN + 1,
+                max: PALW_ATTN_DISSECT_MAX_CHILDREN
+            })
         );
     }
 
@@ -361,17 +382,32 @@ mod tests {
         assert_eq!(Some(applied), palw_kary_rounds_v1(8_193, arity));
     }
 
-    /// **A move's bytes are the ADR's numbers and every legal arity fits one carrier.**
+    /// **A move's bytes are the ADR's numbers, and which `(arity, lanes)` pairs fit one carrier is a
+    /// derivation** — every legal arity fits at a 128-lane tile; at 256 lanes sixty-four does not,
+    /// which is why the court's arity derivation applies the bound at the widest registered tile.
     #[test]
-    fn a_moves_bytes_fit_a_carrier_at_every_legal_arity() {
+    fn a_moves_bytes_are_derived_and_the_carrier_bound_is_a_pair() {
         // The ADR's table: sixteen children at a 64-lane tile, 8,384 bytes of child payload.
         let payload = 16u64 * (4 + 8 + 8 * 64);
         assert_eq!(payload, 8_384);
         assert_eq!(palw_attn_dissect_move_bytes_v1(16, 64), 2 + 4 + 16 * (4 + 8 + 8 * 64 + 4));
+        // One framed carrier, counted: 100,000 × 10 / 12.
+        let carrier = 100_000u64 * 10 / 12;
         for arity in [2u8, 4, 8, 16, 32, 64] {
-            let bytes = palw_attn_dissect_move_bytes_v1(arity, PALW_ATTN_DISSECT_MAX_LANES);
-            assert!(bytes < 100_000 * 10 / 12, "arity {arity} at {PALW_ATTN_DISSECT_MAX_LANES} lanes is {bytes} bytes — over one framed carrier");
+            assert!(palw_attn_dissect_arity_fits_carrier_v1(arity, 128, carrier), "arity {arity} at 128 lanes must fit one carrier");
         }
+        for arity in [2u8, 4, 8, 16, 32] {
+            assert!(
+                palw_attn_dissect_arity_fits_carrier_v1(arity, PALW_ATTN_DISSECT_MAX_LANES, carrier),
+                "arity {arity} at 256 lanes"
+            );
+        }
+        assert!(
+            !palw_attn_dissect_arity_fits_carrier_v1(64, PALW_ATTN_DISSECT_MAX_LANES, carrier),
+            "sixty-four children of 256 lanes are {} bytes — the derivation must refuse that pair",
+            palw_attn_dissect_move_bytes_v1(64, PALW_ATTN_DISSECT_MAX_LANES)
+        );
+        assert!(!palw_attn_dissect_arity_fits_carrier_v1(3, 8, carrier), "an illegal arity never fits");
         // The objects round-trip on the wire.
         let round = PalwAttnDissectRoundV1 {
             version: PALW_ATTN_DISSECT_OBJECT_VERSION_V1,

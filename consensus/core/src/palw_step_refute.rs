@@ -102,10 +102,72 @@ pub const KDESC_A16_ATTN_VALUES: &str = "a16/attn-values/i16xi16-i64-gqa/v1";
 /// **ADR-0082 Decision 1: the fused attention site** — W9, W11, the probs requantization and
 /// W10 composed, committing only the output row, refuted by the history dissection of
 /// `palw_attn_dissect` rather than by opening a context-wide row. Its semantics is
-/// `palw_base0_a16::a16_attn_fused_reference_v1`; the recompute arm below is the ADR-0082 U-02
-/// stream's and refuses `Unadjudicable` until it lands, so a class declaring this kernel
-/// cannot be admitted by a build that cannot try it.
+/// `palw_base0_a16::a16_attn_fused_reference_v1`, and this build's recompute arm runs exactly
+/// that composition.
+///
+/// # The four registered tensors, from the one the node names
+///
+/// A `PalwStepNodeV1` has ONE `weight_name`, and a fused site reads FOUR registered operands:
+/// W9's score triple, the probability requant triple, W10's value triple and the softmax's
+/// widening byte. The artifact is UNCHANGED by the fusion — every one of those four is the same
+/// tensor the four separate nodes read — so the other three are DERIVED from the one the node
+/// names, by [`palw_attn_fused_tensors_v1`], and that function is the single description both the
+/// engine's plan compiler and this adjudicator read (ADR-0049 Decision F). The tree has been
+/// burnt twice by two spellings of one name mapping; there is one here.
+///
+/// The name the node carries is the SOFTMAX's, because it is the one that differs between the two
+/// registered families — the dense artifact stores `blk.{layer}.attn_softmax_up` and the hybrid
+/// stores `blk.{layer}.attn_softmax_up.a16` — while the three triples carry identical suffixes in
+/// both. So the naming rule is: the node names the softmax tensor, whose spelling fixes the layer
+/// prefix, and the triples are that prefix plus `attn_logits.a16`, `attn_probs.a16` and
+/// `attn_values.a16`. A name that is not one of the two registered softmax spellings resolves to
+/// nothing and the node is refused at REGISTRATION (`kernel_can_serve_node_v1`), never discovered
+/// at the first dispute.
 pub const KDESC_A16_ATTN_FUSED: &str = "a16/attn-fused/scores-softmax-requant-values/history-dissection/v1";
+
+/// The softmax tensor's stem, shared by both families: the dense artifact stores exactly this and
+/// the hybrid stores it with [`PALW_ATTN_FUSED_A16_SUFFIX`] appended.
+pub const PALW_ATTN_FUSED_SOFTMAX_STEM: &str = "attn_softmax_up";
+/// The hybrid's suffix on the softmax store. The two spellings are a registration fact of the two
+/// shipped converters, not a choice this rule makes.
+pub const PALW_ATTN_FUSED_A16_SUFFIX: &str = ".a16";
+/// W9's score triple, W5's probability triple and W10's value triple — identically suffixed in
+/// both families, which is why the softmax is the name the node carries.
+pub const PALW_ATTN_FUSED_SCORES_LEAF: &str = "attn_logits.a16";
+pub const PALW_ATTN_FUSED_PROBS_LEAF: &str = "attn_probs.a16";
+pub const PALW_ATTN_FUSED_VALUES_LEAF: &str = "attn_values.a16";
+
+/// The four registered operands of one fused attention site, all for the same layer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwAttnFusedTensorsV1 {
+    /// The one the node itself names — the softmax's widening byte.
+    pub softmax_up: String,
+    pub scores: String,
+    pub probs: String,
+    pub values: String,
+}
+
+/// **The one description of a fused site's operand names** — see [`KDESC_A16_ATTN_FUSED`].
+///
+/// `None` for a name that is not one of the two registered softmax spellings, which is the honest
+/// answer: a court that guessed a prefix would be choosing which bytes it recomputes against.
+pub fn palw_attn_fused_tensors_v1(weight_name: &str) -> Option<PalwAttnFusedTensorsV1> {
+    let hybrid = format!("{PALW_ATTN_FUSED_SOFTMAX_STEM}{PALW_ATTN_FUSED_A16_SUFFIX}");
+    let prefix = weight_name
+        .strip_suffix(hybrid.as_str())
+        .or_else(|| weight_name.strip_suffix(PALW_ATTN_FUSED_SOFTMAX_STEM))?;
+    // A prefix is a layer prefix (`blk.7.`) or nothing at all; anything else is a name that merely
+    // ends in the stem, and the three triples it would imply are names nobody registered.
+    if !prefix.is_empty() && !prefix.ends_with('.') {
+        return None;
+    }
+    Some(PalwAttnFusedTensorsV1 {
+        softmax_up: weight_name.to_string(),
+        scores: format!("{prefix}{PALW_ATTN_FUSED_SCORES_LEAF}"),
+        probs: format!("{prefix}{PALW_ATTN_FUSED_PROBS_LEAF}"),
+        values: format!("{prefix}{PALW_ATTN_FUSED_VALUES_LEAF}"),
+    })
+}
 
 /// The hybrid graph's own ops (ADR-0052). Each names the accumulator width because that is the
 /// only degree of freedom an integer kernel has left.
@@ -493,6 +555,19 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
             }
             if node.weight_name.is_empty() {
                 return Err("a fused attention site must name the tensor its narrowings are registered in");
+            }
+            // **The name must RESOLVE, here, at registration.** `palw_attn_fused_tensors_v1` is
+            // the single description of the other three operands (see `KDESC_A16_ATTN_FUSED`);
+            // a name it cannot resolve is a node whose every dispute would be `Unadjudicable`,
+            // and this file's own discipline is that such a node is refused at registration
+            // rather than discovered by a producer.
+            if palw_attn_fused_tensors_v1(node.weight_name.as_str()).is_none() {
+                return Err("a fused attention site must name the softmax store its layer registers: the other three derive from it");
+            }
+            // The committed row is the OUTPUT (ADR-0082 Decision 1, invariant Z0): a fused site
+            // whose out width is context-shaped is the very thing the fusion removes.
+            if matches!(node.out_len, PalwStepOutLenV1::KvScaled { .. }) {
+                return Err("a fused attention site commits the output row; a kv-scaled width is the row the fusion exists to delete");
             }
             Ok(())
         }
@@ -1653,11 +1728,68 @@ fn qwen36_row(
             let up = b[0].min(62);
             Ok(out(a16::a16_softmax_rows(&as_i32(&inputs[0]), row_len, up).map_err(shape16)?))
         }
-        // **ADR-0082 U-02 lands this arm**: a fused site is not recomputed whole — its terminal
-        // adjudication is the history dissection, whose bottom recomputes ONE tile with
-        // `a16_attn_tile_triple_v1`. Until the court arm exists, a fused leaf is refused as
-        // unadjudicable rather than priced as something a whole-row recompute could reach.
-        Qwen36Op::AttnFused => Err(PalwStepRefuteError::Unadjudicable),
+        // **The fused site, recomputed WHOLE** (ADR-0082 Decision 1, unit U-02).
+        //
+        // This is the design-A-width route: the canonical input set of a fused leaf is the query
+        // row plus the K and V series over the history — the same set the scores and values arms
+        // read, because `canonical_input_leaves`' KV branch is keyed on the SENTINELS a node
+        // declares and this node declares both — and the recompute is the composition the kernel
+        // descriptor names. It opens the whole history, which is what Decision 2's dissection
+        // exists to replace; until that arm arrives this is the honest price of adjudicating the
+        // node, not a claim that the price is small.
+        //
+        // **ADR-0082 stream E's second arm goes HERE**: when the refutation carries a dissection
+        // (`palw_attn_dissect`), the terminal adjudication is a round of the fold or one bottom
+        // tile through `a16_attn_tile_triple_v1`, and this whole-row arm is what a refutation
+        // WITHOUT one still falls back to. Neither may convict where the other acquits: they are
+        // the same arithmetic read at two widths (`fused::the_tile_route_is_the_composition`).
+        Qwen36Op::AttnFused => {
+            need(3)?;
+            let heads = profile.attn_heads as usize;
+            let kv_heads = profile.attn_kv_heads as usize;
+            let d_head = profile.attn_head_dim as usize;
+            let q = as_i32(&inputs[0]);
+            let k_series = as_i32(&inputs[1]);
+            let v_series = as_i32(&inputs[2]);
+            // The same two ceilings the arms this node replaces are bounded by — an unservable
+            // geometry refuses the DISPUTE rather than allocating from a registered `u32`.
+            attn_params_count_v1(profile, true, k_series.len()).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            attn_params_count_v1(profile, false, 0).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            // The series must be the challenged position's OWN history, exactly: `kv_len` is
+            // derived one frame up from the coordinate, and a series of another length would have
+            // this arm recompute over positions the leg never saw. Refused, never recomputed
+            // against — a court that guessed the history would convict honest producers.
+            let kv_dim = kv_heads.checked_mul(d_head).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let want = usize::try_from(kv_len)
+                .ok()
+                .and_then(|n| n.checked_mul(kv_dim))
+                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            if k_series.len() != want || v_series.len() != want {
+                return Err(PalwStepRefuteError::InputSetNotCanonical(
+                    "a fused attention site's opened series are not the challenged position's history",
+                ));
+            }
+            // The four registered operands, from the one the node names — ONE description, shared
+            // with the engine's plan compiler (`KDESC_A16_ATTN_FUSED`).
+            let t = palw_attn_fused_tensors_v1(node.weight_name.as_str()).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            // **One triple each, tiled** — the same registration shape the four separate nodes
+            // read: a `KvScaled` site's lane count is the JOB's, so no artifact can hold one
+            // triple per lane and the class registers one.
+            let up = {
+                let b = weights.operand_bytes(t.softmax_up.as_str(), layer, 0, 1).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                if b.len() != 1 {
+                    return Err(PalwStepRefuteError::Unadjudicable);
+                }
+                b[0].min(62)
+            };
+            let params = a16::A16AttnFusedParamsV1 {
+                scores: params_named(t.scores.as_str(), 0, 1)?[0],
+                probs: params_named(t.probs.as_str(), 0, 1)?[0],
+                values: params_named(t.values.as_str(), 0, 1)?[0],
+                up_bits: up,
+            };
+            Ok(out(a16::a16_attn_fused_reference_v1(&q, &k_series, &v_series, heads, kv_heads, d_head, params).map_err(shape16)?))
+        }
         Qwen36Op::AttnScores | Qwen36Op::AttnValues => {
             need(2)?;
             let heads = profile.attn_heads as usize;

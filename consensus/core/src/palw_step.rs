@@ -645,6 +645,27 @@ impl PalwShapeProfileV3 {
                         }
                     }
                 }
+                // **ADR-0082 Decision 1, invariant Z0's first half.** The fused attention site is
+                // the one kind whose SHAPE is part of the decision: its committed row is the
+                // output and its inputs are exactly the rotated query, the K cache and the V
+                // cache, in that order — the order the adjudicator's arm and every executor read
+                // positionally. A kv-scaled out width here would be the context-wide row the
+                // fusion exists to delete, so it is refused by the profile rather than left to
+                // whichever gate happened to look.
+                if node.op_kind == PalwStepOpKindV1::AttnFused {
+                    if matches!(node.out_len, PalwStepOutLenV1::KvScaled { .. }) {
+                        return Err(bad("a fused attention node commits the output row, never a context-shaped one"));
+                    }
+                    if node.input_refs.len() != 3 {
+                        return Err(bad("a fused attention node reads exactly the query row and both cached series"));
+                    }
+                    if node.input_refs[0] >= PALW_STEP_INPUT_SENTINEL_MIN
+                        || node.input_refs[1] != PALW_STEP_INPUT_KV_K
+                        || node.input_refs[2] != PALW_STEP_INPUT_KV_V
+                    {
+                        return Err(bad("a fused attention node's inputs are the query row, then the K cache, then the V cache"));
+                    }
+                }
                 if node.weight_name.is_empty() != node.weight_dtypes.is_empty() {
                     return Err(bad("weight name and dtypes must be both present or both absent"));
                 }

@@ -345,6 +345,7 @@ pub fn qwen25_a16_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
         crate::palw_base0_profile::QWEN25_A16_PRE_IR,
         crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v1(),
         QWEN25_HEAD_TENSOR,
+        false,
     )
 }
 
@@ -363,7 +364,48 @@ pub fn qwen25_a16_profile_v2(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
         crate::palw_base0_profile::QWEN25_A16_PRE_IR_V2,
         crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2(),
         QWEN25_A16_HEAD_TENSOR_V2,
+        false,
     )
+}
+
+/// **`graph-v5`: the dense tier with ONE fused attention node per layer** (ADR-0082 Decision 1).
+///
+/// The v2 graph in every respect but the attention site, where `ATTN_SCORES`, the row `SoftMax`,
+/// the probability requantization and `ATTN_VALUES` — three of them committing `attn_heads × kv_len`
+/// rows at every position — become one [`crate::palw_step::PalwStepOpKindV1::AttnFused`] node whose
+/// committed row is the OUTPUT and nothing else. The scores, the row max, the exponent sum and the
+/// probabilities are internal to the op: computed in whatever order an executor likes, never
+/// committed, never carried, and refuted by a dissection over the history rather than by opening
+/// the row (ADR-0082 Decision 2).
+///
+/// What it buys, measured against v2's own numbers (§1.2–1.3): no committed row of this class has a
+/// context-shaped width, so the close stops growing with `n_ctx`, and an attention site costs
+/// `⌈heads × d_head / tile_len⌉` leaves a position at EVERY context instead of a count linear in
+/// the position — which returns the job's leaf count to the base count ADR-0077 Decision 12 was
+/// sized against.
+///
+/// A class IS its graph (ADR-0049 Decision F), so this is a NEW class id, registered through
+/// ADR-0075's route or minted at a relaunch. The v1 and v2 rows are untouched and stay exactly as
+/// narrow as they are — they are live chain facts.
+///
+/// The artifact is UNCHANGED: the fused node reads the same four registered tensors the four v2
+/// nodes read (`attn_logits.a16`, `attn_probs.a16`, `attn_values.a16` and `attn_softmax_up`), which
+/// is why no re-conversion and no new inventory is implied — see
+/// [`crate::palw_step_refute::palw_attn_fused_tensors_v1`].
+pub fn qwen25_a16_profile_v5(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen25_a16_profile_inner(
+        geometry,
+        crate::palw_base0_profile::QWEN25_A16_PRE_IR_V2,
+        crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2(),
+        QWEN25_A16_HEAD_TENSOR_V2,
+        true,
+    )
+}
+
+/// **The `graph-v5` row over the epsilon the artifact executes** — the pairing any v5 row that has
+/// to be SERVED must be built from, exactly as [`qwen25_a16_artifact_row_profile_v1`] is for v2.
+pub fn qwen25_a16_artifact_row_profile_v5(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen25_a16_profile_v5(qwen25_geometry_artifact_eps(geometry))
 }
 
 /// **The epsilon every dense artifact of this lineage actually executes.**
@@ -426,6 +468,11 @@ fn qwen25_a16_profile_inner(
     pre_ir: &'static [crate::palw_base0_profile::Base0IrNodeV1],
     state_chunk_map_id: Hash64,
     head: &'static str,
+    // **ADR-0082 Decision 1.** Graph v5 fuses the layer table's four attention nodes into one
+    // `AttnFused` node after the per-node tile budget has run, so the fused node inherits the
+    // budgeted tile of the row it commits and the site's leaf count per position is exactly what
+    // `ATTN_VALUES` costs today. `false` is every shipped row, which is why their ids cannot move.
+    fuse_attention: bool,
 ) -> Result<PalwShapeProfileV3, PalwStepError> {
     use crate::palw_base0_profile::{Base0IrGeometryV1, Base0IrScopeV1, QWEN25_A16_LAYER_IR, QWEN25_A16_POST_IR, base0_ir_nodes_v1};
 
@@ -485,6 +532,11 @@ fn qwen25_a16_profile_inner(
     budget(&mut pre_nodes, pre_ir);
     let mut attn_nodes = base0_ir_nodes_v1(QWEN25_A16_LAYER_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::PerLayer, "");
     budget(&mut attn_nodes, QWEN25_A16_LAYER_IR);
+    // **ADR-0082 Decision 1**, applied to the PROJECTED table and never to a second IR const: one
+    // description of the fusion, read by both families (`palw_fuse_attention_site_v5`).
+    if fuse_attention {
+        attn_nodes = crate::palw_base0_profile::palw_fuse_attention_site_v5(&attn_nodes)?;
+    }
     let mut post_nodes = base0_ir_nodes_v1(QWEN25_A16_POST_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, head);
     budget(&mut post_nodes, QWEN25_A16_POST_IR);
 
