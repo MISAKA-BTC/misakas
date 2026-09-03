@@ -279,7 +279,14 @@ const RECEIPT_USE_WINDOW: u64 = PALW_RC_WINDOWS_V1.receipt_use_window;
 /// 2^22 leaves = 22 bisection rounds, +2 terminal, × 60 DAA per turn = 1,440 — still inside
 /// `WINDOW_COURT` (3,000). Nothing deeper than the cap is admissible at all, so this ladder cannot
 /// fail to reach a class that exists.
-const COURT_MAX_STEP_LEAVES: u64 = crate::palw_step::PALW_STEP_MAX_LEAVES;
+/// **The ruleset's step ladder — public because W1b turned it into a choice.**
+///
+/// Before W1b the executor hardcoded `PALW_STEP_MAX_LEAVES` and this field was decoration. W1b made
+/// the executor read the ruleset, which means this value is now the entire width lever for every
+/// registered class: at `PALW_STEP_MAX_LEAVES` the dense A16 tier admits `n_ctx` 39, below `cad`'s
+/// 38-token grammar floor once any prefill is counted. It is `pub` so a test can assert against the
+/// value a network actually froze rather than against the constant it happens to equal today.
+pub const COURT_MAX_STEP_LEAVES: u64 = crate::palw_step::PALW_STEP_MAX_LEAVES;
 #[allow(dead_code)] // the RC set's named reading, kept beside its rationale (ADR-0077 Decision 7)
 const COURT_TURN_DEADLINE: u64 = PALW_RC_WINDOWS_V1.court_turn_deadline;
 const COURT_TERMINAL_ROUNDS: u32 = 2;

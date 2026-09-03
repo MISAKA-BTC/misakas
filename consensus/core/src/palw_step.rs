@@ -1606,6 +1606,85 @@ mod tests {
     /// point: the defect is unbounded work, and a test that merely returned the wrong answer would
     /// be measuring something else.
     #[test]
+    /// **Which ruleset ladder the registered class needs, as a table rather than as a choice.**
+    ///
+    /// `PalwCourtParamsV2::max_step_leaf_count` is a genesis input, and until this test existed it
+    /// was argued about from two tools that disagreed — one reporting a widest admissible context
+    /// of 176 and one reporting 39. Both were true measurements of different profiles: the
+    /// disagreement was `qwen25_profile_v1` against the A16 projection that actually ships. Two
+    /// measurements that cannot be reconciled by argument are reconciled by putting them in one
+    /// place, so this is that place.
+    ///
+    /// The width here is the CONSERVATIVE bound: `worst_case_step_leaf_count_capped_v1` is the
+    /// whole context as prefill with one decode call, which is the right quantity for admission —
+    /// a class whose typical job fits the ladder while its longest does not is a class an attacker
+    /// picks the job length for. A real free-prompt job is cheaper, so the usable width at a given
+    /// cap is somewhat larger than the number below.
+    #[test]
+    fn the_registered_row_names_the_ladder_it_needs() {
+        let widest_admissible = |cap: u64| -> u32 {
+            (1..=1024u32)
+                .filter(|n| {
+                    crate::palw_context_ladder::palw_a16_context_row_profile_v1(*n)
+                        .ok()
+                        .and_then(|p| worst_case_step_leaf_count_capped_v1(&p, cap).ok())
+                        .is_some()
+                })
+                .max()
+                .unwrap_or(0)
+        };
+        // measured, not chosen — and 2^22 reproduces the shipped ladder's own answer
+        assert_eq!(widest_admissible(1 << 22), 39, "the shipped 2^22 ladder");
+        assert_eq!(widest_admissible(1 << 23), 79);
+        assert_eq!(widest_admissible(1 << 24), 156);
+        assert_eq!(widest_admissible(1 << 26), 574);
+
+        // **2^26 is the smallest power-of-two cap that admits the class the genesis registers.**
+        // 2^24 opens every grammar floor (38 / 60 / 104 plus a prefill) and still tops out at 156,
+        // so it would open MIDI and 3D at a NARROWER class than the registered one — which means
+        // deriving a third class id, which is the loop this row exists to end.
+        let row = crate::palw_context_ladder::palw_a16_context_row_profile_v1(512).expect("the registered row");
+        for pow in 22..26u32 {
+            assert!(
+                worst_case_step_leaf_count_capped_v1(&row, 1 << pow).is_err(),
+                "2^{pow} must not admit the registered 512 row, or the ladder below is wrong"
+            );
+        }
+        let need = worst_case_step_leaf_count_capped_v1(&row, 1 << 26).expect("2^26 admits it");
+        assert_eq!(need, 59_000_848, "the registered row's worst case");
+        assert!(need <= 1 << 26);
+        // and the headroom is stated rather than implied: a row that only just fits is a row one
+        // profile correction away from not fitting
+        assert!(need * 10 < (1u64 << 26) * 9, "less than ten per cent of headroom is not headroom");
+    }
+
+    /// **Does the SHIPPED ruleset admit the row the genesis registers?**
+    ///
+    /// The table above is arithmetic about profiles and is true whatever any network froze. This
+    /// is the other question, and it is the one a cut turns on: `COURT_MAX_STEP_LEAVES` in
+    /// `palw_fp_devnet_v3` is currently `PALW_STEP_MAX_LEAVES`, so W1b — which made the executor
+    /// READ the ruleset's ladder instead of a constant — moved no width at all. It converted a
+    /// constant nobody could choose into a value somebody has to choose, and until somebody
+    /// chooses it the registered class is capped at 39 positions, below `cad`'s 38-token floor
+    /// once any prefill is counted.
+    ///
+    /// **So this test is RED on purpose right now**, and it is the gate that says whether raising
+    /// the ruleset actually did the thing it was raised for. "W1b landed" and "the width moved"
+    /// are two claims and only the first is true today. When the ruleset moves to a cap that
+    /// admits the row, this goes green by measurement rather than by anyone saying so.
+    #[test]
+    fn the_shipped_ruleset_admits_the_row_the_genesis_registers() {
+        let cap = crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
+        let row = crate::palw_context_ladder::palw_a16_context_row_profile_v1(512).expect("the registered row");
+        let got = worst_case_step_leaf_count_capped_v1(&row, cap);
+        assert!(
+            got.is_ok(),
+            "the shipped ruleset's ladder is {cap} and the registered n_ctx 512 row needs 59,000,848 — \
+             W1b made the executor read this field and the field is still the old constant, so no \
+             width has moved and the class is capped at 39 positions. got: {got:?}"
+        );
+    }
+
     fn a_context_wider_than_the_profile_is_refused_before_it_is_walked() {
         let profile = tiny_profile();
         let honest = tiny_context();
