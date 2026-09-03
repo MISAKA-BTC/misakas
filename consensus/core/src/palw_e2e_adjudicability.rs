@@ -647,7 +647,10 @@ pub fn palw_rc_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
         convicted_leaves,
         malformed_refused: true,
     };
-    let mut out = Vec::with_capacity(3);
+    // Four families are pushed below, so the reservation is four. It said three while the body
+    // pushed four — harmless, a Vec grows, and worth fixing because a capacity is the cheapest
+    // statement of how many things the author believed were here, and it disagreed with them.
+    let mut out = Vec::with_capacity(4);
     if let Ok(floor) = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY) {
         out.push(PalwE2eFamilyV1 {
             family_id: palw_e2e_family_id_v1("PALW-BASE-0"),
@@ -877,10 +880,20 @@ pub fn certify_e2e_free_prompt_lane_v1(
 /// class id, and the transition refuses a free-prompt commitment on any class that is not
 /// (`PalwStateParamsV2::fp_certified_classes`).
 ///
-/// One entry: the floor, from `misaka-palw-base0`'s
-/// `the_floor_free_prompt_lane_certifies_and_a_swapped_question_is_refused`, whose covering is
-/// pinned here exactly as the attempt set's is (`e2e_drill` asserts the two agree). QWEN25-A16
-/// and QWEN36 join when their free-prompt paths exist and drill.
+/// **Four entries.** This said "one entry: the floor" — true when the floor was the only family
+/// that had drilled, and still on the page after QWEN36, QWEN25-A16 and QWEN25-A16-V5 joined it.
+/// The body below is the authority; this paragraph is a reader's map that had stopped matching
+/// the terrain.
+///
+/// * `PALW-BASE-0` — the floor, from `misaka-palw-base0`'s
+///   `the_floor_free_prompt_lane_certifies_and_a_swapped_question_is_refused`;
+/// * `PALW-QWEN36` and `PALW-QWEN25-A16` — joined when their free-prompt paths drilled;
+/// * `PALW-QWEN25-A16-V5` — the fused row's family, whose fixture drills `AttnFused` through
+///   stream I's dissection route.
+///
+/// Each covering is pinned here exactly as the attempt set's is, and `e2e_drill` asserts the two
+/// agree. **Not an idle doc**: the set feeds `palw_rc_fp_certified_class_ids_v1`, and a reader who
+/// trusts "one entry" mis-reads what bears weight.
 pub fn palw_rc_fp_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
     let full = |gdn: bool, convicted_leaves: u32| PalwE2eCoveringV1 {
         pre: true,
@@ -892,7 +905,10 @@ pub fn palw_rc_fp_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
         convicted_leaves,
         malformed_refused: true,
     };
-    let mut out = Vec::with_capacity(3);
+    // Four families are pushed below, so the reservation is four. It said three while the body
+    // pushed four — harmless, a Vec grows, and worth fixing because a capacity is the cheapest
+    // statement of how many things the author believed were here, and it disagreed with them.
+    let mut out = Vec::with_capacity(4);
     if let Ok(floor) = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY) {
         out.push(PalwE2eFamilyV1 {
             family_id: palw_e2e_family_id_v1("PALW-BASE-0"),

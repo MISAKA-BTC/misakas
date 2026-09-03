@@ -191,9 +191,13 @@ pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> 
     //
     // A class IS its graph (`shape_profile_id`), and the chain refuses a second registration of
     // the same id — so two weight-sets of the same geometry need two profiles, and `n_ctx` is the
-    // axis that changes nothing else about the arithmetic. The base model sits at the geometry
-    // testnet-11's genesis registered (n_ctx 16, class f942e268…, asserted by test below); each
-    // later model in the lineage takes the next context bound. The REAL ceiling is the court's:
+    // axis that changes nothing else about the arithmetic. The base model sits at n_ctx 16, and
+    // its id under the v1 graph is `f942e268…` (asserted by the test below). **That id is NOT what
+    // testnet-11's genesis registers** — this comment said it was. The genesis calls
+    // `qwen25_a16_registration_v2`, so the registered dense class is the graph-v2 row at the same
+    // width, `71bbb755…`; `f942e268…` is the superseded v1 graph at that geometry. Same model,
+    // same n_ctx, different graph, different class — the distinction this whole file is about,
+    // got wrong in the file's own preamble. Each later model takes the next context bound. The REAL ceiling is the court's:
     // n_ctx 20 is the last value the RC close budget admits (measured 2026-08-28), so this table
     // has room for four models before the family needs a second axis.
     //
@@ -284,9 +288,18 @@ pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> 
         });
     }
 
-    // **ADR-0082's graph-v5 dense row — the class the testnet-11 5f genesis registers.**
-    // A `continue`-shaped absence would be a build that cannot name the class its own chain runs,
-    // which is the failure `resolve_class_v1`'s rewrite closed for the floor.
+    // **ADR-0082's graph-v5 dense row — the class 5f's genesis is INTENDED to register.**
+    //
+    // This said "the class the testnet-11 5f genesis registers", in the present tense, and that
+    // was false: `params.rs` calls `qwen25_a16_registration_v2`, so the RC genesis set is
+    // f1c5635c (floor) / 5bd9ae3d (QWEN36) / 71bbb755 (dense graph-v2 at n_ctx 16). No
+    // `qwen25_a16_registration_v5` exists anywhere. Fixer FG registers it; until then this row is
+    // a class the catalog spells and the chain does not hold, and
+    // `the_artifact_names_a_class_the_shipped_genesis_actually_registers` is RED to say so.
+    //
+    // A `continue`-shaped absence would still be a build that cannot name the class its own chain
+    // will run, which is the failure `resolve_class_v1`'s rewrite closed for the floor — so the
+    // row stays; only the tense was wrong.
     if let Some(row) = a16_graph_v5_row_v1() {
         out.push(row);
     }
@@ -300,7 +313,7 @@ pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> 
 /// thing that must not be done, and that argument is about a DIFFERENT question: which class a
 /// certification tool binds when it is handed a model id. There, a row makes the width a constant
 /// again and a wrong width binds silently. Here the question is which classes this binary can
-/// SUPPLY, and the genesis registers one that no row spells — so the alternatives are a row or a
+/// SUPPLY, and the genesis is to register one that no row spells — so the alternatives are a row or a
 /// node that cannot resolve its own chain's class.
 ///
 /// The falsifiability the other doc asks for is kept, by construction rather than by promise:
@@ -453,7 +466,8 @@ pub struct A16ArtifactRowV1 {
 /// The A16 table above is three fixed widths (16, 18, 16), so `palw-certify bind --model-id`
 /// could only ever produce those three classes. `n_ctx` is inside `PalwShapeProfileV3` and
 /// therefore inside `shape_profile_id`, so **a model id does not determine a class**: the
-/// testnet-11 5f genesis registers the dense tier at n_ctx 512 and no row here spells it.
+/// testnet-11 5f genesis is to register the dense tier at n_ctx 512 (fixer FG; today it registers
+/// the graph-v2 row at n_ctx 16) and no row here spells the wide one.
 ///
 /// **The obvious repair — a fourth row at 512 — is the one thing that must not be done**, and the
 /// reason is falsifiability rather than taste. A row makes the width a CONSTANT again, so a wrong
@@ -595,8 +609,11 @@ pub fn a16_row_for_artifact_shape_v1(
 /// leaving the width-only route projecting kept the defect alive one flag over, where it is
 /// hardest to see — `bind --n-ctx 512` printed a class id, every check below it passed (a
 /// graph-v2 projection at 512 reaches kernels the graph-v2 family covers), and the certificate
-/// named `8d2e6f16…` while genesis registers `4277d84f…`. Same width, different graph, different
-/// class, no error anywhere.
+/// named `8d2e6f16…` while the row this catalog spells at that width is `4277d84f…`. Same width,
+/// different graph, different class, no error anywhere. (Neither is what the chain holds TODAY —
+/// the genesis registers `71bbb755…`, the graph-v2 row at n_ctx 16, until fixer FG lands the v5
+/// registration. The defect being described here is real either way: it is about two routes
+/// disagreeing, not about which of them the chain later adopts.)
 ///
 /// So this matches too, and a width no row spells now FAILS TO BIND instead of projecting. That
 /// is the falsifiability the artifact route's doc argues for, applied to the form that has no
@@ -1226,7 +1243,7 @@ mod tests {
     /// third copy of the predicate the two backend constructors also spelled. ADR-0082's v5 row
     /// registers the TILED map, so it fell through to `artifact_digest()` — a flat hash of a whole
     /// file, and `PalwProvenOperandsV1::from_openings_v1` proves openings against the registered
-    /// root, so an arithmetic close on the row the genesis registers could have proven nothing.
+    /// root, so an arithmetic close on the row the genesis is to register could have proven nothing.
     /// That is the A16 genesis root form defect exactly: one class root spelled two ways with
     /// nothing forcing them equal.
     ///
@@ -1323,7 +1340,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------------------
-    // ADR-0082's graph-v5 dense row — the class the 5f genesis registers
+    // ADR-0082's graph-v5 dense row — the class the 5f genesis is to register (fixer FG)
     // ---------------------------------------------------------------------------------------
 
     fn v5_row() -> CanonicalClassV1 {
@@ -1613,7 +1630,7 @@ mod tests {
         // (`worst_case_step_leaf_count_capped_v1(profile, rules.ladder)`). ADR-0080 W1b made the
         // executor read the field and `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` moved to 2^26 for exactly
         // this row; the registration side was not moved with it, so the ONE helper that assembles a
-        // `ClassRegistered` refuses the class the genesis registers. Pinned rather than worked
+        // `ClassRegistered` refuses the class the genesis is to register. Pinned rather than worked
         // around silently — the fix is a `_capped_` twin in `palw_class_admission_v2`, which is not
         // this stream's file (reported to the integrator).
         //
@@ -1685,16 +1702,8 @@ mod tests {
             let rules =
                 ladder::palw_class_ladder_rules_for_court_v1(&row.profile, Some(kary), ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
                     .expect("a mapped class has ladder rules");
-            let admitted = adm::verify_class_admission_v5(
-                &bundle,
-                &row.profile,
-                &canonical,
-                &registration,
-                &[],
-                &[],
-                Some(rules),
-                Some(kary),
-            );
+            let admitted =
+                adm::verify_class_admission_v5(&bundle, &row.profile, &canonical, &registration, &[], &[], Some(rules), Some(kary));
             assert!(
                 admitted.is_ok(),
                 "{name}: the graph-v5 row must be admissible under its own armed court — ruleset ladder {} \
