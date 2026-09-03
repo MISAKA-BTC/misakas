@@ -449,7 +449,13 @@ cat >"$WORK_DIR/identity.json" <<JSON
 JSON
 
 log "stage 4 — starting the gateway on 127.0.0.1:$GATEWAY_PORT"
+# **The worker's own stderr, on.** ADR-0079 SA-7 withholds it by default — right for a production
+# gateway parsing a stranger's HTTP text, wrong for a drill, whose entire job is to say WHY a stage
+# failed. Measured: the worker refused its artifact by name (no tokenizer commitment) and the drill
+# reported "the worker exited before announcing its manifest" over three withheld log lines. A
+# refusal nobody can read is a refusal that costs the same as a hang.
 MISAKA_PALW_ARTIFACT="$MISAKA_PALW_ARTIFACT" MISAKA_PALW_TOKENIZER="$MISAKA_PALW_TOKENIZER" \
+MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1 \
 MISAKA_PALW_NETWORK_ID="devnet" \
 "$GATEWAY_BIN" --listen "127.0.0.1:$GATEWAY_PORT" --worker "$WORKER_BIN" \
   --outbox "$WORK_DIR/outbox" --identity "$WORK_DIR/identity.json" \
