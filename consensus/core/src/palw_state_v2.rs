@@ -5110,6 +5110,29 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_derived_v1::PalwDerivedRowV1>,
         new: Option<crate::palw_derived_v1::PalwDerivedRowV1>,
     },
+    /// **One chunk arriving into a group that already exists** (audit H-3), rather than a whole
+    /// `CourtCloseGroup { old, new }` swap of the record it lands in.
+    ///
+    /// The swap form is what every other row uses and it is right for every other row, because
+    /// every other row is O(1). A close group is not: it accumulates up to
+    /// `PALW_COURT_CLOSE_CHUNK_MAX_BYTES` per chunk, so journalling `old` and `new` on each
+    /// arrival wrote `Sum(2k-1)` chunk-sized copies for a `count`-chunk assembly — **27 x 100 KB
+    /// of block space became ~73 MB of persisted, reorg-retained delta rows**, an amplification no
+    /// fee, rent or deposit sees and one `palw_close_assembly_deposit_v1` prices linearly in
+    /// `count`. As an arrival the delta is O(1) in the group: the index and the bytes, which are
+    /// exactly what a revert has to put back.
+    ///
+    /// The OPENING and the REMOVAL stay `CourtCloseGroup` swaps — one each per group, so both are
+    /// O(count) once rather than O(count) per chunk — and the completing chunk is not journalled
+    /// at all, because W7 never writes the completed record back.
+    ///
+    /// Appended at the END: the enum's Borsh discriminant is positional and these rows are
+    /// persisted.
+    CourtCloseChunkArrived {
+        key: (Hash64, PalwCourtSideV1),
+        index: u8,
+        bytes: Vec<u8>,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -5566,6 +5589,21 @@ impl<'a> TransitionBuilder<'a> {
             }
         }
         Ok(())
+    }
+
+    /// **A chunk arriving into a group that already exists** (audit H-3): the bit and the bytes,
+    /// journalled as themselves.
+    ///
+    /// Not `write_court_close_group(key, Some(grown_record))`, which is how it was written and
+    /// which put the whole accumulated group into the delta twice per arrival. The row's
+    /// `assembly_deadline_daa` never moves on an arrival, so the deadline index needs no touch
+    /// here — the invariant that makes that true is asserted by `assert_internal_consistency`,
+    /// which recomputes the index from the records.
+    fn write_court_close_chunk(&mut self, key: (Hash64, PalwCourtSideV1), index: u8, bytes: Vec<u8>) {
+        let group = self.state.court_close_groups.get_mut(&key).expect("a chunk only arrives into a group the caller just read");
+        group.present |= 1u64 << index;
+        group.chunks.insert(index, bytes.clone());
+        self.entries.push(PalwDeltaEntryV2::CourtCloseChunkArrived { key, index, bytes });
     }
 
     /// **The one removal that owes nothing** (ADR-0080 W7): the group whose last chunk assembled,
@@ -8907,7 +8945,11 @@ fn apply_object(
             group.present |= 1u64 << index;
             group.chunks.insert(*index, bytes.clone());
             if !group.is_complete() {
-                builder.write_court_close_group((*session_id, *side), Some(group));
+                // O(1) in the group (audit H-3): the arrival is journalled as an arrival, not as a
+                // swap of the whole accumulated record. `group` here is the local clone the checks
+                // above were made against; the writer applies the same bit and bytes to the row in
+                // state, which is why nothing but the delta shape changes.
+                builder.write_court_close_chunk((*session_id, *side), *index, bytes.clone());
                 return Ok(());
             }
             // **W7: the chunk that COMPLETES a group assembles it, and the close happens here.**
@@ -9696,6 +9738,28 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         }
         PalwDeltaEntryV2::PendingChunks { key, old, new } => swap_write!(state.pending_chunks, key, old, new),
         PalwDeltaEntryV2::CourtCloseGroup { key, old, new } => swap_write!(state.court_close_groups, key, old, new),
+        // **A bit-clear plus a map removal** (audit H-3), and the same "verify what you replace"
+        // discipline `swap_write!` has: forward, the index must be absent and becomes these bytes;
+        // in revert it must be present AND be these bytes before it goes. A delta that disagrees
+        // with the state it is applied to is a corrupted reorg, not a recoverable one.
+        PalwDeltaEntryV2::CourtCloseChunkArrived { key, index, bytes } => {
+            let Some(group) = state.court_close_groups.get_mut(key) else {
+                return Err(PalwStateV2Error::DeltaMismatch("a close chunk arrived into a group that is not there"));
+            };
+            if revert {
+                if !group.has(*index) || group.chunks.get(index) != Some(bytes) {
+                    return Err(PalwStateV2Error::DeltaMismatch("the close chunk being reverted is not the one the delta recorded"));
+                }
+                group.present &= !(1u64 << index);
+                group.chunks.remove(index);
+            } else {
+                if group.has(*index) {
+                    return Err(PalwStateV2Error::DeltaMismatch("a close chunk arrived at an index the group already holds"));
+                }
+                group.present |= 1u64 << index;
+                group.chunks.insert(*index, bytes.clone());
+            }
+        }
         PalwDeltaEntryV2::DerivedArtifact { key, old, new } => swap_write!(state.derived_artifacts, key, old, new),
         // Launch blockers §8: the retired-claims accumulator. Its own entry rather than a third
         // component of `Weights`, because it moves on a different event (a retirement sweep) than
@@ -15752,6 +15816,90 @@ pub(crate) mod tests {
         (p, s5, claim_id, session_id)
     }
 
+    /// **A chunk's delta is O(1) in the group** (audit H-3), measured on a full 27-chunk assembly
+    /// at the ruleset's own chunk size.
+    ///
+    /// The swap form journalled `old` and `new` whole on every arrival, so a `count`-chunk
+    /// assembly wrote `Sum(2k-1)` chunk-sized copies — quadratic persisted, reorg-retained delta
+    /// for block space that is linear, and for a deposit
+    /// (`palw_close_assembly_deposit_v1`) that is linear. Both totals are computed here from the
+    /// same records, so the comparison is a measurement rather than an argument.
+    #[test]
+    fn a_split_close_journals_its_chunks_and_not_its_whole_group() {
+        const COUNT: u8 = 27;
+        fn big_chunk(index: u8) -> Vec<u8> {
+            vec![0xA0u8.wrapping_add(index); PALW_COURT_CLOSE_CHUNK_MAX_BYTES]
+        }
+        let (p, s5, _claim_id, session_id) = split_close_fixture();
+        let side = PalwCourtSideV1::Executor;
+        let declaration = PalwConsensusObjectV2::CourtCloseDeclared {
+            session_id,
+            side,
+            count: COUNT,
+            chunk_digests: (0..COUNT).map(|i| palw_court_close_chunk_digest_v1(&big_chunk(i))).collect(),
+            close_digest: h64(0xC105E),
+            verdict: PalwCourtVerdictV2::ExecutorGuilty,
+            signature: vec![1; 8],
+        };
+        let (mut state, declare_delta) = apply(&s5, &p, &ctx(6, 200, 6), &[declaration], None);
+        let opening = borsh::to_vec(&declare_delta).expect("the delta serializes").len();
+        let (mut journalled, mut swap_form) = (opening, opening);
+        // The 27th chunk COMPLETES the group, and W7 never writes a completed record back — so the
+        // assembly this measures is the 26 arrivals that are journalled at all.
+        for index in 0..COUNT - 1 {
+            let before = state.court_close_group(&session_id, side).expect("the row").clone();
+            let object = PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index, bytes: big_chunk(index) };
+            let at = 7 + index as u64;
+            let (next, delta) = apply(&state, &p, &ctx(at, 200 + at, at), &[object], None);
+            journalled += borsh::to_vec(&delta).expect("the delta serializes").len();
+            // What the swap form wrote for the SAME arrival: the record before and the record
+            // after, both whole.
+            let after = next.court_close_group(&session_id, side).expect("the row").clone();
+            swap_form += borsh::to_vec(&PalwDeltaEntryV2::CourtCloseGroup {
+                key: (session_id, side),
+                old: Some(before),
+                new: Some(after),
+            })
+            .expect("the swap entry serializes")
+            .len();
+            state = next;
+        }
+        let block_space = (COUNT as usize - 1) * PALW_COURT_CLOSE_CHUNK_MAX_BYTES;
+        println!(
+            "[H-3] {} arrivals of {} B: journalled {journalled} B of delta ({:.2}x the block space); the swap form was \
+             {swap_form} B ({:.2}x)",
+            COUNT - 1,
+            PALW_COURT_CLOSE_CHUNK_MAX_BYTES,
+            journalled as f64 / block_space as f64,
+            swap_form as f64 / block_space as f64
+        );
+        assert!(
+            journalled < block_space + block_space / 10,
+            "a chunk's delta is no longer O(1) in the group: {journalled} B of delta for {block_space} B of chunks"
+        );
+        assert!(
+            swap_form > journalled * 10,
+            "the swap form is not the quadratic this test exists to have removed ({swap_form} vs {journalled})"
+        );
+        // And the bit and the bytes still revert by the delta alone, which is the property the
+        // entry shape had to keep.
+        let before_last = state.clone();
+        let last = PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index: COUNT - 2, bytes: big_chunk(COUNT - 2) };
+        let _ = last;
+        let (with_more, chunk_delta) = apply(
+            &state,
+            &p,
+            &ctx(40, 240, 40),
+            &[PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index: COUNT - 1, bytes: big_chunk(COUNT - 1) }],
+            None,
+        );
+        // That one completed the group: `close_digest` is `h64(0xC105E)`, which these bytes are
+        // not, so the declarer is convicted and the row is gone.
+        assert!(with_more.court_close_group(&session_id, side).is_none(), "the completing chunk left the group behind");
+        let reverted = revert_delta_v2(&with_more, &chunk_delta, &p).expect("the completing block reverts");
+        assert_eq!(reverted.state_root(), before_last.state_root(), "the reorg did not restore the parent's root");
+    }
+
     /// **A close declared before the ladder narrowed is refused** (audit H-2a).
     ///
     /// The arm's own comment said "a close is legal only at `Terminal`" and nothing asked. At
@@ -17220,6 +17368,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::PendingChunks { .. } => "pending_chunks",
                     PalwDeltaEntryV2::CourtCloseGroup { .. } => "court_close_group",
                     PalwDeltaEntryV2::DerivedArtifact { .. } => "derived_artifact",
+                    PalwDeltaEntryV2::CourtCloseChunkArrived { .. } => "court_close_chunk_arrived",
                 });
             }
         }
