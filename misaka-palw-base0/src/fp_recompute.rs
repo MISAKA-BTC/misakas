@@ -216,7 +216,6 @@ pub struct A16RecomputeKernelsV1<'a> {
     plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
     cache: crate::engine_a16::A16Cache,
     vocab: usize,
-    layers: usize,
 }
 
 impl<'a> A16RecomputeKernelsV1<'a> {
@@ -231,7 +230,6 @@ impl<'a> A16RecomputeKernelsV1<'a> {
             plan,
             cache: crate::engine_a16::A16Cache::new(artifact.shape.n_layers),
             vocab: artifact.shape.vocab,
-            layers: artifact.shape.n_layers,
         })
     }
 }
@@ -261,7 +259,6 @@ impl Base0FpRecomputeKernelsV1 for A16RecomputeKernelsV1<'_> {
     }
 
     fn state_chunks(&self, profile: &PalwShapeProfileV3, positions: u32) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
-        let _ = self.layers;
         // **The CLASS's map, through the one dispatch both directions take.** The same geometry
         // `Base0CheckpointCaptureV1::next_geometry` takes, so a seat chunks the state exactly
         // where the executor did — including the v3 tiled map a graph-v5 class registers.

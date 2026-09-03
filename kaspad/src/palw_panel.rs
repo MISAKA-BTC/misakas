@@ -2432,7 +2432,9 @@ impl PalwPanelService {
                         {
                             break 'verdict Some(verdict);
                         }
-                        let pooled = materials.get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
+                        // The same pooled payloads the interval path was offered, handed on rather
+                        // than cloned a second time: a claim's pool is megabytes.
+                        let pooled = held;
                         let disk = [
                             self.config.retention_dir.join(format!(
                                 "{}{}",
