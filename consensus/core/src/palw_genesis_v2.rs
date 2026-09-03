@@ -313,13 +313,24 @@ mod tests {
     const LEAVES: u64 = 1 << 16;
     const CANONICAL: u64 = 4_096;
 
+    /// The fused kernel's id — the one a genesis registration may not reach (ADR-0082 C-5).
+    fn fused_kernel() -> Hash64 {
+        crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_A16_ATTN_FUSED)
+    }
+
     fn catalog_entry(class_id: Hash64) -> PalwClassCatalogEntryV2 {
+        // Everything this build can adjudicate EXCEPT the fused site. The set is meant to be a
+        // class's own reachable kernels, and no genesis-registrable class reaches that one — the
+        // fold cannot see a genesis row's graph, so it could not tell the court which clock the
+        // class's terminal leaf runs on (`a_fused_genesis_row_is_refused_by_name`).
+        let mut reachable = crate::palw_step_refute::catalogued_kernel_ids_v1();
+        reachable.remove(&fused_kernel());
         PalwClassCatalogEntryV2 {
             class_id,
             artifact_root: h64(0xA7),
             max_step_leaf_count: LEAVES,
             canonical_step_leaf_count: CANONICAL,
-            reachable_kernels: crate::palw_step_refute::catalogued_kernel_ids_v1(),
+            reachable_kernels: reachable,
             court_cost: crate::palw_class_admission_v2::PalwCourtCostV1 {
                 max_close_bytes: 1,
                 max_terminal_macs: 1,
@@ -330,6 +341,39 @@ mod tests {
 
     fn catalog() -> PalwClassCatalogV2 {
         PalwClassCatalogV2::new(vec![catalog_entry(h64(1))]).expect("the fixture catalog is well-formed")
+    }
+
+    /// **A fused class may not be registered at GENESIS, and the refusal names the class.**
+    ///
+    /// `PalwClassStateV2::fused_attention` is what tells the court sweep that this class's terminal
+    /// leaf owes a ROOT CLAIM rather than a close (audit A C-5), and the fold writes it from the
+    /// graph the registration CARRIES. A genesis registration carries none, so the fold writes
+    /// `false` and the class's guilty responders would win by silence — the exact defect C-5 names,
+    /// arriving through the one door that skips the admission gate.
+    ///
+    /// Refused HERE and not in the fold on purpose: resolving a genesis class id against a table of
+    /// the rows this build ships would make the state root a function of the binary, and two builds
+    /// shipping different row sets would root the same genesis differently. The catalog is the
+    /// committed form of the graph and it is in hand at boot, so this is where the question can be
+    /// asked without inventing an answer.
+    #[test]
+    fn a_fused_genesis_row_is_refused_by_name() {
+        let mut entry = catalog_entry(h64(1));
+        entry.reachable_kernels.insert(fused_kernel());
+        let fused_catalog = PalwClassCatalogV2::new(vec![entry]).expect("the fixture catalog is well-formed");
+        let fused_bundle = bundle(&fused_catalog);
+        let objects = [registration(h64(1), CANONICAL), a_bond()];
+        let err = verify_palw_genesis_v2(&fused_bundle, &fused_catalog, &objects, funded).unwrap_err();
+        assert_eq!(err, PalwGenesisV2Error::GenesisClassIsFused { class_id: h64(1) });
+        assert!(err.to_string().contains("post-genesis door"), "the message says which door the class must use: {err}");
+
+        // And the same artifact without the fused kernel loads, so the refusal is about that one
+        // kernel and not about the shape of the test.
+        let clean = catalog();
+        let clean_bundle = bundle(&clean);
+        let mut clean_objects = vec![registration(h64(1), CANONICAL)];
+        clean_objects.extend(a_seatable_registry(&clean_bundle));
+        verify_palw_genesis_v2(&clean_bundle, &clean, &clean_objects, funded).expect("a non-fused row loads");
     }
 
     /// A bundle whose `class_catalog_root` really is this catalog's, so the tests below fail on

@@ -18231,8 +18231,8 @@ pub(crate) mod tests {
     fn the_version_20_state_root_golden_vectors() {
         let empty = PalwChainStateV2::genesis().state_root().to_string();
         let full = m02_populated_state().state_root().to_string();
-        let want_empty = "PENDING_EMPTY";
-        let want_full = "PENDING_FULL";
+        let want_empty = "966bae0706de192840d5a9697764071a065570cb2996d49c82ab6fe1a836afc99ab3fe725bc4387462c8e42bdfa242553f3c10cc435656e7fc2cccdbc52401d3";
+        let want_full = "a0b711e172687e0787d9d6f8307f306493749394caff80d5e24d4324453eea66f7a21c69892b5f9898c07c743601c1a9b86a496ee135f24e8829276566402315";
         assert!(
             empty == want_empty && full == want_full,
             "a version-20 root moved: empty {empty} (want {want_empty}); inhabited {full} (want {want_full})"
@@ -20302,7 +20302,9 @@ pub(crate) mod tests {
             let claim_id = template.claim;
             let trace_root = drill.binding.full_logits_trace_root;
             let space = crate::palw_bisect::PalwBisectSpaceV1::StepLeaves;
-            let size = drill.binding.step_leaf_count;
+            // A space one wider than the open session's, so this is a genuinely NEW session id and
+            // the capacity refusal is what answers it rather than `DuplicateSession`.
+            let size = drill.binding.step_leaf_count + 1;
             let one_more = PalwConsensusObjectV2::CourtOpened {
                 session_id: crate::palw_court_v2::court_session_id_v2(&claim_id, &trace_root, &bond_key(1), &bond_key(1), space, size),
                 claim: claim_id,
