@@ -2407,3 +2407,43 @@ sentence does not.
 > *"the worker's MODEL_ID is the v5 512 row"*, so there is nothing for a citation checker to
 > resolve. **A claim about which tree a fact holds in is not a citation, and we have no
 > instrument for it** — only the habit.
+
+### The structural wall, stated positively
+
+The width limit is worth recording as a property rather than only as a blocker:
+
+> **Nobody can configure their way past the served width.** The A16 row is a hardcoded const
+> with no environment override, and the one lever that does exist — the qwen36 worker's
+> `MISAKA_PALW_MODEL_ID` — lands every canonical row at 8, because they all share
+> `QWEN36_RC_CANONICAL = (7, 2)`. **A limit that cannot be widened by environment is a
+> different and better thing than a limit that merely happens not to be widened**, and an
+> operator cannot produce a commitment wider than the court admits by setting a variable.
+
+### Three times today the note existed and its author walked past it
+
+Not three careless moments — one mechanism, and the most uncomfortable pattern of the evening
+because every instance is self-observed within minutes of writing the rule:
+
+```
+"assert the report's verdict before reading any field"   -> KeyError 'verdict', one turn later
+"pgrep -f matches the asker" (written 2026-08-30)        -> read `script: 2` as running; the
+                                                            script had exited 20 min earlier
+"check the arrow, not the fact" (1c, this hour)          -> "I have no GGUF, therefore I cannot
+                                                            run the gateway smoke" — written
+                                                            WHILE composing the rule; the A16
+                                                            worker never reads MISAKA_PALW_GGUF
+```
+
+> **A rule is at its weakest immediately after you articulate it, not its strongest — because
+> stating it feels like having applied it.** The satisfaction of having named the failure mode
+> is the same feeling as having checked for it, and nothing distinguishes them from inside.
+
+The practical form is not "try harder to remember". It is that **a rule earns its keep only
+once it is attached to a mechanical trigger** — a script, a gate, a grep — because the moment
+it is only in prose it competes with the feeling of already having used it. The three that did
+fire today were all mechanical: `check-doc-citations.sh`, the anchor-count guard that refused
+my `sed` when it found 1 occurrence instead of 2, and `strings | grep -c pow-agent`.
+
+*The guard that stopped the bad `sed` is the smallest and the most instructive: it cost one
+line, it fired within seconds, and what it caught was that my own pattern did not match my own
+text.*
