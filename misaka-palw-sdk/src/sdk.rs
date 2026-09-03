@@ -638,7 +638,11 @@ mod chain_arm_tests {
     use misaka_palw_base0::engine_a16::derived_a16_store;
 
     pub(super) fn court() -> PalwCourtParamsV2 {
-        PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court")
+        // The EXECUTOR's default as this harness's ladder — not the shipped one, which is
+        // `palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES` (2^26). Left where it is deliberately: every
+        // count in these tests is taken against `court()`, so the fixture is self-consistent at
+        // whatever it declares, and moving it would re-measure the SDK battery rather than test it.
+        PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("a legal court")
     }
 
     /// A tiny dense artifact + the CORRECTED profile for its geometry — a class that exists
@@ -1073,8 +1077,13 @@ mod chain_only_lattice_tests {
         let commitment = palw_fp_commitment_v3(&job, &class_facts, &run, NETWORK, 999_999).expect("a finished run commits");
         let claim_id = fp_claim_id_v3(&commitment);
         // The class's quantum is an eighth of its canonical job (ADR-0074 Decision 5).
+        // **Counted against the COURT this fixture runs, not the executor's constant** (ADR-0082
+        // Decision 1). The ruleset is right here — `court()` — and a harness that bounds the class
+        // at `PALW_STEP_MAX_LEAVES` while the chain bounds it at `max_step_leaf_count` is a harness
+        // that cannot exercise any class between the two.
         let canonical_leaves =
-            kaspa_consensus_core::palw_step::step_leaf_count(&profile, &canonical).expect("the class counts its job");
+            kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &canonical, court().max_step_leaf_count())
+                .expect("the class counts its job");
         let quanta = fp_quanta_v3(commitment.work_leaves, fp_class_quantum_leaves_v1(canonical_leaves, 8), 16);
         assert!(quanta >= 1, "the job earns a draw at the class's quantum, got {quanta} at {} leaves", commitment.work_leaves);
 

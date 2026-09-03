@@ -1930,7 +1930,13 @@ impl Params {
             // opening lands past the window and is discarded. Refusing here makes it a network that
             // cannot be built instead of one that runs with an unusable court.
             if let Some(credit) = self.palw_credit.as_ref() {
-                crate::palw_schedule::class_is_adjudicable_v1(&credit.registration.shape_profile, schedule).map_err(|_| {
+                // The ladder the schedule's windows walk is the ruleset's where one is frozen
+                // (a V2 bundle), and the executor's constant on a V1 network, which has no other.
+                let ladder = match &self.palw_consensus_mode {
+                    crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.court.max_step_leaf_count(),
+                    _ => crate::palw_step::PALW_STEP_MAX_LEAVES,
+                };
+                crate::palw_schedule::class_is_adjudicable_capped_v1(&credit.registration.shape_profile, schedule, ladder).map_err(|_| {
                     crate::palw_registry::PalwRegistryError::NotCanonical(
                         "the registered class's step space outruns the ladder these windows can walk",
                     )

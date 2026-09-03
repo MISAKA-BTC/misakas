@@ -485,6 +485,16 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
     let Some(program) = resolve_kernel(&node.kernel_semantics_id) else {
         return Err("no program in this build resolves the node's kernel id");
     };
+    // **A node's op kind and its kernel must be the same op.** The court reads the op kind
+    // (`palw_profile_has_fused_attention_v1`, the dissection site) and the catalog reads the
+    // program the kernel id resolves to (`reachable_kernels_v1`); nothing else forces the two to
+    // agree, so a profile declaring `AttnFused` over some other catalogued kernel — or the fused
+    // kernel under another op kind — would be admitted by one gate and tried by another.
+    let declares_fused = node.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused;
+    let serves_fused = matches!(program, KernelProgram::Qwen36(Qwen36Op::AttnFused));
+    if declares_fused != serves_fused {
+        return Err("a node's op kind and its kernel must be the same op: the court reads one and the catalog the other");
+    }
 
     // **Can the canonical INPUT SET be built for this node at all?**
     //

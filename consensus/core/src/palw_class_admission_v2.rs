@@ -1039,6 +1039,25 @@ pub enum PalwClassAdmissionError {
     /// the adjudicator instead of to the fence.
     #[error("the class carries a fused attention site and this ruleset's court has no dissection to try it with")]
     FusedAttentionNeedsTheKaryCourt,
+    /// **A bottom carries ONE query opening, so a head's query slice has to be inside ONE tile**
+    /// (ADR-0082 Decision 2; fixer FA's note 6).
+    ///
+    /// `palw_court_v2::palw_attn_dispute_site_v2` refuses this at dispute time, by the same
+    /// arithmetic — and refusing it only there means the chain admits a class whose every dispute
+    /// then fails to resolve a site, which is a class with weight and no court. The shape is a
+    /// property of the REGISTERED GRAPH (the rotated-query node's `tile_len` and row width, and
+    /// the head width, are all fields of `PalwShapeProfileV3`), so it is decidable here, once, for
+    /// every head — and the two readings are the same expression so they cannot disagree.
+    #[error(
+        "head {head}'s query slice starts {offset} lanes into a {tile_lanes}-lane tile of the rotated-query row and is \
+         {d_head} lanes wide — a dissection bottom carries one query opening"
+    )]
+    FusedQuerySliceStraddlesTiles { head: u64, offset: u64, d_head: u64, tile_lanes: u64 },
+    /// The fused site's query input does not resolve to a committed, fixed-width row of its own
+    /// layer — so no head's slice can be located in it at all. The string names which of the six
+    /// ways it failed, in the same words the dispute-time resolution uses.
+    #[error("the class's fused attention site has no openable query row: {0}")]
+    FusedQueryRowUnservable(&'static str),
     /// **The price a class is admitted at has to be the price its challengers pay.**
     ///
     /// The cost shape is assembled by `palw_class_ladder_rules_for_court_v1` from the caller's
@@ -1236,6 +1255,60 @@ pub fn palw_profile_has_fused_attention_v1(profile: &PalwShapeProfileV3) -> bool
         .into_iter()
         .flatten()
         .any(|node| node.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused)
+}
+
+/// **Can a dissection bottom open ONE head's query slice with ONE opening?** (ADR-0082 Decision 2;
+/// fixer FA's note 6.)
+///
+/// `palw_court_v2::palw_attn_dispute_site_v2` resolves the fused node's `input_refs[0]` — the
+/// rotated-query row — and refuses a site whose head slice straddles two tiles of it, because the
+/// bottom carries exactly one query opening. That refusal arrives at the FIRST DISPUTE, which is
+/// the wrong moment for a fact about the registered graph: the class would already hold weight,
+/// and the first honest challenger would be the one who discovers the court cannot resolve a site.
+///
+/// Every quantity is a field of `PalwShapeProfileV3` — the query node's `tile_len` and row width,
+/// `attn_heads` and `attn_head_dim` — so the whole question is decidable at admission, for every
+/// head of every fused site at once. Deliberately the SAME expression as the dispute-time one
+/// (`query_lane_offset + d_head > query_tile_lanes`, with `query_tile_lanes` the ragged-last-tile
+/// `min`), so the gate and the court cannot come to disagree about which classes are servable.
+///
+/// The refusals about the query row's KIND are the dispute site's too, in its own words: a
+/// sentinel ref, a ref naming no node, a context-shaped (`KvScaled`) row, a zero tile, and a row
+/// narrower than `heads x d_head`.
+pub fn palw_fused_query_slice_is_openable_v1(profile: &PalwShapeProfileV3) -> Result<(), PalwClassAdmissionError> {
+    use PalwClassAdmissionError::{FusedQueryRowUnservable as Unservable, FusedQuerySliceStraddlesTiles as Straddles};
+    let heads = u64::from(profile.attn_heads);
+    let d_head = u64::from(profile.attn_head_dim);
+    if heads == 0 || d_head == 0 {
+        return Err(Unservable("a fused site needs heads and a head width"));
+    }
+    let row = heads.checked_mul(d_head).ok_or(Unservable("the fused output row overflows"))?;
+    for node in profile.attn_nodes.iter().filter(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused) {
+        let q_ref = *node.input_refs.first().ok_or(Unservable("a fused node with no query input"))?;
+        if q_ref >= crate::palw_step::PALW_STEP_INPUT_SENTINEL_MIN {
+            return Err(Unservable("the fused node's query input is a sentinel, not a committed row"));
+        }
+        let q_node =
+            profile.attn_nodes.get(q_ref as usize).ok_or(Unservable("the fused node's query input names no node of this layer"))?;
+        let crate::palw_step::PalwStepOutLenV1::Fixed { elements: q_row_len } = q_node.out_len else {
+            return Err(Unservable("the query row is context-shaped; a graph-v5 class commits no such row"));
+        };
+        let q_tile_len = u64::from(q_node.tile_len);
+        let q_row_len = u64::from(q_row_len);
+        if q_tile_len == 0 || q_row_len < row {
+            return Err(Unservable("the query row is narrower than the heads it must supply"));
+        }
+        for head in 0..heads {
+            let q_lane = head.checked_mul(d_head).ok_or(Unservable("the head's query offset overflows"))?;
+            let tile_index = q_lane / q_tile_len;
+            let offset = q_lane % q_tile_len;
+            let tile_lanes = q_tile_len.min(q_row_len - tile_index * q_tile_len);
+            if offset + d_head > tile_lanes {
+                return Err(Straddles { head, offset, d_head, tile_lanes });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Every kernel a profile's graph can reach, read off the graph.
@@ -1488,6 +1561,11 @@ pub fn verify_class_admission_v6(
     let fused = palw_profile_has_fused_attention_v1(profile);
     if fused && court.is_none() {
         return Err(PalwClassAdmissionError::FusedAttentionNeedsTheKaryCourt);
+    }
+    // **And the shape the dispute's BOTTOM needs, decided here rather than at the first dispute**
+    // (fixer FA's note 6). See [`palw_fused_query_slice_is_openable_v1`].
+    if fused {
+        palw_fused_query_slice_is_openable_v1(profile)?;
     }
 
     // **And the half neither of those can see: can anybody actually PLAY this class's dispute?**
@@ -3381,6 +3459,215 @@ mod tests {
         let entry = admit(&bundle, &profile, &canonical, &reg).expect("the floor is admissible");
         assert_eq!(entry.canonical_step_leaf_count, counted, "still counted in STEP LEAVES, not decode tokens");
         assert!(!entry.reachable_kernels.is_empty(), "and still coverage-checked");
+    }
+    /// **THE ACCEPTANCE TEST for fixer FD2: one honest graph-v5 512 claim, every layer the chain
+    /// applies, at the RULESET's ladder — and the same claim refused BY NAME at the executor's.**
+    ///
+    /// The genesis registers the graph-v5 dense 512 row and the RC bundle freezes a `2^26` ladder,
+    /// so the admission gate accepts a class whose canonical job counts more than `2^22` step
+    /// leaves. Every layer that still bounded something at `crate::palw_step::PALW_STEP_MAX_LEAVES`
+    /// therefore refused that class's honest work AFTER admission had accepted the class — the
+    /// worst shape a rule can have, because the refusal arrives at a layer nobody registered
+    /// against.
+    ///
+    /// Each assertion below names the layer it is about. The `2^22` half is not decoration: it is
+    /// what says the layer is really reading the number it is handed, rather than passing for a
+    /// reason that has nothing to do with the ladder.
+    ///
+    /// The certificate layer is asserted as the expression `certify_e2e_family_v1` evaluates
+    /// (`step_leaf_count_capped_v1` against the structural top) rather than through the certifier,
+    /// because grading a drill needs planted fault vectors and a weight oracle, which live in
+    /// `misaka-palw-base0`; `misaka_palw_base0::e2e_drill` is where that end is exercised.
+    #[test]
+    fn the_graph_v5_512_row_clears_every_layer_at_the_rulesets_ladder_and_is_named_at_the_executors() {
+        use crate::palw_freeprompt_v3::{
+            PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFpV3Error,
+            PalwFreePromptCommitmentEnvelopeV3, PalwFreePromptCommitmentV3, PalwFreePromptJobV3, fp_trace_manifest_v3,
+        };
+        use crate::tx::{TransactionId, TransactionOutpoint};
+
+        // The two ladders, each read from where it is chosen — neither typed here.
+        let ruleset = crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
+        let executor = PALW_STEP_MAX_LEAVES;
+        assert_eq!(ruleset, PALW_RC_COURT_MAX_STEP_LEAF_COUNT, "the shipped bundles' court field is the RC constant");
+        assert_eq!((ruleset, executor), (1 << 26, 1 << 22), "the two numbers this whole test is about");
+
+        // The class the 5f genesis registers, and the canonical job its own row declares:
+        // ADR-0077 Decision 14's footprint floor, met exactly (`misaka_palw_base0::classes`).
+        let profile = crate::palw_context_ladder::palw_a16_context_row_profile_v5(512).expect("the v5 row projects");
+        let decode = crate::palw_qwen25_profile::QWEN25_A16_CANONICAL.1.max(1);
+        let floor = u32::try_from(crate::palw_context_ladder::palw_canonical_footprint_floor_v1(512)).expect("a u32 footprint");
+        let canonical = context(&profile, floor + 1 - decode, decode);
+        // The longest job the class admits — what the catalog's `max_step_leaf_count` is, and what
+        // the schedule measures its ladder against.
+        let worst_case_job = context(&profile, profile.n_ctx, 1);
+
+        // **The count itself.** Above the executor's constant and inside the ruleset's ladder is
+        // the whole premise; if this stops holding, every assertion below is measuring nothing.
+        let work_leaves = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, ruleset)
+            .expect("layer: the enumeration — the canonical job counts at the ruleset's ladder");
+        // Measured, and pinned so a graph change that moves it says so here: the canonical job is
+        // `(prefill 63, decode 2)` — Decision 14's footprint floor of 64 met exactly — and its
+        // enumeration over the v5 dense 512 graph is 6,630,544 leaves. The class's WORST job (the
+        // whole context as prefill) is 52,778,128, which is also inside `2^26` and is what the
+        // catalog's `max_step_leaf_count` carries.
+        assert_eq!(work_leaves, 6_630_544, "the graph-v5 dense 512 row's canonical job, at (63, 2)");
+        assert!(
+            work_leaves > executor && work_leaves <= ruleset,
+            "the premise: {work_leaves} leaves must sit between the executor's {executor} and the ruleset's {ruleset}"
+        );
+        assert!(
+            crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, executor).is_err(),
+            "and the executor's constant cannot even count it"
+        );
+
+        // ---- layer: ADMISSION (the class the chain accepted) -------------------------------
+        assert_eq!(
+            crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, ruleset).map(|w| w <= ruleset),
+            Ok(true),
+            "layer: admission — the ruleset's ladder admits this class's worst case"
+        );
+        palw_fused_query_slice_is_openable_v1(&profile)
+            .expect("layer: admission — the registered row's head query slices each sit inside one tile (FA note 6)");
+
+        // ---- layer: THE FREE-PROMPT COMMITMENT VALIDATORS ----------------------------------
+        let network_domain = Hash64::from_u64_word(0x4E);
+        let ids: Vec<u32> = (0..canonical.declared_prefill_tokens).collect();
+        let events: Vec<Hash64> = (0..u64::from(decode)).map(|i| Hash64::from_u64_word(i + 1)).collect();
+        let (manifest_root, chunk_count, _) = fp_trace_manifest_v3(Hash64::from_u64_word(0xB1), &events);
+        let envelope = PalwFreePromptCommitmentEnvelopeV3 {
+            commitment: PalwFreePromptCommitmentV3 {
+                trace_root: Hash64::from_u64_word(0x7A),
+                output_root: Hash64::from_u64_word(0x0B),
+                execution_root: Hash64::from_u64_word(0x4E),
+                schedule_root: Hash64::from_u64_word(0x5C),
+                decode_tokens_executed: decode,
+                stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
+                // The honest count, straight off the class's own enumeration.
+                work_leaves,
+                trace_manifest_root: manifest_root,
+                trace_chunk_count: chunk_count,
+                trace_retention_daa: 505_000,
+                job: PalwFreePromptJobV3 {
+                    version: PALW_FP_V3_VERSION,
+                    network_domain,
+                    class_id: profile.shape_profile_id(),
+                    executor_bond: TransactionOutpoint { transaction_id: TransactionId::from_u64_word(7), index: 0 },
+                    executor_pubkey: vec![7; 32],
+                    operator_id: Hash64::from_u64_word(0xE0),
+                    anchor_block: Hash64::from_u64_word(0xA0),
+                    anchor_daa: 5_000,
+                    job_nonce: [0x11; 32],
+                    tokenizer_id: Hash64::from_u64_word(0x70),
+                    prompt_token_ids_hash: crate::palw_v2::prompt_token_ids_hash_v2(&ids),
+                    prompt_tokens: canonical.declared_prefill_tokens,
+                    decode_token_limit: decode,
+                    max_context_tokens: profile.n_ctx,
+                    privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+                    prompt_mode: PALW_FP_PROMPT_MODE_USER,
+                    sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+                    temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+                },
+            },
+            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+        };
+        envelope
+            .validate_stateless_under_ruleset_v3(network_domain, false, ruleset)
+            .expect("layer: the free-prompt commitment validator — the ruleset's ladder admits the honest claim");
+        envelope
+            .validate_shape_v3()
+            .expect("layer: transaction isolation — the context-free door must never be stricter than the walk");
+        assert_eq!(
+            envelope.validate_stateless_under_ruleset_v3(network_domain, false, executor),
+            Err(PalwFpV3Error::WorkLeavesAboveCap { got: work_leaves, max: executor }),
+            "layer: the free-prompt commitment validator — a ruleset that froze 2^22 refuses it, by its own number"
+        );
+
+        // ---- layer: THE LEG (what an executor may commit, and what the court's shape pass reads)
+        crate::palw_step_leg::PalwStepLegBuilderV1::new_capped_v1(canonical.clone(), profile.clone(), ruleset)
+            .expect("layer: the step leg — the producer can build the tree its own honest job needs");
+        assert!(
+            crate::palw_step_leg::PalwStepLegBuilderV1::new_capped_v1(canonical.clone(), profile.clone(), executor).is_err(),
+            "layer: the step leg — and a 2^22 ruleset refuses it"
+        );
+        // The shape pass's own predicate, on the binding's own claim — `check_step_refutation_v1`
+        // convicts `StepLeafCountNotCanonical` unless this is `Ok(claim)`.
+        assert_eq!(
+            crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, work_leaves),
+            Ok(work_leaves),
+            "layer: the leg's shape pass — the honest binding must not convict its own producer"
+        );
+
+        // ---- layer: THE CATALOG ENTRY (the row a genesis publishes) ------------------------
+        let entry = crate::palw_base0_profile::base0_catalog_entry_capped_v1(
+            profile.shape_profile_id(),
+            Hash64::from_u64_word(0xA271FAC7),
+            &profile,
+            &canonical,
+            &worst_case_job,
+            ruleset,
+        )
+        .expect("layer: the catalog entry — the genesis row derives at the ruleset's ladder");
+        assert_eq!(entry.canonical_step_leaf_count, work_leaves, "the row publishes the count the claim carries");
+        assert!(entry.max_step_leaf_count >= work_leaves && entry.max_step_leaf_count <= ruleset);
+        assert!(
+            crate::palw_base0_profile::base0_catalog_entry_capped_v1(
+                profile.shape_profile_id(),
+                Hash64::from_u64_word(0xA271FAC7),
+                &profile,
+                &canonical,
+                &worst_case_job,
+                executor,
+            )
+            .is_err(),
+            "layer: the catalog entry — and the executor's constant cannot build the row at all"
+        );
+        // **The row's cost and the gate's are one derivation** (the 5f integrator's site): the
+        // `court_cost` a catalog publishes must be what `verify_class_admission_v*` derives for the
+        // same class under the same bundle, or the two doors price different courts.
+        assert_eq!(
+            entry.court_cost,
+            derive_court_cost_shaped_v1(&profile, PalwCourtCostShapeV1::genesis_anchored_v1(&profile, ruleset))
+                .expect("the gate's own derivation"),
+            "layer: the catalog entry — the published cost is the gate's"
+        );
+
+        // ---- layer: THE SCHEDULE ------------------------------------------------------------
+        // Dormant on every shipped preset (`palw_schedule: None` on all four), so this is about the
+        // NAME the refusal carries: "your windows afford N rounds and this class needs more" is a
+        // fact an operator can act on; "the class's own shape exceeds the step-space cap" was the
+        // executor's constant answering for a ruleset that does not contain it.
+        let windows = crate::palw_schedule::PalwScheduleParamsV1::stage1_defaults_two_minute_bps();
+        let at_ruleset = crate::palw_schedule::class_is_adjudicable_capped_v1(&profile, &windows, ruleset);
+        match at_ruleset {
+            Err(crate::palw_schedule::PalwScheduleError::LadderCannotReachTheClass { leaves, reachable }) => {
+                assert_eq!(
+                    leaves,
+                    crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, ruleset).expect("counts"),
+                    "layer: the schedule — the refusal names the class's REAL worst case"
+                );
+                assert_eq!(reachable, crate::palw_schedule::max_ladder_space_v1(&windows));
+            }
+            other => panic!("layer: the schedule — expected the windows to name themselves, got {other:?}"),
+        }
+        assert!(
+            matches!(
+                crate::palw_schedule::class_is_adjudicable_capped_v1(&profile, &windows, executor),
+                Err(crate::palw_schedule::PalwScheduleError::ParamsNotCanonical { .. })
+            ),
+            "layer: the schedule — at 2^22 the same class is refused by a number the ruleset does not contain"
+        );
+
+        // ---- layer: THE E2E CERTIFICATE'S DECLARED COUNT ------------------------------------
+        assert_eq!(
+            crate::palw_step::step_leaf_count_capped_v1(
+                &profile,
+                &canonical,
+                crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES
+            ),
+            Ok(work_leaves),
+            "layer: the E2E certificate — `certify_e2e_family_v1` must be able to count the graph it grades"
+        );
     }
 }
 

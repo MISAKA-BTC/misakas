@@ -27,7 +27,6 @@ use crate::palw_legs::PalwCheckpointProfileV1;
 use crate::palw_slash::{PalwSlashError, check_job_context_shape};
 use crate::palw_step::{
     PalwLayerKindV1, PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepError, canonical_step_leaf_index, kv_aux_leaf_count,
-    step_leaf_count,
 };
 use crate::palw_v2::PalwJobContextV2;
 
@@ -917,10 +916,27 @@ pub struct PalwStepLegBuilderV1 {
 }
 
 impl PalwStepLegBuilderV1 {
+    /// **The DEFAULT ladder, for a builder with no ruleset in scope** — see
+    /// [`PALW_STEP_LEG_MAX_LEAVES`]. A producer that knows which network it serves calls
+    /// [`Self::new_capped_v1`] with `PalwCourtParamsV2::max_step_leaf_count`; building at the
+    /// executor's constant on a `2^26` network refuses the class's own honest job.
     pub fn new(context: PalwJobContextV2, profile: PalwShapeProfileV3) -> Result<Self, PalwStepLegError> {
+        Self::new_capped_v1(context, profile, PALW_STEP_LEG_MAX_LEAVES)
+    }
+
+    /// [`Self::new`] against the ladder the RULESET froze (ADR-0080 W1b, ADR-0082 Decision 1).
+    ///
+    /// The count this sizes the tree with is the same enumeration the court's shape pass
+    /// recomputes, so a leg built at one ladder and judged at another is a leg whose honest
+    /// producer is convicted for a number nobody disagreed with.
+    pub fn new_capped_v1(
+        context: PalwJobContextV2,
+        profile: PalwShapeProfileV3,
+        max_step_leaf_count: u64,
+    ) -> Result<Self, PalwStepLegError> {
         check_job_context_shape(&context).map_err(PalwStepLegError::Context)?;
         profile.validate_shape()?;
-        let expected_total = step_leaf_count(&profile, &context)?;
+        let expected_total = crate::palw_step::step_leaf_count_capped_v1(&profile, &context, max_step_leaf_count)?;
         let expected_aux = kv_aux_leaf_count(&profile, &context);
         Ok(Self {
             context_hash: context.context_hash(),
@@ -1323,7 +1339,25 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
         if footprint > binding.shape_profile.n_ctx as u64 {
             return Some(PalwStepFaultV1::JobExceedsClassContext);
         }
-        match step_leaf_count(&binding.shape_profile, &binding.job_context) {
+        // **The cap is the ACCUSATION's own claim, not the executor's constant** (ADR-0082
+        // Decision 1: "the ruleset's is read from the bundle, never typed").
+        //
+        // The rule on this line is an EQUALITY — the committed count must be the canonical
+        // function of `(profile, context)` — and the cap was only ever the enumeration's own
+        // bound. Spelling it `PALW_STEP_MAX_LEAVES` made the shape pass answer
+        // `StepLeafCountNotCanonical` for every binding above `2^22`, which on a `2^26` ruleset is
+        // a CONVICTION of the honest producer of a class the admission gate accepted: the graph-v5
+        // dense 512 row's canonical job counts 6,630,544 leaves, so its every refutation — the
+        // honest one included — convicted, and the family could not certify (`HonestRunConvicted`)
+        // let alone be prosecuted.
+        //
+        // `binding.step_leaf_count` is the exact cap this comparison needs and it needs no
+        // ruleset: the walk returns `Ok(n)` iff the true count is at most the claim, so
+        // `Ok(n) && n == claim` is the same predicate at every ladder, and a claim the enumeration
+        // overruns still convicts by the same name. `step_leaf_count_capped_v1` is a closed form
+        // (at most 256 node visits, plus `⌈log₂⌉` evaluations to locate an overrun), so a
+        // stranger's inflated claim buys no walk.
+        match crate::palw_step::step_leaf_count_capped_v1(&binding.shape_profile, &binding.job_context, binding.step_leaf_count) {
             Ok(count) if count == binding.step_leaf_count => {}
             _ => return Some(PalwStepFaultV1::StepLeafCountNotCanonical),
         }
@@ -1517,7 +1551,12 @@ fn kv_chunk_fault(binding: &PalwStepBindingV2, opening: &PalwStepOpeningV1, prei
     }
     // Reuse the builder's rank derivation via a throwaway view: canonical rank must equal
     // (leaf_index − main leaves).
-    let main = match step_leaf_count(&binding.shape_profile, &binding.job_context) {
+    // Same cap, same reason as the shape pass above: the binding's own claim, never the executor's
+    // constant. This runs only AFTER `shape_fault` has established `count == step_leaf_count`, so
+    // the cap is exact here and the `Err` arm is unreachable through `check_step_refutation_v1`;
+    // it stays fail-closed for any other caller.
+    let main = match crate::palw_step::step_leaf_count_capped_v1(&binding.shape_profile, &binding.job_context, binding.step_leaf_count)
+    {
         Ok(total) => total - kv_aux_leaf_count(&binding.shape_profile, &binding.job_context),
         Err(_) => return Some(PalwStepFaultV1::StepLeafCountNotCanonical),
     };
