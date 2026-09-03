@@ -2021,11 +2021,7 @@ mod tests {
     /// costs after Decision 7.
     #[test]
     fn u01_the_capture_is_priced_against_the_forward() {
-        use kaspa_consensus_core::palw_freeprompt_v3::{
-            PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3,
-        };
         use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
-        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 
         let Ok(path) = std::env::var("MISAKA_PALW_U01_ARTIFACT") else {
             eprintln!("U-01: skipped — set MISAKA_PALW_U01_ARTIFACT to the dense .palwart to measure");
