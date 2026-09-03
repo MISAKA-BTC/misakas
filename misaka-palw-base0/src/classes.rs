@@ -452,8 +452,9 @@ pub struct A16ArtifactRowV1 {
 /// * the **width** is the header's `max_position`, the rotary table's span, which is the widest row
 ///   the file can serve — and is the number `palw_context_ladder`'s 512 already is ("the dense
 ///   artifact's rotary table covers 512 positions, the converter's default");
-/// * the **graph** is `palw_a16_context_row_profile_v1`, the shipped ladder projection, under the
-///   epsilon the artifact executes (`qwen25_a16_artifact_row_profile_v1`).
+/// * the **graph** is `palw_a16_context_row_profile_v5` — the graph-v3 dense row with its
+///   attention site fused and the tiled v3 map (ADR-0082), the row the genesis registers — under
+///   the epsilon the artifact executes.
 ///
 /// `n_ctx` may narrow the row below the header's span (a 256-wide row on a 512-position artifact
 /// is a class those weights can serve); it may never widen it, because a rotary table that does
@@ -508,8 +509,17 @@ pub fn a16_row_for_artifact_shape_v1(
         return Err(A16ArtifactRowError::WiderThanTheArtifact { asked, span });
     }
     let width = u32::try_from(asked).map_err(|_| A16ArtifactRowError::WiderThanTheArtifact { asked, span })?;
+    // **The graph the artifact's row is projected through is the graph the genesis registers**
+    // (ADR-0082): the graph-v3 dense row with its attention site fused and the tiled v3 map,
+    // under the epsilon the artifact executes — `palw_a16_context_row_profile_v5`, the same
+    // constructor `a16_graph_v5_row_v1` ships. It WAS `palw_a16_context_row_profile_v1` (graph-v2),
+    // so `palw-certify bind --artifact` named a class at the same width differing only by the
+    // fused site — a ClassLaneCertified for a class the genesis set does not contain, and a lane
+    // that ships CLOSED (the 5f card's §7 defect in its other direction). The forcing test
+    // (`the_graph_v5_row_is_the_graph_v3_row_with_its_attention_site_fused`) existed and the
+    // production path took the other spelling anyway; this is that path, now on the one spelling.
     let profile =
-        kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v1(width).map_err(A16ArtifactRowError::Projection)?;
+        kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v5(width).map_err(A16ArtifactRowError::Projection)?;
     Ok(A16ArtifactRowV1 {
         profile,
         n_ctx: width,
@@ -531,7 +541,7 @@ pub fn a16_ladder_row_v1(n_ctx: u32) -> Result<PalwShapeProfileV3, A16ArtifactRo
     if n_ctx == 0 {
         return Err(A16ArtifactRowError::ZeroWidth);
     }
-    kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v1(n_ctx).map_err(A16ArtifactRowError::Projection)
+    kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v5(n_ctx).map_err(A16ArtifactRowError::Projection)
 }
 
 /// **One class of the qwen36 lineage this build knows the canonical form of.**
@@ -823,6 +833,31 @@ pub fn resolve_class_v1(
 
 #[cfg(test)]
 mod tests {
+    /// **`bind --artifact`'s derivation names the class the genesis registers.** The header of the
+    /// shipped dense artifact, projected through `a16_row_for_artifact_shape_v1` at its own width,
+    /// is the graph-v5 512 row — the same `shape_profile_id` as `a16_graph_v5_row_v1`. It was the
+    /// graph-v2 row at that width (8d2e6f16…), a class the genesis set does not contain.
+    #[test]
+    fn the_artifacts_own_row_is_the_genesis_graph_v5_row() {
+        let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(
+            kaspa_consensus_core::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT,
+            42,
+            2,
+        )
+        .expect("a court");
+        let genesis = super::a16_graph_v5_row_v1().expect("the genesis row");
+        let row = super::a16_row_for_artifact_shape_v1(&court, &genesis.artifact_shape, None).expect("the header derives a row");
+        assert_eq!(row.n_ctx, super::A16_CONVERTER_ROTARY_SPAN_V1, "the header's width is the row's");
+        assert!(!row.narrowed);
+        assert_eq!(
+            row.profile.shape_profile_id(),
+            genesis.profile.shape_profile_id(),
+            "one class, one spelling: the artifact-derived row must be the genesis row (class {})",
+            genesis.profile.shape_profile_id()
+        );
+        assert_eq!(row.profile, genesis.profile, "and the whole profile, not only its id");
+    }
+
 
     /// **A dense row whose declared epsilon is the one its artifact executes — and the older rows
     /// keep theirs.**
