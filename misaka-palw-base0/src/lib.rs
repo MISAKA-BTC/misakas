@@ -52,6 +52,7 @@ pub mod engine;
 pub mod engine_a16;
 pub mod fp_capture;
 pub mod fp_interval;
+pub mod fp_recompute;
 pub mod fp_worker;
 pub mod fuzz_a16;
 pub mod fuzz_qwen36;

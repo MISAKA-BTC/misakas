@@ -117,6 +117,29 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // preimage is refused by the transition whoever sent it, and requiring a signature would
         // only stop a stranger from paying to deliver a mover's own evidence.
         | PalwConsensusObjectV2::CourtCloseChunk { .. } => Ok(()),
+        // **ADR-0082 Decision 2: the dissection's three moves ride, each carrying its own
+        // authorisation.** The same stateless/stateful split every other court move uses — this
+        // layer checks that a signature is PRESENT, and whether it is the responder's or the
+        // challenger's key is the acceptance layer's, where the registry is in hand. Unsigned,
+        // either party could write the other's moves: a challenger writing disclosures binds an
+        // honest executor to partial sums it never claimed, and a responder writing choices steers
+        // the dissection away from its own divergence.
+        //
+        // Whether the k-ary court is armed at all is also the acceptance layer's, for the reason
+        // this list is stateless: a fence is resolved at a DAA score, and this function does not
+        // have one.
+        PalwConsensusObjectV2::CourtAttnRootClaimed { signature, .. }
+        | PalwConsensusObjectV2::CourtAttnDissected { signature, .. }
+        | PalwConsensusObjectV2::CourtAttnChildChosen { signature, .. }
+            if !signature.is_empty() =>
+        {
+            Ok(())
+        }
+        PalwConsensusObjectV2::CourtAttnRootClaimed { .. }
+        | PalwConsensusObjectV2::CourtAttnDissected { .. }
+        | PalwConsensusObjectV2::CourtAttnChildChosen { .. } => Err(
+            "a fused-attention dissection move must carry the signature of the party it is attributed to — unsigned, either side could write the other's moves",
+        ),
         PalwConsensusObjectV2::CourtCloseDeclared { signature, .. } if !signature.is_empty() => Ok(()),
         PalwConsensusObjectV2::CourtCloseDeclared { .. } => Err(
             "a close declaration must carry the signature of the side it declares for — without one either party could write the other's close and pin it to a verdict it never asserted",

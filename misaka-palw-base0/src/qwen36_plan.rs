@@ -39,11 +39,11 @@ use kaspa_consensus_core::palw_step::{
     PalwStepLaneV1, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, kernel_semantics_id_v1,
 };
 use kaspa_consensus_core::palw_step_refute::{
-    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_RESCALE, KDESC_A16_REQUANTIZE,
-    KDESC_A16_RMS_NORM, KDESC_A16_SOFTMAX, KDESC_Q36_DECAY, KDESC_Q36_GATE_APPLY, KDESC_Q36_GDN_STEP, KDESC_Q36_HEAD_RMS_NORM,
-    KDESC_Q36_L2_NORM, KDESC_Q36_MATMUL_GROUPED, KDESC_Q36_MATMUL_GROUPED_WIDE, KDESC_Q36_MOE_COMBINE, KDESC_Q36_MUL_WIDE,
-    KDESC_Q36_RESCALE_ROW, KDESC_Q36_RMS_NORM_WIDE, KDESC_Q36_ROPE_PARTIAL, KDESC_Q36_ROUTER_TOPK, KDESC_Q36_SIGMOID, KDESC_Q36_SILU,
-    KDESC_Q36_SSM_CONV,
+    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_FUSED, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_RESCALE,
+    KDESC_A16_REQUANTIZE, KDESC_A16_RMS_NORM, KDESC_A16_SOFTMAX, KDESC_Q36_DECAY, KDESC_Q36_GATE_APPLY, KDESC_Q36_GDN_STEP,
+    KDESC_Q36_HEAD_RMS_NORM, KDESC_Q36_L2_NORM, KDESC_Q36_MATMUL_GROUPED, KDESC_Q36_MATMUL_GROUPED_WIDE, KDESC_Q36_MOE_COMBINE,
+    KDESC_Q36_MUL_WIDE, KDESC_Q36_RESCALE_ROW, KDESC_Q36_RMS_NORM_WIDE, KDESC_Q36_ROPE_PARTIAL, KDESC_Q36_ROUTER_TOPK,
+    KDESC_Q36_SIGMOID, KDESC_Q36_SILU, KDESC_Q36_SSM_CONV, palw_attn_fused_tensors_v1,
 };
 
 use crate::kernels::{a16_attn_scores_fast, a16_attn_values_fast};
@@ -224,6 +224,17 @@ enum PlanOpV1 {
     },
     AttnValues {
         name: NameRef,
+    },
+    /// **ADR-0082 Decision 1: the whole attention site as one op.** The four registered operands
+    /// are resolved ONCE, at compile time, from the single name the node carries — through
+    /// `palw_attn_fused_tensors_v1`, the same derivation the court's arm reads — so the
+    /// interpreter and the adjudicator cannot resolve different tensors. The three context-wide
+    /// rows the four separate ops commit live only inside this arm.
+    AttnFused {
+        softmax: NameRef,
+        scores: NameRef,
+        probs: NameRef,
+        values: NameRef,
     },
     /// `q36_router_topk`; commits `[ids…, weights…]` — the order the engine's own probe uses.
     RouterTopk {
@@ -820,6 +831,28 @@ impl<'a> Qwen36Engine<'a> {
                     a16_attn_values_fast(&p_row, &v_series, s.n_heads, s.n_kv_heads, s.head_dim, &vec![p; s.n_heads * s.head_dim])
                         .map_err(a16_refuse("attn_values"))?
                 }
+                // **The fused attention site** (ADR-0082 Decision 1): W9, W11, the probability
+                // requantization and W10, with the three intermediates living only in this frame.
+                // The row committed below is the OUTPUT row. Composed from the same four calls the
+                // separate arms make, which is what keeps `a16_attn_fused_reference_v1` — the
+                // kernel descriptor's declared semantics, and what the court recomputes — equal to
+                // this to the bit.
+                PlanOpV1::AttnFused { softmax, scores, probs, values } => {
+                    let q = resolve(&node.inputs[0], &rows)?;
+                    let k_series = resolve(&node.inputs[1], &rows)?;
+                    let v_series = resolve(&node.inputs[2], &rows)?;
+                    let history = if kv_dim == 0 { 0 } else { k_series.len() / kv_dim };
+                    let sp = a.one_param(&name_of(scores))?;
+                    let raw = a16_attn_scores_fast(&q, &k_series, s.n_heads, s.n_kv_heads, s.head_dim, &vec![sp; s.n_heads * history])
+                        .map_err(a16_refuse("attn_scores"))?;
+                    let up_bits = a.scalar(&name_of(softmax))?.clamp(0, 62) as u8;
+                    let dist = a16_softmax_rows(&raw, history, up_bits).map_err(a16_refuse("attn_softmax"))?;
+                    let pp = a.one_param(&name_of(probs))?;
+                    let codes = a16_requant(&dist, &vec![pp; dist.len()]).map_err(a16_refuse("attn_probs"))?;
+                    let vp = a.one_param(&name_of(values))?;
+                    a16_attn_values_fast(&codes, &v_series, s.n_heads, s.n_kv_heads, s.head_dim, &vec![vp; s.n_heads * s.head_dim])
+                        .map_err(a16_refuse("attn_values"))?
+                }
                 PlanOpV1::RouterTopk { name, k } => {
                     let x = resolve(&node.inputs[0], &rows)?;
                     let up = a.scalar(&name_of(name))?.clamp(0, 62) as u8;
@@ -919,6 +952,7 @@ fn plan_table(
     let k_scores = kernel_semantics_id_v1(KDESC_A16_ATTN_SCORES);
     let k_soft = kernel_semantics_id_v1(KDESC_A16_SOFTMAX);
     let k_vals = kernel_semantics_id_v1(KDESC_A16_ATTN_VALUES);
+    let k_fused = kernel_semantics_id_v1(KDESC_A16_ATTN_FUSED);
     let k_add = kernel_semantics_id_v1(KDESC_A16_ADD_ELEM);
     let k_rescale_mm = kernel_semantics_id_v1(KDESC_A16_MATMUL_RESCALE);
     let k_grouped = kernel_semantics_id_v1(KDESC_Q36_MATMUL_GROUPED);
@@ -1187,6 +1221,34 @@ fn plan_table(
                 }
                 PlanOpV1::AttnValues { name: name_ref() }
             }
+            // **ADR-0082 Decision 1**, the hybrid's fused site. One name in the declaration, four
+            // registered operands, resolved through the ONE derivation the court also reads.
+            (Op::AttnFused, _, _) if kid == k_fused => {
+                arity(3)?;
+                let t = palw_attn_fused_tensors_v1(full_name).ok_or_else(|| {
+                    refuse(index, format!("fused operand {full_name:?} is not a softmax store this family registers"))
+                })?;
+                let as_ref = |n: &str| -> NameRef {
+                    match n.strip_prefix("blk.{layer}.") {
+                        Some(suffix) => NameRef::PerLayer(suffix.to_string()),
+                        None => NameRef::Global(n.to_string()),
+                    }
+                };
+                width(q_dim, "the attention output")?;
+                need(0, W::Fixed(q_dim), "the query")?;
+                if inputs.get(1) != Some(&PlanInput::CachedK) {
+                    return Err(refuse(index, "a fused attention site read something other than the key series".to_string()));
+                }
+                if inputs.get(2) != Some(&PlanInput::CachedV) {
+                    return Err(refuse(index, "a fused attention site read something other than the value series".to_string()));
+                }
+                PlanOpV1::AttnFused {
+                    softmax: as_ref(&t.softmax_up),
+                    scores: as_ref(&t.scores),
+                    probs: as_ref(&t.probs),
+                    values: as_ref(&t.values),
+                }
+            }
             (Op::SsmConv, Some("linear_conv.weight"), _) if kid == k_conv => {
                 arity(3)?;
                 width(conv_w, "the convolution row")?;
@@ -1435,6 +1497,93 @@ mod tests {
     #[test]
     fn the_interpreter_and_the_compiled_engine_agree_bit_for_bit() {
         differential(&qwen36_dev_fixture(8, 16), 4, 6);
+    }
+
+    /// **ADR-0082 Decision 1 on the hybrid: the fused site computes the same model, and commits
+    /// one row where the v2 graph commits four.**
+    ///
+    /// The interpreter's own differential cannot be reused — the compiled engine has no fused arm
+    /// and never will — so the reference here is the v2 PLAN over the same artifact, which the
+    /// test above has already pinned to the compiled engine. Transitively: v5 plan = v2 plan =
+    /// compiled engine, at the logits, at every row outside the site, and at the cache.
+    ///
+    /// The fused row itself is checked against `a16_attn_fused_reference_v1` — the kernel
+    /// descriptor's declared semantics and exactly what the court recomputes — and against
+    /// `a16_attn_fused_via_tiles_v1`, the route a dissection folds to (invariant Z1).
+    #[test]
+    fn the_fused_site_agrees_with_the_v2_graph_and_with_the_reference() {
+        use kaspa_consensus_core::palw_base0_a16::{A16AttnFusedParamsV1, a16_attn_fused_reference_v1, a16_attn_fused_via_tiles_v1};
+        use kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v5;
+        use kaspa_consensus_core::palw_step::{PalwStepOpKindV1, PalwStepOutLenV1};
+
+        let artifact = qwen36_dev_fixture(8, 16);
+        let engine = Qwen36Engine::new(&artifact);
+        let g = geometry_of(&artifact.shape, 4);
+        let v2 = qwen36_profile_v2(g).expect("the v2 row projects");
+        let v5 = qwen36_profile_v5(g).expect("the v5 row projects");
+        assert!(
+            v5.attn_nodes.iter().chain(&v5.gdn_nodes).all(|n| !matches!(n.out_len, PalwStepOutLenV1::KvScaled { .. })),
+            "a v5 hybrid row still commits a context-shaped row"
+        );
+        let fused_at = v5
+            .attn_nodes
+            .iter()
+            .position(|n| n.op_kind == PalwStepOpKindV1::AttnFused)
+            .expect("the v5 attention table has a fused site");
+        let plan_v2 = engine.plan_from_profile(&v2).expect("v2 is servable");
+        let plan_v5 = engine.plan_from_profile(&v5).expect("v5 is servable");
+
+        let mut cache_v2 = Qwen36Cache::new(&artifact.shape);
+        let mut cache_v5 = Qwen36Cache::new(&artifact.shape);
+        let mut sites = 0usize;
+        for position in 0..5usize {
+            let token = (position * 7 + 3) % artifact.shape.vocab;
+            let (a, ta) = engine.forward_token_planned(&plan_v2, &mut cache_v2, token, position).expect("v2 walks");
+            let (b, tb) = engine.forward_token_planned(&plan_v5, &mut cache_v5, token, position).expect("v5 walks");
+            assert_eq!(a, b, "the logits moved at position {position}");
+            assert_eq!(ta.pre, tb.pre, "pre rows at position {position}");
+            assert_eq!(ta.post, tb.post, "post rows at position {position}");
+            assert_eq!(ta.layers.len(), tb.layers.len(), "the same layers ran");
+            for (li, (v2_rows, v5_rows)) in ta.layers.iter().zip(tb.layers.iter()).enumerate() {
+                // The recurrence layers declare no attention site and are untouched by the fusion.
+                if artifact.shape.layer_types[li] != crate::qwen36::Qwen36LayerKind::FullAttention {
+                    assert_eq!(v2_rows, v5_rows, "layer {li}: a recurrence layer moved");
+                    continue;
+                }
+                assert_eq!(v5_rows.len() + 3, v2_rows.len(), "attention layer {li}: four rows became one");
+                assert_eq!(v5_rows[fused_at], v2_rows[fused_at + 3], "layer {li} position {position}: the fused row");
+                assert_eq!(&v5_rows[..fused_at], &v2_rows[..fused_at], "layer {li}: the rows before the site");
+                assert_eq!(&v5_rows[fused_at + 1..], &v2_rows[fused_at + 4..], "layer {li}: the rows after the site");
+
+                // The declared semantics, on the same operands the interpreter resolved.
+                let layer = li;
+                let one =
+                    |n: &str| -> A16QuantParams { artifact.one_param(&format!("blk.{layer}.{n}")).expect("a registered triple") };
+                let params = A16AttnFusedParamsV1 {
+                    scores: one("attn_logits.a16"),
+                    probs: one("attn_probs.a16"),
+                    values: one("attn_values.a16"),
+                    up_bits: artifact.scalar(&format!("blk.{layer}.attn_softmax_up.a16")).expect("the widening").clamp(0, 62) as u8,
+                };
+                let q = &v5_rows[v5.attn_nodes[fused_at].input_refs[0] as usize];
+                let flat = |series: &Vec<Vec<i32>>| -> Vec<i32> { series.iter().flatten().copied().collect() };
+                let k = flat(&cache_v5.keys[layer]);
+                let v = flat(&cache_v5.values[layer]);
+                let (h, kvh, dh) = (artifact.shape.n_heads, artifact.shape.n_kv_heads, artifact.shape.head_dim);
+                let reference = a16_attn_fused_reference_v1(q, &k, &v, h, kvh, dh, params).expect("the composition runs");
+                assert_eq!(v5_rows[fused_at], reference, "layer {li} position {position}: the interpreter parted from the reference");
+                for tile in [1usize, 4] {
+                    let tiled = a16_attn_fused_via_tiles_v1(q, &k, &v, h, kvh, dh, params, tile).expect("the tile route runs");
+                    assert_eq!(v5_rows[fused_at], tiled, "layer {li} position {position} tile {tile}: the tile route parted");
+                }
+                sites += 1;
+            }
+        }
+        assert!(sites > 0, "the fixture has attention layers, or this test gates nothing");
+        assert_eq!(cache_v2.keys, cache_v5.keys, "the two graphs must leave the same cache");
+        assert_eq!(cache_v2.values, cache_v5.values);
+        assert_eq!(cache_v2.conv, cache_v5.conv);
+        assert_eq!(cache_v2.gdn, cache_v5.gdn);
     }
 
     /// The all-attention (qwen3moe) flavor through the same plan machinery: the stripped v2

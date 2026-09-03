@@ -99,6 +99,73 @@ pub const KDESC_A16_ADD_ELEM: &str = "a16/add-elem/lane-sliced/i32-exact/v1";
 pub const KDESC_A16_SOFTMAX: &str = "a16/softmax/rowmax-shifted-intexp-intrecip/v1";
 pub const KDESC_A16_ATTN_SCORES: &str = "a16/attn-scores/i16xi16-i64-gqa/v1";
 pub const KDESC_A16_ATTN_VALUES: &str = "a16/attn-values/i16xi16-i64-gqa/v1";
+/// **ADR-0082 Decision 1: the fused attention site** — W9, W11, the probs requantization and
+/// W10 composed, committing only the output row, refuted by the history dissection of
+/// `palw_attn_dissect` rather than by opening a context-wide row. Its semantics is
+/// `palw_base0_a16::a16_attn_fused_reference_v1`, and this build's recompute arm runs exactly
+/// that composition.
+///
+/// # The four registered tensors, from the one the node names
+///
+/// A `PalwStepNodeV1` has ONE `weight_name`, and a fused site reads FOUR registered operands:
+/// W9's score triple, the probability requant triple, W10's value triple and the softmax's
+/// widening byte. The artifact is UNCHANGED by the fusion — every one of those four is the same
+/// tensor the four separate nodes read — so the other three are DERIVED from the one the node
+/// names, by [`palw_attn_fused_tensors_v1`], and that function is the single description both the
+/// engine's plan compiler and this adjudicator read (ADR-0049 Decision F). The tree has been
+/// burnt twice by two spellings of one name mapping; there is one here.
+///
+/// The name the node carries is the SOFTMAX's, because it is the one that differs between the two
+/// registered families — the dense artifact stores `blk.{layer}.attn_softmax_up` and the hybrid
+/// stores `blk.{layer}.attn_softmax_up.a16` — while the three triples carry identical suffixes in
+/// both. So the naming rule is: the node names the softmax tensor, whose spelling fixes the layer
+/// prefix, and the triples are that prefix plus `attn_logits.a16`, `attn_probs.a16` and
+/// `attn_values.a16`. A name that is not one of the two registered softmax spellings resolves to
+/// nothing and the node is refused at REGISTRATION (`kernel_can_serve_node_v1`), never discovered
+/// at the first dispute.
+pub const KDESC_A16_ATTN_FUSED: &str = "a16/attn-fused/scores-softmax-requant-values/history-dissection/v1";
+
+/// The softmax tensor's stem, shared by both families: the dense artifact stores exactly this and
+/// the hybrid stores it with [`PALW_ATTN_FUSED_A16_SUFFIX`] appended.
+pub const PALW_ATTN_FUSED_SOFTMAX_STEM: &str = "attn_softmax_up";
+/// The hybrid's suffix on the softmax store. The two spellings are a registration fact of the two
+/// shipped converters, not a choice this rule makes.
+pub const PALW_ATTN_FUSED_A16_SUFFIX: &str = ".a16";
+/// W9's score triple, W5's probability triple and W10's value triple — identically suffixed in
+/// both families, which is why the softmax is the name the node carries.
+pub const PALW_ATTN_FUSED_SCORES_LEAF: &str = "attn_logits.a16";
+pub const PALW_ATTN_FUSED_PROBS_LEAF: &str = "attn_probs.a16";
+pub const PALW_ATTN_FUSED_VALUES_LEAF: &str = "attn_values.a16";
+
+/// The four registered operands of one fused attention site, all for the same layer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwAttnFusedTensorsV1 {
+    /// The one the node itself names — the softmax's widening byte.
+    pub softmax_up: String,
+    pub scores: String,
+    pub probs: String,
+    pub values: String,
+}
+
+/// **The one description of a fused site's operand names** — see [`KDESC_A16_ATTN_FUSED`].
+///
+/// `None` for a name that is not one of the two registered softmax spellings, which is the honest
+/// answer: a court that guessed a prefix would be choosing which bytes it recomputes against.
+pub fn palw_attn_fused_tensors_v1(weight_name: &str) -> Option<PalwAttnFusedTensorsV1> {
+    let hybrid = format!("{PALW_ATTN_FUSED_SOFTMAX_STEM}{PALW_ATTN_FUSED_A16_SUFFIX}");
+    let prefix = weight_name.strip_suffix(hybrid.as_str()).or_else(|| weight_name.strip_suffix(PALW_ATTN_FUSED_SOFTMAX_STEM))?;
+    // A prefix is a layer prefix (`blk.7.`) or nothing at all; anything else is a name that merely
+    // ends in the stem, and the three triples it would imply are names nobody registered.
+    if !prefix.is_empty() && !prefix.ends_with('.') {
+        return None;
+    }
+    Some(PalwAttnFusedTensorsV1 {
+        softmax_up: weight_name.to_string(),
+        scores: format!("{prefix}{PALW_ATTN_FUSED_SCORES_LEAF}"),
+        probs: format!("{prefix}{PALW_ATTN_FUSED_PROBS_LEAF}"),
+        values: format!("{prefix}{PALW_ATTN_FUSED_VALUES_LEAF}"),
+    })
+}
 
 /// The hybrid graph's own ops (ADR-0052). Each names the accumulator width because that is the
 /// only degree of freedom an integer kernel has left.
@@ -143,6 +210,7 @@ pub const KDESC_A16_ALL: &[&str] = &[
     KDESC_A16_SOFTMAX,
     KDESC_A16_ATTN_SCORES,
     KDESC_A16_ATTN_VALUES,
+    KDESC_A16_ATTN_FUSED,
     KDESC_A16_ROPE,
     KDESC_A16_MUL_ELEM,
 ];
@@ -196,6 +264,7 @@ pub const KDESC_ALL: &[&str] = &[
     KDESC_A16_SOFTMAX,
     KDESC_A16_ATTN_SCORES,
     KDESC_A16_ATTN_VALUES,
+    KDESC_A16_ATTN_FUSED,
     KDESC_Q36_MATMUL_GROUPED,
     KDESC_Q36_MATMUL_GROUPED_WIDE,
     KDESC_Q36_ROPE_PARTIAL,
@@ -286,6 +355,7 @@ enum Qwen36Op {
     Softmax,
     AttnScores,
     AttnValues,
+    AttnFused,
     MatMulGrouped,
     MatMulGroupedWide,
     RopePartial,
@@ -351,6 +421,7 @@ const KERNEL_CATALOG: &[(&str, KernelProgram)] = &[
     (KDESC_A16_SOFTMAX, KernelProgram::Qwen36(Qwen36Op::Softmax)),
     (KDESC_A16_ATTN_SCORES, KernelProgram::Qwen36(Qwen36Op::AttnScores)),
     (KDESC_A16_ATTN_VALUES, KernelProgram::Qwen36(Qwen36Op::AttnValues)),
+    (KDESC_A16_ATTN_FUSED, KernelProgram::Qwen36(Qwen36Op::AttnFused)),
     (KDESC_A16_ROPE, KernelProgram::Qwen36(Qwen36Op::A16Rope)),
     (KDESC_A16_MUL_ELEM, KernelProgram::Qwen36(Qwen36Op::A16MulElem)),
     (KDESC_Q36_MATMUL_GROUPED, KernelProgram::Qwen36(Qwen36Op::MatMulGrouped)),
@@ -414,6 +485,16 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
     let Some(program) = resolve_kernel(&node.kernel_semantics_id) else {
         return Err("no program in this build resolves the node's kernel id");
     };
+    // **A node's op kind and its kernel must be the same op.** The court reads the op kind
+    // (`palw_profile_has_fused_attention_v1`, the dissection site) and the catalog reads the
+    // program the kernel id resolves to (`reachable_kernels_v1`); nothing else forces the two to
+    // agree, so a profile declaring `AttnFused` over some other catalogued kernel — or the fused
+    // kernel under another op kind — would be admitted by one gate and tried by another.
+    let declares_fused = node.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused;
+    let serves_fused = matches!(program, KernelProgram::Qwen36(Qwen36Op::AttnFused));
+    if declares_fused != serves_fused {
+        return Err("a node's op kind and its kernel must be the same op: the court reads one and the catalog the other");
+    }
 
     // **Can the canonical INPUT SET be built for this node at all?**
     //
@@ -471,6 +552,30 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
         KernelProgram::Qwen36(Qwen36Op::GateApply | Qwen36Op::MulWide | Qwen36Op::MoeCombine | Qwen36Op::AddElem) => {
             if inputs < 2 {
                 return Err("a two-operand elementwise node must name both rows");
+            }
+            Ok(())
+        }
+        // The fused site reads the query row and BOTH cached series, and names the tensor its
+        // three narrowings and the softmax's widening byte are registered in (ADR-0082 D1).
+        KernelProgram::Qwen36(Qwen36Op::AttnFused) => {
+            if inputs < 3 {
+                return Err("a fused attention site must name its query row and both cached series");
+            }
+            if node.weight_name.is_empty() {
+                return Err("a fused attention site must name the tensor its narrowings are registered in");
+            }
+            // **The name must RESOLVE, here, at registration.** `palw_attn_fused_tensors_v1` is
+            // the single description of the other three operands (see `KDESC_A16_ATTN_FUSED`);
+            // a name it cannot resolve is a node whose every dispute would be `Unadjudicable`,
+            // and this file's own discipline is that such a node is refused at registration
+            // rather than discovered by a producer.
+            if palw_attn_fused_tensors_v1(node.weight_name.as_str()).is_none() {
+                return Err("a fused attention site must name the softmax store its layer registers: the other three derive from it");
+            }
+            // The committed row is the OUTPUT (ADR-0082 Decision 1, invariant Z0): a fused site
+            // whose out width is context-shaped is the very thing the fusion removes.
+            if matches!(node.out_len, PalwStepOutLenV1::KvScaled { .. }) {
+                return Err("a fused attention site commits the output row; a kv-scaled width is the row the fusion exists to delete");
             }
             Ok(())
         }
@@ -773,7 +878,7 @@ fn qwen36_row(
     inputs: &[Vec<u32>],
     weights: &dyn PalwWeightOracleV1,
     kv_len: u64,
-    gather: (&PalwStepCoordinateV1, &[u32], &[u32]),
+    gather: (&PalwStepCoordinateV1, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1<'_>, &[u32]),
 ) -> Result<Vec<u32>, PalwStepRefuteError> {
     use crate::palw_base0_a16 as a16;
     use crate::palw_base0_a16::A16QuantParams;
@@ -1048,7 +1153,7 @@ fn qwen36_row(
         Qwen36Op::Embed => {
             let (coord, prompt_ids, generated_ids) = gather;
             let token = if coord.call_index == 0 {
-                *prompt_ids.get(coord.position as usize).ok_or(PalwStepRefuteError::Unadjudicable)?
+                prompt_ids.at(coord.position).ok_or(PalwStepRefuteError::Unadjudicable)?
             } else {
                 let produced = (coord.call_index as usize).checked_sub(1).ok_or(PalwStepRefuteError::Unadjudicable)?;
                 *generated_ids.get(produced).ok_or(PalwStepRefuteError::Unadjudicable)?
@@ -1631,6 +1736,65 @@ fn qwen36_row(
             let up = b[0].min(62);
             Ok(out(a16::a16_softmax_rows(&as_i32(&inputs[0]), row_len, up).map_err(shape16)?))
         }
+        // **The fused site, recomputed WHOLE** (ADR-0082 Decision 1, unit U-02).
+        //
+        // This is the design-A-width route: the canonical input set of a fused leaf is the query
+        // row plus the K and V series over the history — the same set the scores and values arms
+        // read, because `canonical_input_leaves`' KV branch is keyed on the SENTINELS a node
+        // declares and this node declares both — and the recompute is the composition the kernel
+        // descriptor names. It opens the whole history, which is what Decision 2's dissection
+        // exists to replace; until that arm arrives this is the honest price of adjudicating the
+        // node, not a claim that the price is small.
+        //
+        // **ADR-0082 stream E's second arm goes HERE**: when the refutation carries a dissection
+        // (`palw_attn_dissect`), the terminal adjudication is a round of the fold or one bottom
+        // tile through `a16_attn_tile_triple_v1`, and this whole-row arm is what a refutation
+        // WITHOUT one still falls back to. Neither may convict where the other acquits: they are
+        // the same arithmetic read at two widths (`fused::the_tile_route_is_the_composition`).
+        Qwen36Op::AttnFused => {
+            need(3)?;
+            let heads = profile.attn_heads as usize;
+            let kv_heads = profile.attn_kv_heads as usize;
+            let d_head = profile.attn_head_dim as usize;
+            let q = as_i32(&inputs[0]);
+            let k_series = as_i32(&inputs[1]);
+            let v_series = as_i32(&inputs[2]);
+            // The same two ceilings the arms this node replaces are bounded by — an unservable
+            // geometry refuses the DISPUTE rather than allocating from a registered `u32`.
+            attn_params_count_v1(profile, true, k_series.len()).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            attn_params_count_v1(profile, false, 0).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            // The series must be the challenged position's OWN history, exactly: `kv_len` is
+            // derived one frame up from the coordinate, and a series of another length would have
+            // this arm recompute over positions the leg never saw. Refused, never recomputed
+            // against — a court that guessed the history would convict honest producers.
+            let kv_dim = kv_heads.checked_mul(d_head).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let want = usize::try_from(kv_len).ok().and_then(|n| n.checked_mul(kv_dim)).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            if k_series.len() != want || v_series.len() != want {
+                return Err(PalwStepRefuteError::InputSetNotCanonical(
+                    "a fused attention site's opened series are not the challenged position's history",
+                ));
+            }
+            // The four registered operands, from the one the node names — ONE description, shared
+            // with the engine's plan compiler (`KDESC_A16_ATTN_FUSED`).
+            let t = palw_attn_fused_tensors_v1(node.weight_name.as_str()).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            // **One triple each, tiled** — the same registration shape the four separate nodes
+            // read: a `KvScaled` site's lane count is the JOB's, so no artifact can hold one
+            // triple per lane and the class registers one.
+            let up = {
+                let b = weights.operand_bytes(t.softmax_up.as_str(), layer, 0, 1).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                if b.len() != 1 {
+                    return Err(PalwStepRefuteError::Unadjudicable);
+                }
+                b[0].min(62)
+            };
+            let params = a16::A16AttnFusedParamsV1 {
+                scores: params_named(t.scores.as_str(), 0, 1)?[0],
+                probs: params_named(t.probs.as_str(), 0, 1)?[0],
+                values: params_named(t.values.as_str(), 0, 1)?[0],
+                up_bits: up,
+            };
+            Ok(out(a16::a16_attn_fused_reference_v1(&q, &k_series, &v_series, heads, kv_heads, d_head, params).map_err(shape16)?))
+        }
         Qwen36Op::AttnScores | Qwen36Op::AttnValues => {
             need(2)?;
             let heads = profile.attn_heads as usize;
@@ -1738,7 +1902,7 @@ fn base0_row(
     inputs: &[Vec<u32>],
     weights: &dyn PalwWeightOracleV1,
     kv_len: u64,
-    gather: (&PalwStepCoordinateV1, &[u32], &[u32]),
+    gather: (&PalwStepCoordinateV1, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1<'_>, &[u32]),
 ) -> Result<Vec<u32>, PalwStepRefuteError> {
     use crate::palw_base0_ops as ops;
     let need = |n: usize| -> Result<(), PalwStepRefuteError> {
@@ -1822,7 +1986,7 @@ fn base0_row(
             // has already recomputed that root. A decode call `c` consumes the token generated by
             // call `c - 1`.
             let token = if coord.call_index == 0 {
-                *prompt_ids.get(coord.position as usize).ok_or(PalwStepRefuteError::Unadjudicable)?
+                prompt_ids.at(coord.position).ok_or(PalwStepRefuteError::Unadjudicable)?
             } else {
                 let produced = (coord.call_index as usize).checked_sub(1).ok_or(PalwStepRefuteError::Unadjudicable)?;
                 *generated_ids.get(produced).ok_or(PalwStepRefuteError::Unadjudicable)?
@@ -2716,6 +2880,36 @@ pub fn check_tiled_decode_token_refutation_v1(
     binding: &PalwStepBindingV2,
     pin: &PalwTiledDecodePinV1,
 ) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    check_tiled_decode_token_refutation_v2(binding, pin, crate::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY)
+}
+
+/// **ADR-0082 Decision 11's arm: the same two disclosures, compared as KEYS.**
+///
+/// Identical to [`check_tiled_decode_token_refutation_v1`] in everything the court carries — the
+/// authentication order, the two openings, the row root, the tile widths, the ragged last tile —
+/// and different in exactly one line: the two opened lanes are turned into keys
+/// (`value · 2^24 + ((T_q · G) >> 24)`) before they are compared. At
+/// [`crate::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY`] the key is a strictly increasing
+/// function of the value, so this IS the v1 arm; `the_seeded_arm_is_the_shipped_arm_when_greedy`
+/// sweeps that.
+///
+/// **`sampling` must come from the CLAIM, never from the pin.** A challenger who could state the
+/// temperature would state zero, recompute the greedy argmax and convict an honestly sampled
+/// token; a challenger who could state the seed would search for one whose argmax is a different
+/// lane. The claim's job carries both, inside `fp_job_id_v3` and therefore inside the claim id
+/// (ADR-0082 Decision 11), which is why the fields are there and not on the commitment.
+///
+/// **What the caller owes, and does not yet pay.** The court's close arms reach this through a
+/// `PalwStepBindingV2`, whose `job_context` (`PalwJobContextV2`) does not carry the sampler — so
+/// the shipped caller passes `GREEDY` and every shipped row is adjudicated exactly as it is
+/// today. Arming `Params::palw_fp_decode_rules` requires the pair to reach here from the claim;
+/// the ruleset move that arms it is the one that moves `PalwJobContextV2`, because that is the
+/// structure whose hash the execution root already binds.
+pub fn check_tiled_decode_token_refutation_v2(
+    binding: &PalwStepBindingV2,
+    pin: &PalwTiledDecodePinV1,
+    sampling: crate::palw_decode_select_v2::PalwDecodeSamplingV2,
+) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     let bad = PalwStepRefuteError::InputSetNotCanonical;
     // The mirror of the flat arm's rule: this arm adjudicates only the class that registered the
     // tiled commitment.
@@ -2801,8 +2995,15 @@ pub fn check_tiled_decode_token_refutation_v1(
     let v_committed = open_tile(&pin.committed_tile_lanes, &pin.committed_opening, committed)?;
     let v_beat = open_tile(&pin.beat_tile_lanes, &pin.beat_opening, beat_lane)?;
 
-    // The rule, exactly as the engine selects: strictly greater wins; equal goes to the LOWER index.
-    let beats = v_beat > v_committed || (v_beat == v_committed && beat_lane < committed);
+    // The rule, exactly as the engine selects: strictly greater wins; equal goes to the LOWER
+    // index — over the KEYS, which at `GREEDY` are the values scaled by a positive constant and
+    // therefore order identically (ADR-0082 Decision 11).
+    let beats = crate::palw_decode_select_v2::decode_lane_beats_v2(
+        sampling.lane_key(v_beat, pin.position, beat_lane),
+        beat_lane,
+        sampling.lane_key(v_committed, pin.position, committed),
+        committed,
+    );
     if beats {
         let fault = crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: pin.position };
         return Ok(crate::palw_step_leg::PalwStepRefutationVerdictV1 {
@@ -2914,6 +3115,24 @@ pub fn check_base0_decode_token_refutation_v1(
     pin: &PalwBase0DecodeTokensV1,
     position: u32,
 ) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    check_base0_decode_token_refutation_v2(binding, pin, position, crate::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY)
+}
+
+/// **The flat arm's ADR-0082 Decision 11 twin.** The whole row is already open here, so the
+/// seeded rule needs nothing extra: the expected token is the keyed argmax rather than the plain
+/// one. `GREEDY` is the shipped arm exactly.
+///
+/// It exists beside the tiled one for a correctness reason and not for symmetry: a class that
+/// commits FLAT logits and a class that commits tiled ones must be adjudicated under the same
+/// selection rule, or arming the fence would convict every honestly sampled token on one of the
+/// two families. `sampling` comes from the claim, never from the pin — see
+/// [`check_tiled_decode_token_refutation_v2`].
+pub fn check_base0_decode_token_refutation_v2(
+    binding: &PalwStepBindingV2,
+    pin: &PalwBase0DecodeTokensV1,
+    position: u32,
+    sampling: crate::palw_decode_select_v2::PalwDecodeSamplingV2,
+) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     crate::palw_step_leg::verify_binding_v1(binding).map_err(PalwStepRefuteError::Leg)?;
     if binding.shape_profile.lane != crate::palw_step::PalwStepLaneV1::Int32 {
         return Err(PalwStepRefuteError::InputSetNotCanonical(
@@ -2926,7 +3145,7 @@ pub fn check_base0_decode_token_refutation_v1(
         .get(position as usize)
         .ok_or(PalwStepRefuteError::InputSetNotCanonical("the challenged position is outside the job's decode calls"))?;
     let committed = pin.generated_token_ids[position as usize];
-    let expected = base0_decode_token_select_v1(row) as u32;
+    let expected = sampling.select(row, position) as u32;
     if committed != expected {
         let fault = crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position };
         return Ok(crate::palw_step_leg::PalwStepRefutationVerdictV1 {
@@ -3138,7 +3357,15 @@ fn canonical_input_leaves_anchored(
             context.declared_prefill_tokens,
             out_coord.call_index,
             out_coord.position,
-            crate::palw_context_ladder::palw_checkpoint_interval_v1(profile.n_ctx),
+            // **The spacing the class is PRICED at, never `n_ctx / 32` unconditionally** (stream
+            // F's patch note 2 on ADR-0082 Decision 4). `palw_class_ladder_rules_for_court_v1`
+            // charges the recurrence opening at `palw_anchored_interval_for_court_v1`, which on a
+            // fused row is one history tile; a window derived from `palw_checkpoint_interval_v1`
+            // here would assemble `n_ctx / 32` positions of evidence for a class charged for 16 —
+            // an under-charge, the direction that admits a class whose disputes nobody can carry.
+            // The profile-only spelling is the same function without the ruleset argument this
+            // path is not handed.
+            crate::palw_context_ladder::palw_anchored_interval_for_profile_v1(profile),
         )
     {
         positions = window;
@@ -3159,7 +3386,21 @@ fn canonical_input_leaves_anchored(
     // five rows per prior position and reordering them would be a different program.
     use crate::palw_step::{PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V};
     if node.input_refs.iter().any(|r| *r == PALW_STEP_INPUT_KV_K || *r == PALW_STEP_INPUT_KV_V) {
-        let history: Vec<(u32, u32)> = if out_coord.call_index == 0 {
+        let per_position = matches!(
+            crate::palw_context_ladder::palw_checkpoint_cadence_v1(profile),
+            crate::palw_context_ladder::PalwCheckpointCadenceV1::PerPosition
+        );
+        let history: Vec<(u32, u32)> = if anchored && per_position {
+            // **No residue at all** (ADR-0082 Decision 4, amended). A class whose map addresses
+            // history tiles commits a checkpoint after EVERY position, so this step's anchor is the
+            // one at `p + 1` — the state once position `p`'s own K and V rows have been written —
+            // and attention at `p` reads exactly the positions `0..=p` that checkpoint holds. The
+            // per-call cadence has to leave the disputed call's own write as a step opening because
+            // no checkpoint of its leg covers it; this one does not, at a PREFILL position exactly
+            // as at a decode call. The anchor's rows are prepended to an empty opening list below,
+            // which reproduces the same `kv_len` rows the unanchored route concatenates.
+            Vec::new()
+        } else if out_coord.call_index == 0 {
             (0..=out_coord.position).map(|p| (0, p)).collect()
         } else if anchored {
             // The anchor covers the prefill and calls 1..c−1; only this call's own write remains.
@@ -3387,6 +3628,17 @@ fn intra_table_index(profile: &PalwShapeProfileV3, slot: u32) -> Option<usize> {
 /// ONE opening plus its state chunks, and exactly one step opening remains: the current call's own
 /// cache write, which no earlier checkpoint can hold.
 ///
+/// **Under a class whose map addresses history tiles the same sentence is true at every POSITION**
+/// (ADR-0082 Decision 4, amended): its leg commits a checkpoint after every position, prefill
+/// included, so `covered = p + 1` for a dispute at absolute position `p` — the state once position
+/// `p`'s own K and V rows have been written, which is exactly what attention at `p` reads — and the
+/// residue is EMPTY. (It read `covered = p` here while the code has always computed `p + 1`
+/// (`palw_context_ladder::palw_checkpoint_covered_for_step_v1`), so a reader implementing to the
+/// prose built an anchor this function refuses by name.) Before the amendment a prefill dispute had no anchor at
+/// all and opened `p + 1` rows per kind, which is the 3-chunk close ADR-0082 §5 shuts at
+/// acceptance. [`crate::palw_context_ladder::palw_checkpoint_covered_for_step_v1`] is the one
+/// spelling of which checkpoint that is.
+///
 /// # Why substituting is sound
 ///
 /// The cache row and the cache-write node's step tile are the SAME values — the engine pushes one
@@ -3425,17 +3677,27 @@ struct VerifiedKvAnchor<'a> {
     elem: KvAnchorElemV1,
 }
 
-/// Verify a carried anchor against the binding, for a step at `disputed_call`.
+/// Verify a carried anchor against the binding, for a step at `(disputed_call, disputed_position)`.
 fn verify_kv_anchor<'a>(
     binding: &crate::palw_step_leg::PalwStepBindingV2,
     ops: &'a PalwCheckpointKvOperandsV1,
     disputed_call: u32,
+    disputed_position: u32,
 ) -> Result<VerifiedKvAnchor<'a>, PalwStepRefuteError> {
     use crate::palw_state_chunk_map as map;
     use crate::palw_step_leg::{checkpoint_leaf_hash_v2, state_chunk_leaf_hash_v1, state_chunks_root_v1, step_opening_root_v1};
 
-    // Prefill has no anchor at all; a decode call's anchor is the checkpoint before it, exactly.
-    let want_covered = disputed_call.checked_sub(1).filter(|_| disputed_call > 0).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    // **Which checkpoint is this step's anchor, at the cadence the CLASS's map runs.** Per decode
+    // call: the prefill has no anchor at all and a decode call's is the checkpoint before it,
+    // exactly. Per position: the checkpoint covering every position but this one, which exists for
+    // every position after the first.
+    let want_covered = crate::palw_context_ladder::palw_checkpoint_covered_for_step_v1(
+        &binding.shape_profile,
+        &binding.job_context,
+        disputed_call,
+        disputed_position,
+    )
+    .ok_or(PalwStepRefuteError::Unadjudicable)?;
     if ops.leaf.covered_decode_call != want_covered {
         return Err(PalwStepRefuteError::InputSetNotCanonical("the carried checkpoint is not this step's anchor"));
     }
@@ -3467,7 +3729,14 @@ fn verify_kv_anchor<'a>(
         return Err(PalwStepRefuteError::Leg(crate::palw_step_leg::PalwStepLegError::CommittedRootMismatch));
     }
 
-    let positions = map::integer_kv_positions_at_v1(&binding.job_context, ops.leaf.covered_decode_call);
+    // How many positions the anchor's state covers, at the cadence the class's map runs — the
+    // cadence-aware twin of `integer_kv_positions_at_v1`, which is what it still resolves to on
+    // every per-call class.
+    let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(
+        &binding.shape_profile,
+        &binding.job_context,
+        ops.leaf.covered_decode_call,
+    );
     // **The geometry the CLASS registered, not the one this court knew first.** The producer's
     // capture already dispatches on `state_chunk_map_id` (a v2 class chunks four bytes per
     // element); a court that derived v1 unconditionally would read a v2 class's chunks at a
@@ -3483,24 +3752,43 @@ fn verify_kv_anchor<'a>(
     // could never carry the attention anchor its own map entitles it to: every anchored attention
     // refutation on the one class shape ADR-0077 Decision 13 registers came back `Unadjudicable`,
     // on honest material, for declaring the composition the decision requires.
+    //
+    // **The v3 COMPOSITION is not its attention half** (audit B, H-1). The `attn=` halves of the
+    // v1 and v2 hybrid names are `integer_kv` v2 verbatim and their `gdn=` halves are enumerated
+    // by nobody, which is why they resolve to the cache geometry above. The v3 composition IS
+    // enumerated (`hybrid_state_chunk_entry_v3`), the producer commits every chunk of it, and a
+    // court that counted only the attention tiles would refuse an honest anchor by the count.
+    // What does NOT move is the row arithmetic: the attention chunks are indices
+    // `0..attn.chunk_count()`, so `integer_kv_state_locate_v1` addresses them unchanged and only
+    // the count the carried chunks are checked against comes from the composition.
     let declared = binding.shape_profile.state_chunk_map_id;
-    let (geometry, elem) = if declared == map::integer_kv_state_chunk_map_id_v1() {
-        (map::integer_kv_state_geometry_v1(&binding.shape_profile, positions), KvAnchorElemV1::I8)
+    let (geometry, elem, expected_chunks) = if declared == map::integer_kv_state_chunk_map_id_v1() {
+        (map::integer_kv_state_geometry_v1(&binding.shape_profile, positions), KvAnchorElemV1::I8, None)
     } else if declared == map::integer_kv_state_chunk_map_id_v2()
         || declared == map::hybrid_state_chunk_map_id_v1()
         || declared == map::hybrid_state_chunk_map_id_v2()
     {
-        (map::integer_kv_state_geometry_v2(&binding.shape_profile, positions), KvAnchorElemV1::I32Le)
-    } else if declared == map::tiled_kv_state_chunk_map_id_v3() || declared == map::hybrid_state_chunk_map_id_v3() {
+        (map::integer_kv_state_geometry_v2(&binding.shape_profile, positions), KvAnchorElemV1::I32Le, None)
+    } else if declared == map::tiled_kv_state_chunk_map_id_v3() {
         // The tiled enumeration (graph v4): the same `i32` cache, chunked at
         // `PALW_ATTN_HISTORY_TILE_V4` positions so one opening is a TILE of the history rather
         // than the history.
-        (map::tiled_kv_state_geometry_v3(&binding.shape_profile, positions), KvAnchorElemV1::I32Le)
+        (map::tiled_kv_state_geometry_v3(&binding.shape_profile, positions), KvAnchorElemV1::I32Le, None)
+    } else if declared == map::hybrid_state_chunk_map_id_v3() {
+        let composition = map::hybrid_state_geometry_for_covered_v1(&binding.shape_profile, positions)
+            .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+        let expected = composition.chunk_count();
+        (Ok(composition.attn), KvAnchorElemV1::I32Le, Some(expected))
     } else {
         return Err(PalwStepRefuteError::Unadjudicable);
     };
     let geometry = geometry.map_err(|_| PalwStepRefuteError::Unadjudicable)?;
-    if geometry.chunk_count() as usize != ops.chunks.len() {
+    // One spelling of the count, shared with `palw_step_leg`'s shape pass (audit B, M-4), with the
+    // dispatch above as its fallback for a map that crate cannot enumerate.
+    let expected_chunks = map::palw_state_chunk_count_at_v1(&binding.shape_profile, positions)
+        .or(expected_chunks)
+        .unwrap_or_else(|| geometry.chunk_count());
+    if expected_chunks as usize != ops.chunks.len() {
         return Err(PalwStepRefuteError::InputSetNotCanonical("the carried chunk count is not the map's for this state"));
     }
     Ok(VerifiedKvAnchor { ops, geometry, elem })
@@ -3543,6 +3831,35 @@ pub fn check_execution_step_refutation_v1(
     refutation: &PalwExecutionStepRefutationV1,
     weights: &dyn PalwWeightOracleV1,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    check_execution_step_refutation_opened_v1(refutation, weights, None)
+}
+
+/// **The same check, with ADR-0081 Decision 3's prompt-id opening carried beside the refutation.**
+///
+/// A separate entry point rather than a field on [`PalwExecutionStepRefutationV1`], and that is
+/// deliberate: adding a field changes the object's borsh encoding, and this codebase's own answer
+/// to that hazard is [`crate::palw_mode_v2::PALW_V2_TRACE_FORMAT_VERSION`] — a field of
+/// `PalwConsensusParamsV2`, inside `palw_ruleset_id_v2`, inside every ConsensusV2 preset's
+/// fingerprint. Bumping it here would move shipped fingerprints for a rule that is dormant on
+/// every network, which is exactly backwards. The carriage field and the 3 → 4 bump belong to the
+/// genesis cut that arms `Params::palw_prompt_ids_merkle`; until then the opening reaches the
+/// court through this argument.
+///
+/// **The form is not a parameter, because the COMMITMENT is the discriminator.**
+/// [`crate::palw_prompt_ids_v1::verify_prompt_ids_opening_v1`] recomputes the Merkle outer root
+/// and compares it against the job context's `prompt_token_ids_hash`. On a flat network that slot
+/// holds a flat digest, which no Merkle derivation produces, so an opening offered to a flat
+/// network is refused BY NAME rather than quietly believed — the fence decides who SENDS one, and
+/// the arithmetic decides who is right. Derive, never declare (ADR-0046).
+///
+/// An opening and a whole id list are mutually exclusive. Carrying both would leave the court
+/// holding two answers to "which id sits at this position" with nothing choosing between them, and
+/// ignored evidence is how a refutation ends up meaning something other than what it says.
+pub fn check_execution_step_refutation_opened_v1(
+    refutation: &PalwExecutionStepRefutationV1,
+    weights: &dyn PalwWeightOracleV1,
+    prompt_ids_opening: Option<&crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     use crate::palw_step_leg::{PalwStepEvidenceV1, PalwStepRefutationV1, check_step_refutation_v1};
 
     let binding = &refutation.binding;
@@ -3576,7 +3893,7 @@ pub fn check_execution_step_refutation_v1(
     // form: silently ignoring attached evidence makes a refutation mean something other than what
     // it says.
     let anchor = match refutation.kv_checkpoint.as_ref() {
-        Some(ops) => Some(verify_kv_anchor(binding, ops, out_coord.call_index)?),
+        Some(ops) => Some(verify_kv_anchor(binding, ops, out_coord.call_index, out_coord.position)?),
         None => None,
     };
     let required = canonical_input_leaves_anchored(
@@ -3695,11 +4012,39 @@ pub fn check_execution_step_refutation_v1(
     // would name whatever ids convict an honest producer — the ids are the whole basis on which a
     // gather's "correct" output is decided. An empty list is legal (the refutation addresses no
     // gather); a non-empty one must be the prompt the job context committed to.
-    if !refutation.prompt_token_ids.is_empty()
-        && crate::palw_v2::prompt_token_ids_hash_v2(&refutation.prompt_token_ids) != binding.job_context.prompt_token_ids_hash
-    {
-        return Err(PalwStepRefuteError::InputSetNotCanonical("the carried prompt ids are not the ones the job context commits to"));
-    }
+    //
+    // **Two carriers, one discipline** (ADR-0081 Decision 3). The whole list is matched against a
+    // FLAT `prompt_token_ids_hash`; an opening is matched against a Merkle one. Either way the
+    // window a gather reads from exists only on the far side of that comparison, and
+    // `PalwPromptIdWindowV1` has no constructor that skips it. Carrying BOTH is refused rather
+    // than resolved: two answers to "which id sits at this position" with nothing choosing between
+    // them is ignored evidence, and ignored evidence makes a refutation mean something other than
+    // what it says.
+    let prompt_ids = match prompt_ids_opening {
+        None => {
+            if !refutation.prompt_token_ids.is_empty()
+                && crate::palw_v2::prompt_token_ids_hash_v2(&refutation.prompt_token_ids) != binding.job_context.prompt_token_ids_hash
+            {
+                return Err(PalwStepRefuteError::InputSetNotCanonical(
+                    "the carried prompt ids are not the ones the job context commits to",
+                ));
+            }
+            crate::palw_prompt_ids_v1::PalwPromptIdWindowV1::whole_checked(&refutation.prompt_token_ids)
+        }
+        Some(opening) => {
+            if !refutation.prompt_token_ids.is_empty() {
+                return Err(PalwStepRefuteError::InputSetNotCanonical(
+                    "a refutation carries the prompt ids or an opening of them, never both",
+                ));
+            }
+            crate::palw_prompt_ids_v1::verify_prompt_ids_opening_v1(
+                &binding.job_context.prompt_token_ids_hash,
+                binding.job_context.declared_prefill_tokens,
+                opening,
+            )
+            .map_err(|e| PalwStepRefuteError::InputSetNotCanonical(e.refusal()))?
+        }
+    };
     // **The decode half (ADR-0049 Decision E), checked the same way and before anything reads
     // it — dispatched on the class's registered LANE, because `full_logits_trace_root` is one
     // slot with two occupants.** A `Float32` class committed the v2 event-tree root; the `Int32`
@@ -3733,16 +4078,8 @@ pub fn check_execution_step_refutation_v1(
         }
         _ => return Err(PalwStepRefuteError::InputSetNotCanonical("the decode-token pin does not speak the class's lane")),
     };
-    let (recomputed_row, row_offset) = run_program(
-        program,
-        node,
-        layer,
-        &binding.shape_profile,
-        &inputs,
-        weights,
-        kv_len,
-        (&out_coord, &refutation.prompt_token_ids, generated),
-    )?;
+    let (recomputed_row, row_offset) =
+        run_program(program, node, layer, &binding.shape_profile, &inputs, weights, kv_len, (&out_coord, prompt_ids, generated))?;
 
     // 4) Compare the challenged tile's slice, exact bits.
     let tile_start = out_coord.tile_index as usize * node.tile_len as usize;
@@ -3788,9 +4125,15 @@ fn run_program(
     // `KvScaled` node for not holding this, while its own caller derives it from the coordinate
     // it already has — so attention was unadjudicable for want of a value one frame up.
     kv_len: u64,
-    // G5d: the challenged position and the carried, hash-checked prompt ids. Only the gather
+    // G5d: the challenged position and a VERIFIED window over the prompt ids. Only the gather
     // reads them; every other kernel is a function of its opened rows and its weights.
-    gather: (&PalwStepCoordinateV1, &[u32], &[u32]),
+    //
+    // A window rather than a slice since ADR-0081 Decision 3: the ids may arrive whole (matched
+    // against a flat `prompt_token_ids_hash`) or as one opened tile of a Merkle root, and both
+    // address the prompt by ABSOLUTE position. The type is what makes G5d structural — a window
+    // exists only on the far side of a check, so there is no path by which this frame reads an id
+    // nobody proved.
+    gather: (&PalwStepCoordinateV1, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1<'_>, &[u32]),
     // **The index in the node's output row at which the returned slice begins** (ADR-0049
     // Decision B). Every kernel but the BASE-0 matmul recomputes the whole row and returns it at
     // offset 0; the matmul opens only the challenged tile's weight rows, so it can only return
@@ -4328,8 +4671,11 @@ fn i32_len_to_f32_bits(n: u32) -> u32 {
 pub(crate) mod tests {
     /// No gather: the challenged coordinate is the graph's origin and no prompt ids are carried.
     /// Every kernel but `Embed` ignores it, and `Embed` has its own tests.
-    const NO_GATHER: (&PalwStepCoordinateV1, &[u32], &[u32]) =
-        (&PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: 0, tile_index: 0 }, &[], &[]);
+    const NO_GATHER: (&PalwStepCoordinateV1, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1<'static>, &[u32]) = (
+        &PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: 0, tile_index: 0 },
+        crate::palw_prompt_ids_v1::PalwPromptIdWindowV1::EMPTY,
+        &[],
+    );
 
     use super::*;
     use crate::palw_legs::PalwCheckpointProfileV1;
@@ -4734,11 +5080,25 @@ pub(crate) mod tests {
     }
 
     fn honest_execution() -> (PalwStepBindingV2, crate::palw_step_leg::PalwStepLegMaterialV1, Vec<Vec<Vec<u32>>>) {
+        honest_execution_with_context(|_| {})
+    }
+
+    /// [`honest_execution`] with the job context edited BEFORE any material is produced.
+    ///
+    /// The whole commitment chain hangs off `context_hash()` — leaf hashes, the step-leg root, the
+    /// execution root — so a test that reaches into a finished binding and rewrites a context field
+    /// gets `Leg(CommittedRootMismatch)` and never reaches the rule it was trying to test. Measured
+    /// while writing the prompt-ids opening tests: all five arms returned that one error. The edit
+    /// has to happen where the producer would have made it.
+    fn honest_execution_with_context(
+        edit: impl FnOnce(&mut PalwJobContextV2),
+    ) -> (PalwStepBindingV2, crate::palw_step_leg::PalwStepLegMaterialV1, Vec<Vec<Vec<u32>>>) {
         let p = profile();
         // Honest material declares the profile it was produced under (the equality the step-leg
         // verifier enforces).
         let mut ctx = context();
         ctx.shape_profile_id = p.shape_profile_id();
+        edit(&mut ctx);
         // rows[position_ordinal][node_slot] = full output row. Position ordinals: prefill
         // p0, p1, then decode call 1.
         let positions: Vec<(u32, u32)> = vec![(0, 0), (0, 1), (1, 0)];
@@ -5298,8 +5658,17 @@ pub(crate) mod tests {
         let ids = [3u32, 1, 2];
         for (pos, id) in ids.iter().enumerate() {
             let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: pos as u32, tile_index: 0 };
-            let got = base0_row(Base0Op::Embed, &node, None, &profile(), &[], &Table, 1, (&coord, &ids, &[]))
-                .expect("a prefill gather adjudicates");
+            let got = base0_row(
+                Base0Op::Embed,
+                &node,
+                None,
+                &profile(),
+                &[],
+                &Table,
+                1,
+                (&coord, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1::whole_checked(&ids), &[]),
+            )
+            .expect("a prefill gather adjudicates");
             assert_eq!(got, want(*id), "position {pos} must gather the row its token id names");
         }
 
@@ -5312,28 +5681,64 @@ pub(crate) mod tests {
         let generated: Vec<u32> = vec![2, 0];
         let decode = PalwStepCoordinateV1 { call_index: 1, node_slot: 0, position: 0, tile_index: 0 };
         assert_eq!(
-            base0_row(Base0Op::Embed, &node, None, &profile(), &[], &Table, 1, (&decode, &ids, &generated))
-                .expect("a decode gather adjudicates against the claim's own generated ids"),
+            base0_row(
+                Base0Op::Embed,
+                &node,
+                None,
+                &profile(),
+                &[],
+                &Table,
+                1,
+                (&decode, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1::whole_checked(&ids), &generated)
+            )
+            .expect("a decode gather adjudicates against the claim's own generated ids"),
             want(generated[0]),
             "decode call 1 gathers the row the token generated by call 0 names"
         );
         let decode2 = PalwStepCoordinateV1 { call_index: 2, node_slot: 0, position: 1, tile_index: 0 };
         assert_eq!(
-            base0_row(Base0Op::Embed, &node, None, &profile(), &[], &Table, 1, (&decode2, &ids, &generated))
-                .expect("and so does the next one"),
+            base0_row(
+                Base0Op::Embed,
+                &node,
+                None,
+                &profile(),
+                &[],
+                &Table,
+                1,
+                (&decode2, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1::whole_checked(&ids), &generated)
+            )
+            .expect("and so does the next one"),
             want(generated[1])
         );
         // A decode position past what the claim generated stays a refusal, never a default —
         // index 0 would adjudicate every out-of-range gather against the first generated token.
         let past_decode = PalwStepCoordinateV1 { call_index: 9, node_slot: 0, position: 8, tile_index: 0 };
         assert_eq!(
-            base0_row(Base0Op::Embed, &node, None, &profile(), &[], &Table, 1, (&past_decode, &ids, &generated)),
+            base0_row(
+                Base0Op::Embed,
+                &node,
+                None,
+                &profile(),
+                &[],
+                &Table,
+                1,
+                (&past_decode, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1::whole_checked(&ids), &generated)
+            ),
             Err(PalwStepRefuteError::Unadjudicable)
         );
         // And with no ids carried at all it is unadjudicable rather than falling back to the prompt,
         // which would gather a prefill row for a decode step and convict an honest producer.
         assert_eq!(
-            base0_row(Base0Op::Embed, &node, None, &profile(), &[], &Table, 1, (&decode, &ids, &[])),
+            base0_row(
+                Base0Op::Embed,
+                &node,
+                None,
+                &profile(),
+                &[],
+                &Table,
+                1,
+                (&decode, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1::whole_checked(&ids), &[])
+            ),
             Err(PalwStepRefuteError::Unadjudicable),
             "a decode step with no generated ids carried is unchecked, not decided"
         );
@@ -5342,7 +5747,16 @@ pub(crate) mod tests {
         // every out-of-range gather against the FIRST token and convict honest producers.
         let past = PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: 9, tile_index: 0 };
         assert_eq!(
-            base0_row(Base0Op::Embed, &node, None, &profile(), &[], &Table, 1, (&past, &ids, &[])),
+            base0_row(
+                Base0Op::Embed,
+                &node,
+                None,
+                &profile(),
+                &[],
+                &Table,
+                1,
+                (&past, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1::whole_checked(&ids), &[])
+            ),
             Err(PalwStepRefuteError::Unadjudicable)
         );
         // A table that cannot serve the row is unadjudicable, not a conviction.
@@ -5354,7 +5768,16 @@ pub(crate) mod tests {
         }
         let first = PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: 0, tile_index: 0 };
         assert_eq!(
-            base0_row(Base0Op::Embed, &node, None, &profile(), &[], &Empty, 1, (&first, &ids, &[])),
+            base0_row(
+                Base0Op::Embed,
+                &node,
+                None,
+                &profile(),
+                &[],
+                &Empty,
+                1,
+                (&first, crate::palw_prompt_ids_v1::PalwPromptIdWindowV1::whole_checked(&ids), &[])
+            ),
             Err(PalwStepRefuteError::Unadjudicable)
         );
     }
@@ -5397,6 +5820,77 @@ pub(crate) mod tests {
             ),
             "ids matching the commitment must pass the id check"
         );
+    }
+
+    /// **ADR-0081 Decision 3: an opening is bound to the job's own root before anything reads an
+    /// id out of it** — the G5d discipline, carried over to the openable commitment.
+    ///
+    /// The failure this closes is the one G5d already names: a challenger who can NAME the prompt
+    /// ids convicts an honest producer, and under a Merkle commitment "naming them" means offering
+    /// a tile. Every way of offering one that does not bind the job's root is refused BY NAME, and
+    /// none of them reaches a kernel — the window a gather reads from is only constructible on the
+    /// far side of `verify_prompt_ids_opening_v1`.
+    #[test]
+    fn palw_v2_a_prompt_ids_opening_is_bound_to_the_jobs_root_before_it_is_read() {
+        use crate::palw_prompt_ids_v1::{PalwPromptIdsOpeningV1, prompt_ids_opening_v1, prompt_token_ids_root_v1};
+        // The fixture's job context declares two prefill tokens, so this is its whole prompt.
+        let ids = vec![7u32, 8];
+        let merkle_root = prompt_token_ids_root_v1(&ids).expect("two ids commit");
+        let (binding, material, rows) = honest_execution_with_context(|c| c.prompt_token_ids_hash = merkle_root);
+        let coord = PalwStepCoordinateV1 { call_index: 1, node_slot: 1, position: 0, tile_index: 0 };
+        let merkle = build_refutation(&binding, &material, &rows, coord);
+
+        let refusal = |r: &PalwExecutionStepRefutationV1, o: Option<&PalwPromptIdsOpeningV1>| -> Option<&'static str> {
+            match check_execution_step_refutation_opened_v1(r, &NoWeights, o) {
+                Err(PalwStepRefuteError::InputSetNotCanonical(m)) => Some(m),
+                _ => None,
+            }
+        };
+        let honest = prompt_ids_opening_v1(&ids, 0).expect("position 0 opens");
+
+        // The honest opening of the job's own prompt passes the id gate and the step is judged on
+        // its own merits — which for this fixture is `NoFaultFound`, an HONEST producer.
+        assert_eq!(
+            check_execution_step_refutation_opened_v1(&merkle, &NoWeights, Some(&honest)),
+            Err(PalwStepRefuteError::NoFaultFound),
+            "an opening that binds the job's root must let the step be judged, not refuse it"
+        );
+
+        // One id altered: the tile no longer hashes to the leaf the opening names, and the refusal
+        // is the scheme's own, not a generic one.
+        let mut lying = honest.clone();
+        lying.tile_ids[0] ^= 1;
+        assert_eq!(refusal(&merkle, Some(&lying)), Some("the opened prompt ids do not hash to their leaf"));
+
+        // A tile of a DIFFERENT prompt of a different length: refused at the count, before any
+        // hashing — the structural-bounds-first order.
+        let longer = vec![7u32, 8, 9];
+        let foreign = prompt_ids_opening_v1(&longer, 0).expect("three ids open");
+        assert_eq!(refusal(&merkle, Some(&foreign)), Some("the prompt-ids opening's length is not the one the job context declares"));
+
+        // Both carriers at once is refused rather than resolved: two answers to "which id sits at
+        // this position" with nothing choosing between them is ignored evidence.
+        let mut both = merkle.clone();
+        both.prompt_token_ids = ids.clone();
+        assert_eq!(refusal(&both, Some(&honest)), Some("a refutation carries the prompt ids or an opening of them, never both"));
+
+        // **And the COMMITMENT is the discriminator, not the fence.** On a job that committed the
+        // FLAT digest, a Merkle opening cannot bind it and is refused by name — so offering one to
+        // a network that has not armed `Params::palw_prompt_ids_merkle` is safe by arithmetic
+        // rather than by the checker being told which form to expect.
+        let flat_root = crate::palw_v2::prompt_token_ids_hash_v2(&ids);
+        let (fb, fm, fr) = honest_execution_with_context(|c| c.prompt_token_ids_hash = flat_root);
+        let flat = build_refutation(&fb, &fm, &fr, coord);
+        assert_eq!(
+            refusal(&flat, Some(&honest)),
+            Some("the prompt-ids opening does not bind the job's committed prompt root"),
+            "a Merkle opening must never authenticate against a flat commitment"
+        );
+        // …while the SAME job judged through the whole carried list is honest, so the two carriers
+        // agree about the verdict wherever both are legal.
+        let mut whole = flat.clone();
+        whole.prompt_token_ids = ids.clone();
+        assert_eq!(check_execution_step_refutation_v1(&whole, &NoWeights), Err(PalwStepRefuteError::NoFaultFound));
     }
 
     /// **G5c: the KV sentinels resolve to the cache-role nodes over the position history.**
@@ -5847,6 +6341,107 @@ pub(crate) mod tests {
             matches!(check_tiled_decode_token_refutation_v1(&binding, &bent), Err(PalwStepRefuteError::InputSetNotCanonical(_))),
             "a bent tile must be refused as evidence, never adjudicated"
         );
+    }
+
+    /// **Z8's refutation half: under a seed and `T_q > 0` the two-disclosure arm convicts a token
+    /// that is not the keyed argmax and acquits the one that is** — and at `GREEDY` it is the
+    /// shipped arm, verdict for verdict, on the same fixture the test above uses.
+    ///
+    /// The whole point of Decision 11's key being a PER-LANE function is exercised here: the court
+    /// opens exactly two tiles, computes two keys, and compares. Nothing about the row's other
+    /// 9,998 lanes is fetched, at any temperature.
+    #[test]
+    fn the_seeded_arm_convicts_the_token_that_is_not_the_keyed_argmax() {
+        use crate::palw_decode_select_v2::PalwDecodeSamplingV2;
+        // A temperature of 16 in the class's own logit units (Q24), which is large beside this
+        // fixture's ~6-unit spacing between adjacent logits — the row has to be genuinely
+        // re-orderable by the noise or the test proves nothing about the sampler.
+        let sampling = PalwDecodeSamplingV2 { seed: [0x2Bu8; 32], temperature_q: 1 << 28 };
+        let (mut binding, _m, _r, _) = base0_honest_decode_commitment();
+        let vocab = 10_000usize;
+        let decode = binding.job_context.exact_decode_tokens as usize;
+        binding.shape_profile.vocab_size = vocab as u32;
+        binding.shape_profile.logits_scheme_id = tiled_logits_scheme_id_v1();
+        let logits_rows: Vec<Vec<i32>> =
+            (0..decode).map(|c| (0..vocab).map(|i| ((c * 131 + i * 7919) % 65_536) as i32 - 32_768).collect()).collect();
+
+        // The HONEST producer under this seed commits the keyed argmax, which is a different token
+        // from the greedy one — otherwise the test would prove nothing about the sampler.
+        let seeded: Vec<u32> = logits_rows.iter().enumerate().map(|(p, r)| sampling.select(r, p as u32) as u32).collect();
+        let greedy: Vec<u32> = logits_rows.iter().map(|r| base0_decode_token_select_v1(r) as u32).collect();
+        assert_ne!(seeded, greedy, "the fixture's temperature must actually move the selection");
+
+        binding.full_logits_trace_root =
+            tiled_logits_trace_root_v1(&binding.job_context, &logits_rows, &seeded).expect("the fixture's rows build a tree");
+        rebind_committed_root(&mut binding);
+
+        // Acquits the honest seeded token against EVERY other lane a challenger might open.
+        for p in 0..decode as u32 {
+            for beat in [0u32, 1, seeded[p as usize].wrapping_add(1) % vocab as u32, greedy[p as usize], vocab as u32 - 1] {
+                if beat == seeded[p as usize] {
+                    continue;
+                }
+                let pin = tiled_pin(&binding.job_context, &logits_rows, &seeded, p, beat);
+                assert!(
+                    matches!(check_tiled_decode_token_refutation_v2(&binding, &pin, sampling), Err(PalwStepRefuteError::NoFaultFound)),
+                    "the keyed argmax at position {p} must clear against lane {beat}"
+                );
+            }
+        }
+
+        // And convicts a producer that committed the GREEDY token while its job declared a
+        // temperature — the exact fraud a sampler makes possible, caught by the same two tiles.
+        binding.full_logits_trace_root =
+            tiled_logits_trace_root_v1(&binding.job_context, &logits_rows, &greedy).expect("the fixture's rows build a tree");
+        rebind_committed_root(&mut binding);
+        let differs = (0..decode as u32).find(|p| seeded[*p as usize] != greedy[*p as usize]).expect("checked above");
+        let pin = tiled_pin(&binding.job_context, &logits_rows, &greedy, differs, seeded[differs as usize]);
+        let verdict = check_tiled_decode_token_refutation_v2(&binding, &pin, sampling).expect("the keyed argmax beats the greedy one");
+        assert_eq!(verdict.fault, crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: differs });
+
+        // The same close, under GREEDY, is the shipped verdict — an acquittal, because the greedy
+        // token IS the greedy argmax. The v1 entry point and the v2 arm at GREEDY agree.
+        assert!(matches!(check_tiled_decode_token_refutation_v1(&binding, &pin), Err(PalwStepRefuteError::NoFaultFound)));
+        assert!(matches!(
+            check_tiled_decode_token_refutation_v2(&binding, &pin, PalwDecodeSamplingV2::GREEDY),
+            Err(PalwStepRefuteError::NoFaultFound)
+        ));
+    }
+
+    /// **The flat arm's twin of the same property**, so arming the fence cannot convict honest
+    /// tokens on one family while acquitting them on the other.
+    #[test]
+    fn the_seeded_flat_arm_agrees_with_the_seeded_tiled_one() {
+        use crate::palw_decode_select_v2::PalwDecodeSamplingV2;
+        // 16 in logit units, against a 40-lane row whose values span ~429 — see the tiled twin.
+        let sampling = PalwDecodeSamplingV2 { seed: [0x77u8; 32], temperature_q: 1 << 28 };
+        let (b, _, _, _) = base0_honest_decode_commitment();
+        let vocab = b.shape_profile.vocab_size as usize;
+        let decode = b.job_context.exact_decode_tokens as usize;
+        let logits_rows: Vec<Vec<i32>> =
+            (0..decode).map(|c| (0..vocab).map(|i| ((c * 37 + i * 11) % 4_096) as i32 - 2_048).collect()).collect();
+        let seeded: Vec<u32> = logits_rows.iter().enumerate().map(|(p, r)| sampling.select(r, p as u32) as u32).collect();
+        let greedy: Vec<u32> = logits_rows.iter().map(|r| base0_decode_token_select_v1(r) as u32).collect();
+        assert_ne!(seeded, greedy, "the fixture's temperature must actually move the selection");
+
+        let (honest, _, _, pin) = base0_binding_with_decode_root(logits_rows.clone(), seeded.clone());
+        for p in 0..decode as u32 {
+            assert!(matches!(
+                check_base0_decode_token_refutation_v2(&honest, &pin, p, sampling),
+                Err(PalwStepRefuteError::NoFaultFound)
+            ));
+        }
+        // The first position the two rules disagree about — the seed moves some positions and not
+        // others, and a test that assumed position 0 was one of them was asserting the fixture.
+        let differs = (0..decode as u32).find(|p| seeded[*p as usize] != greedy[*p as usize]).expect("checked above");
+        let (lying, _, _, lying_pin) = base0_binding_with_decode_root(logits_rows, greedy);
+        let verdict =
+            check_base0_decode_token_refutation_v2(&lying, &lying_pin, differs, sampling).expect("the greedy token is not the draw");
+        assert_eq!(verdict.fault, crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: differs });
+        // GREEDY is the shipped arm: the same commitment clears at every position.
+        for p in 0..decode as u32 {
+            assert!(matches!(check_base0_decode_token_refutation_v1(&lying, &lying_pin, p), Err(PalwStepRefuteError::NoFaultFound)));
+        }
     }
 
     /// **Neither close arm speaks the other class's scheme.** A flat pin against a tiled class

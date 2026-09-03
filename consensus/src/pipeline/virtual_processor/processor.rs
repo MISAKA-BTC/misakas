@@ -461,6 +461,26 @@ pub struct VirtualStateProcessor {
     /// resolved — the fee collection in `calculate_utxo_state` and the acceptance filter that
     /// spends it must agree, or the filter reads an empty map and silently admits everything.
     pub(super) palw_certification_rent: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0082 Decision 3's fence, `None` on every shipped preset.** Past it a block may carry
+    /// the three moves of a fused-attention dissection, and the court a session is judged under
+    /// takes the DERIVED arity instead of the bundle's binary one. Resolved in exactly one place
+    /// ([`Self::palw_kary_court_active_at`]) for the reason every fence above it is: the
+    /// acceptance filter that admits a move and the court that grades the close it ends in must
+    /// get the same answer for the same block, or one node's session has a phase another node's
+    /// does not.
+    pub(super) palw_kary_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0081 Decision 3 / ADR-0082 Decision 5's fence, `None` on every shipped preset** —
+    /// and un-armable on this build (`Params::validate_palw_v2` refuses it, audit D M-2). Held
+    /// here so the `ClassRegistered` arm reads the form from the ONE place that decides it
+    /// (`Params::palw_prompt_ids_form_at`) rather than spelling `Flat` at the application site.
+    pub(super) palw_prompt_ids_merkle: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0077 Phase B's fence, `None` on every shipped preset.** Past it a class registration
+    /// is judged against `palw_class_ladder_rules_*` — the ladder both leaf counts are enumerated
+    /// against, the court the close is priced for and Decision 14's canonical floor — instead of
+    /// against the genesis-anchored shape. It was carried in `Params` and read nowhere in this
+    /// crate (audit D H-3), so the rules the ADR wrote had no door on the only permissionless
+    /// registration path.
+    pub(super) palw_context_ladder: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0069 Decision 7's fence, `None` on every shipped preset. Past it a block whose class
     /// holds no granted share contributes zero pwu to both chain weights — see
     /// [`Self::palw_uncertified_weightless_at`], which is the ONE place this is resolved.
@@ -892,6 +912,9 @@ impl VirtualStateProcessor {
             // rather than remembered at each of the three sites below.
             palw_capability_bound: params.palw_capability_bound_fence(),
             palw_certification_rent: params.palw_certification_rent,
+            palw_kary_court: params.palw_kary_court_fence(),
+            palw_prompt_ids_merkle: params.palw_prompt_ids_merkle_fence(),
+            palw_context_ladder: params.palw_context_ladder,
             palw_uncertified_weightless: params.palw_uncertified_weightless,
             palw_da_court: params.palw_da_court,
             palw_frontier_provenance: params.palw_frontier_provenance,
@@ -5170,6 +5193,36 @@ impl VirtualStateProcessor {
                     continue;
                 }
             }
+            // **ADR-0080 design A: a declared close buys one adjudication, and pays for it before
+            // the group opens.**
+            //
+            // The court lane's `palw_certification_min_fee_v1`, on the object that carries the
+            // count the work is a function of — see `palw_court_close_min_fee_v1` for why it is the
+            // DECLARATION and not the completing chunk: chunks arrive in any order, so "the last
+            // one" is the declarer's choice of `index` and pricing on it is a discount of up to
+            // `max_close_chunks`. Refused BEFORE the row is written, exactly as the slot rent above
+            // is, so an underpaid declaration never reaches the state root and never commits any
+            // validator to the assembly it would have bought.
+            //
+            // Dropped rather than block-invalidating, for SA-2's own reason: admission on the
+            // lifecycle band is stateless, so an underpaid carrier relays and mines freely and it
+            // would be honest miners producing the invalid blocks. Behind the same
+            // `palw_certification_rent` fence as the two rents it copies — `None` on every shipped
+            // preset, and dormant this whole block is skipped.
+            if rent_armed
+                && let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::CourtCloseDeclared { session_id, count, .. } =
+                    &object
+            {
+                let owed = kaspa_consensus_core::palw_state_v2::palw_court_close_min_fee_v1(*count as u64);
+                if carrier_fee < owed {
+                    info!(
+                        "Block {block}: a CourtCloseDeclared for session {session_id} was dropped, and the block stands: its \
+                         carrier paid {carrier_fee} sompi and adjudicating a close of {count} chunks rents for {owed} \
+                         (ADR-0080 design A)"
+                    );
+                    continue;
+                }
+            }
             // ADR-0075 Decision 9: a block grades at most `PALW_CERTIFICATION_MAX_PER_BLOCK`
             // family drills. Counted before grading, in transaction order, so every node drops the
             // same object and the grader is never run for a drill the block may not carry.
@@ -5376,19 +5429,41 @@ impl VirtualStateProcessor {
             // Not fenced, because the objects it counts do not exist before this state version:
             // a chain that can carry a `CourtCloseChunk` at all is one that already re-minted for
             // `PALW_STATE_V2_VERSION` 18, so there is no un-upgraded node to disagree with.
-            if kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object) {
-                if court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK {
-                    info!(
-                        "Block {block}: a CourtCloseChunk that would complete a declared close was dropped, and the block \
-                         stands: the block already completes {} (PALW_COURT_CLOSE_MAX_PER_BLOCK)",
-                        kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
-                    );
-                    continue;
-                }
-                court_closes_completed += 1;
+            //
+            // **ADR-0082 Decision 2 counts here too**, on the same slot: a dissection move is
+            // court CPU the carrying block must spend (a fold checked, an artifact proven, a
+            // binding verified), and giving it a second per-block budget would be two answers to
+            // "how much court may one block ask for". Same drop-not-invalidate shape, same
+            // constant, one counter.
+            //
+            // **Audit C-1: the slot is SPENT below, once acceptance has said the object is real.**
+            // Both halves of the disjunction are state-dependent predicates over the folded state
+            // — `palw_court_move_spends_the_slot_v1` replaced a bare variant match that let an
+            // unauthenticated `CourtAttnRootClaimed` burn the network's only slot for the price of
+            // one transaction fee — but a predicate cannot see a signature or the k-ary fence, and
+            // `palw_v2_validate_objects` can. So the CAP is read here, before any work is asked
+            // for, and the COUNTER moves after acceptance returns `Ok`: an object acceptance drops
+            // did no court work (the drop path does none), and must not deny the block's real
+            // close its slot. A close denied inside its assembly window is not a delay, it is the
+            // conviction of the party that filed it.
+            let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
+                || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);
+            if spends_the_court_slot && court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK {
+                info!(
+                    "Block {block}: a court move that spends the block's adjudication slot was dropped, and the block \
+                     stands: the block already spent {} (PALW_COURT_CLOSE_MAX_PER_BLOCK)",
+                    kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
+                );
+                continue;
             }
             match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
+                    // Acceptance has verified the fence and the mover's signature, and the
+                    // predicate above read the folded state: whatever this block does with the
+                    // object now, every validator has been asked for the court work it names.
+                    if spends_the_court_slot {
+                        court_closes_completed += 1;
+                    }
                     match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_policies(
                         &folded,
                         state_params,
@@ -5663,32 +5738,111 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| e.to_string())?;
                 }
-                // **ADR-0080 design A: the declaration's authentication is W6's, and until it
-                // exists this door stays SHUT.**
+                // **ADR-0080 design A, W6: the declaration is a court move, and it is signed.**
                 //
-                // A `CourtCloseDeclared` is a court move: it pins every byte of a close and
-                // asserts a verdict on behalf of one of the two bonds the session id binds. The
-                // transition reads the declarer from the session and the claim, so it can never
-                // name a third party — but nothing here yet proves the SIDE authorised it, and
-                // that is precisely P0-9's hole in its original words: either party could
-                // otherwise write the other's move. `check_court_disclosure_acceptance_v2` is the
-                // construction it needs, under a signing domain registered in
-                // `PALW_COURT_V2_ALL_DOMAINS`, and both belong to W6.
+                // This arm refused every `CourtCloseDeclared` outright until W6 landed, and the
+                // refusal was right for as long as it stood: a declaration pins every byte of a
+                // close and asserts a verdict on behalf of one of the two bonds the session id
+                // binds, the transition acts on it, and nothing proved the SIDE authorised it —
+                // P0-9's hole in its original words, where either party could write the other's
+                // move. Unsigned it was worse than that: a declaration is singular per
+                // `(session, side)` for the life of the session and its failure to assemble is the
+                // declarer's conviction, so one forged object would have voided an honest
+                // producer's claim.
                 //
-                // Refused rather than admitted-and-noted, because the failure of an unchecked
-                // signature here is a forged close, and the state machine behind it is complete
-                // enough to act on one. `palw_lifecycle_object_may_ride_v2` already demands a
-                // non-empty signature; this is the layer that would have to say WHOSE.
-                Obj::CourtCloseDeclared { session_id, .. } => {
-                    return Err(format!(
-                        "a split close was declared for session {session_id}, and no layer yet verifies the declaring side's \
-                         signature (ADR-0080 W6) — refused rather than trusted"
-                    ));
+                // `check_court_close_declaration_acceptance_v2` is the same split
+                // `CourtDisclosed` and `CourtVerdictPosted` use: the transition reads WHICH bond
+                // may declare, this layer reads whether that bond spoke — its registered key is in
+                // the candidate state, and neither party names its own.
+                Obj::CourtCloseDeclared { session_id, side, count, chunk_digests, close_digest, verdict, signature } => {
+                    // The ruleset's own carriage count, which the transition cannot ask for: it has
+                    // no `PalwCourtParamsV2` and enforces only the bitmap's structural bound. On
+                    // devnet this is 1, so the split path is refused there rather than engaged.
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "a court close declaration on a network with no V2 court parameters".to_string())?;
+                    kaspa_consensus_core::palw_court_v2::check_close_declared_chunk_count_v2(session_id, *count, court)
+                        .map_err(|e| e.to_string())?;
+                    kaspa_consensus_core::palw_court_v2::check_court_close_declaration_acceptance_v2(
+                        state,
+                        session_id,
+                        *side,
+                        *count,
+                        chunk_digests,
+                        close_digest,
+                        *verdict,
+                        signature,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
                 }
-                // A chunk carries no signature and needs none: the declaration already pinned
-                // these bytes at this index, and the transition refuses anything else — so there
-                // is nothing here for an acceptance check to add.
-                Obj::CourtCloseChunk { .. } => {}
+                // **ADR-0080 design A, W7: the chunk that COMPLETES a group is adjudicated here.**
+                //
+                // A chunk carries no signature and needs none — the declaration already pinned
+                // these bytes at this index, and the transition refuses anything else — so for
+                // every chunk but the last there is nothing for this layer to add.
+                //
+                // The last one is a court close. The split exists so that a close too wide for one
+                // carrier can be filed at all, and the whole point of design A is that it reaches
+                // the SAME verdict by the SAME function: `adjudicate_court_close_v2` over the
+                // assembled proof, compared against the verdict the declaration announced, refused
+                // in either direction — "an asserted conviction and an asserted acquittal are the
+                // same lie", exactly as the one-carrier `CourtClosed` arm below says it.
+                //
+                // **What this arm does NOT refuse, and why that is not an omission.** Bytes that do
+                // not hash to the declaration's own `close_digest`, or that do not decode to this
+                // session's `CourtClosed`, are ADMITTED here — because a refused lifecycle object
+                // is dropped with the block standing, which would leave the group intact and the
+                // declarer sitting on its reserve until the backstop. Those two facts are
+                // establishable from rooted state alone and are entirely the declarer's doing, so
+                // the transition convicts on them in the block that carries the last chunk (W5's
+                // "a failed declaration loses on its OWN side"). This layer only ever refuses what
+                // it alone can see: whether the proof inside adjudicates.
+                Obj::CourtCloseChunk { session_id, side, index, bytes } => {
+                    if kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(state, object)
+                        && let Some(group) = state.court_close_group(session_id, *side)
+                    {
+                        let mut assembled = Vec::new();
+                        for i in 0..group.count {
+                            match (i == *index).then_some(bytes).or_else(|| group.chunks.get(&i)) {
+                                Some(part) => assembled.extend_from_slice(part),
+                                // Unreachable behind the predicate above, which is exactly the
+                                // "every part present" test — asserted rather than assumed, because
+                                // a hole here would adjudicate a truncated proof.
+                                None => return Err(format!("court {session_id} completes with chunk {i} missing")),
+                            }
+                        }
+                        let assembles =
+                            kaspa_consensus_core::palw_state_v2::palw_court_close_chunk_digest_v1(&assembled) == group.close_digest;
+                        let decoded = assembles
+                            .then(|| borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>(&assembled).ok())
+                            .flatten();
+                        // Only when the bytes ARE this session's close does the adjudication run;
+                        // anything else is the transition's conviction, not this layer's refusal.
+                        if let Some(Obj::CourtClosed { session_id: decoded_session, verdict, proof }) = &decoded
+                            && decoded_session == session_id
+                            && *verdict == group.verdict
+                        {
+                            let court = self
+                                .palw_court_params_v2
+                                .as_ref()
+                                .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
+                            let derived =
+                                kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(state, session_id, proof, court)
+                                    .map_err(|e| e.to_string())?;
+                            if derived != *verdict {
+                                return Err(format!(
+                                    "court {session_id}: the {} side declared {verdict:?} and the close it assembled adjudicates \
+                                     {derived:?}",
+                                    side.name()
+                                ));
+                            }
+                        }
+                    }
+                }
                 Obj::CourtDisclosed { session_id, disclosure, signature } => {
                     // The responder's rung, under the responder's key. Unsigned, a challenger
                     // could write the answers it wants to convict.
@@ -5739,6 +5893,81 @@ impl VirtualStateProcessor {
                     if derived != *verdict {
                         return Err(format!("court {session_id} declares {verdict:?}; its own proof adjudicates {derived:?}"));
                     }
+                }
+                // -------------------------------------------------------------------------
+                // ADR-0082 Decision 2/3 — the dissection's three moves.
+                //
+                // Two gates, in this order: the FENCE (a move on a network that never armed the
+                // k-ary court is refused by name — the arm exists in the binary but the rule does
+                // not exist on this chain), then the party's signature, the same split every
+                // other court move uses.
+                // -------------------------------------------------------------------------
+                Obj::CourtAttnRootClaimed { session_id, root, arity, signature, .. } => {
+                    kaspa_consensus_core::palw_court_v2::palw_attn_move_is_admissible_v2(
+                        object,
+                        self.palw_kary_court_active_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
+                    // **The declared arity must be the ruleset's own** (patch note 7). The object
+                    // states it because the fold cannot derive it — the derivation reads the
+                    // bundle — and this is the layer that holds the bundle, so this is the layer
+                    // that refuses any other value. Without the comparison the responder would
+                    // choose how many children it discloses per round, which is the move budget
+                    // Z4 sizes the window against.
+                    let derived = self
+                        .palw_court_params_at(point.daa_score)
+                        .ok_or_else(|| "a dissection move on a network with no V2 bundle".to_string())?
+                        .map_err(|e| format!("session {session_id}: {e}"))?;
+                    if *arity != derived.dissection_arity() {
+                        return Err(format!(
+                            "session {session_id}: the root claim declares dissection arity {arity}; this ruleset derives {}",
+                            derived.dissection_arity()
+                        ));
+                    }
+                    kaspa_consensus_core::palw_court_v2::check_court_attn_root_claim_acceptance_v2(
+                        state,
+                        session_id,
+                        root,
+                        signature,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Obj::CourtAttnDissected { session_id, round, signature } => {
+                    kaspa_consensus_core::palw_court_v2::palw_attn_move_is_admissible_v2(
+                        object,
+                        self.palw_kary_court_active_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
+                    kaspa_consensus_core::palw_court_v2::check_court_attn_round_acceptance_v2(
+                        state,
+                        session_id,
+                        round,
+                        signature,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Obj::CourtAttnChildChosen { session_id, choice, signature } => {
+                    kaspa_consensus_core::palw_court_v2::palw_attn_move_is_admissible_v2(
+                        object,
+                        self.palw_kary_court_active_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("session {session_id}: {e}"))?;
+                    kaspa_consensus_core::palw_court_v2::check_court_attn_choice_acceptance_v2(
+                        state,
+                        session_id,
+                        choice,
+                        signature,
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
                 }
                 Obj::ClassRegistered {
                     class_id,
@@ -5899,7 +6128,45 @@ impl VirtualStateProcessor {
                     // here rather than quietly granting or refusing weight on its own authority.
                     // The set is filled by the node's boot drill; the boot gate is what makes sure
                     // it agrees with the network's pin before a block is ever validated.
-                    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v3(
+                    // **The gate is called with the fences this block runs under** (audit D H-3).
+                    //
+                    // This called `verify_class_admission_v3` — six arguments, `ladder: None` and
+                    // `court: None` — which is the gate as it stood before ADR-0077 Phase B and
+                    // ADR-0082 existed. Two consequences, on the ONLY permissionless registration
+                    // path there is: every graph-v5 profile was refused
+                    // `FusedAttentionNeedsTheKaryCourt` even on a chain whose `palw_kary_court` is
+                    // armed (ADR-0082's own U-08 route, closed), and the close-chunk, ladder and
+                    // `CourtWindowTooShort` bounds were never evaluated against the armed court at
+                    // all. Every one of the three reads a fence, and a fence resolved anywhere but
+                    // at the ONE accessor is a rule two nodes can answer differently — so all
+                    // three come from the accessors above, at this block's own DAA score.
+                    //
+                    // `decode_rules` is `false` and not a fence read: ADR-0082 Decision 10's
+                    // numerator is not in the transition, and `Params::validate_palw_v2` refuses to
+                    // start a node that armed `palw_fp_decode_rules` (audit D M-1), so there is no
+                    // configuration in which this may be anything else.
+                    let court = match self.palw_kary_court_active_at(point.daa_score) {
+                        false => None,
+                        true => {
+                            let derived = self
+                                .palw_court_params_at(point.daa_score)
+                                .ok_or_else(|| format!("class {class_id} is registered on a chain with no V2 ruleset"))?
+                                .map_err(|e| format!("class {class_id} is judged under a court with no shape: {e}"))?;
+                            Some(kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
+                                dissection_arity: derived.dissection_arity(),
+                                prompt_ids_form: self.palw_prompt_ids_form_at(point.daa_score),
+                                window_court_daa: bundle.state.window_court(),
+                            })
+                        }
+                    };
+                    let ladder = self.palw_context_ladder_at(point.daa_score).then(|| {
+                        kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+                            &carriage.profile,
+                            court,
+                            bundle.court.max_step_leaf_count(),
+                        )
+                    });
+                    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v6(
                         bundle,
                         &carriage.profile,
                         &carriage.canonical,
@@ -5908,6 +6175,9 @@ impl VirtualStateProcessor {
                         // consensus must not read the drilled registry — and the chain's own.
                         &certified,
                         &chain_certified,
+                        ladder.flatten(),
+                        court,
+                        false,
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                 }
@@ -6370,6 +6640,50 @@ impl VirtualStateProcessor {
     /// liveness halt all the same, and the reverse would collect fees nobody reads.
     pub(super) fn palw_certification_rent_at(&self, daa_score: u64) -> bool {
         self.palw_certification_rent.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0082 Decision 3, resolved in exactly one place.** `false` on every shipped preset.
+    ///
+    /// Two things read it and they must agree: the acceptance filter, which admits a dissection
+    /// move only past the fence, and [`Self::palw_court_params_at`], which decides the arity the
+    /// children of every round are cut at. A node that resolved them differently would accept a
+    /// root claim its peers refused, or deal a different number of children from the same range.
+    pub(super) fn palw_kary_court_active_at(&self, daa_score: u64) -> bool {
+        self.palw_kary_court.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0081 Decision 3's form at this block, resolved in exactly one place.** `Flat` on every
+    /// shipped preset and on every configuration this build can be started with.
+    pub(super) fn palw_prompt_ids_form_at(&self, daa_score: u64) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
+        match self.palw_prompt_ids_merkle {
+            Some(fence) if fence.is_active(daa_score) => kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            _ => kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        }
+    }
+
+    /// **ADR-0077 Phase B's fence at this block, resolved in exactly one place.** `false` on every
+    /// shipped preset.
+    pub(super) fn palw_context_ladder_at(&self, daa_score: u64) -> bool {
+        self.palw_context_ladder.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **The court a session is judged under at this block** (ADR-0082 Decision 3, patch note 7).
+    ///
+    /// Under a dormant fence this is `bundle.court` byte for byte — every shipped preset's court,
+    /// unchanged. Under an armed one the arity is the derivation's, over the ruleset's own
+    /// quantities and the classes the genesis set registers; `None` from the derivation is a
+    /// REFUSAL here, never a fallback to the binary ladder, because an arity of 2 is a value the
+    /// derivation can legitimately return and using it for "no legal arity" would let a window
+    /// that cannot hold its own dispute run a court that overruns it.
+    pub(super) fn palw_court_params_at(
+        &self,
+        daa_score: u64,
+    ) -> Option<Result<kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2, String>> {
+        let bundle = self.palw_v2_bundle.as_ref()?;
+        Some(
+            kaspa_consensus_core::palw_court_v2::palw_court_params_at_v2(bundle, self.palw_kary_court_active_at(daa_score))
+                .map_err(|e| e.to_string()),
+        )
     }
 
     /// **ADR-0065 D1's blind spot, named in the log instead of left for an operator to find.**
@@ -6897,11 +7211,28 @@ impl VirtualStateProcessor {
             self.network_id_bytes.as_slice(),
             Some(self.genesis.hash),
         );
-        let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_v3(
+        // **The ladder this network froze, read off the bundle and never typed** (ADR-0082
+        // Decision 1). `max_step_leaf_count` is a bundle field — inside `palw_ruleset_id_v2`, so
+        // it cannot move on a running chain — and it is DAA-free: `palw_court_params_at_v2` only
+        // ever changes the dissection arity, never the ladder, so reading it here rather than
+        // through the fence keeps this walk a pure function of the accepted set and the ruleset.
+        //
+        // A node with no bundle has no ladder to apply and falls back to the structural top, which
+        // is what the arming-free entry uses; the walk is then exactly as permissive as it was.
+        let ladder = self
+            .palw_v2_bundle
+            .as_ref()
+            .map(|bundle| bundle.court.max_step_leaf_count())
+            .unwrap_or(kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
+        let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_under_ruleset_v3(
             &txs,
             network_domain,
             freeprompt,
             kaspa_consensus_core::BlockHash::default(),
+            // `false`: this call site has never resolved the `PanelDa` arming and this change does
+            // not start — the ladder and the privacy mode are separate fences.
+            false,
+            ladder,
             // Who authored the commitment. Unverified, a 0x4a transaction from any stranger created
             // a claim bound to any bond outpoint it named — the genesis premine bond among them.
             Self::verify_mldsa87_with_context_bool,
@@ -13309,6 +13640,10 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::MaterialDisclosed { .. } => "MaterialDisclosed",
         O::CourtCloseDeclared { .. } => "CourtCloseDeclared",
         O::CourtCloseChunk { .. } => "CourtCloseChunk",
+        // ADR-0082 Decision 2 — the fused-attention dissection's three moves.
+        O::CourtAttnRootClaimed { .. } => "CourtAttnRootClaimed",
+        O::CourtAttnDissected { .. } => "CourtAttnDissected",
+        O::CourtAttnChildChosen { .. } => "CourtAttnChildChosen",
     }
 }
 

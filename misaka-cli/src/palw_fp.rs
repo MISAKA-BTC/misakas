@@ -541,6 +541,90 @@ pub(crate) fn build_carrier_v1(
     build_carrier_priced_v1(key, nv, object, funding_outpoint, funding_entry).map(|(tx, _, fee)| (tx, fee))
 }
 
+// ---------------------------------------------------------------------------------------------
+// `misaka palw certified` — the two lane facts a builder must know BEFORE it builds
+// ---------------------------------------------------------------------------------------------
+
+/// **Is this class seated on the free-prompt lane, and which decode ruleset is the chain playing?**
+///
+/// Two reads off one `GetPalwProducerFacts` call, and they are together because a builder needs
+/// both before it commits anything and can guess neither:
+///
+/// * `fp_certified` (ADR-0075) — the genesis certified set ∪ the chain set, the same two sets
+///   `FreePromptCommitted` refuses on (`FreePromptLaneUncertified`). A job on an uncertified class
+///   is still ANSWERED — the answer is the product — and its commitment is unsubmittable, so a
+///   gateway that could not ask this discovered it by losing a fee.
+/// * `fp_decode_rules_armed` (ADR-0082 Decisions 10/11) — whether `palw_fp_decode_rules` is in
+///   force at the chain point the facts were read at. Past the fence a job carries
+///   `(sampling_seed, temperature_q)` inside its context hash and decode leaves are what earn, so
+///   a builder on the wrong side of it produces claims that are honest and unreproducible.
+///
+/// Nothing signs and nothing spends: one read. A node older than the field answers `false`, which
+/// is the fail-closed reading the wire format documents — hold back and retry, never submit on an
+/// assumption.
+pub async fn certified(ctx: &Ctx, class_id: &str, json: bool) -> Result<(), CliError> {
+    // The class id is parsed HERE, before a connection is opened, so a typo is a message about the
+    // argument rather than a round trip that comes back "this chain does not have that class".
+    let class = class_id
+        .parse::<kaspa_consensus_core::Hash64>()
+        .map_err(|_| CliError::new(exit::GENERIC, format!("class id '{class_id}' is not a 128-hex Hash64")))?;
+    let reader = crate::palw_derived::connect(ctx).await?;
+    let facts = reader
+        .client
+        .get_palw_producer_facts(class.to_string(), String::new(), 0, false)
+        .await
+        .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwProducerFacts: {e}")))?;
+
+    let as_json = json || ctx.output == OutputFormat::Json;
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema": "misaka.palw.chain-lane-facts.v1",
+                "available": facts.available,
+                "class_id": facts.class_id,
+                "chain_point": facts.chain_point,
+                "daa_score": facts.daa_score,
+                "fp_certified": facts.fp_certified,
+                "fp_decode_rules_armed": facts.fp_decode_rules_armed,
+                "fp_quanta_per_canonical_job": facts.fp_quanta_per_canonical_job,
+                "fp_max_quanta_per_receipt": facts.fp_max_quanta_per_receipt,
+            }))
+            .expect("serializable")
+        );
+    } else if !facts.available {
+        println!("class {class}: this chain does not know it (or is not a ConsensusV2 network)");
+    } else {
+        println!("class {}", facts.class_id);
+        println!("  at chain point {} (daa {})", facts.chain_point, facts.daa_score);
+        println!(
+            "  free-prompt lane   : {}",
+            if facts.fp_certified {
+                "CERTIFIED — a commitment on this class enters the state"
+            } else {
+                "uncertified — FreePromptCommitted would be refused (FreePromptLaneUncertified)"
+            }
+        );
+        println!(
+            "  fp decode rules    : {}",
+            if facts.fp_decode_rules_armed {
+                "ARMED — jobs carry (sampling_seed, temperature_q) and decode leaves earn (ADR-0082 D10/D11)"
+            } else {
+                "dormant — the pre-ADR-0082 job shape; a job built for the armed rules is unreproducible here"
+            }
+        );
+        println!("  quanta per job / receipt cap: {} / {}", facts.fp_quanta_per_canonical_job, facts.fp_max_quanta_per_receipt);
+    }
+
+    // **An unavailable class is a non-zero exit**, the same shape `palw derived` takes for a claim
+    // the chain does not hold: a script that pipes this into a decision must not read "the chain
+    // never heard of this class" as "uncertified", which is a different fact with a different fix.
+    if !facts.available {
+        return Err(CliError::new(exit::GENERIC, format!("this chain holds no class {class}")));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod rent_tests {
     /// **The rent the chain charges is the relay rate this tool pays** (ADR-0075 SA-1/SA-2).

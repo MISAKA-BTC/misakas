@@ -523,6 +523,133 @@ pub fn base0_ir_nodes_v1(table: &[Base0IrNodeV1], g: Base0IrGeometryV1, scope: B
         .collect()
 }
 
+/// **ADR-0082 Decision 1: fuse a projected attention table's four attention nodes into one.**
+///
+/// Graph v5, for BOTH families, from ONE description. The four nodes §1.2 measured — `ATTN_SCORES`
+/// (out `KvScaled`), the row `SoftMax` (out `KvScaled`), the probability requantization (out
+/// `KvScaled`) and `ATTN_VALUES` (out the output row) — become one [`PalwStepOpKindV1::AttnFused`]
+/// node whose committed row is the OUTPUT and whose inputs are the rotated query, the K cache and
+/// the V cache. The three context-wide rows stop being committed at all, which is invariant Z0's
+/// first half and the whole reason the close stops growing with the context.
+///
+/// # Why it runs on the PROJECTED table
+///
+/// The two families keep their attention sites in two different IR types (`Base0IrNodeV1` here,
+/// `Ir` in `palw_qwen36_profile`), and a fusion written once per type would be two spellings of
+/// one graph change — the defect this tree has recorded twice. The PROJECTED type is the one both
+/// families share, so the fusion is stated here, once, and both `qwen25_a16_profile_v5` and
+/// `qwen36_profile_v5` call it.
+///
+/// # Nothing is chosen; everything is inherited
+///
+/// * `out_len`, `tile_len` and `role` come from the VALUES node, because that is the row the fused
+///   node commits — so the site costs exactly the leaves `ATTN_VALUES` costs today and not one
+///   more (`⌈heads × d_head / tile_len⌉` a position, at every context);
+/// * `weight_name` and `weight_dtypes` come from the SOFTMAX node, because the softmax store is
+///   the name the other three derive from
+///   ([`crate::palw_step_refute::palw_attn_fused_tensors_v1`], the one description the engine's
+///   plan compiler and the adjudicator both read);
+/// * the query reference is the SCORES node's first input.
+///
+/// # The site is identified structurally
+///
+/// Four consecutive nodes carrying the four kernels, wired scores → softmax → probs → values with
+/// the K sentinel on the scores and the V sentinel on the values. A table that does not contain
+/// exactly one such run is REFUSED rather than partially fused: a fusion that guessed would be
+/// minting a class whose graph nobody wrote.
+pub fn palw_fuse_attention_site_v5(nodes: &[PalwStepNodeV1]) -> Result<Vec<PalwStepNodeV1>, PalwStepError> {
+    use crate::palw_step::{PALW_STEP_INPUT_SENTINEL_MIN, PalwStepOutLenV1};
+    use crate::palw_step_refute::{KDESC_A16_ATTN_FUSED, PALW_ATTN_FUSED_PROBS_LEAF, palw_attn_fused_tensors_v1};
+    let bad = PalwStepError::ProfileNotCanonical;
+
+    let k_scores = kernel_semantics_id_v1(KDESC_A16_ATTN_SCORES);
+    let k_soft = kernel_semantics_id_v1(KDESC_A16_SOFTMAX);
+    let k_req = kernel_semantics_id_v1(KDESC_A16_REQUANTIZE);
+    let k_vals = kernel_semantics_id_v1(KDESC_A16_ATTN_VALUES);
+
+    let mut site: Option<usize> = None;
+    for i in 0..nodes.len().saturating_sub(3) {
+        let (s, sm, pr, va) = (&nodes[i], &nodes[i + 1], &nodes[i + 2], &nodes[i + 3]);
+        if s.kernel_semantics_id != k_scores
+            || sm.kernel_semantics_id != k_soft
+            || pr.kernel_semantics_id != k_req
+            || va.kernel_semantics_id != k_vals
+            || !pr.weight_name.ends_with(PALW_ATTN_FUSED_PROBS_LEAF)
+        {
+            continue;
+        }
+        // The wiring, not just the kernels: this is the ONE shape whose four rows compose into the
+        // fused semantics, and any other arrangement of the same four kernels is a graph that
+        // computes something else.
+        let chain = s.input_refs.len() == 2
+            && s.input_refs[0] < PALW_STEP_INPUT_SENTINEL_MIN
+            && s.input_refs[1] == PALW_STEP_INPUT_KV_K
+            && sm.input_refs.as_slice() == [i as u16]
+            && pr.input_refs.as_slice() == [(i + 1) as u16]
+            && va.input_refs.len() == 2
+            && va.input_refs[0] == (i + 2) as u16
+            && va.input_refs[1] == PALW_STEP_INPUT_KV_V;
+        if !chain {
+            continue;
+        }
+        if site.is_some() {
+            return Err(bad("two attention sites in one layer table: which one the fusion meant is not written anywhere"));
+        }
+        site = Some(i);
+    }
+    let Some(i) = site else {
+        return Err(bad("this table declares no scores → softmax → probs → values attention site to fuse"));
+    };
+    // The softmax store's name is what the other three derive from, so a table whose softmax names
+    // something the derivation cannot read produces a node no court could serve. Refused here, at
+    // projection, rather than at the class's first dispute.
+    if palw_attn_fused_tensors_v1(nodes[i + 1].weight_name.as_str()).is_none() {
+        return Err(bad("the softmax store's name is not one the fused site's operand derivation can read"));
+    }
+    if matches!(nodes[i + 3].out_len, PalwStepOutLenV1::KvScaled { .. }) {
+        return Err(bad("the attention values node commits a context-shaped row: fusing it would keep the width the fusion deletes"));
+    }
+
+    let fused = PalwStepNodeV1 {
+        op_kind: PalwStepOpKindV1::AttnFused,
+        role: nodes[i + 3].role,
+        weight_name: nodes[i + 1].weight_name.clone(),
+        weight_dtypes: nodes[i + 1].weight_dtypes.clone(),
+        out_len: nodes[i + 3].out_len,
+        tile_len: nodes[i + 3].tile_len,
+        kernel_semantics_id: kernel_semantics_id_v1(KDESC_A16_ATTN_FUSED),
+        input_refs: vec![nodes[i].input_refs[0], PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V],
+    };
+
+    let mut out: Vec<PalwStepNodeV1> = nodes[..i].to_vec();
+    out.push(fused);
+    for node in nodes.iter().skip(i + 4) {
+        let mut node = node.clone();
+        for r in node.input_refs.iter_mut() {
+            if *r >= PALW_STEP_INPUT_SENTINEL_MIN {
+                continue;
+            }
+            let old = *r as usize;
+            *r = if old < i {
+                old as u16
+            } else if old == i + 3 {
+                // The values row IS the fused row.
+                i as u16
+            } else if old > i + 3 {
+                (old - 3) as u16
+            } else {
+                // Scores, softmax or the probability row read from outside the site. Those rows
+                // are INTERNAL to the fused op — never committed, never carried — so a graph that
+                // reads one is a graph this fusion cannot express, and saying so is the only
+                // honest answer.
+                return Err(bad("a node reads an attention row the fusion makes internal to the op"));
+            };
+        }
+        out.push(node);
+    }
+    Ok(out)
+}
+
 pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
     let tile = geometry.tile_len;
     let hidden = geometry.hidden_dim;
@@ -664,8 +791,38 @@ pub fn base0_catalog_entry_v1(
     canonical: &crate::palw_v2::PalwJobContextV2,
     worst_case: &crate::palw_v2::PalwJobContextV2,
 ) -> Result<crate::palw_mode_v2::PalwClassCatalogEntryV2, PalwStepError> {
-    let canonical_step_leaf_count = crate::palw_step::step_leaf_count(profile, canonical)?;
-    let max_step_leaf_count = crate::palw_step::step_leaf_count(profile, worst_case)?;
+    // The executor's constant as the DEFAULT, for a caller with no ruleset in hand. Every caller
+    // in this tree that builds a GENESIS row has one — see [`base0_catalog_entry_capped_v1`].
+    base0_catalog_entry_capped_v1(class_id, artifact_root, profile, canonical, worst_case, crate::palw_step::PALW_STEP_MAX_LEAVES)
+}
+
+/// [`base0_catalog_entry_v1`] against the ladder the RULESET froze (ADR-0082 Decision 1).
+///
+/// **Three numbers in this entry are ladder-bounded and all three were the executor's `2^22`**:
+/// the canonical count, the worst case, and — through `derive_court_cost_v1` —
+/// `PalwCourtCostShapeV1::genesis_anchored_v1`'s `ladder` field, which
+/// `derive_court_cost_walk_v1` uses as the CAP of its enumeration and not merely as a path depth.
+/// On a ruleset whose `max_step_leaf_count` is `2^26` that left two wrong outcomes and no right
+/// one: either the row does not build at all (`TooManyLeaves { max: 4194304 }` on a class the
+/// admission gate accepts), or it builds and the catalog publishes a cost derived for a court that
+/// is not the one that will play. The caller holds the bundle;
+/// `bundle.court.max_step_leaf_count()` is what it passes.
+///
+/// For every class whose worst case is inside `2^22` the entry is byte-identical at either ladder
+/// — the cost walk measures the path from the CLASS's own worst case
+/// (`PalwCourtCostShapeV1::path_from_ladder` is `false` for the genesis-anchored form) — so this
+/// moves no shipped row and no fingerprint. `the_floors_catalog_entry_is_the_same_at_either_ladder`
+/// is what says so rather than the sentence.
+pub fn base0_catalog_entry_capped_v1(
+    class_id: Hash64,
+    artifact_root: Hash64,
+    profile: &PalwShapeProfileV3,
+    canonical: &crate::palw_v2::PalwJobContextV2,
+    worst_case: &crate::palw_v2::PalwJobContextV2,
+    ladder: u64,
+) -> Result<crate::palw_mode_v2::PalwClassCatalogEntryV2, PalwStepError> {
+    let canonical_step_leaf_count = crate::palw_step::step_leaf_count_capped_v1(profile, canonical, ladder)?;
+    let max_step_leaf_count = crate::palw_step::step_leaf_count_capped_v1(profile, worst_case, ladder)?;
     // Every kernel the graph can reach, read off the graph itself. A hand-maintained list here
     // would be the coverage gate certifying a set nobody derived from the thing it covers.
     let reachable_kernels = [&profile.pre_nodes, &profile.gdn_nodes, &profile.attn_nodes, &profile.post_nodes]
@@ -675,8 +832,11 @@ pub fn base0_catalog_entry_v1(
         .collect();
     // The SAME derivation the post-genesis gate runs — mint and admission build entries with one
     // function, or the genesis door enforces a different metric than the running chain.
-    let court_cost = crate::palw_class_admission_v2::derive_court_cost_v1(profile)
-        .map_err(|_| PalwStepError::ProfileNotCanonical("the class's court cost does not derive"))?;
+    let court_cost = crate::palw_class_admission_v2::derive_court_cost_shaped_v1(
+        profile,
+        crate::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(profile, ladder),
+    )
+    .map_err(|_| PalwStepError::ProfileNotCanonical("the class's court cost does not derive"))?;
     Ok(crate::palw_mode_v2::PalwClassCatalogEntryV2 {
         court_cost,
         class_id,
@@ -768,7 +928,19 @@ pub fn palw_rc_base0_registration_v1(
     let class_id = profile.shape_profile_id();
     let canonical = rc_job_context(&profile, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
     let worst = rc_job_context(&profile, PALW_RC_BASE0_WORST_CASE.0, PALW_RC_BASE0_WORST_CASE.1);
-    let entry = base0_catalog_entry_v1(class_id, artifact_root, &profile, &canonical, &worst)?;
+    // **The ladder is the one this network's own bundle freezes**, not the executor's constant:
+    // `palw_fp_bundle_with_windows_v3` builds `court` from `COURT_MAX_STEP_LEAVES` on EVERY
+    // shipped preset (devnet and the RC alike), and `palw_rc_identity_v2`'s gate 5 refuses a
+    // bundle whose ladder is anything else. One spelling, so the row a genesis publishes and the
+    // court that will play it cannot come to disagree.
+    let entry = base0_catalog_entry_capped_v1(
+        class_id,
+        artifact_root,
+        &profile,
+        &canonical,
+        &worst,
+        crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES,
+    )?;
     let catalog = crate::palw_mode_v2::PalwClassCatalogV2::new(vec![entry])
         .map_err(|_| PalwStepError::ProfileNotCanonical("the RC catalog is not well-formed"))?;
     Ok((profile, catalog))
@@ -1148,6 +1320,30 @@ mod tests {
         assert!(kernel_can_serve_node_v1(&tableless, true).is_err(), "a gather must name the table it reads");
     }
 
+    /// **A node's op kind and its kernel must be the same op** (ADR-0082 audit, fixer A2's note):
+    /// the court reads the op kind and the catalog reads the program the kernel id resolves to,
+    /// and nothing else forced them to agree. A profile declaring `AttnFused` over another
+    /// catalogued kernel, or the fused kernel under another op kind, is refused by name.
+    #[test]
+    fn a_nodes_op_kind_and_its_kernel_must_be_the_same_op() {
+        use crate::palw_step::PalwStepOpKindV1;
+        use crate::palw_step_refute::kernel_can_serve_node_v1;
+        let v5 = crate::palw_qwen25_profile::qwen25_a16_profile_v5(crate::palw_qwen25_profile::QWEN25_1_5B_A16)
+            .expect("the graph-v5 dense profile");
+        let fused = v5.attn_nodes.iter().find(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+        let other = v5.attn_nodes.iter().find(|n| n.op_kind != PalwStepOpKindV1::AttnFused).expect("another node");
+        assert!(kernel_can_serve_node_v1(fused, false).is_ok(), "the fused site as registered is served");
+        assert!(kernel_can_serve_node_v1(other, false).is_ok(), "an ordinary node as registered is served");
+        let mut fused_kind_other_kernel = fused.clone();
+        fused_kind_other_kernel.kernel_semantics_id = other.kernel_semantics_id;
+        let err = kernel_can_serve_node_v1(&fused_kind_other_kernel, false).expect_err("AttnFused over another kernel");
+        assert!(err.contains("same op"), "the refusal names the rule: {err}");
+        let mut other_kind_fused_kernel = other.clone();
+        other_kind_fused_kernel.kernel_semantics_id = fused.kernel_semantics_id;
+        let err = kernel_can_serve_node_v1(&other_kind_fused_kernel, false).expect_err("the fused kernel under another op kind");
+        assert!(err.contains("same op"), "the refusal names the rule: {err}");
+    }
+
     /// Every weighted node carries one dtype byte per layer its table covers, all int8 — BASE-0
     /// has exactly one weight type, and variance would mean it is not BASE-0.
     #[test]
@@ -1214,5 +1410,240 @@ mod tests {
         let p = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor is expressible");
         println!("FLOOR_CLASS_ID {}", p.shape_profile_id());
         println!("  pre={} attn={} post={}", p.pre_nodes.len(), p.attn_nodes.len(), p.post_nodes.len());
+    }
+}
+
+/// **ADR-0082 Decision 1's graph, held to invariants Z0 (first half) and the identity rule.**
+///
+/// Both families in one module because the fusion is one function: a defect that reached only one
+/// of them would be a defect in the projection that calls it, and that is what these assert.
+#[cfg(test)]
+mod graph_v5 {
+    use super::*;
+    use crate::palw_qwen25_profile::{QWEN25_1_5B_A16, qwen25_a16_profile_v1, qwen25_a16_profile_v2, qwen25_a16_profile_v5};
+    use crate::palw_qwen36_profile::{QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_profile_v2, qwen36_profile_v5};
+    use crate::palw_step::{PALW_STEP_INPUT_SENTINEL_MIN, PalwStepOutLenV1};
+    use crate::palw_step_refute::{
+        KDESC_A16_ATTN_FUSED, catalogued_kernel_ids_v1, kernel_can_serve_node_v1, palw_attn_fused_tensors_v1,
+    };
+
+    /// The two shipped families' v2 row and its v5 twin, built from the SAME geometry — so every
+    /// assertion below is about the fusion and about nothing else.
+    fn pairs() -> Vec<(&'static str, PalwShapeProfileV3, PalwShapeProfileV3)> {
+        let hybrid_g = qwen36_geometry_artifact_eps(QWEN36_35B_A3B);
+        vec![
+            (
+                "dense",
+                qwen25_a16_profile_v2(QWEN25_1_5B_A16).expect("the dense v2 row projects"),
+                qwen25_a16_profile_v5(QWEN25_1_5B_A16).expect("the dense v5 row projects"),
+            ),
+            (
+                "hybrid",
+                qwen36_profile_v2(hybrid_g).expect("the hybrid v2 row projects"),
+                qwen36_profile_v5(hybrid_g).expect("the hybrid v5 row projects"),
+            ),
+        ]
+    }
+
+    /// **ADR-0082 invariant Z0, first half: no node of a graph-v5 class has a context-shaped
+    /// width.** Swept over every table, not just the attention one, because a `KvScaled` row
+    /// anywhere is a close that grows with the context — which is the whole thing this ADR removes.
+    #[test]
+    fn no_kvscaled_row_projects_from_a_v5_profile() {
+        for (family, v2, v5) in pairs() {
+            // The v2 row HAS them — otherwise this test would pass on a change that deleted
+            // attention rather than fusing it.
+            let v2_scaled = v2
+                .pre_nodes
+                .iter()
+                .chain(&v2.gdn_nodes)
+                .chain(&v2.attn_nodes)
+                .chain(&v2.post_nodes)
+                .filter(|n| matches!(n.out_len, PalwStepOutLenV1::KvScaled { .. }))
+                .count();
+            assert_eq!(v2_scaled, 3, "{family}: the v2 attention site commits three context-wide rows (ADR-0082 §1.2)");
+
+            for (table, nodes) in [("pre", &v5.pre_nodes), ("gdn", &v5.gdn_nodes), ("attn", &v5.attn_nodes), ("post", &v5.post_nodes)]
+            {
+                for (i, node) in nodes.iter().enumerate() {
+                    assert!(
+                        !matches!(node.out_len, PalwStepOutLenV1::KvScaled { .. }),
+                        "{family}: v5 {table} node {i} ({}) still commits a context-shaped row",
+                        node.weight_name
+                    );
+                }
+            }
+        }
+    }
+
+    /// **The v5 row is a NEW class, and the shipped rows did not move.**
+    ///
+    /// The two hex pins are COPIES of the ones already standing in the tree
+    /// (`palw_qwen36_profile::tests::v3_shape_profile_id_golden_vector` and the dense n_ctx-16
+    /// assertion in `palw_qwen25_profile`), restated here so that a change to the fusion path that
+    /// leaked into a shipped projection fails in the stream that made it.
+    #[test]
+    fn the_v5_row_is_a_new_class_id_and_the_v2_row_did_not_move() {
+        assert_eq!(
+            qwen25_a16_profile_v1(QWEN25_1_5B_A16).expect("projects").shape_profile_id().to_string(),
+            "f942e268f43f05461f648adcb76a1300dbedd93f022d3bba0e88c2ef4349e38f3ac1b70871f3b5195b3b2fb3da221f9c29fe291773a094596add6951aa7902c1",
+            "the dense class testnet-11 registered moved"
+        );
+        assert_eq!(
+            qwen36_profile_v2(qwen36_geometry_artifact_eps(QWEN36_35B_A3B)).expect("projects").shape_profile_id().to_string(),
+            "5bd9ae3d91df80650caffe3126a38bafb0b4feb9b046a416d353a7c3f71af6eab5aadf9b1ce41650007a980f1cc6044ef218424f4cbb8299ef9e92c97b99ef8e",
+            "the hybrid graph-v3 row moved"
+        );
+        for (family, v2, v5) in pairs() {
+            assert_ne!(v2.shape_profile_id(), v5.shape_profile_id(), "{family}: a different graph must be a different class");
+            // And the only differences are the attention table and the STATE CHUNK MAP: the fusion
+            // touches the site, and ADR-0082 Decision 4 requires a v5 class to register the tiled
+            // map its dissection's bottom opens against — "the bottom of the dissection opens
+            // tiles, so the anchor is tile-addressed". A v5 row that differed anywhere ELSE would
+            // be a third change riding these two.
+            //
+            // The map is asserted rather than waved through, and both halves of the pair are
+            // named: a v5 row that quietly kept the v2 map would be charged 526,336 bytes for an
+            // opening its evidence carries in 18,432 and admitted at the width it had before the
+            // tile existed (`palw_context_ladder::u00_tiled_attention_measurement`).
+            assert_ne!(v2.state_chunk_map_id, v5.state_chunk_map_id, "{family}: a v5 row must register the tiled map");
+            assert_eq!(
+                PalwShapeProfileV3 { attn_nodes: v2.attn_nodes.clone(), state_chunk_map_id: v2.state_chunk_map_id, ..v5.clone() },
+                v2,
+                "{family}: the v5 row differs from the v2 row somewhere other than the attention table and the map"
+            );
+        }
+        // Which maps, by name — the dense row's cache alone, the hybrid's composition of both
+        // halves (ADR-0082 Decision 4; `palw_state_chunk_map::hybrid_composition_tests` enumerates
+        // the second).
+        assert_eq!(
+            qwen25_a16_profile_v5(QWEN25_1_5B_A16).expect("projects").state_chunk_map_id,
+            crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3()
+        );
+        assert_eq!(
+            qwen36_profile_v5(qwen36_geometry_artifact_eps(QWEN36_35B_A3B)).expect("projects").state_chunk_map_id,
+            crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3()
+        );
+    }
+
+    /// **The site is four nodes shorter and everything downstream still points at the right row.**
+    #[test]
+    fn the_fused_site_replaces_exactly_four_nodes_and_rewires_the_rest() {
+        let fused_kernel = kernel_semantics_id_v1(KDESC_A16_ATTN_FUSED);
+        for (family, v2, v5) in pairs() {
+            assert_eq!(v5.attn_nodes.len() + 3, v2.attn_nodes.len(), "{family}: four nodes became one");
+            let sites: Vec<usize> =
+                v5.attn_nodes.iter().enumerate().filter(|(_, n)| n.kernel_semantics_id == fused_kernel).map(|(i, _)| i).collect();
+            assert_eq!(sites.len(), 1, "{family}: exactly one fused site per layer table");
+            let i = sites[0];
+            let fused = &v5.attn_nodes[i];
+            assert_eq!(fused.op_kind, PalwStepOpKindV1::AttnFused);
+            assert_eq!(fused.input_refs.len(), 3);
+            assert_eq!(fused.input_refs[1], PALW_STEP_INPUT_KV_K);
+            assert_eq!(fused.input_refs[2], PALW_STEP_INPUT_KV_V);
+            // It commits the row `ATTN_VALUES` commits — same width, same tile, so the site's
+            // leaves per position are unchanged at every context.
+            let values = &v2.attn_nodes[i + 3];
+            assert_eq!(fused.out_len, values.out_len, "{family}: the fused row is the output row");
+            assert_eq!(fused.tile_len, values.tile_len, "{family}: the fused row is tiled as the output row is");
+            // The query it reads is the one the SCORES node read.
+            assert_eq!(fused.input_refs[0], v2.attn_nodes[i].input_refs[0], "{family}: the fused site reads the rotated query");
+            // Everything after the site kept its wiring, shifted by the three deleted rows.
+            for (j, node) in v5.attn_nodes.iter().enumerate().skip(i + 1) {
+                let before = &v2.attn_nodes[j + 3];
+                let want: Vec<u16> = before
+                    .input_refs
+                    .iter()
+                    .map(|r| {
+                        let old = *r as usize;
+                        if *r >= PALW_STEP_INPUT_SENTINEL_MIN {
+                            *r
+                        } else if old == i + 3 {
+                            i as u16
+                        } else if old > i + 3 {
+                            *r - 3
+                        } else {
+                            *r
+                        }
+                    })
+                    .collect();
+                assert_eq!(node.input_refs, want, "{family}: v5 attn node {j} lost its wiring");
+            }
+        }
+    }
+
+    /// **The coverage gate's question, asked of the v5 rows**: every kernel catalogued, every node
+    /// servable. A class whose fused site the adjudicator refuses is a class no court can reach,
+    /// and ADR-0069 grants weight only to classes some certified family covers.
+    #[test]
+    fn a_v5_rows_every_kernel_is_catalogued_and_every_node_is_servable() {
+        let catalog = catalogued_kernel_ids_v1();
+        for (family, _, v5) in pairs() {
+            let tables = [
+                ("pre", &v5.pre_nodes, true),
+                ("gdn", &v5.gdn_nodes, false),
+                ("attn", &v5.attn_nodes, false),
+                ("post", &v5.post_nodes, false),
+            ];
+            for (table, nodes, is_pre) in tables {
+                for (i, node) in nodes.iter().enumerate() {
+                    assert!(catalog.contains(&node.kernel_semantics_id), "{family}: v5 {table} node {i} names an uncatalogued kernel");
+                    kernel_can_serve_node_v1(node, is_pre)
+                        .unwrap_or_else(|e| panic!("{family}: v5 {table} node {i} ({}) cannot be served: {e}", node.weight_name));
+                }
+            }
+        }
+    }
+
+    /// **The artifact is UNCHANGED.** Every tensor the fused node reads — the one it names and the
+    /// three derived from it — is a tensor the v2 graph already reads, which is what makes graph v5
+    /// a registration and not a re-conversion.
+    #[test]
+    fn every_tensor_the_fused_node_reads_is_one_the_v2_graph_already_read() {
+        let fused_kernel = kernel_semantics_id_v1(KDESC_A16_ATTN_FUSED);
+        for (family, v2, v5) in pairs() {
+            let declared: std::collections::BTreeSet<&str> = v2.attn_nodes.iter().map(|n| n.weight_name.as_str()).collect();
+            let fused = v5.attn_nodes.iter().find(|n| n.kernel_semantics_id == fused_kernel).expect("the fused site");
+            let t = palw_attn_fused_tensors_v1(fused.weight_name.as_str()).expect("the fused site's operands derive");
+            for name in [&t.softmax_up, &t.scores, &t.probs, &t.values] {
+                assert!(declared.contains(name.as_str()), "{family}: the fused site reads {name:?}, which the v2 graph never named");
+            }
+        }
+    }
+
+    /// **The operand derivation reads both families' registered spellings, and nothing else.**
+    #[test]
+    fn the_operand_derivation_reads_both_families_spellings() {
+        for name in ["blk.7.attn_softmax_up", "blk.7.attn_softmax_up.a16"] {
+            let t = palw_attn_fused_tensors_v1(name).expect("a registered spelling");
+            assert_eq!(t.softmax_up, name);
+            assert_eq!(t.scores, "blk.7.attn_logits.a16");
+            assert_eq!(t.probs, "blk.7.attn_probs.a16");
+            assert_eq!(t.values, "blk.7.attn_values.a16");
+        }
+        // A name that merely ENDS in the stem implies three tensors nobody registered.
+        assert!(palw_attn_fused_tensors_v1("blk.7.my_attn_softmax_up").is_none());
+        assert!(palw_attn_fused_tensors_v1("blk.7.attn_softmax_up.b16").is_none());
+        assert!(palw_attn_fused_tensors_v1("").is_none());
+    }
+
+    /// **A table the fusion cannot express is REFUSED, never partially fused.**
+    #[test]
+    fn the_fusion_refuses_a_table_it_cannot_express() {
+        let v2 = qwen25_a16_profile_v2(QWEN25_1_5B_A16).expect("projects");
+        // No site at all: the post table is three ordinary nodes.
+        assert!(palw_fuse_attention_site_v5(&v2.post_nodes).is_err(), "a table with no attention site has nothing to fuse");
+        // Already fused: the v5 table has no scores → softmax → probs → values run left.
+        let v5 = qwen25_a16_profile_v5(QWEN25_1_5B_A16).expect("projects");
+        assert!(palw_fuse_attention_site_v5(&v5.attn_nodes).is_err(), "fusing twice would mean the first fusion left a site behind");
+        // A downstream node reading the softmax row: that row is INTERNAL to the fused op, so the
+        // graph is one the fusion cannot express and it says so rather than dropping the read.
+        let mut broken = v2.attn_nodes.clone();
+        let scores = broken
+            .iter()
+            .position(|n| n.kernel_semantics_id == kernel_semantics_id_v1(KDESC_A16_ATTN_SCORES))
+            .expect("the dense site");
+        broken[scores + 4].input_refs[0] = (scores + 1) as u16;
+        assert!(palw_fuse_attention_site_v5(&broken).is_err(), "a read of an internal attention row must refuse");
     }
 }

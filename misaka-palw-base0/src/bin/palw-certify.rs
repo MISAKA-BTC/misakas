@@ -4,7 +4,7 @@
 //! change, a fingerprint move and a re-genesis. ADR-0075 makes it two lifecycle objects any
 //! transaction can carry, graded by the court in the transition:
 //!
-//! * `drill --family <base0|qwen36|a16> --lane <attempt|fp> --out <file>` runs the family's
+//! * `drill --family <base0|qwen36|a16|a16-v5> --lane <attempt|fp> --out <file>` runs the family's
 //!   fixture drill and writes a `FamilyCertified` object (borsh `PalwConsensusObjectV2`). The
 //!   chain grades the same vectors with the same court and records the family.
 //! * `bind (--artifact <file> [--n-ctx <n>] | --n-ctx <n> | --model-id <catalog id>) --lane
@@ -70,7 +70,7 @@ fn die(msg: impl std::fmt::Display) -> ! {
 fn usage() -> ! {
     eprintln!(
         "usage:\n  \
-         palw-certify drill (--family <base0|qwen36|a16> | --model-id <catalog model id>) --lane <attempt|fp> --out <file>\n  \
+         palw-certify drill (--family <base0|qwen36|a16|a16-v5> | --model-id <catalog model id>) --lane <attempt|fp> --out <file>\n  \
          palw-certify bind --artifact <.palwart> [--n-ctx <n>] --lane <attempt|fp> --out <file>\n  \
          palw-certify bind --n-ctx <n>            --lane <attempt|fp> --out <file>\n  \
          palw-certify bind --model-id <catalog model id> --lane <attempt|fp> --out <file>\n  \
@@ -83,7 +83,11 @@ fn usage() -> ! {
          --n-ctx     the same dense A16 ladder row at a width taken on your word — nothing confirms the\n              \
          family and nothing bounds the width. For a machine where the artifact is elsewhere.\n  \
          --model-id  a row of this build's catalogs, at the width that row is defined at. A model id\n              \
-         does NOT determine a width, so this cannot reach a class the catalogs do not table."
+         does NOT determine a width, so this cannot reach a class the catalogs do not table.\n\
+         \n\
+         --seat-ms-per-position <ms>  the SLOWEST fleet host's measured seat recompute, in milliseconds per\n              \
+         position (ADR-0082 Decision 9). Given, it is taken against the class row's own figure and the\n              \
+         slower of the two bounds the width this build will certify."
     );
     std::process::exit(2)
 }
@@ -91,6 +95,47 @@ fn usage() -> ! {
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
 }
+
+/// **ADR-0082 Decision 9: the seat's window is what bounds a row's width, and it is checked HERE.**
+///
+/// A row nobody can seat certifies nothing (ADR-0075), so the bound belongs where seats are
+/// measured — not in `verify_class_admission`, which cannot read a fleet measurement and must not
+/// pretend to. `n_max = window_receipt × rate_seat_prefill`, with:
+///
+/// * `window_receipt` the ruleset's own receipt window (`PalwLatticeWindowsV1`), read, never typed;
+/// * `rate_seat_prefill` the SLOWER of two measurements — the class row's SA-4 figure
+///   (`PALW_COURT_ROW_COSTS`, whose source is written down beside it) and whatever this fleet
+///   measured, passed in with `--seat-ms-per-position`. Taking the slower is what "the slowest
+///   fleet host" means, and it can only ever admit FEWER positions.
+///
+/// Nothing is chosen: the two quantities are the ruleset's and the measurement's, and the
+/// derivation is printed so a reader can check the arithmetic rather than the intention.
+fn seat_width_bound(profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3, measured_ms: Option<u64>) -> (u64, u64, u64) {
+    use kaspa_consensus_core::palw_context_ladder::{PALW_COURT_COST_A16, PALW_COURT_COST_BASE0, PALW_COURT_COST_QWEN36};
+    let class_id = profile.shape_profile_id();
+    // The class's own row where the build ships one; otherwise the shape decides which family's
+    // measurement covers it, the way `palw_shipped_court_rows_v1` pairs them.
+    let row_ms = kaspa_consensus_core::palw_court_deadline::palw_shipped_court_rows_v1()
+        .ok()
+        .and_then(|rows| rows.into_iter().find(|r| r.class_id == class_id).map(|r| r.cost.replay_ms_per_position()))
+        .unwrap_or_else(|| {
+            if profile.full_attention_interval == 0 || profile.gdn_heads > 0 {
+                PALW_COURT_COST_QWEN36.replay_ms_per_position()
+            } else if profile.vocab_size > PALW_BASE0_VOCAB_CEILING {
+                PALW_COURT_COST_A16.replay_ms_per_position()
+            } else {
+                PALW_COURT_COST_BASE0.replay_ms_per_position()
+            }
+        });
+    let ms = row_ms.max(measured_ms.unwrap_or(0));
+    let rate = misaka_palw_base0::fp_recompute::base0_fp_seat_milli_positions_per_daa_v1(ms);
+    let window = kaspa_consensus_core::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.window_receipt;
+    (misaka_palw_base0::fp_recompute::base0_fp_seat_width_bound_v1(window, rate), ms, rate)
+}
+
+/// The floor's vocabulary — above it a class is not the integer floor, which is the only thing
+/// this needs to tell apart when a build ships no row for the class.
+const PALW_BASE0_VOCAB_CEILING: u32 = 1_024;
 
 fn lane_of(s: &str) -> PalwCertifiedLaneV1 {
     match s.trim().to_ascii_lowercase().as_str() {
@@ -183,19 +228,25 @@ fn main() {
             let n_ctx = flag(&args, "--n-ctx").map(|s| {
                 s.trim().parse::<u32>().unwrap_or_else(|e| die(format!("--n-ctx {s}: {e} — a width is a decimal number of positions")))
             });
-            // Exactly one source names the class. Two would be two widths for one graph, and the
-            // whole point of this subcommand is that a width is part of the identity.
+            // **The artifact AUTHENTICATES; the model id DISAMBIGUATES.** These were mutually
+            // exclusive, on the reasoning that two sources would be two widths for one graph. That
+            // was right about the width and wrong about the graph: a header and a width can match
+            // more than one row, because two rows can be the same width and different classes —
+            // `graph-v2@512` and `graph-v5@512` are both 512 and are not the same class. So the
+            // file says what these weights can execute, and the model id says which of the rows
+            // they can execute is meant. Passing the id without the file is still fine (a row's
+            // width is part of the row); passing the file alone is fine whenever it names one row.
             let (profile, named_by, checked) = match (flag(&args, "--artifact"), flag(&args, "--model-id"), n_ctx) {
-                (Some(_), Some(_), _) => {
-                    die("--artifact and --model-id name the class two ways. Use --artifact (the file states its own width) \
-                     or --model-id (a catalog row's width is part of the row)")
-                }
+                (Some(_), Some(model_id), Some(n)) => die(format!(
+                    "--model-id {model_id} --n-ctx {n} names two widths for one class: a catalog row's n_ctx is part of \
+                     the row. Drop --n-ctx; --artifact bounds the width and --model-id picks the row"
+                )),
                 (None, Some(model_id), Some(n)) => die(format!(
                     "--model-id {model_id} --n-ctx {n} names two widths for one class: a catalog row's n_ctx is part of the \
                      row, so a width beside it would be a third spelling of the graph. Use --artifact <file> (checked \
                      against the weights), or --n-ctx {n} alone for the dense A16 ladder row"
                 )),
-                (Some(path), None, asked) => {
+                (Some(path), wanted, asked) => {
                     // The panel's own load: the whole file is decoded and its declared digest
                     // recomputed over every byte, so a truncated or rewritten artifact is refused
                     // here rather than certified.
@@ -204,11 +255,11 @@ fn main() {
                     let artifact = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes)
                         .unwrap_or_else(|e| die(format!("{path} is not a readable dense PALW artifact: {e}")));
                     drop(bytes);
-                    let row = misaka_palw_base0::classes::a16_artifact_row_v1(&court, &artifact, asked).unwrap_or_else(|e| {
+                    let row = misaka_palw_base0::classes::a16_artifact_row_v1(&court, &artifact, asked, wanted).unwrap_or_else(|e| {
                         die(format!(
                             "{path}: {e}\n  \
-                             no class id was computed and nothing was written — a certificate whose class the weights \
-                             cannot execute is worse than none"
+                                 no class id was computed and nothing was written — a certificate whose class the weights \
+                                 cannot execute is worse than none"
                         ))
                     });
                     let width_source = if row.narrowed {
@@ -227,24 +278,33 @@ fn main() {
                                 row.family_rows.join(", ")
                             ),
                             format!("width:     {width_source}"),
-                            "graph:     palw_a16_context_row_profile_v1 — the shipped ladder projection, under the epsilon the \
-                             artifact executes"
-                                .to_string(),
+                            format!(
+                                "row:       {} — MATCHED in this build's registry, not projected: the profile bound is that \
+                                 row's own, so the class id cannot be a second spelling of the graph",
+                                row.model_id
+                            ),
                         ],
                     )
                 }
                 (None, None, Some(n)) => {
-                    let profile = misaka_palw_base0::classes::a16_ladder_row_v1(n)
-                        .unwrap_or_else(|e| die(format!("--n-ctx {n}: {e}\n  no class id was computed and nothing was written")));
+                    let (profile, row_id) = misaka_palw_base0::classes::a16_ladder_row_v1(&court, n, None).unwrap_or_else(|e| {
+                        die(format!(
+                            "--n-ctx {n}: {e}\n  \
+                             no class id was computed and nothing was written.\n  \
+                             A width is not a class here: pass --model-id <row> (its name carries the graph, and the row \
+                             carries its own width), or --artifact <file> to have the weights say which family and how wide."
+                        ))
+                    });
                     (
                         profile,
-                        format!("--n-ctx {n} (dense A16 ladder row)"),
+                        format!("--n-ctx {n} (dense A16 row at a width you named)"),
                         vec![
                             format!("width:     {n}, taken on your word — NOTHING here checked it against an artifact"),
                             "family:    unchecked — pass --artifact <file> to have the weights confirm it".to_string(),
-                            "graph:     palw_a16_context_row_profile_v1 — the shipped ladder projection, under the epsilon the \
-                             artifact executes"
-                                .to_string(),
+                            format!(
+                                "row:       {row_id} — MATCHED in this build's registry, not projected: the width chose \
+                                 among tabled rows and the profile bound is that row's own"
+                            ),
                         ],
                     )
                 }
@@ -289,6 +349,39 @@ fn main() {
                 .into_iter()
                 .find(|(_, p)| p.shape_profile_id() == class_id)
                 .map(|(id, _)| id);
+            // **ADR-0082 Decision 9, before anything is written.** A certificate is a statement
+            // that seats can judge this row; a width no seat can recompute inside `window_receipt`
+            // is a row whose seats file `Incapable`, whose claims reach no quorum, and whose
+            // certificate would be a promise the fleet cannot keep.
+            let measured = flag(&args, "--seat-ms-per-position").map(|v| {
+                v.parse::<u64>()
+                    .unwrap_or_else(|_| die(format!("--seat-ms-per-position takes a whole number of milliseconds, not `{v}`")))
+            });
+            let (n_max, ms, rate) = seat_width_bound(&profile, measured);
+            let window = kaspa_consensus_core::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.window_receipt;
+            // `rate` is MILLI-positions per DAA, so the decimal point is placed rather than
+            // computed: `rate as f64 / 1_000.0` was an IEEE-754 divide in a tool that decides
+            // whether a class is certifiable, and ADR-0040 Decision A does not carve out the
+            // reporting line of a binary whose other lines it binds. Same three digits, no float.
+            println!(
+                "seat window (ADR-0082 Decision 9): {ms} ms per position → {}.{:03} positions/DAA × window_receipt {window} DAA = n_max {n_max}; this class registers n_ctx {}{}",
+                rate / 1_000,
+                rate % 1_000,
+                profile.n_ctx,
+                match measured {
+                    Some(m) => format!(" (measured {m} ms/position on this host)"),
+                    None => String::new(),
+                }
+            );
+            if profile.n_ctx as u64 > n_max {
+                die(format!(
+                    "this class registers n_ctx {} and the slowest measured seat recomputes {n_max} positions inside \
+                     window_receipt ({window} DAA at {ms} ms per position) — certifying it would certify a row nobody can seat \
+                     (ADR-0082 Decision 9, ADR-0075). Re-measure with --seat-ms-per-position from the slowest fleet host, or \
+                     register a narrower row.",
+                    profile.n_ctx
+                ));
+            }
             let bytes =
                 write_object(out, &PalwConsensusObjectV2::ClassLaneCertified { class_id, lane, profile: Box::new(profile.clone()) });
             println!("wrote {out}: ClassLaneCertified, {lane} lane, class {class_id}");

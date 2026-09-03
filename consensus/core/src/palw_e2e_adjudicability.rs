@@ -112,6 +112,21 @@ pub struct PalwE2eCoveringV1 {
     /// by a message is not a court, so certification asks for this the way it asks for a
     /// conviction.
     pub malformed_refused: bool,
+    /// **Which KERNELS a fault was actually planted in and convicted at.**
+    ///
+    /// The six booleans above are TABLES — four buckets — and a family's `kernel_ids` is computed
+    /// from the graph (`reachable_kernels_v1(&evidence.profile)`), not from the drill. So until
+    /// this field existed nothing anywhere compared the kernels a certificate DECLARES against the
+    /// kernels a fault was ever planted in, and a graph reaching two kernels through one table was
+    /// certified for both while only one had been adjudicated. Measured 2026-09-03 on
+    /// `graph-v5@512`: ten kernels reached, nine drilled, the fused attention op inside a table the
+    /// walk had already ticked.
+    ///
+    /// A certificate that names an unadjudicated kernel is worse than a refusal — the refusal says
+    /// the class cannot be certified, the declaration says it can while asserting something no
+    /// fixture established. ADR-0069's premise is that a certificate is about kernels the court
+    /// implements; this is the field that lets it be about kernels the court was WATCHED to score.
+    pub drilled_kernel_ids: std::collections::BTreeSet<Hash64>,
 }
 
 impl PalwE2eCoveringV1 {
@@ -133,6 +148,15 @@ impl PalwE2eCoveringV1 {
             && (self.attn || !needs_attn)
             && self.convicted_leaves > 0
             && self.malformed_refused
+            // **Every kernel the profile reaches was actually planted at.** The four table flags
+            // above are four buckets; a profile reaching two kernels through one table sets that
+            // table's flag from either one. `kernel_ids` on the family is
+            // `reachable_kernels_v1(&profile)` — the graph's answer, not the drill's — so without
+            // this line a certificate declares kernels no fault was ever planted in, and the
+            // declaration is indistinguishable from an adjudication. ADR-0069 Decision 2: a
+            // certificate is about kernels the court implements; this makes it about kernels the
+            // court was watched to score.
+            && profile.reachable_kernel_ids_v1().is_subset(&self.drilled_kernel_ids)
     }
 }
 
@@ -383,7 +407,22 @@ pub fn certify_e2e_family_v1(evidence: &PalwE2eDrillEvidenceV1) -> Result<PalwE2
         // is a different size from its declared graph's is exactly ADR-0049 Decision F's failure,
         // where a producer performs arithmetic the court recomputes differently and is convicted
         // for doing it correctly.
-        let declared = crate::palw_step::step_leaf_count(&evidence.profile, ctx).map_err(|e| PalwE2eError::Profile(e.to_string()))?;
+        // **The cap is the STRUCTURAL top, because the rule on this line is the EQUALITY**
+        // (ADR-0082 Decision 1). The certifier holds no ruleset — a drill is graded anywhere, by
+        // anyone, and `PalwE2eDrillEvidenceV1` is a borsh object that carries no bundle — so it
+        // cannot ask "which ladder". What it CAN do is refuse to invent one: bounding the count at
+        // `PALW_STEP_MAX_LEAVES` (the executor's `2^22`) made a class the ruleset admits at `2^26`
+        // uncertifiable, and by `Profile("TooManyLeaves")` rather than by anything about the drill.
+        // The ladder rule lives at admission (`verify_class_admission_v*`, against the bundle's own
+        // `max_step_leaf_count`), which is the one place that holds the number; here the question
+        // is only whether the graph enumerates what the capture committed. The enumeration is a
+        // closed form, so the wider bound buys no walk.
+        let declared = crate::palw_step::step_leaf_count_capped_v1(
+            &evidence.profile,
+            ctx,
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+        )
+        .map_err(|e| PalwE2eError::Profile(e.to_string()))?;
         if vector.honest.binding.step_leaf_count != declared {
             return Err(PalwE2eError::GraphMisdescribesTheEngine { committed: vector.honest.binding.step_leaf_count, declared });
         }
@@ -443,6 +482,11 @@ pub fn certify_e2e_family_v1(evidence: &PalwE2eDrillEvidenceV1) -> Result<PalwE2
         } else {
             covering.decode = true;
         }
+        // Recorded from the same coordinate the table flags are read from, so the two granularities
+        // cannot disagree about which slot this vector convicted.
+        if let Some(kernel) = kernel_of_slot_v1(&evidence.profile, coord.node_slot) {
+            covering.drilled_kernel_ids.insert(kernel);
+        }
         covering.convicted_leaves = covering.convicted_leaves.saturating_add(1);
     }
 
@@ -468,6 +512,24 @@ pub fn certify_e2e_family_v1(evidence: &PalwE2eDrillEvidenceV1) -> Result<PalwE2
 /// Public because the drill needs it to CHOOSE a covering leaf set and this function is what
 /// grades one: a drill that classified slots by its own arithmetic could believe it had covered a
 /// table the certifier then scores differently, and the two would disagree about what was proven.
+/// **The kernel a step slot executes** — the unit a CERTIFICATE is granted in.
+///
+/// [`table_of_slot_v1`] answers which of the four tables a slot belongs to, and a drill that
+/// planted one fault per `(table, call class)` was covering FOUR things while
+/// `reachable_kernels_v1` counts however many distinct `kernel_semantics_id`s the profile holds.
+/// Two granularities for one word: a graph whose attention layers use a fused kernel beside a
+/// split one reaches two kernels through one table, the drill plants a fault in whichever slot it
+/// walked into first, and the other kernel is declared covered by a certificate that never
+/// adjudicated it.
+///
+/// That is not a gap in the evidence, it is a claim the evidence does not support — the certificate
+/// asserts the court can score a kernel nobody has watched it score. Measured 2026-09-03 on
+/// `graph-v5@512`, where nine of ten kernels were drilled and the fused attention op
+/// (`09b81d17…`) was not.
+pub fn kernel_of_slot_v1(profile: &PalwShapeProfileV3, slot: u32) -> Option<crate::Hash64> {
+    profile.resolve_node_slot(slot).map(|(node, _)| node.kernel_semantics_id)
+}
+
 pub fn table_of_slot_v1(profile: &PalwShapeProfileV3, slot: u32) -> Option<PalwStepTableV1> {
     let total = profile.global_node_count();
     if slot >= total {
@@ -586,11 +648,18 @@ pub fn palw_rc_court_e2e_root_v1() -> Hash64 {
 
 /// The pinned value's bytes. Replaced whenever the certified family set changes — which is an
 /// activation, never a silent edit: the root is inside every RC network's `consensus_params_id`.
+///
+/// **Moved for ADR-0082's fused graph** (`PALW-QWEN25-A16-V5`, the fourth family). Measured
+/// consequence, because the two halves of this doc are easy to read apart: adding the family alone
+/// does NOT move `consensus_params_id` — it moves this constant's COMPUTED twin, and the params id
+/// reads the pin. So the fingerprint is unchanged right up until this array is updated, and then
+/// it moves. Anyone measuring "does a fourth family move the fingerprint" without also updating
+/// the pin measures a build that is not self-consistent and gets "no".
 const PALW_RC_COURT_E2E_ROOT_BYTES: [u8; 64] = [
-    0x58, 0x14, 0x66, 0xda, 0x7a, 0x90, 0xa1, 0xf6, 0x3c, 0xe6, 0xe9, 0xcc, 0xa4, 0x5f, 0x19, 0xef, 0x31, 0x42, 0x1b, 0x0e, 0x6a,
-    0x85, 0xf9, 0x2a, 0x37, 0xce, 0x32, 0x47, 0x16, 0x0f, 0xd4, 0x7a, 0x62, 0x5d, 0x0b, 0x0b, 0x1a, 0xdc, 0x3b, 0xeb, 0xba, 0xd1,
-    0x8a, 0x63, 0x10, 0xcb, 0x7e, 0x4b, 0x2a, 0x9f, 0x9d, 0x26, 0x8b, 0x0a, 0x8b, 0x9f, 0xbb, 0x37, 0x06, 0x08, 0xe5, 0xd2, 0x8f,
-    0xcd,
+    0xe6, 0x49, 0xe7, 0xc0, 0x8d, 0xe4, 0xe1, 0xdc, 0x3a, 0xbc, 0x3c, 0xa3, 0xb5, 0xab, 0x8e, 0x50, 0x3f, 0x2d, 0x64, 0xb9, 0xfa,
+    0x1e, 0x90, 0x9b, 0xfd, 0x7b, 0xaa, 0x18, 0xaf, 0xbf, 0xa6, 0x51, 0x97, 0x11, 0xf7, 0x72, 0x3b, 0xce, 0xa5, 0x35, 0x23, 0xbd,
+    0xdc, 0xc8, 0xa5, 0x69, 0x0a, 0xd7, 0x0a, 0x9b, 0x3a, 0xa3, 0x9c, 0xe9, 0x8d, 0x07, 0xd9, 0xc0, 0x39, 0x1d, 0xee, 0x31, 0xde,
+    0x4a,
 ];
 
 /// **The certified family set this network COMMITS to — readable without a model runtime.**
@@ -615,7 +684,22 @@ const PALW_RC_COURT_E2E_ROOT_BYTES: [u8; 64] = [
 ///
 /// [`palw_court_e2e_root_v1`] is the digest of this, so the pin and the set cannot drift apart.
 pub fn palw_rc_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
-    let full = |gdn: bool, convicted_leaves: u32| PalwE2eCoveringV1 {
+    // **`drilled_kernel_ids` is what THIS build's drill planted, measured (2026-09-04): every family
+    // drills every kernel it declares — BASE-0 10/10 over 14 leaves, QWEN36 23/23 over 29, A16
+    // 12/12 over 16, A16-V5 10/10 over 14 — under the minimal cover (`select_candidates_v1`: one
+    // leaf per (table, call class) for the court, then one per declared kernel not yet carried;
+    // 5e's per-kernel purpose, an enumeration that stays under `PALW_CERTIFICATION_MAX_VECTORS` and
+    // the carriage ceiling, which the (table, kernel, call class) triple did not on QWEN36: 74).
+    // The set is spelled as the same expression the declaration uses, so `reachable ⊆ drilled` is
+    // an equality the pin tests re-measure, not a sentence; `convicted_leaves` is the drill's own
+    // count on this tree (another enumeration of the same cover may count differently, and neither
+    // is wrong).**
+    // These are the families this build pinned before the covering carried a kernel dimension, so
+    // there is no honest value to write: nobody recorded which kernels those drills planted at.
+    // Regenerating them is the integrator's, at the freeze, with the drill's own output — writing
+    // a guess here would be the exact defect the field exists to close.
+    let full = |gdn: bool, convicted_leaves: u32, drilled_kernel_ids: std::collections::BTreeSet<Hash64>| PalwE2eCoveringV1 {
+        drilled_kernel_ids,
         pre: true,
         gdn,
         attn: true,
@@ -625,13 +709,16 @@ pub fn palw_rc_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
         convicted_leaves,
         malformed_refused: true,
     };
-    let mut out = Vec::with_capacity(3);
+    // Four families are pushed below, so the reservation is four. It said three while the body
+    // pushed four — harmless, a Vec grows, and worth fixing because a capacity is the cheapest
+    // statement of how many things the author believed were here, and it disagreed with them.
+    let mut out = Vec::with_capacity(4);
     if let Ok(floor) = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY) {
         out.push(PalwE2eFamilyV1 {
             family_id: palw_e2e_family_id_v1("PALW-BASE-0"),
             drilled_class_id: floor.shape_profile_id(),
             kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&floor),
-            covering: full(false, 6),
+            covering: full(false, 14, crate::palw_class_admission_v2::reachable_kernels_v1(&floor)),
         });
     }
     if let Ok(hybrid) = crate::palw_qwen36_profile::qwen36_profile_v2(crate::palw_qwen36_profile::qwen36_geometry_artifact_eps(
@@ -641,7 +728,7 @@ pub fn palw_rc_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
             family_id: palw_e2e_family_id_v1("PALW-QWEN36"),
             drilled_class_id: Hash64::from_bytes(QWEN36_DRILLED_CLASS_ID),
             kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&hybrid),
-            covering: full(true, 8),
+            covering: full(true, 29, crate::palw_class_admission_v2::reachable_kernels_v1(&hybrid)),
         });
     }
     if let Ok(dense) = crate::palw_qwen25_profile::qwen25_a16_profile_v2(crate::palw_qwen25_profile::QWEN25_1_5B_A16) {
@@ -649,11 +736,49 @@ pub fn palw_rc_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
             family_id: palw_e2e_family_id_v1("PALW-QWEN25-A16"),
             drilled_class_id: Hash64::from_bytes(A16_DRILLED_CLASS_ID),
             kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&dense),
-            covering: full(false, 6),
+            covering: full(false, 16, crate::palw_class_admission_v2::reachable_kernels_v1(&dense)),
+        });
+    }
+    // **The fused graph is a FOURTH family, not a wider third one** (ADR-0082 Decision 1).
+    //
+    // `palw_fuse_attention_site_v5` REPLACES the scores/softmax/values kernels with one fused
+    // kernel, so no single profile reaches both the fused kernel and the ones it replaces — a
+    // union `kernel_ids` over the lineage's rows could only ever be a DECLARED superset, which is
+    // a certificate asserting an adjudication nobody performed. Two graphs, two drilled
+    // coverages, one family each; a class IS its graph, and these are two graphs.
+    //
+    // Both fields are read off the SAME projection the drill runs, never written beside it.
+    if let Ok(fused) = crate::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5(PALW_RC_A16_DRILL_GEOMETRY) {
+        out.push(PalwE2eFamilyV1 {
+            family_id: palw_e2e_family_id_v1("PALW-QWEN25-A16-V5"),
+            drilled_class_id: fused.shape_profile_id(),
+            kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&fused),
+            covering: full(false, 14, crate::palw_class_admission_v2::reachable_kernels_v1(&fused)),
         });
     }
     out
 }
+
+/// **The fixture geometry the A16 lineage's drills run on — ONE home, read by both sides.**
+///
+/// `misaka-palw-base0`'s `a16_fixture_v1` builds its weights from this and the family entries
+/// below take their `kernel_ids` from a profile projected from it, so the set a family DECLARES
+/// and the graph its drill RUNS cannot come apart. They were separate numbers until the graph-v5
+/// row needed a fused fixture and the two were found to have never been the same shape.
+pub const PALW_RC_A16_DRILL_GEOMETRY: crate::palw_qwen25_profile::PalwQwen25GeometryV1 =
+    crate::palw_qwen25_profile::PalwQwen25GeometryV1 {
+        layer_count: 2,
+        hidden_dim: 8,
+        ffn_dim: 8,
+        attn_heads: 2,
+        attn_kv_heads: 2,
+        attn_head_dim: 4,
+        vocab_size: 64,
+        n_ctx: 32,
+        n_threads: 1,
+        rms_eps_q: 1,
+        tile_len: 4,
+    };
 
 /// A family's build-level name, hashed. Under its own domain so it can never be read as a class id
 /// or an artifact root.
@@ -817,12 +942,37 @@ pub fn certify_e2e_free_prompt_lane_v1(
 /// class id, and the transition refuses a free-prompt commitment on any class that is not
 /// (`PalwStateParamsV2::fp_certified_classes`).
 ///
-/// One entry: the floor, from `misaka-palw-base0`'s
-/// `the_floor_free_prompt_lane_certifies_and_a_swapped_question_is_refused`, whose covering is
-/// pinned here exactly as the attempt set's is (`e2e_drill` asserts the two agree). QWEN25-A16
-/// and QWEN36 join when their free-prompt paths exist and drill.
+/// **Four entries.** This said "one entry: the floor" — true when the floor was the only family
+/// that had drilled, and still on the page after QWEN36, QWEN25-A16 and QWEN25-A16-V5 joined it.
+/// The body below is the authority; this paragraph is a reader's map that had stopped matching
+/// the terrain.
+///
+/// * `PALW-BASE-0` — the floor, from `misaka-palw-base0`'s
+///   `the_floor_free_prompt_lane_certifies_and_a_swapped_question_is_refused`;
+/// * `PALW-QWEN36` and `PALW-QWEN25-A16` — joined when their free-prompt paths drilled;
+/// * `PALW-QWEN25-A16-V5` — the fused row's family, whose fixture drills `AttnFused` through
+///   stream I's dissection route.
+///
+/// Each covering is pinned here exactly as the attempt set's is, and `e2e_drill` asserts the two
+/// agree. **Not an idle doc**: the set feeds `palw_rc_fp_certified_class_ids_v1`, and a reader who
+/// trusts "one entry" mis-reads what bears weight.
 pub fn palw_rc_fp_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
-    let full = |gdn: bool, convicted_leaves: u32| PalwE2eCoveringV1 {
+    // **`drilled_kernel_ids` is what THIS build's drill planted, measured (2026-09-04): every family
+    // drills every kernel it declares — BASE-0 10/10 over 14 leaves, QWEN36 23/23 over 29, A16
+    // 12/12 over 16, A16-V5 10/10 over 14 — under the minimal cover (`select_candidates_v1`: one
+    // leaf per (table, call class) for the court, then one per declared kernel not yet carried;
+    // 5e's per-kernel purpose, an enumeration that stays under `PALW_CERTIFICATION_MAX_VECTORS` and
+    // the carriage ceiling, which the (table, kernel, call class) triple did not on QWEN36: 74).
+    // The set is spelled as the same expression the declaration uses, so `reachable ⊆ drilled` is
+    // an equality the pin tests re-measure, not a sentence; `convicted_leaves` is the drill's own
+    // count on this tree (another enumeration of the same cover may count differently, and neither
+    // is wrong).**
+    // These are the families this build pinned before the covering carried a kernel dimension, so
+    // there is no honest value to write: nobody recorded which kernels those drills planted at.
+    // Regenerating them is the integrator's, at the freeze, with the drill's own output — writing
+    // a guess here would be the exact defect the field exists to close.
+    let full = |gdn: bool, convicted_leaves: u32, drilled_kernel_ids: std::collections::BTreeSet<Hash64>| PalwE2eCoveringV1 {
+        drilled_kernel_ids,
         pre: true,
         gdn,
         attn: true,
@@ -832,13 +982,16 @@ pub fn palw_rc_fp_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
         convicted_leaves,
         malformed_refused: true,
     };
-    let mut out = Vec::with_capacity(3);
+    // Four families are pushed below, so the reservation is four. It said three while the body
+    // pushed four — harmless, a Vec grows, and worth fixing because a capacity is the cheapest
+    // statement of how many things the author believed were here, and it disagreed with them.
+    let mut out = Vec::with_capacity(4);
     if let Ok(floor) = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY) {
         out.push(PalwE2eFamilyV1 {
             family_id: palw_e2e_family_id_v1("PALW-BASE-0"),
             drilled_class_id: floor.shape_profile_id(),
             kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&floor),
-            covering: full(false, 6),
+            covering: full(false, 14, crate::palw_class_admission_v2::reachable_kernels_v1(&floor)),
         });
     }
     // ADR-0075 Decision 6: the two model tiers, drilled on the same fixture graphs their
@@ -852,7 +1005,7 @@ pub fn palw_rc_fp_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
             family_id: palw_e2e_family_id_v1("PALW-QWEN36"),
             drilled_class_id: Hash64::from_bytes(QWEN36_DRILLED_CLASS_ID),
             kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&hybrid),
-            covering: full(true, 8),
+            covering: full(true, 29, crate::palw_class_admission_v2::reachable_kernels_v1(&hybrid)),
         });
     }
     if let Ok(dense) = crate::palw_qwen25_profile::qwen25_a16_profile_v2(crate::palw_qwen25_profile::QWEN25_1_5B_A16) {
@@ -860,7 +1013,17 @@ pub fn palw_rc_fp_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
             family_id: palw_e2e_family_id_v1("PALW-QWEN25-A16"),
             drilled_class_id: Hash64::from_bytes(A16_DRILLED_CLASS_ID),
             kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&dense),
-            covering: full(false, 6),
+            covering: full(false, 16, crate::palw_class_admission_v2::reachable_kernels_v1(&dense)),
+        });
+    }
+    // The fused graph's free-prompt twin. Same fixture, same projection, same reason it is a
+    // separate family rather than a wider one — see the attempt lane's comment.
+    if let Ok(fused) = crate::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5(PALW_RC_A16_DRILL_GEOMETRY) {
+        out.push(PalwE2eFamilyV1 {
+            family_id: palw_e2e_family_id_v1("PALW-QWEN25-A16-V5"),
+            drilled_class_id: fused.shape_profile_id(),
+            kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&fused),
+            covering: full(false, 14, crate::palw_class_admission_v2::reachable_kernels_v1(&fused)),
         });
     }
     out
@@ -919,6 +1082,9 @@ pub(crate) fn catalog_covering_family_for_tests_v1() -> Vec<PalwE2eFamilyV1> {
         drilled_class_id: Hash64::from_u64_word(0xFA12),
         kernel_ids: crate::palw_step_refute::catalogued_kernel_ids_v1(),
         covering: PalwE2eCoveringV1 {
+            // A COMPLETE fixture: it declares the catalogued set and shows a fault planted in
+            // each, which is what makes it usable as the "this one certifies" side of a test.
+            drilled_kernel_ids: crate::palw_step_refute::catalogued_kernel_ids_v1(),
             pre: true,
             gdn: true,
             attn: true,
@@ -947,7 +1113,38 @@ mod tests {
     }
 
     /// The covering rule is about the profile's OWN tables: a graph with no GDN layers cannot be
-    /// asked for a GDN fault, and requiring one would make every attention-only class uncertifiable.
+    /// **Every pinned family shows the kernels it drilled, and shows all of them.** This test was
+    /// written in the FAILING direction — the pinned sets were empty and the new subset rule
+    /// refused every one — with the instruction to invert it the day `certified_families_v1()` was
+    /// regenerated from the drill's own output. That day was 2026-09-04: the pinned coverings now
+    /// carry the drilled set, and `misaka-palw-base0`'s pin tests
+    /// (`the_committed_family_set_is_the_one_this_build_drilled`,
+    /// `the_rc_free_prompt_set_is_the_one_this_build_drilled`) assert the family the DRILL builds
+    /// from its vectors equals the pinned one, field for field — so the set here is a measurement
+    /// re-taken on every run, not a declaration typed once. A kernel no capture-held leaf can
+    /// carry would leave the drilled set short of the declared one, and both gates go red.
+    #[test]
+    fn every_pinned_family_shows_every_kernel_it_declares_as_drilled() {
+        let mut families = palw_rc_certified_families_v1();
+        families.extend(palw_rc_fp_certified_families_v1());
+        assert!(!families.is_empty(), "this build pins no families at all");
+        for family in &families {
+            assert!(!family.covering.drilled_kernel_ids.is_empty(), "family {} records no drilled kernels", family.family_id);
+            assert!(
+                family.kernel_ids.is_subset(&family.covering.drilled_kernel_ids),
+                "family {} declares {} kernels and shows {} drilled",
+                family.family_id,
+                family.kernel_ids.len(),
+                family.covering.drilled_kernel_ids.len()
+            );
+            assert_eq!(
+                family.kernel_ids, family.covering.drilled_kernel_ids,
+                "family {}: drilled beyond the declaration",
+                family.family_id
+            );
+        }
+    }
+
     #[test]
     fn covering_is_measured_against_the_tables_the_profile_declares() {
         let profile = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
@@ -955,6 +1152,7 @@ mod tests {
         assert!(!profile.gdn_layer_exists(), "the floor is attention-only, which is what makes it the right fixture here");
 
         let full = PalwE2eCoveringV1 {
+            drilled_kernel_ids: profile.reachable_kernel_ids_v1(),
             pre: true,
             gdn: false,
             attn: true,

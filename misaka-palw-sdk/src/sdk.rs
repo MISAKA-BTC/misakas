@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
-use kaspa_consensus_core::palw_class_admission_v2::palw_post_genesis_registration_v1;
+use kaspa_consensus_core::palw_class_admission_v2::{PalwAdmissionShapeV1, palw_post_genesis_registration_capped_v1};
 use kaspa_consensus_core::palw_mode_v2::{PalwClassCatalogEntryV2, PalwConsensusParamsV2, PalwCourtParamsV2};
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, PalwRegistrationTermsV2};
 use kaspa_hashes::Hash64;
@@ -450,11 +450,17 @@ impl PalwClassSdk {
             ));
         }
         if let Some(artifact) = crate::lineages::dense::dense_artifact_by_registered_root(holdings, artifact_root, profile) {
-            let backend = misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile(
+            // **The CHAIN lane** (audit D M-6). The tokenizer refusal is waived only for the
+            // seeded floor, and no dense class the chain registers is that — so a chain-registered
+            // row is refused whatever `derived_seed` the file on disk carries, which neither
+            // `artifact_digest` nor the inventory root covers and which an operator or a fleet
+            // image can therefore flip without moving the root this arm just matched.
+            let backend = misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile_in_lane_v1(
                 artifact,
                 self.network_id.clone(),
                 profile.clone(),
                 (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
+                misaka_palw_base0::classes::ArtifactSourceV1::ConvertedA16,
             )?;
             return Ok(Box::new(backend));
         }
@@ -488,19 +494,29 @@ impl PalwClassSdk {
         bundle: &PalwConsensusParamsV2,
         entry: &PalwClassEntryV1,
         artifact_root: Hash64,
+        shape: &PalwAdmissionShapeV1,
     ) -> Result<PalwClassCatalogEntryV2, String> {
-        self.preflight_admission_with_chain(bundle, entry, artifact_root, &[])
+        self.preflight_admission_with_chain(bundle, entry, artifact_root, &[], shape)
     }
 
     /// [`Self::preflight_admission`] with the chain's own certified families in scope (ADR-0075
     /// Decision 4): `chain_certified` is `PalwRegistrationTermsV2::chain_certified_families`, and a
     /// family there prices the probe's share exactly as a genesis one does.
+    ///
+    /// **`shape` is the court and ladder the ACCEPTANCE path judges this registration under**
+    /// (`palw_admission_shape_at_v1` from the network's `Params` at the point of submission), and
+    /// the probe asks `verify_class_admission_v6` with exactly those. It asked the court-less
+    /// `verify_class_admission_v3` until the ADR-0082 devnet drill: the graph-v5 row was refused
+    /// by name (`FusedAttentionNeedsTheKaryCourt`) on a ruleset whose fence is armed, and the
+    /// panel reported "would be refused by the admission gate" for a row the gate admits. A
+    /// preflight that answers for a court the chain does not run is a limit rendered as a verdict.
     pub fn preflight_admission_with_chain(
         &self,
         bundle: &PalwConsensusParamsV2,
         entry: &PalwClassEntryV1,
         artifact_root: Hash64,
         chain_certified: &[kaspa_consensus_core::palw_e2e_adjudicability::PalwE2eFamilyV1],
+        shape: &PalwAdmissionShapeV1,
     ) -> Result<PalwClassCatalogEntryV2, String> {
         let canonical = entry.canonical_context();
         // The build's certified families (ADR-0069 Decision 5) — the same set the consensus gate
@@ -525,7 +541,12 @@ impl PalwClassSdk {
         } else {
             0
         };
-        let probe = palw_post_genesis_registration_v1(
+        // **Counted against the RULESET's ladder** (audit D H-5b): the uncapped helper counts at
+        // the executor's `2^22`, so the graph-v5 512 row could not even be EXPRESSED as an object
+        // — "the canonical job does not count against this profile: job shape yields 4223328 step
+        // leaves, exceeding the 4194304 cap" — while the gate this probe feeds recounts at the
+        // bundle's `2^26`. The preflight has the bundle in hand, so it uses it.
+        let probe = palw_post_genesis_registration_capped_v1(
             entry.profile.clone(),
             canonical.clone(),
             artifact_root,
@@ -535,15 +556,27 @@ impl PalwClassSdk {
             0,
             PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::default(), 0)),
             Vec::new(),
+            bundle.court.max_step_leaf_count(),
         )
-        .map_err(|e| format!("this build cannot express a registration for {}: {e}", entry.model_id))?;
-        kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v3(
+        .map_err(|e| {
+            // A canonical job that does not count against this ruleset's ladder is a class this
+            // ruleset would refuse, so it is the gate's answer in substance and says so in the
+            // gate's words — nothing here is signed or funded either way.
+            format!(
+                "the {} registration cannot be expressed against this ruleset, so nothing was signed or funded: {e}",
+                entry.model_id
+            )
+        })?;
+        kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v6(
             bundle,
             &entry.profile,
             &canonical,
             &probe,
             &certified,
             chain_certified,
+            shape.ladder,
+            shape.court,
+            false,
         )
         .map_err(|e| {
             format!("the {} registration would be refused by the admission gate, so nothing was signed or funded: {e}", entry.model_id)
@@ -565,8 +598,15 @@ impl PalwClassSdk {
         activation_daa: u64,
         registrant_bond: PalwBondKeyV2,
         signature: Vec<u8>,
+        shape: &PalwAdmissionShapeV1,
     ) -> Result<PalwConsensusObjectV2, String> {
-        self.preflight_admission_with_chain(bundle, &candidate.entry, candidate.artifact_root, &terms.chain_certified_families)?;
+        self.preflight_admission_with_chain(
+            bundle,
+            &candidate.entry,
+            candidate.artifact_root,
+            &terms.chain_certified_families,
+            shape,
+        )?;
         // **The share an entrant may take is a function of its own graph** (ADR-0069 Decisions 5
         // and 6). `terms` carries the chain-wide minimum, which is the right value for a class some
         // end-to-end certified family covers; a class no family covers joins WEIGHTLESS instead,
@@ -585,7 +625,10 @@ impl PalwClassSdk {
         )
         .map_err(|e| format!("this node cannot price a registration for {}: {e}", candidate.entry.model_id))?
         .is_some();
-        palw_post_genesis_registration_v1(
+        // The ruleset's ladder, for the reason `preflight_admission_with_chain` gives: the object a
+        // registrant signs and the object the gate recounts must be counted by one number, and that
+        // number is the bundle's, never the executor's constant (audit D H-5b).
+        palw_post_genesis_registration_capped_v1(
             candidate.entry.profile.clone(),
             candidate.entry.canonical_context(),
             candidate.artifact_root,
@@ -595,6 +638,7 @@ impl PalwClassSdk {
             activation_daa,
             registrant_bond,
             signature,
+            bundle.court.max_step_leaf_count(),
         )
         .map_err(|e| format!("this node cannot build a registration for {}: {e}", candidate.entry.model_id))
     }
@@ -614,7 +658,11 @@ mod chain_arm_tests {
     use misaka_palw_base0::engine_a16::derived_a16_store;
 
     pub(super) fn court() -> PalwCourtParamsV2 {
-        PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court")
+        // The EXECUTOR's default as this harness's ladder — not the shipped one, which is
+        // `palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES` (2^26). Left where it is deliberately: every
+        // count in these tests is taken against `court()`, so the fixture is self-consistent at
+        // whatever it declares, and moving it would re-measure the SDK battery rather than test it.
+        PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("a legal court")
     }
 
     /// A tiny dense artifact + the CORRECTED profile for its geometry — a class that exists
@@ -631,10 +679,16 @@ mod chain_arm_tests {
             ln_theta_gen_q: LN_THETA_10000_GEN_Q,
             eps_q: 1,
         };
+        // **It declares a tokenizer, because a CHAIN-REGISTERED class must** (audit D M-6). The
+        // exemption `check_tokenizer_declared_v1` grants is a property of the lane the resolver
+        // decided, not of the artifact's `derived_seed` — a flag neither `artifact_digest` nor the
+        // operand inventory covers — so a fixture standing in for a registered class has to carry
+        // what a registered class carries.
         let artifact = Base0ArtifactV1::derive_deterministic(shape, 0x0067)
             .expect("a valid shape")
             .with_a16_params(derived_a16_store(&shape))
-            .expect("sorted and unique");
+            .expect("sorted and unique")
+            .with_tokenizer_commitment(Base0ArtifactV1::tokenizer_commitment_of(b"{\"model\":\"misaka-palw-sdk-test\"}"));
         (std::sync::Arc::new(artifact), qwen25_a16_profile_v2(small_geometry()).expect("the corrected profile builds"))
     }
 
@@ -686,6 +740,8 @@ mod chain_arm_tests {
             max_context_tokens: n_ctx,
             privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         }
     }
 
@@ -761,7 +817,8 @@ mod chain_arm_tests {
             b"misaka-palw-rc".to_vec(),
             profile.clone(),
             (4, 2),
-        );
+        )
+        .expect("the table path compiles this class's declaration");
 
         let prompt_ids: Vec<u32> = vec![3, 9, 17];
         let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
@@ -1041,8 +1098,13 @@ mod chain_only_lattice_tests {
         let commitment = palw_fp_commitment_v3(&job, &class_facts, &run, NETWORK, 999_999).expect("a finished run commits");
         let claim_id = fp_claim_id_v3(&commitment);
         // The class's quantum is an eighth of its canonical job (ADR-0074 Decision 5).
+        // **Counted against the COURT this fixture runs, not the executor's constant** (ADR-0082
+        // Decision 1). The ruleset is right here — `court()` — and a harness that bounds the class
+        // at `PALW_STEP_MAX_LEAVES` while the chain bounds it at `max_step_leaf_count` is a harness
+        // that cannot exercise any class between the two.
         let canonical_leaves =
-            kaspa_consensus_core::palw_step::step_leaf_count(&profile, &canonical).expect("the class counts its job");
+            kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &canonical, court().max_step_leaf_count())
+                .expect("the class counts its job");
         let quanta = fp_quanta_v3(commitment.work_leaves, fp_class_quantum_leaves_v1(canonical_leaves, 8), 16);
         assert!(quanta >= 1, "the job earns a draw at the class's quantum, got {quanta} at {} leaves", commitment.work_leaves);
 
@@ -1081,28 +1143,47 @@ mod chain_only_lattice_tests {
         assert!(matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the chain-only claim certifies");
 
         // ---- the receipt block: the producer's envelope, fully admitted -------------------
-        let beacon = kaspa_consensus_core::palw_freeprompt_v3::PalwBeaconFactV3 {
-            beacon_block: h(0xBEAC),
-            beacon_daa: 131,
-            prev_attempt_daa: 121,
-        };
+        //
+        // **The beacon is SEARCHED, not chosen.** A quantum's ticket is
+        // `H(network ‖ beacon ‖ claim ‖ q)` compared against the class's receipt target, which the
+        // RC seeds at `u128::MAX / 2` — a coin flip — and `claim_id` is one of its inputs. A
+        // hard-coded beacon therefore makes this test pass or fail by luck about a lottery it is
+        // not testing, and it came up tails the moment ADR-0082 Decision 11's two job fields moved
+        // the claim id. Searching is what the shape asks for: a producer hunting a spendable
+        // quantum does exactly this (`PalwFpSpendableQuantumV3`). Anything that is NOT the ticket
+        // is re-raised on the spot, so the loop cannot hide a real refusal.
         let (pph, ts, nonce) = (h(0xB0), 1_700u64, 9u64);
-        let envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, h(0xBEAC));
-        let admitted = kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
-            &state,
-            &at(7, 132, 7),
-            h(999),
-            pph,
-            ts,
-            nonce,
-            MATURITY,
-            USE_WINDOW,
-            &beacon,
-            &envelope,
-            |pk: &[u8], m: &[u8], c: &[u8], sig: &[u8]| kaspa_txscript::verify_mldsa87_with_context(pk, m, c, sig).unwrap_or(false),
-        )
-        .expect("the chain admits a receipt block for a class no binary ever tabled");
-        assert_ne!(admitted, Hash64::default());
+        let mut admitted = None;
+        for i in 0..64u64 {
+            let beacon_block = h(0xBEAC + i);
+            let beacon =
+                kaspa_consensus_core::palw_freeprompt_v3::PalwBeaconFactV3 { beacon_block, beacon_daa: 131, prev_attempt_daa: 121 };
+            let envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, beacon_block);
+            match kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
+                &state,
+                &at(7, 132, 7),
+                h(999),
+                pph,
+                ts,
+                nonce,
+                MATURITY,
+                USE_WINDOW,
+                &beacon,
+                &envelope,
+                |pk: &[u8], m: &[u8], c: &[u8], sig: &[u8]| {
+                    kaspa_txscript::verify_mldsa87_with_context(pk, m, c, sig).unwrap_or(false)
+                },
+            ) {
+                Ok(id) => {
+                    admitted = Some(id);
+                    break;
+                }
+                Err(kaspa_consensus_core::palw_fp_admission_v3::PalwFpAdmissionV3Error::TicketRejected { .. }) => continue,
+                Err(e) => panic!("the chain refused the spend for a reason that is not the lottery: {e:?}"),
+            }
+        }
+        let admitted = admitted.expect("no beacon in 64 tries won a one-in-two draw — the target or the ticket moved");
+        assert_ne!(admitted, Hash64::default(), "the chain admits a receipt block for a class no binary ever tabled");
     }
 }
 

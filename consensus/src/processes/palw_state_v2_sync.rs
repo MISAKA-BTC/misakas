@@ -53,7 +53,9 @@ pub enum PalwSyncV2Error {
     #[error("palw v2 sync store error: {0}")]
     Store(#[from] StoreError),
     #[error("palw v2 transition failed at block {block}: {source}")]
-    State { block: BlockHash, source: PalwStateV2Error },
+    // Boxed: the transition error is the largest thing this enum can carry (272 bytes), and every
+    // `Result` on the sync walk would otherwise be that wide on its Ok path too.
+    State { block: BlockHash, source: Box<PalwStateV2Error> },
     #[error("retreat expects the current tip {expected:?} first, got {got}")]
     NotAtTip { expected: Option<BlockHash>, got: BlockHash },
     #[error("the sync has no tip — install genesis before advancing or retreating")]
@@ -89,6 +91,23 @@ pub struct PalwStateSyncV2 {
     /// folded with the pre-DA-court rule while the live path folded with the post-court one would
     /// compute a different state root for the same block and reject the chain it was syncing.
     da_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    // **`palw_kary_court` is deliberately NOT carried here, and that is not the gap the three
+    // fences above are** (ADR-0082 Decision 2, audit A C-5).
+    //
+    // The dissection is fenced at the ACCEPTANCE layer — `palw_v2_validate_objects` admits the
+    // three `CourtAttn*` moves only past `palw_kary_court_active_at`, and this walk replays the
+    // objects that layer already admitted — so the fold has no fence to resolve for them, and
+    // `PalwCourtSessionStateV2::dissection` being `Some` is itself the record that the fence was
+    // active when the phase opened.
+    //
+    // The clock C-5 adds at a terminal ladder reads `PalwClassStateV2::fused_attention`, which is
+    // written by this same fold from the graph the registration carried, and is likewise the
+    // record that the fence was armed: `verify_class_admission_v6` refuses a fused profile unless
+    // its `court` argument is `Some`, and that argument IS
+    // `VirtualStateProcessor::palw_kary_court_active_at`. So the walk cannot resolve it
+    // differently from the live path — there is nothing here to resolve. A future rule that made
+    // the dissection's own arithmetic fence-dependent inside the transition WOULD need threading,
+    // exactly as the three above do.
 }
 
 impl PalwStateSyncV2 {
@@ -169,7 +188,7 @@ impl PalwStateSyncV2 {
                 self.uncertified_weightless.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
                 self.da_court.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
             )
-            .map_err(|source| PalwSyncV2Error::State { block: step.ctx.block, source })?;
+            .map_err(|source| PalwSyncV2Error::State { block: step.ctx.block, source: Box::new(source) })?;
             store.insert_delta_batch(batch, step.ctx.block, next.state_root(), &delta)?;
             current = next;
         }
@@ -214,8 +233,8 @@ impl PalwStateSyncV2 {
                 }
             }
             let (_, delta) = store.delta_of(*block)?;
-            current =
-                revert_delta_v2(&current, &delta, &self.params).map_err(|source| PalwSyncV2Error::State { block: *block, source })?;
+            current = revert_delta_v2(&current, &delta, &self.params)
+                .map_err(|source| PalwSyncV2Error::State { block: *block, source: Box::new(source) })?;
             store.delete_delta_batch(batch, *block)?;
         }
         if let Some(point) = current.last_point()

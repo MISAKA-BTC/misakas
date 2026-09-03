@@ -169,12 +169,22 @@ fn main() {
     let n_ctx: u32 = flag("--n-ctx").unwrap_or_else(|| "256".into()).parse().unwrap_or_else(|e| die(format!("--n-ctx: {e}")));
     let out = PathBuf::from(flag("--out").unwrap_or_else(|| die("--out <dir> is required".into())));
     let only = flag("--only");
-    // `committed` runs the shipped `execute_free_prompt` at whatever decode budget the SHIPPED
-    // step ladder (2^22 leaves) admits. `wide` runs the identical decode loop through the same
+    // `committed` runs the shipped `execute_free_prompt` at whatever decode budget the step
+    // ladder this gate was pointed at admits — `--ladder <n>`, defaulting to the RC ruleset's
+    // `COURT_MAX_STEP_LEAVES` rather than to the executor's `PALW_STEP_MAX_LEAVES` constant, which
+    // printed `TooManyLeaves` for classes the chain admits. `wide` runs the identical decode loop through the same
     // engine with no step capture, at the full `n_ctx - prefill` budget — the generation the
     // committed path WOULD produce if the ladder admitted it (ADR-0077 Decision 12 raises the
     // top to 2^32 behind a fence; the executor here still counts against the shipped constant).
     let mode = flag("--mode").unwrap_or_else(|| "both".to_string());
+    let ladder: u64 = flag("--ladder")
+        .map(|v| v.parse().unwrap_or_else(|e| die(format!("--ladder: {e}"))))
+        .unwrap_or(kaspa_consensus_core::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES);
+    eprintln!(
+        "[palw-model-gate] step ladder: {ladder} (executor constant {}, RC ruleset {})",
+        kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+        kaspa_consensus_core::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES
+    );
     std::fs::create_dir_all(&out).unwrap_or_else(|e| die(format!("{}: {e}", out.display())));
 
     // -------------------------------------------------------------------------------------
@@ -197,9 +207,8 @@ fn main() {
     );
 
     // For reference: the registered row this class actually serves today.
-    let court =
-        kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
-            .unwrap_or_else(|e| die(format!("the shipped court params do not build: {e:?}")));
+    let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(ladder, 4, 2)
+        .unwrap_or_else(|e| die(format!("the court params do not build at ladder {ladder}: {e:?}")));
     let registered = misaka_palw_base0::classes::canonical_class_by_model_id_v1(&court, MODEL_ID)
         .unwrap_or_else(|| die(format!("this build's catalog has no {MODEL_ID} row")));
     eprintln!(
@@ -257,11 +266,12 @@ fn main() {
     let net_bytes = net.clone();
     let arc = std::sync::Arc::new(artifact);
     // Reported, because it is a fact about this row and not about the model: the ADR-0067
-    // constructor compiles the declared graph against the artifact, and the DENSE ladder row is
-    // built from `QWEN25_1_5B`, whose `rms_eps_q` is 1 while the converter wrote 256. The
-    // REGISTERED row is built from the same constant and carries the same split — which is why
-    // the shipped worker uses `Qwen25A16Backend::new` (no compiled plan, the artifact's epsilon
-    // executes) and why this harness does too.
+    // constructor compiles the declared graph against the artifact, and a CATALOG row built from
+    // `QWEN25_1_5B` declares `rms_eps_q` 1 while the converter wrote 256. The ladder row this
+    // harness runs (`palw_a16_context_row_profile_v1`) is the artifact-epsilon projection and
+    // compiles; the registered catalog row is not, and its refusal is the measurement. Since
+    // ADR-0082 audit E's H-1 `::new` compiles the same plan, so the two constructors no longer
+    // differ in what they will execute — only in what they are told about the class.
     match Qwen25A16Backend::from_registered_profile(arc.clone(), net.clone(), profile.clone(), registered.canonical_job) {
         Ok(_) => eprintln!("[palw-model-gate] from_registered_profile: the n_ctx {n_ctx} row compiles against this artifact"),
         Err(e) => eprintln!("[palw-model-gate] from_registered_profile REFUSES the n_ctx {n_ctx} row: {e}"),
@@ -272,7 +282,8 @@ fn main() {
     }
     // The shipped worker's own assembly (`palw-a16-fp-worker::load`).
     let engine_arc = arc.clone();
-    let backend = Qwen25A16Backend::new(arc, net.clone(), profile.clone(), registered.canonical_job);
+    let backend = Qwen25A16Backend::new(arc, net.clone(), profile.clone(), registered.canonical_job)
+        .unwrap_or_else(|e| die(format!("::new refuses the n_ctx {n_ctx} row over this artifact: {e}")));
     eprintln!("[palw-model-gate] backend built; supports_court={}", {
         use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
         backend.supports_court()
@@ -412,7 +423,7 @@ fn main() {
         }
 
         // The court's ladder is a real ceiling on the decode budget, so it is MEASURED rather
-        // than assumed: the largest budget whose step leaf count fits `PALW_STEP_MAX_LEAVES`.
+        // than assumed: the largest budget whose step leaf count fits the ladder above.
         let job_for = |decode: u32| PalwFreePromptJobV3 {
             version: PALW_FP_V3_VERSION,
             network_domain: Hash64::default(),
@@ -429,6 +440,8 @@ fn main() {
             decode_token_limit: decode,
             max_context_tokens: n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            sampling_seed: [0u8; 32],
+            temperature_q: 0,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
         };
         let leaves_for = |decode: u32| -> Result<u64, String> {
@@ -452,7 +465,7 @@ fn main() {
                 step_leaf_count: 0,
             };
             let ctx = palw_fp_job_context_v3(&job, &class, &facts, &net_bytes).map_err(|e| format!("{e:?}"))?;
-            kaspa_consensus_core::palw_step::step_leaf_count(&profile, &ctx).map_err(|e| format!("{e:?}"))
+            kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &ctx, ladder).map_err(|e| format!("{e:?}"))
         };
 
         let mut decode = wanted;

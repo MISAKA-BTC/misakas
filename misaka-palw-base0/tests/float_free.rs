@@ -63,6 +63,11 @@ const CONSENSUS_PATH: &[&str] = &[
     // The dense A16 tier's producer — same rule, same reason: an execution path may not
     // compute in floats, and this one derives its job, runs the engine and commits four roots.
     "src/qwen25_a16_backend.rs",
+    // The seat's recomputation of the state a checkpoint opens to. It is the execution path from
+    // the other end: the producer commits these bytes and this reproduces them, so a float here
+    // would put a seat and a producer on different arithmetic — the one disagreement the court
+    // cannot adjudicate, because both sides would be "right" on their own hardware.
+    "src/fp_recompute.rs",
     // The free-prompt worker (ADR-0067): it executes a caller's job and returns the roots a
     // commitment is assembled from. (`misaka-palw-serve`, which committed nothing, was retired by
     // ADR-0077 Decision 1: the server IS the worker now.)
@@ -126,6 +131,10 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/reference.rs", "the float reference forward: it measures the checkpoint's ranges so the PTQ can pick scales"),
     ("src/bin/base0-depth-sweep.rs", "measurement tool"),
     ("src/bin/base0-class-sizing.rs", "measurement tool"),
+    (
+        "src/bin/palw-tile-measure.rs",
+        "measurement tool: U-00's close sweep over derive_court_cost_shaped_v1; it prices, it computes no engine arithmetic",
+    ),
     ("src/bin/palw-rc-genesis.rs", "genesis card generator"),
     // Off the path by CATEGORY, not because it holds a float — it holds none today. It drives
     // `A16Engine` over HTTP and its own module doc is explicit that a run served here is "a real
@@ -169,27 +178,44 @@ fn crate_root() -> PathBuf {
 /// float in a file that has none. A guard whose first output is a false positive gets switched
 /// off, so the string contents go.
 ///
-/// Raw strings (`r#"..."#`) are not tracked — none of the scanned files contain one, and the
-/// `every_source_file_is_classified` test is what keeps that set from growing unnoticed.
-fn code_only(line: &str) -> String {
+/// **`in_string` is the CALLER's, because a Rust string does not end at the end of a line.** This
+/// used to reset per line, and a `\`-continued message spanning several lines was therefore read
+/// as bare code from its second line on — which is how this guard reported a float literal at
+/// `palw-a16-fp-worker.rs:193`, where the "float" was the `2.5` inside `Qwen/Qwen2.5-1.5B` in the
+/// middle of a `die(format!(…))` message.
+///
+/// The false positive is the visible half. The other half is worse and silent: on the line that
+/// CLOSES such a string, the lone `"` flipped the state ON, so everything after it — real code,
+/// on the execution path — was dropped from the scan. A guard that reports a violation it cannot
+/// see is also skipping the ones it can.
+///
+/// Raw strings (`r#"..."#`) are still not tracked, and now they would desync the rest of the file
+/// rather than one line, so [`scan`] refuses a file containing one instead of scanning it wrong.
+fn code_only(line: &str, in_string: &mut bool) -> String {
     let bytes = line.as_bytes();
     let mut out = String::with_capacity(line.len());
-    let mut in_string = false;
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            b'\\' if in_string => i += 1,
+            b'\\' if *in_string => i += 1,
             b'"' => {
-                in_string = !in_string;
+                *in_string = !*in_string;
                 out.push('"');
             }
-            b'/' if !in_string && i + 1 < bytes.len() && bytes[i + 1] == b'/' => break,
-            c if !in_string => out.push(c as char),
+            b'/' if !*in_string && i + 1 < bytes.len() && bytes[i + 1] == b'/' => break,
+            c if !*in_string => out.push(c as char),
             _ => {}
         }
         i += 1;
     }
     out
+}
+
+/// [`code_only`] for a line that starts outside a string — the single-line form the detector's own
+/// tests use.
+#[cfg(test)]
+fn code_only_line(line: &str) -> String {
+    code_only(line, &mut false)
 }
 
 /// A `f32`/`f64` occurrence as a whole word. `f32` inside `buf32` or `Hash64` is not a float.
@@ -246,20 +272,80 @@ struct Finding {
     reason: &'static str,
 }
 
+/// Does this source open a raw string?
+///
+/// **`source.contains("r\"")` is not this question**, which is the whole reason it is a function:
+/// every word ending in `r` before a closing quote — `"the executor"`, `"a carrier"` — contains
+/// that pair, so the naive check refuses nearly every file in the crate for a raw string none of
+/// them has. The `r` has to START a token.
+fn has_raw_string(source: &str) -> bool {
+    let b = source.as_bytes();
+    for i in 0..b.len() {
+        if b[i] != b'r' || (i > 0 && is_ident_char(b[i - 1])) {
+            continue;
+        }
+        let after_hashes = source[i + 1..].trim_start_matches('#');
+        if after_hashes.starts_with('"') && after_hashes.len() < source.len() - i {
+            return true;
+        }
+    }
+    false
+}
+
 /// Everything before the file's single trailing `#[cfg(test)]`, comments removed.
-fn scan(path: &Path, label: &str) -> Vec<Finding> {
+fn scan(path: &Path, label: &str) -> (Vec<Finding>, usize, usize) {
     let source = std::fs::read_to_string(path).unwrap_or_else(|e| {
         panic!(
             "{label} could not be read ({e}). This guard enumerates its targets on purpose: a file \
              that moved must be re-classified here, not silently dropped from the scan."
         )
     });
+    // A raw string would flip `in_string` without a matching close and silently blind the scan
+    // from there to the end of the file. Refusing is the only honest answer available here: the
+    // alternative is a green result that means nothing.
+    assert!(
+        !has_raw_string(&source),
+        "{label} contains a raw string, which `code_only` does not track — it would desync the \
+         string state for the rest of the file and scan real code as prose (or skip it). Teach \
+         `code_only` raw strings before adding a file that uses one."
+    );
     let mut findings = Vec::new();
+    let mut scanned = 0usize;
+    let mut in_string = false;
+    let mut skipping_tests = false;
     for (index, raw) in source.lines().enumerate() {
-        if raw.trim_start().starts_with("#[cfg(test)]") {
-            break;
+        // **A test module is SKIPPED, not treated as the end of the file — and it used to be
+        // neither.**
+        //
+        // This read "everything before the file's single trailing `#[cfg(test)]`" and stopped at
+        // the first line whose TRIMMED form began with it, so an INDENTED attribute on a
+        // test-only helper inside a shipped `impl` ended the scan. `engine_a16.rs` has three
+        // markers, the first at line 287 of 2,249: the guard read **12%** of a file it lists in
+        // CONSENSUS_PATH — "the dense A16 engine, ADR-0040 Decision A's whole point" — and
+        // reported the result as if it had read the file.
+        //
+        // Stopping at the first COLUMN-ZERO marker instead is still wrong, just less wrong: it
+        // recovered 530 lines and left 1,432, because "the file's single trailing `#[cfg(test)]`"
+        // is a premise this file does not satisfy — it has two top-level test modules, and code
+        // that ships lives between them.
+        //
+        // So the rule is now what it should always have been: a `#[cfg(test)]` module is SKIPPED
+        // — from its attribute to the closing brace at column zero — and the scan resumes after
+        // it. Nothing about a test module makes the code below it untestable, and a guard that
+        // treats "I found tests" as "the file is over" gets quieter every time someone adds one.
+        if !in_string && raw.starts_with("#[cfg(test)]") {
+            skipping_tests = true;
+            continue;
         }
-        let code = code_only(raw);
+        if skipping_tests {
+            // The module's closing brace, at column zero. Nothing else in this codebase's style
+            // puts a bare `}` there.
+            if raw == "}" {
+                skipping_tests = false;
+            }
+            continue;
+        }
+        let code = code_only(raw, &mut in_string);
         let reason = if has_float_type(&code) {
             Some("an IEEE-754 type (ADR-0040 Decision A)")
         } else if LIBM_CALLS.iter().any(|c| code.contains(c)) {
@@ -269,24 +355,46 @@ fn scan(path: &Path, label: &str) -> Vec<Finding> {
         } else {
             None
         };
+        scanned += 1;
         if let Some(reason) = reason {
             findings.push(Finding { file: label.to_string(), line: index + 1, text: raw.trim().to_string(), reason });
         }
     }
-    findings
+    (findings, scanned, source.lines().count())
 }
 
 #[test]
 fn the_execution_path_contains_no_float() {
     let root = crate_root();
     let mut findings = Vec::new();
+    let (mut scanned, mut total, mut files) = (0usize, 0usize, 0usize);
     for relative in CONSENSUS_PATH.iter().chain(STATES_THE_ARITHMETIC.iter()) {
-        findings.extend(scan(&root.join(relative), relative));
+        let (f, s, t) = scan(&root.join(relative), relative);
+        findings.extend(f);
+        scanned += s;
+        total += t;
+        files += 1;
     }
     for name in CONSENSUS_CORE {
         let path = root.join("../consensus/core/src").join(name);
-        findings.extend(scan(&path, &format!("consensus/core/src/{name}")));
+        let (f, s, t) = scan(&path, &format!("consensus/core/src/{name}"));
+        findings.extend(f);
+        scanned += s;
+        total += t;
+        files += 1;
     }
+    // **A checker that prints its verdict without printing its coverage is unfalsifiable** —
+    // `ci-gates.sh`'s own second rule, applied to a guard that spent its whole life green while
+    // reading 56% of what it claimed. The skipped remainder is `#[cfg(test)]` module bodies.
+    println!(
+        "float-free: {scanned} of {total} lines across {files} declared files ({}% — the rest is test modules)",
+        100 * scanned / total.max(1)
+    );
+    assert!(
+        scanned * 2 > total,
+        "the guard read {scanned} of {total} lines, under half of what it declares — a stopping rule \
+         has gone wrong again and a green result here would mean nothing"
+    );
     assert!(
         findings.is_empty(),
         "ADR-0040 Decision A says integer-only means integer-only, and these lines are not:\n{}",
@@ -344,15 +452,29 @@ fn the_detectors_separate_float_from_things_that_look_like_it() {
 
     // The libm detector on its own: no `f32`/`f64` token appears on this line, so if the type
     // check were the only one firing, `x.exp()` would pass.
-    let call = code_only("let y = x.exp();");
+    let call = code_only_line("let y = x.exp();");
     assert!(LIBM_CALLS.iter().any(|c| call.contains(c)));
     assert!(!has_float_type(&call));
 
-    assert_eq!(code_only("let x = 1; // 2.0 is fine in a comment"), "let x = 1; ");
-    assert_eq!(code_only("//! a doc line with f64 in it"), "");
+    assert_eq!(code_only_line("let x = 1; // 2.0 is fine in a comment"), "let x = 1; ");
+    assert_eq!(code_only_line("//! a doc line with f64 in it"), "");
     // The literal that made this necessary: a model name is not an arithmetic constant.
-    assert!(!has_float_literal(&code_only("let m = \"Qwen/Qwen2.5-1.5B\";")));
-    assert!(!has_float_type(&code_only("let m = \"an f64 mentioned in a string\";")));
+    assert!(!has_float_literal(&code_only_line("let m = \"Qwen/Qwen2.5-1.5B\";")));
+    assert!(!has_float_type(&code_only_line("let m = \"an f64 mentioned in a string\";")));
+
+    // **A string that spans lines stays a string.** Both directions of the old per-line reset:
+    // the continuation line is prose (not a float literal), and the code AFTER the closing quote
+    // is still scanned (it is).
+    let mut open = false;
+    let first = code_only(r#"        die(format!("the row whose epsilon it \"#, &mut open);
+    assert!(open, "a line that opens a string and does not close it leaves the scanner inside it");
+    assert!(!has_float_literal(&first));
+    let middle = code_only("             DOES execute is `Qwen/Qwen2.5-1.5B/graph-v3`, and moving \\", &mut open);
+    assert!(open, "the continuation line does not close the string either");
+    assert!(!has_float_literal(&middle), "a model name inside a continued string is not a float literal");
+    let last = code_only("             this worker is a class decision\", 1.5);", &mut open);
+    assert!(!open, "the closing quote ends the string");
+    assert!(has_float_literal(&last), "real code after a multi-line string's closing quote must still be scanned");
     // And a comment marker inside a string must not truncate the line before real code.
-    assert!(has_float_literal(&code_only("let u = \"http://x\"; let x = 1.0;")));
+    assert!(has_float_literal(&code_only_line("let u = \"http://x\"; let x = 1.0;")));
 }

@@ -257,13 +257,26 @@ impl Outcome {
     }
 }
 
-/// The worker's retention manifest beside the trace: the job context hash and family name that
-/// let a consumer recompute `output_root` (ADR-0078 X6).
-pub fn read_worker_manifest(job_dir: &Path) -> (Option<String>, Option<String>) {
-    let Ok(bytes) = std::fs::read(job_dir.join("manifest.json")) else { return (None, None) };
-    let Ok(doc) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return (None, None) };
+/// The worker's retention manifest beside the trace: the job context, its hash and the family
+/// name that let a consumer recompute `output_root` AND bind the derivation to it (ADR-0078 X6).
+///
+/// **Three values, because the hash alone cannot be asked which tokenizer.** `output_root` needs
+/// `job_context_hash` and nothing more, and that is all this returned until the binding existed.
+/// But the question a consumer actually wants answered — "is this artifact's DSL the rendering of
+/// this claim's ids?" — needs `tokenizer_id`, which is a FIELD of `PalwJobContextV2` and is not
+/// recoverable from its hash. So the worker publishes the context beside the hash and this hands
+/// both on; `palw-derive verify --job-context` and `misaka palw derived-verify --tokenizer` read
+/// the borsh and derive the hash from it, so the tokenizer and the root cannot come from two
+/// different contexts.
+///
+/// A manifest written by an older worker carries no `job_context_borsh_hex`, and then the third
+/// value is `None` and the consumer's verdict says the binding was not checked — which is the
+/// truth about that job, not a failure of this reader.
+pub fn read_worker_manifest(job_dir: &Path) -> (Option<String>, Option<String>, Option<String>) {
+    let Ok(bytes) = std::fs::read(job_dir.join("manifest.json")) else { return (None, None, None) };
+    let Ok(doc) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return (None, None, None) };
     let get = |k: &str| doc.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
-    (get("job_context_hash"), get("family"))
+    (get("job_context_hash"), get("family"), get(misaka_palw_base0::fp_worker::RETENTION_JOB_CONTEXT_FIELD_V1))
 }
 
 /// Serve `GET /v1/artifacts/<derived-id-hex>`: the bytes filed under the id, or nothing.
@@ -332,6 +345,78 @@ pub fn base64(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The worker's manifest hands the consumer the CONTEXT, and the hash is derived from it**
+    /// (ADR-0078 X6's binding leg).
+    ///
+    /// The reader is the gateway's only source for these three values, and the third is the one
+    /// that makes a binding possible at all: `output_root` needs the hash, but "which tokenizer
+    /// may render these ids" is `tokenizer_id`, a FIELD, and a hash cannot be asked for a field.
+    /// The round trip below is what a consumer performs — decode the borsh, recompute
+    /// `context_hash()`, and refuse the pair if it is not the hash published beside it.
+    ///
+    /// The second half is the older-worker case: a manifest without the field still yields the
+    /// two values it does carry, and the third is `None` — a job whose binding cannot be checked,
+    /// said rather than passed over.
+    #[test]
+    fn the_worker_manifest_hands_over_the_job_context_and_not_only_its_hash() {
+        use kaspa_consensus_core::palw_v2::PalwJobContextV2;
+        let context = PalwJobContextV2 {
+            version: 2,
+            network_id: b"misaka-palw-rc".to_vec(),
+            job_id: Hash64::from_u64_word(0x10),
+            job_nullifier: Hash64::default(),
+            assignment_id: Hash64::default(),
+            execution_seed: [0x5A; 32],
+            model_profile_id: Hash64::from_u64_word(0x20),
+            runtime_manifest_hash: Hash64::from_u64_word(0x21),
+            runtime_class_id: Hash64::from_u64_word(0x22),
+            shape_profile_id: Hash64::from_u64_word(0x23),
+            trace_scheme_id: Hash64::from_u64_word(0x24),
+            cu_ruleset_id: Hash64::default(),
+            // The field the hash cannot carry, and the reason this reader returns three values.
+            tokenizer_id: Hash64::from_u64_word(0x70),
+            prompt_token_ids_hash: Hash64::from_u64_word(0x71),
+            declared_prefill_tokens: 5,
+            exact_decode_tokens: 2,
+            max_context_tokens: 32,
+        };
+        let dir = std::env::temp_dir().join(format!("palw-gw-manifest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let borsh_hex = faster_hex::hex_string(&borsh::to_vec(&context).expect("borsh"));
+        let mut written = serde_json::Map::new();
+        written.insert("job_context_hash".into(), hex(context.context_hash()).into());
+        written.insert("family".into(), "qwen25-a16".into());
+        // Spelled from the writer's own constant, so a rename in the worker breaks this here
+        // rather than in production, where the symptom is a binding that is silently never made.
+        written.insert(misaka_palw_base0::fp_worker::RETENTION_JOB_CONTEXT_FIELD_V1.into(), borsh_hex.into());
+        std::fs::write(dir.join("manifest.json"), serde_json::to_vec_pretty(&written).unwrap()).expect("write");
+
+        let (hash, family, context_hex) = read_worker_manifest(&dir);
+        assert_eq!(family.as_deref(), Some("qwen25-a16"));
+        let raw_hex = context_hex.expect("the manifest publishes the context, not only its hash");
+        let mut raw = vec![0u8; raw_hex.len() / 2];
+        faster_hex::hex_decode(raw_hex.as_bytes(), &mut raw).expect("the field is hex");
+        let read_back: PalwJobContextV2 = borsh::from_slice(&raw).expect("the field is a borsh PalwJobContextV2");
+        assert_eq!(read_back, context, "the context survives the manifest byte for byte");
+        assert_eq!(
+            Some(hex(read_back.context_hash())),
+            hash,
+            "the hash a consumer recomputes from the published context IS the one output_root was built from"
+        );
+
+        // A manifest an older worker wrote: two values, and the third honestly absent.
+        std::fs::write(
+            dir.join("manifest.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({ "job_context_hash": hex(context.context_hash()), "family": "base0" }))
+                .unwrap(),
+        )
+        .expect("write");
+        let (hash, family, context_hex) = read_worker_manifest(&dir);
+        assert!(hash.is_some() && family.is_some());
+        assert_eq!(context_hex, None, "an older worker's manifest cannot be made to yield a context it never wrote");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn base64_matches_rfc4648_vectors() {

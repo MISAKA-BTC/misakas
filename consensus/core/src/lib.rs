@@ -147,6 +147,10 @@ pub mod palw_admission_v2;
 pub mod palw_adversarial;
 pub mod palw_artifact;
 pub mod palw_attempt_v2;
+/// ADR-0082 Decision 2 / U-03: the dissection as a court phase, and its window gate.
+pub mod palw_attn_court_v1;
+/// ADR-0082 Decisions 2–3: the history dissection's objects, fold and round arithmetic.
+pub mod palw_attn_dissect;
 pub mod palw_backend;
 pub mod palw_base0;
 pub mod palw_base0_a16;
@@ -186,6 +190,7 @@ pub mod palw_court_v2;
 /// consumer).
 pub mod palw_credit;
 pub mod palw_credit_batch;
+pub mod palw_decode_select_v2;
 pub mod palw_derived_v1;
 pub mod palw_dispute;
 /// ADR-0069: end-to-end adjudicability — the half of "can this class be prosecuted" that coverage
@@ -193,6 +198,11 @@ pub mod palw_dispute;
 /// graph reaches; this says a real backend can actually PLAY the dispute, proven by re-running the
 /// shipped court over a drill's planted faults. Weight requires both.
 pub mod palw_e2e_adjudicability;
+/// **The economic locus census** (ADR-0080 Decision 3, narrowed): which quantities on the
+/// free-prompt path are priced in LEAVES and survive restructuring, and which are priced per
+/// claim or per block and do not. A doc comment with a test suite attached; no rule, no state,
+/// no caller. Read it before proposing that one answer become several claims.
+pub mod palw_economic_locus_v1;
 pub mod palw_exposure;
 pub mod palw_facts;
 pub mod palw_fork_authority_v2;
@@ -226,6 +236,10 @@ pub mod palw_mode_v2;
 pub mod palw_panel_da_v1;
 pub mod palw_panel_v2;
 pub mod palw_producer_v2;
+/// ADR-0081 Decision 3 — the one decision of ADR-0081 that survives its refutation: the
+/// prompt's token ids as a tiled Merkle root, so a gather proves ONE id instead of carrying
+/// all of them. Dormant (`Params::palw_prompt_ids_merkle` is `None` on every preset).
+pub mod palw_prompt_ids_v1;
 pub mod palw_pwu;
 pub mod palw_qwen25_profile;
 pub mod palw_qwen36_ops;

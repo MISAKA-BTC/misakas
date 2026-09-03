@@ -28,7 +28,7 @@ use kaspa_consensus_core::palw_e2e_adjudicability::{
     PalwE2eFreePromptDrillEvidenceV1, certify_e2e_family_v1, certify_e2e_free_prompt_lane_v1, table_of_slot_v1,
 };
 use kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3;
-use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepTableV1, canonical_step_coordinates};
+use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepTableV1, canonical_step_leaf_index};
 use kaspa_hashes::Hash64;
 
 /// Why a family could not be drilled. Separated from [`PalwE2eError`] — which is the CERTIFIER's
@@ -63,7 +63,129 @@ impl std::fmt::Display for PalwDrillError {
 struct Candidate {
     leaf: u64,
     table: PalwStepTableV1,
+    /// **The unit a certificate is granted in.** The dedup key used to be `table` alone, which is
+    /// four buckets against however many distinct kernels the profile reaches — so a graph with a
+    /// fused attention op beside a split one drilled whichever slot the walk hit first and the
+    /// certificate declared both.
+    kernel: kaspa_consensus_core::Hash64,
     decode: bool,
+}
+
+/// **The leaves the drill will plant faults at: one per `(table, kernel, call class)` the profile
+/// reaches.** A certificate is granted in KERNELS (`reachable_kernels_v1` maps every node's
+/// `kernel_semantics_id`), and dedup by table alone covered four buckets while declaring N — on
+/// graph-v5@512 the fused attention kernel went undrilled inside a table already ticked, so the
+/// family declared a kernel whose adjudication nobody watched (5e, 1fd6a30a). Dedup by kernel alone
+/// drops a table two kernels share while the court's covering check is by TABLE; the drill owes both.
+///
+/// # Why this is a probe and no longer a walk
+///
+/// This was `for leaf in 0..step_leaf_count { canonical_step_coordinates(…, leaf) }`, and that
+/// walk is QUADRATIC in the step space: `canonical_step_coordinates` decrements a cursor position
+/// by position, so one call costs `O(positions + slots)`, and the loop makes `step_leaf_count` of
+/// them. On the classes it was written for that is invisible — the floor's canonical job
+/// enumerates a few thousand leaves. On the graph-v5 dense 512 row it is 6,630,544 leaves × ~552
+/// node visits ≈ **3.7e9 operations for the candidate search alone**, before a single fault is
+/// planted; `the_candidate_probe_is_a_closed_cost_on_the_512_row` measures the real numbers.
+///
+/// So raising the drill's leaf cap from the executor's `2^22` to the ruleset's `2^26` had to bound
+/// the WALK, not the count: a bound on the count is what was refusing the class in the first place.
+///
+/// # And the probe visits the same leaves the walk would have found
+///
+/// The walk's answer is, for each `(table, decode)` pair, the FIRST leaf in canonical order
+/// carrying it. Canonical order is call-major, then position, then node slot, then tile — so that
+/// leaf is always tile 0 of some node at one of three positions:
+///
+/// * `(call 0, position 0)` — the first prefill position, which carries every table except the
+///   post nodes (the logits row exists only at the LAST prefill position);
+/// * `(call 0, position prefill − 1)` — where the post nodes live;
+/// * `(call 1, position 0)` — the first decode call, which carries every table.
+///
+/// Three probe points × the profile's node slots, each one forward
+/// [`canonical_step_leaf_index`] — a CLOSED cost in the class's graph, with no `n_ctx` and no
+/// decode factor at all. `the_probe_finds_what_the_exhaustive_walk_finds` pins the two answers
+/// equal on a real capture, which is the only claim that matters here.
+///
+/// The one behavioural difference is the fallback: when `drillable` refuses a pair's first leaf
+/// (the capture does not hold that coordinate), the walk moved on to the next leaf with the same
+/// pair — including the next TILE of the same node — while this moves on to the next node of the
+/// same table. A family whose capture holds a node's second tile but not its first would lose that
+/// candidate; the drill then reports `NoCandidate` or certifies a narrower covering set, which the
+/// CERTIFIER scores. It is a refusal, never a silent pass.
+fn drill_candidates_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+    step_leaf_count: u64,
+    mut drillable: impl FnMut(u64) -> bool,
+) -> Vec<Candidate> {
+    let prefill = ctx.declared_prefill_tokens;
+    let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
+    let mut points: Vec<(u32, u32)> = Vec::new();
+    if prefill > 0 {
+        points.push((0, 0));
+        if prefill > 1 {
+            points.push((0, prefill - 1));
+        }
+    }
+    if decode_calls >= 1 {
+        points.push((1, 0));
+    }
+
+    // Probed in whatever order the points come, then SORTED into the enumeration's own order —
+    // "first leaf carrying this pair" is a statement about leaf index, and a probe that reported
+    // its finds in probe order would answer it with whichever point was asked first.
+    let mut probes: Vec<(u64, PalwStepTableV1, kaspa_consensus_core::Hash64, bool)> = Vec::new();
+    for (call, position) in points {
+        for slot in 0..profile.global_node_count() {
+            let Some(table) = table_of_slot_v1(profile, slot) else { continue };
+            let Some(kernel) = kaspa_consensus_core::palw_e2e_adjudicability::kernel_of_slot_v1(profile, slot) else { continue };
+            let coord = PalwStepCoordinateV1 { call_index: call, node_slot: slot, position, tile_index: 0 };
+            let Some(leaf) = canonical_step_leaf_index(profile, ctx, &coord) else { continue };
+            if leaf >= step_leaf_count {
+                continue;
+            }
+            probes.push((leaf, table, kernel, call > 0));
+        }
+    }
+    // By leaf index alone, and STABLY: `PalwStepTableV1` carries no ordering (it is a classifier,
+    // not a scale), and two probe points never produce the same leaf, so the key is total.
+    probes.sort_by_key(|(leaf, ..)| *leaf);
+
+    // A leaf is only drillable if the capture HOLDS it — `execute_with_injected_fault` corrupts a
+    // tile the material carries, and a coordinate the capture never filled has none. Asked of the
+    // backend rather than assumed, because which leaves a family retains is a family fact.
+    probes.retain(|(leaf, ..)| drillable(*leaf));
+    select_candidates_v1(probes)
+}
+
+/// **The cover the drill owes, and no more: every `(table, call class)` for the court, then every
+/// kernel the certificate declares, each at its first drillable leaf.**
+///
+/// The court's covering check is by TABLE and call class; the certificate is granted in KERNELS.
+/// Drilling every `(table, kernel, call class)` triple satisfies both but is not the smallest set
+/// that does — on the QWEN36 hybrid it is 74 vectors, 1.44 MB of evidence, past both the court's
+/// `PALW_CERTIFICATION_MAX_VECTORS` (32) and the 800,000-byte carriage ceiling, so the family could
+/// be pinned at genesis and never certified through the chain. Two passes, both in leaf order: the
+/// first takes one leaf per `(table, call class)`; the second adds, for each declared kernel no
+/// chosen leaf carries, the first leaf that does. Every table, every call class, every kernel —
+/// once each — sorted by leaf so "which leaf" is a statement about the enumeration, not the pass.
+fn select_candidates_v1(probes: Vec<(u64, PalwStepTableV1, kaspa_consensus_core::Hash64, bool)>) -> Vec<Candidate> {
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for (leaf, table, kernel, decode) in &probes {
+        if candidates.iter().any(|c| c.table == *table && c.decode == *decode) {
+            continue;
+        }
+        candidates.push(Candidate { leaf: *leaf, table: *table, kernel: *kernel, decode: *decode });
+    }
+    for (leaf, table, kernel, decode) in &probes {
+        if candidates.iter().any(|c| c.kernel == *kernel) {
+            continue;
+        }
+        candidates.push(Candidate { leaf: *leaf, table: *table, kernel: *kernel, decode: *decode });
+    }
+    candidates.sort_by_key(|c| c.leaf);
+    candidates
 }
 
 /// **Drill one family and record what it proved** — the half that needs the model.
@@ -106,27 +228,22 @@ pub fn drill_family_evidence_v1(
 
     // **Candidates: one leaf per (table, call class) the profile actually reaches.**
     //
-    // Walked in the step space's own enumeration rather than computed, so the drill cannot disagree
-    // with `canonical_step_coordinates` about which leaf is which — the same reason
-    // `base0_anchored_ladder_v1` walks instead of doing arithmetic on the space.
-    let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count(profile, &job)
-        .map_err(|e| PalwDrillError::Backend { what: "count its own step space", why: format!("{e:?}") })?;
-    let mut candidates: Vec<Candidate> = Vec::new();
-    for leaf in 0..leaf_count {
-        let Some(coord) = canonical_step_coordinates(profile, &job, leaf) else { continue };
-        let Some(table) = table_of_slot_v1(profile, coord.node_slot) else { continue };
-        let decode = coord.call_index > 0;
-        if candidates.iter().any(|c| c.table == table && c.decode == decode) {
-            continue;
-        }
-        // A leaf is only drillable if the capture HOLDS it — `execute_with_injected_fault` corrupts
-        // a tile the material carries, and a coordinate the capture never filled has none. Asked of
-        // the backend rather than assumed, because which leaves a family retains is a family fact.
-        if backend.refutation_for_index(&honest.material, leaf).is_err() {
-            continue;
-        }
-        candidates.push(Candidate { leaf, table, decode });
-    }
+    // **The size of the space is the capture's own, never re-derived here.** It was
+    // `step_leaf_count(profile, &job)`, which counts against the EXECUTOR's `PALW_STEP_MAX_LEAVES`
+    // (`2^22`) — so the graph-v5 dense 512 row, whose canonical job is 6,630,544 leaves and which
+    // the chain admits under a `2^26` ruleset, could not be drilled at all: the drill refused to
+    // count the space of the run it had just performed. The producer committed that number, the
+    // backend states it, and the backend's own ladder (`with_step_ladder_cap`, ADR-0080 W1b) is
+    // what bounded it there.
+    let leaf_count = backend
+        .capture_shape(&honest.material)
+        .ok_or(PalwDrillError::Backend {
+            what: "state the size of its own step space",
+            why: "capture_shape returned None".to_string(),
+        })?
+        .step_leaf_count;
+    let candidates =
+        drill_candidates_v1(profile, &job, leaf_count, |leaf| backend.refutation_for_index(&honest.material, leaf).is_ok());
     if candidates.is_empty() {
         return Err(PalwDrillError::NoCandidate { what: "any table at any call class" });
     }
@@ -272,21 +389,19 @@ pub fn drill_free_prompt_evidence_v1(
         });
     }
 
-    let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count(profile, &ctx)
-        .map_err(|e| PalwDrillError::Backend { what: "count its own step space", why: format!("{e:?}") })?;
-    let mut candidates: Vec<Candidate> = Vec::new();
-    for leaf in 0..leaf_count {
-        let Some(coord) = canonical_step_coordinates(profile, &ctx, leaf) else { continue };
-        let Some(table) = table_of_slot_v1(profile, coord.node_slot) else { continue };
-        let decode = coord.call_index > 0;
-        if candidates.iter().any(|c| c.table == table && c.decode == decode) {
-            continue;
-        }
-        if backend.refutation_for_free_prompt_index(&honest.material, leaf, prompt_token_ids).is_err() {
-            continue;
-        }
-        candidates.push(Candidate { leaf, table, decode });
-    }
+    // The capture's own size, for the reason the attempt lane states: the ladder this space was
+    // priced against is the backend's, and re-deriving it here would price it at the executor's
+    // constant instead.
+    let leaf_count = backend
+        .capture_shape(&honest.material)
+        .ok_or(PalwDrillError::Backend {
+            what: "state the size of its own step space",
+            why: "capture_shape returned None".to_string(),
+        })?
+        .step_leaf_count;
+    let candidates = drill_candidates_v1(profile, &ctx, leaf_count, |leaf| {
+        backend.refutation_for_free_prompt_index(&honest.material, leaf, prompt_token_ids).is_ok()
+    });
     if candidates.is_empty() {
         return Err(PalwDrillError::NoCandidate { what: "any table at any call class" });
     }
@@ -418,12 +533,25 @@ fn drill_base0_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
 /// answer that question.
 pub fn register_builtin_certified_families_v1() -> Vec<&'static str> {
     let mut registered = Vec::new();
-    for (name, certificate) in
-        [("PALW-BASE-0", base0_certificate_v1()), ("PALW-QWEN36", qwen36_certificate_v1()), ("PALW-QWEN25-A16", a16_certificate_v1())]
-    {
-        if let Ok(certificate) = certificate {
-            kaspa_consensus_core::palw_e2e_adjudicability::register_certified_family_v1(certificate);
-            registered.push(name);
+    for (name, certificate) in [
+        ("PALW-BASE-0", base0_certificate_v1()),
+        ("PALW-QWEN36", qwen36_certificate_v1()),
+        ("PALW-QWEN25-A16", a16_certificate_v1()),
+        ("PALW-QWEN25-A16-V5", a16_v5_certificate_v1()),
+    ] {
+        match certificate {
+            Ok(certificate) => {
+                kaspa_consensus_core::palw_e2e_adjudicability::register_certified_family_v1(certificate);
+                registered.push(name);
+            }
+            // **Say which family did not drill, and why.** This was `if let Ok(..)`, so a family
+            // whose drill failed simply vanished — and the only symptom was a downstream count
+            // mismatch ("the network commits to 4 families and this build drilled 3") with nothing
+            // naming the one that fell out or the reason. A skip that reads as an absence is the
+            // same defect as a skip that reads as a pass.
+            Err(why) => {
+                eprintln!("[palw-e2e] {name} did not drill and is NOT registered: {why:?}");
+            }
         }
     }
     registered
@@ -599,6 +727,71 @@ fn a16_fixture_v1() -> Result<(crate::qwen25_a16_backend::Qwen25A16Backend, Palw
     Ok((backend, profile, root))
 }
 
+/// The A16 fixture on the FUSED graph — the same weights, projected through
+/// `qwen25_a16_artifact_row_profile_v5`.
+///
+/// **The epsilon is the trap, written here because the next person meets the same refusal.** That
+/// projection applies `qwen25_geometry_artifact_eps`, so the profile's `rms_eps_q` is 256 — the
+/// epsilon the ARTIFACT executes — while `a16_fixture_v1` above builds its shape with `eps_q: 1`.
+/// Reuse that shape and the backend refuses with
+///
+/// ```text
+/// GeometryMismatch { what: "rms_eps_q", profile: 256, artifact: 1 }
+/// ```
+///
+/// which reads as "the backend cannot serve a fused profile" and is nothing of the kind: it is the
+/// same artifact-epsilon mismatch that made the dense catalog row unregistrable, one layer over.
+/// The capability was always there — the backend serves this profile and the drill plants faults
+/// in it. A fixture had simply never been fused.
+fn a16_v5_fixture_v1() -> Result<(crate::qwen25_a16_backend::Qwen25A16Backend, PalwShapeProfileV3, Hash64), PalwDrillError> {
+    use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_A16_ARTIFACT_EPS_Q, qwen25_a16_artifact_row_profile_v5};
+
+    // One home for the geometry: the family entries in `palw_e2e_adjudicability` take their
+    // `kernel_ids` from a projection of this same constant, so what a family DECLARES and what its
+    // drill RUNS cannot drift apart.
+    let geometry = kaspa_consensus_core::palw_e2e_adjudicability::PALW_RC_A16_DRILL_GEOMETRY;
+    let shape = crate::artifact::Base0ShapeV1 {
+        n_layers: geometry.layer_count as usize,
+        n_heads: geometry.attn_heads as usize,
+        n_kv_heads: geometry.attn_kv_heads as usize,
+        d_head: geometry.attn_head_dim as usize,
+        d_ff: geometry.ffn_dim as usize,
+        vocab: geometry.vocab_size as usize,
+        max_position: geometry.n_ctx as usize,
+        ln_theta_gen_q: crate::artifact::LN_THETA_10000_GEN_Q,
+        // NOT `1`, and not the geometry's `rms_eps_q` either — see the doc above.
+        eps_q: QWEN25_A16_ARTIFACT_EPS_Q,
+    };
+    let artifact = crate::artifact::Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+        .map_err(|e| PalwDrillError::Backend { what: "derive its fixture weights", why: format!("{e:?}") })?
+        .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
+        .map_err(|e| PalwDrillError::Backend { what: "derive its A16 parameter store", why: format!("{e:?}") })?;
+    let profile = qwen25_a16_artifact_row_profile_v5(geometry)
+        .map_err(|e| PalwDrillError::Backend { what: "project the fused fixture geometry", why: format!("{e:?}") })?;
+    let root = crate::inventory::a16_inventory_v1(&artifact, &profile)
+        .map_err(|e| PalwDrillError::Backend { what: "root its own fixture inventory", why: format!("{e:?}") })?
+        .root();
+    let backend = crate::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile(
+        std::sync::Arc::new(artifact),
+        b"misaka-palw-rc".to_vec(),
+        profile.clone(),
+        (4, 2),
+    )
+    .map_err(|why| PalwDrillError::Backend { what: "serve its own registered graph", why })?;
+    Ok((backend, profile, root))
+}
+
+/// The fused graph's attempt-lane certificate. Drilled, never declared.
+pub fn a16_v5_certificate_v1() -> Result<&'static PalwE2eCertificateV1, &'static PalwDrillError> {
+    static CERT: std::sync::OnceLock<Result<PalwE2eCertificateV1, PalwDrillError>> = std::sync::OnceLock::new();
+    CERT.get_or_init(drill_a16_v5_v1).as_ref()
+}
+
+fn drill_a16_v5_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
+    let (backend, profile, root) = a16_v5_fixture_v1()?;
+    drill_family_v1(family_id_of("PALW-QWEN25-A16-V5"), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D8255))
+}
+
 fn drill_a16_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
     let (backend, profile, root) = a16_fixture_v1()?;
     drill_family_v1(a16_family_id_v1(), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D825))
@@ -614,16 +807,22 @@ pub enum PalwRcFamilyV1 {
     Base0,
     Qwen36,
     Qwen25A16,
+    /// The A16 lineage's FUSED graph (ADR-0082 Decision 1). A separate family and not a wider
+    /// `Qwen25A16`, because the fusion REPLACES the scores/softmax/values kernels with one — so no
+    /// profile reaches both sets, and a union `kernel_ids` could only be a declared superset: a
+    /// certificate asserting an adjudication nobody performed.
+    Qwen25A16V5,
 }
 
 impl PalwRcFamilyV1 {
-    pub const ALL: [Self; 3] = [Self::Base0, Self::Qwen36, Self::Qwen25A16];
+    pub const ALL: [Self; 4] = [Self::Base0, Self::Qwen36, Self::Qwen25A16, Self::Qwen25A16V5];
 
     pub fn name(self) -> &'static str {
         match self {
             Self::Base0 => "PALW-BASE-0",
             Self::Qwen36 => "PALW-QWEN36",
             Self::Qwen25A16 => "PALW-QWEN25-A16",
+            Self::Qwen25A16V5 => "PALW-QWEN25-A16-V5",
         }
     }
 
@@ -631,12 +830,90 @@ impl PalwRcFamilyV1 {
         family_id_of(self.name())
     }
 
+    /// **The short form an operator types**, and the one `palw-certify`'s usage string must list.
+    ///
+    /// It existed only inside `parse`'s match arms, so "which short names are there" could be
+    /// answered by reading that function and nowhere else — which is why `a16-v5` was accepted by
+    /// the parser while `--help` said `<base0|qwen36|a16>` for as long as it did. A name with one
+    /// spelling can be checked against the help; a name that lives in match arms cannot.
+    pub fn short_name_v1(self) -> &'static str {
+        match self {
+            Self::Base0 => "base0",
+            Self::Qwen36 => "qwen36",
+            Self::Qwen25A16 => "a16",
+            Self::Qwen25A16V5 => "a16-v5",
+        }
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "base0" | "palw-base-0" | "floor" => Some(Self::Base0),
             "qwen36" | "palw-qwen36" => Some(Self::Qwen36),
             "a16" | "qwen25-a16" | "palw-qwen25-a16" => Some(Self::Qwen25A16),
+            "a16-v5" | "qwen25-a16-v5" | "palw-qwen25-a16-v5" => Some(Self::Qwen25A16V5),
             _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod family_name_tests {
+    use super::*;
+
+    /// **Every family must be nameable by an operator, and the compiler cannot check that.**
+    ///
+    /// Adding `Qwen25A16V5` made five `match family` sites fail to compile until each answered for
+    /// it — which is the property a non-exhaustive match buys. `parse` is a STRING match, so it
+    /// compiled fine while returning `None` for the new family, and `palw-certify drill --family
+    /// a16-v5` answered "unknown family". The family existed, was drilled, was committed to by the
+    /// network, and the one tool an operator types could not name it.
+    ///
+    /// This closes the gap the compiler cannot: every variant must round-trip through its own name.
+    #[test]
+    fn every_family_can_be_named_by_the_operator() {
+        for family in PalwRcFamilyV1::ALL {
+            let name = family.name();
+            assert_eq!(
+                PalwRcFamilyV1::parse(name),
+                Some(family),
+                "`palw-certify --family {name}` does not parse back to the family it names — a family nobody can \
+                 spell is a family nobody can drill"
+            );
+            // And the short form the docs use, lowercased, for the same reason.
+            assert!(PalwRcFamilyV1::parse(&name.to_ascii_lowercase()).is_some(), "the lowercased name {name} does not parse");
+            // The short form is a third spelling unless it round-trips too.
+            assert_eq!(
+                PalwRcFamilyV1::parse(family.short_name_v1()),
+                Some(family),
+                "short_name_v1() returned `{}`, which `parse` does not map back to {name}",
+                family.short_name_v1()
+            );
+        }
+
+        // **The parser accepting a name is not the operator being able to find it.** Everything
+        // above compares the parser with itself: `parse(name()) == family` is a round trip inside
+        // one module, and it was green the whole time `palw-certify --help` said
+        // `--family <base0|qwen36|a16>` while the parser also took `a16-v5`. A family the tool can
+        // drill and the help does not mention is a family nobody will ask for — and `a16-v5` is
+        // the one that drills the fused row the genesis is to register.
+        //
+        // So the OTHER end is the binary's own source, read at compile time. A short form added to
+        // the parser without reaching the usage string fails here.
+        let cli = include_str!("bin/palw-certify.rs");
+        for family in PalwRcFamilyV1::ALL {
+            let short = family.short_name_v1();
+            // Delimited on both sides, so a middle element of `<a|b|c>` matches too — my first
+            // cut only accepted first-or-last and failed on `qwen36`, which is the check being
+            // wrong rather than the help.
+            let listed = cli.contains(&format!("<{short}|"))
+                || cli.contains(&format!("|{short}|"))
+                || cli.contains(&format!("|{short}>"))
+                || cli.contains(&format!("<{short}>"));
+            assert!(
+                listed,
+                "`palw-certify`'s usage does not list `--family {short}`, so the only way to discover it is to read \
+                 the parser. Add it to BOTH the module doc and the usage string."
+            );
         }
     }
 }
@@ -658,6 +935,10 @@ pub fn rc_attempt_evidence_v1(family: PalwRcFamilyV1) -> Result<PalwE2eDrillEvid
             let (backend, profile, root) = a16_fixture_v1()?;
             drill_family_evidence_v1(family.family_id(), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D825))
         }
+        PalwRcFamilyV1::Qwen25A16V5 => {
+            let (backend, profile, root) = a16_v5_fixture_v1()?;
+            drill_family_evidence_v1(family.family_id(), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D8255))
+        }
     }
 }
 
@@ -666,7 +947,7 @@ pub fn rc_attempt_evidence_v1(family: PalwRcFamilyV1) -> Result<PalwE2eDrillEvid
 /// prompt a USER handed the class. The QWEN36 fixture's context is eight tokens.
 pub fn rc_free_prompt_question_v1(family: PalwRcFamilyV1) -> (Vec<u32>, u32) {
     match family {
-        PalwRcFamilyV1::Base0 | PalwRcFamilyV1::Qwen25A16 => (vec![3, 5, 8, 13, 21], 2),
+        PalwRcFamilyV1::Base0 | PalwRcFamilyV1::Qwen25A16 | PalwRcFamilyV1::Qwen25A16V5 => (vec![3, 5, 8, 13, 21], 2),
         PalwRcFamilyV1::Qwen36 => (vec![3, 5, 8, 13], 2),
     }
 }
@@ -695,6 +976,8 @@ pub fn fp_drill_job_v1(profile: &PalwShapeProfileV3, ids: &[u32], decode: u32) -
         max_context_tokens: profile.n_ctx,
         privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
         prompt_mode: PALW_FP_PROMPT_MODE_USER,
+        sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+        temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
     }
 }
 
@@ -715,6 +998,11 @@ pub fn rc_free_prompt_evidence_v1(family: PalwRcFamilyV1) -> Result<PalwE2eFreeP
         }
         PalwRcFamilyV1::Qwen25A16 => {
             let (backend, profile, root) = a16_fixture_v1()?;
+            let job = fp_drill_job_v1(&profile, &ids, decode);
+            drill_free_prompt_evidence_v1(family.family_id(), &backend, &profile, root, &job, &ids)
+        }
+        PalwRcFamilyV1::Qwen25A16V5 => {
+            let (backend, profile, root) = a16_v5_fixture_v1()?;
             let job = fp_drill_job_v1(&profile, &ids, decode);
             drill_free_prompt_evidence_v1(family.family_id(), &backend, &profile, root, &job, &ids)
         }
@@ -790,11 +1078,17 @@ pub fn a16_fp_certificate_v1() -> Result<&'static PalwE2eFreePromptCertificateV1
     CERT.get_or_init(|| drill_fp_v1(PalwRcFamilyV1::Qwen25A16)).as_ref()
 }
 
+pub fn a16_v5_fp_certificate_v1() -> Result<&'static PalwE2eFreePromptCertificateV1, &'static PalwDrillError> {
+    static CERT: std::sync::OnceLock<Result<PalwE2eFreePromptCertificateV1, PalwDrillError>> = std::sync::OnceLock::new();
+    CERT.get_or_init(|| drill_fp_v1(PalwRcFamilyV1::Qwen25A16V5)).as_ref()
+}
+
 pub fn rc_fp_certificate_v1(family: PalwRcFamilyV1) -> Result<&'static PalwE2eFreePromptCertificateV1, &'static PalwDrillError> {
     match family {
         PalwRcFamilyV1::Base0 => base0_fp_certificate_v1(),
         PalwRcFamilyV1::Qwen36 => qwen36_fp_certificate_v1(),
         PalwRcFamilyV1::Qwen25A16 => a16_fp_certificate_v1(),
+        PalwRcFamilyV1::Qwen25A16V5 => a16_v5_fp_certificate_v1(),
     }
 }
 
@@ -1039,6 +1333,8 @@ mod tests {
             max_context_tokens: profile.n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         };
         let drill = drill_free_prompt_evidence_v1(base0_family_id_v1(), &backend, &profile, root, &job, &ids)
             .expect("the floor drills its free-prompt lane");
@@ -1156,9 +1452,50 @@ mod certification_object_tests {
         use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
         let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court");
         let mut checked = 0;
+        let mut fused_lanes_covered = 0;
+        let mut uncovered: Vec<(String, String)> = Vec::new();
         for (model_id, profile) in catalog_profiles_v1(&court) {
             let legacy = model_id != "PALW-BASE-0/rc" && !model_id.contains("/graph-v");
             if legacy {
+                continue;
+            }
+            // **ADR-0082's graph-v5 row is COVERED now, and the red must still say by what if it
+            // ever stops being.**
+            //
+            // A family's `kernel_ids` is read off the profile a drill WALKED
+            // (`certify_e2e_attempt_lane_v1`: "a drill that named its own kernel set would be
+            // certifying arithmetic it had not walked"). Every fixture in this build used to be a
+            // graph-v2 shape, so no family declared `AttnFused` and this arm collected the gap
+            // instead of failing on it. `PALW-QWEN25-A16-V5` closed it the prescribed way — a
+            // FIXTURE (`a16_v5_fixture_v1`) that drills the fused op through stream I's dissection
+            // route on both lanes — and NOT by widening `palw_rc_certified_families_v1` to the
+            // union, which would make the committed set assert an adjudication nobody performed
+            // and grant weight for it (ADR-0069 Decision 5).
+            //
+            // The arm stays because the DIAGNOSTIC is the valuable part: a bare `is_some()` on a
+            // future fused row would say "no family", where this says which kernel ids the nearest
+            // family is missing. What changed is the assertion below — it now reads empty.
+            if kaspa_consensus_core::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&profile) {
+                let reachable = kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&profile);
+                for lane in [PalwCertifiedLaneV1::Attempt, PalwCertifiedLaneV1::FreePrompt] {
+                    if covering_rc_family_v1(&profile, lane).is_some() {
+                        fused_lanes_covered += 1;
+                        continue;
+                    }
+                    let families = match lane {
+                        PalwCertifiedLaneV1::Attempt => kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1(),
+                        _ => kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_fp_certified_families_v1(),
+                    };
+                    // The nearest family is this lineage's FUSED one; what it is missing is the gap.
+                    let nearest = families
+                        .iter()
+                        .find(|f| f.family_id == PalwRcFamilyV1::Qwen25A16V5.family_id())
+                        .expect("the fused dense family is committed");
+                    let missing: Vec<String> =
+                        reachable.difference(&nearest.kernel_ids).map(|k| k.to_string()[..16].to_string()).collect();
+                    uncovered
+                        .push((model_id.clone(), format!("{lane} lane, family PALW-QWEN25-A16-V5 is missing kernel(s) {missing:?}")));
+                }
                 continue;
             }
             for lane in [PalwCertifiedLaneV1::Attempt, PalwCertifiedLaneV1::FreePrompt] {
@@ -1167,6 +1504,25 @@ mod certification_object_tests {
             }
             checked += 1;
         }
+        // **The gap is closed, and it is now stated as EMPTY so it cannot reopen quietly.** This
+        // pinned the two-entry uncovered set until `PALW-QWEN25-A16-V5` landed; it said in its own
+        // comment that it would go red "the day the fused fixture lands and this row becomes
+        // covered", and that is the day it went red. A pin that survives the repair it asked for
+        // is a document asserting a state of the tree nobody re-checked.
+        assert!(
+            uncovered.is_empty(),
+            "a catalog row on a registered graph reaches a kernel no RC family drills: {uncovered:?}. Close it with a \
+             FIXTURE that drills the op through stream I's dissection route — never by widening \
+             palw_rc_certified_families_v1, which would certify an adjudication nobody performed"
+        );
+        // And the fused row is covered by DRILL, not by the arm above being skipped: two lanes on
+        // the one graph-v5 row this catalog expresses. Without this, deleting the v5 row from the
+        // catalog would also satisfy the emptiness above.
+        assert!(
+            fused_lanes_covered >= 2,
+            "the graph-v5 512 row must be covered on BOTH lanes by a family that drilled the fused op, covered \
+             {fused_lanes_covered}"
+        );
         assert!(checked >= 5, "the floor, the A16 graph-v2 row and the three Qwen36 graph-v3 rows, checked {checked}");
     }
 
@@ -1546,6 +1902,65 @@ mod pin_tests {
         }
     }
 
+    /// **Route agreement for "certifiable": every family the genesis pins must be one the chain
+    /// would accept as evidence.** The genesis commits a family by ROOT and grades nothing; the
+    /// acceptance path grades a `FamilyCertified` object under two caps it never applied to the
+    /// genesis set — `PALW_CERTIFICATION_MAX_VECTORS` (`TooManyDrillVectors`) and the carriage
+    /// ceiling (`ObjectTooLargeToChunk`, `PALW_OBJECT_CHUNK_MAX_BYTES × PALW_OBJECT_CHUNK_MAX_COUNT`).
+    /// The (table, kernel, call class) rule pinned a QWEN36 family of 74 vectors / 1,442,857 B that
+    /// no chain could ever certify (2026-09-04); this asks the chain's own chunker and the court's
+    /// own cap about every pinned family, on both lanes, so a family cannot be pinned
+    /// uncertifiable again — the third time tonight the genesis route could mint what the
+    /// acceptance path refuses (44).
+    #[test]
+    fn every_pinned_family_is_certifiable_through_the_chain() {
+        use super::{PalwRcFamilyV1, rc_attempt_evidence_v1, rc_free_prompt_evidence_v1};
+        use kaspa_consensus_core::palw_state_v2::{
+            PALW_CERTIFICATION_MAX_VECTORS, PALW_OBJECT_CHUNK_MAX_BYTES, PALW_OBJECT_CHUNK_MAX_COUNT, PalwCertificationEvidenceV1,
+            PalwConsensusObjectV2 as Obj, palw_object_chunks_v1,
+        };
+        let ceiling = PALW_OBJECT_CHUNK_MAX_BYTES * PALW_OBJECT_CHUNK_MAX_COUNT as usize;
+        // Every family is measured before any is judged, so one refusal does not hide the sizes of
+        // the rest — the report names all of them.
+        let mut refused: Vec<String> = Vec::new();
+        for family in PalwRcFamilyV1::ALL {
+            let attempt = rc_attempt_evidence_v1(family).unwrap_or_else(|e| panic!("{} drills its attempt lane: {e}", family.name()));
+            let fp =
+                rc_free_prompt_evidence_v1(family).unwrap_or_else(|e| panic!("{} drills its free-prompt lane: {e}", family.name()));
+            for (lane, vectors, object) in [
+                (
+                    "attempt",
+                    attempt.vectors.len(),
+                    Obj::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(attempt.clone())) },
+                ),
+                (
+                    "free-prompt",
+                    fp.evidence.vectors.len(),
+                    Obj::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::FreePrompt(fp.clone())) },
+                ),
+            ] {
+                let bytes = borsh::to_vec(&object).expect("the object serializes").len();
+                let carriage = palw_object_chunks_v1(&object);
+                let carriers = match &carriage {
+                    Ok(chunks) => chunks.as_ref().map_or(1, |c| c.len()).to_string(),
+                    Err(e) => format!("REFUSED {e:?}"),
+                };
+                println!(
+                    "{} ({lane}): {vectors} vectors, {bytes} B = {carriers} carrier(s); caps {PALW_CERTIFICATION_MAX_VECTORS} vectors, {ceiling} B",
+                    family.name()
+                );
+                if vectors > PALW_CERTIFICATION_MAX_VECTORS {
+                    refused
+                        .push(format!("{} ({lane}): {vectors} vectors > the court's {PALW_CERTIFICATION_MAX_VECTORS}", family.name()));
+                }
+                if let Err(e) = carriage {
+                    refused.push(format!("{} ({lane}): {bytes} B cannot ride the chain ({e:?}; ceiling {ceiling})", family.name()));
+                }
+            }
+        }
+        assert!(refused.is_empty(), "families the genesis pins that the chain would refuse to certify:\n  {}", refused.join("\n  "));
+    }
+
     #[test]
     fn the_pinned_rc_e2e_root_is_what_this_build_certifies() {
         super::register_builtin_certified_families_v1();
@@ -1726,10 +2141,12 @@ mod registered_class_tests {
         assert_eq!(row.class_id(), entry.class_id, "the registration and the lineage table name one class");
         assert!(covered(&profile), "the drill's certified family covers the class the chain would register");
 
-        // And the certified set really is the three families, not an accident of ordering.
+        // And the certified set really is the four families, not an accident of ordering: the
+        // floor, both model tiers, and the dense tier's FUSED graph — which is a family of its own
+        // because the fusion replaces the kernels it covers, so no one profile reaches both sets.
         let names = super::register_builtin_certified_families_v1();
-        assert_eq!(names.len(), 3, "the floor and both model tiers certify on this build: {names:?}");
-        assert_eq!(certified_families_v1().len(), 3);
+        assert_eq!(names.len(), 4, "the floor, both model tiers and the fused dense graph certify on this build: {names:?}");
+        assert_eq!(certified_families_v1().len(), 4);
     }
 }
 
@@ -1861,5 +2278,114 @@ mod evidence_size_probe {
                 v.operand_openings.len()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod candidate_probe {
+    use super::*;
+
+    /// **The probe answers what the exhaustive walk answered**, on a real capture of the shipped
+    /// floor — the same backend, the same job, the same `refutation_for_index` filter.
+    ///
+    /// The retired walk is spelled out here rather than described, because "these two searches
+    /// agree" is the entire licence for having replaced one with the other, and a description
+    /// cannot be run.
+    #[test]
+    fn the_probe_finds_what_the_exhaustive_walk_finds() {
+        let (backend, profile, _root) = floor_fixture_v1().expect("the floor fixture builds");
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0E2E_D8111)).expect("a job");
+        let honest = backend.execute(&job, &prompt).expect("an honest run");
+        let leaf_count = backend.capture_shape(&honest.material).expect("the capture states its shape").step_leaf_count;
+        assert!(leaf_count > 0);
+
+        let probed: Vec<(u64, PalwStepTableV1, kaspa_consensus_core::Hash64, bool)> =
+            drill_candidates_v1(&profile, &job, leaf_count, |leaf| backend.refutation_for_index(&honest.material, leaf).is_ok())
+                .into_iter()
+                .map(|c| (c.leaf, c.table, c.kernel, c.decode))
+                .collect();
+
+        // The walk enumerates EVERY drillable leaf, then applies the one selection rule the probe
+        // applies (`select_candidates_v1`): a probe that answered a different question would show
+        // here as a different list.
+        let mut all: Vec<(u64, PalwStepTableV1, kaspa_consensus_core::Hash64, bool)> = Vec::new();
+        for leaf in 0..leaf_count {
+            let Some(coord) = kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &job, leaf) else { continue };
+            let Some(table) = table_of_slot_v1(&profile, coord.node_slot) else { continue };
+            let Some(kernel) = kaspa_consensus_core::palw_e2e_adjudicability::kernel_of_slot_v1(&profile, coord.node_slot) else {
+                continue;
+            };
+            if backend.refutation_for_index(&honest.material, leaf).is_err() {
+                continue;
+            }
+            all.push((leaf, table, kernel, coord.call_index > 0));
+        }
+        let walked: Vec<(u64, PalwStepTableV1, kaspa_consensus_core::Hash64, bool)> =
+            select_candidates_v1(all).into_iter().map(|c| (c.leaf, c.table, c.kernel, c.decode)).collect();
+
+        assert!(!walked.is_empty(), "the floor's own capture must yield candidates at all");
+        assert_eq!(probed, walked, "the probe and the walk must name the same leaves, in the same order");
+        // And the cover is complete in both currencies: every declared kernel, every (table, call class).
+        let kernels = kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&profile);
+        for k in &kernels {
+            assert!(probed.iter().any(|(_, _, kk, _)| kk == k), "a declared kernel {k} has no drill leaf");
+        }
+    }
+
+    /// **What the walk would have cost on the class the genesis registers, measured.**
+    ///
+    /// The graph-v5 dense 512 row's canonical job is 6,630,544 leaves. `canonical_step_coordinates`
+    /// is a cursor walk, so the retired loop is `leaf_count` walks of `O(positions + slots)` each;
+    /// this samples the real per-leaf cost and reports the product, beside the probe's own wall
+    /// time on the same profile. The assertion is the weak, non-flaky half — the probe is faster
+    /// than the walk it replaced — and the numbers are the point.
+    #[test]
+    fn the_candidate_probe_is_a_closed_cost_on_the_512_row() {
+        use std::time::Instant;
+
+        let Some(row) = crate::classes::a16_graph_v5_row_v1() else {
+            eprintln!("the graph-v5 512 row is not built into this configuration; nothing to measure");
+            return;
+        };
+        let (prefill, decode) = row.canonical_job;
+        let (ctx, _prompt) = crate::produce::base0_rc_job_v1(
+            &row.profile,
+            Hash64::from_u64_word(0x0000_082B_2512),
+            row.artifact_shape.vocab,
+            prefill,
+            decode,
+        );
+        let ladder = kaspa_consensus_core::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
+        let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&row.profile, &ctx, ladder)
+            .expect("the canonical job of an admitted class fits the ruleset's ladder");
+        assert!(
+            leaf_count > kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+            "this measurement is only interesting because the row outruns the executor's constant"
+        );
+
+        // The probe, on the real row.
+        let started = Instant::now();
+        let candidates = drill_candidates_v1(&row.profile, &ctx, leaf_count, |_| true);
+        let probe = started.elapsed();
+
+        // One `canonical_step_coordinates` call, sampled across the space, times the leaf count.
+        let samples = 64u64;
+        let started = Instant::now();
+        for i in 0..samples {
+            let at = leaf_count / samples * i;
+            std::hint::black_box(kaspa_consensus_core::palw_step::canonical_step_coordinates(&row.profile, &ctx, at));
+        }
+        let per_leaf = started.elapsed() / samples as u32;
+        let walk = per_leaf * (leaf_count.min(u32::MAX as u64) as u32);
+
+        eprintln!(
+            "graph-v5 512 row: job ({prefill}, {decode}) = {leaf_count} leaves (ruleset ladder {ladder}, executor constant {}); \
+             probe {probe:?} over {} slots × ≤3 positions → {} candidates; retired walk ≈ {per_leaf:?} × {leaf_count} = {walk:?}",
+            kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+            row.profile.global_node_count(),
+            candidates.len(),
+        );
+        assert!(!candidates.is_empty(), "the row's own canonical job must offer a leaf to drill");
+        assert!(probe < walk, "the probe must cost less than the walk it replaced");
     }
 }

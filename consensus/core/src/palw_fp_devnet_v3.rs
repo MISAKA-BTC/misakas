@@ -112,6 +112,52 @@ impl PalwLatticeWindowsV1 {
     pub const fn max_close_chunks(&self) -> u64 {
         crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(self.court_max_close_bytes)
     }
+
+    /// **The close ceiling this set carries, taken from the DERIVATION over the rows a genesis
+    /// registers** (ADR-0082 Decision 6; audit D M-5).
+    ///
+    /// Decision 6 makes the count "a derivation, evaluated at genesis over the rows the genesis set
+    /// registers". [`crate::palw_context_ladder::palw_close_chunks_for_ladder_v1`] is that
+    /// derivation and, until this, it had three test callers and no production one: the ceiling a
+    /// lattice carried was a typed constant, and a genesis whose registered set is the graph-v5
+    /// pair would have carried the graph-v2/v3 pair's 27 — a close bound about nine times looser
+    /// than the transport and the economics the ADR sizes, with
+    /// `palw_close_assembly_daa_v1(27) = 216` DAA of reserve charged to every window for carriers
+    /// nothing files.
+    ///
+    /// It is a BUILDER and not a rewrite of the two shipped constants, deliberately: the ceiling
+    /// is inside `palw_ruleset_id_v2`, so changing what a shipped set carries moves every
+    /// fingerprint on that network and is a genesis decision, not a fix. An assembler that wants
+    /// the derivation says so; the two constants stay what the 5f genesis card froze.
+    /// `the_genesis_close_ceiling_is_the_derivation_over_the_set_it_registers` reports both
+    /// numbers.
+    #[must_use]
+    pub fn with_derived_court_close_v1(
+        mut self,
+        families: &[crate::palw_context_ladder::PalwLadderFamilyV1],
+        rows: &[u32],
+        court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
+        ladder: u64,
+    ) -> Option<Self> {
+        self.court_max_close_bytes = palw_derived_court_max_close_bytes_v1(families, rows, court, ladder)?;
+        Some(self)
+    }
+}
+
+/// **ADR-0082 Decision 6's derivation, in bytes** — the unit `PalwCourtParamsV2` carries.
+///
+/// `palw_close_bytes_for_chunks_v1` of `palw_close_chunks_for_ladder_v1` over the `(families,
+/// rows)` a genesis registers, at that ruleset's own `court` and `ladder`. `None` means no pair
+/// priced at all, which is a genesis set that registers no prosecutable row rather than a cheap
+/// one — a caller must not read that as "take the default".
+pub fn palw_derived_court_max_close_bytes_v1(
+    families: &[crate::palw_context_ladder::PalwLadderFamilyV1],
+    rows: &[u32],
+    court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
+    ladder: u64,
+) -> Option<u64> {
+    let chunks = crate::palw_context_ladder::palw_close_chunks_for_ladder_v1(families, rows, court, ladder)?;
+    Some(crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(chunks))
 }
 
 /// testnet-11's windows: bind 600, receipt 600, challenge 1,200, court 3,000, at the frozen 120 s
@@ -219,7 +265,18 @@ pub const PALW_DEVNET_WINDOWS_V1: PalwLatticeWindowsV1 = PalwLatticeWindowsV1 {
 /// `the_devnet_close_ceiling_admits_every_shipped_row` prints all five and fails the day one of
 /// them needs a second carrier. That day is a decision about the devnet WINDOW, taken in daylight,
 /// and not a default to inherit.
-const DEVNET_COURT_MAX_CLOSE_BYTES: u64 = 81_920;
+/// **The one quantity devnet chooses about its close: ONE carrier.** The byte ceiling below is
+/// that count restated through `palw_close_bytes_for_chunks_v1`, the way `DEFAULT_MAX_CLOSE_BYTES`
+/// is the RC's 27 restated — never a second literal. It WAS a literal (81,920, a pre-ADR-0080
+/// single-transaction relay budget), and a byte ceiling that does not sit on the chunk grid is a
+/// ruleset that reads one ceiling in two units: the admission gate and the boot gate counted
+/// carriers (one holds up to 83,333 bytes) while `check_close_cost_v2` refused bytes above 81,920,
+/// so a class whose worst close fell in [81,921 .. 83,333] was admitted and unprosecutable at its
+/// widest dispute — and the graph-v5@512 dense row, priced with its dissection, closes at 83,175
+/// bytes (measured by `palw-certify bind` and pinned in `classes.rs`), INSIDE that gap. Derived,
+/// the two units are one number and the gap does not exist (misaka-testnet-44, 2026-09-03).
+const DEVNET_COURT_MAX_CLOSE_CHUNKS: u64 = 1;
+const DEVNET_COURT_MAX_CLOSE_BYTES: u64 = crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(DEVNET_COURT_MAX_CLOSE_CHUNKS);
 
 /// **3,000, from the corrected worst case** (audit M2-24). The ladder's clock runs per MOVE, and a
 /// bisection round is two of them — a disclosure and a verdict — so a 22-rung ladder plus two
@@ -1066,7 +1123,11 @@ mod tests {
         // therefore the move clock each window can afford, is a function of. The devnet's ceiling is
         // the pre-ADR-0080 80 KiB, which frames to a single carrier; the RC's is the 27-carrier one.
         assert_eq!(PALW_DEVNET_WINDOWS_V1.court_max_close_bytes, DEVNET_COURT_MAX_CLOSE_BYTES);
-        assert_eq!(DEVNET_COURT_MAX_CLOSE_BYTES, 81_920);
+        // Derived from the carrier count, so the byte ceiling sits ON the chunk grid: the two
+        // units a close is measured in are one number here, as on the RC.
+        assert_eq!(DEVNET_COURT_MAX_CLOSE_CHUNKS, 1);
+        assert_eq!(DEVNET_COURT_MAX_CLOSE_BYTES, crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(1));
+        assert_eq!(DEVNET_COURT_MAX_CLOSE_BYTES, 83_333, "one carrier after framing; 81,920 was the literal this replaced");
         assert_eq!(devnet.court.max_close_bytes(), DEVNET_COURT_MAX_CLOSE_BYTES);
         assert_eq!(devnet.court.max_close_chunks(), 1, "setting the bytes is what moves the count");
         assert_eq!(devnet.court.max_close_chunks(), PALW_DEVNET_WINDOWS_V1.max_close_chunks());
@@ -1074,6 +1135,88 @@ mod tests {
         assert_eq!(rc.court.max_close_chunks(), 27);
         assert_eq!(rc.court.max_close_chunks(), PALW_RC_WINDOWS_V1.max_close_chunks());
         assert_ne!(devnet.court.max_close_chunks(), rc.court.max_close_chunks(), "a close ceiling is a ruleset");
+    }
+
+    /// **Audit D M-5: the close ceiling a genesis carries, as ADR-0082 Decision 6's derivation.**
+    ///
+    /// Decision 6 makes the count "a derivation, evaluated at genesis over the rows the genesis set
+    /// registers". The derivation was implemented and had three test callers; the ceiling a lattice
+    /// carried was a typed constant, so a genesis registering the graph-v5 pair would have carried
+    /// the graph-v2/v3 pair's number — a close bound about nine times looser than the transport,
+    /// with `palw_close_assembly_daa_v1(27) = 216` DAA of reserve charged to every window for
+    /// carriers nothing files.
+    ///
+    /// **This test does not move a ceiling and must not**: `court_max_close_bytes` is inside
+    /// `palw_ruleset_id_v2`, so what a shipped set carries is a genesis decision. It REPORTS both
+    /// numbers, and pins the one that already agrees.
+    #[test]
+    fn the_genesis_close_ceiling_is_the_derivation_over_the_set_it_registers() {
+        use crate::palw_context_ladder::{PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, PALW_LADDER_FAMILIES_V1, PALW_LADDER_FAMILIES_V5};
+
+        // ---- t11 / the RC set: the graph-v2/v3 pair at ADR-0077 Decision 13's first row, which
+        // is what `PALW_RC_WINDOWS_V1.court_max_close_bytes` was chosen for.
+        let rc_derived =
+            palw_derived_court_max_close_bytes_v1(&PALW_LADDER_FAMILIES_V1, &[512], None, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
+                .expect("the RC set prices");
+        println!(
+            "t11 (graph-v2/v3 @ 512): derived {rc_derived} bytes = {} chunks; shipped {} bytes = {} chunks",
+            crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(rc_derived),
+            PALW_RC_WINDOWS_V1.court_max_close_bytes,
+            PALW_RC_WINDOWS_V1.max_close_chunks()
+        );
+        assert_eq!(
+            rc_derived, PALW_RC_WINDOWS_V1.court_max_close_bytes,
+            "the RC ceiling stopped being the derivation over the set it was chosen for"
+        );
+        // The builder is the production door, and it must reproduce that set byte for byte.
+        assert_eq!(
+            PALW_RC_WINDOWS_V1
+                .with_derived_court_close_v1(&PALW_LADDER_FAMILIES_V1, &[512], None, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
+                .expect("the RC set prices"),
+            PALW_RC_WINDOWS_V1,
+            "taking the derivation must not move the RC lattice"
+        );
+
+        // ---- the devnet's own set: the rows this build actually ships and registers, measured
+        // through the same walk. REPORTED, not asserted equal — the devnet's 81,920 was taken when
+        // one close was one transaction, and the derivation rounds to the carrier grid.
+        let rows = crate::palw_court_deadline::palw_shipped_court_rows_v1().expect("the shipped rows project");
+        let widest = rows
+            .iter()
+            .filter_map(|row| crate::palw_class_admission_v2::derive_court_cost_v1(&row.profile).ok())
+            .map(|cost| cost.max_close_bytes)
+            .max()
+            .expect("at least one shipped row prices");
+        let devnet_derived =
+            crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(widest));
+        println!(
+            "devnet (the shipped rows): widest close {widest} bytes = {} chunk(s) -> derived ceiling {devnet_derived} bytes; \
+             shipped {} bytes = {} chunk(s)",
+            crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(widest),
+            PALW_DEVNET_WINDOWS_V1.court_max_close_bytes,
+            PALW_DEVNET_WINDOWS_V1.max_close_chunks()
+        );
+        assert_eq!(
+            crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(devnet_derived),
+            PALW_DEVNET_WINDOWS_V1.max_close_chunks(),
+            "the devnet's CHUNK count is what the reserve and the move clock are functions of, and it must agree"
+        );
+
+        // ---- and the set ADR-0082 is actually for, so the number a relaunch would take is on the
+        // record rather than re-derived by hand at the genesis card.
+        let court = crate::palw_class_admission_v2::PalwKaryCourtV1 {
+            dissection_arity: 16,
+            prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            window_court_daa: PALW_RC_WINDOWS_V1.window_court,
+        };
+        let v5 =
+            palw_derived_court_max_close_bytes_v1(&PALW_LADDER_FAMILIES_V5, &[512], Some(court), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
+                .expect("the graph-v5 set prices");
+        println!(
+            "graph-v5 @ 512 under the dissection court: derived {v5} bytes = {} chunks",
+            crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(v5)
+        );
+        assert!(v5 < rc_derived, "the whole point of ADR-0082 is that the v5 set's close is smaller: {v5} against {rc_derived}");
     }
 
     /// **Every class row this build ships fits the devnet court's ONE-carrier close** — the claim
@@ -1095,7 +1238,17 @@ mod tests {
         let rows = crate::palw_court_deadline::palw_shipped_court_rows_v1().expect("the shipped rows project");
         assert!(!rows.is_empty(), "no shipped rows — this check verified nothing");
         for row in &rows {
-            let cost = crate::palw_class_admission_v2::derive_court_cost_v1(&row.profile).expect("a shipped row prices");
+            // Under the court this ruleset plays: the devnet ARMS `palw_kary_court` at genesis, and
+            // a fused row priced at the binary court is priced at a court the devnet never deals
+            // (`palw_shipped_row_court_cost_v1` — 42 carriers against one on the graph-v5 row).
+            let cost = crate::palw_court_deadline::palw_shipped_row_court_cost_v1(
+                &row.profile,
+                COURT_MAX_STEP_LEAVES,
+                crate::palw_mode_v2::PALW_COURT_BINARY_ARITY_V1,
+                PALW_DEVNET_WINDOWS_V1.window_court,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .expect("a shipped row prices");
             let chunks = crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes);
             println!("{}: n_ctx {} closes at {} bytes = {chunks} carrier(s)", row.cost.row, row.profile.n_ctx, cost.max_close_bytes);
             assert!(

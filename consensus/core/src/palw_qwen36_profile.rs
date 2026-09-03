@@ -1148,7 +1148,7 @@ mod qwen3moe_family {
     fn qwen3moe_geometry_probe() {
         let p = crate::config::params::palw_rc_shipped_params();
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &p.palw_consensus_mode else { panic!() };
-        for nctx in [4u32, 6, 8, 9, 10, 12, 16] {
+        for nctx in [4u32, 6, 8, 9, 10, 12, 16, 64, 128, 192, 256] {
             let g = PalwQwen36GeometryV1 {
                 layer_count: 48,
                 full_attention_interval: 1,
@@ -1206,14 +1206,23 @@ mod qwen3moe_family {
             b.court_e2e_root = crate::palw_e2e_adjudicability::palw_court_e2e_root_of_v1(&certified);
             let verdict = crate::palw_class_admission_v2::verify_class_admission_v2(&b, &profile, &canonical, &reg, &certified);
             match nctx {
-                4 | 6 | 8 | 9 | 10 => assert!(verdict.is_ok(), "n_ctx {nctx} fell out of the qwen3moe family's room: {verdict:?}"),
-                _ => assert!(verdict.is_err(), "n_ctx {nctx} was admitted — the qwen3moe ceiling moved, revisit the ladder comment"),
+                // Re-measured after audit D H-5: the ceiling was the EXECUTOR's `2^22` constant
+                // leaking into the gate's cost walk and canonical count, not the ruleset's `2^26`
+                // ladder. Corrected, this family's room runs to 128 and 192 is refused by the
+                // ladder itself (`DeeperThanTheLadder { worst: 67,414,472, ladder: 67,108,864 }`).
+                4 | 6 | 8 | 9 | 10 | 12 | 16 | 64 | 128 => {
+                    assert!(verdict.is_ok(), "n_ctx {nctx} fell out of the qwen3moe family's room: {verdict:?}")
+                }
+                _ => assert!(
+                    matches!(verdict, Err(crate::palw_class_admission_v2::PalwClassAdmissionError::DeeperThanTheLadder { .. })),
+                    "n_ctx {nctx} must be refused by the ruleset's ladder and nothing else: {verdict:?}"
+                ),
             }
         }
     }
 }
 pub fn qwen36_profile_v1(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
-    qwen36_profile_with(g, QWEN36_PRE_IR, QWEN36_LINEAR_IR, QWEN36_ATTN_IR, QWEN36_POST_IR)
+    qwen36_profile_with(g, QWEN36_PRE_IR, QWEN36_LINEAR_IR, QWEN36_ATTN_IR, QWEN36_POST_IR, false)
 }
 
 /// **graph-v2: the same computation, described with the names the engine reads.**
@@ -1223,7 +1232,36 @@ pub fn qwen36_profile_v1(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, 
 /// this is the row an interpreter can actually follow, and the mmap interpreter (ADR-0067's
 /// fourth clause) builds against THIS, never against v1.
 pub fn qwen36_profile_v2(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
-    qwen36_profile_with(g, QWEN36_PRE_IR, QWEN36_LINEAR_IR_V2, QWEN36_ATTN_IR_V2, QWEN36_POST_IR)
+    qwen36_profile_with(g, QWEN36_PRE_IR, QWEN36_LINEAR_IR_V2, QWEN36_ATTN_IR_V2, QWEN36_POST_IR, false)
+}
+
+/// **`graph-v5`: the hybrid's gated-attention layer with ONE fused attention node** (ADR-0082
+/// Decision 1).
+///
+/// The `graph-v3` pairing's projection in every respect but the attention site, where
+/// `ATTN_SCORES`, the row `SoftMax`, the probability requantization and `ATTN_VALUES` — three of
+/// them committing `attn_heads x kv_len` rows at every position — become one
+/// [`crate::palw_step::PalwStepOpKindV1::AttnFused`] node whose committed row is the OUTPUT
+/// (`QDim`, exactly what `ATTN_VALUES` emits today) and nothing else. The GDN layers are untouched:
+/// their table declares no attention site, and the fusion is applied only to the attention table.
+///
+/// The fusion is `palw_base0_profile::palw_fuse_attention_site_v5`, the SAME function the dense
+/// tier's `qwen25_a16_profile_v5` calls, applied to the projected table rather than to a second IR
+/// const — one description of one graph change, for both families.
+///
+/// A class IS its graph, so this is a new class id; v1, v2 and the `graph-v3` pairing are untouched
+/// live chain facts. The artifact is UNCHANGED — the fused node reads `attn_logits.a16`,
+/// `attn_probs.a16`, `attn_values.a16` and `attn_softmax_up.a16`, the four tensors the four v2
+/// nodes read.
+pub fn qwen36_profile_v5(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen36_profile_with(g, QWEN36_PRE_IR, QWEN36_LINEAR_IR_V2, QWEN36_ATTN_IR_V2, QWEN36_POST_IR, true)
+}
+
+/// **The `graph-v5` row over the epsilon the artifact executes** — the v5 projection paired with
+/// [`qwen36_geometry_artifact_eps`], the same pairing `qwen36_class_id_v3` uses, so a v5 row that
+/// has to be SERVED is built from one spelling rather than two.
+pub fn qwen36_artifact_row_profile_v5(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen36_profile_v5(qwen36_geometry_artifact_eps(g))
 }
 
 fn qwen36_profile_with(
@@ -1232,6 +1270,10 @@ fn qwen36_profile_with(
     gdn: &[Ir],
     attn: &[Ir],
     post: &[Ir],
+    // **ADR-0082 Decision 1.** Graph v5 fuses the ATTENTION table's four attention nodes into one
+    // `AttnFused` node after projection, so the fused node inherits the budgeted tile of the row it
+    // commits. `false` is every shipped row, which is why their ids cannot move.
+    fuse_attention: bool,
 ) -> Result<PalwShapeProfileV3, PalwStepError> {
     let (gdn_span, attn_span) = layer_spans(&g);
     // **The gate is STORED here and DERIVED in the engine, so they must be checked against each
@@ -1249,7 +1291,7 @@ fn qwen36_profile_with(
              all-attention-ness, so a hybrid must gate and a full-attention-only member must not",
         ));
     }
-    let profile = PalwShapeProfileV3 {
+    let mut profile = PalwShapeProfileV3 {
         version: PALW_STEP_OBJECT_VERSION_V1,
         lane: PalwStepLaneV1::Int32,
         layer_count: g.layer_count,
@@ -1290,7 +1332,18 @@ fn qwen36_profile_with(
         n_threads: g.n_threads,
         pre_nodes: project(pre, &g, 1),
         gdn_nodes: project(gdn, &g, gdn_span),
-        attn_nodes: project(attn, &g, attn_span),
+        // **ADR-0082 Decision 1**, on the PROJECTED table and through the one function both
+        // families read (`palw_fuse_attention_site_v5`). An empty attention table (a span of zero)
+        // has no site to fuse and is left alone — the fusion refuses a table with no site, which
+        // is right for a table that should have one and wrong for one that has no layers at all.
+        attn_nodes: {
+            let projected = project(attn, &g, attn_span);
+            if fuse_attention && !projected.is_empty() {
+                crate::palw_base0_profile::palw_fuse_attention_site_v5(&projected)?
+            } else {
+                projected
+            }
+        },
         post_nodes: project(post, &g, 1),
         reference_ruleset_id: crate::palw_reference::reference_arithmetic_ruleset_id_v2(),
         transcendental_bindings: Vec::new(),
@@ -1298,6 +1351,19 @@ fn qwen36_profile_with(
         kv_chunk_calls: 0,
         state_chunk_map_id: Hash64::default(),
     };
+    // **ADR-0082 Decision 4: a graph-v5 class registers the tiled map** — and a hybrid's map has to
+    // name BOTH halves, because a hybrid has both kinds of layer. `hybrid_state_chunk_map_id_v3`
+    // is that composition (`attn=` the tiled v3 cache, `gdn=` the head-sliced v2 recurrence,
+    // spelled as its two parts so it cannot drift from either), and the recurrence half prices at
+    // v2's window through `gdn_state_terms_for_map_v1`'s v3 arm.
+    //
+    // Set here rather than at the sentinel above so no SHIPPED row moves: `state_chunk_map_id` is
+    // inside `shape_profile_id`, `qwen36_profile_v2`/`v3` pass `fuse_attention: false` and keep the
+    // default their registered ids were minted over, and `palw_qwen36_context_row_profile_v1` still
+    // overwrites it with the v2 composition for the graph-v3 ladder rows.
+    if fuse_attention {
+        profile.state_chunk_map_id = crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3();
+    }
     profile.validate_shape()?;
     Ok(profile)
 }
@@ -1345,16 +1411,23 @@ pub fn qwen36_registration_v1(
     let profile = qwen36_profile_v1(QWEN36_35B_A3B)?;
     let class_id = profile.shape_profile_id();
     let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN36_RC_CANONICAL.0, QWEN36_RC_CANONICAL.1);
-    let worst = crate::palw_step::worst_case_step_leaf_count_v1(&profile)?;
-    let counted = crate::palw_step::step_leaf_count(&profile, &canonical)?;
+    // **Every ladder-bounded number in this row is the RULESET's** — see
+    // `palw_base0_profile::base0_catalog_entry_capped_v1` for the argument and the ladder's one
+    // spelling.
+    let ladder = crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
+    let worst = crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, ladder)?;
+    let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, ladder)?;
     let entry = crate::palw_mode_v2::PalwClassCatalogEntryV2 {
         class_id,
         artifact_root,
         max_step_leaf_count: worst,
         canonical_step_leaf_count: counted,
         reachable_kernels: qwen36_reachable_kernels_v1(QWEN36_35B_A3B)?,
-        court_cost: crate::palw_class_admission_v2::derive_court_cost_v1(&profile)
-            .map_err(|_| PalwStepError::ProfileNotCanonical("the class's court cost does not derive"))?,
+        court_cost: crate::palw_class_admission_v2::derive_court_cost_shaped_v1(
+            &profile,
+            crate::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(&profile, ladder),
+        )
+        .map_err(|_| PalwStepError::ProfileNotCanonical("the class's court cost does not derive"))?,
     };
     let object = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
         class_id,
@@ -1423,18 +1496,23 @@ pub fn qwen36_registration_v3(
     let profile = qwen36_profile_v2(qwen36_geometry_artifact_eps(QWEN36_35B_A3B))?;
     let class_id = profile.shape_profile_id();
     let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN36_RC_CANONICAL.0, QWEN36_RC_CANONICAL.1);
-    let counted = crate::palw_step::step_leaf_count(&profile, &canonical)?;
+    // The RULESET's ladder, one spelling — see the sibling constructor above.
+    let ladder = crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
+    let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, ladder)?;
     let entry = crate::palw_mode_v2::PalwClassCatalogEntryV2 {
         class_id,
         artifact_root,
-        max_step_leaf_count: crate::palw_step::worst_case_step_leaf_count_v1(&profile)?,
+        max_step_leaf_count: crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, ladder)?,
         canonical_step_leaf_count: counted,
         // **Off the corrected profile's own nodes**, not the v1 helper: the two declarations differ
         // in the graph, so a reachable set read from the wrong one would describe a class nobody
         // registered — and it is exactly the set the admission gate compares against a certificate.
         reachable_kernels: crate::palw_class_admission_v2::reachable_kernels_v1(&profile),
-        court_cost: crate::palw_class_admission_v2::derive_court_cost_v1(&profile)
-            .map_err(|_| PalwStepError::ProfileNotCanonical("the corrected hybrid class's court cost does not derive"))?,
+        court_cost: crate::palw_class_admission_v2::derive_court_cost_shaped_v1(
+            &profile,
+            crate::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(&profile, ladder),
+        )
+        .map_err(|_| PalwStepError::ProfileNotCanonical("the corrected hybrid class's court cost does not derive"))?,
     };
     let object = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
         class_id,

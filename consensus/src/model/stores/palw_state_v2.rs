@@ -108,6 +108,24 @@ pub struct DbPalwStateV2Store {
     /// back from a restart unable to load its own tip. `None` on every shipped preset, which is
     /// byte-for-byte the behaviour before the field existed.
     uncertified_weightless: Option<ForkActivation>,
+    /// **The materialized tip, keyed on the tip row it was decoded from** (audit M-7).
+    ///
+    /// `load_tip` is a full re-materialization: borsh-decode the whole carriage,
+    /// `rebuild_deadline_free_indices`, `rebuild_deadline_index_v2`, `assert_internal_consistency_v2`,
+    /// `assert_deadline_consistency` and a complete `state_root()` recompute over every collection.
+    /// Every `palw_*` RPC read path took that per call, from an unauthenticated caller, against a
+    /// ~200-byte request — and W5 put up to `2 x 27 x 100 KB` per open court session inside the
+    /// carriage being re-rooted.
+    ///
+    /// Keyed on `(block, state_root)` rather than on the block alone: the tip is rewritten on every
+    /// virtual walk and a re-materialization at the same block with a different root is a different
+    /// state. Shared through the `Arc` so a `clone()` of the store is the same cache, and holding
+    /// the state itself in an `Arc` so a hit hands out a pointer rather than a copy of the tip.
+    tip_cache: Arc<parking_lot::Mutex<Option<(BlockHash, Hash64, Arc<PalwChainStateV2>)>>>,
+    /// Carriage bytes this store has actually borsh-decoded for a tip read. A measurement, not a
+    /// rule: it is what makes "the cache works" a number in a test rather than an assertion about
+    /// code that was read.
+    tip_bytes_decoded: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl DbPalwStateV2Store {
@@ -119,7 +137,15 @@ impl DbPalwStateV2Store {
             pruning_snapshot: CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::PalwPruningPointState.into()),
             schema: CachedDbItem::new(db, DatabaseStorePrefixes::PalwStateV2Schema.into()),
             uncertified_weightless: None,
+            tip_cache: Arc::new(parking_lot::Mutex::new(None)),
+            tip_bytes_decoded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
+    }
+
+    /// Carriage bytes borsh-decoded for tip reads since this store was built (audit M-7's
+    /// measurement).
+    pub fn tip_bytes_decoded(&self) -> u64 {
+        self.tip_bytes_decoded.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Install ADR-0069 Decision 7's fence. Every construction path starts dormant, so a caller
@@ -335,13 +361,43 @@ impl DbPalwStateV2Store {
         let Some(record) = self.tip_record()? else {
             return Ok(None);
         };
+        let state = self.materialize_tip(&record, params)?;
+        Ok(Some((record.block, state)))
+    }
+
+    /// **The tip, materialized ONCE per tip row** (audit M-7) — the read every `palw_*` RPC answer
+    /// should take.
+    ///
+    /// Same state as [`Self::load_tip`], same refusals, same trust discipline: on a miss it runs
+    /// exactly `load_tip`'s work, and the recorded root is still demanded back. What it does not do
+    /// is run it again for the next caller while the tip has not moved, which is the whole of the
+    /// finding: an unauthenticated client looping `getPalwPendingChunkGroup` paid the node a decode,
+    /// a consistency walk and a blake2b over the entire PALW state per ~200-byte request.
+    pub fn load_tip_cached(&self, params: &PalwStateParamsV2) -> StoreResult<Option<(BlockHash, Arc<PalwChainStateV2>)>> {
+        let Some(record) = self.tip_record()? else {
+            return Ok(None);
+        };
+        if let Some((block, root, state)) = self.tip_cache.lock().as_ref()
+            && *block == record.block
+            && *root == record.state_root
+        {
+            return Ok(Some((record.block, Arc::clone(state))));
+        }
+        let state = Arc::new(self.materialize_tip(&record, params)?);
+        *self.tip_cache.lock() = Some((record.block, record.state_root, Arc::clone(&state)));
+        Ok(Some((record.block, state)))
+    }
+
+    /// The decode-and-recheck half both tip readers share, so the cached path and the uncached one
+    /// cannot come to hold two different ideas of what a tip row means.
+    fn materialize_tip(&self, record: &PalwStateTipRecordV2, params: &PalwStateParamsV2) -> StoreResult<PalwChainStateV2> {
+        self.tip_bytes_decoded.fetch_add(record.carriage_borsh.len() as u64, std::sync::atomic::Ordering::Relaxed);
         let carriage = borsh::from_slice::<PalwStateCarriageV2>(&record.carriage_borsh)
             .map_err(|e| StoreError::DataInconsistency(format!("palw v2 tip snapshot does not decode: {e}")))?;
         let armed = self.uncertified_weightless_at(&carriage);
-        let state = carriage
+        carriage
             .into_state_v2(params, Some(record.state_root), armed)
-            .map_err(|e: PalwStateV2Error| StoreError::DataInconsistency(format!("palw v2 tip snapshot refused: {e}")))?;
-        Ok(Some((record.block, state)))
+            .map_err(|e: PalwStateV2Error| StoreError::DataInconsistency(format!("palw v2 tip snapshot refused: {e}")))
     }
 }
 
@@ -385,6 +441,65 @@ mod tests {
                 signature: Vec::new(),
             },
         ]
+    }
+
+    /// **A `palw_*` read costs one materialization per TIP, not one per request** (audit M-7),
+    /// measured in carriage bytes decoded.
+    ///
+    /// The RPC read paths took a full `load_tip` per call — borsh-decode of the whole carriage,
+    /// both index rebuilds, both consistency walks and a complete `state_root()` — from an
+    /// unauthenticated client against a ~200-byte request, with W5's chunk bytes now inside the
+    /// thing being re-rooted. The number below is the amplification: bytes the node decodes for
+    /// N identical reads.
+    #[test]
+    fn a_palw_read_path_materializes_the_tip_once_per_tip_and_not_once_per_call() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        store.reindex_if_stale().unwrap();
+
+        let p = params();
+        let c1 = ctx(0xB1, 100, 100);
+        let (child, delta) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &c1, &registrations(), None).unwrap();
+        let mut batch = WriteBatch::default();
+        store.insert_delta_batch(&mut batch, c1.block, child.state_root(), &delta).unwrap();
+        store.set_tip_batch(&mut batch, c1.block, &child).unwrap();
+        db.write(batch).unwrap();
+
+        const CALLS: u64 = 64;
+        let uncached = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        for _ in 0..CALLS {
+            uncached.load_tip(&p).unwrap().expect("the tip is there");
+        }
+        let per_call = uncached.tip_bytes_decoded() / CALLS;
+
+        let cached = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        for _ in 0..CALLS {
+            let (block, state) = cached.load_tip_cached(&p).unwrap().expect("the tip is there");
+            assert_eq!(block, c1.block);
+            assert_eq!(*state, child, "the cached tip is not the state the machine produced");
+        }
+        println!(
+            "[M-7] {CALLS} getPalwPendingChunkGroup-shaped reads: {} B of carriage decoded before ({per_call} B per call), \
+             {} B after",
+            uncached.tip_bytes_decoded(),
+            cached.tip_bytes_decoded()
+        );
+        assert_eq!(cached.tip_bytes_decoded(), per_call, "the cache decoded the carriage more than once for one tip");
+        assert_eq!(uncached.tip_bytes_decoded(), per_call * CALLS, "the uncached path is the per-call cost this test measures");
+
+        // **And it is keyed on the tip row, not on "we read once".** A second block moves the tip,
+        // and the next read materializes the new one.
+        let c2 = ctx(0xB2, 101, 101);
+        let (grand, delta2) = apply_palw_transition_v2(&child, &p, &c2, &[], None).unwrap();
+        let mut batch = WriteBatch::default();
+        store.insert_delta_batch(&mut batch, c2.block, grand.state_root(), &delta2).unwrap();
+        store.set_tip_batch(&mut batch, c2.block, &grand).unwrap();
+        db.write(batch).unwrap();
+
+        let moved = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
+        let (block, state) = moved.load_tip_cached(&p).unwrap().expect("the tip is there");
+        assert_eq!(block, c2.block, "the cache answered from a tip the chain has left");
+        assert_eq!(*state, grand);
     }
 
     /// One real transition, through the disk and back: the loaded tip is the state the machine

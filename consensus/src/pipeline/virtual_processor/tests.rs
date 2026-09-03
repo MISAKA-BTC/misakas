@@ -2452,7 +2452,7 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
         challenge_v2, class_ticket_v3, palw_network_domain_v2_for,
     };
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
-    use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_A16_CANONICAL, qwen25_a16_class_id_v2};
+    use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_A16_CANONICAL, qwen25_a16_graph_v5_profile_v1};
     use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
     use misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend;
 
@@ -2460,7 +2460,13 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
     let opened = std::time::Instant::now();
     let bytes = std::fs::read(&path).expect("the artifact reads");
     let artifact = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).expect("the artifact decodes");
-    let artifact_root = artifact.artifact_digest();
+    // The registered dense row is the graph-v5 512 row (ADR-0082), and a court-capable row
+    // registers the A16 INVENTORY root, not the container digest — `CanonicalClassV1::artifact_root`
+    // is the one spelling (the genesis constant is measured equal to it for the shipped file).
+    let artifact_root = misaka_palw_base0::classes::a16_graph_v5_row_v1()
+        .expect("the graph-v5 dense row")
+        .artifact_root(&artifact)
+        .expect("the inventory root derives");
     eprintln!(
         "dense drill: {} layers / vocab {} / root {artifact_root} in {:?}",
         artifact.shape.n_layers,
@@ -2493,7 +2499,7 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
     // The REGISTERED dense class is the corrected `graph-v2` one (ADR-0069): the v1 declaration
     // announces a one-byte state map against an i32 cache, so its backend is not court-capable and
     // a class on it cannot hold weight.
-    let dense_class_id = qwen25_a16_class_id_v2();
+    let dense_class_id = qwen25_a16_graph_v5_profile_v1().expect("the graph-v5 dense profile").shape_profile_id();
     assert_ne!(dense_class_id, bundle.base_class_id, "the dense class is not the floor");
 
     let config = ConfigBuilder::new(params)
@@ -2528,7 +2534,11 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
         )
         .expect("a valid A16 profile"),
         QWEN25_A16_CANONICAL,
-    );
+    )
+    // Fallible since ADR-0082 audit E's H-1: the constructor compiles the class's declaration into
+    // the program it executes, so a declaration this artifact cannot serve is a named refusal here
+    // instead of a forward pass under arithmetic nobody declared.
+    .expect("the dense drill's declaration is the program this artifact runs");
     // The work, and the draw (ADR-0072): the execution IS the ticket, so a lost draw is re-rolled
     // by the next bucket — a different job, a second real inference — never by moving the nonce.
     let mut won = None;
@@ -9767,6 +9777,8 @@ async fn a_callers_prompt_on_a_registered_class_opens_a_claim_at_the_shipped_qua
         max_context_tokens: backend.profile().n_ctx,
         privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
         prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+        sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+        temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
     };
 
     let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
@@ -10079,6 +10091,8 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
         max_context_tokens: backend.profile().n_ctx,
         privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
         prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+        sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+        temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
     };
     let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
     let class = PalwFpClassFactsV3 {
@@ -10671,8 +10685,8 @@ async fn palw_v2_a_funded_carrier_is_priced_by_the_fee_the_utxo_walk_read() {
             .expect("virtual merges the carrier block it was just built on")
             .total_fees;
         // One more block, so the carrier block is a settled chain block and the PALW state tip is
-        // the one its own object walk wrote.
-        drop(vp);
+        // the one its own object walk wrote. (`vp` is a borrow of `ctx`; its last use is above, so
+        // the borrow ends before `mine` takes `ctx` mutably — no `drop` of a reference needed.)
         mine(&mut ctx, new_miner_data(), vec![]).await;
         let vp = ctx.consensus.virtual_processor();
         let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");

@@ -517,7 +517,24 @@ pub struct PalwJobContextV2 {
     pub max_context_tokens: u32,
 }
 
-/// Hash of the canonical prompt token ids.
+/// **Hash of the canonical prompt token ids — the FLAT form, and the only one this build runs.**
+///
+/// `put_u32_seq(ids)` under one domain: a flat digest, which cannot be OPENED. That is not a
+/// defect of the hash, it is a property with a price, and ADR-0081 Decision 3 measured it. The
+/// court's embedding gather reads exactly ONE id (`prompt_ids[coordinate.position]`), and because
+/// the only way to authenticate one against this value is to recompute it from all of them,
+/// `derive_court_cost_v1` charges `n_ctx x 4` bytes on EVERY node of the graph — 2 KiB per node at
+/// `n_ctx` 512 against an 80 KiB carrier, 128 KiB at 32,768, where nothing fits.
+///
+/// The openable form is [`crate::palw_prompt_ids_v1::prompt_token_ids_root_v1`], and which of the
+/// two a job's `prompt_token_ids_hash` holds is `Params::palw_prompt_ids_form_at` — `Flat` on
+/// every shipped preset. This function is not deprecated and will not be: the flat form is the
+/// commitment every live network runs, and every id ever derived under it still verifies here.
+///
+/// **Call [`crate::palw_prompt_ids_v1::prompt_token_ids_commitment_v1`], not this, from anywhere
+/// that could run under either form.** A caller that switched on the form itself would be a second
+/// spelling of a consensus hash, and a root the court recomputes differently from the producer is
+/// an honest producer who can neither be convicted nor paid.
 pub fn prompt_token_ids_hash_v2(prompt_token_ids: &[u32]) -> Hash64 {
     let mut w = CanonicalWriter::new();
     w.put_u32_seq(prompt_token_ids);

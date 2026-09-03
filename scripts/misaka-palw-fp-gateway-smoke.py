@@ -3,10 +3,29 @@
 answered by the real model, with the commitment inputs in the response and the artifact in the
 outbox — one inference, one resident worker, and the SSE form of the same answer.
 
-Runs the OFFLINE form (`--anchor`), so the four chain facts read as `unknown` and `/health` says
-so by name. The live form is `--rpc <host:port>`; the devnet drill exercises that.
+Runs the OFFLINE form (`--anchor`): the four chain facts read `unknown` and `/health` says so by
+name, and the CHAIN raises no objection to committing — a source that cannot submit cannot read an
+unknown as a yes. What decides whether an UNSIGNED commitment is written is then ADR-0077 SA-1's
+exposure rule alone (`PublicJobBudget::may_commit`): with no `--rpc` to read the numbers from, the
+operator must DECLARE the bond's exposure room and one claim's exposure, so this smoke declares
+them (`--bond-exposure-room-sompi` / `--claim-exposure-sompi`) and step [3] asserts the writer
+ran. Without the two flags the gateway answers and withholds the commitment by design
+(`not_committed_because` names the reason) — which is what this script used to claim could not
+happen, until the first run that reached step [3] (2026-09-03). The live form is `--rpc
+<host:port>`; the devnet drill exercises that.
 
-usage: misaka-palw-fp-gateway-smoke.py <misaka-palw-gateway> <family-fp-worker> <gguf>
+The identity is REAL where the worker checks it: `palw-a16-fp-worker` pins the request's
+`class_id` to the class its artifact derives (`fp_worker.rs`, "the request declares a runtime this
+worker is not"), so `class_id` here is taken from `palw-class ledger` for `MISAKA_PALW_MODEL_ID`
+(default `Qwen/Qwen2.5-1.5B/graph-v5@512`) — or from `MISAKA_PALW_CLASS_ID` — never a synthetic
+`c1c1…`, which the worker refuses.
+
+usage: misaka-palw-fp-gateway-smoke.py <misaka-palw-gateway> <family-fp-worker> <artifact.palwart>
+env:   MISAKA_PALW_TOKENIZER (tokenizer.json for the artifact — REQUIRED)
+       MISAKA_PALW_NETWORK_ID (the worker's network — REQUIRED, e.g. testnet-11)
+       MISAKA_PALW_MODEL_ID (the catalog row; default Qwen/Qwen2.5-1.5B/graph-v5@512)
+       MISAKA_PALW_CLASS_ID (skip the ledger lookup and use this 128-hex class id)
+       PALW_CLASS_BIN (the palw-class binary; default: beside the gateway binary)
 """
 import http.client
 import json
@@ -17,8 +36,48 @@ import sys
 import tempfile
 import time
 
-GATEWAY, WORKER, GGUF = sys.argv[1], sys.argv[2], sys.argv[3]
+if len(sys.argv) != 4:
+    sys.exit(__doc__)
+GATEWAY, WORKER, ARTIFACT = sys.argv[1], sys.argv[2], sys.argv[3]
 PORT = 18790
+
+
+def required_env(name):
+    value = os.environ.get(name)
+    if not value:
+        sys.exit(f"{name} is not set — this smoke runs the real worker, which needs it (see the usage in this file)")
+    return value
+
+
+TOKENIZER = required_env("MISAKA_PALW_TOKENIZER")
+NETWORK_ID = required_env("MISAKA_PALW_NETWORK_ID")
+MODEL_ID = os.environ.get("MISAKA_PALW_MODEL_ID", "Qwen/Qwen2.5-1.5B/graph-v5@512")
+for label, path in (("artifact", ARTIFACT), ("tokenizer", TOKENIZER)):
+    if not pathlib.Path(path).is_file():
+        sys.exit(f"the {label} {path!r} is not a file — relative paths resolve against the CALLER's cwd, use absolute ones")
+
+
+def class_id_for(model_id):
+    """The class id this build derives for `model_id`, from `palw-class ledger` — the same id the
+    worker's manifest carries, so the request's identity and the runtime agree by construction."""
+    explicit = os.environ.get("MISAKA_PALW_CLASS_ID")
+    if explicit:
+        assert len(explicit) == 128, "MISAKA_PALW_CLASS_ID must be the 128-hex class id"
+        return explicit
+    palw_class = os.environ.get("PALW_CLASS_BIN") or str(pathlib.Path(GATEWAY).resolve().parent / "palw-class")
+    if not pathlib.Path(palw_class).is_file():
+        sys.exit(f"{palw_class} is not a file — build it (cargo build --release -p misaka-palw-sdk) or set MISAKA_PALW_CLASS_ID")
+    ledger = subprocess.run([palw_class, "ledger", "--network", NETWORK_ID], capture_output=True, text=True, check=True).stdout
+    found = False
+    for line in ledger.splitlines():
+        words = line.split()
+        if found and len(words) >= 3 and words[0] == "class" and words[1] == "id":
+            return words[2]
+        found = found or (len(words) >= 1 and words[0] == model_id)
+    sys.exit(f"palw-class ledger names no class id for {model_id!r} on {NETWORK_ID}")
+
+
+CLASS_ID = class_id_for(MODEL_ID)
 
 work = pathlib.Path(tempfile.mkdtemp(prefix="palw-fp-gateway-smoke."))
 outbox = work / "outbox"
@@ -26,7 +85,7 @@ identity = work / "identity.json"
 anchor = work / "anchor.json"
 identity.write_text(json.dumps({
     "network_domain": "4e" * 64,
-    "class_id": "c1" * 64,
+    "class_id": CLASS_ID,
     "bond_txid": "b0" * 64,
     "bond_index": 0,
     "executor_pubkey": "07" * 32,
@@ -35,10 +94,15 @@ identity.write_text(json.dumps({
 anchor.write_text(json.dumps({"anchor_block": "a0" * 64, "anchor_daa": 5000}))
 
 env = dict(os.environ)
-env["MISAKA_PALW_GGUF"] = GGUF
+env["MISAKA_PALW_ARTIFACT"] = ARTIFACT
+env["MISAKA_PALW_TOKENIZER"] = TOKENIZER
+env["MISAKA_PALW_NETWORK_ID"] = NETWORK_ID
 gateway = subprocess.Popen(
     [GATEWAY, "--listen", f"127.0.0.1:{PORT}", "--worker", WORKER, "--outbox", str(outbox),
-     "--identity", str(identity), "--anchor", str(anchor), "--class-leaves", "7708"],
+     "--identity", str(identity), "--anchor", str(anchor), "--class-leaves", "7708",
+     # SA-1: declared, because offline there is no chain to read them from — without these two
+     # the gateway answers and writes NO commitment, by design (see the header).
+     "--bond-exposure-room-sompi", "1000000", "--claim-exposure-sompi", "50000"],
     env=env, stderr=subprocess.PIPE, text=True,
 )
 try:
@@ -92,6 +156,9 @@ try:
     artifact = pathlib.Path(misaka["artifact"])
     assert artifact.is_file(), "the artifact JSON exists"
     summary = json.loads(artifact.read_text())
+    # The commitment writer ran because the exposure was DECLARED; a refusal names its reason.
+    assert summary["committed"] is True, f"the gateway withheld the commitment: {summary.get('not_committed_because')}"
+    assert summary["not_committed_because"] is None
     assert summary["schema"] == "misaka.palw.fp-v3-gateway-artifact.v1"
     assert summary["trace_root"] == misaka["trace_root"]
     assert summary["work_leaves"] == misaka["work_leaves"]
@@ -104,9 +171,14 @@ try:
     assert commitment_artifact.is_file() and commitment_artifact.stat().st_size > 0, "the unsigned commitment rides too"
     assert summary["trace_manifest_root"] and int(summary["trace_chunk_count"]) >= 1
     trace_dir = pathlib.Path(summary["trace_dir"])
-    assert (trace_dir / "manifest.json").is_file() and (trace_dir / "chunk-0.bin").is_file(), "the retained trace is where the summary says"
+    # The retention the worker writes is `manifest.json` + `material.bin` (fp_worker.rs `retain_v1`);
+    # `chunk-0.bin` was an older layout, and asserting it was the third stale expectation on this
+    # path (misaka-testnet-44's run: 14.7 MB of material under a name the smoke did not know).
+    assert (trace_dir / "manifest.json").is_file(), "the retention manifest is where the summary says"
+    material = trace_dir / "material.bin"
+    assert material.is_file() and material.stat().st_size > 0, "the retained material rides beside the manifest"
     assert summary["pending_for_chain_submission"] and all("trace" not in item for item in summary["pending_for_chain_submission"]),         "retention is no longer pending; the signer and the rail are"
-    print(f"[3] artifact ok: {artifact.name} + unsigned commitment + retained trace ({summary['trace_chunk_count']} chunk)")
+    print(f"[3] artifact ok: {artifact.name} + unsigned commitment (exposure declared, SA-1) + retained trace ({summary['trace_chunk_count']} chunk)")
 
     # Same conversation again. Two properties, both load-bearing and easy to conflate:
     # * F1: the ANSWER is identical — the fresh nonce never touches the model's input.

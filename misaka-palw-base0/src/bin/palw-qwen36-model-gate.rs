@@ -234,6 +234,17 @@ fn main() {
     let out = PathBuf::from(flag("--out").unwrap_or_else(|| die("--out <dir> is required".into())));
     let only = flag("--only");
     let mode = flag("--mode").unwrap_or_else(|| "both".to_string());
+    // **The step ladder this gate counts at, from the ruleset and not from the executor.** It was
+    // `PALW_STEP_MAX_LEAVES` (2^22) with no way to say otherwise, so a class the chain admits
+    // under the RC ruleset's 2^26 was reported `TooManyLeaves` and read as inadmissible.
+    let ladder: u64 = flag("--ladder")
+        .map(|v| v.parse().unwrap_or_else(|e| die(format!("--ladder: {e}"))))
+        .unwrap_or(kaspa_consensus_core::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES);
+    eprintln!(
+        "[palw-qwen36-model-gate] step ladder: {ladder} (executor constant {}, RC ruleset {})",
+        kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+        kaspa_consensus_core::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES
+    );
     // The SHIPPED assembly is what a gate measures unless it is told otherwise, and after the fix
     // the shipped assembly is "the model chooses". `--template chat-segments-v1` forces the OLD
     // transform onto this model — the red arm, still built by production code so that what the red
@@ -556,7 +567,7 @@ fn main() {
         }
 
         // The court's ladder is a real ceiling on the decode budget, so it is MEASURED rather
-        // than assumed: the largest budget whose step leaf count fits `PALW_STEP_MAX_LEAVES`.
+        // than assumed: the largest budget whose step leaf count fits the ladder above.
         let job_for = |decode: u32| PalwFreePromptJobV3 {
             version: PALW_FP_V3_VERSION,
             network_domain: Hash64::default(),
@@ -574,6 +585,10 @@ fn main() {
             max_context_tokens: n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            // ADR-0082 Decision 11's fields at their greedy defaults: the gate measures the
+            // shipped argmax, and the sampler's fence is dormant on every preset.
+            sampling_seed: [0u8; 32],
+            temperature_q: 0,
         };
         let leaves_for = |decode: u32| -> Result<u64, String> {
             use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
@@ -596,7 +611,7 @@ fn main() {
                 step_leaf_count: 0,
             };
             let ctx = palw_fp_job_context_v3(&job, &class, &facts, &net_bytes).map_err(|e| format!("{e:?}"))?;
-            kaspa_consensus_core::palw_step::step_leaf_count(&profile, &ctx).map_err(|e| format!("{e:?}"))
+            kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &ctx, ladder).map_err(|e| format!("{e:?}"))
         };
 
         let mut decode = wanted;

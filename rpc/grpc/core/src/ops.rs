@@ -107,6 +107,8 @@ pub enum KaspadPayloadOps {
     // ADR-0078 Decision 5: the consumer's read of a claim's derivations
     GetPalwDerivedArtifacts,
     GetPalwFreePromptClaim,
+    // ADR-0080 design A: a declared close, mid-assembly
+    GetPalwPendingChunkGroup,
     GetTokenSupply,
     GetTokenEmissionInfo,
 

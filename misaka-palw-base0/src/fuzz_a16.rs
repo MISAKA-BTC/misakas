@@ -40,19 +40,7 @@ impl FuzzRng {
     pub fn new(seed: u64) -> Self {
         Self(seed.max(1))
     }
-    /// **Named `next` deliberately, and NOT an `Iterator`.**
-    ///
-    /// Clippy's `should_implement_trait` fires here and the lint is wrong for this type. An
-    /// `Iterator` is something a caller may collect, take, zip or run to exhaustion; this is an
-    /// infinite deterministic sequence whose entire purpose is that a seed reproduces a schedule.
-    /// Implementing the trait would offer every combinator on a value where most of them are
-    /// meaningless, and would let a `for` loop over it run forever and read as ordinary code.
-    ///
-    /// `next` is what every RNG in this codebase and outside it calls this step, so renaming it to
-    /// satisfy a lint would cost a reader more than the lint saves. Allowed with the reason rather
-    /// than silenced.
-    #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> u64 {
+    pub fn next_u64(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x >> 12;
         x ^= x << 25;
@@ -61,7 +49,7 @@ impl FuzzRng {
         x.wrapping_mul(0x2545F4914F6CDD1D)
     }
     pub(crate) fn below(&mut self, n: u64) -> u64 {
-        self.next() % n.max(1)
+        self.next_u64() % n.max(1)
     }
 }
 
@@ -129,6 +117,30 @@ fn tiny_class() -> (Base0ArtifactV1, PalwShapeProfileV3) {
         tile_len: 4,
     };
     (artifact, qwen25_a16_profile_v2(geometry).expect("the corrected profile builds"))
+}
+
+/// The SAME artifact and the same geometry as [`tiny_class`], projected as ADR-0082's graph v5:
+/// one fused attention node per layer instead of four. The artifact is unchanged, which is what
+/// makes this a second GRAPH over one model rather than a second fixture.
+#[cfg(test)]
+fn tiny_class_v5() -> (Base0ArtifactV1, PalwShapeProfileV3) {
+    let (artifact, v2) = tiny_class();
+    let geometry = PalwQwen25GeometryV1 {
+        layer_count: 2,
+        hidden_dim: 16,
+        ffn_dim: 12,
+        attn_heads: 4,
+        attn_kv_heads: 2,
+        attn_head_dim: 4,
+        vocab_size: 64,
+        n_ctx: 16,
+        n_threads: 1,
+        rms_eps_q: 1,
+        tile_len: 4,
+    };
+    let v5 = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v5(geometry).expect("the v5 profile builds");
+    assert_ne!(v2.shape_profile_id(), v5.shape_profile_id(), "a different graph is a different class");
+    (artifact, v5)
 }
 
 /// One random edit. The vocabulary of edits is the vocabulary of ways a stranger's registration
@@ -226,7 +238,60 @@ fn gate_accepts(
     ) else {
         return false;
     };
-    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v2(bundle, profile, &canonical, &probe, &[]).is_ok()
+    // **A fused profile is judged under the court that can try it** (ADR-0082 Decision 6): the
+    // admission gate refuses a graph-v5 row by name unless the k-ary court is in force, so the
+    // corpus is gated the way an ARMED ruleset gates it — the RC's derived arity, the Merkle prompt
+    // ids the rows arm with, and the RC's court window. A profile with no fused site is gated
+    // exactly as before (`None`), so the v2 corpus reads unchanged.
+    // The court is the bundle's own (`fuzz_*_profiles_from_v1` arms the dissection arity on a fused
+    // base), the prompt ids are the Merkle form graph-v5 rows arm with, and the window is the RC's.
+    // A fused row is also PRICED for that court: the ladder rules carry the cost shape the gate
+    // compares against the arity, and a base too small for the long-form rules is priced by the
+    // anchored shape with the same dissection — `PricedForADifferentCourt` is the gate's answer
+    // when a registrant prices a row for a court the ruleset does not play, not this harness's.
+    //
+    // **The arity is the one an ARMED CHAIN would play, not one written into the bundle** (audit D
+    // M-4). This read `bundle.court.dissection_arity()` while `fuzz_a16_profiles_from_v1` wrote
+    // the derived value into the bundle first — a configuration no chain has, because no genesis
+    // builder writes a derived arity in, and precisely the one in which H-1's stored-versus-derived
+    // mismatch is invisible. `palw_court_params_at_v2(bundle, true)` is what the court itself
+    // reads at activation, so the harness and the chain now answer the same question.
+    let fused = kaspa_consensus_core::palw_class_admission_v2::palw_profile_has_fused_attention_v1(profile);
+    let arity = kaspa_consensus_core::palw_court_v2::palw_court_params_at_v2(bundle, fused)
+        .map(|c| c.dissection_arity())
+        .unwrap_or_else(|_| bundle.court.dissection_arity());
+    let court = fused.then_some(kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
+        dissection_arity: arity,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+        window_court_daa: kaspa_consensus_core::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.window_court,
+    });
+    let ladder = fused.then(|| {
+        kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+            profile,
+            court,
+            bundle.court.max_step_leaf_count(),
+        )
+        .unwrap_or_else(|| kaspa_consensus_core::palw_class_admission_v2::PalwClassLadderRulesV1 {
+            ladder: bundle.court.max_step_leaf_count(),
+            cost_shape: kaspa_consensus_core::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(
+                profile,
+                bundle.court.max_step_leaf_count(),
+            )
+            .with_dissection_v1(arity),
+            canonical_footprint_floor: 0,
+        })
+    });
+    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v5(
+        bundle,
+        profile,
+        &canonical,
+        &probe,
+        &[],
+        &[],
+        ladder,
+        court,
+    )
+    .is_ok()
 }
 
 /// Drive `iterations` mutated profiles through gate → plan → double execution. See the module
@@ -234,7 +299,18 @@ fn gate_accepts(
 /// fence to arm.
 pub fn fuzz_a16_profiles_v1(seed: u64, iterations: u64) -> FuzzTallyV1 {
     let (artifact, base) = tiny_class();
-    let engine = A16Engine::new(&artifact).expect("the store resolves");
+    fuzz_a16_profiles_from_v1(seed, iterations, &artifact, &base)
+}
+
+/// [`fuzz_a16_profiles_v1`] over a caller's BASE profile — the same schedule, the same mutations,
+/// the same findings, driven from a different graph.
+///
+/// A parameter rather than a second harness because ADR-0082's graph v5 is a new graph over the
+/// same model, and a fuzz gate that only ever saw the four-node attention site would say nothing
+/// about the one-node one. `fuzz_a16_profiles_v1` is the shipped base and its corpus digest is
+/// pinned; this is what lets a second base be driven without moving that pin.
+pub fn fuzz_a16_profiles_from_v1(seed: u64, iterations: u64, artifact: &Base0ArtifactV1, base: &PalwShapeProfileV3) -> FuzzTallyV1 {
+    let engine = A16Engine::new(artifact).expect("the store resolves");
     let bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
         base.shape_profile_id(),
         kaspa_hashes::Hash64::from_u64_word(0xCA7),
@@ -246,6 +322,12 @@ pub fn fuzz_a16_profiles_v1(seed: u64, iterations: u64) -> FuzzTallyV1 {
         ),
     )
     .expect("the devnet bundle assembles");
+    // **The bundle is the devnet's, unmutated** (audit D M-4). This wrote the derived arity into
+    // `bundle.court` for a fused base so that `gate_accepts` would read 4 back out of it. No chain
+    // bundle carries a derived arity — every preset literal and every genesis builder writes the
+    // binary 2 — so the harness was measuring a gate no network runs, and it was exactly the
+    // configuration in which H-1's stored-versus-derived mismatch cannot be seen. `gate_accepts`
+    // now asks `palw_court_params_at_v2`, which is what an armed chain asks.
     let root = artifact.artifact_digest();
 
     let mut rng = FuzzRng::new(seed);
@@ -493,7 +575,7 @@ fn mutate_adversarially(rng: &mut FuzzRng, profile: &mut PalwShapeProfileV3) {
 pub fn fuzz_a16_adversarial_profiles_v1(seed: u64, iterations: u64, ceiling_bytes: u64) -> AdversarialTallyV1 {
     let (artifact, base) = tiny_class();
     let engine = A16Engine::new(&artifact).expect("the store resolves");
-    let bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+    let mut bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
         base.shape_profile_id(),
         kaspa_hashes::Hash64::from_u64_word(0xCA7),
         kaspa_hashes::Hash64::from_u64_word(0xC0757),
@@ -504,6 +586,13 @@ pub fn fuzz_a16_adversarial_profiles_v1(seed: u64, iterations: u64, ceiling_byte
         ),
     )
     .expect("the devnet bundle assembles");
+    // **A fused base is fuzzed under the court that can try it** (ADR-0082 Decision 6): the devnet
+    // bundle plays the binary court, and the gate refuses every graph-v5 row by name under it, so
+    // the corpus would never reach execution. The RC derives 4 (`palw_court_arity_v1`, the
+    // smallest legal arity inside the window); a v2 base leaves the bundle byte for byte.
+    if kaspa_consensus_core::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&base) {
+        bundle.court = bundle.court.with_dissection_arity(4).expect("4 is a legal dissection arity");
+    }
     let root = artifact.artifact_digest();
 
     let mut rng = FuzzRng::new(seed);
@@ -592,6 +681,36 @@ mod tests {
         assert!(tally.max_close_bytes_seen > 0, "a zero here would mean the ceiling was never compared against anything");
     }
 
+    /// **The same gate over ADR-0082's graph v5** — the fused attention site, driven through the
+    /// same mutate → admit → plan → execute-twice schedule.
+    ///
+    /// The point is not a second tally. It is that the fence Decision 5 arms is a fence about the
+    /// PROFILE SPACE, and graph v5 changes the shape of that space at exactly the site the
+    /// mutations reach: a fused node has three inputs where every other node has one or two, its
+    /// out width is fixed where the site's used to be job-scaled, and its operand name is the ONE
+    /// the other three derive from. A mutation that rewrites that name, that width or those refs
+    /// must be refused or planned — never panicked on, and never nondeterministic.
+    ///
+    /// The corpus digest for THIS base is pinned separately, by
+    /// `the_v5_fuzz_corpus_digest_is_the_same_on_every_machine` below — two bases, two pins,
+    /// neither hiding the other.
+    #[test]
+    fn a_bounded_fuzz_run_over_the_v5_graph_finds_no_panic_and_no_nondeterminism() {
+        let (artifact, base) = tiny_class_v5();
+        let tally = fuzz_a16_profiles_from_v1(0x0082_2026_0903, 400, &artifact, &base);
+        println!("v5 fuzz tally: {tally:?}");
+        assert_eq!(tally.panics, 0, "a panic inside the interpreter is the fence staying down");
+        assert_eq!(tally.nondeterminism, 0, "two runs of one plan must be one bitstream");
+        assert!(tally.executed > 0, "the v5 corpus must actually reach execution, or this test gates nothing");
+        assert!(tally.court_costed > 0, "and the court cost must actually derive for a v5 row");
+        assert!(tally.max_close_bytes_seen > 0, "a zero here would mean the ceiling was never compared against anything");
+        // `closes_over_ceiling` is REPORTED and not asserted zero: the whole-row route of ADR-0082
+        // Decision 1 opens the K and V history, and pricing it down to the dissection's bounded
+        // close is Decision 2 / stream F's derivation, not this stream's. Asserting zero here
+        // would be asserting a bound this ADR has not yet derived.
+        println!("v5 closes over the shipped ceiling: {}", tally.closes_over_ceiling);
+    }
+
     /// **ADR-0067 Decision 5's cross-architecture clause, met by the suite rather than promised.**
     ///
     /// The two-runs-in-one-process check cannot see a machine that computes differently — it
@@ -619,6 +738,33 @@ mod tests {
 
     /// Seed `0x0067_2026_08_31`, 400 iterations. See the test above.
     const CORPUS_DIGEST_400: &str = "90939894923247d3e1eb18478b0495744e9ff0416bb9a20d16d01f0c411ff5eb";
+
+    /// **The same clause over the FUSED base** (ADR-0082 audit E, M-2).
+    ///
+    /// The pin above is folded over the graph-v2 space and cannot see the fused site at all, and
+    /// the fused site is where this ADR puts new arithmetic on the executor's hot path: `int_exp`
+    /// and `int_recip` per position per head, inside `PlanOp::AttnFused`. The v5 gate beside it
+    /// runs each plan twice IN ONE PROCESS, which is a check that agrees with itself — a machine
+    /// that computes the fused row differently passes it. So the v5 base gets its OWN pin rather
+    /// than the v2 one being widened: two bases, two numbers, and a disagreement names which
+    /// space it is in.
+    ///
+    /// The re-pin discipline is the v2 pin's, verbatim: a deliberate change that moves this value
+    /// re-pins it in ONE commit that says which change moved it and why it was intended.
+    #[test]
+    fn the_v5_fuzz_corpus_digest_is_the_same_on_every_machine() {
+        let (artifact, base) = tiny_class_v5();
+        let tally = fuzz_a16_profiles_from_v1(0x0082_2026_0903, 400, &artifact, &base);
+        assert_eq!(
+            faster_hex::hex_string(&tally.corpus_digest),
+            V5_CORPUS_DIGEST_400,
+            "this machine computed a different fused corpus than the pinned one — see the doc above before touching the pin"
+        );
+        assert_ne!(V5_CORPUS_DIGEST_400, CORPUS_DIGEST_400, "two bases must not fold to one number, or one of them is unpinned");
+    }
+
+    /// Seed `0x0082_2026_0903`, 400 iterations, over the graph-v5 base. See the test above.
+    const V5_CORPUS_DIGEST_400: &str = "236888781074c28a61cbae304c77cb3915729663cfc695ae182447d213c58a86";
 
     /// **ADR-0067 SA-1, first half: the corpus contains profiles built to exhaust memory and to
     /// recurse, and driving them finds no panic.**

@@ -583,9 +583,22 @@ impl<'a> A16Engine<'a> {
         Ok((logits, streams))
     }
 
-    /// **The replay surface: one position's forward with EVERY node's committed row recorded,
-    /// in the shape profile's numbering.** The full-job replay adjudicates each of these rows
-    /// through the court's own dispatch and demands bit equality.
+    /// **The compiled GRAPH-V2 program: one position's forward with every node's committed row
+    /// recorded, in the v2 shape profile's numbering.** The full-job replay adjudicates each of
+    /// these rows through the court's own dispatch and demands bit equality.
+    ///
+    /// **It is a v2 reference and nothing wider.** The row count is written into this function —
+    /// twenty-seven nodes a layer, the attention site spelled as `ATTN_SCORES`, the row `SoftMax`,
+    /// the probability requantization and `ATTN_VALUES` — so it describes exactly the graph
+    /// `qwen25_a16_profile_v2` declares. ADR-0082's graph v5 replaces those four nodes with one
+    /// fused node and declares twenty-four, and this route MUST NOT learn the fusion: the whole
+    /// point of ADR-0067 Decision 2 is that [`Self::plan_from_profile`] is the single authority on
+    /// what a declaration executes, and a second hand-written program that also knew the fused
+    /// site would be a second authority to keep in step. A v5 class is served by
+    /// [`Self::forward_token_planned`]; a caller that reaches this route with a v5 profile is
+    /// refused by name, by the Decision-F probe in `a16_execute_for_attempt_v1` ("per-layer
+    /// declares 24 against 27 recorded") and pinned by
+    /// `the_plan_less_route_is_the_v2_reference_and_refuses_a_fused_row`.
     pub fn forward_token_traced(
         &self,
         cache: &mut A16Cache,
@@ -959,9 +972,9 @@ use kaspa_consensus_core::palw_step::{
     PalwStepLaneV1, PalwStepNodeV1, PalwStepOutLenV1, kernel_semantics_id_v1,
 };
 use kaspa_consensus_core::palw_step_refute::{
-    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT,
+    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_FUSED, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT,
     KDESC_A16_MATMUL_RESCALE, KDESC_A16_MUL_ELEM, KDESC_A16_REQUANTIZE, KDESC_A16_RMS_NORM, KDESC_A16_ROPE, KDESC_A16_SOFTMAX,
-    KDESC_Q36_SILU,
+    KDESC_Q36_SILU, palw_attn_fused_tensors_v1,
 };
 
 /// Why a profile could not be compiled to a plan. Every variant names the boundary it found —
@@ -1115,10 +1128,17 @@ enum PlanOp {
     Requant(ReqSlot),
     MatMulRequant(MatSlot),
     MatMulRescale(MatSlot),
-    Rope { kv: bool },
+    Rope {
+        kv: bool,
+    },
     AttnScores,
     Softmax,
     AttnValues,
+    /// **ADR-0082 Decision 1: the whole attention site as one op.** Scores, the row softmax, the
+    /// probability requantization and the value reduction, computed here and committed as ONE
+    /// row: the output. The three context-wide rows the four separate ops commit are internal —
+    /// never a plan row, never a leaf, never carried.
+    AttnFused,
     AddElem,
     MulElem,
     Silu,
@@ -1232,11 +1252,20 @@ impl<'a> A16Engine<'a> {
     }
 
     /// One position's forward, EXECUTED FROM THE PLAN: one committed row per declared node, in
-    /// the declared order. Bit-compatible with [`Self::forward_token_traced`] whenever the plan
-    /// was compiled from the profile that describes this engine — pinned by
-    /// `the_interpreter_and_the_compiled_engine_agree_bit_for_bit` below — and faithful to the
-    /// DECLARATION where the two differ, which is the point of ADR-0067: the court adjudicates
-    /// what was declared, so an interpreter must execute exactly that.
+    /// the declared order. This is the route that serves EVERY declared graph, the fused
+    /// attention site of ADR-0082 included (`PlanOp::AttnFused`).
+    ///
+    /// Bit-compatible with [`Self::forward_token_traced`] for a plan compiled from a GRAPH-V2
+    /// profile — pinned by `the_interpreter_and_the_compiled_engine_agree_bit_for_bit` below,
+    /// which is stated over `qwen25_a16_profile_v2` and claims nothing wider. There is no such
+    /// correspondence for graph v5 and there is not meant to be one: the traced route is the
+    /// twenty-seven-row v2 program, a v5 layer declares twenty-four nodes, and the fused arm's
+    /// equality is proven against the ARITHMETIC instead — `a16_attn_fused_reference_v1` and
+    /// `a16_attn_fused_via_tiles_v1`, in `the_fused_arm_is_the_reference_composition`.
+    ///
+    /// Faithful to the DECLARATION wherever a declaration and a hand-written program could
+    /// differ, which is the point of ADR-0067: the court adjudicates what was declared, so an
+    /// interpreter must execute exactly that.
     pub fn forward_token_planned(
         &self,
         plan: &A16ProfilePlanV1,
@@ -1428,6 +1457,48 @@ impl<'a> A16Engine<'a> {
                     )
                     .map_err(refuse("attn_values"))?
                 }
+                // **The fused attention site** (ADR-0082 Decision 1). The four shipped kernels
+                // composed — W9, W11, the probability requantization, W10 — with the three
+                // intermediates living only in this frame. The row pushed below is the OUTPUT
+                // row, so the site commits `heads x d_head` codes at every context instead of
+                // three rows that grow with the position.
+                //
+                // Composed from the engine's OWN kernels rather than from
+                // `a16_attn_fused_via_tiles_v1`: the two are proven equal at every history
+                // length and tile width (`palw_base0_a16::fused::the_tile_route_is_the
+                // _composition`), and the composition is what the fast projections are asserted
+                // bit-identical against, so this keeps the executor at the runtime's speed while
+                // computing exactly what `a16_attn_fused_reference_v1` defines. The equality is
+                // held by `the_fused_arm_is_the_reference_composition` below.
+                PlanOp::AttnFused => {
+                    let q = resolve(&node.inputs[0], &rows)?;
+                    let k_series = resolve(&node.inputs[1], &rows)?;
+                    let v_series = resolve(&node.inputs[2], &rows)?;
+                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
+                    let history = k_series.len() / kv_dim.max(1);
+                    let scores = a16_attn_scores(
+                        self.fast,
+                        &q,
+                        &k_series,
+                        shape.n_heads,
+                        shape.n_kv_heads,
+                        shape.d_head,
+                        &tile(lp(li).logits, shape.n_heads * history),
+                    )
+                    .map_err(refuse("attn_scores"))?;
+                    let probs = a16_softmax_rows(&scores, history, lp(li).softmax_up).map_err(refuse("softmax"))?;
+                    let codes = a16_requant(&probs, &tile(lp(li).probs, probs.len())).map_err(refuse("requant"))?;
+                    a16_attn_values(
+                        self.fast,
+                        &codes,
+                        &v_series,
+                        shape.n_heads,
+                        shape.n_kv_heads,
+                        shape.d_head,
+                        &tile(lp(li).values, shape.n_heads * shape.d_head),
+                    )
+                    .map_err(refuse("attn_values"))?
+                }
                 PlanOp::AddElem => {
                     let a = resolve(&node.inputs[0], &rows)?;
                     let b = resolve(&node.inputs[1], &rows)?;
@@ -1491,6 +1562,7 @@ fn plan_table(
     let k_scores = kernel_semantics_id_v1(KDESC_A16_ATTN_SCORES);
     let k_soft = kernel_semantics_id_v1(KDESC_A16_SOFTMAX);
     let k_vals = kernel_semantics_id_v1(KDESC_A16_ATTN_VALUES);
+    let k_fused = kernel_semantics_id_v1(KDESC_A16_ATTN_FUSED);
     let k_add = kernel_semantics_id_v1(KDESC_A16_ADD_ELEM);
     let k_mul = kernel_semantics_id_v1(KDESC_A16_MUL_ELEM);
     let k_silu = kernel_semantics_id_v1(KDESC_Q36_SILU);
@@ -1701,6 +1773,37 @@ fn plan_table(
                 }
                 PlanOp::AttnValues
             }
+            // **ADR-0082 Decision 1**, the fused site. Its four registered operands come from the
+            // ONE the node names, through `palw_attn_fused_tensors_v1` — the same function the
+            // adjudicator reads, so the engine and the court cannot resolve different tensors —
+            // and the derived names are then checked against the ones this store actually holds.
+            (Op::AttnFused, n) if kid == k_fused => {
+                arity(3)?;
+                let t = palw_attn_fused_tensors_v1(n)
+                    .ok_or_else(|| refuse(index, format!("fused operand {n:?} is not a softmax store this family registers")))?;
+                for (what, got, want) in [
+                    ("softmax", t.softmax_up.as_str(), "attn_softmax_up"),
+                    ("scores", t.scores.as_str(), "attn_logits.a16"),
+                    ("probs", t.probs.as_str(), "attn_probs.a16"),
+                    ("values", t.values.as_str(), "attn_values.a16"),
+                ] {
+                    if strip_layer(got) != Some(want) {
+                        let why = format!("the fused site's {what} operand derives to {got:?}, which is not one this store names");
+                        return Err(refuse(index, why));
+                    }
+                }
+                // The committed row is the OUTPUT row (Z0's first half); the query is the rotated
+                // one and the two series are the caches, in the order the court reads them.
+                width(d, "hidden")?;
+                need(0, W::Fixed(d), "the query")?;
+                if inputs.get(1) != Some(&PlanInput::CachedK) {
+                    return Err(refuse(index, "a fused attention site read something other than the key series".to_string()));
+                }
+                if inputs.get(2) != Some(&PlanInput::CachedV) {
+                    return Err(refuse(index, "a fused attention site read something other than the value series".to_string()));
+                }
+                PlanOp::AttnFused
+            }
             (Op::RopeImrope, "rope") if kid == k_rope => {
                 arity(1)?;
                 use kaspa_consensus_core::palw_step::PalwStepNodeRoleV1 as Role;
@@ -1796,6 +1899,84 @@ mod profile_plan_tests {
         }
     }
 
+    /// **ADR-0082 Decision 1: the fused arm IS the four shipped kernels, and the graph around it
+    /// did not move.**
+    ///
+    /// Three claims in one walk, at every layer and every position including the sink:
+    ///
+    /// * the v5 plan's committed row at the fused site equals the v2 plan's `ATTN_VALUES` row —
+    ///   the site commits the OUTPUT row and the three context-wide rows simply stop existing;
+    /// * that row equals `a16_attn_fused_reference_v1`, which is the kernel descriptor's declared
+    ///   semantics and exactly what the court's arm recomputes, AND
+    ///   `a16_attn_fused_via_tiles_v1`, which is what a dissection folds to — so the executor,
+    ///   the whole-row court and the tile route are one number (invariant Z1);
+    /// * the logits and the cache the whole forward leaves behind are bit-identical between the
+    ///   two graphs, which is the statement that graph v5 computes the same model.
+    #[test]
+    fn the_fused_arm_is_the_reference_composition() {
+        use kaspa_consensus_core::palw_base0_a16::{A16AttnFusedParamsV1, a16_attn_fused_reference_v1, a16_attn_fused_via_tiles_v1};
+        use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v5;
+        use kaspa_consensus_core::palw_step::PalwStepOutLenV1 as OutLen;
+
+        for (layers, d_head, d_ff) in [(1usize, 4usize, 12usize), (2, 8, 16)] {
+            let artifact = artifact(layers, d_head, d_ff);
+            let engine = A16Engine::new(&artifact).expect("the store resolves");
+            let g = geometry(&artifact);
+            let v2 = qwen25_a16_profile_v2(g).expect("the v2 profile builds");
+            let v5 = qwen25_a16_profile_v5(g).expect("the v5 profile builds");
+            // Z0's first half, on the row this build will actually execute.
+            assert!(
+                v5.attn_nodes.iter().all(|n| !matches!(n.out_len, OutLen::KvScaled { .. })),
+                "a v5 layer table still commits a context-shaped row"
+            );
+            let fused_at = v5
+                .attn_nodes
+                .iter()
+                .position(|n| n.op_kind == kaspa_consensus_core::palw_step::PalwStepOpKindV1::AttnFused)
+                .expect("the v5 layer table has a fused site");
+            let plan_v2 = engine.plan_from_profile(&v2).expect("v2 is servable");
+            let plan_v5 = engine.plan_from_profile(&v5).expect("v5 is servable");
+
+            let mut cache_v2 = A16Cache::new(layers);
+            let mut cache_v5 = A16Cache::new(layers);
+            for position in 0..6usize {
+                let token = (position * 7 + 3) % artifact.shape.vocab;
+                let (a, ta) = engine.forward_token_planned(&plan_v2, &mut cache_v2, token, position).expect("v2 walks");
+                let (b, tb) = engine.forward_token_planned(&plan_v5, &mut cache_v5, token, position).expect("v5 walks");
+                assert_eq!(a, b, "the logits moved at position {position}");
+                assert_eq!(ta.pre, tb.pre, "pre rows at position {position}");
+                assert_eq!(ta.post, tb.post, "post rows at position {position}");
+                for li in 0..layers {
+                    let v2_rows = &ta.attn[li];
+                    let v5_rows = &tb.attn[li];
+                    assert_eq!(v5_rows.len() + 3, v2_rows.len(), "layer {li}: four rows became one");
+                    // The fused row is the values row, and every row after it is unchanged.
+                    assert_eq!(v5_rows[fused_at], v2_rows[fused_at + 3], "layer {li} position {position}: the fused row");
+                    assert_eq!(&v5_rows[..fused_at], &v2_rows[..fused_at], "layer {li}: the rows before the site");
+                    assert_eq!(&v5_rows[fused_at + 1..], &v2_rows[fused_at + 4..], "layer {li}: the rows after the site");
+
+                    // …and it is the catalogued composition, and the tile route, to the bit.
+                    let lp = &engine.layers[li];
+                    let params =
+                        A16AttnFusedParamsV1 { scores: lp.logits, probs: lp.probs, values: lp.values, up_bits: lp.softmax_up };
+                    let q = &v5_rows[v5.attn_nodes[fused_at].input_refs[0] as usize];
+                    let flat = |series: &Vec<Vec<i32>>| -> Vec<i32> { series.iter().flatten().copied().collect() };
+                    let k = flat(&cache_v5.keys[li]);
+                    let v = flat(&cache_v5.values[li]);
+                    let (h, kvh, dh) = (artifact.shape.n_heads, artifact.shape.n_kv_heads, artifact.shape.d_head);
+                    let reference = a16_attn_fused_reference_v1(q, &k, &v, h, kvh, dh, params).expect("the composition runs");
+                    assert_eq!(v5_rows[fused_at], reference, "layer {li} position {position}: the engine parted from the reference");
+                    for tile in [1usize, 4, 16] {
+                        let tiled = a16_attn_fused_via_tiles_v1(q, &k, &v, h, kvh, dh, params, tile).expect("the tile route runs");
+                        assert_eq!(v5_rows[fused_at], tiled, "layer {li} position {position} tile {tile}: the tile route parted");
+                    }
+                }
+            }
+            assert_eq!(cache_v2.keys, cache_v5.keys, "the two graphs must leave the same cache");
+            assert_eq!(cache_v2.values, cache_v5.values);
+        }
+    }
+
     /// **ADR-0067's differential gate, in miniature: the compiled rows are the interpreter's
     /// reference vectors.** The plan is compiled from the CORRECTED profile — the graph that
     /// names what the engine does — so walking it must land on the compiled engine's exact bits:
@@ -1861,7 +2042,16 @@ mod profile_plan_tests {
             let probe_artifact = artifact(1, 4, 12);
             let probe_engine = A16Engine::new(&probe_artifact).expect("the store resolves");
             let real = probe_engine.plan_from_profile(&entry.profile);
-            let corrected = entry.model_id.ends_with("/graph-v2");
+            // **Derived from the GRAPH, not matched on the NAME.** This read
+            // `entry.model_id.ends_with("/graph-v2")`, which is the row's label rather than its
+            // content — and the moment a second corrected row arrived under a different label
+            // (`/graph-v3`, the row that declares the epsilon its artifact executes) the test
+            // classified it as uncorrected, built its comparison profile from the v1 tables, and
+            // failed asserting a v1 property of a v2 graph. The name is a fact about what we called
+            // the row; what the assertions below are about is whether its pre table NAMES the
+            // embed-lift requant, which is a fact about the graph. Same rule as everywhere else in
+            // this tree: derive, never declare.
+            let corrected = entry.profile.pre_nodes.len() == kaspa_consensus_core::palw_base0_profile::QWEN25_A16_PRE_IR_V2.len();
             match (&real, corrected) {
                 // A real profile against a MISMATCHED artifact must refuse on geometry — that is
                 // the root check doing its job, and it tells us the planner reached the geometry

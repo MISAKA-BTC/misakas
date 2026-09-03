@@ -49,13 +49,18 @@ mod tests {
 
     use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
     use kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2;
-    use kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES;
     use kaspa_hashes::Hash64;
 
     use super::*;
 
+    /// **The RULESET's ladder, not the executor's constant** (audit D H-5). This was
+    /// `PALW_STEP_MAX_LEAVES` (2^22) — the executor's own default — while the networks this SDK
+    /// serves froze `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` (2^26) for exactly the rows the ledger now
+    /// carries. A battery run at 2^22 reports "the step space does not enumerate" for the graph-v5
+    /// 512 row, which is a statement about a constant somewhere else and not about the class.
     fn court() -> PalwCourtParamsV2 {
-        PalwCourtParamsV2::new(PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court")
+        PalwCourtParamsV2::new(kaspa_consensus_core::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT, 4, 2)
+            .expect("shipped court")
     }
 
     fn sdk() -> PalwClassSdk {
@@ -238,14 +243,95 @@ mod tests {
         let s = PalwClassSdk::builtin_v1(bundle.court, params.net.to_string().into_bytes());
         let floor = s.ledger().into_iter().find(|e| e.model_id == "PALW-BASE-0/rc").expect("floor");
         let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("pinned");
-        s.preflight_admission(bundle, &floor, root).expect("the floor admits under the network that runs it");
+        let shape = kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1(&params, bundle, &floor.profile, 0)
+            .expect("the network's court has a shape");
+        s.preflight_admission(bundle, &floor, root, &shape).expect("the floor admits under the network that runs it");
 
         // A court too shallow for the class: the gate refuses, and the refusal says so BEFORE any
         // signature or carrier exists. (Ladder depth is a bundle property; 2^4 leaves holds no
         // real class.)
         let mut shallow = bundle.clone();
         shallow.court = PalwCourtParamsV2::new(16, 4, 2).expect("a legal, tiny court");
-        let err = s.preflight_admission(&shallow, &floor, root).expect_err("a class deeper than the ladder is refused");
+        let err = s.preflight_admission(&shallow, &floor, root, &shape).expect_err("a class deeper than the ladder is refused");
         assert!(err.contains("nothing was signed or funded"), "{err}");
+    }
+
+    /// **The ADR-0082 devnet drill's stage-2 failure, as a unit test.** The graph-v5 row
+    /// preflights under the court devnet arms at genesis (the shape the acceptance path judges
+    /// by), and is refused BY NAME under no court — so a preflight that asked a court-less gate
+    /// reported "would be refused" for a row the chain admits, and the panel never signed.
+    #[test]
+    fn a_fused_row_preflights_under_the_court_the_ruleset_arms_and_not_without_it() {
+        use kaspa_consensus_core::palw_class_admission_v2::{PalwAdmissionShapeV1, palw_admission_shape_at_v1};
+        let params = kaspa_consensus_core::config::params::devnet_shipped_params();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("devnet ships a ConsensusV2 bundle");
+        };
+        let s = PalwClassSdk::builtin_v1(bundle.court, params.net.to_string().into_bytes());
+        let row = s
+            .ledger()
+            .into_iter()
+            .find(|e| e.model_id == misaka_palw_base0::classes::A16_GRAPH_V5_MODEL_ID)
+            .expect("this build's SDK knows the graph-v5 row");
+        let root = kaspa_hashes::Hash64::from_u64_word(0xA16);
+        let armed = palw_admission_shape_at_v1(&params, bundle, &row.profile, 0).expect("devnet's court has a shape");
+        assert!(armed.court.is_some(), "devnet arms palw_kary_court at genesis");
+        s.preflight_admission(bundle, &row, root, &armed).expect("the fused row is admissible under the court the ruleset arms");
+
+        let dormant = PalwAdmissionShapeV1 { court: None, ladder: None };
+        let err = s.preflight_admission(bundle, &row, root, &dormant).expect_err("no court, no fused row");
+        assert!(err.contains("has no dissection to try it with"), "{err}");
+    }
+
+    /// **The chain we cut is not the chain the drill runs.** Devnet arms `palw_context_ladder`;
+    /// testnet-11 (`palw_rc_shipped_params`) leaves it dormant, so the panel there asks the gate
+    /// with the court armed and `ladder: None` — the bundle's own 2^26 count, no ladder rules.
+    /// The fused row must be admissible through that exact shape too, or a green devnet drill
+    /// would be a network the cut chain is not (8e's question at the freeze).
+    #[test]
+    fn a_fused_row_preflights_under_t11s_court_with_the_ladder_dormant() {
+        use kaspa_consensus_core::palw_class_admission_v2::{PalwAdmissionShapeV1, palw_admission_shape_at_v1};
+        let params = kaspa_consensus_core::config::params::palw_rc_shipped_params();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("testnet-11 ships a ConsensusV2 bundle");
+        };
+        assert!(params.palw_context_ladder.is_none(), "t11 leaves palw_context_ladder dormant (the 5f card §1)");
+        let s = PalwClassSdk::builtin_v1(bundle.court, params.net.to_string().into_bytes());
+        let row = s
+            .ledger()
+            .into_iter()
+            .find(|e| e.model_id == misaka_palw_base0::classes::A16_GRAPH_V5_MODEL_ID)
+            .expect("this build's SDK knows the graph-v5 row");
+        let shape = palw_admission_shape_at_v1(&params, bundle, &row.profile, 0).expect("t11's court has a shape");
+        assert!(shape.court.is_some(), "t11 arms palw_kary_court at genesis");
+        assert!(shape.ladder.is_none(), "and the dormant ladder fence yields no rules — the gate counts at the bundle's ladder");
+        let root = kaspa_hashes::Hash64::from_u64_word(0xA16);
+        let admitted = s
+            .preflight_admission(bundle, &row, root, &shape)
+            .expect("the fused row is admissible under t11's armed court with the ladder dormant");
+        // Counted at the RULESET's ladder (2^26), the number the gate recounts — above the
+        // executor's 2^22, which is why the probe must be counted against the bundle (audit D H-5b).
+        let counted = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(
+            &row.profile,
+            &row.canonical_context(),
+            bundle.court.max_step_leaf_count(),
+        )
+        .expect("the canonical job counts against the ruleset's ladder");
+        assert_eq!(admitted.canonical_step_leaf_count, counted, "the entry carries the count the gate recomputed");
+        assert!(counted > 1 << 22, "the 512 row does not fit the executor's 2^22 — the bundle's ladder is what admits it");
+
+        // **And the gate prices the row identically whether the ladder fence is armed or dormant**:
+        // the entry with the court's rules passed explicitly is the entry with none passed, byte for
+        // byte — the court, not the context-ladder fence, is what the dissection price follows.
+        let court = shape.court.expect("t11 arms the court");
+        let rules = kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+            &row.profile,
+            Some(court),
+            bundle.court.max_step_leaf_count(),
+        )
+        .expect("the graph-v5 row has ladder rules under the court");
+        let with_rules = PalwAdmissionShapeV1 { court: Some(court), ladder: Some(rules) };
+        let priced = s.preflight_admission(bundle, &row, root, &with_rules).expect("the same row, the rules stated");
+        assert_eq!(format!("{priced:?}"), format!("{admitted:?}"), "one price for the fused row under one court");
     }
 }

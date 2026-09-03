@@ -436,6 +436,22 @@ enum PalwCmd {
         #[arg(long)]
         yes: bool,
     },
+    /// **ADR-0075 / ADR-0082: the two free-prompt lane facts a builder must know before it
+    /// builds.** Is this class SEATED on the free-prompt lane (`fp_certified` — the genesis
+    /// certified set union the chain set, the same two `FreePromptCommitted` refuses on), and is
+    /// ADR-0082's decode ruleset in force (`fp_decode_rules_armed` — past that fence a job carries
+    /// its sampling seed and temperature inside its context hash and decode leaves are what earn)?
+    ///
+    /// A job on an uncertified class is still answered and its commitment is unsubmittable; a job
+    /// built for the wrong decode ruleset is honest and unreproducible. Neither is guessable and
+    /// both are one read. Nothing signs, nothing spends.
+    Certified {
+        /// 128-hex class id (`execution_class_id`, the shape profile id).
+        class_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
     /// ADR-0078 Decision 5: read what the chain holds about a free-prompt claim's DERIVATIONS —
     /// the grammar, the transformer, the DSL and artifact hashes, and the claim's own output_root.
     /// The answer's token ids are on no chain; hold them from the gateway response.
@@ -459,7 +475,19 @@ enum PalwCmd {
         /// The canonical DSL bytes, when the response file does not carry them inline.
         #[arg(long)]
         dsl: Option<std::path::PathBuf>,
-        /// 128-hex job context hash, overriding the one in `--answer`.
+        /// The whole `PalwJobContextV2` (borsh, or the same bytes as hex text), when the response
+        /// file does not carry `misaka.job_context`. Its hash is DERIVED from it, so the tokenizer
+        /// it pins and the `output_root` it implies cannot come from two different jobs.
+        #[arg(long)]
+        job_context: Option<std::path::PathBuf>,
+        /// The tokenizer.json the class was converted from — the fourth binding input. With the
+        /// ids, the context and the family, the DSL is RENDERED from the claim's own ids and the
+        /// verdict is a statement about one inference (`binding_checked: true`).
+        #[arg(long)]
+        tokenizer: Option<std::path::PathBuf>,
+        /// 128-hex job context hash, overriding the one in `--answer`. Recomputing `output_root`
+        /// is all it can do: the binding needs `--job-context`, whose `tokenizer_id` a hash cannot
+        /// carry.
         #[arg(long)]
         job_context_hash: Option<String>,
         /// Family of the class that answered (`base0`, `qwen36`, `qwen25-a16`), overriding
@@ -991,9 +1019,23 @@ async fn main() -> std::process::ExitCode {
             )
             .await
         }
+        Command::Palw(PalwCmd::Certified { class_id, json }) => palw_fp::certified(&ctx, &class_id, json).await,
         Command::Palw(PalwCmd::Derived { claim_id, json }) => palw_derived::show(&ctx, &claim_id, json).await,
-        Command::Palw(PalwCmd::DerivedVerify { claim_id, answer, dsl, job_context_hash, family, json }) => {
-            palw_derived::verify(&ctx, &claim_id, &answer, dsl.as_deref(), job_context_hash.as_deref(), family.as_deref(), json).await
+        Command::Palw(PalwCmd::DerivedVerify { claim_id, answer, dsl, job_context, tokenizer, job_context_hash, family, json }) => {
+            palw_derived::verify(
+                &ctx,
+                palw_derived::DerivedVerifyArgs {
+                    claim_id: &claim_id,
+                    answer: &answer,
+                    dsl: dsl.as_deref(),
+                    job_context: job_context.as_deref(),
+                    job_context_hash: job_context_hash.as_deref(),
+                    tokenizer: tokenizer.as_deref(),
+                    family: family.as_deref(),
+                    json,
+                },
+            )
+            .await
         }
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, key })) => {
             wallet::utxo_list(&ctx, address.as_deref(), &key.source()).await

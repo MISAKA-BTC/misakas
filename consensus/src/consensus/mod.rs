@@ -1249,8 +1249,28 @@ impl ConsensusApi for Consensus {
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => &bundle.state,
             _ => return None,
         };
-        let (_chain_point, state) = self.storage.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        // Audit M-7: the shared materialization, so a read path cannot cost the node a whole
+        // re-rooting of the PALW state per unauthenticated call.
+        let (_chain_point, state) = self.storage.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         palw_derived_claim_view_v1(&state, claim_id)
+    }
+
+    /// ADR-0080 design A, on the node: the materialized tip, then the row itself. The tip read is
+    /// the same snapshot every other `palw_*` answer here takes.
+    fn palw_court_close_group_v1(
+        &self,
+        session_id: kaspa_hashes::Hash64,
+        side: kaspa_consensus_core::palw_state_v2::PalwCourtSideV1,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwCourtCloseGroupV2> {
+        let state_params = match &self.config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => &bundle.state,
+            _ => return None,
+        };
+        // Audit M-7: the same materialized tip every other `palw_*` answer takes, decoded once per
+        // tip row rather than once per request. W5's chunk bytes are inside that carriage — up to
+        // `2 x 27 x 100 KB` per open session — and this call is reachable unauthenticated.
+        let (_chain_point, state) = self.storage.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        state.court_close_group(&session_id, side).cloned()
     }
 
     fn get_virtual_bits(&self) -> u32 {

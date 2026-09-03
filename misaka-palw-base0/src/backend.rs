@@ -13,7 +13,7 @@
 use crate::artifact::Base0ArtifactV1;
 use crate::classes::ResolvedClassV1;
 use crate::produce::{
-    base0_execute_for_attempt_capped_v1, base0_material_decode_v1, base0_material_encode_v1, base0_material_matches_claim_v1,
+    base0_execute_for_attempt_capped_v1, base0_material_decode_v1, base0_material_encode_v1, base0_material_matches_claim_capped_v1,
     base0_rc_job_v1,
 };
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
@@ -172,6 +172,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
         start: &crate::fp_interval::Base0FpIntervalStartV1<'_>,
         first_call: u32,
         last_call: u32,
+        step_leaf_count: u64,
     ) -> Result<Vec<(u64, Hash64)>, String> {
         use crate::engine::{Base0Engine, KvCache};
         let engine = Base0Engine::new(self.artifact);
@@ -185,19 +186,29 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
         let mut cache = match start {
             crate::fp_interval::Base0FpIntervalStartV1::Genesis { .. } => KvCache::new(self.artifact),
             crate::fp_interval::Base0FpIntervalStartV1::Checkpoint { covered_decode_call, chunks, .. } => {
-                let positions = kaspa_consensus_core::palw_state_chunk_map::integer_kv_positions_at_v1(ctx, *covered_decode_call);
-                let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions).map_err(|e| format!("{e:?}"))?;
+                // The one spelling of a checkpoint's geometry at its counter, cadence-aware (a
+                // per-call class reads `covered` as a call, a per-position class as positions).
+                let geometry =
+                    crate::legs::base0_checkpoint_geometry_at_v1(profile, ctx, *covered_decode_call).map_err(|e| format!("{e:?}"))?;
                 KvCache::from_state_chunks(self.artifact, &geometry, chunks).map_err(|e| format!("{e:?}"))?
             }
         };
         let vocab = self.artifact.shape.vocab;
-        crate::fp_interval::base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, |token, position| {
-            if token >= vocab {
-                return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
-            }
-            let (logits, probe) = engine.forward_token_probed(&mut cache, token, position).map_err(|e| format!("{e:?}"))?;
-            Ok((logits, crate::legs::base0_captured_rows_v1(&probe)))
-        })
+        crate::fp_interval::base0_fp_replay_interval_v1(
+            profile,
+            ctx,
+            start,
+            first_call,
+            last_call,
+            step_leaf_count,
+            |token, position| {
+                if token >= vocab {
+                    return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
+                }
+                let (logits, probe) = engine.forward_token_probed(&mut cache, token, position).map_err(|e| format!("{e:?}"))?;
+                Ok((logits, crate::legs::base0_captured_rows_v1(&probe)))
+            },
+        )
     }
 }
 
@@ -313,8 +324,8 @@ impl PalwExecutionBackendV1 for Base0Backend {
             &self.profile,
             &ctx,
             prompt_tokens,
-            on_token,
             self.step_ladder_cap,
+            on_token,
         )
         .map_err(|e| e.to_string())?;
 
@@ -366,7 +377,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
         if claim.anchor != Hash64::default() && decoded.0.job_context.job_id != claim.anchor {
             return PalwMaterialVerdictV1::Mismatch;
         }
-        match base0_material_matches_claim_v1(&decoded, claim.execution_root, claim.trace_root) {
+        match base0_material_matches_claim_capped_v1(&decoded, claim.execution_root, claim.trace_root, self.step_ladder_cap) {
             Ok(true) => PalwMaterialVerdictV1::Matches,
             Ok(false) => PalwMaterialVerdictV1::Mismatch,
             Err(_) => PalwMaterialVerdictV1::Unverifiable,
@@ -473,9 +484,13 @@ impl PalwExecutionBackendV1 for Base0Backend {
 
     fn fp_interval_count(&self, capture: &[u8]) -> Option<u32> {
         let (binding, ..) = base0_material_decode_v1(capture).ok()?;
-        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&binding, self.checkpoint_interval())
-            .ok()
-            .map(|g| g.interval_count)
+        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_capped_v1(
+            &binding,
+            self.checkpoint_interval(),
+            self.step_ladder_cap,
+        )
+        .ok()
+        .map(|g| g.interval_count)
     }
 
     fn fp_interval_count_for(&self, prompt_tokens: u32, decode_tokens_executed: u32) -> Option<u32> {
@@ -484,8 +499,14 @@ impl PalwExecutionBackendV1 for Base0Backend {
 
     fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
         let material = base0_material_decode_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
-        crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, self.checkpoint_interval())
-            .map_err(|e| e.to_string())
+        crate::fp_interval::base0_open_fp_interval_capped_v1(
+            &material,
+            index,
+            prompt_token_ids,
+            self.checkpoint_interval(),
+            self.step_ladder_cap,
+        )
+        .map_err(|e| e.to_string())
     }
 
     fn verify_fp_interval_opening(
@@ -496,13 +517,14 @@ impl PalwExecutionBackendV1 for Base0Backend {
         prompt_token_ids: &[u32],
         work_leaves: u64,
     ) -> kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1 {
-        crate::fp_interval::base0_verify_fp_interval_opening_v1(
+        crate::fp_interval::base0_verify_fp_interval_opening_capped_v1(
             opening,
             claim,
             index,
             prompt_token_ids,
             work_leaves,
             self.checkpoint_interval(),
+            self.step_ladder_cap,
             &Base0IntervalKernels { artifact: &self.artifact },
         )
     }
@@ -594,6 +616,8 @@ mod tests {
             max_context_tokens: backend.profile().n_ctx,
             privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         }
     }
 
@@ -1305,6 +1329,8 @@ mod end_to_end_tests {
             max_context_tokens: backend.profile().n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         };
         let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
         let class = PalwFpClassFactsV3 {
@@ -1414,34 +1440,56 @@ mod end_to_end_tests {
         assert!(matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the prompt's claim certifies");
 
         // ---- the block: does the chain admit a receipt spending this work? --------------------
-        let beacon = PalwBeaconFactV3 { beacon_block: h(0xBEAC), beacon_daa: 130, prev_attempt_daa: 120 };
+        //
         // **The envelope the PRODUCER builds** — `build_fp_receipt_spend_envelope`, signing with
         // the bond's real key — admitted by the FULL check: stateless shape, the ML-DSA-87
         // signature, and all eight stateful items. This is the carriage a receipt block's header
         // carries under algo 7, produced by the same function a mining node calls.
+        //
+        // **The beacon is SEARCHED, not chosen.** A quantum's ticket is
+        // `H(network ‖ beacon ‖ claim ‖ q)` against the class's receipt target, seeded at
+        // `u128::MAX / 2` — a coin flip whose inputs include the claim id. Holding one beacon made
+        // this fixture pass by luck, and it came up tails the moment ADR-0082 Decision 11 put two
+        // fields inside the job id. A producer hunting a spendable quantum searches; so does this.
+        // Any refusal that is NOT the lottery is re-raised on the spot.
         let (pph, ts, nonce) = (h(0xB0), 1_700u64, 9u64);
-        let envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, h(0xBEAC));
-        let admitted = kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
-            &state,
-            &at(6, 131, 6),
-            h(999),
-            pph,
-            ts,
-            nonce,
-            MATURITY,
-            USE_WINDOW,
-            &beacon,
-            &envelope,
-            |pk: &[u8], m: &[u8], c: &[u8], sig: &[u8]| kaspa_txscript::verify_mldsa87_with_context(pk, m, c, sig).unwrap_or(false),
-        )
-        .expect("the chain admits a receipt block for a certified free-prompt claim, signature and all");
+        let mut found = None;
+        for i in 0..64u64 {
+            let beacon_block = h(0xBEAC + i);
+            let beacon = PalwBeaconFactV3 { beacon_block, beacon_daa: 130, prev_attempt_daa: 120 };
+            let envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, beacon_block);
+            match kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
+                &state,
+                &at(6, 131, 6),
+                h(999),
+                pph,
+                ts,
+                nonce,
+                MATURITY,
+                USE_WINDOW,
+                &beacon,
+                &envelope,
+                |pk: &[u8], m: &[u8], c: &[u8], sig: &[u8]| {
+                    kaspa_txscript::verify_mldsa87_with_context(pk, m, c, sig).unwrap_or(false)
+                },
+            ) {
+                Ok(id) => {
+                    found = Some((id, beacon, beacon_block));
+                    break;
+                }
+                Err(kaspa_consensus_core::palw_fp_admission_v3::PalwFpAdmissionV3Error::TicketRejected { .. }) => continue,
+                Err(e) => panic!("the chain refused a certified claim's spend for a reason that is not the lottery: {e:?}"),
+            }
+        }
+        let (admitted, beacon, beacon_block) =
+            found.expect("no beacon in 64 tries won a one-in-two draw — the target or the ticket moved");
         assert_ne!(admitted, Hash64::default(), "and it returns the spend id the block is identified by");
 
         // **The producer's envelope builder is the one the admission accepts.** `produce_receipt`
         // builds the receipt carriage this way — header position, bond key — so admitting a
         // hand-built envelope proves the check, and admitting the producer's proves the seam a
         // mining node actually uses.
-        let producer_envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, h(0xBEAC));
+        let producer_envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, beacon_block);
         let via_producer = kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
             &state,
             &at(6, 131, 6),

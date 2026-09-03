@@ -27,7 +27,6 @@ use crate::palw_legs::PalwCheckpointProfileV1;
 use crate::palw_slash::{PalwSlashError, check_job_context_shape};
 use crate::palw_step::{
     PalwLayerKindV1, PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepError, canonical_step_leaf_index, kv_aux_leaf_count,
-    step_leaf_count,
 };
 use crate::palw_v2::PalwJobContextV2;
 
@@ -653,42 +652,150 @@ pub fn state_chunk_leaf_hash_v1(state_chunk_map_id: &Hash64, chunk_index: u32, c
     w.keyed64(PALW_STEP_LEG_DOMAIN_STATE_CHUNK_LEAF)
 }
 
+/// **The leaf [`state_chunks_root_v1`] folds for chunk `index`**: its chunk hash, index-bound
+/// under the same domain.
+///
+/// Exported for the reason [`step_merkle_leaf_v1`] is: a per-chunk OPENING has to hash the same
+/// leaf the root builder hashes, and the only two ways to arrange that are to export this or to
+/// restate it. It was about to be restated (ADR-0082 Decision 4's bottom), and a restatement is a
+/// second spelling of a consensus hash.
+pub fn state_chunk_tree_leaf_v1(chunk_index: u32, chunk_hash: &Hash64) -> Hash64 {
+    let mut w = Writer::new();
+    w.u32(chunk_index);
+    w.hash64(chunk_hash);
+    w.keyed64(PALW_STEP_LEG_DOMAIN_STATE_CHUNK_LEAF)
+}
+
+/// **The sibling path proving ONE chunk is in [`state_chunks_root_v1`]** — the producing side of
+/// [`state_chunk_opening_root_v1`], and the primitive ADR-0082 Decision 4's bottom needs.
+///
+/// Without it the only evidence about a checkpoint's state is `PalwCheckpointKvOperandsV1`, which
+/// carries `chunks: Vec<Vec<u8>>` — EVERY chunk of the checkpoint. Under the graph-v4 tiled map a
+/// chunk is a sixteen-position tile, so a court that wanted one tile still had to be handed the
+/// whole history: tiling the map made the chunk small and left it unopenable. This is the missing
+/// half.
+///
+/// Promote-odd, left to right, exactly as [`state_chunks_root_v1`] folds — the same loop, and the
+/// pin that says so is `a_state_chunk_opening_is_the_root_the_builder_builds`.
+pub fn state_chunk_path_v1(chunk_hashes: &[Hash64], mut index: usize) -> Result<Vec<Hash64>, PalwStepLegError> {
+    if chunk_hashes.is_empty() || chunk_hashes.len() > PALW_STEP_LEG_MAX_STATE_CHUNKS {
+        return Err(PalwStepLegError::StateChunksOutOfRange { got: chunk_hashes.len(), max: PALW_STEP_LEG_MAX_STATE_CHUNKS });
+    }
+    if index >= chunk_hashes.len() {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: index as u64, count: chunk_hashes.len() as u64 });
+    }
+    let mut level: Vec<Hash64> = chunk_hashes.iter().enumerate().map(|(i, h)| state_chunk_tree_leaf_v1(i as u32, h)).collect();
+    let mut path = Vec::new();
+    while level.len() > 1 {
+        let promoted = !level.len().is_multiple_of(2) && index == level.len() - 1;
+        if !promoted {
+            let sibling = if index.is_multiple_of(2) { index + 1 } else { index - 1 };
+            path.push(level[sibling]);
+        }
+        level = state_chunk_fold_level_v1(&level);
+        index /= 2;
+    }
+    Ok(path)
+}
+
+/// **Recompute [`state_chunks_root_v1`] from ONE chunk and its path.** The caller compares the
+/// answer with the checkpoint leaf's `state_chunks_root`; a mismatch is "this chunk is not in that
+/// checkpoint", which is the only question a tile-addressed opening asks.
+///
+/// Promote levels are derived from `(chunk_index, chunk_count)` and consume no sibling — the same
+/// discipline [`step_opening_root_capped_v1`] states, and the reason a path can be checked without
+/// the tree.
+pub fn state_chunk_opening_root_v1(
+    chunk_count: usize,
+    chunk_index: u32,
+    chunk_hash: &Hash64,
+    siblings: &[Hash64],
+) -> Result<Hash64, PalwStepLegError> {
+    if chunk_count == 0 || chunk_count > PALW_STEP_LEG_MAX_STATE_CHUNKS {
+        return Err(PalwStepLegError::StateChunksOutOfRange { got: chunk_count, max: PALW_STEP_LEG_MAX_STATE_CHUNKS });
+    }
+    if chunk_index as usize >= chunk_count {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: chunk_index as u64, count: chunk_count as u64 });
+    }
+    let mut current = state_chunk_tree_leaf_v1(chunk_index, chunk_hash);
+    let mut position = chunk_index as usize;
+    let mut width = chunk_count;
+    let mut siblings = siblings.iter();
+    while width > 1 {
+        let promoted = !width.is_multiple_of(2) && position == width - 1;
+        if !promoted {
+            let Some(sibling) = siblings.next() else {
+                return Err(PalwStepLegError::OpeningPathTooShort);
+            };
+            current = if position.is_multiple_of(2) {
+                keyed64(PALW_STEP_LEG_DOMAIN_STATE_CHUNK_NODE, &[current.as_byte_slice(), sibling.as_byte_slice()])
+            } else {
+                keyed64(PALW_STEP_LEG_DOMAIN_STATE_CHUNK_NODE, &[sibling.as_byte_slice(), current.as_byte_slice()])
+            };
+        }
+        position /= 2;
+        width = width.div_ceil(2);
+    }
+    let leftover = siblings.count();
+    if leftover != 0 {
+        return Err(PalwStepLegError::OpeningPathTooLong { extra: leftover });
+    }
+    Ok(current)
+}
+
+/// One level of the state-chunk tree's fold: pair left to right, promote a lone odd tail. The one
+/// loop [`state_chunks_root_v1`] and [`state_chunk_path_v1`] share, so a change to the shape moves
+/// both or neither.
+fn state_chunk_fold_level_v1(level: &[Hash64]) -> Vec<Hash64> {
+    let mut next = Vec::with_capacity(level.len().div_ceil(2));
+    let mut chunks = level.chunks_exact(2);
+    for pair in &mut chunks {
+        next.push(keyed64(PALW_STEP_LEG_DOMAIN_STATE_CHUNK_NODE, &[pair[0].as_byte_slice(), pair[1].as_byte_slice()]));
+    }
+    if let [odd] = chunks.remainder() {
+        next.push(*odd);
+    }
+    next
+}
+
 /// Root over a checkpoint's state chunk hashes (small tree; the v1 leg discipline at its own
 /// domains, via the step-tree functions on a u64-capped width).
 pub fn state_chunks_root_v1(chunk_hashes: &[Hash64]) -> Result<Hash64, PalwStepLegError> {
     if chunk_hashes.is_empty() || chunk_hashes.len() > PALW_STEP_LEG_MAX_STATE_CHUNKS {
         return Err(PalwStepLegError::StateChunksOutOfRange { got: chunk_hashes.len(), max: PALW_STEP_LEG_MAX_STATE_CHUNKS });
     }
-    let mut level: Vec<Hash64> = chunk_hashes
-        .iter()
-        .enumerate()
-        .map(|(i, h)| {
-            let mut w = Writer::new();
-            w.u32(i as u32);
-            w.hash64(h);
-            w.keyed64(PALW_STEP_LEG_DOMAIN_STATE_CHUNK_LEAF)
-        })
-        .collect();
+    let mut level: Vec<Hash64> = chunk_hashes.iter().enumerate().map(|(i, h)| state_chunk_tree_leaf_v1(i as u32, h)).collect();
     while level.len() > 1 {
-        let mut next = Vec::with_capacity(level.len().div_ceil(2));
-        let mut chunks = level.chunks_exact(2);
-        for pair in &mut chunks {
-            next.push(keyed64(PALW_STEP_LEG_DOMAIN_STATE_CHUNK_NODE, &[pair[0].as_byte_slice(), pair[1].as_byte_slice()]));
-        }
-        if let [odd] = chunks.remainder() {
-            next.push(*odd);
-        }
-        level = next;
+        level = state_chunk_fold_level_v1(&level);
     }
     Ok(level[0])
 }
 
 /// A v2 checkpoint leaf: the v1 chain discipline with the flat state root replaced by the
 /// chunked one.
+///
+/// # `covered_decode_call` counts what the CLASS's map says it counts (ADR-0082 Decision 4)
+///
+/// There is no v3 leaf and there does not need to be one. Under
+/// [`crate::palw_context_ladder::PalwCheckpointCadenceV1::PerDecodeCall`] — every shipped class —
+/// the field is decode calls, `(index + 1) × interval`. Under `PerPosition`, which a class
+/// registering the tiled attention map runs at, it is POSITIONS of the cache, `index + 1`, prefill
+/// positions included.
+///
+/// The two are told apart without a second field because [`checkpoint_leaf_hash_v2`] already binds
+/// `state_chunk_map_id` into the preimage beside the counter, and the map id is what chooses the
+/// cadence: the same numbers under two maps are two different leaf hashes. A version field would
+/// be a second name for a fact the first one already fixes, and two names for one fact is how a
+/// producer commits at one cadence and a court judges at another.
+///
+/// The wire form is byte-for-byte the shipped one, so every shipped row's checkpoint leg is the
+/// leg it files today — `the_shipped_cadence_is_per_call_and_its_leaves_do_not_move`.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwCheckpointLeafV2 {
     pub version: u16,
     pub checkpoint_index: u32,
+    /// Decode calls covered, or — for a class whose map addresses history tiles — POSITIONS
+    /// covered. [`crate::palw_context_ladder::palw_checkpoint_covered_at_index_v1`] is the rule.
     pub covered_decode_call: u32,
     pub prev_checkpoint_leaf_hash: Hash64,
     pub state_chunk_count: u32,
@@ -809,10 +916,27 @@ pub struct PalwStepLegBuilderV1 {
 }
 
 impl PalwStepLegBuilderV1 {
+    /// **The DEFAULT ladder, for a builder with no ruleset in scope** — see
+    /// [`PALW_STEP_LEG_MAX_LEAVES`]. A producer that knows which network it serves calls
+    /// [`Self::new_capped_v1`] with `PalwCourtParamsV2::max_step_leaf_count`; building at the
+    /// executor's constant on a `2^26` network refuses the class's own honest job.
     pub fn new(context: PalwJobContextV2, profile: PalwShapeProfileV3) -> Result<Self, PalwStepLegError> {
+        Self::new_capped_v1(context, profile, PALW_STEP_LEG_MAX_LEAVES)
+    }
+
+    /// [`Self::new`] against the ladder the RULESET froze (ADR-0080 W1b, ADR-0082 Decision 1).
+    ///
+    /// The count this sizes the tree with is the same enumeration the court's shape pass
+    /// recomputes, so a leg built at one ladder and judged at another is a leg whose honest
+    /// producer is convicted for a number nobody disagreed with.
+    pub fn new_capped_v1(
+        context: PalwJobContextV2,
+        profile: PalwShapeProfileV3,
+        max_step_leaf_count: u64,
+    ) -> Result<Self, PalwStepLegError> {
         check_job_context_shape(&context).map_err(PalwStepLegError::Context)?;
         profile.validate_shape()?;
-        let expected_total = step_leaf_count(&profile, &context)?;
+        let expected_total = crate::palw_step::step_leaf_count_capped_v1(&profile, &context, max_step_leaf_count)?;
         let expected_aux = kv_aux_leaf_count(&profile, &context);
         Ok(Self {
             context_hash: context.context_hash(),
@@ -1215,7 +1339,25 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
         if footprint > binding.shape_profile.n_ctx as u64 {
             return Some(PalwStepFaultV1::JobExceedsClassContext);
         }
-        match step_leaf_count(&binding.shape_profile, &binding.job_context) {
+        // **The cap is the ACCUSATION's own claim, not the executor's constant** (ADR-0082
+        // Decision 1: "the ruleset's is read from the bundle, never typed").
+        //
+        // The rule on this line is an EQUALITY — the committed count must be the canonical
+        // function of `(profile, context)` — and the cap was only ever the enumeration's own
+        // bound. Spelling it `PALW_STEP_MAX_LEAVES` made the shape pass answer
+        // `StepLeafCountNotCanonical` for every binding above `2^22`, which on a `2^26` ruleset is
+        // a CONVICTION of the honest producer of a class the admission gate accepted: the graph-v5
+        // dense 512 row's canonical job counts 6,630,544 leaves, so its every refutation — the
+        // honest one included — convicted, and the family could not certify (`HonestRunConvicted`)
+        // let alone be prosecuted.
+        //
+        // `binding.step_leaf_count` is the exact cap this comparison needs and it needs no
+        // ruleset: the walk returns `Ok(n)` iff the true count is at most the claim, so
+        // `Ok(n) && n == claim` is the same predicate at every ladder, and a claim the enumeration
+        // overruns still convicts by the same name. `step_leaf_count_capped_v1` is a closed form
+        // (at most 256 node visits, plus `⌈log₂⌉` evaluations to locate an overrun), so a
+        // stranger's inflated claim buys no walk.
+        match crate::palw_step::step_leaf_count_capped_v1(&binding.shape_profile, &binding.job_context, binding.step_leaf_count) {
             Ok(count) if count == binding.step_leaf_count => {}
             _ => return Some(PalwStepFaultV1::StepLeafCountNotCanonical),
         }
@@ -1241,8 +1383,16 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
         {
             return Some(PalwStepFaultV1::CheckpointProfileNotCanonical);
         }
-        let decode_calls = binding.job_context.exact_decode_tokens.saturating_sub(1);
-        let canonical_ckpts = decode_calls / binding.checkpoint_profile.checkpoint_interval;
+        // **How many checkpoints this job canonically has, at the cadence its map runs**
+        // (ADR-0082 Decision 4). `decode_calls / interval` for every shipped class; `prefill +
+        // decode_calls` for a class whose map addresses history tiles, which is every position the
+        // cache ever holds. A leg short of that is a producer that opted out of the positions it
+        // did not commit, which is the whole reason this count is recomputed rather than trusted.
+        let canonical_ckpts = crate::palw_context_ladder::palw_checkpoint_count_v1(
+            &binding.shape_profile,
+            &binding.job_context,
+            binding.checkpoint_profile.checkpoint_interval,
+        );
         if binding.checkpoint_count != canonical_ckpts {
             return Some(PalwStepFaultV1::CheckpointCountNotCanonical);
         }
@@ -1401,7 +1551,12 @@ fn kv_chunk_fault(binding: &PalwStepBindingV2, opening: &PalwStepOpeningV1, prei
     }
     // Reuse the builder's rank derivation via a throwaway view: canonical rank must equal
     // (leaf_index − main leaves).
-    let main = match step_leaf_count(&binding.shape_profile, &binding.job_context) {
+    // Same cap, same reason as the shape pass above: the binding's own claim, never the executor's
+    // constant. This runs only AFTER `shape_fault` has established `count == step_leaf_count`, so
+    // the cap is exact here and the `Err` arm is unreachable through `check_step_refutation_v1`;
+    // it stays fail-closed for any other caller.
+    let main = match crate::palw_step::step_leaf_count_capped_v1(&binding.shape_profile, &binding.job_context, binding.step_leaf_count)
+    {
         Ok(total) => total - kv_aux_leaf_count(&binding.shape_profile, &binding.job_context),
         Err(_) => return Some(PalwStepFaultV1::StepLeafCountNotCanonical),
     };
@@ -1460,14 +1615,43 @@ fn checkpoint_fault(
     if preimage.checkpoint_index as u64 != opening.leaf_index {
         return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
     }
+    // **The counter's canonical value at this index, at the cadence the CLASS's map runs**
+    // (ADR-0082 Decision 4). On every shipped class this is `(index + 1) × interval` verbatim.
     let interval = binding.checkpoint_profile.checkpoint_interval;
-    if preimage.covered_decode_call != (preimage.checkpoint_index + 1) * interval {
+    let canonical =
+        crate::palw_context_ladder::palw_checkpoint_covered_at_index_v1(&binding.shape_profile, preimage.checkpoint_index, interval);
+    if canonical != Some(preimage.covered_decode_call) {
         return Some(PalwStepFaultV1::CheckpointCoveredCallNotCanonical);
     }
     if preimage.checkpoint_index == 0 && preimage.prev_checkpoint_leaf_hash != checkpoint_genesis_prev_v2(context_hash) {
         return Some(PalwStepFaultV1::CheckpointGenesisPrevMismatch);
     }
     if preimage.state_chunk_count == 0 || preimage.state_chunk_count as usize > PALW_STEP_LEG_MAX_STATE_CHUNKS {
+        return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
+    }
+    // **And the count must be the CLASS's map's for this state** (audit B, M-4). The range check
+    // above admits any count in `[1, 2^16]`, so a leg whose leaves declare one chunk per
+    // checkpoint — the whole cache as a blob — passed the shape pass and then made every anchor
+    // built on it `Unadjudicable`: a leg that advertises a route it cannot serve, which on a
+    // per-position class leaves the attention site with no route at all, because the cache-write
+    // route is refused there too.
+    //
+    // **The fault is `CheckpointIndexNotCanonical` and not a new discriminant**: `PalwStepFaultV1`
+    // is borsh-serialised with `use_discriminant = true` and its discriminants are wire-frozen, so
+    // a new arm is a consensus object change; the existing arm already carries the other
+    // `state_chunk_count` refusal two lines above, which is the same rule.
+    //
+    // `None` from the map is "this crate cannot enumerate that map" (the standalone recurrence
+    // maps, whose geometry lives in the executor crate) and is not a fault: refusing a leg for the
+    // court's own missing arithmetic would convict an honest class.
+    let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(
+        &binding.shape_profile,
+        &binding.job_context,
+        preimage.covered_decode_call,
+    );
+    if let Some(canonical_chunks) = crate::palw_state_chunk_map::palw_state_chunk_count_at_v1(&binding.shape_profile, positions)
+        && preimage.state_chunk_count as u64 != canonical_chunks
+    {
         return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
     }
     None
@@ -2396,5 +2580,88 @@ mod tests {
             step_opening_root_capped_v1(LADDER, &opening, LADDER / 2),
             Err(PalwStepLegError::LeafCountOutOfRange { got: LADDER, max: LADDER / 2 })
         );
+    }
+}
+
+// =============================================================================================
+// Tests — ADR-0082 Decision 4: a state chunk is individually openable
+// =============================================================================================
+
+#[cfg(test)]
+mod state_chunk_opening_tests {
+    use super::*;
+
+    fn chunk_hashes(n: usize) -> Vec<Hash64> {
+        (0..n).map(|i| Hash64::from_bytes([(i % 251) as u8 + 3; 64])).collect()
+    }
+
+    /// **A chunk opening recomputes the root the builder builds** — at every chunk count, every
+    /// index, and every odd width where the promote-odd rule is the only thing that could make an
+    /// opening and a root disagree.
+    ///
+    /// This is the pin ADR-0082 Decision 4 rests on: the bottom of a dissection opens ONE tile of
+    /// the checkpoint, and it can only do that if a chunk's membership is provable without the
+    /// other chunks.
+    #[test]
+    fn a_state_chunk_opening_is_the_root_the_builder_builds() {
+        for count in [1usize, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 100, 1_000] {
+            let hashes = chunk_hashes(count);
+            let root = state_chunks_root_v1(&hashes).expect("a root");
+            for index in 0..count {
+                let path = state_chunk_path_v1(&hashes, index).expect("a path for a chunk in the tree");
+                assert_eq!(
+                    state_chunk_opening_root_v1(count, index as u32, &hashes[index], &path).expect("an opening"),
+                    root,
+                    "count {count}, index {index}: the opening does not rebuild the root"
+                );
+                // A path is at most the tree's depth, and the promoted tail spends fewer.
+                assert!(path.len() <= count.next_power_of_two().trailing_zeros() as usize, "count {count}, index {index}");
+            }
+        }
+    }
+
+    /// **What a chunk opening may not be**: another chunk's hash, another index, a path of the
+    /// wrong length, an index past the map, an empty or oversized map — each refused by name.
+    #[test]
+    fn a_state_chunk_opening_refuses_what_is_not_in_the_tree() {
+        let count = 13usize;
+        let hashes = chunk_hashes(count);
+        let root = state_chunks_root_v1(&hashes).expect("a root");
+        let path = state_chunk_path_v1(&hashes, 5).expect("a path");
+        assert_eq!(state_chunk_opening_root_v1(count, 5, &hashes[5], &path).expect("honest"), root);
+        // A different chunk's bytes under the same index rebuild a different root — the refusal
+        // the CALLER makes, and the reason this function returns a root rather than a bool.
+        assert_ne!(state_chunk_opening_root_v1(count, 5, &hashes[6], &path).expect("still a root"), root);
+        // The same chunk claimed at another index likewise.
+        assert_ne!(state_chunk_opening_root_v1(count, 4, &hashes[5], &path).expect("still a root"), root);
+        // Structural refusals.
+        assert_eq!(
+            state_chunk_opening_root_v1(count, 13, &hashes[5], &path),
+            Err(PalwStepLegError::LeafIndexOutOfRange { index: 13, count: 13 })
+        );
+        assert_eq!(
+            state_chunk_opening_root_v1(0, 0, &hashes[0], &[]),
+            Err(PalwStepLegError::StateChunksOutOfRange { got: 0, max: PALW_STEP_LEG_MAX_STATE_CHUNKS })
+        );
+        assert_eq!(state_chunk_opening_root_v1(count, 5, &hashes[5], &path[..1]), Err(PalwStepLegError::OpeningPathTooShort));
+        let mut long = path.clone();
+        long.push(Hash64::from_bytes([9; 64]));
+        assert_eq!(state_chunk_opening_root_v1(count, 5, &hashes[5], &long), Err(PalwStepLegError::OpeningPathTooLong { extra: 1 }));
+        assert_eq!(state_chunk_path_v1(&hashes, 13), Err(PalwStepLegError::LeafIndexOutOfRange { index: 13, count: 13 }));
+        assert_eq!(
+            state_chunk_path_v1(&[], 0),
+            Err(PalwStepLegError::StateChunksOutOfRange { got: 0, max: PALW_STEP_LEG_MAX_STATE_CHUNKS })
+        );
+    }
+
+    /// **The exported leaf is the leaf the root builder uses.** A one-chunk map's root IS that
+    /// leaf, which is the cheapest possible witness that the two spellings are one.
+    #[test]
+    fn the_exported_state_chunk_leaf_is_the_builders_own() {
+        let h = Hash64::from_bytes([7; 64]);
+        assert_eq!(state_chunks_root_v1(&[h]).expect("a one-chunk root"), state_chunk_tree_leaf_v1(0, &h));
+        // And the leaf is bound to BOTH the index and the chunk hash.
+        assert_ne!(state_chunk_tree_leaf_v1(0, &h), state_chunk_tree_leaf_v1(1, &h));
+        assert_ne!(state_chunk_tree_leaf_v1(0, &h), state_chunk_tree_leaf_v1(0, &Hash64::from_bytes([8; 64])));
     }
 }

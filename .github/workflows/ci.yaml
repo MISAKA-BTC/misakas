@@ -366,6 +366,11 @@ jobs:
         run: cargo test -p misaka-palw-derive
         env:
           MISAKA_PALW_POW_FIXTURE: "1"
+          # CI holds no checkpoint. `tests/corpus_width.rs` FAILS by name when the dense tokenizer
+          # or the QWEN36 .gguf is absent — a run that checked nothing must not read as one that
+          # checked — unless the host declares it cannot check; this is that declaration, and the
+          # SKIPPED lines it prints name the tests and say the widths were NOT checked here.
+          MISAKA_PALW_WIDTH_NO_TOKENIZER: "1"
 
       - name: Run cargo doc tests
         run: cargo test --doc

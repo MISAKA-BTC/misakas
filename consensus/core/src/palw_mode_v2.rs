@@ -293,6 +293,25 @@ pub const fn palw_close_chunks_for_bytes_v1(bytes: u64) -> u64 {
     carried.div_ceil(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64)
 }
 
+/// **Can this ruleset carry AND verify a close of `bytes`?** — the ONE reading of the two bounds a
+/// court holds over a close: the verification-cost ceiling ADR-0049 Decision C put in the ruleset
+/// (`max_close_bytes`, what a validating node will hash) and ADR-0080 design A's carriage count
+/// (`max_close_chunks`, what the network pays to relay).
+///
+/// They are the same refusal only on a ruleset whose byte ceiling sits on the chunk grid. The RC's
+/// does (2,250,000 = `palw_close_bytes_for_chunks_v1(27)`); the devnet's does not (81,920 against
+/// a carrier of 83,333), and until this predicate the admission gate and the boot gate compared
+/// CHUNKS only while `check_close_cost_v2` compared BYTES only — so on devnet a permissionless
+/// class whose worst close fell in [81,921 .. 83,334] was admitted, and every honest close of its
+/// widest dispute was refused `CloseTooLarge`: a class admitted and unprosecutable at its own
+/// widest dispute, 1,414 bytes wide (measured 2026-09-03; no shipped row is in the gap — the
+/// graph-v5@512 row closes at 81,312 B on both presets). Every reader asks this predicate now, so
+/// the two units can no longer disagree; which unit IS the ruleset — whether devnet's 81,920 should
+/// be restated on the grid as 83,333 — is an ADR question that moves a ruleset id, not this one.
+pub const fn palw_close_fits_court_v1(bytes: u64, court: &PalwCourtParamsV2) -> bool {
+    bytes <= court.max_close_bytes && palw_close_chunks_for_bytes_v1(bytes) <= court.max_close_chunks
+}
+
 /// **The mempool's standard-transaction mass, mirrored** — the number
 /// [`DEFAULT_MAX_CLOSE_BYTES`] is derived from.
 ///
@@ -317,6 +336,10 @@ pub const DEFAULT_MAX_TERMINAL_MACS: u64 = 16 * 1024 * 1024;
 /// BASE-0 or Qwen graphs (the widest is the gated-delta-net recurrence's five rows; the floor's is
 /// two).
 pub const DEFAULT_MAX_OPERAND_COUNT: u32 = 8;
+
+/// **The shipped ladder's arity: binary, one pinned midpoint a round** (ADR-0082 Decision 3's
+/// baseline). Every shipped preset's court carries this value; a wider arity is a ruleset move.
+pub const PALW_COURT_BINARY_ARITY_V1: u8 = 2;
 
 /// One opaque number becomes three checkable ones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -356,6 +379,15 @@ pub struct PalwCourtParamsV2 {
     max_close_chunks: u64,
     max_terminal_macs: u64,
     max_operand_count: u32,
+    /// **ADR-0082 Decision 3: the dissection arity.** `2` is the shipped binary ladder; `k`
+    /// discloses the `k` subtree roots below the current node — `log₂ k` binary levels at once,
+    /// authenticated by hashing them back up — so a search over `space` items takes
+    /// `⌈log₂ space / log₂ k⌉` rounds (`palw_attn_dissect::palw_kary_rounds_v1`). It is DERIVED
+    /// at genesis from the move budget the window affords over the widest row the ruleset
+    /// admits, never chosen; a power of two in `2..=64`; inside the ruleset id like every field
+    /// beside it. The binary ladder at `2^32` already spends `(2 × 32 + 2) × 45 = 2,970` of the
+    /// RC's 3,000-DAA window, which is why a history dissection cannot be added without it.
+    dissection_arity: u8,
 }
 
 impl PalwCourtParamsV2 {
@@ -403,7 +435,50 @@ impl PalwCourtParamsV2 {
             max_close_chunks,
             max_terminal_macs,
             max_operand_count,
+            dissection_arity: PALW_COURT_BINARY_ARITY_V1,
         })
+    }
+
+    /// The same court with a wider dissection (ADR-0082 Decision 3). Refuses an arity that is
+    /// not a power of two in `2..=64`, by name.
+    pub fn with_dissection_arity(mut self, arity: u8) -> Result<Self, PalwModeV2Error> {
+        if !crate::palw_attn_dissect::palw_attn_arity_is_legal_v1(arity) {
+            return Err(PalwModeV2Error::Invalid("a dissection arity is a power of two in 2..=64"));
+        }
+        self.dissection_arity = arity;
+        Ok(self)
+    }
+
+    pub fn dissection_arity(&self) -> u8 {
+        self.dissection_arity
+    }
+
+    /// **The rounds a dissection over `history_positions` positions takes**, at `tile` positions a
+    /// tile and this court's arity (ADR-0082 Decision 2). `None` for a zero tile.
+    pub fn history_dissection_rounds(&self, history_positions: u64, tile: u32) -> Option<u32> {
+        crate::palw_attn_dissect::palw_attn_dissection_rounds_v1(history_positions, tile, self.dissection_arity)
+    }
+
+    /// [`Self::worst_case_duration_daa`] with a history dissection of `history_positions`
+    /// positions appended to the ladder:
+    /// `(2 × (ladder_rounds + history_rounds) + terminal + root_claim) × deadline`.
+    /// The window gate a graph-v5 row is admitted against; a row with no fused site passes
+    /// `history_positions = 0` and gets the ladder's own number, unchanged.
+    ///
+    /// **The root claim is a move** (audit A M-2). ADR-0082 Z4's count omitted it, and it is the
+    /// one move with no clock of its own: the protocol drawn at the head of `palw_attn_court_v1`
+    /// shows `ladder Terminal ──▶ root claim ──▶ AwaitDisclosure`, so a dissection's clocked
+    /// sequence is one `turn_deadline` longer than the formula said. With `terminal_rounds = 1` a
+    /// row would be admitted whose honest exchange needs one more move than `window_court` holds,
+    /// and the party that legitimately moves last loses at the backstop. Counted only where there
+    /// IS a dissection.
+    pub fn worst_case_duration_with_history_daa(&self, history_positions: u64, tile: u32) -> Option<u64> {
+        let ladder = u64::from(self.bisection_rounds());
+        let history = u64::from(self.history_dissection_rounds(history_positions, tile)?);
+        let root_claim = u64::from(history_positions != 0);
+        let moves =
+            ladder.checked_add(history)?.checked_mul(2)?.checked_add(u64::from(self.terminal_rounds))?.checked_add(root_claim)?;
+        moves.checked_mul(self.turn_deadline_daa)
     }
 
     pub fn max_close_bytes(&self) -> u64 {
@@ -437,10 +512,19 @@ impl PalwCourtParamsV2 {
         self.terminal_rounds
     }
 
-    /// `ceil(log2(max_step_leaf_count))` — the bisection depth needed to isolate one step.
+    /// `⌈log₂ max_step_leaf_count⌉` — the rounds the LEAF ladder takes to isolate one step.
+    ///
+    /// **At the ladder's own arity, which is two** (audit D H-2). This read
+    /// `self.dissection_arity` and so priced a k-ary LEAF ladder that no session plays: a
+    /// session's ladder is [`crate::palw_bisect::PalwBisectLadderV1`], binary at a pinned
+    /// midpoint, and `PalwKaryLadderV1` has no caller outside its own tests. At the RC's numbers
+    /// the difference is not cosmetic — the derivation reported 34 moves where the played dispute
+    /// takes 60, so `window_court` "held" a prosecution it does not hold and an honest challenger
+    /// playing correctly runs out of clock. ADR-0082 Decision 3's k buys rounds of the HISTORY
+    /// search, which is the only search that is k-ary today; the day the ladder itself becomes
+    /// k-ary, this constant moves with it and one place decides.
     pub fn bisection_rounds(&self) -> u32 {
-        // `next_power_of_two` is exact for powers of two, so this is ceil(log2(n)) for n >= 2.
-        self.max_step_leaf_count.next_power_of_two().trailing_zeros()
+        crate::palw_attn_dissect::palw_kary_rounds_v1(self.max_step_leaf_count, PALW_COURT_LEAF_LADDER_ARITY_V1).unwrap_or(u32::MAX)
     }
 
     /// ADR-0042 Decision 8's formula, in DAA units. `None` on overflow, which the startup gate
@@ -456,6 +540,98 @@ impl PalwCourtParamsV2 {
         let bisection_moves = u64::from(self.bisection_rounds()).checked_mul(2)?;
         let moves = bisection_moves.checked_add(u64::from(self.terminal_rounds))?;
         moves.checked_mul(self.turn_deadline_daa)
+    }
+}
+
+/// **ADR-0082 Decision 3: the arity a ruleset DERIVES, never writes.**
+///
+/// The smallest legal power of two for which the whole dispute — the leaf ladder, the history
+/// dissection, and the terminal moves — fits the court window at the deadline SA-4 derives:
+///
+/// ```text
+///   (2 · (ceil(log2 L) + ceil(log_k (history / tile))) + terminal + 1) · turn_deadline  <=  window_court
+/// ```
+///
+/// `log2 L` and not `log_k L`: the LEAF ladder a session plays is binary
+/// ([`PALW_COURT_LEAF_LADDER_ARITY_V1`]), and `k` buys rounds of the HISTORY search alone. The
+/// trailing `+ 1` is the root claim, the move that opens the dissection.
+///
+/// Smallest, not largest, because a wider round costs BYTES: `arity` children of
+/// `(4 + 8 + 8 · lanes)` ride every move, so the arity that just fits the clock is the arity that
+/// spends the least carrier. Every input is a ruleset quantity — the window, the SA-4 deadline,
+/// the ladder's `max_step_leaf_count`, the widest history the ruleset will admit, the class map's
+/// tile, the terminal move count and the widest output tile any registered row disputes — so no
+/// preset writes a `k` and no `k` can be chosen.
+///
+/// **And a round has to fit a carrier, which is a property of the (arity, lanes) PAIR.** At a
+/// 128-lane tile every legal arity fits one framed carrier; at the hybrid's 256-lane head, arity
+/// 64 is 132,102 bytes and does not. The bound is applied at the WIDEST output tile the ruleset
+/// registers, and a `k` whose round no carrier holds is REFUSED rather than priced: `None`. It can
+/// only ever refuse from above — a smaller arity discloses strictly fewer children — so the
+/// smallest window-fitting arity is also the cheapest one to check.
+///
+/// `history_positions_max = 0` is a ruleset with no fused attention site: the dissection has no
+/// rounds and the answer is whatever arity the leaf ladder alone needs.
+///
+/// `None` when no legal arity fits — which is the honest answer for a window that cannot hold the
+/// dispute it admits, and the refusal ADR-0082 Z4 turns into an admission error rather than a
+/// court that runs out of clock mid-prosecution.
+/// **The arity of the LEAF ladder a session actually plays.**
+///
+/// `PalwBisectLadderV1` is binary at a pinned midpoint (`palw_bisect`'s header), and it is what
+/// `PalwCourtSessionStateV2::ladder` holds. ADR-0082 Decision 3's `dissection_arity` is the
+/// HISTORY search's, not this one; naming the two apart is what keeps a derivation from pricing a
+/// ladder no chain runs (audit D H-2).
+pub const PALW_COURT_LEAF_LADDER_ARITY_V1: u8 = 2;
+
+#[allow(clippy::too_many_arguments)]
+pub fn palw_court_arity_v1(
+    window_court: u64,
+    turn_deadline: u64,
+    max_step_leaves: u64,
+    history_positions_max: u64,
+    tile: u32,
+    terminal_moves: u32,
+    widest_lane_count: usize,
+    max_close_chunks: u64,
+) -> Option<u8> {
+    use crate::palw_attn_dissect::{
+        PALW_ATTN_DISSECT_MAX_ARITY, PALW_ATTN_DISSECT_MIN_ARITY, palw_attn_dissect_arity_fits_carrier_v1,
+        palw_attn_dissection_rounds_v1, palw_kary_rounds_v1,
+    };
+    if window_court == 0 || turn_deadline == 0 {
+        return None;
+    }
+    let carrier = palw_close_bytes_for_chunks_v1(1);
+    let mut arity = PALW_ATTN_DISSECT_MIN_ARITY;
+    loop {
+        // The LEAF ladder is binary whatever `k` is (audit D H-2); `k` buys history rounds only.
+        let ladder = u64::from(palw_kary_rounds_v1(max_step_leaves, PALW_COURT_LEAF_LADDER_ARITY_V1)?);
+        let history = if history_positions_max == 0 {
+            0
+        } else {
+            u64::from(palw_attn_dissection_rounds_v1(history_positions_max, tile, arity)?)
+        };
+        // And the root claim is a move (audit A M-2), wherever there is a dissection to open.
+        let root_claim = u64::from(history_positions_max != 0);
+        let moves = ladder.checked_add(history)?.checked_mul(2)?.checked_add(u64::from(terminal_moves))?.checked_add(root_claim)?;
+        // **On the SAME inequality admission applies** (audit A H-2 / audit D H-2c). This selected
+        // on `moves · deadline <= window_court` while `palw_attn_court_admits_row_v1` admits on
+        // `moves · deadline + assembly_reserve < window_court` — so the derivation could return an
+        // arity the admission gate then refuses, and a wider arity that WOULD have fitted was never
+        // reached. The reserve is a property of the window (both sides' closes occupy blocks that
+        // carry no move), so it belongs in the search that chooses the shape the window has to hold.
+        let reserve = crate::palw_context_ladder::palw_close_assembly_daa_v1(max_close_chunks);
+        if moves.checked_mul(turn_deadline)?.checked_add(reserve)? < window_court {
+            // The clock admits this arity. The carrier is the other half of the same question,
+            // and it answers for the PAIR: a wider arity would only weigh more, so a round that
+            // does not fit here is a refusal and never a reason to keep searching upward.
+            return palw_attn_dissect_arity_fits_carrier_v1(arity, widest_lane_count, carrier).then_some(arity);
+        }
+        if arity >= PALW_ATTN_DISSECT_MAX_ARITY {
+            return None;
+        }
+        arity *= 2;
     }
 }
 
@@ -1049,9 +1225,11 @@ impl PalwConsensusParamsV2 {
         // asserts the derived cost, the ruleset asserts what it will pay for, and a class whose
         // disputes cannot ride a carrier must fail the BOOT gate, not its first challenger.
         for entry in catalog.entries() {
-            // In CHUNKS, the unit the registration gate compares in (ADR-0080 design A), so a
-            // class cannot be admitted at one rule and refused at boot by another.
-            if palw_close_chunks_for_bytes_v1(entry.court_cost.max_close_bytes) > self.court.max_close_chunks() {
+            // BOTH units — bytes (what a validating node will hash) and chunks (what the network
+            // pays to relay) — through the one predicate the registration gate and the close gate
+            // ask, so a class cannot be admitted at one rule and refused at boot by another, nor
+            // admitted here and refused at its first close (`palw_close_fits_court_v1`).
+            if !palw_close_fits_court_v1(entry.court_cost.max_close_bytes, &self.court) {
                 return Err(PalwModeV2Error::Invalid(
                     "a registered class's terminal opening exceeds the ceiling this ruleset pays for",
                 ));
@@ -1705,6 +1883,72 @@ pub(crate) mod tests {
         let catalog = PalwClassCatalogV2::new(vec![entry]).expect("well-formed");
         bundle.class_catalog_root = catalog.root();
         bundle.verify_against_catalog(&catalog).expect("a class at the ceiling is a class the ruleset pays for");
+    }
+
+    /// **One ceiling, two units — and the reader that counted carriers admitted what the reader
+    /// that counts bytes refuses.** On the RC the byte ceiling sits on the chunk grid
+    /// (2,250,000 = 27 carriers exactly) so the two readings coincide; on devnet it does not
+    /// (81,920 against a carrier of 83,333), and a class whose worst close is 81,921 bytes was
+    /// admitted by the boot gate and by `verify_class_admission_v6` — one carrier, inside the
+    /// count — while `check_close_cost_v2` refuses every honest close of its widest dispute:
+    /// admitted and unprosecutable, 1,414 bytes wide. `palw_close_fits_court_v1` is the one
+    /// predicate now; this pins the devnet boundary from both sides and the RC's coincidence.
+    #[test]
+    fn a_close_the_carrier_count_admits_but_the_byte_ceiling_refuses_fails_at_boot() {
+        // **Both shipped presets sit on the chunk grid now** — the byte ceiling IS the carrier
+        // count restated, so the two units are one number (devnet's 81,920 literal was the one
+        // that did not, and the graph-v5@512 row's 83,175-byte close sat in its gap).
+        for (name, params) in [
+            ("devnet", crate::config::params::devnet_shipped_params()),
+            ("testnet-11", crate::config::params::palw_rc_shipped_params()),
+        ] {
+            let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("{name} ships a V2 bundle") };
+            assert_eq!(
+                bundle.court.max_close_bytes(),
+                palw_close_bytes_for_chunks_v1(bundle.court.max_close_chunks()),
+                "{name}: the byte ceiling must be the carrier count restated"
+            );
+        }
+        // The off-grid court, built on purpose: devnet's own court with the literal it used to
+        // carry, so the predicate's two halves can be seen to disagree and the gate to follow the
+        // stricter one.
+        let devnet = crate::config::params::devnet_shipped_params();
+        let PalwConsensusMode::ConsensusV2(shipped) = &devnet.palw_consensus_mode else { panic!("devnet ships a V2 bundle") };
+        let on_grid = shipped.court;
+        let court = PalwCourtParamsV2::with_cost_ceilings(
+            on_grid.max_step_leaf_count(),
+            on_grid.turn_deadline_daa(),
+            on_grid.terminal_rounds(),
+            81_920,
+            on_grid.max_terminal_macs(),
+            on_grid.max_operand_count(),
+        )
+        .expect("a court with an off-grid byte ceiling is legal to build");
+        assert_eq!(court.max_close_chunks(), 1, "one carrier — the count rounds UP from the literal");
+        assert!(court.max_close_bytes() < palw_close_bytes_for_chunks_v1(1), "and the byte ceiling is BELOW that carrier");
+        // The gap, both sides: the carrier count says yes to 81,921, the byte ceiling says no.
+        let just_over = court.max_close_bytes() + 1;
+        assert!(palw_close_chunks_for_bytes_v1(just_over) <= court.max_close_chunks(), "one carrier holds it");
+        assert!(!palw_close_fits_court_v1(just_over, &court), "and the ruleset still cannot verify it");
+        assert!(palw_close_fits_court_v1(court.max_close_bytes(), &court), "at the byte ceiling, both bounds hold");
+
+        // And the boot gate asks the predicate: a class priced one byte over devnet's byte ceiling
+        // does not boot there, though one carrier would have carried it.
+        let mut entry = catalog_entry(h64(1), 1 << 10);
+        entry.court_cost.max_close_bytes = just_over;
+        let catalog = PalwClassCatalogV2::new(vec![entry]).expect("well-formed");
+        let mut bundle = shipped.clone();
+        bundle.court = court;
+        bundle.genesis_objects.clear();
+        bundle.base_class_id = h64(1);
+        bundle.class_catalog_root = catalog.root();
+        let err = bundle.verify_against_catalog(&catalog).expect_err("one byte over the byte ceiling must not boot");
+        assert!(format!("{err:?}").contains("terminal opening"), "refused by the cost gate, by name: {err:?}");
+        let mut entry = catalog_entry(h64(1), 1 << 10);
+        entry.court_cost.max_close_bytes = court.max_close_bytes();
+        let catalog = PalwClassCatalogV2::new(vec![entry]).expect("well-formed");
+        bundle.class_catalog_root = catalog.root();
+        bundle.verify_against_catalog(&catalog).expect("at the byte ceiling the class boots");
     }
 
     /// **Audit C1/H2: the invariants that need the catalog PREIMAGE, not just its root.**
