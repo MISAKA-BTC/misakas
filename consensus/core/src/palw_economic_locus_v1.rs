@@ -755,12 +755,14 @@ mod tests {
         //
         // Checked against the preimage rather than remembered: every name the hashed row claims is
         // in the root walk, and no name the rebuildable row claims is.
-        assert_eq!(
-            crate::palw_state_v2::PALW_STATE_V2_VERSION,
-            18,
-            "the census's hashed/rebuildable split was read at state version 18; a bump means the \
-             root preimage moved and both claim-state rows need re-reading"
-        );
+        //
+        // **The pin is the SPLIT, not the number.** This asserted `PALW_STATE_V2_VERSION == 17`,
+        // which made every state-schema move a red test in a file that has nothing to say about
+        // schema moves — and the fix a reader reaches for is to retype the number, which is
+        // exactly the edit that leaves the census wrong. What the census actually claims is which
+        // tables are inside the root preimage and which are not, so that is what is checked, at
+        // whatever version the tree is at (17 → 18 with ADR-0080 design A's split close; the
+        // dissection phase moves it again).
         let preimage = std::include_str!("palw_state_v2.rs");
         let hashed = PALW_ECONOMIC_LOCUS_CENSUS_V1
             .iter()
@@ -770,7 +772,9 @@ mod tests {
         for table in listed.split('/') {
             assert!(
                 preimage.contains(&format!("collection_root(b\"{table}\"")),
-                "the census claims {table} is in the state root and the root walk does not hash it"
+                "the census claims {table} is in the state root and the root walk (state version {}) does not hash it \
+                 — a table left the preimage, and both claim-state rows need re-reading",
+                crate::palw_state_v2::PALW_STATE_V2_VERSION
             );
         }
         let rebuildable = PALW_ECONOMIC_LOCUS_CENSUS_V1
@@ -781,7 +785,9 @@ mod tests {
         for index in indices.split('/') {
             assert!(
                 !preimage.contains(&format!("collection_root(b\"{index}\"")),
-                "the census calls {index} rebuildable and the root walk hashes it"
+                "the census calls {index} rebuildable and the root walk (state version {}) hashes it \
+                 — an index joined the preimage, and both claim-state rows need re-reading",
+                crate::palw_state_v2::PALW_STATE_V2_VERSION
             );
         }
     }
