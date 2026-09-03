@@ -1637,12 +1637,21 @@ pub fn base0_verify_fp_interval_opening_with_state_capped_v1<K: Base0FpIntervalK
     if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != ctx.prompt_token_ids_hash {
         return Base0FpIntervalSeatVerdictV1::Mismatch;
     }
-    let Ok(step_leaf_count) = base0_fp_binding_step_space_v1(binding, max_step_leaf_count) else {
-        return Base0FpIntervalSeatVerdictV1::Mismatch;
+    // **A limit is not a verdict.** A binding priced ABOVE the ladder this seat was handed is a
+    // job this seat cannot check — `Unverifiable`, which files nothing — never `Mismatch`, which
+    // is a statement about the producer's honesty. (`Ok(false)` and `Err(limit)` are one control
+    // flow to a compiler and opposite statements to a person; three findings this week were a
+    // limit or an absence rendered as a positive finding about someone else.) A binding whose
+    // price is not its geometry's IS the producer's claim being false, and stays `Mismatch`.
+    let step_leaf_count = match base0_fp_binding_step_space_v1(binding, max_step_leaf_count) {
+        Ok(count) => count,
+        Err(Base0FpIntervalError::LeafCountOutOfRange { .. }) => return Base0FpIntervalSeatVerdictV1::Unverifiable,
+        Err(_) => return Base0FpIntervalSeatVerdictV1::Mismatch,
     };
-    let Ok(geometry) = Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count)
-    else {
-        return Base0FpIntervalSeatVerdictV1::Mismatch;
+    let geometry = match Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count) {
+        Ok(geometry) => geometry,
+        Err(Base0FpIntervalError::LeafCountOutOfRange { .. }) => return Base0FpIntervalSeatVerdictV1::Unverifiable,
+        Err(_) => return Base0FpIntervalSeatVerdictV1::Mismatch,
     };
     let Ok(leaves_geometry) = base0_fp_interval_leaves_v1(profile, ctx, &geometry, index, step_leaf_count) else {
         return Base0FpIntervalSeatVerdictV1::Mismatch;
@@ -3211,8 +3220,8 @@ mod the_rulesets_ladder {
         );
         assert_eq!(
             base0_verify_fp_interval_opening_with_state_capped_v1(&opened, claim, 0, &ids, leaves, interval, narrow, None, &kernels),
-            Base0FpIntervalSeatVerdictV1::Mismatch,
-            "and a seat whose ladder cannot hold the class refuses rather than replaying it"
+            Base0FpIntervalSeatVerdictV1::Unverifiable,
+            "a seat whose ladder cannot hold the class declines to replay it — a limit is not a verdict, so never Mismatch"
         );
         // The executor cannot serve one either, and says so with the numbers.
         assert_eq!(

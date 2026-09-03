@@ -91,11 +91,14 @@ fn report(name: &str, profile: &PalwShapeProfileV3, jobs: &[(u32, u32)]) {
     );
     match worst_case_step_leaf_count_capped_v1(profile, ladder()) {
         Ok(w) => println!(
-            "- longest job (whole context as prefill): **{w}** leaves, {} rounds — ADMISSIBLE at ladder {}",
+            "- longest job (whole context as prefill — a what-if over the GEOMETRY, not a registered class): **{w}** leaves, {} rounds — ADMISSIBLE at ladder {}",
             bisection_rounds(w),
             ladder()
         ),
-        Err(e) => println!("- longest job: **INADMISSIBLE at ladder {}** — {e:?}", ladder()),
+        Err(e) => println!(
+            "- longest job (a what-if over the GEOMETRY, not a registered class): **INADMISSIBLE at ladder {}** — {e:?}",
+            ladder()
+        ),
     }
     println!();
     println!("| job (prefill/decode) | step leaves | rounds |");
@@ -135,6 +138,9 @@ fn main() {
     let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor geometry is expressible");
     report("PALW-BASE-0, the RC liveness floor", &floor, &[PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_WORST_CASE]);
 
+    // Synthetic provisioning jobs (prefill/decode) over the full geometry — what-ifs for the
+    // ruleset, NOT catalog rows: the registered A16 rows are at n_ctx 16/18/512 and every one
+    // fits the RC ladder (measured 2026-09-04: v2/v3@512 59,000,848, v5@512 52,778,128).
     let jobs = [(64u32, 64u32), (512, 128), (2048, 512)];
     let q15 = qwen25_profile_v1(QWEN25_1_5B).expect("the measured 1.5B geometry is expressible");
     report("Qwen2.5-1.5B (measured, as shipped in `palw_qwen25_profile`)", &q15, &jobs);
