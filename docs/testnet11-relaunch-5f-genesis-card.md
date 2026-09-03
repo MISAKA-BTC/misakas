@@ -2982,3 +2982,40 @@ sentence whose subject is *that this number is wrong.*
 opposite repairs.* The first would have someone edit or delete a correct comment — deleting the
 only place the failure mode is written down, which is the precise repair that makes the next
 occurrence unfindable. **Nothing here needs fixing except how the number was read.**
+
+### The close figure, confirmed under the shape that ships — and a fourth value that never got in
+
+5b's v6 fix verified from the third angle, green, and it printed the byte count as a side effect:
+
+```
+RC admission shape @ daa 0:  court arity 2, Flat ids, window 3000  |  ladder None (fence dormant)
+t11 shape admission: class 4277d84f7d91528c admitted, close 81,312 B, 35,840 terminal MACs
+test result: ok. 2 passed; 0 failed
+```
+
+**81,312 B is now measured from the genesis-registered carriage, priced under the shape the
+acceptance path actually uses** — which is what §3 already said and had not yet been measured that
+way. The figure has moved three times (81,599 → 82,719 → 81,312) and this is the first reading
+taken under the configuration that ships.
+
+**A fourth value existed and never reached either document.** 1c measured **83,175** and reported
+it as the reproducible one, then found both of their measurements passed `ladder: Some(rules)` —
+their `armed_rulesets` helper supplies it for *both* presets, and their genesis-object probe built
+the rules itself and priced with them. **t11's actual shape is `ladder: None`.**
+
+> They corrected my arity, corrected my ids form, and then priced under the wrong **ladder** —
+> **the third field of the same three-field shape, and the one they had just built a test to
+> expose.** Two fields read off the bundle, one supplied by the caller, and a number that looks
+> derived. *That is the `kary_court` defect they named, committed by the person who named it.*
+
+**And the announcement's decision survives its fourth number.** It carries **no byte count at
+all** — one carrier and a real command instead. Checked mechanically just now: `83,175`, `83175`,
+`81312` and `81,312` all appear **zero** times in
+`docs/testnet11-relaunch-5f-announcement-draft.md`. *A figure that has moved four times under
+three configurations is not a figure a launch document should carry, and the decision to drop it
+was made before three of those movements were known.*
+
+**What made this visible was the red test, not care.** It was written to check someone else's
+rule, and the first thing it printed on going green was a correction to its author's own
+arithmetic. **A test that asks the shipped question answers more than the question it was written
+for.**
