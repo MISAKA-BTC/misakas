@@ -65,6 +65,13 @@ pub enum PalwGenesisV2Error {
          (ADR-0042: the derivation is required before any class carries weight)"
     )]
     ClassIsNotDerived(Hash64),
+    #[error(
+        "genesis registers class {class_id}, whose catalogued graph reaches the fused attention kernel — \
+         a fused class must enter through the post-genesis door that carries its profile, because a \
+         genesis registration carries none and the fold cannot resolve a graph it was never given \
+         (ADR-0082 Decision 2, audit A C-5)"
+    )]
+    GenesisClassIsFused { class_id: Hash64 },
     #[error("genesis registers no class at all — a network with no liveness floor cannot produce a block")]
     NoRegistrations,
     #[error("the first class genesis registers is {first}, not the bundle's liveness floor {base}")]
@@ -182,6 +189,27 @@ pub fn verify_palw_genesis_v2(
                     });
                 }
             }
+        }
+        // **A fused class may not be registered at genesis** (ADR-0082 Decision 2, audit A C-5).
+        //
+        // `PalwClassStateV2::fused_attention` is what tells the sweep that this class's terminal
+        // leaf owes a ROOT CLAIM rather than a close, and the fold writes it from the graph the
+        // registration CARRIES. A genesis registration carries none — "the catalog IS the profile
+        // in committed form" — and the fold holds no catalog, so it folds `false` and the class's
+        // guilty responders would win by silence, which is exactly the defect C-5 names.
+        //
+        // Deriving it in the fold from a table of the rows THIS BUILD ships would be worse: the
+        // state root would become a function of the binary, and two builds shipping different row
+        // sets would root the same genesis differently. So the refusal is here, at the boot gate,
+        // where the catalog IS in hand — an operator holding two artifacts is told which one is
+        // wrong, and no node ever folds a genesis it cannot clock.
+        //
+        // The catalog's `reachable_kernels` is the committed form of the question: a fused site
+        // carries `KDESC_A16_ATTN_FUSED`, the one description of that kernel
+        // (`kernel_can_serve_node_v1` refuses a fused node whose operands do not match it), and
+        // `reachable_kernels_v1` is the same traversal the entry was minted from.
+        if entry.reachable_kernels.contains(&crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_A16_ATTN_FUSED)) {
+            return Err(PalwGenesisV2Error::GenesisClassIsFused { class_id: *class_id });
         }
         registered.push(*class_id);
     }
