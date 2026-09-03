@@ -610,6 +610,41 @@ reading as ordinary code. Keep that sentence, drop the lint apologia, take the r
 a retracted argument gets re-adopted: the `#[allow]` side reads as the more thoroughly justified one,
 and it is the wrong one.*
 
+**A THIRD merge is required and the card did not name it: `palw-launch-consolidated`.** It is not
+optional polish — it carries two defects of exactly the class this cut keeps finding, in the tool an
+operator uses to verify a published derivation:
+
+    5e369d10  "I cannot check this" was being reported as "this is a forgery"
+              UnknownGrammar / UnknownTransformer -> UNVERIFIABLE, still exit 2
+    928b4081  `"signed": true` was a BORSH field being PRESENT, not a signature that verifies
+              it was `signature.is_some()`; a signature that is a byte of noise verified `consistent`
+    ce9a6a24  the drill silently skipped contract/evm/v1 and said nothing
+    e2341aec  `width` — the row's arithmetic, so a narrow class refuses BY NAME
+
+`signature.is_some()` printed as `signed: true` is the sharpest of the four: the tool that exists to
+let a stranger check a derivation was answering a different question than the word it printed.
+
+**One merge, not three** — `palw-launch-consolidated` already contains `palw-launch-derived-proof`
+and `palw-launch-qwen36-demo` (verified by ancestry). It adds 35 commits over the re-merged tree and
+conflicts in exactly one file.
+
+**That conflict is pre-ruled: `misaka-palw/src/host_security.rs`, and it is DOC-ONLY.** Two hunks,
+zero non-doc lines inside either. Both sides independently discovered the same defect — that
+`MISAKA_PALW_NETWORK_ID` missing from `PALW_WORKER_ENV_ALLOWLIST` made every free-prompt worker
+unstartable, with SA-7 withholding the real reason so the gateway reported only "the worker exited
+before announcing its manifest" — and both wrote it up. The allowlist entry itself is byte-identical
+on both sides at line 78.
+
+    KEEP HEAD's test.  HEAD has `assert!(PALW_WORKER_ENV_ALLOWLIST.contains(&"MISAKA_PALW_NETWORK_ID"))`
+                       at line 949; consolidated has no such test. Losing it is the real risk here.
+    MERGE the prose.   HEAD explains the two well-founded rules that pointed opposite ways and that
+                       a name is not a capability; consolidated has the reproduction (`env -i` with
+                       the exact delivered set) and the exact `die` message. Both halves are worth
+                       keeping and neither is a superset.
+
+*Two sessions finding the same defect and writing two explanations is the cheapest kind of conflict
+and the easiest to resolve badly: a side-pick keeps one write-up and silently drops a test.*
+
 **The other four, and who owns them.** `classes.rs`, `palw_class_admission_v2.rs` and
 `palw_state_v2.rs` are where the fourth certified family, the artifact-route change and the
 `canonical_leaves` field meet ADR-0082's court — 1c's to resolve, and they are resolving them.
