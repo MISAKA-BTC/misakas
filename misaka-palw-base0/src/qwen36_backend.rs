@@ -382,6 +382,49 @@ pub fn qwen36_checkpoint_profile_v1(
     kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(profile.n_ctx.max(1))
 }
 
+/// **Take one checkpoint of the hybrid's state, at whatever the class's map names** (ADR-0082
+/// Decision 4, amended; audit B, C-3).
+///
+/// The shipped hybrid registers the checkpoint sentinel and never reaches here. A graph-v5 hybrid
+/// registers the composed map, so its leg has `prefill + decode_calls` leaves and a producer that
+/// took none sealed at zero against a canonical count that is never zero —
+/// `CheckpointCaptureIncomplete`, and the class produced nothing at all.
+///
+/// Both halves come from the functions the SEAT uses (`qwen36_attn_chunk_bytes_v1`,
+/// `qwen36_recurrence_state_v1`, `base0_gdn_state_chunks_v2`) and the order is
+/// `base0_composed_state_chunks_v1`'s, which is `hybrid_state_chunk_entry_v3` itself. The
+/// recurrence is built ONLY when this leaf carries it: under the per-position cadence the
+/// attention tiles ride every position and the recurrence rides its derived spacing, and asking
+/// the geometry is how this function avoids having an opinion about that.
+fn qwen36_push_checkpoint_v1(
+    checkpoints: &mut crate::legs::Base0CheckpointCaptureV1,
+    shape: &crate::qwen36::Qwen36ShapeV1,
+    cache: &Qwen36Cache,
+) -> Result<(), String> {
+    let geometry = checkpoints.next_capture_geometry_v1().map_err(|e| format!("{e:?}"))?;
+    let needs_recurrence = match &geometry {
+        crate::legs::Base0CaptureGeometryV1::Hybrid(g) => g.gdn_chunk_count() > 0,
+        crate::legs::Base0CaptureGeometryV1::Flat(_) => false,
+    };
+    let gdn_chunks = if needs_recurrence {
+        let (layers, states) = crate::fp_recompute::qwen36_recurrence_state_v1(shape, cache);
+        let gdn_geometry = crate::fp_capture::base0_gdn_state_geometry_v2(
+            &layers,
+            shape.linear_v_heads as u32,
+            shape.linear_head_dim as u32,
+            shape.linear_head_dim as u32,
+            shape.conv_kernel as u32,
+        )
+        .map_err(|e| e.to_string())?;
+        crate::fp_capture::base0_gdn_state_chunks_v2(&gdn_geometry, &states).map_err(|e| e.to_string())?
+    } else {
+        Vec::new()
+    };
+    checkpoints
+        .push_composed_v1(|entry| crate::fp_recompute::qwen36_attn_chunk_bytes_v1(cache, entry), &gdn_chunks)
+        .map_err(|e| format!("{e:?}"))
+}
+
 /// **The hybrid tier's captured attempt** — the same object the floor's and the dense tier's
 /// captured runs return, because it answers the same three verbs. What differs is the walk (the
 /// planned interpreter, one committed row per declared node) and the checkpoint leg (empty by
@@ -519,7 +562,7 @@ fn qwen36_execute_streaming_v1(
     let mut capture = crate::legs::Base0CaptureSinkV1::for_kind(capture_kind, profile, ctx, leaf_count, max_step_leaf_count)
         .map_err(|e| format!("{e:?}"))?;
     let checkpoint_profile = qwen36_checkpoint_profile_v1(profile);
-    let checkpoints = crate::legs::Base0CheckpointCaptureV1::new(ctx, profile, &checkpoint_profile);
+    let mut checkpoints = crate::legs::Base0CheckpointCaptureV1::new(ctx, profile, &checkpoint_profile);
     let mut cache = Qwen36Cache::new(&artifact.shape);
 
     let mut logits_rows: Vec<Vec<i32>> = Vec::with_capacity(decode_tokens);
@@ -536,6 +579,15 @@ fn qwen36_execute_streaming_v1(
             rows.retain(|r| r.table != kaspa_consensus_core::palw_step::PalwStepTableV1::Post);
         }
         capture.push_call(profile, ctx, 0, position as u32, &rows).map_err(|e| format!("{e:?}"))?;
+        // **A checkpoint after a PREFILL position, when the class's cadence says so** (ADR-0082
+        // Decision 4, amended). The sentinel-mapped hybrid wants none of these and this is `false`
+        // at every position; a class that registered the composed map wants one after every
+        // position, and before this the hybrid producer took NO checkpoint at any coordinate and
+        // then sealed at a count that is `prefill + decode_calls`.
+        if checkpoints.wants_checkpoint_after_v1(0, position as u32) {
+            qwen36_push_checkpoint_v1(&mut checkpoints, &artifact.shape, &cache)
+                .map_err(|e| format!("the prefill checkpoint at position {position}: {e}"))?;
+        }
         last_logits = logits;
     }
     let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits) as u32;
@@ -557,13 +609,19 @@ fn qwen36_execute_streaming_v1(
         generated.push(next);
         on_token(next);
         logits_rows.push(logits);
+        // The same predicate the prefill arm asks, so the two cannot drift into two cadences.
+        if checkpoints.wants_checkpoint_after_v1(call as u32, 0) {
+            qwen36_push_checkpoint_v1(&mut checkpoints, &artifact.shape, &cache)
+                .map_err(|e| format!("the checkpoint after decode call {call}: {e}"))?;
+        }
     }
 
     // The count the CLASS's cadence says this job has (ADR-0082 Decision 4, amended). The shipped
     // hybrid registers the checkpoint sentinel and commits none, and `palw_checkpoint_count_v1`
-    // returns exactly what `decode_calls / interval` returned for it — the derivation is here so a
-    // hybrid that registers the composed map is sealed at the count its own leg has rather than at
-    // a per-call one nobody would file.
+    // returns exactly what `decode_calls / interval` returned FOR THAT MAP — the sentinel's. It is
+    // NOT `decode_calls / interval` in general: a class that registers the composed map is on the
+    // per-position cadence and its canonical count is `prefill + decode_calls`, which is what the
+    // two push sites above now file (audit B, C-3 and L-1 item 3).
     let checkpoints = checkpoints.finish_canonical_v1().map_err(|e| format!("{e:?}"))?;
     let captured = capture.finish(max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
 

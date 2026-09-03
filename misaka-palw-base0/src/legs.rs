@@ -567,6 +567,121 @@ pub fn base0_state_chunk_geometry_v1(
     geometry.map_err(LegError::CheckpointStateMap)
 }
 
+/// **The layout ONE checkpoint of this class is taken under** — the attention cache alone, or the
+/// whole composition a hybrid's map names (ADR-0082 Decision 4; audit B, H-1).
+///
+/// [`base0_state_chunk_geometry_v1`] answers about the CACHE half and is what the seat's A16
+/// kernels and the court's row reads take. A hybrid's registered map is not the cache half: its
+/// name is `palw-hybrid-state/attn=…/gdn=…/v3`, and a producer that enumerated only the `attn=`
+/// part would commit `attn.chunk_count()` chunks under a root the seat rebuilds over
+/// `attn + gdn` — a `CheckpointRootMismatch` against an honest producer, and a recurrence
+/// committed by nobody and adjudicable by nobody. One enumeration, here, for both directions.
+pub enum Base0CaptureGeometryV1 {
+    /// A class whose checkpoint is the attention cache (or the recurrence's own standalone map).
+    Flat(kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1),
+    /// A class whose checkpoint is the composition, in the order its map's NAME spells.
+    Hybrid(kaspa_consensus_core::palw_state_chunk_map::PalwHybridStateGeometryV1),
+}
+
+impl Base0CaptureGeometryV1 {
+    /// Chunks this checkpoint has, under the class's own map.
+    pub fn chunk_count(&self) -> u64 {
+        match self {
+            Self::Flat(g) => g.chunk_count(),
+            Self::Hybrid(g) => g.chunk_count(),
+        }
+    }
+
+    /// The attention half's geometry — the same object either way, so a caller that only reads
+    /// cache rows (`integer_kv_state_locate_v1`) does not have to know which shape it has.
+    pub fn attn(&self) -> &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1 {
+        match self {
+            Self::Flat(g) => g,
+            Self::Hybrid(g) => &g.attn,
+        }
+    }
+
+    /// The entry at `index`, or `None` past the end — [`kaspa_consensus_core::palw_state_chunk_map::hybrid_state_chunk_entry_v3`]
+    /// for the composition and the flat enumeration wrapped in its attention arm otherwise, so one
+    /// walk serves both.
+    pub fn entry(&self, index: u64) -> Option<kaspa_consensus_core::palw_state_chunk_map::PalwHybridChunkEntryV1> {
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+        match self {
+            Self::Flat(g) => map::integer_kv_state_chunk_entry_v1(g, index).map(map::PalwHybridChunkEntryV1::AttentionCache),
+            Self::Hybrid(g) => map::hybrid_state_chunk_entry_v3(g, index),
+        }
+    }
+}
+
+/// **The layout of one checkpoint at `positions`, composition included** — the dispatch every
+/// capture takes, and the twin of [`base0_state_chunk_geometry_v1`] for the classes whose map
+/// names two halves.
+///
+/// The recurrence section is not a caller's choice: `hybrid_state_geometry_for_covered_v1` asks
+/// `palw_checkpoint_leaf_carries_recurrence_v1` whether THIS checkpoint carries it, so a
+/// per-position leg commits the attention tiles at every position and the recurrence at its
+/// derived spacing — the same answer the seat's `Qwen36RecomputeKernelsV1::state_chunks` gets from
+/// the same function.
+pub fn base0_capture_geometry_v1(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+) -> Result<Base0CaptureGeometryV1, LegError> {
+    use kaspa_consensus_core::palw_state_chunk_map as map;
+    if profile.state_chunk_map_id == map::hybrid_state_chunk_map_id_v3() {
+        return map::hybrid_state_geometry_for_covered_v1(profile, positions)
+            .map(Base0CaptureGeometryV1::Hybrid)
+            .map_err(LegError::CheckpointStateMap);
+    }
+    base0_state_chunk_geometry_v1(profile, positions).map(Base0CaptureGeometryV1::Flat)
+}
+
+/// **The one walk of a class's checkpoint layout** — producer and seat (audit B, H-1).
+///
+/// `attn` serializes one attention-cache entry out of whatever cache the caller holds;
+/// `gdn_chunks` are the recurrence's chunks in its own map's order, consumed in the order the
+/// composition enumerates them. The enumeration is
+/// [`Base0CaptureGeometryV1::entry`] — `hybrid_state_chunk_entry_v3` for a composed map and the
+/// flat one otherwise — so the executor's chunk `i` and the seat's chunk `i` are the same bytes by
+/// construction. Before this there were three spellings: the producer and the court enumerated the
+/// attention half alone and the seat enumerated attention plus recurrence, which is a
+/// `CheckpointRootMismatch` against an honest producer at every checkpoint that carries the
+/// recurrence.
+pub fn base0_composed_state_chunks_v1<F>(
+    geometry: &Base0CaptureGeometryV1,
+    mut attn: F,
+    gdn_chunks: &[Vec<u8>],
+) -> Result<Vec<Vec<u8>>, LegError>
+where
+    F: FnMut(&kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>>,
+{
+    use kaspa_consensus_core::palw_state_chunk_map::PalwHybridChunkEntryV1;
+    let attn_count = geometry.attn().chunk_count();
+    let mut out = Vec::with_capacity(geometry.chunk_count() as usize);
+    for index in 0..geometry.chunk_count() {
+        let entry = geometry.entry(index).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?;
+        let bytes = match entry {
+            PalwHybridChunkEntryV1::AttentionCache(entry) => {
+                attn(&entry).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?
+            }
+            PalwHybridChunkEntryV1::RecurrenceState { byte_len, .. } => {
+                let bytes: Vec<u8> = gdn_chunks
+                    .get((index - attn_count) as usize)
+                    .cloned()
+                    .ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?;
+                // The composition's own length for the slice, checked where the bytes are picked
+                // up rather than two layers later: a recurrence chunk of another width is a leaf
+                // nothing can open at the index the map named.
+                if bytes.len() as u64 != byte_len {
+                    return Err(LegError::CheckpointStateUnavailable { chunk_index: index });
+                }
+                bytes
+            }
+        };
+        out.push(bytes);
+    }
+    Ok(out)
+}
+
 /// **What a finished capture holds on to** (ADR-0082 Decision 4, amended).
 ///
 /// Not a caller's choice — [`Base0CheckpointCaptureV1::new`] derives it from the class's cadence,
@@ -680,14 +795,7 @@ impl Base0CheckpointCaptureV1 {
     /// cache that is a row short would otherwise be committed as a shorter state, and the shortfall
     /// would look like a job that ran fewer calls.
     pub fn push(&mut self, cache: &crate::engine::KvCache) -> Result<(), LegError> {
-        let geometry = self.next_geometry()?;
-        let mut chunk_bytes = Vec::with_capacity(geometry.chunk_count() as usize);
-        for index in 0..geometry.chunk_count() {
-            let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
-                .ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?;
-            chunk_bytes.push(cache.state_chunk_bytes(&entry).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?);
-        }
-        self.push_chunks(chunk_bytes)
+        self.push_with_v1(|entry| cache.state_chunk_bytes(entry))
     }
 
     /// The map this capture's NEXT checkpoint is taken under — the geometry the CLASS declares,
@@ -697,12 +805,23 @@ impl Base0CheckpointCaptureV1 {
     /// ([`kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1`]), which on
     /// every per-call class is `integer_kv_positions_at_v1` verbatim.
     pub fn next_geometry(&self) -> Result<kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1, LegError> {
-        let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(
+        base0_state_chunk_geometry_v1(&self.profile, self.next_positions_v1())
+    }
+
+    /// The positions the NEXT checkpoint's state covers, at the class's cadence.
+    pub fn next_positions_v1(&self) -> u32 {
+        kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(
             &self.profile,
             &self.ctx,
             self.next_covered_decode_call(),
-        );
-        base0_state_chunk_geometry_v1(&self.profile, positions)
+        )
+    }
+
+    /// **The whole layout of the next checkpoint, composition included** — what `push_chunks`
+    /// prices and validates against, so a hybrid's recurrence half is part of the leaf rather than
+    /// a section the producer enumerated and the seat did not (audit B, H-1).
+    pub fn next_capture_geometry_v1(&self) -> Result<Base0CaptureGeometryV1, LegError> {
+        base0_capture_geometry_v1(&self.profile, self.next_positions_v1())
     }
 
     /// **Take the next checkpoint from a chunk serializer** — the entry both backends use, so
@@ -712,17 +831,33 @@ impl Base0CheckpointCaptureV1 {
     /// `KvCache::state_chunk_bytes`); `None` from it is a state the class's declared map cannot
     /// describe, and the run fails here rather than committing a checkpoint that opens to a state
     /// the producer never held.
-    pub fn push_with_v1<F>(&mut self, mut chunk: F) -> Result<(), LegError>
+    pub fn push_with_v1<F>(&mut self, chunk: F) -> Result<(), LegError>
     where
         F: FnMut(&kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>>,
     {
-        let geometry = self.next_geometry()?;
-        let mut chunk_bytes = Vec::with_capacity(geometry.chunk_count() as usize);
-        for index in 0..geometry.chunk_count() {
-            let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
-                .ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?;
-            chunk_bytes.push(chunk(&entry).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?);
-        }
+        self.push_composed_v1(chunk, &[])
+    }
+
+    /// **Take the next checkpoint of a class whose map names TWO halves** (audit B, H-1 and C-3).
+    ///
+    /// `attn` is the cache's own serializer, as in [`Self::push_with_v1`]; `gdn_chunks` are the
+    /// recurrence's chunks in ITS map's order (`base0_gdn_state_chunks_v2`), which the composition
+    /// enumerates after the attention tiles because
+    /// `palw-hybrid-state/attn=…/gdn=…/v3` spells them in that order. The walk is
+    /// `hybrid_state_chunk_entry_v3` itself, so the producer's enumeration IS the seat's
+    /// (`Qwen36RecomputeKernelsV1::state_chunks` walks the same function) rather than a second
+    /// derivation that agrees until it does not.
+    ///
+    /// A checkpoint whose leaf does not carry the recurrence at all (the per-position cadence,
+    /// away from the derived spacing) enumerates zero recurrence chunks and `gdn_chunks` is
+    /// ignored — the section question is `palw_checkpoint_leaf_carries_recurrence_v1`'s and no
+    /// caller answers it.
+    pub fn push_composed_v1<F>(&mut self, attn: F, gdn_chunks: &[Vec<u8>]) -> Result<(), LegError>
+    where
+        F: FnMut(&kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>>,
+    {
+        let geometry = self.next_capture_geometry_v1()?;
+        let chunk_bytes = base0_composed_state_chunks_v1(&geometry, attn, gdn_chunks)?;
         self.push_chunks(chunk_bytes)
     }
 
@@ -730,7 +865,7 @@ impl Base0CheckpointCaptureV1 {
     /// produce the same leaf or a producer and a seat would disagree about what was committed, so
     /// both go through here rather than each hashing for itself.
     pub fn push_chunks(&mut self, chunk_bytes: Vec<Vec<u8>>) -> Result<(), LegError> {
-        let geometry = self.next_geometry()?;
+        let geometry = self.next_capture_geometry_v1()?;
         if chunk_bytes.len() as u64 != geometry.chunk_count() {
             return Err(LegError::CheckpointStateUnavailable { chunk_index: chunk_bytes.len() as u64 });
         }
@@ -739,8 +874,9 @@ impl Base0CheckpointCaptureV1 {
         for (index, bytes) in chunk_bytes.iter().enumerate() {
             // The map's own length for this chunk, checked here: bytes of the wrong length hash to
             // a leaf nothing can open, and a producer that committed one could not answer for it.
-            let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index as u64)
-                .ok_or(LegError::CheckpointStateUnavailable { chunk_index: index as u64 })?;
+            // Through the COMPOSITION's enumeration, so a hybrid's recurrence chunk is priced by
+            // its own head slice and not by an attention tile's width.
+            let entry = geometry.entry(index as u64).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index as u64 })?;
             if bytes.len() as u64 != entry.byte_len() {
                 return Err(LegError::CheckpointStateUnavailable { chunk_index: index as u64 });
             }
@@ -1153,13 +1289,25 @@ pub fn base0_checkpoint_chunks_at_v1<F>(
 where
     F: FnMut(&kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>>,
 {
+    use kaspa_consensus_core::palw_state_chunk_map::PalwHybridChunkEntryV1;
     let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, ctx, covered);
-    let geometry = base0_state_chunk_geometry_v1(profile, positions)?;
+    let geometry = base0_capture_geometry_v1(profile, positions)?;
     let mut out = Vec::with_capacity(geometry.chunk_count() as usize);
     for index in 0..geometry.chunk_count() {
-        let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
-            .ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?;
-        out.push(chunk(&entry).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?);
+        match geometry.entry(index).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })? {
+            PalwHybridChunkEntryV1::AttentionCache(entry) => {
+                out.push(chunk(&entry).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?)
+            }
+            // **The recurrence is not prefix-stable and is not re-derivable from a later state.**
+            // That is the whole reason it rides at a derived spacing rather than at every position
+            // (`palw_checkpoint_leaf_carries_recurrence_v1`): a `heads × k_dim × v_dim` delta
+            // matrix at position `p` is not a prefix of the one at `p + 1`. A producer answering
+            // for such a checkpoint must have retained it, and saying so is better than serving an
+            // attention half under a root that was taken over both.
+            PalwHybridChunkEntryV1::RecurrenceState { .. } => {
+                return Err(LegError::CheckpointStateUnavailable { chunk_index: index });
+            }
+        }
     }
     Ok(out)
 }

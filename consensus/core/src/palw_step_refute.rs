@@ -3744,24 +3744,39 @@ fn verify_kv_anchor<'a>(
     // could never carry the attention anchor its own map entitles it to: every anchored attention
     // refutation on the one class shape ADR-0077 Decision 13 registers came back `Unadjudicable`,
     // on honest material, for declaring the composition the decision requires.
+    //
+    // **The v3 COMPOSITION is not its attention half** (audit B, H-1). The `attn=` halves of the
+    // v1 and v2 hybrid names are `integer_kv` v2 verbatim and their `gdn=` halves are enumerated
+    // by nobody, which is why they resolve to the cache geometry above. The v3 composition IS
+    // enumerated (`hybrid_state_chunk_entry_v3`), the producer commits every chunk of it, and a
+    // court that counted only the attention tiles would refuse an honest anchor by the count.
+    // What does NOT move is the row arithmetic: the attention chunks are indices
+    // `0..attn.chunk_count()`, so `integer_kv_state_locate_v1` addresses them unchanged and only
+    // the count the carried chunks are checked against comes from the composition.
     let declared = binding.shape_profile.state_chunk_map_id;
-    let (geometry, elem) = if declared == map::integer_kv_state_chunk_map_id_v1() {
-        (map::integer_kv_state_geometry_v1(&binding.shape_profile, positions), KvAnchorElemV1::I8)
+    let (geometry, elem, expected_chunks) = if declared == map::integer_kv_state_chunk_map_id_v1() {
+        (map::integer_kv_state_geometry_v1(&binding.shape_profile, positions), KvAnchorElemV1::I8, None)
     } else if declared == map::integer_kv_state_chunk_map_id_v2()
         || declared == map::hybrid_state_chunk_map_id_v1()
         || declared == map::hybrid_state_chunk_map_id_v2()
     {
-        (map::integer_kv_state_geometry_v2(&binding.shape_profile, positions), KvAnchorElemV1::I32Le)
-    } else if declared == map::tiled_kv_state_chunk_map_id_v3() || declared == map::hybrid_state_chunk_map_id_v3() {
+        (map::integer_kv_state_geometry_v2(&binding.shape_profile, positions), KvAnchorElemV1::I32Le, None)
+    } else if declared == map::tiled_kv_state_chunk_map_id_v3() {
         // The tiled enumeration (graph v4): the same `i32` cache, chunked at
         // `PALW_ATTN_HISTORY_TILE_V4` positions so one opening is a TILE of the history rather
         // than the history.
-        (map::tiled_kv_state_geometry_v3(&binding.shape_profile, positions), KvAnchorElemV1::I32Le)
+        (map::tiled_kv_state_geometry_v3(&binding.shape_profile, positions), KvAnchorElemV1::I32Le, None)
+    } else if declared == map::hybrid_state_chunk_map_id_v3() {
+        let composition = map::hybrid_state_geometry_for_covered_v1(&binding.shape_profile, positions)
+            .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+        let expected = composition.chunk_count();
+        (Ok(composition.attn), KvAnchorElemV1::I32Le, Some(expected))
     } else {
         return Err(PalwStepRefuteError::Unadjudicable);
     };
     let geometry = geometry.map_err(|_| PalwStepRefuteError::Unadjudicable)?;
-    if geometry.chunk_count() as usize != ops.chunks.len() {
+    let expected_chunks = expected_chunks.unwrap_or_else(|| geometry.chunk_count());
+    if expected_chunks as usize != ops.chunks.len() {
         return Err(PalwStepRefuteError::InputSetNotCanonical("the carried chunk count is not the map's for this state"));
     }
     Ok(VerifiedKvAnchor { ops, geometry, elem })

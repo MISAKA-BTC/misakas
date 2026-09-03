@@ -398,52 +398,72 @@ impl<'a> Qwen36RecomputeKernelsV1<'a> {
 
     /// The recurrence layers' live state, in the shape [`crate::fp_capture`] chunks.
     fn recurrence_state(&self) -> (Vec<u16>, Vec<crate::fp_capture::Base0GdnLayerStateV1>) {
-        let mut layers = Vec::new();
-        let mut states = Vec::new();
-        for (index, kind) in self.shape.layer_types.iter().enumerate() {
-            if *kind != crate::qwen36::Qwen36LayerKind::LinearAttention {
-                continue;
-            }
-            layers.push(index as u16);
-            states.push(crate::fp_capture::Base0GdnLayerStateV1 {
-                heads: self.cache.gdn.get(index).cloned().unwrap_or_default(),
-                conv: self.cache.conv.get(index).cloned().unwrap_or_default(),
-            });
-        }
-        (layers, states)
+        qwen36_recurrence_state_v1(self.shape, &self.cache)
     }
 
-    /// **This cache's bytes for one ATTENTION chunk of the v3 composition** — the hybrid's
-    /// analogue of `A16Cache::state_chunk_bytes_v1`, and the same discipline: the width is read
-    /// off the entry rather than assumed, and a row that does not fit the declared width is
-    /// refused instead of narrowed.
-    ///
-    /// The composition's attention half is `tiled_kv_state_geometry_v3` verbatim, whose rows are
-    /// little-endian `i32` at `attn_kv_heads × attn_head_dim × 4` bytes — the width the `i32` cache
-    /// this engine holds actually is. A checkpoint that opened to a state the producer never held
-    /// is worse than a missing one, and the producer has signed for it.
     fn attn_chunk_bytes_v1(
         &self,
         entry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1,
     ) -> Option<Vec<u8>> {
-        use kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1;
-        let side = match entry.kind {
-            PalwStateChunkKindV1::Key => &self.cache.keys,
-            PalwStateChunkKindV1::Value => &self.cache.values,
-        };
-        let layer = side.get(entry.attn_layer as usize)?;
-        let mut out = Vec::with_capacity((entry.position_count as usize) * (entry.row_bytes as usize));
-        for p in entry.position_start..entry.position_start + entry.position_count {
-            let row = layer.get(p as usize)?;
-            if entry.row_bytes as usize != row.len().checked_mul(4)? {
-                return None;
-            }
-            for value in row {
-                out.extend_from_slice(&value.to_le_bytes());
-            }
-        }
-        Some(out)
+        qwen36_attn_chunk_bytes_v1(&self.cache, entry)
     }
+}
+
+/// **The hybrid cache's recurrence layers, in the order the gdn map enumerates them** — one
+/// spelling for the seat (above) and the PRODUCER (`qwen36_execute_for_attempt_capped_v1`), so a
+/// checkpoint the executor commits and the one a seat recomputes are the same object.
+pub fn qwen36_recurrence_state_v1(
+    shape: &crate::qwen36::Qwen36ShapeV1,
+    cache: &crate::qwen36::Qwen36Cache,
+) -> (Vec<u16>, Vec<crate::fp_capture::Base0GdnLayerStateV1>) {
+    let mut layers = Vec::new();
+    let mut states = Vec::new();
+    for (index, kind) in shape.layer_types.iter().enumerate() {
+        if *kind != crate::qwen36::Qwen36LayerKind::LinearAttention {
+            continue;
+        }
+        layers.push(index as u16);
+        states.push(crate::fp_capture::Base0GdnLayerStateV1 {
+            heads: cache.gdn.get(index).cloned().unwrap_or_default(),
+            conv: cache.conv.get(index).cloned().unwrap_or_default(),
+        });
+    }
+    (layers, states)
+}
+
+/// **This cache's bytes for one ATTENTION chunk of the v3 composition** — the hybrid's analogue of
+/// `A16Cache::state_chunk_bytes_v1`, and the same discipline: the width is read off the entry
+/// rather than assumed, and a row that does not fit the declared width is refused instead of
+/// narrowed.
+///
+/// The composition's attention half is `tiled_kv_state_geometry_v3` verbatim, whose rows are
+/// little-endian `i32` at `attn_kv_heads × attn_head_dim × 4` bytes — the width the `i32` cache
+/// this engine holds actually is. A checkpoint that opened to a state the producer never held is
+/// worse than a missing one, and the producer has signed for it.
+///
+/// A free function because the producer serializes the same cache with the same rule; two copies
+/// of it is how a producer and a seat come to commit different bytes for one state.
+pub fn qwen36_attn_chunk_bytes_v1(
+    cache: &crate::qwen36::Qwen36Cache,
+    entry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1,
+) -> Option<Vec<u8>> {
+    use kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1;
+    let side = match entry.kind {
+        PalwStateChunkKindV1::Key => &cache.keys,
+        PalwStateChunkKindV1::Value => &cache.values,
+    };
+    let layer = side.get(entry.attn_layer as usize)?;
+    let mut out = Vec::with_capacity((entry.position_count as usize) * (entry.row_bytes as usize));
+    for p in entry.position_start..entry.position_start + entry.position_count {
+        let row = layer.get(p as usize)?;
+        if entry.row_bytes as usize != row.len().checked_mul(4)? {
+            return None;
+        }
+        for value in row {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    Some(out)
 }
 
 impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
@@ -523,28 +543,16 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
                 crate::fp_capture::base0_gdn_state_chunks_v2(&gdn_geometry, &states)
                     .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?
             };
-            let mut out = Vec::with_capacity(geometry.chunk_count() as usize);
-            for index in 0..geometry.chunk_count() {
-                let entry = map::hybrid_state_chunk_entry_v3(&geometry, index)
-                    .ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
-                match entry {
-                    map::PalwHybridChunkEntryV1::AttentionCache(entry) => {
-                        out.push(self.attn_chunk_bytes_v1(&entry).ok_or(Base0FpRecomputeError::StateIsNotTheMaps {
-                            chunk_index: index,
-                        })?);
-                    }
-                    map::PalwHybridChunkEntryV1::RecurrenceState { .. } => {
-                        let within = (index - geometry.attn.chunk_count()) as usize;
-                        let bytes =
-                            gdn_chunks.get(within).ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
-                        if bytes.len() as u64 != entry.byte_len() {
-                            return Err(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index });
-                        }
-                        out.push(bytes.clone());
-                    }
-                }
-            }
-            return Ok(out);
+            // **The walk is the PRODUCER's** (audit B, H-1). `base0_composed_state_chunks_v1` is
+            // the one enumeration of a class's checkpoint layout and
+            // `Base0CheckpointCaptureV1::push_composed_v1` takes it too, so a seat's chunk `i` is
+            // the executor's chunk `i` by construction rather than by two derivations agreeing.
+            return crate::legs::base0_composed_state_chunks_v1(
+                &crate::legs::Base0CaptureGeometryV1::Hybrid(geometry),
+                |entry| self.attn_chunk_bytes_v1(entry),
+                &gdn_chunks,
+            )
+            .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")));
         }
         if declared == map::hybrid_state_chunk_map_id_v1() || declared == map::hybrid_state_chunk_map_id_v2() {
             return Err(Base0FpRecomputeError::NoStateSerializer {
