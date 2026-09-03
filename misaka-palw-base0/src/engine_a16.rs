@@ -583,9 +583,22 @@ impl<'a> A16Engine<'a> {
         Ok((logits, streams))
     }
 
-    /// **The replay surface: one position's forward with EVERY node's committed row recorded,
-    /// in the shape profile's numbering.** The full-job replay adjudicates each of these rows
-    /// through the court's own dispatch and demands bit equality.
+    /// **The compiled GRAPH-V2 program: one position's forward with every node's committed row
+    /// recorded, in the v2 shape profile's numbering.** The full-job replay adjudicates each of
+    /// these rows through the court's own dispatch and demands bit equality.
+    ///
+    /// **It is a v2 reference and nothing wider.** The row count is written into this function —
+    /// twenty-seven nodes a layer, the attention site spelled as `ATTN_SCORES`, the row `SoftMax`,
+    /// the probability requantization and `ATTN_VALUES` — so it describes exactly the graph
+    /// `qwen25_a16_profile_v2` declares. ADR-0082's graph v5 replaces those four nodes with one
+    /// fused node and declares twenty-four, and this route MUST NOT learn the fusion: the whole
+    /// point of ADR-0067 Decision 2 is that [`Self::plan_from_profile`] is the single authority on
+    /// what a declaration executes, and a second hand-written program that also knew the fused
+    /// site would be a second authority to keep in step. A v5 class is served by
+    /// [`Self::forward_token_planned`]; a caller that reaches this route with a v5 profile is
+    /// refused by name, by the Decision-F probe in `a16_execute_for_attempt_v1` ("per-layer
+    /// declares 24 against 27 recorded") and pinned by
+    /// `the_plan_less_route_is_the_v2_reference_and_refuses_a_fused_row`.
     pub fn forward_token_traced(
         &self,
         cache: &mut A16Cache,
@@ -1237,11 +1250,20 @@ impl<'a> A16Engine<'a> {
     }
 
     /// One position's forward, EXECUTED FROM THE PLAN: one committed row per declared node, in
-    /// the declared order. Bit-compatible with [`Self::forward_token_traced`] whenever the plan
-    /// was compiled from the profile that describes this engine — pinned by
-    /// `the_interpreter_and_the_compiled_engine_agree_bit_for_bit` below — and faithful to the
-    /// DECLARATION where the two differ, which is the point of ADR-0067: the court adjudicates
-    /// what was declared, so an interpreter must execute exactly that.
+    /// the declared order. This is the route that serves EVERY declared graph, the fused
+    /// attention site of ADR-0082 included (`PlanOp::AttnFused`).
+    ///
+    /// Bit-compatible with [`Self::forward_token_traced`] for a plan compiled from a GRAPH-V2
+    /// profile — pinned by `the_interpreter_and_the_compiled_engine_agree_bit_for_bit` below,
+    /// which is stated over `qwen25_a16_profile_v2` and claims nothing wider. There is no such
+    /// correspondence for graph v5 and there is not meant to be one: the traced route is the
+    /// twenty-seven-row v2 program, a v5 layer declares twenty-four nodes, and the fused arm's
+    /// equality is proven against the ARITHMETIC instead — `a16_attn_fused_reference_v1` and
+    /// `a16_attn_fused_via_tiles_v1`, in `the_fused_arm_is_the_reference_composition`.
+    ///
+    /// Faithful to the DECLARATION wherever a declaration and a hand-written program could
+    /// differ, which is the point of ADR-0067: the court adjudicates what was declared, so an
+    /// interpreter must execute exactly that.
     pub fn forward_token_planned(
         &self,
         plan: &A16ProfilePlanV1,

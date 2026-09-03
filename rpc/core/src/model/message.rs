@@ -2319,6 +2319,21 @@ pub struct GetPalwProducerFactsResponse {
     pub fp_quanta_per_canonical_job: u32,
     /// The per-receipt jackpot bound (`fp_quanta_v3`'s cap). Zero on a network with no lane.
     pub fp_max_quanta_per_receipt: u32,
+    /// **Is ADR-0082's free-prompt decode ruleset IN FORCE at `daa_score`** — the fence
+    /// `Params::palw_fp_decode_rules`, answered by `palw_fp_decode_rules_active_at` at the same
+    /// chain point every other fact here was read at.
+    ///
+    /// It is a node-config fact and not chain state, exactly like the two prices above, and it is
+    /// on the wire for the same reason `fp_certified` is: it changes what a commitment must
+    /// contain before the commitment is built. Past the fence a job carries `(sampling_seed,
+    /// temperature_q)` inside its context hash and decode leaves are what earn; a gateway that
+    /// guessed would either omit fields the chain requires or publish fields it will not read, and
+    /// in both directions the claim is unreproducible rather than rejected.
+    ///
+    /// False whenever `available` is false, and false on any pre-version-4 peer — the same
+    /// fail-closed reading `fp_certified` takes, and for the same reason: a submitter that held
+    /// back on a stale `false` loses nothing it cannot retry.
+    pub fp_decode_rules_armed: bool,
     /// **Every outpoint a wallet must not spend**, `txid:index` with a 128-hex transaction id.
     ///
     /// Two sources, deliberately in ONE list so a wallet cannot read half of it (audit3 H3, H12):
@@ -2338,11 +2353,12 @@ pub struct GetPalwProducerFactsResponse {
 
 impl Serializer for GetPalwProducerFactsResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        // Version 3: `fp_certified` and the free-prompt price (ADR-0077 Decision 3). Version 2
-        // added `locked_bond_outpoints` (audit3 H3). Every version is a strict suffix, so an older
+        // Version 4: `fp_decode_rules_armed` (ADR-0082 Decisions 10/11's fence). Version 3 added
+        // `fp_certified` and the free-prompt price (ADR-0077 Decision 3). Version 2 added
+        // `locked_bond_outpoints` (audit3 H3). Every version is a strict suffix, so an older
         // reader stops where its version ended and this reader tolerates an older writer by
         // leaving the later fields at their defaults — additive, never re-ordered.
-        store!(u16, &3, writer)?;
+        store!(u16, &4, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.chain_point, writer)?;
         store!(u64, &self.daa_score, writer)?;
@@ -2367,6 +2383,7 @@ impl Serializer for GetPalwProducerFactsResponse {
         store!(bool, &self.fp_certified, writer)?;
         store!(u32, &self.fp_quanta_per_canonical_job, writer)?;
         store!(u32, &self.fp_max_quanta_per_receipt, writer)?;
+        store!(bool, &self.fp_decode_rules_armed, writer)?;
         Ok(())
     }
 }
@@ -2401,6 +2418,11 @@ impl Deserializer for GetPalwProducerFactsResponse {
         // nothing it cannot retry from the outbox. Fail closed.
         let (fp_certified, fp_quanta_per_canonical_job, fp_max_quanta_per_receipt) =
             if version >= 3 { (load!(bool, reader)?, load!(u32, reader)?, load!(u32, reader)?) } else { (false, 0, 0) };
+        // Same fail-closed reading one version on: a peer that predates the fence cannot be
+        // asserting it is dormant, so "unknown" is read as "not in force" and a submitter that
+        // holds back retries. The opposite default would have a gateway building jobs with decode
+        // fields against a chain that will not read them.
+        let fp_decode_rules_armed = if version >= 4 { load!(bool, reader)? } else { false };
         Ok(Self {
             available,
             chain_point,
@@ -2426,6 +2448,7 @@ impl Deserializer for GetPalwProducerFactsResponse {
             fp_certified,
             fp_quanta_per_canonical_job,
             fp_max_quanta_per_receipt,
+            fp_decode_rules_armed,
         })
     }
 }
@@ -5674,7 +5697,7 @@ impl Deserializer for UnsubscribeResponse {
 mod palw_producer_facts_wire_tests {
     use super::*;
 
-    fn v3_response() -> GetPalwProducerFactsResponse {
+    fn v4_response() -> GetPalwProducerFactsResponse {
         GetPalwProducerFactsResponse {
             available: true,
             chain_point: "cc".repeat(64),
@@ -5699,6 +5722,9 @@ mod palw_producer_facts_wire_tests {
             fp_certified: true,
             fp_quanta_per_canonical_job: 8,
             fp_max_quanta_per_receipt: 64,
+            // ADR-0082 Decisions 10/11: `true` so the round trip distinguishes "carried" from
+            // "defaulted" — the field's own default is false and a lost field would pass silently.
+            fp_decode_rules_armed: true,
             locked_bond_outpoints: vec![format!("{}:0", "aa".repeat(64)), format!("{}:7", "bb".repeat(64))],
         }
     }
@@ -5709,13 +5735,14 @@ mod palw_producer_facts_wire_tests {
     /// failure the version prefix exists to make impossible.
     #[test]
     fn the_producer_facts_survive_the_borsh_round_trip() {
-        let response = v3_response();
+        let response = v4_response();
         let mut bytes = Vec::new();
         Serializer::serialize(&response, &mut bytes).unwrap();
         let back = <GetPalwProducerFactsResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
         assert!(back.fp_certified, "ADR-0077 Decision 3: a gateway cannot name its refusal without this");
         assert_eq!(back.fp_quanta_per_canonical_job, 8, "the lane's price is the chain's, not the gateway's");
         assert_eq!(back.fp_max_quanta_per_receipt, 64);
+        assert!(back.fp_decode_rules_armed, "ADR-0082 D10/D11: a builder on the wrong side of this fence is unreproducible");
         assert_eq!(back.locked_bond_outpoints, response.locked_bond_outpoints, "the must-not-spend set must not shorten");
         assert_eq!(back.class_target, response.class_target);
         assert_eq!(back.bond_exposure_ceiling, response.bond_exposure_ceiling);
@@ -5770,7 +5797,7 @@ mod palw_producer_facts_wire_tests {
     /// Uncertified and unpriced is the safe reading, and it costs a retry, not a fee.
     #[test]
     fn a_version_two_writer_reads_as_uncertified_and_unpriced() {
-        let r = v3_response();
+        let r = v4_response();
         let mut v2 = Vec::new();
         store!(u16, &2, &mut v2).unwrap();
         store!(bool, &r.available, &mut v2).unwrap();
@@ -5799,6 +5826,47 @@ mod palw_producer_facts_wire_tests {
         assert_eq!(back.locked_bond_outpoints, r.locked_bond_outpoints, "everything version 2 DID say is read");
         assert!(!back.fp_certified, "silence is not certification");
         assert_eq!((back.fp_quanta_per_canonical_job, back.fp_max_quanta_per_receipt), (0, 0), "and it prices nothing");
+        assert!(!back.fp_decode_rules_armed, "and a peer older than the fence is not asserting it is dormant either");
+    }
+
+    /// **A version-THREE writer reads as decode-rules-dormant**, and everything version 3 did say
+    /// is still read. The suffix property one version on: each version's fields are a strict
+    /// prefix of the next, so a new field can never shift an old one.
+    #[test]
+    fn a_version_three_writer_reads_as_decode_rules_dormant() {
+        let r = v4_response();
+        let mut v3 = Vec::new();
+        store!(u16, &3, &mut v3).unwrap();
+        store!(bool, &r.available, &mut v3).unwrap();
+        store!(String, &r.chain_point, &mut v3).unwrap();
+        store!(u64, &r.daa_score, &mut v3).unwrap();
+        store!(String, &r.class_id, &mut v3).unwrap();
+        store!(String, &r.artifact_root, &mut v3).unwrap();
+        store!(String, &r.class_target, &mut v3).unwrap();
+        store!(u64, &r.pwu, &mut v3).unwrap();
+        store!(bool, &r.is_base_class, &mut v3).unwrap();
+        store!(u64, &r.min_trace_retention_daa, &mut v3).unwrap();
+        store!(u64, &r.epoch_index, &mut v3).unwrap();
+        store!(u64, &r.epoch_budget_blocks, &mut v3).unwrap();
+        store!(u64, &r.epoch_produced_blocks, &mut v3).unwrap();
+        store!(bool, &r.bond_known, &mut v3).unwrap();
+        store!(String, &r.bond_registered_pubkey, &mut v3).unwrap();
+        store!(String, &r.bond_operator_id, &mut v3).unwrap();
+        store!(u64, &r.bond_collateral, &mut v3).unwrap();
+        store!(String, &r.bond_reserved_exposure, &mut v3).unwrap();
+        store!(String, &r.bond_exposure_ceiling, &mut v3).unwrap();
+        store!(String, &r.bond_claim_exposure, &mut v3).unwrap();
+        store!(String, &r.not_ready_reason, &mut v3).unwrap();
+        store!(Vec<String>, &r.locked_bond_outpoints, &mut v3).unwrap();
+        store!(bool, &r.fp_certified, &mut v3).unwrap();
+        store!(u32, &r.fp_quanta_per_canonical_job, &mut v3).unwrap();
+        store!(u32, &r.fp_max_quanta_per_receipt, &mut v3).unwrap();
+
+        let back = <GetPalwProducerFactsResponse as Deserializer>::deserialize(&mut v3.as_slice()).unwrap();
+        assert!(back.fp_certified, "everything version 3 DID say is read");
+        assert_eq!(back.fp_quanta_per_canonical_job, r.fp_quanta_per_canonical_job);
+        assert_eq!(back.fp_max_quanta_per_receipt, r.fp_max_quanta_per_receipt);
+        assert!(!back.fp_decode_rules_armed, "a version-3 peer knows nothing about the fence — read fail-closed");
     }
 }
 

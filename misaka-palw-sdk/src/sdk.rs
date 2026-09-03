@@ -763,7 +763,7 @@ mod chain_arm_tests {
             b"misaka-palw-rc".to_vec(),
             profile.clone(),
             (4, 2),
-        );
+        ).expect("the table path compiles this class's declaration");
 
         let prompt_ids: Vec<u32> = vec![3, 9, 17];
         let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
