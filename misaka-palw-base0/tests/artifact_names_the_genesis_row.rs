@@ -382,23 +382,38 @@ fn the_registered_row_prices_at_one_carrier_under_the_bundle_that_registers_it()
             // The close is DERIVED, never declared — the carriage carries the profile and the
             // acceptance layer prices it. So this prices the registered profile under the shipped
             // bundle's own court, which is the number the chain implies.
-            let kary = kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
-                dissection_arity: bundle.court.dissection_arity(),
-                prompt_ids_form: params.palw_prompt_ids_form_at(0),
-                window_court_daa: bundle.state.window_court(),
-            };
-            let Some(rules) = kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+            // **The shape the ACCEPTANCE path judges by, from the one helper its callers share** —
+            // NOT one assembled here.
+            //
+            // This used to build a `PalwKaryCourtV1` from the bundle and then call
+            // `palw_class_ladder_rules_for_court_v1` ITSELF, which supplies `ladder: Some(rules)`.
+            // testnet-11 leaves `palw_context_ladder` dormant, so the shape it actually runs is
+            // `ladder: None` — and the two price differently: **83,175 B with rules supplied,
+            // 81,312 B under the shape that ships.** The test's own name says "under the bundle
+            // that registers it" and it was not.
+            //
+            // That is the `kary_court` defect one file over and by the same hand: two fields read
+            // off the bundle, the third supplied by the caller, and a number that LOOKS derived.
+            // Reading the shape from `palw_admission_shape_at_v1` removes the third spelling —
+            // `processor.rs`'s `ClassRegistered` arm derives it the same way, so this now prices
+            // the way the chain does rather than the way this file guessed.
+            let shape = kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1(&params, bundle, &a.profile, 0)
+                .unwrap_or_else(|e| panic!("the RC court has no shape at genesis: {e}"));
+            let entry = kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v6(
+                bundle,
                 &a.profile,
-                Some(kary),
-                kaspa_consensus_core::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
-            ) else {
-                println!("GENESIS class {}… has no ladder rules", &id[..16]);
-                continue;
-            };
-            let rows = kaspa_consensus_core::palw_class_admission_v2::derive_court_cost_rows_v1(&a.profile, rules.cost_shape)
-                .unwrap_or_else(|e| panic!("the genesis registers class {}… at a profile that does not price: {e:?}", &id[..16]));
-            let b = rows.first().expect("a priced row has a binding node");
-            let chunks = kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(b.close_bytes);
+                &a.canonical,
+                o,
+                &kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1(),
+                &[],
+                shape.ladder,
+                shape.court,
+                params.palw_fp_decode_rules.is_some(),
+            )
+            .unwrap_or_else(|e| panic!("the genesis registers class {}… which its own ruleset will not admit: {e:?}", &id[..16]));
+            let close_bytes = entry.court_cost.max_close_bytes;
+            let chunks = kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(close_bytes);
+            let kary = shape.court.expect("the RC preset arms palw_kary_court");
             println!(
                 "GENESIS class {}… n_ctx {} arity {} {:?} ids window {} -> close {} B = {} carrier(s)",
                 &id[..16],
@@ -406,7 +421,7 @@ fn the_registered_row_prices_at_one_carrier_under_the_bundle_that_registers_it()
                 kary.dissection_arity,
                 kary.prompt_ids_form,
                 kary.window_court_daa,
-                b.close_bytes,
+                close_bytes,
                 chunks
             );
             // **One carrier is the claim that matters** — it is what the announcement states, and
@@ -418,7 +433,7 @@ fn the_registered_row_prices_at_one_carrier_under_the_bundle_that_registers_it()
                 "the genesis registers class {}… whose close is {} B = {chunks} carriers at arity {}, {:?} ids, \
                  window {}. More than one carrier means the row cannot be prosecuted.",
                 &id[..16],
-                b.close_bytes,
+                close_bytes,
                 kary.dissection_arity,
                 kary.prompt_ids_form,
                 kary.window_court_daa
@@ -426,11 +441,11 @@ fn the_registered_row_prices_at_one_carrier_under_the_bundle_that_registers_it()
             // And the byte figure, pinned so a silent move is visible — with the court beside it,
             // because this number has been three different correct values in one afternoon.
             assert_eq!(
-                b.close_bytes, 83_175,
+                close_bytes, 81_312,
                 "the registered row's close moved: {} B at arity {}, {:?} ids, window {}. Check WHICH of those \
                  three moved before re-pinning — the last time this number changed it was the ids form, chosen \
                  by nobody.",
-                b.close_bytes, kary.dissection_arity, kary.prompt_ids_form, kary.window_court_daa
+                close_bytes, kary.dissection_arity, kary.prompt_ids_form, kary.window_court_daa
             );
             priced += 1;
         }

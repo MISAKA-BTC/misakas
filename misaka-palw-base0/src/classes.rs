@@ -1778,9 +1778,21 @@ mod tests {
             // been three different values in one afternoon and every one of them was a correct
             // measurement of a court somebody was not running:
             //
-            //   81,599  arity 2, MerkleV1 ids  — a court `validate_palw_v2` REFUSES to assemble
-            //   83,175  arity 2, Flat ids      — the shipped court, both presets, and the same
-            //                                    figure the genesis-registered profile prices at
+            //   81,599  arity 2, MerkleV1 ids, ladder Some  — a court `validate_palw_v2` REFUSES
+            //                                                   to assemble
+            //   83,175  arity 2, Flat ids,     ladder Some  — THIS test's court: `armed_rulesets`
+            //                                                   supplies rules for both presets
+            //   81,312  arity 2, Flat ids,     ladder NONE  — **the shipped court.** t11 leaves
+            //                                                   `palw_context_ladder` dormant
+            //
+            // **83,175 is correct for what this test measures and is NOT the shipped figure**, and
+            // an earlier version of this comment called it "the shipped court, both presets". That
+            // was the same defect one field further on: `armed_rulesets` passes `Some(rules)` for
+            // BOTH presets, so this helper cannot express t11's shape at all — it is structurally
+            // unable to ask the question that ships. The shipped figure is pinned where it can be:
+            // `artifact_names_the_genesis_row`'s genesis-carriage test and
+            // `consensus/core/tests/palw_rc_admission_shape.rs`, both of which read the shape from
+            // `palw_admission_shape_at_v1` rather than building one.
             //
             // The Merkle figure came from this very helper hardcoding `prompt_ids_form` between
             // two fields it read off the bundle. 287 bytes moved by a field nobody chose.
