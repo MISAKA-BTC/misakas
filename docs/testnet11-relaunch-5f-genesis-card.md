@@ -5245,3 +5245,26 @@ seat2 all pay coinbase to that address, so the broadcast becomes fundable when t
 `8` (heartbeat) and no `9` (`PALW_EXEC_V3`, a model class) yet — QWEN36 since 17:24, v5 since 18:03. The explorer's
 `transactions_outputs` is still empty (the filler writes outputs on acceptance), so the miner census by address
 waits.
+
+### 6f — producer facts from the chain, and a correction (18:10 UTC, daa 65)
+
+`getPalwProducerFacts` over wRPC JSON (`26314`; a 40-line stdlib WebSocket client in `/root/fp-smoke-5f/wrpc.py`,
+ibm has no client library), node0:
+
+    class        available  epochBudget  produced  fpCertified  classTarget
+    QWEN36       true       489          0         true         208075503442540174204994800459846778879   = 0.61 · u128::MAX
+    v5           true       489          0         false        340282366920938463463374607431768211455   = u128::MAX exactly
+    bondKnown true · notReadyReason "" · pwu 2,685,360 / 6,630,544 · minTraceRetentionDaa 5400 · fpDecodeRulesArmed false
+
+- The PALW state store is seeded on the cut before any attempt block exists (5e's rig deadlock is rig-specific).
+- **5e's finding is confirmed on the cut:** the v5 class's target is `u128::MAX` to the digit — `palw_seed_attempt_targets_v1`
+  skips the fused row. Post-cut (a target moves by retarget, not by re-genesis); in the audit list.
+- **Correction to 6e:** the heartbeat lane's blocks carry `powAlgoId 3` (`POW_ALGO_ID_BLAKE2B_SHA3`) at the fixed
+  `bits 545259519`; the 59 blocks I called "hash-floor" are the five seats' heartbeats (one per ~2 min each; node0
+  `heartbeat #15` at 18:06 is block `a43c2194…`, algo 3 in the explorer). No lane has produced an attempt block
+  (algo 9): not node1's floor, not QWEN36 since 17:24, not v5 since 18:03. With class targets at 0.61·MAX and MAX
+  the class ticket is not the constraint; the Layer-0 digest against `bits` and inference time are.
+- **Named expectation, to be read rather than assumed:** 5e's measured rate was 6 QWEN36 + 2 floor blocks in 7 h, so
+  zero attempt blocks in 50 min is a ~40% outcome. If no algo-9 block exists by ~20:10 UTC (≈2 h of QWEN36
+  production), investigate `produce_one`'s silent `continue` paths (`palw_producer.rs` 383/401/414/461 on the cut)
+  before anything else. The announcement does not say a model class produced a block until one is read.
