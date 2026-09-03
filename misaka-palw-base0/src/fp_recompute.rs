@@ -846,7 +846,7 @@ mod tests {
     #[test]
     fn the_dense_tiers_recompute_reaches_its_committed_checkpoints_at_every_position() {
         use kaspa_consensus_core::palw_context_ladder::{PalwCheckpointCadenceV1, palw_checkpoint_cadence_v1};
-        use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v2};
+        use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v5};
         let geometry = PalwQwen25GeometryV1 {
             layer_count: 2,
             hidden_dim: 8,
@@ -860,16 +860,21 @@ mod tests {
             rms_eps_q: 1,
             tile_len: 4,
         };
-        // **The v2 GRAPH with the v5 MAP.** The registered graph-v5 row is what will run this in
-        // production, but its fused attention node is a kernel the shipped A16 engine does not
-        // execute yet (`a16_execute_for_attempt_v1` refuses it by name: "per-layer declares 24
-        // against 27 recorded"), so a real v5 capture is not available on this base. The cadence is
-        // a property of the MAP, not of the graph — `palw_checkpoint_cadence_v1` reads
-        // `state_chunk_map_id` and nothing else — so overriding the map puts a runnable class on
-        // the per-position cadence and exercises exactly the rule under test. What this does NOT
-        // exercise is the fused site's own arithmetic, which is stream I's court and not the seat's.
-        let mut profile = qwen25_a16_profile_v2(geometry).expect("a valid A16 profile");
-        profile.state_chunk_map_id = kaspa_consensus_core::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3();
+        // **The REGISTERED graph-v5 row, graph and map together.** The fused attention node is
+        // executed here — by the PLANNED walk, `PlanOp::AttnFused`, which is the one authority
+        // that serves it (`the_fused_arm_is_the_reference_composition` proves that arm bit-equal
+        // to `a16_attn_fused_reference_v1` and to the tile route). What cannot execute it is the
+        // plan-LESS route: `A16Engine::forward_token_traced` is the compiled twenty-seven-row v2
+        // program, so `a16_execute_for_attempt_v1` with `plan: None` refuses a v5 declaration by
+        // name ("per-layer declares 24 against 27 recorded"). Passing the compiled plan is
+        // therefore not a convenience here — it is the difference between exercising the class the
+        // genesis registers and exercising a stand-in for it.
+        let profile = qwen25_a16_profile_v5(geometry).expect("a valid graph-v5 A16 profile");
+        assert_eq!(
+            profile.state_chunk_map_id,
+            kaspa_consensus_core::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3(),
+            "a graph-v5 row registers the tiled map (ADR-0082 Decision 4) — this test is about that pairing"
+        );
         assert_eq!(palw_checkpoint_cadence_v1(&profile), PalwCheckpointCadenceV1::PerPosition, "the tiled map is per-position");
         let shape = crate::artifact::Base0ShapeV1 {
             n_layers: geometry.layer_count as usize,
@@ -886,9 +891,11 @@ mod tests {
             .expect("a valid shape")
             .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
             .expect("the derived store is sorted and unique");
+        let engine = crate::engine_a16::A16Engine::new(&artifact).expect("the fixture is an A16 artifact");
+        let plan = engine.plan_from_profile(&profile).expect("the v5 declaration is this engine's program");
         let (ctx, prompt) =
             crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0xA16_5EA7), geometry.vocab_size as usize, 3, 4);
-        let run = crate::qwen25_a16_backend::a16_execute_for_attempt_v1(&artifact, &profile, None, &ctx, &prompt)
+        let run = crate::qwen25_a16_backend::a16_execute_for_attempt_v1(&artifact, &profile, Some(&plan), &ctx, &prompt)
             .expect("the dense v5 fixture runs");
 
         // Every position the cache ever holds has a checkpoint, prefill included.
@@ -900,7 +907,7 @@ mod tests {
         let mut prefill_checked = 0u32;
         for leaf in &run.checkpoints.leaves {
             let positions = leaf.covered_decode_call; // POSITIONS, on this cadence
-            let mut kernels = A16RecomputeKernelsV1::new(&artifact, None).expect("the dense kernels");
+            let mut kernels = A16RecomputeKernelsV1::new(&artifact, Some(&plan)).expect("the dense kernels");
             let state =
                 base0_fp_recompute_state_at_position_v1(&profile, &ctx, &ids, &run.generated_token_ids, positions, &mut kernels)
                     .expect("the seat can stop at any position");
@@ -918,7 +925,7 @@ mod tests {
 
         // A tampered root names the checkpoint, which is Z5's second half.
         let leaf = &run.checkpoints.leaves[1];
-        let mut kernels = A16RecomputeKernelsV1::new(&artifact, None).expect("the dense kernels");
+        let mut kernels = A16RecomputeKernelsV1::new(&artifact, Some(&plan)).expect("the dense kernels");
         let state = base0_fp_recompute_state_at_position_v1(
             &profile,
             &ctx,

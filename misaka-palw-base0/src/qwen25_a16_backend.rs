@@ -483,11 +483,14 @@ pub struct Qwen25A16Backend {
     profile: PalwShapeProfileV3,
     class_profile_id: Hash64,
     canonical_job: (u32, u32),
-    /// **ADR-0067: `Some` when this backend executes FROM the registered profile.** The plan is
-    /// compiled at construction — every declared node bound to a served kernel and a named
-    /// operand, or the constructor refuses — and every forward walks it. `None` is the compiled
-    /// engine, kept for the rows this build's own table names (and as the interpreter's
-    /// reference vectors, per the differential test beside the plan).
+    /// **ADR-0067: the class's declaration, compiled.** Every declared node bound to a served
+    /// kernel and a named operand, or the constructor refuses — and every forward walks it. BOTH
+    /// constructors fill it now (ADR-0082 audit E, H-1): the plan-less route was
+    /// `forward_token_traced`, a hand-written twenty-seven-row v2 program that cannot serve a
+    /// fused attention site, so a `None` here meant the shipped producer refused its own class as
+    /// soon as the dense tier moved to graph v5. `Option` survives only because the field is read
+    /// by `a16_execute_for_attempt_v1`, whose `plan` argument is public and whose `None` arm is
+    /// the v2-reference path (and the Decision-F probe that guards it).
     plan: Option<crate::engine_a16::A16ProfilePlanV1>,
     /// **Whether this instance's class can carry a capture at all** — the four-byte state map,
     /// which is the width `A16Cache` holds. Decided from the profile at construction (declared
@@ -531,16 +534,53 @@ pub fn a16_court_capable_v1(profile: &PalwShapeProfileV3) -> bool {
 }
 
 impl Qwen25A16Backend {
+    /// **This build's own table names the class — and the class's DECLARATION is still the
+    /// program.** (ADR-0067 Decision 2; the constructor that closes ADR-0082 audit E's H-1.)
+    ///
+    /// This used to store `plan: None` and execute through
+    /// [`A16Engine::forward_token_traced`], which is a hand-written program: twenty-seven rows a
+    /// layer, the attention site spelled as scores / softmax / requant / values. That was a second
+    /// authority beside [`A16Engine::plan_from_profile`], and ADR-0082's graph v5 is exactly the
+    /// row where the two part — a v5 layer declares TWENTY-FOUR nodes, so the shipped producer
+    /// refused its own class by name the moment the dense tier moved to a fused site:
+    ///
+    /// ```text
+    /// this class's registered graph does not name every narrowing its engine performs
+    /// (ADR-0049 Decision F): … per-layer declares 24 against 27 recorded.
+    /// ```
+    ///
+    /// Compiling the plan here is what makes that refusal impossible rather than merely unlikely:
+    /// one authority, the same one the chain-registered path uses, and the traced route retires to
+    /// being the v2 reference it always was. Teaching the traced route the fusion instead would
+    /// have re-created the second authority.
+    ///
+    /// **Fallible, because the compile can honestly fail.** A profile whose geometry is not this
+    /// artifact's — the `rms_eps_q` split that `qwen25_a16_artifact_row_profile_v*` exists to
+    /// project is the live example — no longer executes silently under the artifact's constants
+    /// while declaring somebody else's. That silence was the asymmetry
+    /// [`crate::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile`] was found by, and
+    /// it is now closed on both constructors.
     pub fn new(
         artifact: std::sync::Arc<Base0ArtifactV1>,
         network_id: Vec<u8>,
         profile: PalwShapeProfileV3,
         canonical_job: (u32, u32),
-    ) -> Self {
+    ) -> Result<Self, String> {
+        let engine = A16Engine::new(&artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        // The same two facts `from_registered_profile` keeps apart (round-3 defect I-3): a kernel
+        // this build does not carry is not the same statement as this node's own capacity bound.
+        let plan = engine.plan_from_profile(&profile).map_err(|e| match e {
+            A16PlanErrorV1::OverMemoryCeiling { bytes, ceiling } => format!(
+                "this node's interpreted-execution capacity refuses this class's graph: one token's committed trace is \
+                 {bytes} bytes and this build's capacity is {ceiling} (ADR-0067 SA-1). This is node-local servability, \
+                 not a statement about the class: a node built with a larger ceiling serves the very same graph"
+            ),
+            other => format!("this build cannot serve the graph this class declares: {other:?}"),
+        })?;
         let shape_id = artifact.artifact_digest();
         let class_profile_id = profile.shape_profile_id();
         let court_capable = a16_court_capable_v1(&profile);
-        Self {
+        Ok(Self {
             artifact,
             model_id: "PALW-QWEN25-A16".to_string(),
             network_id,
@@ -548,10 +588,10 @@ impl Qwen25A16Backend {
             profile,
             class_profile_id,
             canonical_job,
-            plan: None,
+            plan: Some(plan),
             court_capable,
             step_ladder_cap: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
-        }
+        })
     }
 
     /// **The ladder top from the ruleset**, for a caller that holds `PalwCourtParamsV2`. Passing
@@ -1515,7 +1555,8 @@ mod free_prompt_tests {
     fn the_corrected_a16_class_commits_the_root_the_derivation_recomputes() {
         let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
         let digest = artifact.artifact_digest();
-        let backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile.clone(), (4, 2));
+        let backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile.clone(), (4, 2))
+            .expect("the fixture's declaration is this engine's program");
         let prompt: Vec<usize> = vec![3, 9, 17, 33];
         let job = job(&profile, prompt.len() as u32, 3);
 
@@ -1548,32 +1589,52 @@ mod free_prompt_tests {
         assert_ne!(profile.shape_profile_id(), registered.shape_profile_id());
     }
 
-    /// **A16 refuses the free-prompt path, and the refusal names why — under either map.**
+    /// **The v1 graph's undeclared requant: refused where the two authorities are, executed as
+    /// DECLARED where there is only one.**
     ///
-    /// This test was first written to assert the opposite: give the class a state map that fits its
-    /// cache and the round trip should close. It does not, and the reason is a second gap the first
-    /// one was hiding. ADR-0049 Decision F requires a class's profile to name every narrowing its
-    /// engine performs; `Base0Engine` exposes `plan()` and `base0_check_graph_v1` enforces it.
-    /// `A16Engine` has no plan and there is no A16 counterpart. Measured, the per-layer and post
-    /// tables agree exactly — and the pre table does not: the engine records the embedding gather
-    /// AND the requant that lifts it onto the A16 stream, while the profile declares only the
-    /// gather. A requant is a narrowing, which is what Decision F is about.
+    /// This test used to assert one thing: that `::new` refused a v1-graph class by name. ADR-0049
+    /// Decision F requires a class's profile to name every narrowing its engine performs, and the
+    /// v1 pre table declares the embedding gather while `A16Engine::forward_token_traced` also
+    /// performs the requant that lifts it onto the A16 stream. Two authorities, and the probe was
+    /// what compared them.
     ///
-    /// Both maps are exercised because the graph gap fires first: giving this class a state map
-    /// that fits its cache would not make it adjudicable.
+    /// Since ADR-0082 audit E's H-1 the constructor compiles `plan_from_profile`, so on that route
+    /// there is no second authority left to disagree with: the declaration IS the program, the
+    /// undeclared requant is simply not performed, and the v1 graph executes exactly what it says.
+    /// That is not a softened refusal — it is the refusal becoming unnecessary, and it is what
+    /// `from_registered_profile` has always done with the same profile, so the two constructors
+    /// now agree instead of one of them being the lenient one.
+    ///
+    /// What is still pinned, and pinned here:
+    /// * the plan-LESS route — `a16_execute_for_attempt_v1(.., None, ..)`, where the two
+    ///   authorities still exist — refuses by name, and names the missing requant;
+    /// * the v1 MAP is refused whichever route runs, because a one-byte map cannot describe an
+    ///   `i32` cache (the sibling test below).
     #[test]
     fn a16_refuses_the_free_prompt_path_until_its_graph_is_reconciled() {
         for map_id in [map::integer_kv_state_chunk_map_id_v2(), map::integer_kv_state_chunk_map_id_v1()] {
             let (artifact, profile) = class(map_id);
-            let backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile.clone(), (4, 2));
             let prompt: Vec<usize> = vec![3, 9, 17, 33];
-            let job = job(&profile, prompt.len() as u32, 3);
-            let error = match backend.execute_free_prompt(&job, &prompt) {
-                Err(e) => e,
-                Ok(_) => panic!("a class whose graph does not name what its engine computes must not commit a step leg"),
-            };
+
+            // The route with two authorities still compares them, and still names the gap.
+            let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prompt.len() as u32, 3);
+            let error = a16_execute_for_attempt_v1(&artifact, &profile, None, &ctx, &prompt)
+                .err()
+                .expect("a graph that does not name what the traced engine computes must not commit a step leg");
             assert!(error.contains("registered graph"), "the refusal names the gap: {error}");
             assert!(error.contains("requant"), "and the node it is missing: {error}");
+
+            // The route with ONE authority executes the declaration — the requant the profile does
+            // not name is not performed, so there is nothing left to disagree about.
+            let backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile.clone(), (4, 2))
+                .expect("the v1 declaration is a graph this build serves — a worse model, not a mis-executed one");
+            let job = job(&profile, prompt.len() as u32, 3);
+            match (map_id == map::integer_kv_state_chunk_map_id_v1(), backend.execute_free_prompt(&job, &prompt)) {
+                (true, Ok(_)) => panic!("a one-byte map cannot describe an i32 cache, and committing anyway is the defect"),
+                (true, Err(_)) => {}
+                (false, Ok(run)) => assert!(run.facts.step_leg_root != Hash64::default(), "an executed declaration commits a leg"),
+                (false, Err(e)) => panic!("the declaration this backend compiled is the one it must be able to run: {e}"),
+            }
         }
     }
 
@@ -1595,14 +1656,17 @@ mod free_prompt_tests {
     fn the_executor_prices_the_job_against_the_rulesets_ladder() {
         let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
         let anchor = Hash64::from_u64_word(0xA16C0117);
-        let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3));
+        let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3))
+            .expect("the fixture's declaration is this engine's program");
         let (ctx, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job");
         let price = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &ctx, u64::MAX)
             .expect("the canonical job has a step space");
         assert!(price > 1, "a one-leaf job cannot demonstrate a boundary");
 
         // A ruleset one leaf short of this job's price refuses it — in the executor, and named.
-        let tight = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3)).with_step_ladder_cap(price - 1);
+        let tight = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3))
+            .expect("the fixture's declaration is this engine's program")
+            .with_step_ladder_cap(price - 1);
         assert_eq!(tight.step_ladder_cap(), price - 1);
         let err = match tight.execute(&ctx, &prompt) {
             Err(e) => e,
@@ -1613,7 +1677,9 @@ mod free_prompt_tests {
 
         // The same job, the same geometry, one more leaf of ladder — and it runs, committing the
         // price the ruleset admitted.
-        let exact = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile.clone(), (4, 3)).with_step_ladder_cap(price);
+        let exact = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile.clone(), (4, 3))
+            .expect("the fixture's declaration is this engine's program")
+            .with_step_ladder_cap(price);
         let Ok(outcome) = exact.execute(&ctx, &prompt) else {
             panic!("the ruleset that admits this job's price must execute it");
         };
@@ -1637,7 +1703,8 @@ mod free_prompt_tests {
         use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
 
         let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
-        let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3));
+        let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3))
+            .expect("the fixture's declaration is this engine's program");
         assert!(backend.supports_court(), "the corrected class takes a court's turn");
 
         let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0xA16C0117)).expect("the anchor implies a job");
@@ -1710,7 +1777,8 @@ mod free_prompt_tests {
     #[test]
     fn both_authorities_capture_one_job_to_one_commitment() {
         let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
-        let compiled = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3));
+        let compiled = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3))
+            .expect("the fixture's declaration is this engine's program");
         let registered = Qwen25A16Backend::from_registered_profile(artifact, NETWORK.to_vec(), profile, (4, 3))
             .expect("the corrected profile plans");
         assert!(compiled.supports_court() && registered.supports_court());
@@ -1733,7 +1801,8 @@ mod free_prompt_tests {
     #[test]
     fn a16_refuses_to_commit_under_a_map_that_cannot_describe_its_cache() {
         let (artifact, profile) = class(map::integer_kv_state_chunk_map_id_v1());
-        let backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile.clone(), (4, 2));
+        let backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile.clone(), (4, 2))
+            .expect("the fixture's declaration is this engine's program");
         let prompt: Vec<usize> = vec![3, 9, 17, 33];
         let job = job(&profile, prompt.len() as u32, 3);
 
@@ -1741,7 +1810,17 @@ mod free_prompt_tests {
             Err(e) => e,
             Ok(_) => panic!("a one-byte map cannot describe an i32 cache, and committing anyway is the defect"),
         };
-        assert!(error.contains("registered graph") || error.contains("state map"), "the error names the defect it hit first: {error}");
+        // **Which gate fires has moved, and the message with it.** The Decision-F probe used to
+        // refuse this class before the map was ever consulted; a planned backend executes its
+        // declaration, so the MAP is now what stops it — at the checkpoint it cannot serialise,
+        // rather than at the class's door. The refusal is still a refusal, and nothing is
+        // committed. That it is `CheckpointStateUnavailable` and not a NAMED map refusal is
+        // recorded here rather than papered over: the predicate `a16_court_capable_v1` already
+        // spells "can this map describe this cache", and nothing calls it as a door.
+        assert!(
+            error.contains("CheckpointStateUnavailable") || error.contains("state map") || error.contains("registered graph"),
+            "the error names the defect it hit first: {error}"
+        );
     }
 
     /// **The registered row, through the constructor a dense-tier demonstration actually uses.**
@@ -1755,11 +1834,12 @@ mod free_prompt_tests {
     /// `qwen25-convert` writes is refused by its own declaration:
     /// `GeometryMismatch { what: "rms_eps_q", profile: 1, artifact: 256 }`.
     ///
-    /// It went unseen because the shipped worker takes [`Qwen25A16Backend::new`], which compiles
-    /// no plan and lets the artifact's epsilon execute, while the ADR-0080 ladder row, the SDK and
-    /// any chain-registered class go through [`Qwen25A16Backend::from_registered_profile`]. This
-    /// test drives the second one, over an artifact built at the converter's epsilon, which is
-    /// the asymmetry made visible.
+    /// It went unseen because the shipped worker took [`Qwen25A16Backend::new`], which compiled no
+    /// plan and let the artifact's epsilon execute, while the ADR-0080 ladder row, the SDK and any
+    /// chain-registered class go through [`Qwen25A16Backend::from_registered_profile`]. That
+    /// asymmetry is closed — since ADR-0082 audit E's H-1 `::new` compiles the same plan and
+    /// refuses the same mismatch — and this test keeps driving the registered constructor over an
+    /// artifact built at the converter's epsilon, which is where the split was first made visible.
     ///
     /// Both directions are pinned: the corrected projection PLANS, and a declaration carrying the
     /// frozen `rms_eps_q: 1` still refuses on exactly that field and no other — the dense twin of
@@ -1862,7 +1942,8 @@ mod free_prompt_tests {
     #[test]
     fn the_folded_capture_commits_the_dense_captures_roots() {
         let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
-        let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3));
+        let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3))
+            .expect("the fixture's declaration is this engine's program");
         let (ctx, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0xF01D)).expect("the anchor implies a job");
         let cap = kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES;
 
@@ -1910,7 +1991,8 @@ mod free_prompt_tests {
     #[test]
     fn a_replayed_interval_opening_is_the_dense_ones() {
         let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
-        let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3));
+        let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3))
+            .expect("the fixture's declaration is this engine's program");
         let (ctx, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0BEE)).expect("the anchor implies a job");
         let cap = kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES;
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
@@ -2160,7 +2242,8 @@ mod free_prompt_tests {
 
         // And the backend's own default is that same constant, so an instance nobody told about a
         // ruleset behaves exactly as it did.
-        let backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile, (4, 2));
+        let backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile, (4, 2))
+            .expect("the fixture's declaration is this engine's program");
         assert_eq!(backend.step_ladder_cap(), kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES);
     }
 
@@ -2178,10 +2261,13 @@ mod free_prompt_tests {
         let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prompt.len() as u32, 3);
         let needed = kaspa_consensus_core::palw_step::step_leaf_count(&profile, &ctx).expect("the job has a step space");
 
-        let default = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 2));
+        let default = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 2))
+            .expect("the fixture's declaration is this engine's program");
         assert!(default.execute_free_prompt(&fp, &prompt).is_ok(), "the shipped ladder admits this job");
 
-        let shallow = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile, (4, 2)).with_step_ladder_cap(needed - 1);
+        let shallow = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile, (4, 2))
+            .expect("the fixture's declaration is this engine's program")
+            .with_step_ladder_cap(needed - 1);
         let message = shallow.execute_free_prompt(&fp, &prompt).err().expect("a shallower ruleset must refuse it");
         assert!(message.contains("TooManyLeaves"), "the refusal must name the ladder: {message}");
     }
@@ -2289,11 +2375,83 @@ mod free_prompt_tests {
         let profile = qwen25_a16_artifact_row_profile_v5(geometry).expect("the v5 projection is a valid profile");
         let backend = Qwen25A16Backend::from_registered_profile(artifact, NETWORK.to_vec(), profile.clone(), (4, 2))
             .expect("the served v5 row compiles a plan");
-        let (ctx, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0082_5)).expect("the anchor implies a job");
+        let (ctx, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0000_0825)).expect("the anchor implies a job");
         let outcome = backend.execute(&ctx, &prompt).expect("the compiled v5 plan executes its own canonical job");
         let (binding, ..) = crate::produce::base0_material_decode_v1(&outcome.material).expect("the capture decodes");
         assert_eq!(binding.shape_profile.shape_profile_id(), profile.shape_profile_id(), "it produced for the class it was given");
         assert!(binding.step_leaf_count > 0, "an execution with no committed steps is not one");
+    }
+
+    /// **The shipped constructor runs a graph-v5 job — which is H-1 of ADR-0082's audit E.**
+    ///
+    /// `Qwen25A16Backend::new` is the constructor the SDK's dense lineage and the shipped
+    /// free-prompt worker take for a class this build's own table names. It stored `plan: None`,
+    /// so it executed through `forward_token_traced` — the compiled twenty-seven-row v2 program —
+    /// and the moment the dense tier moves to ADR-0082's fused site the producer refused its own
+    /// class by name (the refusal is pinned by the test below). Not a consensus break: a shipping
+    /// break, and precisely the row this ADR exists to ship.
+    ///
+    /// The close is one authority rather than two: `new` compiles `plan_from_profile`, exactly as
+    /// `from_registered_profile` does, so a declaration is executed as declared or refused with
+    /// the node named. This test is the difference measured on the same fixture the refusal test
+    /// uses — same artifact, same graph, one constructor apart.
+    #[test]
+    fn the_shipped_constructor_compiles_the_plan_and_runs_a_graph_v5_job() {
+        use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5;
+
+        let geometry = v5_geometry();
+        let artifact = v5_artifact(geometry);
+        let profile = qwen25_a16_artifact_row_profile_v5(geometry).expect("the v5 projection is a valid profile");
+        assert_eq!(profile.attn_nodes.len(), 24, "a v5 layer declares twenty-four nodes — the traced route records 27");
+
+        let backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile.clone(), (4, 2))
+            .expect("the constructor compiles the declared graph instead of assuming a v2 program");
+        let (ctx, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0000_8201)).expect("the anchor implies a job");
+        let outcome = backend.execute(&ctx, &prompt).expect("the shipped constructor executes its own class's fused graph");
+        let (binding, ..) = crate::produce::base0_material_decode_v1(&outcome.material).expect("the capture decodes");
+        assert_eq!(
+            binding.shape_profile.shape_profile_id(),
+            profile.shape_profile_id(),
+            "it produced for the class it was given, not for a v2 stand-in"
+        );
+        assert!(binding.step_leaf_count > 0, "an execution with no committed steps is not one");
+        assert!(backend.supports_court(), "and the tiled-map row it serves takes a court's turn");
+
+        // A declaration this artifact cannot serve is now a REFUSAL rather than a silent
+        // execution under the artifact's own constants: the frozen v5 row declares `rms_eps_q` 1
+        // where the converter writes 256, and that is the asymmetry H-1 closed.
+        let frozen = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v5(geometry).expect("a valid profile");
+        let message = Qwen25A16Backend::new(v5_artifact(geometry), NETWORK.to_vec(), frozen, (4, 2))
+            .err()
+            .expect("a row declaring an epsilon its artifact does not execute must refuse here too");
+        assert!(message.contains("rms_eps_q"), "the refusal names the field: {message}");
+    }
+
+    /// **The plan-less route is the v2 reference, and a graph-v5 row is refused there by name.**
+    ///
+    /// `A16Engine::forward_token_traced` is a COMPILED program — twenty-seven rows a layer, the
+    /// attention site spelled as scores / softmax / requant / values — and ADR-0082 Decision 1
+    /// replaces those four with one. So the traced route cannot serve a v5 row and must not
+    /// pretend to: teaching it the fusion would put a second authority beside
+    /// `plan_from_profile`, which is exactly what ADR-0067 Decision 2 merged. The Decision-F probe
+    /// is what states the boundary, and this pins that it states it on the fused row rather than
+    /// mis-executing it.
+    #[test]
+    fn the_plan_less_route_is_the_v2_reference_and_refuses_a_fused_row() {
+        use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5;
+
+        let geometry = v5_geometry();
+        let artifact = v5_artifact(geometry);
+        let profile = qwen25_a16_artifact_row_profile_v5(geometry).expect("the v5 projection is a valid profile");
+        let (ctx, prompt) =
+            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x0000_8200), geometry.vocab_size as usize, 3, 2);
+
+        let message = a16_execute_for_attempt_v1(&artifact, &profile, None, &ctx, &prompt)
+            .err()
+            .expect("the twenty-seven-row traced program cannot execute a twenty-four-node declaration");
+        println!("plan-less refusal on a v5 row: {message}");
+        assert!(message.contains("registered graph"), "the refusal names the boundary: {message}");
+        assert!(message.contains("per-layer declares 24 against 27 recorded"), "and the count that disagrees: {message}");
     }
 
     /// **A class whose artifact declares no tokenizer is refused at the lane's entrance, by name.**
