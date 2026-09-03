@@ -874,6 +874,29 @@ cases are running as this is written. `mainnet_soak_randomized_fault_injection`,
 failure mode with the worst recovery story, and the wall clock is free while the last fixer
 finishes. Whatever it prints goes in §6 as a gate that was run rather than a set that was skipped.
 
+### SEND THE VALUE **AND** WHAT YOU THINK PRODUCED IT — the disagreement is the check
+
+A hash arrived with a sentence: *"derive/src tree hash after the fmt: `4969f8dc…` (the fmt moved it
+as expected)."* **The hash was right. The sentence was wrong** — that is the value from *before* the
+fmt too, and `git diff` across the fmt shows nothing under that crate. The fmt ran (17 files, 211
+insertions) and touched base0, the tests and the sdk; `misaka-palw-derive/src` was already formatted.
+
+The cause was two hashes over one directory that are easy to conflate: **`source_tree_sha256`**, the
+project's own hash and the transformer ids' input — which **FH did move**, `d2419027…` →
+`637858db…` — and the **git tree hash** of the same path, which moved at neither FH nor the fmt in
+the window being discussed. Same content, different algorithms, and an intuition that applies to one
+reads as applying to the other.
+
+**A bare hash would have passed unchallenged.** The only reason it did not is that the sender said
+what they believed had produced it, and the belief and the value disagreed. *So the ceremony's
+reporting rule is: never send a value alone — send the value and the operation you think produced
+it.* It costs a clause and it converts every handoff into a two-ways check.
+
+**And the correction was in our favour**, which is the part that would otherwise have gone unnoticed:
+if the fmt moved nothing under that crate, the prediction captured *before* it is the exact tree the
+pin comes from, and the "two readings minutes apart" hazard this ceremony was built to guard has
+nothing to guard.
+
 ### THE PREDICTION, taken pre-fmt on impl `41e364b6` — check every paste against it
 
 Recorded **before** the formatting pass, per the ceremony rule, so a value that moves without a named
