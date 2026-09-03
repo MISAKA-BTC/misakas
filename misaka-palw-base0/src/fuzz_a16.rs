@@ -40,6 +40,18 @@ impl FuzzRng {
     pub fn new(seed: u64) -> Self {
         Self(seed.max(1))
     }
+    /// **Named `next` deliberately, and NOT an `Iterator`.**
+    ///
+    /// Clippy's `should_implement_trait` fires here and the lint is wrong for this type. An
+    /// `Iterator` is something a caller may collect, take, zip or run to exhaustion; this is an
+    /// infinite deterministic sequence whose entire purpose is that a seed reproduces a schedule.
+    /// Implementing the trait would offer every combinator on a value where most of them are
+    /// meaningless, and would let a `for` loop over it run forever and read as ordinary code.
+    ///
+    /// `next` is what every RNG in this codebase and outside it calls this step, so renaming it to
+    /// satisfy a lint would cost a reader more than the lint saves. Allowed with the reason rather
+    /// than silenced.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x >> 12;
