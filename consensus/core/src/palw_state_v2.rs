@@ -632,6 +632,16 @@ pub struct PalwStateParamsV2 {
     /// at: no share moves except at an activation grant, and every existing fixture keeps its
     /// meaning.
     class_growth_permille: u16,
+    /// **ADR-0082 Decisions 10/11's fence, as the transition needs it: an activation score.**
+    ///
+    /// `Params::palw_fp_decode_rules` resolved to its DAA score, or `None` for a network that has
+    /// not armed it — every shipped preset. It is the height and not a pre-resolved `bool` because
+    /// this rule decides what a claim EARNS: a fold that answered the question at a different
+    /// height from its peers would compute a different state root from a block it accepted, and a
+    /// height in the params is a value every node reads the same way at every DAA score.
+    ///
+    /// `None` is byte-identical to the transition before the field existed.
+    fp_decode_rules_daa: Option<u64>,
 }
 
 impl PalwStateParamsV2 {
@@ -723,6 +733,7 @@ impl PalwStateParamsV2 {
             // which is what every caller predating ADR-0054 meant. See
             // `with_class_share_growth_v1`.
             class_growth_permille: 0,
+            fp_decode_rules_daa: None,
         })
     }
 
@@ -908,6 +919,20 @@ impl PalwStateParamsV2 {
 
     /// ADR-0054's growth step, in permille of a class's own share per closed epoch. `0` = the rule
     /// is off and no share moves outside an activation grant.
+    /// **ADR-0082 Decisions 10/11: arm the lane's decode rules at this DAA score.**
+    /// `Params::palw_fp_decode_rules_fence().map(|f| f.daa_score())` is the one value a caller
+    /// should pass; no preset passes anything.
+    pub fn with_fp_decode_rules_v1(mut self, activation_daa: Option<u64>) -> Self {
+        self.fp_decode_rules_daa = activation_daa;
+        self
+    }
+
+    /// Are ADR-0082's decode rules in force at `daa_score`? `false` on every shipped preset, and
+    /// on every caller that has not armed it.
+    pub fn fp_decode_rules_at(&self, daa_score: u64) -> bool {
+        self.fp_decode_rules_daa.is_some_and(|at| daa_score >= at)
+    }
+
     pub fn class_growth_permille(&self) -> u16 {
         self.class_growth_permille
     }
@@ -3077,6 +3102,29 @@ pub enum PalwStateV2Error {
     QuantumAlreadySpent { claim: Hash64, index: u32 },
     #[error("a free-prompt commitment with zero quanta licenses nothing and does not enter the state")]
     ZeroQuanta,
+    /// **ADR-0082 Decision 10's fail-closed edge.**
+    ///
+    /// Past `Params::palw_fp_decode_rules` a claim earns on its DECODE leaves, which are a
+    /// function of `(prompt_tokens, decode_tokens_executed, the class's shape profile)`. The
+    /// chain holds the first of those nowhere and the third of those nowhere: the object carries
+    /// `prompt_token_ids_hash` and not the token COUNT, and `PalwClassStateV2` carries
+    /// `pwu_rule` — the canonical job's TOTAL leaves — and no profile. `palw_step::
+    /// decode_leaf_count_v1` is the arithmetic; the chain simply cannot feed it.
+    ///
+    /// So past the fence this arm refuses BY NAME rather than pricing the carried total, which is
+    /// the one thing Decision 10 forbids. The refusal is unreachable on every shipped preset (the
+    /// fence is `None` everywhere) and is the correct behaviour the moment it is not: a claim
+    /// priced on leaves the rule says are worth nothing is a subsidy on replay, and a lane that
+    /// silently keeps the old numerator past its own fence is a network whose nodes disagree
+    /// about what a block paid.
+    ///
+    /// What closes it is named in the message: the object must carry `prompt_tokens`, and the
+    /// class record must carry the profile-derived quantities the split needs — a
+    /// `PALW_STATE_V2_VERSION` move, sequenced by whoever owns the record's layout.
+    #[error(
+        "free-prompt claim {claim} cannot be priced past ADR-0082 Decision 10's fence: the transition cannot enumerate its decode leaves — the object carries no prompt_tokens and class {class} carries no shape profile. Arming Params::palw_fp_decode_rules requires both (palw_step::decode_leaf_count_v1 is the arithmetic)"
+    )]
+    FreePromptDecodeLeavesUnavailable { claim: Hash64, class: Hash64 },
     #[error("work {work_id} is already claimed by {claim} — one inference, one claim (ADR-0074 Decision 4)")]
     DuplicateWork { work_id: Hash64, claim: Hash64 },
     #[error("the free-prompt lane is unpriced on this network (no quanta per canonical job) — a commitment cannot enter the state")]
@@ -7944,8 +7992,29 @@ fn apply_object(
             {
                 return Err(PalwStateV2Error::FreePromptLaneUncertified(*class_id));
             }
+            // **ADR-0082 Decision 10: what this claim is CREDITED for.**
+            //
+            // Under `Params::palw_fp_decode_rules` the numerator is the job's DECODE leaves and
+            // the prefill of a user-chosen prompt is priced at zero — a deterministic causal model
+            // makes every prefix leaf recomputable at zero cost by the bond that computed it once,
+            // so a subsidy on prefill is a subsidy on replay. The quantum (the denominator) is
+            // unchanged: still a fraction of the class's own canonical job (ADR-0074 Decision 5).
+            //
+            // `work_leaves` stays on the record whatever the fence says — the seat's binding is
+            // against the capture's own count, and the attempt lane reads it — but past the fence
+            // it is not what the claim is PAID for.
+            //
+            // The chain cannot enumerate the decode half today; see
+            // `FreePromptDecodeLeavesUnavailable` for exactly which two inputs are missing and
+            // what closing it costs. Refusing is the fail-closed direction and is unreachable on
+            // every shipped preset.
+            let decode_rules = builder.params.fp_decode_rules_at(ctx.daa_score);
+            if decode_rules {
+                return Err(PalwStateV2Error::FreePromptDecodeLeavesUnavailable { claim: *claim_id, class: *class_id });
+            }
+            let credited = crate::palw_freeprompt_v3::fp_credited_leaves_v1(decode_rules, *work_leaves, 0);
             let quantum = crate::palw_freeprompt_v3::fp_class_quantum_leaves_v1(class.pwu_rule.canonical_leaves_v1(), per_job);
-            let quanta = crate::palw_freeprompt_v3::fp_quanta_v3(*work_leaves, quantum, cap);
+            let quanta = crate::palw_freeprompt_v3::fp_quanta_v3(credited, quantum, cap);
             if quanta == 0 {
                 return Err(PalwStateV2Error::ZeroQuanta);
             }

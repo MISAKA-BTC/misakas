@@ -1203,6 +1203,8 @@ mod free_prompt_tests {
             max_context_tokens: profile.n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         }
     }
 

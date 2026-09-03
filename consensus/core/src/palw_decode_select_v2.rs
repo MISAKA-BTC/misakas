@@ -130,6 +130,44 @@ pub fn decode_lane_beats_v2(beat_key: i64, beat_lane: usize, committed_key: i64,
     beat_key > committed_key || (beat_key == committed_key && beat_lane < committed_lane)
 }
 
+/// **A job's sampler inputs, as the court receives them.**
+///
+/// The pair travels together everywhere, and it is a struct rather than two arguments for one
+/// reason: an arm that takes `(seed, temperature)` positionally is an arm a caller can transpose,
+/// and the two have different types only by luck.
+///
+/// **Where the court gets it is the load-bearing question.** It must come from the CLAIM — the
+/// job the executor signed, whose id contains both fields — and never from the challenger's pin:
+/// a challenger who could state the temperature could state `0`, recompute the greedy argmax, and
+/// convict an honestly sampled token. The refutation arms below therefore take it as a parameter
+/// and the caller must bind it to the claim; see the note on
+/// [`crate::palw_step_refute::check_tiled_decode_token_refutation_v2`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwDecodeSamplingV2 {
+    pub seed: [u8; 32],
+    pub temperature_q: u32,
+}
+
+impl PalwDecodeSamplingV2 {
+    /// What every shipped row carries, and what a dormant fence admits: the v1 rule exactly.
+    pub const GREEDY: Self = Self { seed: PALW_DECODE_SEED_GREEDY, temperature_q: PALW_DECODE_TEMPERATURE_GREEDY };
+
+    /// True when this pair selects exactly what `base0_decode_token_select_v1` selects.
+    pub const fn is_greedy(&self) -> bool {
+        self.temperature_q == PALW_DECODE_TEMPERATURE_GREEDY
+    }
+
+    /// One lane's key under this pair — [`decode_lane_key_v2`] with the pair unpacked.
+    pub fn lane_key(&self, value: i32, position: u32, lane: usize) -> i64 {
+        decode_lane_key_v2(value, &self.seed, position, lane, self.temperature_q)
+    }
+
+    /// The selected lane of a whole row under this pair.
+    pub fn select(&self, values: &[i32], position: u32) -> usize {
+        decode_token_select_v2(values, &self.seed, position, self.temperature_q)
+    }
+}
+
 /// **The selection rule.** `argmax_j (values[j] · T_ONE + T_q · G_j)`, ties to the lowest index.
 ///
 /// At [`PALW_DECODE_TEMPERATURE_GREEDY`] this is

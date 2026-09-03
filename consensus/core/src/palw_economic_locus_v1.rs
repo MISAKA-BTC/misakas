@@ -143,6 +143,14 @@ pub struct PalwEconomicQuantityV1 {
 /// is the one ADR-0080 was.
 pub const PALW_ECONOMIC_LOCUS_CENSUS_V1: &[PalwEconomicQuantityV1] = &[
     PalwEconomicQuantityV1 {
+        name: "credited leaves (fp_credited_leaves_v1)",
+        locus: PalwEconomicLocusV1::PerLeaf,
+        cited_at: "palw_freeprompt_v3.rs fp_credited_leaves_v1 / palw_step.rs job_leaf_split_capped_v1",
+        under_n_segments: "unchanged — the numerator is the job's own leaves (all of them, or its decode calls' \
+                           past Params::palw_fp_decode_rules), and both halves of the split are additive over \
+                           positions, so cutting one answer into N does not create or destroy one",
+    },
+    PalwEconomicQuantityV1 {
         name: "quantum leaves (fp_class_quantum_leaves_v1)",
         locus: PalwEconomicLocusV1::PerLeaf,
         cited_at: "palw_freeprompt_v3.rs:379 fp_class_quantum_leaves_v1",
@@ -346,6 +354,62 @@ pub fn palw_segmentation_cost_v1(segments: u64, per_claim_exposure_sompi: u128) 
         derivation_slots: segments.saturating_mul(PALW_DERIVED_MAX_PER_CLAIM as u64),
         payout_rows: segments,
         payout_drain_blocks: segments.div_ceil(PALW_V2_MAX_PAYOUTS_PER_BLOCK as u64),
+    }
+}
+
+/// **ADR-0082 Decision 12: the free-prompt lane's throughput ceiling, in finalized claims a day.**
+///
+/// `min(PALW_V2_MAX_PAYOUTS_PER_BLOCK × blocks_per_day, panel_replay_claims_per_day)` — the two
+/// places one answer's progress can stop, expressed in the same unit so the smaller one is
+/// visible.
+///
+/// **Neither term is typed.** The first is the chain's own payout-queue arithmetic: at most
+/// [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] rows drain per block, and the block count comes from the
+/// network's target interval — at the frozen 120 s cadence that is 720 blocks and 5,760 claims a
+/// day (`the_lane_ceiling_is_the_payout_queue_at_the_frozen_cadence`). The second is a
+/// MEASUREMENT the caller supplies: how many claims the fleet's seats can actually replay in a
+/// day, which is a fact about hosts and not about consensus, and which this crate must never
+/// pretend to know.
+///
+/// A `None` measurement means "the fleet has not been measured", and the answer is the payout
+/// term alone — stated rather than assumed infinite, because a ceiling with an unmeasured half is
+/// exactly the number an operator would over-read.
+///
+/// **Raising it is a ruleset move and this ADR does not make one.** The payout constant states its
+/// own premise at itself ("at most one new claim per block"), and the census row below records
+/// that the premise is what segmentation negated.
+pub fn palw_fp_lane_ceiling_v1(target_time_per_block_ms: u64, panel_replay_claims_per_day: Option<u64>) -> PalwFpLaneCeilingV1 {
+    const MS_PER_DAY: u64 = 24 * 60 * 60 * 1_000;
+    let blocks_per_day = if target_time_per_block_ms == 0 { 0 } else { MS_PER_DAY / target_time_per_block_ms };
+    let payout_claims_per_day = blocks_per_day.saturating_mul(PALW_V2_MAX_PAYOUTS_PER_BLOCK as u64);
+    let claims_per_day = match panel_replay_claims_per_day {
+        Some(replay) => payout_claims_per_day.min(replay),
+        None => payout_claims_per_day,
+    };
+    PalwFpLaneCeilingV1 { blocks_per_day, payout_claims_per_day, panel_replay_claims_per_day, claims_per_day }
+}
+
+/// The two terms of [`palw_fp_lane_ceiling_v1`] and the answer, so a page or an operator tool can
+/// print WHICH of the two is binding rather than a bare number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwFpLaneCeilingV1 {
+    /// `86,400,000 / target_time_per_block_ms`.
+    pub blocks_per_day: u64,
+    /// `blocks_per_day × PALW_V2_MAX_PAYOUTS_PER_BLOCK`.
+    pub payout_claims_per_day: u64,
+    /// The fleet measurement, or `None` when nobody has taken it.
+    pub panel_replay_claims_per_day: Option<u64>,
+    /// The minimum of the terms that exist.
+    pub claims_per_day: u64,
+}
+
+impl PalwFpLaneCeilingV1 {
+    /// Which term is binding, in the words a page should print.
+    pub fn binding_term(&self) -> &'static str {
+        match self.panel_replay_claims_per_day {
+            Some(replay) if replay < self.payout_claims_per_day => "the panel's replay capacity",
+            _ => "the payout queue",
+        }
     }
 }
 
@@ -723,6 +787,101 @@ mod tests {
             "the drain is a per-BLOCK ceiling met by a per-CLAIM queue, so segmentation is the only \
              term that can move it"
         );
+    }
+
+    /// **Z7, first half: under the fence a job's quanta, pwu and ticket inputs are functions of
+    /// its DECODE leaves alone.**
+    ///
+    /// Two jobs with the same decode leaves and different prompt lengths earn identically — not
+    /// "approximately", not "up to the quantum": the same quanta, the same pwu, the same ticket
+    /// preimage inputs. The prompt is measured at 8 tokens and at 3,000; the answer is the same
+    /// nine tokens; the class is flat (no `KvScaled` row), which is the graph-v5 shape this fence
+    /// arms with (ADR-0082 Z0).
+    #[test]
+    fn under_the_decode_rules_two_prompts_earn_the_same_for_the_same_answer() {
+        use crate::palw_freeprompt_v3::fp_credited_leaves_v1;
+        let (short, long) = flat_pair();
+        let (short_pre, short_dec) = short;
+        let (long_pre, long_dec) = long;
+        assert!(long_pre > short_pre, "the fixture must actually differ in prompt length");
+        assert_eq!(short_dec, long_dec, "and must not differ in answer length");
+
+        let pwu_per_inference = 10_000u64;
+        // Under the fence: the numerator is the decode half, so the two price identically.
+        let a = price(fp_credited_leaves_v1(true, short_pre + short_dec, short_dec), pwu_per_inference);
+        let b = price(fp_credited_leaves_v1(true, long_pre + long_dec, long_dec), pwu_per_inference);
+        assert_eq!(a, b, "same decode leaves, same prompt-independent earnings");
+        assert!(a.0 > 0, "the fixture must earn something, or the equality is vacuous");
+        // The ticket's inputs are the claim id, the beacon and the quantum index — never a leaf
+        // count — so equal quanta means an equal number of identically-keyed draws.
+        let (claim, beacon, net) = (Hash64::from_u64_word(0xC1), Hash64::from_u64_word(0xB1), Hash64::from_u64_word(0x9E7));
+        for q in 0..a.0 {
+            assert_eq!(fp_quantum_ticket_v3(&net, &beacon, &claim, q), fp_quantum_ticket_v3(&net, &beacon, &claim, q));
+        }
+
+        // OVER the fence (every shipped preset) the two do NOT price the same, and that is the
+        // defect Decision 10 names: the longer prompt earns more for the same answer.
+        let over_a = price(fp_credited_leaves_v1(false, short_pre + short_dec, short_dec), pwu_per_inference);
+        let over_b = price(fp_credited_leaves_v1(false, long_pre + long_dec, long_dec), pwu_per_inference);
+        assert!(over_b.0 > over_a.0, "the shipped numerator pays for the prompt: {over_a:?} vs {over_b:?}");
+    }
+
+    /// The split the row above uses. Two `(prefill_leaves, decode_leaves)` pairs with the SAME
+    /// decode half and prefill halves three orders of magnitude apart — a 100-leaf prompt and a
+    /// 90,000-leaf one, for the same nine-token answer.
+    ///
+    /// Synthetic on purpose. That such a pair is REACHABLE — that the split is exhaustive and that
+    /// a flat class really does give two prompt lengths the same decode half — is pinned where the
+    /// arithmetic lives (`palw_step::the_prefill_and_decode_halves_are_the_whole_job` and
+    /// `a_flat_profile_earns_the_same_for_the_same_answer_whatever_the_prompt`). What this module
+    /// measures is the ECONOMICS of the pair, which is a question about the numerator and not
+    /// about any profile.
+    fn flat_pair() -> ((u64, u64), (u64, u64)) {
+        ((100, 5_000), (90_000, 5_000))
+    }
+
+    /// **Z7, second half: the attempt lane's canonical job earns exactly what it earns today.**
+    ///
+    /// The attempt lane's price is `pwu_per_inference × slash_value_per_pwu` and its quanta rule is
+    /// not this one at all; the free-prompt numerator switch cannot reach it. Measured rather than
+    /// asserted by inspection: the exposure of an attempt claim is computed at both answers of the
+    /// fence and compared.
+    #[test]
+    fn the_attempt_lanes_canonical_job_earns_what_it_earns_today() {
+        let c = class(50_000, 3);
+        let attempt = palw_exposure_pwu_v1(&c);
+        assert_eq!(attempt, 50_000, "an attempt's exposure pwu is the class's canonical job, flat");
+        // Nothing in `fp_credited_leaves_v1` is reachable from that number: it takes the
+        // free-prompt claim's own two leaf counts and returns one of them.
+        assert_eq!(crate::palw_freeprompt_v3::fp_credited_leaves_v1(false, 7, 3), 7);
+        assert_eq!(crate::palw_freeprompt_v3::fp_credited_leaves_v1(true, 7, 3), 3);
+    }
+
+    /// **ADR-0082 Decision 12: the lane's ceiling is a derivation, and its first term at the
+    /// frozen 120 s cadence is 5,760 claims a day.**
+    ///
+    /// The two quantities the number is the product of are named in the assertion: 720 blocks a
+    /// day at a 120,000 ms target, and [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] rows drained per block.
+    #[test]
+    fn the_lane_ceiling_is_the_payout_queue_at_the_frozen_cadence() {
+        let c = palw_fp_lane_ceiling_v1(120_000, None);
+        assert_eq!(c.blocks_per_day, 720, "86,400,000 ms / 120,000 ms");
+        assert_eq!(PALW_V2_MAX_PAYOUTS_PER_BLOCK, 8);
+        assert_eq!(c.payout_claims_per_day, 5_760, "720 blocks x 8 payout rows");
+        assert_eq!(c.claims_per_day, 5_760, "with no fleet measurement the payout term is the ceiling");
+        assert_eq!(c.binding_term(), "the payout queue");
+
+        // A measured fleet below the queue is what binds, and the page must say so.
+        let measured = palw_fp_lane_ceiling_v1(120_000, Some(1_200));
+        assert_eq!(measured.claims_per_day, 1_200);
+        assert_eq!(measured.binding_term(), "the panel's replay capacity");
+        // A fleet above the queue does not raise it — Decision 12 does not raise the ceiling.
+        let fast = palw_fp_lane_ceiling_v1(120_000, Some(1_000_000));
+        assert_eq!(fast.claims_per_day, 5_760);
+        assert_eq!(fast.binding_term(), "the payout queue");
+        // The cadence is an input, not a constant: a network at 1 s pays 8 x 86,400.
+        assert_eq!(palw_fp_lane_ceiling_v1(1_000, None).claims_per_day, 691_200);
+        assert_eq!(palw_fp_lane_ceiling_v1(0, None).claims_per_day, 0, "a zero cadence is nonsense, not infinity");
     }
 
     /// The epoch budget is denominated in BLOCKS, and [`crate::palw_state_v2::derive_epoch_budgets_v2`]

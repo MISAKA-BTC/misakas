@@ -36,8 +36,12 @@ use blake2b_simd::Params;
 /// Object version for every FP-V3 wire object. A different version is a different object family.
 /// **3 → 4** (2026-09-02, ADR-0074): the job carries `prompt_mode`, the commitment carries
 /// `work_leaves` in place of `cu`, and a quantum is a fraction of the class's own canonical job.
+/// **4 → 5** (2026-09-03, ADR-0082 Decision 11): the job carries `sampling_seed` and
+/// `temperature_q`. Two fields inside the job id means every claim id moves, which is exactly
+/// what a ruleset move is for — and the alternative, a sampler whose inputs live outside the
+/// identity the executor signed, is a seed the executor can change after the fact.
 /// A node on the old wire cannot decode the new payload, and must not.
-pub const PALW_FP_V3_VERSION: u16 = 4;
+pub const PALW_FP_V3_VERSION: u16 = 5;
 
 /// Width of the expanded spend L1 tag — the attempt lane's width, so the Layer-0 finalizer's call
 /// shape is identical across both block kinds.
@@ -245,6 +249,34 @@ pub struct PalwFreePromptJobV3 {
     /// when nobody is asking (ADR-0074 Decision 1); the ids are a pure function of the job and
     /// travel only in the job material. Anything else is refused.
     pub prompt_mode: u8,
+    /// **ADR-0082 Decision 11: the seed the decode sampler draws under.**
+    ///
+    /// `[0u8; 32]` is the greedy default, and at `temperature_q == 0` this field is INERT — the
+    /// key never reads it (`crate::palw_decode_select_v2::decode_lane_key_v2`). Carried anyway,
+    /// and hashed anyway, because a field outside identity is a field two objects can differ in
+    /// while claiming to be the same object (the module note above).
+    ///
+    /// It is inside [`fp_job_id_v3`] BY CONSTRUCTION — that function hashes the whole canonical
+    /// borsh of this struct — and therefore inside the claim id. Two consequences, and they are
+    /// the reason Decision 11 puts the seed here rather than in the commitment:
+    ///
+    /// * **A seed cannot be changed after the fact.** The executor signed an identity that
+    ///   already contains it, so "I meant a different seed" is a different job.
+    /// * **Grinding a seed costs a WHOLE INFERENCE per draw**, which is ADR-0072's rule kept (one
+    ///   inference, one ticket) rather than broken. Nothing here is a lottery input either: the
+    ///   quantum ticket consumes a beacon that does not exist when this field is fixed on chain
+    ///   (ADR-0044 F6), so a chosen seed buys a different ANSWER and never a better draw.
+    pub sampling_seed: [u8; 32],
+    /// **ADR-0082 Decision 11: the sampling temperature, in Q24** — `1 << 24` is a temperature of
+    /// one in the class's own logit units.
+    ///
+    /// [`crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY`] (zero) is the shipped
+    /// rule byte for byte, and is what every row carries while `Params::palw_fp_decode_rules` is
+    /// dormant; a job declaring anything else is refused BY NAME
+    /// ([`PalwFpV3Error::SamplingNotArmed`]) rather than quietly executed greedily, because a
+    /// user who asked for a temperature and silently got greedy has been told a false thing about
+    /// what ran.
+    pub temperature_q: u32,
 }
 
 /// `H(canonical(job))` — every field, no exceptions.
@@ -395,6 +427,33 @@ pub fn fp_quanta_v3(work_leaves: u64, quantum_leaves: u64, max_quanta_per_receip
     }
     let full = work_leaves / quantum_leaves;
     full.min(max_quanta_per_receipt as u64) as u32
+}
+
+/// **ADR-0082 Decision 10: which leaves a free-prompt claim is CREDITED for.**
+///
+/// One spelling, so the transition, a builder and a seat cannot answer it differently.
+///
+/// * `decode_rules == false` (every shipped preset, `Params::palw_fp_decode_rules` dormant): the
+///   whole capture, `work_leaves`, exactly as the lane prices it today.
+/// * `decode_rules == true`: the leaves of the DECODE calls
+///   ([`crate::palw_step::decode_leaf_count_v1`]). The prefill of a user-chosen prompt is priced
+///   at ZERO.
+///
+/// The rationale is arithmetic, not policy. A pinned integer model is deterministic and causal, so
+/// every leaf of a prefix is a pure function of the prefix: the same bond re-submitting a
+/// 32,000-token prompt with one new token recomputes nothing and, under the shipped rule, is
+/// credited everything. Prefill leaves are therefore not scarce, and a subsidy on them is a
+/// subsidy on replay.
+///
+/// **The quantum is unchanged** (ADR-0074 Decision 5): the denominator stays the class's own
+/// canonical job, so a class's own scale still normalises its draws. What moves is the numerator
+/// and nothing else — which is why this is a function of one argument pair and not a new pricing
+/// rule.
+///
+/// **The attempt lane never calls this.** Its canonical job is drawn from the beacon and cannot be
+/// cached, so there is no replay to subsidise and nothing to remove.
+pub fn fp_credited_leaves_v1(decode_rules: bool, work_leaves: u64, decode_leaves: u64) -> u64 {
+    if decode_rules { decode_leaves } else { work_leaves }
 }
 
 /// The quantum's lottery draw: leading 128 bits (big-endian, matching `palw_ticket_v1`'s reading)
@@ -737,6 +796,14 @@ pub enum PalwFpV3Error {
         "privacy mode 2 (PanelDa) is not armed on this network — it arms at a height through Params::palw_panel_da, and this network has none"
     )]
     PanelDaNotArmed,
+    /// **ADR-0082 Decision 11's arming refusal.** Not `UnsupportedSampling`: this build understands
+    /// the seeded argmax completely (`crate::palw_decode_select_v2`), and what it is refusing is a
+    /// RULESET that has not armed it — a fence an operator can schedule, exactly like
+    /// [`Self::PanelDaNotArmed`] beside it.
+    #[error(
+        "sampling (temperature_q {temperature_q}) is not armed on this network — ADR-0082 Decision 11 arms at a height through Params::palw_fp_decode_rules, and this network has none; the greedy defaults are temperature_q 0 with a zero seed"
+    )]
+    SamplingNotArmed { temperature_q: u32 },
     /// A mode-2 payload that carries the prompt anyway. Refused rather than trimmed: an executor
     /// that published a prompt the user asked to keep off chain has already done the harm, and a
     /// claim built on that payload would be one the chain quietly blessed.
@@ -801,7 +868,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         // **`PanelDa` disarmed, because a caller that passed no arming has armed nothing**
         // (ADR-0077 Decision 16). This entry predates the mode; every one of its callers refuses
         // mode 2 today and keeps refusing it until it starts passing the answer.
-        self.validate_v3(Some(network_domain), false)
+        self.validate_v3(Some(network_domain), false, false)
     }
 
     /// The same rules **under this network's arming** — the entry that can admit a `PanelDa`
@@ -809,7 +876,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// at the point the caller is judging; a caller that cannot resolve it calls
     /// [`Self::validate_stateless_v3`] and gets the disarmed answer.
     pub fn validate_stateless_under_v3(&self, network_domain: Hash64, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed)
+        self.validate_v3(Some(network_domain), panel_da_armed, false)
     }
 
     /// **The half a context-free caller can run: everything except the two checks that need the
@@ -841,16 +908,16 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// Mode 2's own shape rule, that the payload carries no ids, needs no arming at all and is
     /// checked under both answers.
     pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, false)
+        self.validate_v3(None, false, false)
     }
 
     /// The shape half under a known arming — the door on a network that carries the rule, and
     /// what a builder asks before it spends an inference on a job the chain will refuse.
     pub fn validate_shape_under_v3(&self, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed)
+        self.validate_v3(None, panel_da_armed, false)
     }
 
-    fn validate_v3(&self, network_domain: Option<Hash64>, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
+    fn validate_v3(&self, network_domain: Option<Hash64>, panel_da_armed: bool, decode_rules_armed: bool) -> Result<(), PalwFpV3Error> {
         let c = &self.commitment;
         let job = &c.job;
         if job.version != PALW_FP_V3_VERSION {
@@ -874,6 +941,23 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         }
         if job.prompt_mode != PALW_FP_PROMPT_MODE_USER && job.prompt_mode != PALW_FP_PROMPT_MODE_CANONICAL {
             return Err(PalwFpV3Error::UnsupportedPromptMode(job.prompt_mode));
+        }
+        // **ADR-0082 Decision 11, refused BY NAME while the fence is dormant.** The same two-sided
+        // shape the privacy modes have directly above, and for the same reason: "no build does
+        // this" and "this ruleset does not" are different facts with different fixes. A job
+        // declaring a temperature on a network that has not armed `Params::palw_fp_decode_rules`
+        // would otherwise be executed GREEDILY by a conforming worker — a user told a false thing
+        // about what ran, and a commitment whose id says one rule while its tokens obey another.
+        //
+        // The seed is only meaningful at a non-zero temperature (the key never reads it at zero),
+        // so a non-zero seed with a greedy temperature is refused too: it is a field claiming to
+        // decide something that decides nothing, and admitting it would let two jobs with the same
+        // execution carry two different ids.
+        if !decode_rules_armed
+            && (job.temperature_q != crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY
+                || job.sampling_seed != crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY)
+        {
+            return Err(PalwFpV3Error::SamplingNotArmed { temperature_q: job.temperature_q });
         }
         if job.executor_pubkey.is_empty() {
             return Err(PalwFpV3Error::MissingPublicKey);
@@ -1080,6 +1164,12 @@ pub struct PalwFpWorkerRequestV3 {
     /// [`PALW_FP_PROMPT_MODE_USER`] or [`PALW_FP_PROMPT_MODE_CANONICAL`] (ADR-0074 Decision 1);
     /// copied onto the job verbatim.
     pub prompt_mode: u8,
+    /// ADR-0082 Decision 11's sampler inputs, copied onto the job verbatim like `prompt_mode`.
+    /// The worker does not choose them: whoever asked for the inference did, and the job id the
+    /// worker binds its trace to contains them — so a worker that ignored them would produce a
+    /// commitment whose id no replayer can rebuild.
+    pub sampling_seed: [u8; 32],
+    pub temperature_q: u32,
     pub input: PalwFpWorkerInputV3,
     /// Runtime identity pins, checked against the worker's own manifest-derived values —
     /// running a job under a mis-declared identity would let one runtime impersonate another's
@@ -1340,26 +1430,26 @@ impl PalwFpCommitmentTxPayloadV3 {
     /// The signature is verified by the caller (this crate holds no ML-DSA implementation);
     /// [`Self::signed_message`] is what it must verify over.
     pub fn validate_stateless_v3(&self, network_domain: Hash64) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), false)
+        self.validate_v3(Some(network_domain), false, false)
     }
 
     /// The same, **under this network's arming** — the entry the extraction walk uses, and the
     /// only one that can admit a `PanelDa` payload (ADR-0077 Decision 16). `panel_da_armed` is
     /// `Params::palw_panel_da_at` at the accepting block's DAA score.
     pub fn validate_stateless_under_v3(&self, network_domain: Hash64, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed)
+        self.validate_v3(Some(network_domain), panel_da_armed, false)
     }
 
     /// The context-free half — see [`PalwFreePromptCommitmentEnvelopeV3::validate_shape_v3`] for
     /// why the transaction validator can only run this one, and why the arming it asks is the
     /// height-free one.
     pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, false)
+        self.validate_v3(None, false, false)
     }
 
     /// The shape half under a known arming — `Params::palw_panel_da_admissible` at the door.
     pub fn validate_shape_under_v3(&self, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed)
+        self.validate_v3(None, panel_da_armed, false)
     }
 
     /// **The signature, on the payload that actually rides a transaction.**
@@ -1379,7 +1469,7 @@ impl PalwFpCommitmentTxPayloadV3 {
             .validate_signature_v3(verify_mldsa87)
     }
 
-    fn validate_v3(&self, network_domain: Option<Hash64>, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
+    fn validate_v3(&self, network_domain: Option<Hash64>, panel_da_armed: bool, decode_rules_armed: bool) -> Result<(), PalwFpV3Error> {
         if self.version != PALW_FP_V3_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
         }
@@ -1457,6 +1547,8 @@ mod tests {
             max_context_tokens: 4096,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         }
     }
 
@@ -1830,6 +1922,8 @@ mod tests {
             max_context_tokens: j.max_context_tokens,
             privacy_mode: j.privacy_mode,
             prompt_mode: j.prompt_mode,
+            sampling_seed: j.sampling_seed,
+            temperature_q: j.temperature_q,
             input: PalwFpWorkerInputV3::TokenIds(ids.clone()),
             model_profile_id: Hash64::from_u64_word(0x1),
             runtime_manifest_hash: Hash64::from_u64_word(0x2),
@@ -2168,6 +2262,8 @@ mod fp_material_tests {
             max_context_tokens: 16,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         }
     }
 

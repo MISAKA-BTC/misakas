@@ -582,6 +582,8 @@ mod tests {
             max_context_tokens: backend.profile().n_ctx,
             privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         }
     }
 
@@ -1293,6 +1295,8 @@ mod end_to_end_tests {
             max_context_tokens: backend.profile().n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         };
         let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
         let class = PalwFpClassFactsV3 {
