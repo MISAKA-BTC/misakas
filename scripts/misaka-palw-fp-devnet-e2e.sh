@@ -408,8 +408,14 @@ submit() {
   "${CLI[@]}" palw submit-object --key-file "$WORK_DIR/keys/main.seed" "${args[@]}" --yes
   advance 2   # a chunked object needs one carrier per chunk, and the next burst spends this change
 }
-log "stage 3 — certifying the a16 family on the free-prompt lane"
-"$CERTIFY_BIN" drill --family a16 --lane fp --out "$WORK_DIR/obj/a16-fp.obj" || die "the a16 fp drill did not produce evidence"
+log "stage 3 — certifying the family that covers $MODEL_ID on the free-prompt lane"
+# **The row names its family; this script does not.** `--family a16` was the graph-v2 family
+# (PALW-QWEN25-A16), whose free-prompt drill does not cover the graph-v5 row's kernel set (the
+# fused site is PALW-QWEN25-A16-V5's), so every node dropped the class-lane binding — "no family
+# certified on this chain for the free-prompt lane covers every kernel" — and stage 5b then found
+# no commitment to sign. Found on the ADR-0082 devnet drill of 2026-09-03; `--model-id` derives the
+# family from the catalog row exactly as `bind` does.
+"$CERTIFY_BIN" drill --model-id "$MODEL_ID" --lane fp --out "$WORK_DIR/obj/a16-fp.obj" || die "the free-prompt drill for $MODEL_ID's family did not produce evidence"
 submit "$WORK_DIR/obj/a16-fp.obj"
 "$CERTIFY_BIN" bind --model-id "$MODEL_ID" --lane fp --out "$WORK_DIR/obj/a16-bind.obj" || die "palw-certify bind refused $MODEL_ID"
 submit "$WORK_DIR/obj/a16-bind.obj"
