@@ -799,6 +799,21 @@ impl PalwRcFamilyV1 {
         family_id_of(self.name())
     }
 
+    /// **The short form an operator types**, and the one `palw-certify`'s usage string must list.
+    ///
+    /// It existed only inside `parse`'s match arms, so "which short names are there" could be
+    /// answered by reading that function and nowhere else — which is why `a16-v5` was accepted by
+    /// the parser while `--help` said `<base0|qwen36|a16>` for as long as it did. A name with one
+    /// spelling can be checked against the help; a name that lives in match arms cannot.
+    pub fn short_name_v1(self) -> &'static str {
+        match self {
+            Self::Base0 => "base0",
+            Self::Qwen36 => "qwen36",
+            Self::Qwen25A16 => "a16",
+            Self::Qwen25A16V5 => "a16-v5",
+        }
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "base0" | "palw-base-0" | "floor" => Some(Self::Base0),
@@ -835,6 +850,39 @@ mod family_name_tests {
             );
             // And the short form the docs use, lowercased, for the same reason.
             assert!(PalwRcFamilyV1::parse(&name.to_ascii_lowercase()).is_some(), "the lowercased name {name} does not parse");
+            // The short form is a third spelling unless it round-trips too.
+            assert_eq!(
+                PalwRcFamilyV1::parse(family.short_name_v1()),
+                Some(family),
+                "short_name_v1() returned `{}`, which `parse` does not map back to {name}",
+                family.short_name_v1()
+            );
+        }
+
+        // **The parser accepting a name is not the operator being able to find it.** Everything
+        // above compares the parser with itself: `parse(name()) == family` is a round trip inside
+        // one module, and it was green the whole time `palw-certify --help` said
+        // `--family <base0|qwen36|a16>` while the parser also took `a16-v5`. A family the tool can
+        // drill and the help does not mention is a family nobody will ask for — and `a16-v5` is
+        // the one that drills the fused row the genesis is to register.
+        //
+        // So the OTHER end is the binary's own source, read at compile time. A short form added to
+        // the parser without reaching the usage string fails here.
+        let cli = include_str!("bin/palw-certify.rs");
+        for family in PalwRcFamilyV1::ALL {
+            let short = family.short_name_v1();
+            // Delimited on both sides, so a middle element of `<a|b|c>` matches too — my first
+            // cut only accepted first-or-last and failed on `qwen36`, which is the check being
+            // wrong rather than the help.
+            let listed = cli.contains(&format!("<{short}|"))
+                || cli.contains(&format!("|{short}|"))
+                || cli.contains(&format!("|{short}>"))
+                || cli.contains(&format!("<{short}>"));
+            assert!(
+                listed,
+                "`palw-certify`'s usage does not list `--family {short}`, so the only way to discover it is to read \
+                 the parser. Add it to BOTH the module doc and the usage string."
+            );
         }
     }
 }
@@ -2161,12 +2209,11 @@ mod candidate_probe {
         let leaf_count = backend.capture_shape(&honest.material).expect("the capture states its shape").step_leaf_count;
         assert!(leaf_count > 0);
 
-        let probed: Vec<(u64, PalwStepTableV1, bool)> = drill_candidates_v1(&profile, &job, leaf_count, |leaf| {
-            backend.refutation_for_index(&honest.material, leaf).is_ok()
-        })
-        .into_iter()
-        .map(|c| (c.leaf, c.table, c.decode))
-        .collect();
+        let probed: Vec<(u64, PalwStepTableV1, bool)> =
+            drill_candidates_v1(&profile, &job, leaf_count, |leaf| backend.refutation_for_index(&honest.material, leaf).is_ok())
+                .into_iter()
+                .map(|c| (c.leaf, c.table, c.decode))
+                .collect();
 
         // The walk this replaced, verbatim.
         let mut walked: Vec<(u64, PalwStepTableV1, bool)> = Vec::new();

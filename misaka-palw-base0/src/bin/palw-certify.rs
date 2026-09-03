@@ -255,14 +255,13 @@ fn main() {
                     let artifact = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes)
                         .unwrap_or_else(|e| die(format!("{path} is not a readable dense PALW artifact: {e}")));
                     drop(bytes);
-                    let row = misaka_palw_base0::classes::a16_artifact_row_v1(&court, &artifact, asked, wanted.as_deref())
-                        .unwrap_or_else(|e| {
-                            die(format!(
-                                "{path}: {e}\n  \
+                    let row = misaka_palw_base0::classes::a16_artifact_row_v1(&court, &artifact, asked, wanted).unwrap_or_else(|e| {
+                        die(format!(
+                            "{path}: {e}\n  \
                                  no class id was computed and nothing was written — a certificate whose class the weights \
                                  cannot execute is worse than none"
-                            ))
-                        });
+                        ))
+                    });
                     let width_source = if row.narrowed {
                         format!("--n-ctx {}, NARROWED from the artifact's {}-position rotary span", row.n_ctx, row.artifact_span)
                     } else {

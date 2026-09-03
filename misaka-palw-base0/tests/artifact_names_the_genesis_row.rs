@@ -340,3 +340,102 @@ fn the_artifact_names_a_class_the_shipped_genesis_actually_registers() {
         registered.join(", ")
     );
 }
+
+/// **The close of the row the genesis REGISTERS, priced under the bundle that registers it** —
+/// the only derivation in this area that touches no re-armed ruleset and no literal.
+///
+/// Every other close measurement here builds a ruleset, arms it, registers the row into it and
+/// prices the result. That reproduces the shipped court faithfully *when the helper is right*, and
+/// on 2026-09-03 it was not: one field of three was a hardcoded `MerkleV1` between two read off
+/// the bundle, so the number looked bundle-derived and was priced under a court
+/// `validate_palw_v2` refuses to assemble. The figure moved 287 bytes when the field was fixed.
+///
+/// This asks the shipped params instead: take the profile out of the genesis object's own
+/// admission carriage, take arity, window and ids form off the same bundle, and price it. Two
+/// independent routes now agree at 83,175 B / one carrier, which is the agreement the single
+/// route could not provide.
+///
+/// **There is no stored close to read.** The carriage carries `profile`, `canonical`,
+/// `registrant_bond` and `signature`; the acceptance layer derives the price. So a byte count has
+/// no existence apart from a court — which is why the assertion below names all three fields, and
+/// why the public announcement quotes the CARRIER COUNT and a command rather than a number.
+#[test]
+fn the_registered_row_prices_at_one_carrier_under_the_bundle_that_registers_it() {
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+    let params = kaspa_consensus_core::config::params::palw_rc_shipped_params();
+    let bundle = match &params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b,
+        other => panic!("not v2: {other:?}"),
+    };
+    let mut priced = 0;
+    println!("ids form at 0: {:?}", params.palw_prompt_ids_form_at(0));
+    println!("bundle arity: {}  window_court: {}", bundle.court.dissection_arity(), bundle.state.window_court());
+    for o in &bundle.genesis_objects {
+        if let PalwConsensusObjectV2::ClassRegistered { class_id, admission, .. } = o {
+            let id = class_id.to_string();
+            // Only a fused row carries one (FG: "a fused row must carry its graph"), so the floor
+            // and the hybrid legitimately have none and are not priced here.
+            let Some(a) = admission else {
+                println!("GENESIS class {}… has NO admission carriage", &id[..16]);
+                continue;
+            };
+            // The close is DERIVED, never declared — the carriage carries the profile and the
+            // acceptance layer prices it. So this prices the registered profile under the shipped
+            // bundle's own court, which is the number the chain implies.
+            let kary = kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
+                dissection_arity: bundle.court.dissection_arity(),
+                prompt_ids_form: params.palw_prompt_ids_form_at(0),
+                window_court_daa: bundle.state.window_court(),
+            };
+            let Some(rules) = kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+                &a.profile,
+                Some(kary),
+                kaspa_consensus_core::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            ) else {
+                println!("GENESIS class {}… has no ladder rules", &id[..16]);
+                continue;
+            };
+            let rows = kaspa_consensus_core::palw_class_admission_v2::derive_court_cost_rows_v1(&a.profile, rules.cost_shape)
+                .unwrap_or_else(|e| panic!("the genesis registers class {}… at a profile that does not price: {e:?}", &id[..16]));
+            let b = rows.first().expect("a priced row has a binding node");
+            let chunks = kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(b.close_bytes);
+            println!(
+                "GENESIS class {}… n_ctx {} arity {} {:?} ids window {} -> close {} B = {} carrier(s)",
+                &id[..16],
+                a.profile.n_ctx,
+                kary.dissection_arity,
+                kary.prompt_ids_form,
+                kary.window_court_daa,
+                b.close_bytes,
+                chunks
+            );
+            // **One carrier is the claim that matters** — it is what the announcement states, and
+            // it is true across every close figure this row has had today. A class whose close
+            // needs more than one carrier cannot be prosecuted on a shipped build.
+            assert_eq!(
+                chunks,
+                1,
+                "the genesis registers class {}… whose close is {} B = {chunks} carriers at arity {}, {:?} ids, \
+                 window {}. More than one carrier means the row cannot be prosecuted.",
+                &id[..16],
+                b.close_bytes,
+                kary.dissection_arity,
+                kary.prompt_ids_form,
+                kary.window_court_daa
+            );
+            // And the byte figure, pinned so a silent move is visible — with the court beside it,
+            // because this number has been three different correct values in one afternoon.
+            assert_eq!(
+                b.close_bytes, 83_175,
+                "the registered row's close moved: {} B at arity {}, {:?} ids, window {}. Check WHICH of those \
+                 three moved before re-pinning — the last time this number changed it was the ids form, chosen \
+                 by nobody.",
+                b.close_bytes, kary.dissection_arity, kary.prompt_ids_form, kary.window_court_daa
+            );
+            priced += 1;
+        }
+    }
+    // Without this the whole test passes when the genesis registers nothing with a carriage —
+    // which is precisely the state this file spent the day discovering it was in.
+    assert!(priced >= 1, "no genesis class carried an admission carriage, so nothing was priced and this test proved nothing");
+}
