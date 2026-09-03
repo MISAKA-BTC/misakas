@@ -29,7 +29,14 @@ at genesis and the rest stay `None`.
 |---|---|---|
 | `palw_context_ladder` | **ARM** | without it the registered class cannot price a wide row; the ladder is the whole point of the 512 registration |
 | `palw_uncertified_weightless` | **ARM, `ForkActivation::always()`** | genesis is the ONLY moment this can be armed — `validate_palw_v2` refuses any other height |
+| `palw_kary_court` | **ARM, `ForkActivation::always()`** | **ADR-0082's, does not exist yet.** Without it the registered row is admitted and UNPROSECUTABLE — see §3. A bare fence: no companion value, no bundle field. `dissection_arity` stays 2 on every preset and the fence overrides it with the derived arity. |
+| `palw_prompt_ids_merkle` | `None` | ADR-0082's. Not needed at the registered width — flat ids are 82,080 against a budget of 83,333 — and arming it moves every free-prompt job id. **It becomes REQUIRED above about n_ctx 1,024**, so it is the fence to arm the day a wider row is registered, not before. |
+| `palw_fp_decode_rules` | `None` | ADR-0082 stream H's (decode leaves earn, seeded argmax). Not a prosecutability condition and not on the acceptance path; deferred so the cut arms only what it must. |
 | the other nine | `None` | nothing in this cut needs them; a fence armed without a shipping thing to obey it is the ADR-0065 D1 mistake |
+
+**A fence that must be armed at genesis and does not exist yet is a scheduling fact, not a
+contradiction** — it lands with ADR-0082 (§7), and the card names it now so the arming is not
+discovered at cut time.
 
 **Arming the ladder is TWO moves, not one.** `Params::palw_context_ladder` AND the bundle's
 `PalwCourtParamsV2::max_step_leaf_count`. Setting one and not the other produces a build that
@@ -75,11 +82,23 @@ three sessions.
 Carrier is `PALW_OBJECT_CHUNK_MAX_BYTES` = 100,000 bytes. The `PalwStepBindingV2` the mempool
 charges for but the court does not is 13,996 at its widest.
 
+**Every graph-v5 figure below is UNDER THE DISSECTION COURT.** This is not a footnote: under the
+shipped BINARY court a fused leaf's terminal check opens the whole history it reads — about 1 MB at
+n_ctx 512, twelve to thirteen carriers — which §5 shuts. So a graph-v5 row registered with only the
+ladder and weightless fences armed is admitted and **unprosecutable**, and the number that says
+otherwise was measured under a court the build would not be running. `palw_kary_court` is what
+makes the table true, which is why §1 arms it.
+
+*(This correction is the same defect class as everything else on this card: a figure measured under
+one configuration, quoted as if it held under another. It was caught by the session that derived
+it, reading its own label — "dissection court, arity 16, Merkle prompt ids".)*
+
 | row | close proof | + binding | carriers | fileable |
 |---|---|---|---|---|
-| graph-v2/v3 dense @ 512 (today) | 1,154,673 | 1,168,669 | 14 | **no** |
-| graph-v5 dense @ 512 (ADR-0082) | 80,504 | **94,500** | **1** | **yes** |
-| graph-v5 hybrid @ 512 | 200,732 | — | 3 | no |
+| graph-v2/v3 dense @ 512, binary court (today) | 1,154,673 | 1,168,669 | 14 | **no** |
+| graph-v5 dense @ 512, **binary** court | ~1,000,000 | — | 12–13 | **no** |
+| graph-v5 dense @ 512, **dissection** court | 80,504 | **94,500** | **1** | **yes** |
+| graph-v5 hybrid @ 512, dissection court | 200,732 | — | 3 | no |
 
 **How flat "flat" is, swept rather than interpolated** — graph-v5 dense, every registrable width:
 
@@ -183,7 +202,14 @@ green except the known pin" said this week was a statement about jobs that never
 
 ## 7. Must land before the cut
 
-- **ADR-0082 full implementation** — §3 makes this a precondition, not a preference
+- **ADR-0082 full implementation** — §3 makes this a precondition, not a preference. Includes the
+  `palw_kary_court` fence itself (§1), and stream E's court wiring: the dissection phase on the
+  court session, the `AttnDissection` close-proof arm, the deadline read, and a **state version bump
+  18 → 19** because the session record gains a field.
+- **NOBODY MAY APPEND A VARIANT TO `PalwConsensusObjectV2` ON 5f** until E's wiring lands. The Borsh
+  discriminants are positional; W5 already appended two, and E appends three more. A fourth appended
+  in parallel collides by number, and the collision is silent until two builds disagree about what
+  an object is.
 - **The QWEN36 lane's own chat renderer** — the lane serves Qwen3.5 through Qwen2.5's template. The
   model's own template appends a `<think>` preamble in BOTH modes; there is no branch that stops at
   `assistant\n`. Under the shipped assembly **4 of 8 correct answers were refused at column 1** and
