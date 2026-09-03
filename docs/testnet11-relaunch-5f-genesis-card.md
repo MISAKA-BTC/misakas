@@ -541,6 +541,45 @@ thing done before the cut and it is done ONCE.
 | `PALW_RC_COURT_E2E_ROOT_BYTES` | `consensus/core/src/palw_e2e_adjudicability.rs` | here, second — see the ordering below |
 | state version 18 → 19, ADR-0043 goldens | `palw-adr0082-impl` | 5b, on that branch |
 
+### A RED PIN PROTECTS NOTHING WHILE IT IS RED — the re-pin must be a PREDICTION, not a reading
+
+**This changes how the ceremony is run and it is the most important procedural finding of the cut.**
+
+A re-genesis is precisely the window in which several pins are red at once. While they are red they
+are not guarding anything, so **a second change made in that window is invisible — and then gets
+blessed by the paste.**
+
+Proved by mutation rather than argued. One byte of `PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT` flipped
+(`0xf4` → `0xf5`), consensus-core run before and after:
+
+    clean tree    3 failed:  premine, fingerprints, freeprompt golden
+    mutated tree  3 failed:  premine, fingerprints, freeprompt golden      IDENTICAL
+
+    but the fingerprint test's own message moved:
+      clean    testnet-11 … got f38049f023cec8d4…
+      mutated  testnet-11 … got 1d03bd9c143f39f1…
+
+**The gate detects the change and cannot report it.** An operator watching pass/fail sees three reds
+before and three reds after, with the same three names. Whoever then re-pins by pasting the `got`
+value pastes the mutated one and **freezes the accidental byte into the genesis** — after which
+every gate is green and the tree is wrong.
+
+**So the re-pin is a prediction that must be confirmed, never a value that is read and pasted:**
+
+    1  BEFORE any further change, on the frozen tree, record the expected fingerprints.
+    2  Perform the re-pins.
+    3  The value the ceremony reads MUST equal the value predicted in step 1.
+    4  If it does not, NAME the change that moved it — or stop. "It moved" is not a finding;
+       "it moved and here is why" is. An unexplained move in this window is the one thing
+       this window cannot otherwise show you.
+
+*The method is the deliverable, not any particular string.* Both prediction values must be taken
+from the **frozen** tree by whoever holds it — FG moves testnet-11's legitimately, so a prediction
+taken before FG lands is a prediction for a tree nobody ships.
+
+*Found by 1c, who built a scanner for this class, noticed its baseline was generated from the tree
+it checks and therefore could not fail, and asked the underlying question by hand instead.*
+
 ### THE RE-PIN LIST WAS WRONG AND THE MISSING ONE ABORTS EVERY HOST AT STARTUP
 
 **`PALW_RC_GENESIS` holds TWO literals that both move at this re-genesis, and the procedure re-pins
