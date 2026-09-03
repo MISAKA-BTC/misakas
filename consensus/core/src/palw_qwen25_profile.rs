@@ -230,14 +230,8 @@ mod a16_family {
                         "n_ctx 16 no longer derives the class testnet-11 registered"
                     );
                 }
-                // **The room this family has, and what bounds it.** Under the 80 KiB
-                // one-transaction ceiling the widest admitted context was 21 and the COST is what
-                // refused 24; under ADR-0080 design A's 27-chunk group the cost stops binding
-                // below the shipped `2^22` ladder, which refuses at 40. So the admitted set grew
-                // from {15..21} to {15..39} and the REASON changed with it — see
-                // `palw_class_admission_v2::tests::the_widest_context_each_family_admits`, which
-                // measures both gates for both families.
-                // **The room this family has, and what bounds it** — re-measured after audit D H-5.
+                // **The room this family has, and what bounds it** — re-measured after audit D H-5
+                // and again after the row builders were moved onto the ruleset's ladder.
                 //
                 // Under the 80 KiB one-transaction ceiling the widest admitted context was 21 and
                 // the COST refused 24; under ADR-0080 design A's 27-chunk group the cost stopped
@@ -248,6 +242,14 @@ mod a16_family {
                 // `DeeperThanTheLadder { worst: 67,235,200, ladder: 67,108,864 }` at 576. That is
                 // the same 574 ADR-0082 Decision 1 quotes as "the release branch's own gate", which
                 // is the number this gate was supposed to be producing all along.
+                //
+                // **The same leak was still open on the far side of the gate** and this is where it
+                // is closed: `derive_court_cost_v1` anchors `genesis_anchored_v1` at the executor's
+                // `2^22`, and three genesis ROW builders — the floor's, this family's and the
+                // hybrid's — took their `court_cost`, their canonical count and their worst case
+                // from it. So the gate measured one court and the catalog published another. Every
+                // builder now derives at `palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES`, the field every
+                // shipped bundle's `court` is constructed from.
                 15 | 17 | 18 | 20 | 24 | 32 | 48 | 64 | 90 | 128 | 256 | 512 | 574 => {
                     assert!(verdict.is_ok(), "n_ctx {nctx} fell out of the family's room: {verdict:?}")
                 }
@@ -267,11 +269,24 @@ pub fn qwen25_admissible_geometry_v1(
         let candidate = PalwQwen25GeometryV1 { n_ctx, tile_len: tile, ..model };
         let Ok(profile) = qwen25_profile_v1(candidate) else { return false };
         // The ladder: the whole context as prefill is the longest job the class admits.
-        if crate::palw_step::worst_case_step_leaf_count_v1(&profile).map(|w| w > court.max_step_leaf_count()).unwrap_or(true) {
+        //
+        // **Counted against the COURT the caller handed, not the executor's constant.** The
+        // comparison already named `court.max_step_leaf_count()` while the count itself was capped
+        // at `2^22`, so on a `2^26` court every geometry between the two answered "does not
+        // enumerate" instead of "is inside the ladder" — the search's ceiling was the executor's
+        // number wearing the court's name.
+        let ladder = court.max_step_leaf_count();
+        if crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, ladder).map(|w| w > ladder).unwrap_or(true) {
             return false;
         }
-        // ADR-0049 Decision C: and what prosecuting one of its steps costs.
-        let Ok(cost) = crate::palw_class_admission_v2::derive_court_cost_v1(&profile) else { return false };
+        // ADR-0049 Decision C: and what prosecuting one of its steps costs — priced for the same
+        // court, since `genesis_anchored_v1`'s ladder is the cost walk's own enumeration cap.
+        let Ok(cost) = crate::palw_class_admission_v2::derive_court_cost_shaped_v1(
+            &profile,
+            crate::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(&profile, ladder),
+        ) else {
+            return false;
+        };
         cost.max_close_bytes <= court.max_close_bytes()
             && cost.max_terminal_macs <= court.max_terminal_macs()
             && u64::from(cost.max_operand_count) <= u64::from(court.max_operand_count())
@@ -646,19 +661,27 @@ pub fn qwen25_a16_registration_v1(
     let profile = qwen25_a16_profile_v1(QWEN25_1_5B_A16)?;
     let class_id = profile.shape_profile_id();
     let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN25_A16_CANONICAL.0, QWEN25_A16_CANONICAL.1);
-    let counted = crate::palw_step::step_leaf_count(&profile, &canonical)?;
+    // **Every ladder-bounded number in this row is the RULESET's** — see
+    // `palw_base0_profile::base0_catalog_entry_capped_v1` for the argument and the ladder's one
+    // spelling. Three of them are: the canonical count, the worst case, and the cost walk's own
+    // enumeration cap inside `genesis_anchored_v1`.
+    let ladder = crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
+    let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, ladder)?;
     let entry = crate::palw_mode_v2::PalwClassCatalogEntryV2 {
         class_id,
         artifact_root,
-        max_step_leaf_count: crate::palw_step::worst_case_step_leaf_count_v1(&profile)?,
+        max_step_leaf_count: crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, ladder)?,
         canonical_step_leaf_count: counted,
         reachable_kernels: [&profile.pre_nodes, &profile.attn_nodes, &profile.post_nodes]
             .into_iter()
             .flatten()
             .map(|n| n.kernel_semantics_id)
             .collect(),
-        court_cost: crate::palw_class_admission_v2::derive_court_cost_v1(&profile)
-            .map_err(|_| PalwStepError::ProfileNotCanonical("the A16 dense class's court cost does not derive"))?,
+        court_cost: crate::palw_class_admission_v2::derive_court_cost_shaped_v1(
+            &profile,
+            crate::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(&profile, ladder),
+        )
+        .map_err(|_| PalwStepError::ProfileNotCanonical("the A16 dense class's court cost does not derive"))?,
     };
     let object = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
         class_id,
@@ -697,19 +720,24 @@ pub fn qwen25_a16_registration_v2(
     let profile = qwen25_a16_profile_v2(QWEN25_1_5B_A16)?;
     let class_id = profile.shape_profile_id();
     let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN25_A16_CANONICAL.0, QWEN25_A16_CANONICAL.1);
-    let counted = crate::palw_step::step_leaf_count(&profile, &canonical)?;
+    // The RULESET's ladder, one spelling — see the sibling constructor above.
+    let ladder = crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
+    let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, ladder)?;
     let entry = crate::palw_mode_v2::PalwClassCatalogEntryV2 {
         class_id,
         artifact_root,
-        max_step_leaf_count: crate::palw_step::worst_case_step_leaf_count_v1(&profile)?,
+        max_step_leaf_count: crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, ladder)?,
         canonical_step_leaf_count: counted,
         reachable_kernels: [&profile.pre_nodes, &profile.attn_nodes, &profile.post_nodes]
             .into_iter()
             .flatten()
             .map(|n| n.kernel_semantics_id)
             .collect(),
-        court_cost: crate::palw_class_admission_v2::derive_court_cost_v1(&profile)
-            .map_err(|_| PalwStepError::ProfileNotCanonical("the corrected A16 class's court cost does not derive"))?,
+        court_cost: crate::palw_class_admission_v2::derive_court_cost_shaped_v1(
+            &profile,
+            crate::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(&profile, ladder),
+        )
+        .map_err(|_| PalwStepError::ProfileNotCanonical("the corrected A16 class's court cost does not derive"))?,
     };
     let object = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
         class_id,

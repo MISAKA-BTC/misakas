@@ -1411,16 +1411,23 @@ pub fn qwen36_registration_v1(
     let profile = qwen36_profile_v1(QWEN36_35B_A3B)?;
     let class_id = profile.shape_profile_id();
     let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN36_RC_CANONICAL.0, QWEN36_RC_CANONICAL.1);
-    let worst = crate::palw_step::worst_case_step_leaf_count_v1(&profile)?;
-    let counted = crate::palw_step::step_leaf_count(&profile, &canonical)?;
+    // **Every ladder-bounded number in this row is the RULESET's** — see
+    // `palw_base0_profile::base0_catalog_entry_capped_v1` for the argument and the ladder's one
+    // spelling.
+    let ladder = crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
+    let worst = crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, ladder)?;
+    let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, ladder)?;
     let entry = crate::palw_mode_v2::PalwClassCatalogEntryV2 {
         class_id,
         artifact_root,
         max_step_leaf_count: worst,
         canonical_step_leaf_count: counted,
         reachable_kernels: qwen36_reachable_kernels_v1(QWEN36_35B_A3B)?,
-        court_cost: crate::palw_class_admission_v2::derive_court_cost_v1(&profile)
-            .map_err(|_| PalwStepError::ProfileNotCanonical("the class's court cost does not derive"))?,
+        court_cost: crate::palw_class_admission_v2::derive_court_cost_shaped_v1(
+            &profile,
+            crate::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(&profile, ladder),
+        )
+        .map_err(|_| PalwStepError::ProfileNotCanonical("the class's court cost does not derive"))?,
     };
     let object = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
         class_id,
@@ -1489,18 +1496,23 @@ pub fn qwen36_registration_v3(
     let profile = qwen36_profile_v2(qwen36_geometry_artifact_eps(QWEN36_35B_A3B))?;
     let class_id = profile.shape_profile_id();
     let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN36_RC_CANONICAL.0, QWEN36_RC_CANONICAL.1);
-    let counted = crate::palw_step::step_leaf_count(&profile, &canonical)?;
+    // The RULESET's ladder, one spelling — see the sibling constructor above.
+    let ladder = crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
+    let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, ladder)?;
     let entry = crate::palw_mode_v2::PalwClassCatalogEntryV2 {
         class_id,
         artifact_root,
-        max_step_leaf_count: crate::palw_step::worst_case_step_leaf_count_v1(&profile)?,
+        max_step_leaf_count: crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, ladder)?,
         canonical_step_leaf_count: counted,
         // **Off the corrected profile's own nodes**, not the v1 helper: the two declarations differ
         // in the graph, so a reachable set read from the wrong one would describe a class nobody
         // registered — and it is exactly the set the admission gate compares against a certificate.
         reachable_kernels: crate::palw_class_admission_v2::reachable_kernels_v1(&profile),
-        court_cost: crate::palw_class_admission_v2::derive_court_cost_v1(&profile)
-            .map_err(|_| PalwStepError::ProfileNotCanonical("the corrected hybrid class's court cost does not derive"))?,
+        court_cost: crate::palw_class_admission_v2::derive_court_cost_shaped_v1(
+            &profile,
+            crate::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(&profile, ladder),
+        )
+        .map_err(|_| PalwStepError::ProfileNotCanonical("the corrected hybrid class's court cost does not derive"))?,
     };
     let object = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
         class_id,
