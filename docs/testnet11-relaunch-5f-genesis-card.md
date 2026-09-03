@@ -5025,3 +5025,21 @@ genesis   the node prints no genesis-hash line; the genesis is proven by M-07's 
 Three readings of the one value that moved: the pin test's `got` on the merged tree, the mechanism at
 `params.rs:3058`, and now a node's own line from the release binary on another machine. The un-re-pinned
 binary printed `a5291e00…` and died under M-07 an hour earlier; this one printed `2222e054…` and lived.
+
+## STEP 5 IN PROGRESS: stop → verify → wipe
+
+`relaunch-fleet-wipe.sh stop --execute` on all three hosts (10 / 6 / 9 units), the stray deleted
+`kaspad.candidate` on ibm killed by executable path; `verify` must read CLEAN before `wipe --genesis
+08e9c8a4…` (appdirs renamed in place, never deleted).
+
+### From the drill session, for the launch document: "add a model" on a running network produces nothing until the next epoch boundary
+
+5e's stage 4 PASSED with `bound-candidate.palwart` (the gateway serves the 512 class; `/health`
+names the four chain facts at n_ctx 512); stage 5 refused: *"the executor bond is not producible:
+this class's epoch budget is already spent (bond_active false)"* — a class registered mid-epoch holds
+share but has no entry in the epoch budget table until the boundary (`EPOCH_LENGTH = 1_000` on
+devnet, ~11 h at its cadence), and `unwrap_or(0)` renders "never granted" as "already spent".
+**The launch's own classes — floor, A16 512, QWEN36 — are genesis classes and hold budget from
+epoch 0; the wall belongs to later permissionless additions.** And the distinction this card keeps:
+tonight's STL and MIDI were committed **locally** by the offline gateway and verified bound (D5) —
+never submitted, never budgeted; 5e's stage 5 is the first real job to reach the chain's budget gate.
