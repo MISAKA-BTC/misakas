@@ -920,108 +920,38 @@ pub fn palw_close_chunks_for_ladder_v1(
 pub const PALW_LADDER_FAMILIES_V1: [PalwLadderFamilyV1; 2] =
     [palw_a16_context_row_profile_v1, palw_qwen36_context_row_profile_v1];
 
-/// **The graph-v5 rows, built by FUSING the four attention nodes of the shipped ones** (ADR-0082
-/// Decision 1).
+/// **The dense tier at a ladder row, graph v5** (ADR-0082 Decision 1).
 ///
-/// U-04's fixtures, and deliberately a TRANSFORM of the registered rows rather than a second hand-
-/// written table: what Decision 1 changes is four nodes out of twenty-seven (dense) or forty-seven
-/// (hybrid), and a fixture that restated the whole graph could differ from the shipped one in some
-/// other way and price that difference instead. **U-02 (stream D) lands the real constructors**
-/// (`qwen25_a16_profile_v5` / the hybrid's twin) with the engine, the adjudicator and the fuzz
-/// gate behind them; when they exist these fixtures are deleted and every pin below is re-taken
-/// against them. They are `#[cfg(test)]` so nothing can register one by accident in the meantime.
-#[cfg(test)]
-pub(crate) mod v5_fixtures {
-    use super::*;
-    use crate::palw_step::{
-        kernel_semantics_id_v1, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V,
-        PALW_STEP_INPUT_SENTINEL_MIN,
-    };
-    use crate::palw_step_refute::{KDESC_A16_ATTN_FUSED, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES};
-
-    /// Replace `[scores, softmax, probs, values]` with ONE `AttnFused` node whose committed row is
-    /// the values node's, and renumber every later intra-table reference. The four are contiguous
-    /// in both shipped tables (dense 7..=10, hybrid 13..=16), which this checks rather than
-    /// assumes.
-    pub(crate) fn fuse_attention_v5(profile: &PalwShapeProfileV3) -> PalwShapeProfileV3 {
-        let table = &profile.attn_nodes;
-        let scores_id = kernel_semantics_id_v1(KDESC_A16_ATTN_SCORES);
-        let values_id = kernel_semantics_id_v1(KDESC_A16_ATTN_VALUES);
-        let s = table.iter().position(|n| n.kernel_semantics_id == scores_id).expect("the shipped row has a scores node");
-        let v = table.iter().position(|n| n.kernel_semantics_id == values_id).expect("the shipped row has a values node");
-        assert_eq!(v, s + 3, "the four attention nodes are contiguous in the shipped table");
-
-        let values = &table[v];
-        let fused = PalwStepNodeV1 {
-            op_kind: PalwStepOpKindV1::AttnFused,
-            role: PalwStepNodeRoleV1::Plain,
-            // The tensor the three narrowings and the softmax's widening byte are registered in —
-            // the coverage gate requires a fused site to name one (`palw_step_refute`'s shape arm).
-            weight_name: "blk.{layer}.attn_fused.a16".to_string(),
-            weight_dtypes: values.weight_dtypes.clone(),
-            // The committed row is `out` and nothing else: exactly what ATTN_VALUES commits today.
-            out_len: values.out_len,
-            tile_len: values.tile_len,
-            kernel_semantics_id: kernel_semantics_id_v1(KDESC_A16_ATTN_FUSED),
-            // The rotated query row, the K cache, the V cache.
-            input_refs: vec![table[s].input_refs[0], PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V],
-        };
-
-        // `map(i)`: the four collapse onto the fused node's index, everything after it shifts down.
-        let remap = |r: u16| -> u16 {
-            if r >= PALW_STEP_INPUT_SENTINEL_MIN {
-                return r;
-            }
-            let i = r as usize;
-            if i < s {
-                r
-            } else if i <= v {
-                s as u16
-            } else {
-                (i - (v - s)) as u16
-            }
-        };
-        let mut attn: Vec<PalwStepNodeV1> = Vec::with_capacity(table.len() - 3);
-        for (index, node) in table.iter().enumerate() {
-            if index == s {
-                attn.push(fused.clone());
-                continue;
-            }
-            if index > s && index <= v {
-                continue;
-            }
-            let mut node = node.clone();
-            node.input_refs = node.input_refs.iter().map(|r| remap(*r)).collect();
-            attn.push(node);
-        }
-
-        let mut out = profile.clone();
-        out.attn_nodes = attn;
-        // **A graph-v5 class registers the tiled map** (Decision 4): the anchor its bottom stands
-        // on is addressed a history tile at a time, and the composition keeps whichever recurrence
-        // half the family already declared.
-        out.state_chunk_map_id = if out.gdn_nodes.is_empty() {
-            crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3()
-        } else {
-            crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3()
-        };
-        out.validate_shape().expect("a fused row is well-formed");
-        out
-    }
-
-    /// The dense A16 tier at a ladder row, graph v5.
-    pub(crate) fn dense_v5(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
-        Ok(fuse_attention_v5(&palw_a16_context_row_profile_v1(n_ctx)?))
-    }
-
-    /// The hybrid QWEN36 tier at a ladder row, graph v5.
-    pub(crate) fn hybrid_v5(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
-        Ok(fuse_attention_v5(&palw_qwen36_context_row_profile_v1(n_ctx)?))
-    }
-
-    /// The graph-v5 genesis set, in the shape [`palw_close_chunks_for_ladder_v1`] reads.
-    pub(crate) const V5_FAMILIES: [PalwLadderFamilyV1; 2] = [dense_v5, hybrid_v5];
+/// [`palw_a16_context_row_profile_v1`]'s twin, and deliberately built the same way — through
+/// `qwen25_a16_artifact_row_profile_v5` — so the two rows differ in exactly what Decision 1 changes
+/// (the four attention nodes become one `AttnFused`, stream D's `palw_fuse_attention_site_v5`) and
+/// in the map Decision 4 requires (`tiled_kv_state_chunk_map_id_v3`), and in nothing else. A NEW
+/// class id by construction: the graph and the map are both inside `shape_profile_id`, so no
+/// registered row moves.
+pub fn palw_a16_context_row_profile_v5(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
+    crate::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5(crate::palw_qwen25_profile::PalwQwen25GeometryV1 {
+        n_ctx,
+        ..crate::palw_qwen25_profile::QWEN25_1_5B
+    })
 }
+
+/// **The hybrid tier at a ladder row, graph v5** (ADR-0082 Decisions 1 and 4).
+///
+/// [`palw_qwen36_context_row_profile_v1`]'s twin. The map is the v3 COMPOSITION — `attn=` the
+/// tiled cache the dissection's bottom opens, `gdn=` the head-sliced recurrence v2 already
+/// enumerates — and it is set inside `qwen36_profile_v5` rather than here, so a v5 row cannot be
+/// projected without it.
+pub fn palw_qwen36_context_row_profile_v5(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
+    crate::palw_qwen36_profile::qwen36_artifact_row_profile_v5(crate::palw_qwen36_profile::PalwQwen36GeometryV1 {
+        n_ctx,
+        ..crate::palw_qwen36_profile::QWEN36_35B_A3B
+    })
+}
+
+/// **The graph-v5 genesis set** — the same two families under ADR-0082 Decisions 1-5, which is the
+/// other set Decision 6's derivation has to be evaluated over.
+pub const PALW_LADDER_FAMILIES_V5: [PalwLadderFamilyV1; 2] =
+    [palw_a16_context_row_profile_v5, palw_qwen36_context_row_profile_v5];
 
 #[cfg(test)]
 mod tests {
@@ -2763,7 +2693,6 @@ mod u00_tiled_attention_measurement {
 /// the prompt-id term (Z0's second half).
 #[cfg(test)]
 mod u04_flat_close {
-    use super::v5_fixtures::V5_FAMILIES;
     use super::*;
     use crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1;
     use crate::palw_class_admission_v2::{derive_court_cost_shaped_v1, PalwKaryCourtV1};
@@ -2804,7 +2733,7 @@ mod u04_flat_close {
         println!("v2/v3 set @ 512 -> {derived} chunks (shipped DEFAULT_MAX_CLOSE_CHUNKS = {DEFAULT_MAX_CLOSE_CHUNKS})");
 
         // ---- the graph-v5 set, under the dissection court.
-        for (name, build) in [("dense A16 graph-v5", V5_FAMILIES[0]), ("hybrid QWEN36 graph-v5", V5_FAMILIES[1])] {
+        for (name, build) in [("dense A16 graph-v5", PALW_LADDER_FAMILIES_V5[0]), ("hybrid QWEN36 graph-v5", PALW_LADDER_FAMILIES_V5[1])] {
             for row in [512u32, 4_096, 32_768] {
                 match palw_widest_close_over_the_ladder_v1(&[build], &[row], Some(kary(16))) {
                     Some((_, _, binding)) => println!(
@@ -2822,7 +2751,7 @@ mod u04_flat_close {
                 }
             }
         }
-        let v5 = palw_close_chunks_for_ladder_v1(&V5_FAMILIES, &[512], Some(kary(16)));
+        let v5 = palw_close_chunks_for_ladder_v1(&PALW_LADDER_FAMILIES_V5, &[512], Some(kary(16)));
         println!("v5 set @ 512 -> {v5:?} chunks");
     }
 
@@ -2832,7 +2761,7 @@ mod u04_flat_close {
     fn the_bottom_opening_and_every_move_fit_one_carrier() {
         let carrier = palw_close_bytes_for_chunks_v1(1);
         println!("one carrier, counted: {carrier}");
-        for (name, build) in [("dense", V5_FAMILIES[0]), ("hybrid", V5_FAMILIES[1])] {
+        for (name, build) in [("dense", PALW_LADDER_FAMILIES_V5[0]), ("hybrid", PALW_LADDER_FAMILIES_V5[1])] {
             for n_ctx in [512u32, 4_096, 32_768] {
                 let profile = build(n_ctx).expect("projects");
                 let d_head = profile.attn_head_dim as u64;
@@ -2863,7 +2792,7 @@ mod u04_flat_close {
     /// prompt-id term, at 512 / 4,096 / 32,768 / 131,072, on both families.
     #[test]
     fn a_graph_v5_close_is_flat_in_the_context() {
-        for (name, build) in [("dense", V5_FAMILIES[0]), ("hybrid", V5_FAMILIES[1])] {
+        for (name, build) in [("dense", PALW_LADDER_FAMILIES_V5[0]), ("hybrid", PALW_LADDER_FAMILIES_V5[1])] {
             for form in [PalwPromptIdsFormV1::MerkleV1, PalwPromptIdsFormV1::Flat] {
                 let mut seen = Vec::new();
                 for n_ctx in [512u32, 4_096, 32_768, 131_072] {

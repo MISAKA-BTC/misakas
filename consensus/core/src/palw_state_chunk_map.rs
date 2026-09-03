@@ -347,7 +347,16 @@ pub fn gdn_state_row_bytes_v2(profile: &PalwShapeProfileV3) -> Option<u64> {
 pub fn gdn_state_terms_for_map_v1(profile: &PalwShapeProfileV3) -> Option<(u64, u64)> {
     let declared = profile.state_chunk_map_id;
     let delta = gdn_delta_head_slice_bytes_v1(profile)?;
-    if declared == gdn_state_chunk_map_id_v2() || declared == hybrid_state_chunk_map_id_v2() {
+    // **The v3 composition's recurrence half IS v2's**, spelled verbatim in
+    // `palw_hybrid_state_chunk_map_name_v3` (`gdn={PALW_GDN_STATE_CHUNK_MAP_NAME_V2}`), so it
+    // prices at v2's head-sliced window. Missing this arm was not a cheaper price, it was NO price:
+    // the dispatch answered `None`, `palw_class_ladder_rules_v1` turned that into `.unwrap_or(0)`,
+    // and a hybrid class that registered the tiled attention map was admitted with its recurrence
+    // anchor charged at ZERO — the direction that admits a class whose disputes nobody can carry.
+    // Dormant until ADR-0082 Decision 4 made the v3 composition the map a graph-v5 hybrid
+    // registers, which is what turned a documented gap into a live one.
+    if declared == gdn_state_chunk_map_id_v2() || declared == hybrid_state_chunk_map_id_v2() || declared == hybrid_state_chunk_map_id_v3()
+    {
         Some((delta, gdn_conv_head_slice_bytes_v2(profile)?))
     } else if declared == gdn_state_chunk_map_id_v1() || declared == hybrid_state_chunk_map_id_v1() {
         Some((delta, gdn_conv_window_bytes_v1(profile)?))
