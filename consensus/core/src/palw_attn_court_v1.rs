@@ -2767,6 +2767,28 @@ mod tests {
         assert_eq!(palw_close_assembly_daa_v1(court.max_close_chunks()), 216, "the RC's 27-carrier reserve");
         assert_eq!(palw_attn_court_admits_row_v1(&court, 512, TILE, window), Ok(2_730), "2,730 + 216 is inside 3,000");
 
+        // **The genesis row, at the lane count it actually disputes.** The dense graph-v5 512 row
+        // is a genesis row (stream J), and `palw_court_params_at_v2` derives its arity from these
+        // same numbers through the transition's own path.
+        assert_eq!(palw_court_arity_v1(window, deadline, rc_ladder, 512, TILE, 2, 8), Some(2));
+
+        // **The CLOCK is the other half of the same inequality, and it comes from a different
+        // move count.** `palw_court_turn_deadline_v1(3000, 2^26, 2, 27)` returns 51 — the clock
+        // for the LADDER alone, with no history rounds and no root claim in it — while the RC's
+        // shipped constant is 42. At 51 the honest dispute no longer fits: the cheapest arity
+        // becomes 32 (57 moves, 2,907 DAA), and 2,907 + 216 is past 3,000, so admission refuses a
+        // row the arity derivation just admitted. At 42, arity 2 fits with 54 DAA to spare. Two
+        // derivations of one inequality is the defect; the repair belongs to
+        // `palw_court_turn_deadline_v1`, which this stream does not own (patch note).
+        assert_eq!(crate::palw_context_ladder::palw_court_turn_deadline_v1(window, rc_ladder, 2, 27), Some(51));
+        assert_eq!(palw_court_arity_v1(window, 51, rc_ladder, 512, TILE, 2, 8), Some(32));
+        let at_51 = PalwCourtParamsV2::new(rc_ladder, 51, 2).expect("a court").with_dissection_arity(32).expect("legal");
+        assert_eq!(at_51.worst_case_duration_with_history_daa(512, TILE), Some(57 * 51));
+        assert_eq!(
+            palw_attn_court_admits_row_v1(&at_51, 512, TILE, window),
+            Err(PalwAttnCourtError::OverrunsWindow { moves: 57, deadline: 51, reserve: 216, window_court: window })
+        );
+
         // **A 4,096-position row shows that the derivation and the GATE are two inequalities.**
         // `palw_court_arity_v1` selects on `moves x deadline <= window_court`;
         // `palw_attn_court_admits_row_v1` admits on `moves x deadline + assembly_reserve <
