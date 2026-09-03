@@ -237,6 +237,32 @@ ladder and weightless fences armed is admitted and **unprosecutable**, and the n
 otherwise was measured under a court the build would not be running. `palw_kary_court` is what
 makes the table true, which is why §1 arms it.
 
+**§3's central claim is now MEASURED, not argued** — priced at the ruleset's own 2^26 ladder on
+`5f + impl(4ffb2b26)`, which is the first time the "precondition, not optimisation" line has had a
+number under it:
+
+    RC ceiling                        2,250,000 B = 27 chunks
+    graph-v2/v3 @ 512                 1,999,729 B = 24 chunks   FITS
+    graph-v5    @ 512, no dissection  3,446,708 B = 42 chunks   OVER THE CEILING
+    graph-v5    @ 512, dissection     (FD's derivation)  4 chunks
+
+So "a graph-v5 row registered with only the ladder and weightless fences armed is admitted and
+unprosecutable" is **42 against 27** — refused at acceptance, by fifteen carriers. The dissection
+court is what takes it to 4. That is the whole of §1's reason for arming `palw_kary_court`, in one
+line, and it can now be re-derived by anyone rather than believed.
+
+**And the same table answers a real strategic question, which is why it is worth having.** A
+graph-v2/v3 row at 512 **fits without ADR-0082 at all** — 24 chunks against 27, no fused site, no
+court arming, and its 12 kernels are already covered by the shipped A16 family. So 0082 is not a
+precondition for *a 512 class*; it is a precondition for *the v5 512 class*. The card said the
+former and meant the latter, and the distinction is only visible once both rows are priced.
+
+**We stay with graph-v5, and the reason is the close, not the fusion.** 24 carriers is a 0.3375 MSK
+assembly deposit and a 192-DAA reserve on every close, against 4 carriers and 32 DAA — and that
+reserve is charged to the court window whether or not anyone ever files, which is what compressed
+the turn deadline in the first place. A v2 row would ship a class every honest dispute of which
+costs six times what it needs to.
+
 *(This correction is the same defect class as everything else on this card: a figure measured under
 one configuration, quoted as if it held under another. It was caught by the session that derived
 it, reading its own label — "dissection court, arity 16, Merkle prompt ids".)*
