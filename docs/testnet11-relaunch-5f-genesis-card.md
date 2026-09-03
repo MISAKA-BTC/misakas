@@ -4759,3 +4759,35 @@ tokenizer, only for the weights. Stage 4's tokenizer gate is open before the dri
 `fp_worker.rs:442 runtime_manifest_hash: Hash64::default()`, and `/health` printed `0000…` in
 serve mode during this session's runs. A seat comparing it compares zero to zero. Named, not a
 problem tonight.
+
+### The certifiability test fired again under the cover, and the carriage moves — with one fact about what the fingerprint does not see
+
+```
+both lanes, with the cover:
+BASE-0   14 vectors   754,377 / 531,397 B   (8 / 6 carriers)
+QWEN36   29 vectors   914,168 / 931,572 B   REFUSED — ObjectTooLargeToChunk over 800,000 B
+                                             (PALW_OBJECT_CHUNK_MAX_BYTES 100,000 × PALW_OBJECT_CHUNK_MAX_COUNT 8)
+A16      16 vectors   227,425 / 236,837 B   (3)
+A16-V5   14 vectors   190,438 / 198,754 B   (2)
+```
+
+The court's cap of 32 vectors holds everywhere; **the carriage does not hold a 23-kernel family
+whose vectors are ~32 KB each.** So under the cover the genesis would still pin one family the
+chain refuses to carry — the assertion written an hour ago for exactly this caught it before the
+printer ran.
+
+**Decision (3e), at the rule's location:** `PALW_OBJECT_CHUNK_MAX_COUNT` 8 → 16 (1.6 MB; QWEN36
+becomes 10 carriers, BASE-0 stays 8) — a consensus rule change on lifecycle carriage, safe by the
+re-genesis argument, its doc naming the measurement. Consequences **derived, not retyped**:
+`PALW_CERTIFICATION_MASS_PER_VECTOR` (carriage ÷ 32) 25,000 → 50,000 and
+`PALW_OBJECT_CHUNK_SLOT_MASS` 800,000 → 1,600,000 — a family that fills its carriage pays for the
+carriage it fills (ADR-0075 SA-2); pending chunk groups hold 16; the admission test's pinned "8"
+says 16 with the reason; 16 < 27 keeps the close's own table above it.
+
+> **What the fingerprint does not see, measured:** none of the three constants is read by
+> `params.rs`, the identity module, or the bundle — so neither the fingerprint nor the ruleset id
+> covers the carriage. A node on 8 and a node on 16 would **handshake and then diverge silently**.
+> Tonight that is covered by accident of ordering: the family root moves the t11 fingerprint
+> anyway, so every old binary is refused at the handshake. **A future change to the carriage
+> alone would not be** — post-cut, the carriage constants belong in the ruleset id or behind a
+> fence, so a rule that decides what a chain carries is a rule the handshake can see.
