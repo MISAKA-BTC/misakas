@@ -49,7 +49,7 @@ use kaspa_hashes::Hash64;
 use crate::palw_catalog_coverage::{PalwReachableKernelSetV1, verify_catalog_coverage_v1};
 use crate::palw_mode_v2::{PalwClassCatalogEntryV2, PalwConsensusParamsV2};
 use crate::palw_state_v2::{PalwConsensusObjectV2, PalwPwuRuleV2};
-use crate::palw_step::{PalwShapeProfileV3, step_leaf_count};
+use crate::palw_step::PalwShapeProfileV3;
 use crate::palw_step_refute::catalogued_kernel_ids_v1;
 use crate::palw_v2::PalwJobContextV2;
 
@@ -1731,11 +1731,53 @@ pub fn palw_post_genesis_registration_v1(
     registrant_bond: crate::palw_state_v2::PalwBondKeyV2,
     signature: Vec<u8>,
 ) -> Result<PalwConsensusObjectV2, PalwClassAdmissionError> {
+    palw_post_genesis_registration_capped_v1(
+        profile,
+        canonical,
+        artifact_root,
+        min_grantable_share_permille,
+        initial_target,
+        slash_value_per_pwu,
+        activation_daa,
+        registrant_bond,
+        signature,
+        crate::palw_step::PALW_STEP_MAX_LEAVES,
+    )
+}
+
+/// [`palw_post_genesis_registration_v1`] against the RULESET's ladder (audit D H-5b).
+///
+/// The helper counted `pwu_per_inference` with `step_leaf_count`, which caps at
+/// [`crate::palw_step::PALW_STEP_MAX_LEAVES`] — the EXECUTOR's `2^22` — while the gate it feeds
+/// recounts against `bundle.court.max_step_leaf_count()`. On the graph-v5 512 row the honest count
+/// is 6,630,544 and the helper answered
+/// `"the canonical job does not count against this profile: job shape yields 4223328 step leaves,
+/// exceeding the 4194304 cap"`, so the object could not be BUILT at all: no chain could register
+/// the row, on the only path a stranger has, for a reason that names a constant the ruleset does
+/// not contain. This is the third place the executor's constant was found standing against a `2^26`
+/// network, after the executor's own ladder (ADR-0080 W1b) and this file's cost walk (H-5).
+///
+/// `ladder` is the bundle's. The count is still made HERE rather than by the caller, for the reason
+/// the wrapper's own comment gives: the object the gate reads and the number it recounts must come
+/// from one value.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_post_genesis_registration_capped_v1(
+    profile: PalwShapeProfileV3,
+    canonical: PalwJobContextV2,
+    artifact_root: Hash64,
+    min_grantable_share_permille: u16,
+    initial_target: u128,
+    slash_value_per_pwu: u64,
+    activation_daa: u64,
+    registrant_bond: crate::palw_state_v2::PalwBondKeyV2,
+    signature: Vec<u8>,
+    ladder: u64,
+) -> Result<PalwConsensusObjectV2, PalwClassAdmissionError> {
     let class_id = profile.shape_profile_id();
     // Counted here, from the same canonical job the carriage carries, so the object the gate reads
     // and the number it recounts come from one value. A caller that computed the count separately
     // could hand the gate two statements about one class.
-    let counted = crate::palw_step::step_leaf_count(&profile, &canonical)
+    let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, ladder)
         .map_err(|e| PalwClassAdmissionError::Profile(format!("the canonical job does not count against this profile: {e}")))?;
     Ok(PalwConsensusObjectV2::ClassRegistered {
         class_id,
@@ -1763,7 +1805,7 @@ mod tests {
     // `worst_case_step_leaf_count_v1` is used only from this module, so the import lives here:
     // at the top of the file it was dead in the non-test build (`-D warnings` refused it)
     // while the `--tests` target needed it -- one name, two targets, opposite answers.
-    use crate::palw_step::{PALW_STEP_MAX_LEAVES, worst_case_step_leaf_count_v1};
+    use crate::palw_step::{PALW_STEP_MAX_LEAVES, step_leaf_count, worst_case_step_leaf_count_v1};
     use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, trace_scheme_id_v2};
 
     /// The measured Qwen2.5-1.5B graph, at the `tile_len` that actually admits its own declared

@@ -1527,6 +1527,12 @@ mod tests {
         // `ClassRegistered` refuses the class the genesis registers. Pinned rather than worked
         // around silently — the fix is a `_capped_` twin in `palw_class_admission_v2`, which is not
         // this stream's file (reported to the integrator).
+        //
+        // **The twin landed** as `palw_post_genesis_registration_capped_v1` (audit D H-5b), and the
+        // SDK's registration path passes `bundle.court.max_step_leaf_count()`. This arm stays, and
+        // now pins the UNCAPPED wrapper's documented default: it is the executor's `2^22`, on
+        // purpose, so a caller with no ruleset in hand still gets the old number rather than a
+        // silently different one.
         match adm::palw_post_genesis_registration_v1(
             row.profile.clone(),
             canonical.clone(),
@@ -1588,7 +1594,8 @@ mod tests {
             let kary = kary_court(&bundle);
             // Priced for the court that can try it — the ladder rules the fence selects.
             let rules =
-                ladder::palw_class_ladder_rules_for_court_v1(&row.profile, Some(kary)).expect("a mapped class has ladder rules");
+                ladder::palw_class_ladder_rules_for_court_v1(&row.profile, Some(kary), ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
+                    .expect("a mapped class has ladder rules");
             let admitted = adm::verify_class_admission_v5(
                 &bundle,
                 &row.profile,

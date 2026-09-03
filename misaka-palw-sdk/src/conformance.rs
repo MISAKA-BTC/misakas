@@ -19,7 +19,7 @@
 use kaspa_consensus_core::palw_catalog_coverage::{PalwReachableKernelSetV1, verify_catalog_coverage_v1, verify_profile_coverage_v1};
 use kaspa_consensus_core::palw_class_admission_v2::{derive_court_cost_v1, reachable_kernels_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
-use kaspa_consensus_core::palw_step::{PALW_STEP_INPUT_SENTINEL_MIN, step_leaf_count, worst_case_step_leaf_count_v1};
+use kaspa_consensus_core::palw_step::{PALW_STEP_INPUT_SENTINEL_MIN, step_leaf_count_capped_v1, worst_case_step_leaf_count_capped_v1};
 
 use crate::lineage::PalwModelLineageV1;
 use crate::sdk::PalwClassSdk;
@@ -65,11 +65,18 @@ pub fn check_lineage_v1(lineage: &dyn PalwModelLineageV1, court: &PalwCourtParam
         verify_profile_coverage_v1(&entry.profile).map_err(|e| format!("{who}: a node's shape is not servable: {e:?}"))?;
         // The canonical job: countable, non-empty, inside the class's own worst case and inside
         // the context the class declares (in the enumeration's own footprint form).
-        let worst =
-            worst_case_step_leaf_count_v1(&entry.profile).map_err(|e| format!("{who}: the step space does not enumerate: {e:?}"))?;
+        //
+        // **Against the COURT's ladder, not the executor's constant** (audit D H-5/H-5b). Both
+        // counters have an uncapped spelling that stops at `PALW_STEP_MAX_LEAVES` (2^22); this
+        // battery is handed the court the lineage is being asked about, and a class whose step
+        // space enumerates fine under the ruleset it will run on is not "unenumerable" because a
+        // constant somewhere else is smaller. The graph-v5 512 row is exactly that class.
+        let ladder = court.max_step_leaf_count();
+        let worst = worst_case_step_leaf_count_capped_v1(&entry.profile, ladder)
+            .map_err(|e| format!("{who}: the step space does not enumerate: {e:?}"))?;
         let canonical = entry.canonical_context();
-        let counted =
-            step_leaf_count(&entry.profile, &canonical).map_err(|e| format!("{who}: the canonical job does not count: {e:?}"))?;
+        let counted = step_leaf_count_capped_v1(&entry.profile, &canonical, ladder)
+            .map_err(|e| format!("{who}: the canonical job does not count: {e:?}"))?;
         if counted == 0 {
             return Err(format!("{who}: the canonical job commits no step leaves"));
         }
