@@ -32,10 +32,12 @@ use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpPromptSegmentV1, PalwFpWork
 /// A distinct id from the original `…/plain-markers/v1` because that one rode the `Text` arm with
 /// specials ENABLED: same rendered string, different ids, and ids are what consensus sees.
 pub const TEMPLATE_ID_PLAIN_SEGMENTS_V1: &str = "misaka-palw/fp-gateway-template/plain-markers-segments/v1";
-/// ADR-0077 Decision 6: the model's own control tokens, segment-wise. Re-exported rather than
-/// re-spelled — the ChatML transforms and the rule that picks between them live in ONE place, and
-/// two constants with the same value in two crates is how they stop having the same value.
-pub use misaka_palw_base0::chat_template::{TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_V1, TEMPLATE_ID_CHAT_SEGMENTS_V1};
+/// ADR-0077 Decision 6 places the model's own control tokens segment-wise, and there are now two
+/// such transforms: `…/chat-segments/v1`, which ends the generation prompt at `assistant\n`, and
+/// `…/chat-segments-think-closed/v1`, which ends it with a reasoning model's own closed think
+/// block. Neither id is spelled here — both live beside the renderer that produces them, in
+/// [`misaka_palw_base0::chat_template`], because two constants with the same value in two crates
+/// is how they stop having the same value. [`template_id_for`] is this file's way to ask.
 
 pub const MARKER_SYSTEM: &str = "### System:\n";
 pub const MARKER_USER: &str = "### User:\n";
@@ -93,11 +95,6 @@ pub fn render_plain_markers(messages: &[Turn]) -> Result<String, String> {
     }
     out.push_str(MARKER_ASSISTANT);
     Ok(out)
-}
-
-/// Look up a control token by NAME in the manifest's table.
-pub fn special_id(manifest: &PalwFpWorkerManifestV1, name: &str) -> Option<u32> {
-    manifest.special_tokens.iter().find(|(n, _)| n == name).map(|(_, id)| *id)
 }
 
 /// **The template id this manifest's model selects**, without building a prompt.
@@ -391,6 +388,7 @@ mod tests {
     use super::*;
     use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFreePromptJobV3};
     use kaspa_hashes::Hash64;
+    use misaka_palw_base0::chat_template::{TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_V1, TEMPLATE_ID_CHAT_SEGMENTS_V1};
 
     fn manifest(chatml: bool) -> PalwFpWorkerManifestV1 {
         PalwFpWorkerManifestV1 {
