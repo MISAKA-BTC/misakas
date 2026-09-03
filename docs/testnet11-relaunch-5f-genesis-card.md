@@ -3618,3 +3618,34 @@ the audit, corrected:
 found defects is a number with an interest in being larger, and I did not check the last one as
 hard as the first four because it fit the pattern. *Availability again, and this time in the
 tally rather than in the diagnosis.*
+
+### The orphan, scoped: it is the only one, and the obvious check would not have found it
+
+Swept independently across both branches and the merged tree:
+
+```
+palw-testnet-5f      palw_step.rs  ORPHAN at 1608 (another #[test] at 1623, no fn between)   1
+palw-adr0082-impl    same file                                                               0
+the merged tree      every .rs file, tree-wide                                               0
+```
+
+**Both of my claims hold — 5f-only, and the merge fixes it — and nothing else in the repository is
+in this state.** The detector walks forward from each `#[test]` past comments, blank lines and
+other attributes, and flags it when the next real item is not a `fn`.
+
+> **Counting `#[test]` against `fn` would NOT have found it**, and that is the instrument anyone
+> reaches for first. 5f's copy of that file has **24 attributes and 68 functions**; impl's has
+> **30 and 84**. The ratio is uninformative because most functions are helpers. **The orphan is
+> only visible by asking what each attribute attaches to** — the count is exactly the wrong
+> question, and it is the cheap one.
+
+**And the consequence is the inverse of every other skip-shaped defect tonight.** An orphaned
+`#[test]` attaches to the next function, so the suite reports **two tests where one ran twice**.
+
+```
+every other absence tonight    showed as ABSENCE   (0 tests, 4 unchecked, SKIPPED, 0 agreed)
+this one                       shows as SURPLUS    (2 passed, where 1 test ran twice)
+```
+
+*A defect that presents as extra coverage is not going to be found by anyone looking for missing
+coverage*, which is what the whole evening has trained us to look for.
