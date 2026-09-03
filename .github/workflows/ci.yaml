@@ -63,6 +63,26 @@ jobs:
           "$RUNNER_TEMP/artifact-venv/bin/pip" install --disable-pip-version-check \
             mido==1.3.3 numpy-stl==4.0.0
 
+      # **This job is RED right now, on purpose, and here is the one gate that is red.**
+      #
+      # `artifact-stranger` fails with `SELFTEST FAILED — 3 of 18 checks disagree with the shipped
+      # tree`: `source_tree_sha256` recomputed `98265872…` against a pinned `d2419027…`, and
+      # `cad/stl/v1` and `music/smf/v1` moved with it. Nothing is wrong with the re-derivation. A
+      # `transformer_id` is a hash of every byte under `misaka-palw-derive/src/` (ADR-0078
+      # Decision 3; `misaka-palw-derive/tests/transformer_id_pin.rs` is the pin and says so at
+      # length), and commit a87cc282 rustfmt'd `src/kinds/scene.rs` — one `if` collapsed onto one
+      # line — which moved all eight ids at once. That commit's own message states the ordering:
+      # "the freeze for the single `transformer_id` re-pin has to come AFTER this, not before."
+      #
+      # So this is the same red as `shipped_presets_have_pinned_fingerprints`: it closes at the
+      # cut's single re-pin, which is the integrator's, and a contributor who "fixes" it moves
+      # eight ids a second time. It is left red rather than skipped because a gate that goes quiet
+      # is the failure this whole job exists for.
+      #
+      # It does not hide the other five. `scripts/ci-gates.sh` prints one line per gate with that
+      # gate's OWN exit code and never a single aggregate word, so a SECOND red appears by name in
+      # the same summary. Read the summary block, not the job's colour, until the re-pin lands.
+      #
       # The same command a contributor runs. `--group fast` is every gate that needs no cargo
       # build; the Lints / Check / Test Suite jobs below run the rest.
       - name: Run the no-compiler gates
