@@ -4350,3 +4350,54 @@ scripts/relaunch-fleet-wipe.sh wipe       # dnsseeders are part of it; pool slot
 
 *What is deliberately absent: any step that reads a value from prose, any `tail` on a build,
 any `pgrep -f`, any count read as a distribution, any "probably fine".*
+
+## The guard's first real run, and the devnet drill's stall
+
+### The guard, against a real table
+
+3e's finalize on `971b2eff` wrote `extracted-pins.txt` with `extracted_from 971b2eff…`. The guard:
+
+```
+OK    derive/src tree        4969f8dc…          checked FIRST and alone
+OK    table provenance       extracted_from 971b2eff… == 971b2eff
+OK    source_tree_sha256     637858db…          OK  t11 fingerprint  71efa664…
+DIFF  devnet fingerprint     predicted WITHDRAWN-see-above   read 34c7e482…   -> STOP
+```
+
+**That STOP is the script working.** The devnet value had been withdrawn for a named cause and
+the guard refused to be made to pass. The operator's move is the only kind it accepts — the
+value written in **with both causes beside it**, each named in writing before the extraction:
+
+```
+(a)  09a71652  devnet genesis mirrors testnet-11's class set     c0da0c90… -> 24d55f6d…
+T1   a733b21e  devnet close ceiling derived from its carrier count  24d55f6d… -> 34c7e482…
+```
+
+Re-run: **all five predictions hold, against a table computed from the frozen tree.** The word
+"frozen" has not been said, and the ceremony does not start on a table alone.
+
+### The drill stalled — and the reason is ADR-0076's equilibrium, seen from the other side
+
+Stage 1 of the devnet drill: **three floor seats, zero blocks in twelve minutes.** Measured:
+
+```
+floor-only devnet          floor 2^119.9
+mirrored devnet (= t11)    floor 2^114.4   (45x harder)    QWEN36 2^127.3    graph-v5@512 2^128 = MAX
+```
+
+**Mirroring t11's class set made devnet a chain the model tiers pace — exactly as t11 is — and
+the drill's seats were all floor-only.** *The drill was once again asking a chain it was not
+running.* Fix under test, script only: resolve the class id from `palw-class ledger` before
+stage 1 and give node-0 `--palw-producer-class=<4277d84f…>` beside its artifact — the same
+shape as t11's node0.
+
+> **On the mirrored devnet, a floor-only seat set does not produce; the drill needs a
+> model-capable producer.** This is the mirror image of the rule already in this project's
+> notes — *on t11 the floor must have a producer or DAA stops* — and both are the same
+> equilibrium: the class-target seed puts each tier where the *registered set* pays it, so a
+> chain whose set includes model tiers is paced by them, and a rehearsal that only seats the
+> floor rehearses nothing.
+
+The final table will be regenerated on the tip that carries the script fix — the pins do not
+depend on the script, but the join rule says a table names the commit its run ran on, and the
+guard enforces that. It will be re-run there before anything is pasted.
