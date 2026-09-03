@@ -196,6 +196,182 @@ pub fn hybrid_state_chunk_map_id_v3() -> Hash64 {
     state_chunk_map_id_v1(&palw_hybrid_state_chunk_map_name_v3())
 }
 
+// -------------------------------------------------------------------------------------------------
+// The hybrid COMPOSITION, enumerated (ADR-0082 Decision 4)
+// -------------------------------------------------------------------------------------------------
+
+/// **Which half of a hybrid checkpoint a chunk belongs to, and in which order.**
+///
+/// The discriminants ARE the enumeration order, and the order is not this enum's opinion: it is
+/// read off the map's NAME, which is the preimage of the id a class registers.
+/// [`palw_hybrid_state_chunk_map_name_v3`] is `palw-hybrid-state/attn=…/gdn=…/v3` — `attn=`
+/// before `gdn=` — so the attention cache's tiles come first and the recurrence's head slices
+/// follow. `the_hybrid_sections_are_ordered_by_the_maps_own_name` asserts that against the string
+/// rather than against this comment, so a future composition that spelled its halves the other way
+/// round would fail a test instead of silently enumerating one order while its id promises
+/// another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum PalwHybridChunkSectionV1 {
+    AttentionCache = 0,
+    RecurrenceState = 1,
+}
+
+impl PalwHybridChunkSectionV1 {
+    pub const ALL: [PalwHybridChunkSectionV1; 2] =
+        [PalwHybridChunkSectionV1::AttentionCache, PalwHybridChunkSectionV1::RecurrenceState];
+}
+
+/// Which half of the RECURRENCE state a chunk holds. `kind-major(delta,conv)` in
+/// [`PALW_GDN_STATE_CHUNK_MAP_NAME_V2`], and the discriminants are that order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum PalwGdnChunkKindV1 {
+    Delta = 0,
+    Conv = 1,
+}
+
+impl PalwGdnChunkKindV1 {
+    pub const ALL: [PalwGdnChunkKindV1; 2] = [PalwGdnChunkKindV1::Delta, PalwGdnChunkKindV1::Conv];
+}
+
+/// **The layout of one hybrid checkpoint** — the attention cache's 16-position tiles beside the
+/// recurrence's head slices, in the order the map's name fixes.
+///
+/// Every field is a function of the profile and the position count; none is a choice. The
+/// attention half is [`tiled_kv_state_geometry_v3`] verbatim, so the composition cannot describe
+/// the cache differently from the standalone map its own name embeds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwHybridStateGeometryV1 {
+    /// The `attn=` half, exactly as `tiled_kv_state_geometry_v3` derives it.
+    pub attn: PalwStateChunkGeometryV1,
+    /// The recurrence layers, in the PROFILE's numbering, ascending (`layer-asc`).
+    pub gdn_layers: Vec<u16>,
+    /// Heads per recurrence layer (`head-asc`).
+    pub gdn_heads: u16,
+    /// One head's delta state: `gdn_head_v_dim` rows of `gdn_head_k_dim × 4`.
+    pub delta_head_bytes: u64,
+    /// One head's convolution window: `gdn_conv_kernel` rows of `(2·k_dim + v_dim) × 4`.
+    pub conv_head_bytes: u64,
+}
+
+impl PalwHybridStateGeometryV1 {
+    /// Chunks in the recurrence half: two kinds x layers x heads. ONE chunk per `(kind, layer,
+    /// head)` — that is what "a per-head opening expressible" means in
+    /// [`PALW_GDN_STATE_CHUNK_MAP_NAME_V2`], and it is the granularity
+    /// [`gdn_state_row_bytes_for_map_v1`] prices the court's anchor at. A geometry whose head
+    /// slice did not fit one chunk is refused by [`hybrid_state_geometry_v3`] rather than split
+    /// here, because splitting it would be a different map.
+    pub fn gdn_chunk_count(&self) -> u64 {
+        2 * self.gdn_layers.len() as u64 * self.gdn_heads as u64
+    }
+
+    /// Chunks in the whole composition: the attention half's, then the recurrence half's.
+    pub fn chunk_count(&self) -> u64 {
+        self.attn.chunk_count() + self.gdn_chunk_count()
+    }
+
+    /// Bytes the composition covers. The enumeration covers exactly this many, once each.
+    pub fn total_bytes(&self) -> u64 {
+        self.attn.total_bytes()
+            + self.gdn_layers.len() as u64
+                * self.gdn_heads as u64
+                * (self.delta_head_bytes + self.conv_head_bytes)
+    }
+}
+
+/// One chunk of a hybrid checkpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwHybridChunkEntryV1 {
+    /// A run of positions of one attention layer's K or V history — the v3 tile.
+    AttentionCache(PalwStateChunkEntryV1),
+    /// One recurrence head's delta state or convolution window.
+    RecurrenceState { kind: PalwGdnChunkKindV1, gdn_layer: u16, head: u16, byte_len: u64 },
+}
+
+impl PalwHybridChunkEntryV1 {
+    pub fn section(&self) -> PalwHybridChunkSectionV1 {
+        match self {
+            Self::AttentionCache(_) => PalwHybridChunkSectionV1::AttentionCache,
+            Self::RecurrenceState { .. } => PalwHybridChunkSectionV1::RecurrenceState,
+        }
+    }
+
+    pub fn byte_len(&self) -> u64 {
+        match self {
+            Self::AttentionCache(entry) => entry.byte_len(),
+            Self::RecurrenceState { byte_len, .. } => *byte_len,
+        }
+    }
+}
+
+/// **The composition's layout at `positions`, derived from the profile** (ADR-0082 Decision 4).
+///
+/// The one spelling of "what is in a hybrid checkpoint and in what order". A hybrid commits ZERO
+/// checkpoints on every shipped row, so before this function the composition existed only as an id
+/// with two halves named in a string and no enumeration anywhere — which is why a recompute could
+/// only refuse it by name. Both halves are read from the functions that already own them
+/// ([`tiled_kv_state_geometry_v3`], [`gdn_delta_head_slice_bytes_v1`],
+/// [`gdn_conv_head_slice_bytes_v2`]), so this adds an ORDER and no arithmetic: a second derivation
+/// that merely agreed with them is how a producer and a court come to open different bytes.
+pub fn hybrid_state_geometry_v3(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+) -> Result<PalwHybridStateGeometryV1, PalwStateChunkMapError> {
+    let attn = tiled_kv_state_geometry_v3(profile, positions)?;
+    let gdn_layers: Vec<u16> =
+        (0..profile.layer_count).filter(|&l| profile.layer_kind(l) == PalwLayerKindV1::GatedDeltaNet).collect();
+    let delta_head_bytes = gdn_delta_head_slice_bytes_v1(profile).ok_or(PalwStateChunkMapError::ZeroRowWidth {
+        kv_heads: profile.gdn_heads,
+        head_dim: profile.gdn_head_k_dim,
+    })?;
+    let conv_head_bytes = gdn_conv_head_slice_bytes_v2(profile).ok_or(PalwStateChunkMapError::ZeroRowWidth {
+        kv_heads: profile.gdn_heads,
+        head_dim: profile.gdn_head_v_dim,
+    })?;
+    // One head slice is one chunk; a geometry whose slice does not fit is a different map, refused
+    // rather than silently re-chunked. (`gdn_delta_head_slice_bytes_v1` already applies the same
+    // cap to its ROW; this applies it to the slice the enumeration actually addresses.)
+    for bytes in [delta_head_bytes, conv_head_bytes] {
+        if bytes > PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64 {
+            return Err(PalwStateChunkMapError::RowExceedsChunk { row_bytes: bytes, max: PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES });
+        }
+    }
+    let geometry = PalwHybridStateGeometryV1 { attn, gdn_layers, gdn_heads: profile.gdn_heads, delta_head_bytes, conv_head_bytes };
+    let chunk_count = geometry.chunk_count();
+    if chunk_count > PALW_STEP_LEG_MAX_STATE_CHUNKS as u64 {
+        return Err(PalwStateChunkMapError::TooManyChunks { got: chunk_count, max: PALW_STEP_LEG_MAX_STATE_CHUNKS });
+    }
+    Ok(geometry)
+}
+
+/// **The entry at `chunk_index`, or `None` past the end** — the composition's own
+/// [`integer_kv_state_chunk_entry_v1`].
+///
+/// Attention first, recurrence second, because that is the order
+/// [`palw_hybrid_state_chunk_map_name_v3`] spells. Inside the recurrence half the order is the gdn
+/// map's: `kind-major(delta,conv)`, then `layer-asc`, then `head-asc`.
+pub fn hybrid_state_chunk_entry_v3(geometry: &PalwHybridStateGeometryV1, chunk_index: u64) -> Option<PalwHybridChunkEntryV1> {
+    let attn_count = geometry.attn.chunk_count();
+    if chunk_index < attn_count {
+        return integer_kv_state_chunk_entry_v1(&geometry.attn, chunk_index).map(PalwHybridChunkEntryV1::AttentionCache);
+    }
+    let within = chunk_index.checked_sub(attn_count)?;
+    if within >= geometry.gdn_chunk_count() {
+        return None;
+    }
+    let per_kind = geometry.gdn_layers.len() as u64 * geometry.gdn_heads as u64;
+    let (kind, byte_len) = if within < per_kind {
+        (PalwGdnChunkKindV1::Delta, geometry.delta_head_bytes)
+    } else {
+        (PalwGdnChunkKindV1::Conv, geometry.conv_head_bytes)
+    };
+    let within_kind = within % per_kind;
+    let layer_ordinal = (within_kind / geometry.gdn_heads as u64) as usize;
+    let head = (within_kind % geometry.gdn_heads as u64) as u16;
+    Some(PalwHybridChunkEntryV1::RecurrenceState { kind, gdn_layer: geometry.gdn_layers[layer_ordinal], head, byte_len })
+}
+
 /// **The RECURRENCE's map: a state, not a history** (ADR-0077 Decision 10).
 ///
 /// The two integer-KV maps above chunk the *cache*, and a cache is the whole history: at position
