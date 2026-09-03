@@ -36,7 +36,14 @@ PREDICTED_T11_FP=71efa66480211731e3dc6fa2312ed73f7ed11b93372a19a55ac66ef39b65920
 # is the only kind this ceremony accepts. A pin that moves and is then quietly re-predicted is
 # the thing this script exists to prevent, and editing this line to the new value would be
 # exactly that.
-PREDICTED_DEVNET_FP=WITHDRAWN-see-above
+# NAMED MOVE, 2026-09-04 — the withdrawal above is resolved by two causes, each written down by
+# the person moving it BEFORE the extraction, and each with its own intermediate value:
+#   (a) 09a71652  devnet genesis mirrors testnet-11's class set   c0da0c90… -> 24d55f6d…
+#   T1  a733b21e  devnet close ceiling derived from its carrier   24d55f6d… -> 34c7e482…
+#       count (81,920 -> 83,333, a ruleset field)
+# The value below is the extractor's, from the table with `extracted_from 971b2eff…`, not a
+# guess and not a re-prediction: it is written here only because both moves are named.
+PREDICTED_DEVNET_FP=34c7e4829eadb996e50871ed9bf32055fe4f54057e66814a6bab1c54b67bd8e1
 PREDICTED_FP_GOLDEN=c940b5c36ee40846087e6c5927d6e6b5
 PREDICTED_PREMINE_BUILDS=ba2612417e7e0817
 
