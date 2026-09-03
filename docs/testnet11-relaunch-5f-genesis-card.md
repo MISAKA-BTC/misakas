@@ -89,7 +89,7 @@ Three are armed at genesis on testnet-11 and the rest stay `None`.
 | fence | at genesis | why |
 |---|---|---|
 | `palw_context_ladder` | **`None` — DO NOT ARM** | **This row said ARM and its reason was false.** There is no `palw_context_ladder_active_at`: nothing reads the fence. Every use of that name is the *module*, the field, the `never()→None` normalisation, or `params.rs:3243` writing it into the FINGERPRINT. So arming it moves the fingerprint and gates nothing — and FG proves the reason wrong, because the 512 row is registered and priced at 2^26 **with this fence dormant**. The wide row prices from the bundle's `max_step_leaf_count`, which is the second of the "two moves" below; the first move is decoration. |
-| `palw_uncertified_weightless` | **ARM, `ForkActivation::always()`** | genesis is the ONLY moment this can be armed — `validate_palw_v2` refuses any other height |
+| `palw_uncertified_weightless` | **ARM, `ForkActivation::always()`** | genesis is the ONLY moment — `validate_palw_v2` refuses any other height (`params.rs:1490`). **And unlike the ladder, this one HAS a reader**: `palw_class_bears_weight_v2` (`palw_state_v2.rs:1183`) is `!uncertified_weightless \|\| share > 0`, called from `palw_claim_safe_contribution_v2` and the safe-weight accumulation at `:4589`, with the consistency check branching on it at `:4770`. It gates whether an uncertified class's `pwu` enters safe weight — ADR-0069 D7, on the fold that is the production path. |
 | `palw_kary_court` | **ARM, `ForkActivation::always()`** | **ADR-0082's, does not exist yet.** Without it the registered row is admitted and UNPROSECUTABLE — see §3. A bare fence: no companion value, no bundle field. `dissection_arity` stays 2 on every preset and the fence overrides it with the derived arity. |
 | `palw_prompt_ids_merkle` | `None` — **and it cannot be armed** | ADR-0082's. Not needed at the registered width: flat ids are 82,080 against a budget of 83,333. It becomes REQUIRED above about n_ctx 1,024 — but as of FD it is no longer a fence anyone may arm at that point: **`validate_palw_v2` REFUSES a ruleset that arms it** (`config/params.rs:1595`, on impl; 2310 is only the doc comment about it), because the commitment form it selects does not ship. Registering a wider row is therefore blocked on implementing the form, not on flipping the fence. |
 | `palw_fp_decode_rules` | `None` | ADR-0082 stream H's (decode leaves earn, seeded argmax). Not a prosecutability condition and not on the acceptance path; deferred so the cut arms only what it must. |
@@ -98,6 +98,12 @@ Three are armed at genesis on testnet-11 and the rest stay `None`.
 **A fence that must be armed at genesis and does not exist yet is a scheduling fact, not a
 contradiction** — it lands with ADR-0082 (§7), and the card names it now so the arming is not
 discovered at cut time.
+
+**The two fences look alike and are opposites — the difference is one grep, and it is the grep to
+run before arming anything.** Both are `Option<ForkActivation>`, both were listed ARM here, both
+reach `palw_ruleset_id_v2`. One is wired to the state fold that decides safe weight; the other is
+wired to nothing. *The name of a fence tells you what it was meant to do; only its readers tell you
+what it does.* The check is: does an accessor exist, and does anything outside `params.rs` call it?
 
 **"Arming the ladder is TWO moves" was half right: only the SECOND move exists.** The bundle's
 `PalwCourtParamsV2::max_step_leaf_count` is the whole mechanism; `Params::palw_context_ladder` has
