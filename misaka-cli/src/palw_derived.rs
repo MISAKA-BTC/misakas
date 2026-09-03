@@ -331,10 +331,7 @@ fn from_hex(text: &str, what: &str) -> Result<Vec<u8>, CliError> {
 
 fn decode_job_context(raw: &[u8], from: &std::path::Path) -> Result<PalwJobContextV2, CliError> {
     borsh::from_slice(raw).map_err(|e| {
-        CliError::new(
-            exit::GENERIC,
-            format!("{}: the job context does not decode as a borsh PalwJobContextV2: {e}", from.display()),
-        )
+        CliError::new(exit::GENERIC, format!("{}: the job context does not decode as a borsh PalwJobContextV2: {e}", from.display()))
     })
 }
 
@@ -351,10 +348,7 @@ fn read_job_context_file(path: &std::path::Path) -> Result<PalwJobContextV2, Cli
     {
         return Ok(context);
     }
-    Err(CliError::new(
-        exit::GENERIC,
-        format!("{} is not a borsh PalwJobContextV2 (nor the same bytes as hex text)", path.display()),
-    ))
+    Err(CliError::new(exit::GENERIC, format!("{} is not a borsh PalwJobContextV2 (nor the same bytes as hex text)", path.display())))
 }
 
 fn parse_ids(arr: &[serde_json::Value], path: &std::path::Path) -> Result<Vec<u32>, CliError> {
@@ -567,12 +561,13 @@ pub async fn verify(ctx: &Ctx, args: DerivedVerifyArgs<'_>) -> CliResult {
         Some(p) => Some(std::fs::read(p).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", p.display())))?),
         None => None,
     };
-    let tokenizer = match (&tokenizer_bytes, args.tokenizer) {
-        (Some(bytes), Some(p)) => Some(QwenTokenizer::from_json(bytes).map_err(|e| {
-            CliError::new(exit::GENERIC, format!("--tokenizer {}: not a readable tokenizer.json: {e}", p.display()))
-        })?),
-        _ => None,
-    };
+    let tokenizer =
+        match (&tokenizer_bytes, args.tokenizer) {
+            (Some(bytes), Some(p)) => Some(QwenTokenizer::from_json(bytes).map_err(|e| {
+                CliError::new(exit::GENERIC, format!("--tokenizer {}: not a readable tokenizer.json: {e}", p.display()))
+            })?),
+            _ => None,
+        };
     let opened_tokenizer_id = tokenizer_bytes.as_deref().map(misaka_palw_derive::opened_tokenizer_id_v1);
     let reader = connect(ctx).await?;
     let response = reader
@@ -921,8 +916,8 @@ mod tests {
         let chain_derived_id = derived_id_v1(&derivation.object);
 
         let other = vec![7u32, 11, 14];
-        let mismatches = compare(&derivation.object, chain_derived_id, &unbound(&answer, family, job_context_hash, &other))
-            .expect("re-runnable");
+        let mismatches =
+            compare(&derivation.object, chain_derived_id, &unbound(&answer, family, job_context_hash, &other)).expect("re-runnable");
         assert_eq!(mismatches.iter().map(|m| m.field).collect::<Vec<_>>(), vec!["output_root"]);
         assert_eq!(mismatches[0].on_chain, derivation.object.output_root.to_string());
     }
@@ -940,15 +935,17 @@ mod tests {
 
         let mut rebuilt = derivation.object.clone();
         rebuilt.network_domain = h(0x22);
-        let mismatches =
-            compare(&rebuilt, chain_derived_id, &unbound(&answer, family, job_context_hash, &ids)).expect("re-runnable");
+        let mismatches = compare(&rebuilt, chain_derived_id, &unbound(&answer, family, job_context_hash, &ids)).expect("re-runnable");
         assert_eq!(mismatches.iter().map(|m| m.field).collect::<Vec<_>>(), vec!["derived_id"]);
     }
 
     /// Without the answer bytes and without the ids, the only thing left to check is the
     /// reconstruction — and the verdict says exactly that rather than reporting a bare pass.
+    ///
+    /// The fourth recomputation is the BINDING, and it is why the `(true, true)` row that used to
+    /// read "in full" no longer does when nothing bound the artifact to the claim.
     #[test]
-    fn a_pass_says_which_of_the_three_recomputations_it_covered() {
+    fn a_pass_says_which_of_the_four_recomputations_it_covered() {
         // The FOURTH: only a bound run may say "in full", because without the binding the other
         // three are true of the bytes the caller happened to pass.
         assert!(describe_checked(true, true, true).contains("in full"));
@@ -1167,7 +1164,8 @@ mod tests {
         );
 
         // The forgery: an artifact of another answer, filed against THIS claim.
-        let other = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../misaka-palw-derive/corpus/music/03-overlapping-melody.json");
+        let other =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../misaka-palw-derive/corpus/music/03-overlapping-melody.json");
         let other = std::fs::read(&other).unwrap_or_else(|e| panic!("{}: {e}", other.display()));
         assert_ne!(other, honest.answer, "the forgery must be derived from a different answer");
         let claim = ClaimBinding {

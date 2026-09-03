@@ -132,8 +132,13 @@ object itself; without it the object is left unsigned for the rail), `--artifact
 Response: `misaka.derivation` — `status` (`derived` or `refused` with the grammar's reason; a
 refusal changes nothing about the claim, X4), the ids and hashes, `dsl`, `artifact`
 (`inline_base64` or `url`), `object_borsh_hex`, `signature_hex`. Beside it, for X6:
-`misaka.output_token_ids`, `misaka.job_context_hash`, `misaka.family`, `misaka.fp_claim_id`,
-`misaka.executor_pubkey`.
+`misaka.output_token_ids`, `misaka.job_context` (the whole `PalwJobContextV2` as borsh hex),
+`misaka.job_context_hash`, `misaka.family`, `misaka.fp_claim_id`, `misaka.executor_pubkey`.
+`job_context` is the binding leg: the hash gives `output_root` its third input, and only the
+context carries `tokenizer_id` — which tokenizer may render those ids into the DSL. It comes from
+the worker's retention manifest (`job_context_borsh_hex`, written beside `job_context_hash`, whose
+value is derived from the same bytes), so a response from an older worker carries `null` there and
+a verifier says the binding was not checked rather than passing.
 
 Outbox files per job: `<stem>.dsl`, `<stem>.artifact.<ext>`, `<stem>.derived-unsigned.borsh`,
 `<stem>.derived-object.borsh` (when signed), `<stem>.derived.json`, `artifacts/<derived-id>.<ext>`,
@@ -270,9 +275,18 @@ later voids "is a derivation of a voided claim, and says so when read".
 `output_root = output_commitment_v2(job_context_hash, ids, family_rendered_hash)` and nothing else,
 because ADR-0044 Decision 8's sentence about not silently publishing prompts applies to answers
 word for word. So verification is a comparison of two independent sources: the chain's side comes
-from these calls, and the ids, the job's context hash, the family and the canonical DSL come from
-the gateway's own response (`misaka.output_token_ids`, `misaka.job_context_hash`, `misaka.family`,
-`misaka.derivation.dsl`). A verifier holding both from one source would be checking nothing.
+from these calls, and the ids, the job's CONTEXT, the family and the canonical DSL come from the
+gateway's own response (`misaka.output_token_ids`, `misaka.job_context`, `misaka.job_context_hash`,
+`misaka.family`, `misaka.derivation.dsl`). A verifier holding both from one source would be
+checking nothing.
+
+**`misaka.job_context` is the whole `PalwJobContextV2` as borsh hex, and it is what makes a binding
+possible.** The hash beside it gives `output_root` its third input and nothing else; the question a
+consumer actually wants answered — *is this artifact's DSL the rendering of this claim's ids?* —
+needs `tokenizer_id`, which is a FIELD of the context and is not recoverable from its hash. The
+worker writes the context into its retention manifest (`job_context_borsh_hex`) and the gateway
+hands it on; a response from a worker that predates the field carries `"job_context": null`, and a
+verifier then says the binding was not checked rather than passing.
 
 ### The consumer's two commands
 
@@ -280,16 +294,20 @@ the gateway's own response (`misaka.output_token_ids`, `misaka.job_context_hash`
 # what the chain holds about this claim's derivations
 misaka palw derived <claim-id> --rpc <host:port> [--json]
 
-# re-run it over the answer you kept, and compare — `consistent`, or the first mismatch by name
+# the derivation alone — `consistent-given-the-supplied-answer`, or the first mismatch by name
 misaka palw derived-verify <claim-id> --answer <gateway-response.json> --rpc <host:port> [--json]
+
+# the derivation AND its binding — `consistent`, a statement about ONE inference
+misaka palw derived-verify <claim-id> --answer <gateway-response.json> \
+    --tokenizer <tokenizer.json> --rpc <host:port> [--json]
 ```
 
 `--answer` takes the gateway's response (the whole chat completion, or just its `misaka` block), the
 outbox's `<stem>.json` artifact summary, or a bare JSON array of the answer's output token ids;
-`--dsl <file>`, `--job-context-hash <hex>` and `--family base0|qwen36|qwen25-a16` fill in or override
-what the file does not carry. Only the HTTP response carries `output_token_ids` — the outbox summary
-does not, so verifying from it checks the derivation and says `NOT output_root` rather than passing
-a check it did not make. The command
+`--dsl <file>`, `--job-context <file>`, `--job-context-hash <hex>` and
+`--family base0|qwen36|qwen25-a16` fill in or override what the file does not carry. Only the HTTP
+response carries `output_token_ids` — the outbox summary does not, so verifying from it checks the
+derivation and says `NOT output_root` rather than passing a check it did not make. The command
 rebuilds the object from what the chain returned, then checks, in this order:
 
 | field | what it means when it disagrees |
@@ -299,14 +317,45 @@ rebuilds the object from what the chain returned, then checks, in this order:
 | `kind` | X8: the object's kind disagrees with its own transformer's manifest — a disagreement the chain cannot catch, because it interprets no kind |
 | `derived_id` | a check on the READER, not the executor: the object rebuilt here is not the one the chain accepted, so the network domain or the executor key is wrong |
 
-Exit 0 and `consistent`, or exit 1 with the first mismatching field named and both values printed.
+**Which verdict word means what — the same two words `palw-derive verify` prints, for the same
+reason.** The four checks above are two independent legs: `output_root` over ids you supplied, and
+`dsl_hash` / `artifact_hash` / `artifact_bytes` over bytes you supplied, with nothing computing
+either from the other. So they can both be true of inputs with nothing to do with each other, and a
+pass on that path is `consistent-given-the-supplied-answer`, not `consistent`. Give the command a
+`--tokenizer <tokenizer.json>` beside a response carrying `misaka.job_context` and
+`misaka.output_token_ids` and it renders the claim's own ids under the tokenizer that context pins,
+re-runs the grammar and the transformer over THOSE bytes
+(`misaka_palw_derive::verify_bound`), and prints the bare `consistent` with `binding_checked: true`.
+
+| summary line | exit | what it means |
+|---|---|---|
+| `consistent — binding_checked: true; …` | 0 | every row re-runs AND its DSL is the rendering of this claim's ids under the tokenizer the claim pins |
+| `consistent-given-the-supplied-answer — binding_checked: false; …` | 0 | every row re-runs over the bytes you supplied; `binding_not_checked_because` names which of the four inputs was missing |
+| `MISMATCH — a demonstrable false object (ADR-0078 Decision 5)` | nonzero | a row disagrees; the field is named with both values |
+| `UNVERIFIABLE — this build does not publish that manifest (ADR-0078 SA-5)` | nonzero | `transformer_id` names a source tree this build is not; nobody running it can check the derivation either way |
+| (a refusal, no verdict printed) | nonzero | a file that is not there, a `--tokenizer` that is not the one the claim pins, or a `--job-context` and `--job-context-hash` that are not the same job |
+
+A caller that branches on the exit code alone cannot tell a checked binding from an unchecked one —
+both are 0. Branch on `binding_checked`, which the document carries beside the verdict.
+
 An object whose `transformer_id` this build does not publish is reported `UNVERIFIABLE` rather than
 passed — SA-5's promise is that an unverifiable statement can be SAID to be unverifiable — **and
 the document's own summary line says `UNVERIFIABLE` too when that is all that happened.** A claim
 every row of which this build cannot re-run must not end with a forgery accusation underneath
 them; a single refuted row still reads `MISMATCH`, whatever else could not be checked. A pass also
-states which of the three recomputations it covered, because "consistent" over one of them is not
-the same sentence as "consistent" over all three.
+states which of the **four** recomputations it covered — the fourth being whether the DSL was the
+rendering — because "consistent" over one of them is not the same sentence as "consistent" over all
+four, and only the bound form may say "in full".
+
+**What the binding does not rest on.** No consensus rule compares a job's `tokenizer_id` to
+anything (`palw_freeprompt_v3`'s module doc says so), and a class registration carries no tokenizer
+identity, so the pin is the executor's own statement inside a context whose hash `output_root`
+commits to. That is enough to stop the substitution above — an executor cannot swap the answer
+without moving `dsl_hash` — and it is not a chain-anchored tokenizer identity. A `--tokenizer` file
+that is not the pinned one is refused by name, and the refusal names the other lineage too: a class
+whose tokenizer is embedded in a pinned GGUF publishes `tokenizer_id_v2_for_gguf(<gguf sha256>)`,
+which no `tokenizer.json` reproduces, so for that lineage the binding cannot be checked from a file
+at all.
 
 ## The two-architecture drill (X3)
 
