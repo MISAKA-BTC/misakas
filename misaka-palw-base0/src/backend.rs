@@ -194,13 +194,21 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
             }
         };
         let vocab = self.artifact.shape.vocab;
-        crate::fp_interval::base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, step_leaf_count, |token, position| {
-            if token >= vocab {
-                return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
-            }
-            let (logits, probe) = engine.forward_token_probed(&mut cache, token, position).map_err(|e| format!("{e:?}"))?;
-            Ok((logits, crate::legs::base0_captured_rows_v1(&probe)))
-        })
+        crate::fp_interval::base0_fp_replay_interval_v1(
+            profile,
+            ctx,
+            start,
+            first_call,
+            last_call,
+            step_leaf_count,
+            |token, position| {
+                if token >= vocab {
+                    return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
+                }
+                let (logits, probe) = engine.forward_token_probed(&mut cache, token, position).map_err(|e| format!("{e:?}"))?;
+                Ok((logits, crate::legs::base0_captured_rows_v1(&probe)))
+            },
+        )
     }
 }
 
@@ -476,9 +484,13 @@ impl PalwExecutionBackendV1 for Base0Backend {
 
     fn fp_interval_count(&self, capture: &[u8]) -> Option<u32> {
         let (binding, ..) = base0_material_decode_v1(capture).ok()?;
-        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_capped_v1(&binding, self.checkpoint_interval(), self.step_ladder_cap)
-            .ok()
-            .map(|g| g.interval_count)
+        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_capped_v1(
+            &binding,
+            self.checkpoint_interval(),
+            self.step_ladder_cap,
+        )
+        .ok()
+        .map(|g| g.interval_count)
     }
 
     fn fp_interval_count_for(&self, prompt_tokens: u32, decode_tokens_executed: u32) -> Option<u32> {

@@ -1720,16 +1720,14 @@ pub fn verify_class_admission_v6(
             .court
             .with_dissection_arity(k.dissection_arity)
             .map_err(|e| PalwClassAdmissionError::Profile(format!("the caller's dissection arity is not legal: {e}")))?;
-        crate::palw_attn_court_v1::palw_attn_court_admits_row_v1(&played, history, tile, k.window_court_daa).map_err(|e| {
-            match e {
-                crate::palw_attn_court_v1::PalwAttnCourtError::OverrunsWindow { moves, deadline, reserve, window_court } => {
-                    PalwClassAdmissionError::CourtWindowTooShort {
-                        needed: moves.saturating_mul(deadline).saturating_add(reserve),
-                        window: window_court,
-                    }
+        crate::palw_attn_court_v1::palw_attn_court_admits_row_v1(&played, history, tile, k.window_court_daa).map_err(|e| match e {
+            crate::palw_attn_court_v1::PalwAttnCourtError::OverrunsWindow { moves, deadline, reserve, window_court } => {
+                PalwClassAdmissionError::CourtWindowTooShort {
+                    needed: moves.saturating_mul(deadline).saturating_add(reserve),
+                    window: window_court,
                 }
-                _ => PalwClassAdmissionError::CourtWindowTooShort { needed: u64::MAX, window: k.window_court_daa },
             }
+            _ => PalwClassAdmissionError::CourtWindowTooShort { needed: u64::MAX, window: k.window_court_daa },
         })?;
     }
 
@@ -2201,8 +2199,12 @@ mod tests {
         let v5 = |build: fn(u32) -> Result<PalwShapeProfileV3, crate::palw_step::PalwStepError>, n_ctx: u32| -> Result<(), String> {
             let profile = build(n_ctx).map_err(|e| format!("the profile does not project: {e:?}"))?;
             let court = kary_court_v1();
-            let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&profile, Some(court), crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
-                .ok_or_else(|| "the row registers no state chunk map".to_string())?;
+            let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+                &profile,
+                Some(court),
+                crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            )
+            .ok_or_else(|| "the row registers no state chunk map".to_string())?;
             let mut bundle = conforming_bundle();
             bundle.court = PalwCourtParamsV2::with_cost_ceilings(
                 crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
@@ -2340,7 +2342,12 @@ mod tests {
     fn a_v5_row_clears_the_close_the_ladder_and_the_window_or_names_the_one_it_does_not() {
         let court = kary_court_v1();
         let profile = crate::palw_context_ladder::palw_a16_context_row_profile_v5(512).expect("projects");
-        let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&profile, Some(court), crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("mapped");
+        let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+            &profile,
+            Some(court),
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+        )
+        .expect("mapped");
         let canonical = context(&profile, 510, 2);
         let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, rules.ladder).expect("counts");
         let registration = weightless_registration(profile.shape_profile_id(), counted);
@@ -2399,8 +2406,12 @@ mod tests {
         // touch.
         {
             let hybrid = crate::palw_context_ladder::palw_qwen36_context_row_profile_v5(512).expect("projects");
-            let hybrid_rules =
-                crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&hybrid, Some(court), crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("mapped");
+            let hybrid_rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+                &hybrid,
+                Some(court),
+                crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            )
+            .expect("mapped");
             let hybrid_job = context(&hybrid, 510, 2);
             let counted = crate::palw_step::step_leaf_count_capped_v1(&hybrid, &hybrid_job, hybrid_rules.ladder).expect("counts");
             let reg = weightless_registration(hybrid.shape_profile_id(), counted);
@@ -2411,10 +2422,10 @@ mod tests {
             assert!(format!("{err}").contains("court close chunks"), "the close must name itself: {err}");
         }
         // The WINDOW alone refuses, and says so.
-        let err = admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, rc_turn_deadline()), PalwKaryCourtV1 {
-            window_court_daa: 100,
-            ..court
-        })
+        let err = admit(
+            court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, rc_turn_deadline()),
+            PalwKaryCourtV1 { window_court_daa: 100, ..court },
+        )
         .expect_err("a 100-DAA court window prosecutes nothing");
         assert!(matches!(err, PalwClassAdmissionError::CourtWindowTooShort { .. }), "the window must name itself: {err}");
         // And a shape priced for a court the ruleset does not play is refused rather than corrected.
@@ -3421,7 +3432,10 @@ mod tests {
     fn the_shipped_court_cost_reads_the_prompt_ids_flat() {
         use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
         let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor derives");
-        assert_eq!(PalwCourtCostShapeV1::genesis_anchored_v1(&profile, PALW_STEP_MAX_LEAVES).prompt_ids_form, PalwPromptIdsFormV1::Flat);
+        assert_eq!(
+            PalwCourtCostShapeV1::genesis_anchored_v1(&profile, PALW_STEP_MAX_LEAVES).prompt_ids_form,
+            PalwPromptIdsFormV1::Flat
+        );
         assert_eq!(
             PalwCourtCostShapeV1::checkpoint_anchored_v1(&profile, 16, PALW_STEP_MAX_LEAVES, 0).prompt_ids_form,
             PalwPromptIdsFormV1::Flat
@@ -3431,7 +3445,8 @@ mod tests {
         let shipped = derive_court_cost_v1(&profile).expect("the floor's cost derives");
         let explicit = derive_court_cost_shaped_v1(
             &profile,
-            PalwCourtCostShapeV1::genesis_anchored_v1(&profile, PALW_STEP_MAX_LEAVES).with_prompt_ids_form_v1(PalwPromptIdsFormV1::Flat),
+            PalwCourtCostShapeV1::genesis_anchored_v1(&profile, PALW_STEP_MAX_LEAVES)
+                .with_prompt_ids_form_v1(PalwPromptIdsFormV1::Flat),
         )
         .expect("the explicit flat reading derives");
         assert_eq!(shipped, explicit);

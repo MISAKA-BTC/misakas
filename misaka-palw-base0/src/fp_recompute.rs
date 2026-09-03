@@ -403,10 +403,7 @@ impl<'a> Qwen36RecomputeKernelsV1<'a> {
         qwen36_recurrence_state_v1(self.shape, &self.cache)
     }
 
-    fn attn_chunk_bytes_v1(
-        &self,
-        entry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1,
-    ) -> Option<Vec<u8>> {
+    fn attn_chunk_bytes_v1(&self, entry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>> {
         qwen36_attn_chunk_bytes_v1(&self.cache, entry)
     }
 }
@@ -607,12 +604,7 @@ struct SeatStateKeyV1 {
 
 static SEAT_STATE_MEMO: std::sync::Mutex<Option<(SeatStateKeyV1, Hash64, Base0FpSeatStateV1)>> = std::sync::Mutex::new(None);
 
-fn seat_state_key_v1(
-    profile: &PalwShapeProfileV3,
-    ctx: &PalwJobContextV2,
-    prompt_token_ids: &[u32],
-    covered: u32,
-) -> SeatStateKeyV1 {
+fn seat_state_key_v1(profile: &PalwShapeProfileV3, ctx: &PalwJobContextV2, prompt_token_ids: &[u32], covered: u32) -> SeatStateKeyV1 {
     SeatStateKeyV1 {
         class_id: profile.shape_profile_id(),
         context_hash: ctx.context_hash(),

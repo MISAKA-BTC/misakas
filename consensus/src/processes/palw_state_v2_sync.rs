@@ -233,9 +233,8 @@ impl PalwStateSyncV2 {
                 }
             }
             let (_, delta) = store.delta_of(*block)?;
-            current =
-                revert_delta_v2(&current, &delta, &self.params)
-                    .map_err(|source| PalwSyncV2Error::State { block: *block, source: Box::new(source) })?;
+            current = revert_delta_v2(&current, &delta, &self.params)
+                .map_err(|source| PalwSyncV2Error::State { block: *block, source: Box::new(source) })?;
             store.delete_delta_batch(batch, *block)?;
         }
         if let Some(point) = current.last_point()

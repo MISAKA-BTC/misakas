@@ -646,10 +646,7 @@ impl Base0CaptureGeometryV1 {
 /// per-position leg commits the attention tiles at every position and the recurrence at its
 /// derived spacing — the same answer the seat's `Qwen36RecomputeKernelsV1::state_chunks` gets from
 /// the same function.
-pub fn base0_capture_geometry_v1(
-    profile: &PalwShapeProfileV3,
-    positions: u32,
-) -> Result<Base0CaptureGeometryV1, LegError> {
+pub fn base0_capture_geometry_v1(profile: &PalwShapeProfileV3, positions: u32) -> Result<Base0CaptureGeometryV1, LegError> {
     use kaspa_consensus_core::palw_state_chunk_map as map;
     if profile.state_chunk_map_id == map::hybrid_state_chunk_map_id_v3() {
         return map::hybrid_state_geometry_for_covered_v1(profile, positions)
@@ -992,9 +989,8 @@ impl Base0CheckpointCaptureV1 {
         }
         // …and the leaf hash binds the chunk INDEX, so a tile whose index moved is a different
         // leaf even though its bytes did not.
-        let prev_index = kind * (prev.layers as u64 * prev.chunks_per_slice as u64)
-            + layer_ordinal * prev.chunks_per_slice as u64
-            + block;
+        let prev_index =
+            kind * (prev.layers as u64 * prev.chunks_per_slice as u64) + layer_ordinal * prev.chunks_per_slice as u64 + block;
         if prev_index != index {
             return None;
         }
@@ -1561,11 +1557,7 @@ where
         Some(kept) => kept.clone(),
         None => base0_checkpoint_chunks_at_v1(profile, ctx, want, chunk).ok()?,
     };
-    Some(kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1 {
-        leaf: checkpoints.leaves[at].clone(),
-        opening,
-        chunks,
-    })
+    Some(kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1 { leaf: checkpoints.leaves[at].clone(), opening, chunks })
 }
 
 /// **Open a bisection ladder already narrowed to a committed checkpoint** — the bisect half's

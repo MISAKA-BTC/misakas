@@ -3,8 +3,10 @@
 //! ```text
 //! palw-derive list
 //! palw-derive derive --transformer <name|kind> --answer <file> --out <dir> [--claim <hex> --output-root <hex> --network-domain <hex> --executor-pubkey <hex>]
-//! palw-derive verify --object <derived-unsigned.borsh|derived-object.borsh> --answer <file> [--artifact <file>]
-//!                    [--output-token-ids <json array file> --job-context-hash <hex> --family <qwen25-a16|qwen36>]
+//! palw-derive verify --object <derived-unsigned.borsh|derived-object.borsh> [--answer <file>] [--artifact <file>]
+//!                    [--output-token-ids <json array file> --family <base0|qwen36|qwen25-a16|qwen25-a16-v5>]
+//!                    [--job-context <PalwJobContextV2 borsh|hex> | --job-context-hash <hex>]
+//!                    [--tokenizer <tokenizer.json>]
 //! palw-derive manifest --transformer <name|id> | --all
 //! palw-derive drill [--corpus <dir>] [--report <file.json>] [--check <file.json>]
 //! palw-derive inspect --object <file>
@@ -15,7 +17,24 @@
 //! `derive` runs the derivation offline (the same code the gateway runs) and writes the DSL, the
 //! artifact and the unsigned object. `verify` is Decision 5 / X6: from the answer and the object,
 //! recompute `dsl_hash` and `artifact_hash`; with the ids, the job's context hash and the family,
-//! recompute the claim's `output_root` too. `manifest` is SA-5's: the document behind a
+//! recompute the claim's `output_root` too.
+//!
+//! **`verify`'s verdict word says what it covered, and there are two.** Recomputing `dsl_hash`
+//! from an answer you were handed and `output_root` from ids you were handed are two true
+//! sentences about two unrelated inputs: nothing in either path takes the other's input, and
+//! `rendered_output_hash_v1` is not the missing link (it hashes the IDS, not the rendered text).
+//! So an executor could attach any artifact of any kind to any of its own claims and pass. Give
+//! `verify` the claim's ids, its family, its `PalwJobContextV2` and the tokenizer that context
+//! pins, and it RENDERS the answer from the ids (ADR-0077 Decision 2's `render_answer_v1`) and
+//! re-runs the derivation over those bytes — `binding_checked: true`, verdict `consistent`.
+//! Without all four it reports `binding_checked: false` and says
+//! `consistent-given-the-supplied-answer`, which is not a statement that this artifact came from
+//! that inference. `--artifact` takes either the derivation's own bytes (hashed against
+//! `artifact_hash`, as before) or the dense PALW class artifact whose weights ran — the file's own
+//! magic says which, and the verdict names the role it was read in. Exit codes are unchanged (0
+//! consistent, 2 MISMATCH or UNVERIFIABLE, 1 refusal) and printed in the verdict's `exit_status`.
+//!
+//! `manifest` is SA-5's: the document behind a
 //! `transformer_id`, with the exact preimage, so a consumer can recompute the id themselves — a
 //! derivation whose manifest this tree does not publish is refused rather than made. `drill` is
 //! X3's instrument: every registered transformer over every corpus file, compared with that
@@ -42,8 +61,14 @@ use std::path::{Path, PathBuf};
 
 use kaspa_consensus_core::palw_derived_v1::{PalwDerivedArtifactV1, derived_id_v1, kind};
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
-use misaka_palw_derive::{ClaimBinding, derive_named, registry, verify, verify_artifact_bytes};
+use misaka_palw_base0::artifact::{BASE0_ARTIFACT_FILE_MAGIC, BASE0_ARTIFACT_FILE_MAGIC_V1};
+use misaka_palw_base0::e2e_drill::PalwRcFamilyV1;
+use misaka_palw_base0::tokenizer::QwenTokenizer;
+use misaka_palw_derive::{
+    ClaimBinding, derive_named, opened_tokenizer_id_v1, recompute_output_root, registry, verify, verify_artifact_bytes, verify_bound,
+};
 
 fn die(msg: String) -> ! {
     eprintln!("[palw-derive] fatal: {msg}");
@@ -86,13 +111,49 @@ fn read_object(path: &Path) -> (PalwDerivedArtifactV1, Option<Vec<u8>>) {
     }
 }
 
-/// The family's rendered-output hash rule (ADR-0078 X6), by family name.
-fn rendered_output_hash(family: &str, ids: &[u32]) -> Hash64 {
-    match family {
-        "qwen25-a16" => misaka_palw_base0::qwen25_a16_backend::rendered_output_hash_v1(ids),
-        "qwen36" => misaka_palw_base0::qwen36_backend::rendered_output_hash_v1(ids),
-        other => die(format!("unknown family {other:?}: this build knows qwen25-a16 and qwen36")),
+/// The family a `--family` argument names.
+///
+/// `PalwRcFamilyV1::parse` and `rendered_output_hash_for_family` are the tree's one spelling of
+/// "which family" and "what that family's rendering hashes to". This tool used to carry a second,
+/// narrower one — a two-arm `match` on the strings `qwen25-a16` and `qwen36` — which silently
+/// disagreed with the library about the floor (`base0` renders nothing, and the local copy died on
+/// the name) and about the fused A16 row. A verifier whose family table is a subset of the court's
+/// refuses honest claims by not knowing their class.
+fn family_by_name(name: &str) -> PalwRcFamilyV1 {
+    PalwRcFamilyV1::parse(name).unwrap_or_else(|| {
+        die(format!(
+            "unknown family {name:?}: this build knows {}",
+            PalwRcFamilyV1::ALL.iter().map(|f| f.name()).collect::<Vec<_>>().join(", ")
+        ))
+    })
+}
+
+/// A `--artifact <file>` is one of two different questions, and the FILE says which.
+///
+/// `verify` has always taken the derived artifact's bytes here — the GLB, the PNG — and hashed
+/// them against `artifact_hash`. The binding check (below) needs a different file: the dense PALW
+/// class artifact whose weights ran, which is what `palw-certify bind --artifact` takes. Rather
+/// than two flags a reader has to keep straight, the file is asked what it is: a dense artifact
+/// declares itself in its first eight bytes, and nothing else may claim that magic. The verdict
+/// names which question the file answered, so a reader never has to guess either.
+enum ArtifactFile {
+    /// The derivation's own output bytes.
+    Derived(Vec<u8>),
+    /// A dense PALW class artifact, decoded with its declared digest RECOMPUTED over every byte
+    /// (`decode_artifact_file_v1` refuses a file that decodes into something other than it claims).
+    Class(Box<misaka_palw_base0::artifact::Base0ArtifactV1>),
+}
+
+fn read_artifact_file(path: &Path) -> ArtifactFile {
+    let bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
+    let magic = bytes.get(..8).unwrap_or_default();
+    if magic == BASE0_ARTIFACT_FILE_MAGIC.as_slice() || magic == BASE0_ARTIFACT_FILE_MAGIC_V1.as_slice() {
+        let artifact = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).unwrap_or_else(|e| {
+            die(format!("{} declares itself a dense PALW artifact and is not a readable one: {e}", path.display()))
+        });
+        return ArtifactFile::Class(Box::new(artifact));
     }
+    ArtifactFile::Derived(bytes)
 }
 
 fn cmd_list() {
@@ -188,13 +249,64 @@ fn cmd_derive(mut args: VecDeque<String>) {
     );
 }
 
+/// A `PalwJobContextV2` as a file: the borsh bytes, or the same bytes as hex text.
+///
+/// **The full context and not its hash, because the hash cannot be asked a question.**
+/// `--job-context-hash` gives `output_root` its third input and nothing else; the binding needs to
+/// know WHICH TOKENIZER the claim was executed under, and that is `tokenizer_id`, a field. Taking
+/// it as a separate flag would let a caller pin the tokenizer that suits them and pass a context
+/// hash from somewhere else — so the hash is DERIVED here (`context_hash()`), from the same bytes
+/// the `tokenizer_id` came out of, and the two can no longer disagree.
+fn read_job_context(path: &Path) -> PalwJobContextV2 {
+    let bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
+    if let Ok(ctx) = borsh::from_slice::<PalwJobContextV2>(&bytes) {
+        return ctx;
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let trimmed = text.trim();
+    let mut raw = vec![0u8; trimmed.len() / 2];
+    if trimmed.len().is_multiple_of(2)
+        && faster_hex::hex_decode(trimmed.as_bytes(), &mut raw).is_ok()
+        && let Ok(ctx) = borsh::from_slice::<PalwJobContextV2>(&raw)
+    {
+        return ctx;
+    }
+    die(format!("{} is not a borsh PalwJobContextV2 (nor the same bytes as hex text)", path.display()))
+}
+
+/// The four `verify` recomputations, into the verdict. One place, because the bound and the
+/// unbound paths must report the same fields under the same names — a reader comparing two runs of
+/// this tool is comparing the same sentence or nothing.
+fn insert_verification(verdict: &mut serde_json::Map<String, serde_json::Value>, v: &misaka_palw_derive::Verification) {
+    verdict.insert("dsl_hash_matches".into(), v.dsl_hash_matches.into());
+    verdict.insert("artifact_hash_matches".into(), v.artifact_hash_matches.into());
+    verdict.insert("artifact_bytes_matches".into(), v.artifact_bytes_matches.into());
+    // X8: the chain checks `kind != 0` and interprets nothing else, so a disagreement
+    // between an object's kind and its transformer's manifest is the consumer's to catch.
+    verdict.insert("kind_matches".into(), v.kind_matches.into());
+    verdict.insert("manifest_kind".into(), v.manifest_kind.into());
+    verdict.insert("recomputed_dsl_hash".into(), hex(v.recomputed_dsl_hash).into());
+    verdict.insert("recomputed_artifact_hash".into(), hex(v.recomputed_artifact_hash).into());
+}
+
+/// SA-5's sentence, for a `DeriveError` that says "this build cannot ask the question".
+fn unverifiable_note(e: &misaka_palw_derive::DeriveError) -> String {
+    format!(
+        "{e} — this build does not publish that manifest (ADR-0078 SA-5), so nobody running it can check this derivation \
+         either way. `palw-derive manifest --all` prints the ids this build has; a derivation is checkable only against \
+         the build whose source tree its transformer_id names."
+    )
+}
+
 fn cmd_verify(mut args: VecDeque<String>) {
     let mut object_path = None;
     let mut answer = None;
     let mut artifact = None;
     let mut ids_path = None;
     let mut job_context_hash = None;
-    let mut family = None;
+    let mut job_context_path = None;
+    let mut tokenizer_path = None;
+    let mut family_name = None;
     while let Some(arg) = args.pop_front() {
         match arg.as_str() {
             "--object" => object_path = Some(PathBuf::from(flag(&mut args, "--object"))),
@@ -202,13 +314,39 @@ fn cmd_verify(mut args: VecDeque<String>) {
             "--artifact" => artifact = Some(PathBuf::from(flag(&mut args, "--artifact"))),
             "--output-token-ids" => ids_path = Some(PathBuf::from(flag(&mut args, "--output-token-ids"))),
             "--job-context-hash" => job_context_hash = Some(hex64(&flag(&mut args, "--job-context-hash"), "--job-context-hash")),
-            "--family" => family = Some(flag(&mut args, "--family")),
+            "--job-context" => job_context_path = Some(PathBuf::from(flag(&mut args, "--job-context"))),
+            "--tokenizer" => tokenizer_path = Some(PathBuf::from(flag(&mut args, "--tokenizer"))),
+            "--family" => family_name = Some(flag(&mut args, "--family")),
             other => die(format!("unknown argument {other:?}")),
         }
     }
     let (object, signature) = read_object(&object_path.unwrap_or_else(|| die("--object <file> is required".into())));
-    let answer_path = answer.unwrap_or_else(|| die("--answer <file> is required".into()));
-    let answer_bytes = std::fs::read(&answer_path).unwrap_or_else(|e| die(format!("{}: {e}", answer_path.display())));
+
+    // Every input, read BEFORE any verdict is formed — a missing file is a refusal by name here,
+    // never a check quietly dropped from the list further down.
+    let supplied_answer: Option<Vec<u8>> =
+        answer.as_ref().map(|p| std::fs::read(p).unwrap_or_else(|e| die(format!("{}: {e}", p.display()))));
+    let ids: Option<Vec<u32>> = ids_path.as_ref().map(|p| {
+        let text = std::fs::read_to_string(p).unwrap_or_else(|e| die(format!("{}: {e}", p.display())));
+        serde_json::from_str(&text).unwrap_or_else(|e| die(format!("{} is not a JSON array of ids: {e}", p.display())))
+    });
+    if job_context_path.is_some() && job_context_hash.is_some() {
+        die("--job-context and --job-context-hash are two spellings of the same value: pass the context, whose hash is \
+             computed here, or the hash alone when the context is all you were given"
+            .into());
+    }
+    let job_context = job_context_path.as_ref().map(|p| read_job_context(p));
+    let context_hash = job_context.as_ref().map(|c| c.context_hash()).or(job_context_hash);
+    let family = family_name.as_deref().map(family_by_name);
+    let tokenizer_bytes: Option<Vec<u8>> =
+        tokenizer_path.as_ref().map(|p| std::fs::read(p).unwrap_or_else(|e| die(format!("{}: {e}", p.display()))));
+    let tokenizer = tokenizer_bytes.as_ref().map(|b| {
+        QwenTokenizer::from_json(b).unwrap_or_else(|e| {
+            die(format!("--tokenizer {}: not a readable tokenizer.json: {e}", tokenizer_path.as_ref().expect("just read").display()))
+        })
+    });
+    let artifact_file = artifact.as_ref().map(|p| read_artifact_file(p));
+
     let mut verdict = serde_json::Map::new();
     verdict.insert("schema".into(), "misaka.palw.derive-verify.v1".into());
     verdict.insert("derived_id".into(), hex(derived_id_v1(&object)).into());
@@ -234,6 +372,7 @@ fn cmd_verify(mut args: VecDeque<String>) {
          that covers it. A `.derived-object.borsh` handed to you out of band carries no proof of its own signer."
             .into(),
     );
+
     let mut all_ok = true;
     // **"I cannot check this" is not "this is a forgery."** An object naming a grammar or a
     // transformer THIS build does not publish is SA-5's case, and it is the ordinary consequence
@@ -244,77 +383,215 @@ fn cmd_verify(mut args: VecDeque<String>) {
     // reader's own version. `misaka palw derived-verify` already separates UNVERIFIABLE from
     // MISMATCH; this said MISMATCH for both.
     let mut unverifiable: Option<String> = None;
-    match verify(&object, &answer_bytes) {
-        Ok(v) => {
-            all_ok &= v.all_match();
-            verdict.insert("dsl_hash_matches".into(), v.dsl_hash_matches.into());
-            verdict.insert("artifact_hash_matches".into(), v.artifact_hash_matches.into());
-            verdict.insert("artifact_bytes_matches".into(), v.artifact_bytes_matches.into());
-            // X8: the chain checks `kind != 0` and interprets nothing else, so a disagreement
-            // between an object's kind and its transformer's manifest is the consumer's to catch.
-            verdict.insert("kind_matches".into(), v.kind_matches.into());
-            verdict.insert("manifest_kind".into(), v.manifest_kind.into());
-            verdict.insert("recomputed_dsl_hash".into(), hex(v.recomputed_dsl_hash).into());
-            verdict.insert("recomputed_artifact_hash".into(), hex(v.recomputed_artifact_hash).into());
-        }
-        Err(e @ (misaka_palw_derive::DeriveError::UnknownGrammar(_) | misaka_palw_derive::DeriveError::UnknownTransformer(_))) => {
-            all_ok = false;
-            unverifiable = Some(format!(
-                "{e} — this build does not publish that manifest (ADR-0078 SA-5), so nobody running it can check this derivation \
-                 either way. `palw-derive manifest --all` prints the ids this build has; a derivation is checkable only against \
-                 the build whose source tree its transformer_id names."
-            ));
-            verdict.insert("derivation_rerun".into(), unverifiable.clone().unwrap().into());
-        }
-        Err(e) => {
-            all_ok = false;
+
+    // ---------------------------------------------------------------------------------------
+    // The class artifact's own statement, when one was handed over.
+    // ---------------------------------------------------------------------------------------
+    if let Some(ArtifactFile::Class(a)) = &artifact_file {
+        verdict.insert("artifact_file_role".into(), "dense PALW class artifact (the weights), digest recomputed on decode".into());
+        verdict.insert("class_artifact_digest".into(), hex(a.artifact_digest()).into());
+        if a.tokenizer_commitment == Hash64::default() {
+            // Legal, and the state the shipped dense artifact is in: a class that declares no
+            // tokenizer confirms nothing about one, and collapsing that into a pass or a failure
+            // is what `TokenizerBindingV1::Undeclared` exists to stop anyone doing.
             verdict.insert(
-                "derivation_rerun".into(),
-                format!("could not re-run: {e} — the object names a computation the answer does not admit").into(),
+                "class_artifact_tokenizer".into(),
+                "the artifact declares none (Hash64::default()), so it confirms nothing here; the claim's own \
+                 PalwJobContextV2.tokenizer_id is what pins the rendering"
+                    .into(),
             );
+        } else {
+            verdict.insert("class_artifact_tokenizer".into(), hex(a.tokenizer_commitment).into());
+            if let Some(bytes) = &tokenizer_bytes {
+                // The pair, opened together: refuse by name, because every id the wrong file
+                // produces is an id the class does not mean.
+                if let Some(refusal) = a.check_tokenizer_bytes_v1(bytes).refusal() {
+                    die(refusal);
+                }
+                verdict.insert("class_artifact_tokenizer_matches_the_file".into(), true.into());
+            }
+            if let Some(ctx) = &job_context {
+                if ctx.tokenizer_id != a.tokenizer_commitment {
+                    die(format!(
+                        "the class artifact and the claim name different tokenizers: the artifact commits to {}, the job \
+                         context pins {}. One of the two does not belong to this claim, and rendering under either would \
+                         be a guess",
+                        a.tokenizer_commitment, ctx.tokenizer_id
+                    ));
+                }
+                verdict.insert("class_artifact_tokenizer_matches_the_claim".into(), true.into());
+            }
         }
     }
-    if let Some(path) = artifact {
-        let bytes = std::fs::read(&path).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
-        let ok = verify_artifact_bytes(&object, &bytes);
+
+    // ---------------------------------------------------------------------------------------
+    // The binding: is the object's DSL the rendering of THIS claim's ids?
+    // ---------------------------------------------------------------------------------------
+    let missing: Vec<&str> = [
+        (ids.is_none(), "--output-token-ids"),
+        (job_context.is_none(), "--job-context"),
+        (tokenizer.is_none(), "--tokenizer"),
+        (family.is_none(), "--family"),
+    ]
+    .into_iter()
+    .filter_map(|(absent, name)| absent.then_some(name))
+    .collect();
+    let binding_checked = missing.is_empty();
+    verdict.insert("binding_checked".into(), binding_checked.into());
+
+    if let (Some(ids), Some(ctx), Some(tok), Some(family)) = (&ids, &job_context, &tokenizer, family) {
+        let opened = opened_tokenizer_id_v1(tokenizer_bytes.as_ref().expect("a tokenizer was parsed from bytes"));
+        // **Refused here, and not left to `verify_bound`'s Err.** A tokenizer file that is not the
+        // one the claim pins is the CALLER holding the wrong file — the same shape as a `--object`
+        // that is not there — and reporting it down the `MISMATCH` road would file it under "a
+        // demonstrable false object", which accuses the executor of the reader's own mistake.
+        if let Err(e) = misaka_palw_derive::check_tokenizer_pin_v1(ctx, opened) {
+            die(e.to_string());
+        }
+        match verify_bound(&object, family, ctx, tok, opened, ids, supplied_answer.as_deref()) {
+            Ok(b) => {
+                all_ok &= b.all_match();
+                insert_verification(&mut verdict, &b.verification);
+                verdict.insert("tokenizer_id".into(), hex(b.tokenizer_id).into());
+                verdict.insert("rendered_answer_bytes".into(), b.rendered_answer_bytes.into());
+                verdict.insert("output_root_matches".into(), b.output_root_matches.into());
+                verdict.insert("recomputed_output_root".into(), hex(b.recomputed_output_root).into());
+                verdict.insert("job_context_hash".into(), hex(ctx.context_hash()).into());
+                if let Some(same) = b.supplied_answer_is_the_rendering {
+                    verdict.insert("supplied_answer_is_the_rendering".into(), same.into());
+                }
+                verdict.insert(
+                    "binding".into(),
+                    format!(
+                        "dsl_hash, artifact_hash and artifact_bytes were recomputed over the bytes this claim's {} ids \
+                         RENDER to under the tokenizer it pins ({}…), and output_root over those same ids — not over an \
+                         answer supplied beside them. So `consistent` here is a statement about ONE inference.",
+                        ids.len(),
+                        &hex(b.tokenizer_id)[..16]
+                    )
+                    .into(),
+                );
+                if !b.all_match() {
+                    verdict.insert(
+                        "mismatches".into(),
+                        serde_json::Value::Array(b.mismatches().into_iter().map(serde_json::Value::from).collect()),
+                    );
+                }
+            }
+            Err(e @ (misaka_palw_derive::DeriveError::UnknownGrammar(_) | misaka_palw_derive::DeriveError::UnknownTransformer(_))) => {
+                all_ok = false;
+                unverifiable = Some(unverifiable_note(&e));
+                verdict.insert("derivation_rerun".into(), unverifiable.clone().expect("just set").into());
+            }
+            Err(e) => {
+                all_ok = false;
+                verdict.insert(
+                    "derivation_rerun".into(),
+                    format!("could not re-run: {e} — the object names a computation the rendering of those ids does not admit").into(),
+                );
+            }
+        }
+    } else {
+        // The UNBOUND path — every check below is true of the bytes the caller supplied and says
+        // nothing about which inference they came from. That is why the verdict word changes.
+        verdict.insert(
+            "binding_not_checked_because".into(),
+            format!(
+                "missing {}. Without all four, nothing here computes the answer FROM the claim's ids: `dsl_hash` and \
+                 `artifact_hash` are recomputed from bytes you supplied and `output_root` from ids you supplied, and the \
+                 two never meet (`rendered_output_hash_v1` hashes the IDS, not the rendered text). An executor can attach \
+                 any artifact of any kind to any of its own claims and pass every check on this path.",
+                missing.join(", ")
+            )
+            .into(),
+        );
+        let answer_bytes = supplied_answer.clone().unwrap_or_else(|| {
+            die("--answer <file> is required unless the binding inputs (--output-token-ids, --job-context, --tokenizer, \
+                 --family) are all present, in which case the answer is RENDERED from the claim's own ids"
+                .into())
+        });
+        match verify(&object, &answer_bytes) {
+            Ok(v) => {
+                all_ok &= v.all_match();
+                insert_verification(&mut verdict, &v);
+                if !v.all_match() {
+                    verdict.insert(
+                        "mismatches".into(),
+                        serde_json::Value::Array(v.mismatches().into_iter().map(serde_json::Value::from).collect()),
+                    );
+                }
+            }
+            Err(e @ (misaka_palw_derive::DeriveError::UnknownGrammar(_) | misaka_palw_derive::DeriveError::UnknownTransformer(_))) => {
+                all_ok = false;
+                unverifiable = Some(unverifiable_note(&e));
+                verdict.insert("derivation_rerun".into(), unverifiable.clone().expect("just set").into());
+            }
+            Err(e) => {
+                all_ok = false;
+                verdict.insert(
+                    "derivation_rerun".into(),
+                    format!("could not re-run: {e} — the object names a computation the answer does not admit").into(),
+                );
+            }
+        }
+        match (&ids, context_hash, family) {
+            (Some(ids), Some(ctx), Some(family)) => {
+                let recomputed = recompute_output_root(family, &ctx, ids);
+                let ok = recomputed == object.output_root;
+                all_ok &= ok;
+                verdict.insert("output_root_matches".into(), ok.into());
+                verdict.insert("recomputed_output_root".into(), hex(recomputed).into());
+            }
+            _ => {
+                verdict.insert(
+                    "output_root".into(),
+                    "not checked: pass --output-token-ids, --job-context (or --job-context-hash) and --family to recompute \
+                     the claim's output_root (ADR-0078 X6)"
+                        .into(),
+                );
+            }
+        }
+    }
+
+    // The derived artifact's own bytes, when that is what `--artifact` was.
+    if let Some(ArtifactFile::Derived(bytes)) = &artifact_file {
+        verdict.insert("artifact_file_role".into(), "the derivation's own artifact bytes".into());
+        let ok = verify_artifact_bytes(&object, bytes);
         all_ok &= ok;
         verdict.insert("artifact_file_matches".into(), ok.into());
     }
-    if let (Some(ids_path), Some(ctx), Some(family)) = (ids_path, job_context_hash, family) {
-        let text = std::fs::read_to_string(&ids_path).unwrap_or_else(|e| die(format!("{}: {e}", ids_path.display())));
-        let ids: Vec<u32> =
-            serde_json::from_str(&text).unwrap_or_else(|e| die(format!("{} is not a JSON array of ids: {e}", ids_path.display())));
-        let rendered = rendered_output_hash(&family, &ids);
-        let recomputed = kaspa_consensus_core::palw_v2::output_commitment_v2(&ctx, &ids, &rendered);
-        let ok = recomputed == object.output_root;
-        all_ok &= ok;
-        verdict.insert("output_root_matches".into(), ok.into());
-        verdict.insert("recomputed_output_root".into(), hex(recomputed).into());
-    } else {
-        verdict.insert(
-            "output_root".into(),
-            "not checked: pass --output-token-ids, --job-context-hash and --family to recompute the claim's output_root (ADR-0078 X6)"
-                .into(),
-        );
-    }
+
+    // **The word answers the question it is read as answering.** `consistent` is read as "this
+    // artifact came from that inference"; on the unbound path nothing checked that, so the word
+    // says what it actually covered. Same repair as `signed:` → `signature_verified:` above, and
+    // as UNVERIFIABLE vs MISMATCH below: a verdict that overstates its own scope is worse than no
+    // verdict, because a reader stops looking.
+    let word = match (all_ok, &unverifiable, binding_checked) {
+        (true, _, true) => "consistent".to_string(),
+        (true, _, false) => "consistent-given-the-supplied-answer — binding_checked: false; NOT a statement that this \
+                             artifact came from that inference (see binding_not_checked_because)"
+            .to_string(),
+        // Exit 2 either way — a reader who cannot check an object must not treat it as
+        // checked — but the WORD is the difference between "this executor lied" and "I am
+        // the wrong build to ask".
+        (false, Some(_), _) => "UNVERIFIABLE — this build does not publish that manifest (ADR-0078 SA-5)".to_string(),
+        (false, None, _) => "MISMATCH — a demonstrable false object (ADR-0078 Decision 5)".to_string(),
+    };
+    verdict.insert("verdict".into(), word.clone().into());
     verdict.insert(
-        "verdict".into(),
-        match (all_ok, &unverifiable) {
-            (true, _) => "consistent",
-            // Exit 2 either way — a reader who cannot check an object must not treat it as
-            // checked — but the WORD is the difference between "this executor lied" and "I am
-            // the wrong build to ask".
-            (false, Some(_)) => "UNVERIFIABLE — this build does not publish that manifest (ADR-0078 SA-5)",
-            (false, None) => "MISMATCH — a demonstrable false object (ADR-0078 Decision 5)",
-        }
-        .into(),
+        "exit_status".into(),
+        "0 when the verdict word begins `consistent` — INCLUDING `consistent-given-the-supplied-answer`, which is not a \
+         binding; 2 for MISMATCH and for UNVERIFIABLE alike; 1 for a refusal (a file that is not there, a tokenizer that \
+         is not the one the claim pins). A caller that branches on the exit code alone cannot tell a checked binding from \
+         an unchecked one: branch on `binding_checked`."
+            .into(),
     );
     println!("{}", serde_json::Value::Object(verdict));
+    eprintln!("[palw-derive] verify: {word} | binding_checked: {binding_checked} | exit {}", if all_ok { 0 } else { 2 });
     if !all_ok {
         std::process::exit(2);
     }
 }
-
 fn cmd_inspect(mut args: VecDeque<String>) {
     let mut object_path = None;
     while let Some(arg) = args.pop_front() {

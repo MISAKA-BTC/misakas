@@ -1172,7 +1172,8 @@ mod tests {
             .map(|cost| cost.max_close_bytes)
             .max()
             .expect("at least one shipped row prices");
-        let devnet_derived = crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(widest));
+        let devnet_derived =
+            crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(widest));
         println!(
             "devnet (the shipped rows): widest close {widest} bytes = {} chunk(s) -> derived ceiling {devnet_derived} bytes; \
              shipped {} bytes = {} chunk(s)",
@@ -1193,13 +1194,9 @@ mod tests {
             prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
             window_court_daa: PALW_RC_WINDOWS_V1.window_court,
         };
-        let v5 = palw_derived_court_max_close_bytes_v1(
-            &PALW_LADDER_FAMILIES_V5,
-            &[512],
-            Some(court),
-            PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
-        )
-        .expect("the graph-v5 set prices");
+        let v5 =
+            palw_derived_court_max_close_bytes_v1(&PALW_LADDER_FAMILIES_V5, &[512], Some(court), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
+                .expect("the graph-v5 set prices");
         println!(
             "graph-v5 @ 512 under the dissection court: derived {v5} bytes = {} chunks",
             crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(v5)

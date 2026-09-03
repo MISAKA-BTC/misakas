@@ -1936,11 +1936,13 @@ impl Params {
                     crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.court.max_step_leaf_count(),
                     _ => crate::palw_step::PALW_STEP_MAX_LEAVES,
                 };
-                crate::palw_schedule::class_is_adjudicable_capped_v1(&credit.registration.shape_profile, schedule, ladder).map_err(|_| {
-                    crate::palw_registry::PalwRegistryError::NotCanonical(
-                        "the registered class's step space outruns the ladder these windows can walk",
-                    )
-                })?;
+                crate::palw_schedule::class_is_adjudicable_capped_v1(&credit.registration.shape_profile, schedule, ladder).map_err(
+                    |_| {
+                        crate::palw_registry::PalwRegistryError::NotCanonical(
+                            "the registered class's step space outruns the ladder these windows can walk",
+                        )
+                    },
+                )?;
             }
         }
         if let Some(ramp) = self.palw_ramp.as_ref() {
@@ -5340,7 +5342,11 @@ pub fn palw_v2_params_with_classes_on_base(
         _ => false,
     };
     if registers_a_fused_row && params.palw_kary_court.is_none() {
-        params.palw_kary_court = Some(ForkActivation::always());
+        return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+            "the genesis set registers a fused-attention row and the preset leaves palw_kary_court dormant: the \
+             court that can try that row must be STATED on the preset (ForkActivation::always()) — a fence armed \
+             by derivation alone would be an arming nobody decided",
+        ));
     }
 
     // Both gates again, from scratch, over the network actually being shipped.
@@ -8104,6 +8110,25 @@ pub fn palw_rc_base_params() -> Params {
     params.pow_blake2b_sha3_activation = ForkActivation::never();
     params.pow_palw_activation = ForkActivation::never();
     params.pow_palw_ollama_activation = ForkActivation::never();
+    // **The two genesis fences the 5f cut arms, STATED on the preset** so the card's table is the
+    // operator's map of what this network arms — a fence armed only by a derivation somewhere
+    // else would make that table false, and would be an arming nobody decided (it would fire the
+    // day an unrelated constant was filled in). `always()` is the only legal value for each (a
+    // chain that acquired either rule mid-life would be two rulesets wearing one id).
+    //
+    // * `palw_uncertified_weightless` — ADR-0069 Decision 7: READ on the production path (the
+    //   virtual processor resolves it per point and hands it to the fold; the sync walker carries
+    //   the same fence), and genesis is its only opportunity (`validate_palw_v2` refuses it above
+    //   genesis). Dormant, an uncertified class's pwu enters safe weight.
+    // * `palw_kary_court` — ADR-0082 Decision 3: the class assembly below DERIVES that a genesis
+    //   set registering a fused row needs the dissection court and refuses a preset that
+    //   disagrees — belt and braces: the preset says it, the derivation enforces it.
+    //
+    // NOT `palw_context_ladder`: no accessor reads that fence to gate anything — the 512 row is
+    // registered and priced from the bundle's own `max_step_leaf_count` with it dormant — so arming
+    // it would move the fingerprint and gate nothing (ADR-0065 D1's mistake).
+    params.palw_uncertified_weightless = Some(ForkActivation::always());
+    params.palw_kary_court = Some(ForkActivation::always());
     // **The EVM lane is ON from DAA 0, inherited from `TESTNET_PARAMS` and kept deliberately.**
     //
     // It was briefly turned off here on the reasoning that `MAINNET_PARAMS` never activates the
@@ -9449,10 +9474,11 @@ mod consensus_params_id_tests {
             "devnet arms ADR-0069 Decision 7 at genesis, and `always()` is the only height it may take"
         );
         devnet_shipped_params().validate_palw_v2().expect("the armed devnet assembles");
-        assert!(
-            palw_rc_shipped_params().palw_uncertified_weightless.is_none(),
-            "the assembled RC ruleset leaves it dormant too — arming it is a deployment decision and it moves the \
-             params id, which is what the running network compares"
+        assert_eq!(
+            palw_rc_shipped_params().palw_uncertified_weightless,
+            Some(ForkActivation::always()),
+            "the assembled RC ruleset (testnet-11 Relaunch 5f) ARMS it at genesis too — stated on the preset \
+             (`palw_rc_base_params`), where the card's table can be checked against it"
         );
 
         let mut scheduled = MAINNET_PARAMS;
@@ -9911,8 +9937,11 @@ mod consensus_params_id_tests {
             "the RC genesis registers a fused-attention row, so its dissection court is armed from block one"
         );
         // The dormancy/visibility property itself, on a ruleset that has NOT armed it — the
-        // class-free RC base, which is what the fence's own doc is about.
-        let bare = palw_rc_base_params();
+        // class-free RC base with the fence taken back off (the preset STATES it since the 5f
+        // cut; the property under test is what arming does to the identity, not whether the RC
+        // arms), which is what the fence's own doc is about.
+        let mut bare = palw_rc_base_params();
+        bare.palw_kary_court = None;
         assert!(!bare.palw_kary_court_active_at(u64::MAX), "a ruleset with no fused row leaves the fence dormant");
         let mut armed = shipped.clone();
         armed.palw_kary_court = Some(ForkActivation::new(9_000_000));
@@ -10108,7 +10137,10 @@ mod consensus_params_id_tests {
         shipped.validate_palw_v2().expect("the shipped devnet assembles");
 
         for (name, arm) in [
-            ("palw_fp_decode_rules", (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_rules = Some(a)) as fn(&mut Params, ForkActivation)),
+            (
+                "palw_fp_decode_rules",
+                (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_rules = Some(a)) as fn(&mut Params, ForkActivation),
+            ),
             ("palw_prompt_ids_merkle", |p: &mut Params, a: ForkActivation| p.palw_prompt_ids_merkle = Some(a)),
         ] {
             for activation in [ForkActivation::always(), ForkActivation::new(9_000_000)] {

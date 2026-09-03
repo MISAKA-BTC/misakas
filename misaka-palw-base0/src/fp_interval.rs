@@ -856,12 +856,11 @@ pub fn base0_open_fp_interval_capped_v1(
     let leaves_geometry = base0_fp_interval_leaves_v1(profile, ctx, &geometry, index, step_leaf_count)?;
 
     let leaves = leaves_from_tiles_v1(binding, tiles, max_step_leaf_count)?;
-    let tree =
-        crate::fp_capture::Base0SparseStepTreeV1::from_leaves_capped_v1(
-            &leaves,
-            crate::fp_capture::PALW_BASE0_SPARSE_RETAIN_LEVEL_V1,
-            max_step_leaf_count,
-        )?;
+    let tree = crate::fp_capture::Base0SparseStepTreeV1::from_leaves_capped_v1(
+        &leaves,
+        crate::fp_capture::PALW_BASE0_SPARSE_RETAIN_LEVEL_V1,
+        max_step_leaf_count,
+    )?;
     // The capture must be the one the binding committed, checked before anything is served: an
     // opening assembled from a leaf vector that does not reproduce `step_merkle_root` is an
     // opening no seat can verify, and the executor would rather learn that here.
@@ -1063,9 +1062,7 @@ fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
             //
             // Indexed by the anchor's CALL, never by the leaf's counter: `generated` is one id per
             // call and a per-position leaf's counter is a position.
-            let seed_call = geometry
-                .anchor_seed_call_v1(interval)
-                .ok_or(Base0FpIntervalError::NoCheckpointAt { covered })?;
+            let seed_call = geometry.anchor_seed_call_v1(interval).ok_or(Base0FpIntervalError::NoCheckpointAt { covered })?;
             let seed_token = *generated
                 .get(seed_call as usize)
                 .ok_or_else(|| Base0FpIntervalError::Replay(format!("the retention has no id for call {seed_call}")))?;
@@ -1392,11 +1389,8 @@ where
             // converted to a position count by the one function that answers that
             // (`palw_checkpoint_positions_at_v1`) and back to the call the position implies. On
             // every shipped class the two conversions cancel and this is `covered + 1` verbatim.
-            let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(
-                profile,
-                ctx,
-                *covered_decode_call,
-            );
+            let positions =
+                kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, ctx, *covered_decode_call);
             let anchored_call = (positions as usize).saturating_sub(prefill);
             if first_call as usize != anchored_call + 1 {
                 return Err("the checkpoint does not cover the call before this interval".to_string());
@@ -2316,7 +2310,8 @@ mod tests {
             .find(|c| c.call_index == call && reads_kv(c.node_slot))
             .expect("the class has a step that reads its own KV history");
 
-        let anchor = base0_checkpoint_operands_v1(&run.binding, &run.checkpoints.chunks, &run.checkpoints.leaves, call - 1).expect("the committed checkpoint");
+        let anchor = base0_checkpoint_operands_v1(&run.binding, &run.checkpoints.chunks, &run.checkpoints.leaves, call - 1)
+            .expect("the committed checkpoint");
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::Base0V1(
             kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1 {
@@ -2755,13 +2750,8 @@ mod tests {
     /// C-2's acceptance test are all questions about the same run.
     #[cfg(test)]
     #[allow(clippy::type_complexity)]
-    pub(super) fn dense_v5_run() -> (
-        crate::artifact::Base0ArtifactV1,
-        PalwShapeProfileV3,
-        PalwJobContextV2,
-        Vec<usize>,
-        crate::produce::Base0ExecutionV1,
-    ) {
+    pub(super) fn dense_v5_run()
+    -> (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1) {
         use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v5};
         let geometry = PalwQwen25GeometryV1 {
             layer_count: 2,
@@ -2956,13 +2946,9 @@ mod tests {
         use kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1;
         for interval in [1u32, 2, 3] {
             for (prefill, decode) in [(4u32, 9u32), (7, 5), (1, 12)] {
-                let per_call = Base0FpIntervalGeometryV1::from_chain_facts_v1(
-                    prefill,
-                    decode,
-                    interval,
-                    PalwCheckpointCadenceV1::PerDecodeCall,
-                )
-                .expect("a geometry");
+                let per_call =
+                    Base0FpIntervalGeometryV1::from_chain_facts_v1(prefill, decode, interval, PalwCheckpointCadenceV1::PerDecodeCall)
+                        .expect("a geometry");
                 let per_position =
                     Base0FpIntervalGeometryV1::from_chain_facts_v1(prefill, decode, interval, PalwCheckpointCadenceV1::PerPosition)
                         .expect("a geometry");
@@ -3025,9 +3011,7 @@ mod tests {
 
         let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
         let mut checked = 0u32;
-        for (call_index, position) in
-            (0..prefill as u32).map(|p| (0u32, p)).chain((1..=decode_calls).map(|c| (c, 0u32)))
-        {
+        for (call_index, position) in (0..prefill as u32).map(|p| (0u32, p)).chain((1..=decode_calls).map(|c| (c, 0u32))) {
             let want = palw_checkpoint_covered_for_step_v1(&profile, &ctx, call_index, position).expect("a per-position anchor");
             let anchor = crate::legs::base0_kv_anchor_for_step_v1(&run.checkpoints, &profile, &ctx, call_index, position, |entry| {
                 cache.state_chunk_bytes_v1(entry)
@@ -3046,7 +3030,6 @@ mod tests {
         }
         assert_eq!(checked, run.checkpoints.leaves.len() as u32, "every committed leaf was reached from some step");
     }
-
 }
 
 // =================================================================================================
@@ -3073,12 +3056,9 @@ mod the_rulesets_ladder {
             prefill,
             decode,
         );
-        let step_leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(
-            &row.profile,
-            &job_context,
-            COURT_MAX_STEP_LEAVES,
-        )
-        .expect("the canonical job of an admitted class fits the ruleset it was admitted under");
+        let step_leaf_count =
+            kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&row.profile, &job_context, COURT_MAX_STEP_LEAVES)
+                .expect("the canonical job of an admitted class fits the ruleset it was admitted under");
         let binding = PalwStepBindingV2 {
             version: 2,
             job_context,
@@ -3132,11 +3112,7 @@ mod the_rulesets_ladder {
             "a seat handed the ruleset's ladder must build a geometry for the row the genesis registers"
         );
         assert_eq!(
-            Base0FpIntervalGeometryV1::from_binding_capped_v1(
-                &binding,
-                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
-                PALW_STEP_MAX_LEAVES
-            ),
+            Base0FpIntervalGeometryV1::from_binding_capped_v1(&binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1, PALW_STEP_MAX_LEAVES),
             Err(Base0FpIntervalError::LeafCountOutOfRange { got: leaves, max: PALW_STEP_MAX_LEAVES }),
         );
         // The un-capped name is the executor's default and must still BE the executor's default —

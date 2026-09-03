@@ -2742,8 +2742,16 @@ mod tests {
         // own window buys, which is what `palw_court_turn_deadline_v1` returns for it.
         let ladder_clock = crate::palw_context_ladder::palw_court_turn_deadline_v1(WINDOW, LADDER, 2, CHUNKS).expect("a clock");
         assert_eq!(ladder_clock, 42);
-        assert_eq!(palw_court_arity_v1(WINDOW, ladder_clock, LADDER, 0, TILE, 2, 128, CHUNKS), Some(2), "66 moves at 42 DAA is 2,772, and 2,772 + 216 is inside 3,000");
-        assert_eq!(palw_court_arity_v1(WINDOW, 45, LADDER, 0, TILE, 2, 128, CHUNKS), None, "66 moves at 45 DAA is 2,970, and the 216-DAA reserve puts it past the window");
+        assert_eq!(
+            palw_court_arity_v1(WINDOW, ladder_clock, LADDER, 0, TILE, 2, 128, CHUNKS),
+            Some(2),
+            "66 moves at 42 DAA is 2,772, and 2,772 + 216 is inside 3,000"
+        );
+        assert_eq!(
+            palw_court_arity_v1(WINDOW, 45, LADDER, 0, TILE, 2, 128, CHUNKS),
+            None,
+            "66 moves at 45 DAA is 2,970, and the 216-DAA reserve puts it past the window"
+        );
     }
 
     /// **The RC's own numbers, derived rather than quoted — and what they now select.**
@@ -2778,7 +2786,8 @@ mod tests {
         assert_eq!(rc_ladder, 1 << 26);
 
         // The RC's own row: 512 positions, 32 tiles of 16.
-        let arity = palw_court_arity_v1(window, deadline, rc_ladder, 512, TILE, 2, 128, CHUNKS).expect("the RC's own row admits an arity");
+        let arity =
+            palw_court_arity_v1(window, deadline, rc_ladder, 512, TILE, 2, 128, CHUNKS).expect("the RC's own row admits an arity");
         assert_eq!(arity, 2, "26 binary ladder rounds and 5 history rounds is the cheapest exchange that fits");
         let court = PalwCourtParamsV2::new(rc_ladder, deadline, 2).expect("a court").with_dissection_arity(arity).expect("legal");
         assert_eq!(court.worst_case_duration_with_history_daa(512, TILE), Some((2 * (26 + 5) + 2 + 1) * deadline));

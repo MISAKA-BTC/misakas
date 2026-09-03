@@ -917,18 +917,26 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Qwen36IntervalKernels<'_> 
         let mut cache = Qwen36Cache::new(&self.artifact.shape);
         let vocab = self.artifact.shape.vocab;
         let max_position = self.artifact.shape.max_position;
-        crate::fp_interval::base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, step_leaf_count, |token, position| {
-            if token >= vocab {
-                return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
-            }
-            if position >= max_position {
-                return Err(format!("the job runs past the rotary table at position {position}"));
-            }
-            let (logits, trace) = engine
-                .forward_token_planned(self.plan, &mut cache, token, position)
-                .map_err(|e| format!("forward at {position}: {e}"))?;
-            Ok((logits, qwen36_captured_rows_v1(profile, &trace)))
-        })
+        crate::fp_interval::base0_fp_replay_interval_v1(
+            profile,
+            ctx,
+            start,
+            first_call,
+            last_call,
+            step_leaf_count,
+            |token, position| {
+                if token >= vocab {
+                    return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
+                }
+                if position >= max_position {
+                    return Err(format!("the job runs past the rotary table at position {position}"));
+                }
+                let (logits, trace) = engine
+                    .forward_token_planned(self.plan, &mut cache, token, position)
+                    .map_err(|e| format!("forward at {position}: {e}"))?;
+                Ok((logits, qwen36_captured_rows_v1(profile, &trace)))
+            },
+        )
     }
 }
 
@@ -1275,28 +1283,29 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             .ok_or_else(|| "this backend serves no registered graph, so it opens no interval".to_string())?;
         // Two retention forms, one opening, the class's map deciding whether the history travels —
         // ADR-0082 Decisions 7 and 9, exactly as the dense tier composes them.
-        let chunked = match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
-            crate::produce::Base0RetentionV1::Folded(material) => {
-                let plan = self.plan.as_ref().ok_or_else(|| "this backend serves no registered graph".to_string())?;
-                crate::fp_interval::base0_open_fp_interval_sparse_capped_v1(
+        let chunked =
+            match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
+                crate::produce::Base0RetentionV1::Folded(material) => {
+                    let plan = self.plan.as_ref().ok_or_else(|| "this backend serves no registered graph".to_string())?;
+                    crate::fp_interval::base0_open_fp_interval_sparse_capped_v1(
+                        &material,
+                        index,
+                        prompt_token_ids,
+                        interval,
+                        self.step_ladder_cap,
+                        &Qwen36IntervalKernels { artifact: &self.artifact, plan },
+                    )
+                    .map_err(|e| e.to_string())?
+                }
+                crate::produce::Base0RetentionV1::Dense(material) => crate::fp_interval::base0_open_fp_interval_capped_v1(
                     &material,
                     index,
                     prompt_token_ids,
                     interval,
                     self.step_ladder_cap,
-                    &Qwen36IntervalKernels { artifact: &self.artifact, plan },
                 )
-                .map_err(|e| e.to_string())?
-            }
-            crate::produce::Base0RetentionV1::Dense(material) => crate::fp_interval::base0_open_fp_interval_capped_v1(
-                &material,
-                index,
-                prompt_token_ids,
-                interval,
-                self.step_ladder_cap,
-            )
-            .map_err(|e| e.to_string())?,
-        };
+                .map_err(|e| e.to_string())?,
+            };
         if self.profile.as_ref().is_some_and(crate::fp_interval::base0_fp_class_requires_flat_openings_v1) {
             return crate::fp_interval::base0_strip_fp_interval_history_v1(&chunked).map_err(|e| e.to_string());
         }
@@ -1372,16 +1381,9 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         };
         let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
         let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan);
-        crate::fp_recompute::base0_fp_seat_state_memoized_v1(
-            profile,
-            &ctx,
-            prompt_token_ids,
-            output_token_ids,
-            covered,
-            &mut kernels,
-        )
-        .map(|state| state.state_chunks_root)
-        .map_err(|e| e.to_string())
+        crate::fp_recompute::base0_fp_seat_state_memoized_v1(profile, &ctx, prompt_token_ids, output_token_ids, covered, &mut kernels)
+            .map(|state| state.state_chunks_root)
+            .map_err(|e| e.to_string())
     }
 
     /// **The largest `covered` this class's leg carries, in the class's own cadence unit**
@@ -1948,8 +1950,8 @@ mod tests {
     #[test]
     fn a_graph_v5_hybrid_executes_and_its_checkpoints_are_its_seats() {
         use kaspa_consensus_core::palw_context_ladder::{
-            PalwCheckpointCadenceV1, palw_anchored_interval_for_profile_v1, palw_checkpoint_cadence_v1,
-            palw_checkpoint_count_v1, palw_checkpoint_leaf_carries_recurrence_v1,
+            PalwCheckpointCadenceV1, palw_anchored_interval_for_profile_v1, palw_checkpoint_cadence_v1, palw_checkpoint_count_v1,
+            palw_checkpoint_leaf_carries_recurrence_v1,
         };
         use kaspa_consensus_core::palw_state_chunk_map as map;
 
@@ -1959,8 +1961,7 @@ mod tests {
 
         let engine = Qwen36Engine::new(&artifact);
         let plan = engine.plan_from_profile(&profile).expect("the fixture's declaration is its program");
-        let (ctx, prompt) =
-            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x0000_82C3), artifact.shape.vocab, 3, 4);
+        let (ctx, prompt) = crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x0000_82C3), artifact.shape.vocab, 3, 4);
         let positions_total = ctx.declared_prefill_tokens + ctx.exact_decode_tokens.saturating_sub(1);
         assert!(
             positions_total < palw_anchored_interval_for_profile_v1(&profile),
