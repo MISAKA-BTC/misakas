@@ -153,6 +153,13 @@ thing done before the cut and it is done ONCE.
 4. Nothing under `misaka-palw-derive/src/` may be touched after step 3, for any reason, including a
    typo in a comment.
 
+**Two re-pins, two owners, no overlap.** The state version goes 18 → 19 on `palw-adr0082-impl` (the
+court session gains its dissection phase) and the ADR-0043 goldens move with it — those are re-pinned
+there, by the session that moves them. `transformer_id_pin` and
+`shipped_presets_have_pinned_fingerprints` are re-pinned here, once, in step 3. Stated because a
+fingerprint is not the sum of two diffs: two sessions re-pinning the same value against different
+bases produce a third value, and this project has done exactly that before.
+
 Anything quoting the old scene goldens is stale: `02-hierarchy` is **2736** (was 2716) and
 `05-tetrahedral-rotations` is **17748** (was 17728).
 
@@ -197,6 +204,12 @@ green except the known pin" said this week was a statement about jobs that never
 | third party | `scripts/misaka-palw-artifact-thirdparty.py --require` | mido / pygltflib / numpy-stl; compares MEANING (enclosed volume, playback duration) against the DSL |
 | model gate, dense | `palw-model-gate` | A16 lane only — declared in advance |
 | model gate, QWEN36 | `palw-qwen36-model-gate` | needs the ChatML fix (§7) to pass through the production assembly |
+| **prosecutability** | ADR-0082 stream I's end-to-end court drill | **This is the gate, and admission is not.** A graph-v5 leaf disputed to the bottom under the ARMED fence set, through `apply_object`: honest acquitted, forged convicted. F's admission arm refusing an unfenced `AttnFused` profile by name is a guard on the way in — useful, and not the property. The property is that a dispute can be carried to a verdict, and only the drill asserts it. |
+
+**Why this row exists at all.** Every wrong turn on this card came from measuring admissibility and
+reading it as usability: the 512 row, the hybrid's margin, the court the close was priced under.
+Admissibility is what the tree kept measuring because it is what the tree made easy to measure. The
+gate above is the one that would have caught all three.
 
 ---
 
