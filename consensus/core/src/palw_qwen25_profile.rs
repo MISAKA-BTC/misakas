@@ -396,7 +396,13 @@ pub fn qwen25_a16_profile_v5(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
     qwen25_a16_profile_inner(
         geometry,
         crate::palw_base0_profile::QWEN25_A16_PRE_IR_V2,
-        crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2(),
+        // **ADR-0082 Decision 4: a graph-v5 class registers the TILED map.** The bottom of the
+        // dissection opens one history tile of K rows and one of V rows, so the anchor has to be
+        // addressable at that granularity — under `integer_kv_state_chunk_map_id_v2` the smallest
+        // thing the map can name is the whole history, and the class would be charged 526,336
+        // bytes for an opening its evidence carries in 18,432. This is the one line that makes the
+        // tile buy the dense tier its width; the v2 row above keeps its own map and its own id.
+        crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3(),
         QWEN25_A16_HEAD_TENSOR_V2,
         true,
     )

@@ -607,12 +607,19 @@ mod tests {
 
     /// **The id term's growth is logarithmic — the four numbers, printed.**
     ///
-    /// ADR-0081 Decision 3's whole claim. The flat term is `n_ctx × 4` and passes the 80 KiB
-    /// carrier between 4,096 and 32,768; the opening's is `4·min(n,32) + 64·⌈log₂⌈n/32⌉⌉ + 88` and
+    /// ADR-0081 Decision 3's whole claim. The flat term is `n_ctx × 4` and passes the CARRIER
+    /// between 4,096 and 32,768; the opening's is `4·min(n,32) + 64·⌈log₂⌈n/32⌉⌉ + 88` and
     /// every DOUBLING of the context adds exactly one 64-byte path element.
+    ///
+    /// **The carrier, derived, and not `DEFAULT_MAX_CLOSE_BYTES`.** This test was written when a
+    /// close weighed in one transaction and the constant WAS the carrier (81,920). ADR-0080 design
+    /// A made it a group of 27 of them — 2,250,000 — and the sentence "the flat term alone passes
+    /// the carrier" stopped being true of the constant while staying true of the thing it names.
+    /// `palw_close_bytes_for_chunks_v1(1)` is the carrier, at 83,333 counted bytes, and every
+    /// number below is unchanged.
     #[test]
     fn the_prompt_id_close_term_grows_logarithmically() {
-        let carrier = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+        let carrier = crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(1);
         let mut measured = Vec::new();
         for n_ctx in [30u64, 512, 4_096, 32_768] {
             let flat = prompt_ids_close_bytes_v1(PalwPromptIdsFormV1::Flat, n_ctx).unwrap();

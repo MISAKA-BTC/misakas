@@ -1282,7 +1282,7 @@ fn qwen36_profile_with(
              all-attention-ness, so a hybrid must gate and a full-attention-only member must not",
         ));
     }
-    let profile = PalwShapeProfileV3 {
+    let mut profile = PalwShapeProfileV3 {
         version: PALW_STEP_OBJECT_VERSION_V1,
         lane: PalwStepLaneV1::Int32,
         layer_count: g.layer_count,
@@ -1342,6 +1342,19 @@ fn qwen36_profile_with(
         kv_chunk_calls: 0,
         state_chunk_map_id: Hash64::default(),
     };
+    // **ADR-0082 Decision 4: a graph-v5 class registers the tiled map** — and a hybrid's map has to
+    // name BOTH halves, because a hybrid has both kinds of layer. `hybrid_state_chunk_map_id_v3`
+    // is that composition (`attn=` the tiled v3 cache, `gdn=` the head-sliced v2 recurrence,
+    // spelled as its two parts so it cannot drift from either), and the recurrence half prices at
+    // v2's window through `gdn_state_terms_for_map_v1`'s v3 arm.
+    //
+    // Set here rather than at the sentinel above so no SHIPPED row moves: `state_chunk_map_id` is
+    // inside `shape_profile_id`, `qwen36_profile_v2`/`v3` pass `fuse_attention: false` and keep the
+    // default their registered ids were minted over, and `palw_qwen36_context_row_profile_v1` still
+    // overwrites it with the v2 composition for the graph-v3 ladder rows.
+    if fuse_attention {
+        profile.state_chunk_map_id = crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3();
+    }
     profile.validate_shape()?;
     Ok(profile)
 }
