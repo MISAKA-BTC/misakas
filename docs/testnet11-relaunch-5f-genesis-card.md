@@ -547,15 +547,29 @@ every gate the card told the operator to run has passed.
 **So the freeze re-pins FIVE, not four**, and the fifth has no test until one is written:
 
     1  PALW_RC_GENESIS.utxo_commitment    every_genesis_commits_to_the_premine_this_build_mints
-    1b PALW_RC_GENESIS.hash               *** NOTHING CATCHES THIS ***
+    1b PALW_RC_GENESIS.hash               test_genesis_hashes  (CLOSED — see below)
     2  the two shipped fingerprints       shipped_presets_have_pinned_fingerprints
     3  the free-prompt golden             palw_freeprompt_v3::golden_vector_ids_are_frozen
     4  the eight transformer ids          transformer_id_pin
 
-**Must land before the cut:** add `PALW_RC_GENESIS` to `test_genesis_hashes`'s list, and make the
-ceremony printer emit the genesis hash beside the commitment it already prints. Both are one line.
-*The card said this re-pin was safe because a ceremony tool did it rather than a hand edit — and the
-ceremony tool does not print the value.*
+**CLOSED on impl at `68f0a1b6`, before the ceremony rather than after.** Both one-liners landed:
+`PALW_RC_GENESIS` is now the sixth entry in `test_genesis_hashes`'s array, and
+`print_premine_commitment` prints, beside the commitment, the `PALW_RC_GENESIS.hash` that commitment
+implies (and the `hash_merkle_root` it does not move).
+
+**The new guard is GREEN today, and that is the honest reading rather than a weakness.** The stored
+hash covers the stored commitment, so the struct is self-consistent right now; it goes red *the
+instant the commitment is re-pinned without the hash*, which is the only moment it needs to fire.
+A guard that were red today would be telling you about the old genesis.
+
+**Take the value from the cut's own commit, not from here.** The printer's output moves when any
+genesis object moves — FG's v5 registration will move it — so a hash printed before FG lands is a
+hash for a genesis nobody ships. Run `config::premine::tests::print_premine_commitment` on the
+frozen tree and paste what it prints, both lines.
+
+*The card said this re-pin was safe because a ceremony tool did it rather than a hand edit. The
+ceremony tool did not print the value. The tool prints it now — which is the repair the reassurance
+was always describing.*
 
 ### The re-pin list is SEVEN items and only FOUR have a red test — here is where the other three went
 
