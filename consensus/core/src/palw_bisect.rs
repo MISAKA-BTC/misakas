@@ -52,6 +52,34 @@ pub enum PalwBisectSpaceV1 {
     TraceEvents = 1,
 }
 
+/// **The rung deadline a session's own backstop admits** (ADR-0080 W4).
+///
+/// `min(accepted_daa + w_round, session_deadline_daa − assembly_reserve_daa)`.
+///
+/// ADR-0080 splits a court close across several blocks, so a mover spends part of its turn
+/// ASSEMBLING the close rather than answering. The reserve is those blocks
+/// (`palw_context_ladder::palw_close_assembly_daa_v1(court.max_close_chunks())` is the derived
+/// figure, and it is passed in rather than read here so this machine keeps taking numbers instead
+/// of deriving them — the same discipline that keeps `w_round` an argument). It is a per-RULESET
+/// number, which is the other reason it cannot be read here: two shipped networks answer 216 and 8.
+///
+/// A rung window that would run past the reserve is pulled back to it. That is a cap, not an
+/// error: the party whose turn it is loses window it was never going to be able to use, and the
+/// party after it keeps the blocks its own close costs.
+///
+/// Saturating in both directions. A reserve wider than the backstop yields 0 — a session with no
+/// assembly room, which the whole-session backstop ends on the challenger's side.
+pub const fn bisect_rung_deadline_within_session_v1(
+    accepted_daa: u64,
+    w_round: u64,
+    session_deadline_daa: u64,
+    assembly_reserve_daa: u64,
+) -> u64 {
+    let rung = accepted_daa.saturating_add(w_round);
+    let cap = session_deadline_daa.saturating_sub(assembly_reserve_daa);
+    if rung < cap { rung } else { cap }
+}
+
 /// The pinned midpoint: `lo + (hi − lo)/2`, integer floor. One function, one witness test —
 /// a responder and challenger that derive different midpoints are not in the same dispute.
 pub fn bisect_midpoint_v1(lo: u64, hi: u64) -> u64 {
@@ -356,6 +384,32 @@ impl PalwBisectLadderV1 {
         Ok(accepted_daa.saturating_add(w_round))
     }
 
+    /// **Pull this rung's deadline back inside the session's own assembly reserve** (ADR-0080 W4).
+    ///
+    /// A court close no longer fits one carrier, so a mover spends blocks ASSEMBLING its close
+    /// before the move exists at all. Those blocks come out of the session, and if the rung clock
+    /// is allowed to run to the session backstop the reserve is spent by whichever party moved
+    /// last — the deadline then closes on the other side while it is still assembling, which is
+    /// audit M2-24's shape one level down.
+    ///
+    /// The cap is [`bisect_rung_deadline_within_session_v1`]'s: `session.deadline_daa −
+    /// assembly_reserve_daa`, never raised, only lowered. Returns the deadline in force after the
+    /// cap, so a caller can index on it without reading the field back.
+    ///
+    /// **A cap at or below the current score means the session has no assembly room left**, and
+    /// that is the honest answer rather than an error: the whole-session backstop is what ends such
+    /// a session, on the challenger's side, which is what an unfinishable prosecution deserves.
+    /// This is also why the cap may break the monotonicity [`Self::open`] requires of the FIRST
+    /// deadline — a backstop is not a rung window, and a session whose backstop has already passed
+    /// cannot be given a rung in the future to preserve an invariant about rungs.
+    pub fn cap_deadline_to_session_v1(&mut self, session_deadline_daa: u64, assembly_reserve_daa: u64) -> u64 {
+        let cap = session_deadline_daa.saturating_sub(assembly_reserve_daa);
+        if cap < self.last_deadline_daa {
+            self.last_deadline_daa = cap;
+        }
+        self.last_deadline_daa
+    }
+
     pub fn session_id(&self) -> Hash64 {
         self.session_id
     }
@@ -600,6 +654,81 @@ mod tests {
 
     fn open_ladder(space_size: u64) -> PalwBisectLadderV1 {
         PalwBisectLadderV1::open(&h64(1), &h64(2), &h64(3), &h64(4), PalwBisectSpaceV1::StepLeaves, space_size, 100, 200).unwrap()
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // ADR-0080 W4 — a rung may not spend the session's close-assembly reserve
+    // ---------------------------------------------------------------------------------------
+
+    /// **The rung window is capped at the session backstop LESS the assembly reserve**, so the
+    /// blocks a split close occupies are still there when the next party has to assemble one.
+    ///
+    /// The pure form first — it is what a caller with two numbers and no ladder wants — then the
+    /// same rule applied to a live ladder.
+    #[test]
+    fn a_rung_deadline_is_capped_at_the_sessions_assembly_reserve() {
+        // ADR-0080's shipped figure, restated here as a fixture rather than imported: this
+        // machine takes numbers, it does not derive them.
+        const RESERVE: u64 = 216;
+        // Inside the reserve: the rung window is what it was.
+        assert_eq!(bisect_rung_deadline_within_session_v1(100, 30, 1_000, RESERVE), 130);
+        // Past it: pulled back to `backstop − reserve`, never to the backstop itself.
+        assert_eq!(bisect_rung_deadline_within_session_v1(800, 30, 1_000, RESERVE), 784);
+        assert_eq!(1_000 - RESERVE, 784, "the cap is the backstop less the reserve, and nothing else");
+        // The last rung window that is NOT capped, and the first that is — the boundary, so a
+        // change to the comparison shows up here rather than as an off-by-one in a dispute.
+        assert_eq!(bisect_rung_deadline_within_session_v1(753, 30, 1_000, RESERVE), 783);
+        assert_eq!(bisect_rung_deadline_within_session_v1(754, 30, 1_000, RESERVE), 784);
+        assert_eq!(bisect_rung_deadline_within_session_v1(755, 30, 1_000, RESERVE), 784);
+        // Exactly on the cap is already at it, and the cap is idempotent.
+        assert_eq!(bisect_rung_deadline_within_session_v1(784, 0, 1_000, RESERVE), 784);
+        // A reserve wider than the backstop is a session with no assembly room: 0, saturating,
+        // rather than an underflow.
+        assert_eq!(bisect_rung_deadline_within_session_v1(100, 30, 100, RESERVE), 0);
+        assert_eq!(bisect_rung_deadline_within_session_v1(u64::MAX, u64::MAX, 1_000, RESERVE), 784);
+    }
+
+    /// The same rule on a live ladder: the cap lowers a rung deadline and never raises one, and
+    /// the capped deadline is strictly inside the backstop — which is the condition the court
+    /// sweep reads to decide whether a rung clock may fire at all.
+    #[test]
+    fn capping_a_ladders_rung_lowers_it_and_leaves_the_reserve() {
+        const RESERVE: u64 = 216;
+        const BACKSTOP: u64 = 1_000;
+        let mut ladder = open_ladder(16);
+        // `open`'s first deadline is 200 — well inside the cap, so the cap changes nothing.
+        assert_eq!(ladder.last_deadline_daa(), 200);
+        assert_eq!(ladder.cap_deadline_to_session_v1(BACKSTOP, RESERVE), 200, "the cap raised a deadline");
+
+        // A rung accepted late sets a deadline past the reserve; the cap pulls it back.
+        let round = ladder.round();
+        let mid = ladder.expected_midpoint().expect("a fresh ladder has a midpoint");
+        ladder
+            .apply_disclosure(
+                &PalwBisectDisclosureV1 {
+                    version: PALW_BISECT_OBJECT_VERSION_V1,
+                    session_id: ladder.session_id(),
+                    round,
+                    midpoint: mid,
+                    mid_state: h64(0x40),
+                },
+                900,
+                W_ROUND,
+            )
+            .expect("the disclosure is on turn");
+        assert_eq!(ladder.last_deadline_daa(), 930, "the uncapped rung window is the accepted score plus w_round");
+        assert_eq!(ladder.cap_deadline_to_session_v1(BACKSTOP, RESERVE), 784);
+        assert_eq!(ladder.last_deadline_daa(), 784);
+        assert!(ladder.last_deadline_daa() < BACKSTOP, "a capped rung must still be able to fire before the backstop");
+        assert_eq!(BACKSTOP - ladder.last_deadline_daa(), RESERVE, "the reserve is exactly what the cap left");
+        // Idempotent, and it does not disturb anything else the rung set.
+        assert_eq!(ladder.cap_deadline_to_session_v1(BACKSTOP, RESERVE), 784);
+        assert_eq!(ladder.turn(), PalwBisectTurnV1::AwaitVerdict);
+        assert_eq!(ladder.last_disclosure(), Some((mid, h64(0x40))));
+        // And silence past the capped deadline is still the objective offense, charged to the
+        // party whose turn it is — the cap moves WHEN, never WHO.
+        let no_show = ladder.declare_no_show(785).expect("silence past the capped deadline");
+        assert_eq!((no_show.silent_party, no_show.deadline_daa), (PalwBisectPartyV1::Challenger, 784));
     }
 
     /// Walk a ladder to its terminal, driving the interval toward `divergence`. Returns the

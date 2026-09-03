@@ -201,9 +201,7 @@ pub(crate) fn check_job_context_shape(ctx: &PalwJobContextV2) -> Result<(), Palw
     // and the model tiers' tiled selecting-row scheme. The pin used to admit only the first, so
     // every tiled-class binding failed its context check before a single leaf was read — the
     // whole step space of both model tiers, unprosecutable at the front door.
-    if ctx.trace_scheme_id != trace_scheme_id_v2()
-        && ctx.trace_scheme_id != crate::palw_step_refute::tiled_logits_scheme_id_v1()
-    {
+    if ctx.trace_scheme_id != trace_scheme_id_v2() && ctx.trace_scheme_id != crate::palw_step_refute::tiled_logits_scheme_id_v1() {
         return Err(PalwSlashError::SchemeMismatch);
     }
     Ok(())

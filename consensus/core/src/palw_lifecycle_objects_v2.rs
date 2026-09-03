@@ -109,7 +109,18 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // transition, and the class binding is checked against the class's own profile hash.
         | PalwConsensusObjectV2::FamilyCertified { .. }
         | PalwConsensusObjectV2::ClassLaneCertified { .. }
-        | PalwConsensusObjectV2::ObjectChunk { .. } => Ok(()),
+        | PalwConsensusObjectV2::ObjectChunk { .. }
+        // **ADR-0080 design A: the split close.** The declaration carries the signature of one of
+        // the two bonds the session id binds, checked at acceptance against that bond's registered
+        // key — the same split every other court move uses. A chunk carries none and needs none:
+        // the declaration already pinned its bytes at its index, so a chunk that is not the pinned
+        // preimage is refused by the transition whoever sent it, and requiring a signature would
+        // only stop a stranger from paying to deliver a mover's own evidence.
+        | PalwConsensusObjectV2::CourtCloseChunk { .. } => Ok(()),
+        PalwConsensusObjectV2::CourtCloseDeclared { signature, .. } if !signature.is_empty() => Ok(()),
+        PalwConsensusObjectV2::CourtCloseDeclared { .. } => Err(
+            "a close declaration must carry the signature of the side it declares for — without one either party could write the other's close and pin it to a verdict it never asserted",
+        ),
         // **Audit M-01: a door nobody can authenticate is shut.**
         //
         // `BondRetireRequested { bond }` carried no signature and no owner binding, and a bond key
@@ -925,9 +936,12 @@ mod tests {
             artifact_bytes: 99,
             executor_pubkey: vec![9; PALW_DERIVED_V1_EXECUTOR_PUBKEY_LEN],
         };
-        let signed =
-            PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(object.clone()), signature: vec![1; PALW_DERIVED_V1_SIGNATURE_LEN] };
-        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: signed.clone() }).unwrap();
+        let signed = PalwConsensusObjectV2::DerivedArtifactV1 {
+            object: Box::new(object.clone()),
+            signature: vec![1; PALW_DERIVED_V1_SIGNATURE_LEN],
+        };
+        let payload =
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: signed.clone() }).unwrap();
         validate_palw_lifecycle_tx(&payload).expect("a signed, shaped derivation may ride");
         let tx = carrier(SUBNETWORK_ID_PALW_LIFECYCLE.clone(), payload);
         let extracted = palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(&tx));
@@ -937,20 +951,19 @@ mod tests {
         let unsigned = PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(object.clone()), signature: Vec::new() };
         let mut zero_kind = object.clone();
         zero_kind.kind = 0;
-        let unshaped =
-            PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(zero_kind), signature: vec![1; PALW_DERIVED_V1_SIGNATURE_LEN] };
+        let unshaped = PalwConsensusObjectV2::DerivedArtifactV1 {
+            object: Box::new(zero_kind),
+            signature: vec![1; PALW_DERIVED_V1_SIGNATURE_LEN],
+        };
         // **X1: a free-length signature is where a GLB would go.** A refusal at the ACCEPTANCE
         // layer drops the object and lets the block stand, so bytes refused there still ride an
         // accepted transaction forever; this list is a block rule, so it is where "under any
         // size" is enforced. A 4 MiB signature is refused by name, exactly like a 16-byte one.
         let overlong = PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(object.clone()), signature: vec![0xAB; 4 << 20] };
         let short = PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(object.clone()), signature: vec![1; 16] };
-        for (refused, why) in [
-            (unsigned, "signature"),
-            (unshaped, "kind 0"),
-            (overlong, "free-length field"),
-            (short, "free-length field"),
-        ] {
+        for (refused, why) in
+            [(unsigned, "signature"), (unshaped, "kind 0"), (overlong, "free-length field"), (short, "free-length field")]
+        {
             let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: refused }).unwrap();
             let err = validate_palw_lifecycle_tx(&payload).expect_err("refused at admission");
             assert!(format!("{err:?}").contains(why), "{err:?}");

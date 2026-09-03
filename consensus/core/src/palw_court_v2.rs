@@ -1669,10 +1669,7 @@ mod tests {
         // any arm reads that geometry, which is what stops a poisoned profile from reaching an
         // allocation or a shift.
         assert!(
-            matches!(
-                outcome,
-                Err(PalwCourtV2Error::CloseProfileIsNotTheClass { .. }) | Err(PalwCourtV2Error::TraceRootMismatch)
-            ),
+            matches!(outcome, Err(PalwCourtV2Error::CloseProfileIsNotTheClass { .. }) | Err(PalwCourtV2Error::TraceRootMismatch)),
             "a proof about another execution must not produce a verdict at all, got {outcome:?}"
         );
         let procedural = adjudicate_court_close_v2(&in_court, &sid, &bogus, &court());

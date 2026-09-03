@@ -137,9 +137,8 @@ pub async fn submit(
                 Some(dsl_path) => {
                     let dsl_bytes =
                         std::fs::read(dsl_path).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dsl_path.display())))?;
-                    let decoded = kaspa_consensus_core::palw_derived_v1::palw_fp_dsl_decode_v1(&dsl_bytes).ok_or_else(|| {
-                        CliError::new(exit::GENERIC, format!("{} is not an FPD1 DSL payload", dsl_path.display()))
-                    })?;
+                    let decoded = kaspa_consensus_core::palw_derived_v1::palw_fp_dsl_decode_v1(&dsl_bytes)
+                        .ok_or_else(|| CliError::new(exit::GENERIC, format!("{} is not an FPD1 DSL payload", dsl_path.display())))?;
                     if decoded.claim_id != claim {
                         return Err(CliError::new(
                             exit::GENERIC,
@@ -158,7 +157,10 @@ pub async fn submit(
         }
         None => {
             if dsl_payload.is_some() {
-                return Err(CliError::new(exit::GENERIC, "--dsl-payload needs --material-out (the node's retention directory)".to_string()));
+                return Err(CliError::new(
+                    exit::GENERIC,
+                    "--dsl-payload needs --material-out (the node's retention directory)".to_string(),
+                ));
             }
             None
         }
@@ -183,7 +185,8 @@ pub async fn submit(
         std::fs::rename(&partial, &file).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", file.display())))?;
         material_note = Some(file.display().to_string());
         if let Some((dsl_partial, dsl_file)) = dsl {
-            std::fs::rename(&dsl_partial, &dsl_file).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dsl_file.display())))?;
+            std::fs::rename(&dsl_partial, &dsl_file)
+                .map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dsl_file.display())))?;
             dsl_note = Some(dsl_file.display().to_string());
         }
     }
@@ -223,7 +226,6 @@ pub async fn submit(
 /// compute mass, because a drill's chunk is a hundred kilobytes and a send-sized fee would be
 /// refused by the mempool as insufficient.
 pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std::path::PathBuf], yes: bool) -> Result<(), CliError> {
-    use kaspa_consensus_core::mass::MassCalculator;
     use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
     use kaspa_consensus_core::tx::UtxoEntry;
 
@@ -298,131 +300,19 @@ pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std
     let nv = connect(ctx).await?;
     let key = ks.load_key()?;
     let addr = key.funding_address(nv.params.prefix());
-    let all = crate::wallet::page_all(&nv, &addr).await?;
-    // **Ask the mempool before choosing funding.** An earlier burst's carriers spend a UTXO the
-    // index still lists and pay change the index does not list yet; picking by the index alone
-    // is "output already spent by transaction in the mempool", every second run. Our own pending
-    // transactions are read back, their inputs excluded, their change to us made eligible.
-    let mut pending_spent: std::collections::HashSet<kaspa_consensus_core::tx::TransactionOutpoint> = Default::default();
-    let mut pending_change: Vec<(kaspa_consensus_core::tx::TransactionOutpoint, UtxoEntry)> = Vec::new();
-    if let Ok(entries) = nv.client.get_mempool_entries_by_addresses(vec![addr.clone()], false, false).await {
-        use kaspa_consensus_core::tx::{TransactionInput, TransactionOutpoint, TransactionOutput};
-        let my_spk = kaspa_txscript::pay_to_address_script(&addr);
-        let mut seen: std::collections::BTreeSet<kaspa_consensus_core::tx::TransactionId> = Default::default();
-        for by_address in entries {
-            for entry in by_address.sending.iter().chain(by_address.receiving.iter()) {
-                let rtx = &entry.transaction;
-                let inputs: Vec<TransactionInput> = rtx
-                    .inputs
-                    .iter()
-                    .map(|i| {
-                        TransactionInput::new(
-                            TransactionOutpoint::new(i.previous_outpoint.transaction_id, i.previous_outpoint.index),
-                            i.signature_script.clone(),
-                            i.sequence,
-                            i.sig_op_count,
-                        )
-                    })
-                    .collect();
-                let outputs: Vec<TransactionOutput> =
-                    rtx.outputs.iter().map(|o| TransactionOutput::new(o.value, o.script_public_key.clone())).collect();
-                let tx = Transaction::new(
-                    rtx.version,
-                    inputs,
-                    outputs,
-                    rtx.lock_time,
-                    rtx.subnetwork_id.clone(),
-                    rtx.gas,
-                    rtx.payload.clone(),
-                );
-                let id = tx.id();
-                if !seen.insert(id) {
-                    continue;
-                }
-                for input in &tx.inputs {
-                    pending_spent.insert(input.previous_outpoint);
-                }
-                for (index, output) in tx.outputs.iter().enumerate() {
-                    if output.script_public_key == my_spk {
-                        pending_change.push((
-                            TransactionOutpoint::new(id, index as u32),
-                            UtxoEntry::new(output.value, output.script_public_key.clone(), 0, false),
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    let mut candidates: Vec<(kaspa_consensus_core::tx::TransactionOutpoint, UtxoEntry)> = all
-        .iter()
-        .filter(|u| u.mature && !u.bonded && !pending_spent.contains(&u.outpoint))
-        .map(|u| (u.outpoint, u.entry.clone()))
-        .collect();
-    candidates.extend(pending_change.into_iter().filter(|(outpoint, _)| !pending_spent.contains(outpoint)));
-    candidates.sort_by(|a, b| b.1.amount.cmp(&a.1.amount));
+    let candidates = spendable_candidates_v1(&nv, &addr).await?;
     let (first_outpoint, first_entry) = candidates
         .first()
         .cloned()
         .ok_or_else(|| CliError::new(exit::GENERIC, format!("no mature, unbonded, unspent UTXO at {addr} to fund the carrier")))?;
-    let floor = kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI;
-    let calc = MassCalculator::new(
-        nv.params.mass_per_tx_byte,
-        nv.params.mass_per_script_pub_key_byte,
-        nv.params.mass_per_sig_op,
-        nv.params.storage_mass_parameter,
-    );
 
     // Build every carrier first — chained on the previous one's change — so a refusal costs nothing.
     let mut funding_outpoint = first_outpoint;
     let mut funding_entry = first_entry;
     let mut carriers = Vec::with_capacity(objects.len());
     for (path, object, summary) in &objects {
-        // Size the fee from the carrier itself: build once at the floor, read its mass, rebuild.
-        let probe = key
-            .build_palw_lifecycle_tx(object, funding_outpoint, &funding_entry, floor)
-            .map_err(|e| CliError::new(exit::GENERIC, format!("build the carrier for {}: {e}", path.display())))?;
-        let compute_mass = calc.calc_non_contextual_masses(&probe).compute_mass;
-        // **…and from the RENT the chain may charge it** (ADR-0075 SA-1/SA-2). The relay rate
-        // prices bytes on the wire; the amendment prices two things bytes do not measure — the
-        // court re-executions a vector count buys, and the state-root room a chunk group reserves
-        // for its whole TTL. Paid on every network, armed fence or not: a carrier the chain drops
-        // for underpaying is a fee spent and nothing recorded, and the over-payment where the
-        // fence is dormant is a fraction of one MSK on an object submitted a handful of times in a
-        // network's life. The room is charged to chunk 0 alone, which is the chunk that opens the
-        // group: the carriers are CHAINED on one another's change, so no later one can be mined
-        // first.
-        let rent = match object {
-            PalwConsensusObjectV2::FamilyCertified { evidence } => {
-                kaspa_consensus_core::palw_state_v2::palw_certification_min_fee_v1(evidence.vector_count())
-            }
-            PalwConsensusObjectV2::ObjectChunk { index, count, .. } => {
-                let opener = if *index == 0 { kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_rent_v1() } else { 0 };
-                // The chunk that COMPLETES the group carries the certification into its block, so
-                // it owes the grading rent — and a single chunk cannot say how many vectors the
-                // assembled object holds, so it pays for the most the rules allow. Widened to u16
-                // because `index` and `count` come off a FILE an operator hands this command, and
-                // `255 + 1` on a u8 is a panic rather than a refusal.
-                let completing = if u16::from(*index) + 1 == u16::from(*count) {
-                    kaspa_consensus_core::palw_state_v2::palw_certification_min_fee_v1(
-                        kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_VECTORS,
-                    )
-                } else {
-                    0
-                };
-                opener.max(completing)
-            }
-            _ => 0,
-        };
-        let fee = kaspa_pq_validator_core::relay_fee_for_compute_mass(compute_mass).max(floor).max(rent);
-        if funding_entry.amount <= fee {
-            return Err(CliError::new(
-                exit::GENERIC,
-                format!("the funding for {} holds {} sompi, under its {fee} sompi fee", path.display(), funding_entry.amount),
-            ));
-        }
-        let tx = key
-            .build_palw_lifecycle_tx(object, funding_outpoint, &funding_entry, fee)
-            .map_err(|e| CliError::new(exit::GENERIC, format!("build the carrier for {}: {e}", path.display())))?;
+        let (tx, compute_mass, fee) = build_carrier_priced_v1(&key, &nv, object, funding_outpoint, &funding_entry)
+            .map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", path.display())))?;
         let change = tx.outputs.first().ok_or_else(|| CliError::new(exit::GENERIC, "the carrier has no change output".to_string()))?;
         funding_outpoint = kaspa_consensus_core::tx::TransactionOutpoint::new(tx.id(), 0);
         funding_entry = UtxoEntry::new(change.value, change.script_public_key.clone(), 0, false);
@@ -491,6 +381,164 @@ pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std
         _ => println!("the chain grades them when the carriers are accepted; a chunked object applies in the block that completes it"),
     }
     Ok(())
+}
+
+// =================================================================================================
+// The carriage path, shared — one funding rule and one fee rule for every lifecycle carrier
+// =================================================================================================
+
+/// **Every outpoint this key may spend, mempool included, largest first.**
+///
+/// Lifted out of `submit_objects` unchanged so `palw court-close` funds a carrier the SAME way:
+/// two callers picking funding by two rules is how "output already spent by transaction in the
+/// mempool" came back the last time, and the reasoning below is the reason it does not.
+///
+/// **Ask the mempool before choosing funding.** An earlier burst's carriers spend a UTXO the
+/// index still lists and pay change the index does not list yet; picking by the index alone is
+/// "output already spent by transaction in the mempool", every second run. Our own pending
+/// transactions are read back, their inputs excluded, their change to us made eligible.
+///
+/// The pending change is also what `palw court-close` resumes from: a carrier the node is still
+/// holding is a carrier that was sent, and its change is the funding of the next part.
+pub(crate) async fn spendable_candidates_v1(
+    nv: &crate::wallet::NodeView,
+    addr: &kaspa_addresses::Address,
+) -> Result<Vec<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)>, CliError> {
+    use kaspa_consensus_core::tx::UtxoEntry;
+    let all = crate::wallet::page_all(nv, addr).await?;
+    let mut pending_spent: std::collections::HashSet<kaspa_consensus_core::tx::TransactionOutpoint> = Default::default();
+    let mut pending_change: Vec<(kaspa_consensus_core::tx::TransactionOutpoint, UtxoEntry)> = Vec::new();
+    if let Ok(entries) = nv.client.get_mempool_entries_by_addresses(vec![addr.clone()], false, false).await {
+        use kaspa_consensus_core::tx::{TransactionInput, TransactionOutpoint, TransactionOutput};
+        let my_spk = kaspa_txscript::pay_to_address_script(addr);
+        let mut seen: std::collections::BTreeSet<kaspa_consensus_core::tx::TransactionId> = Default::default();
+        for by_address in entries {
+            for entry in by_address.sending.iter().chain(by_address.receiving.iter()) {
+                let rtx = &entry.transaction;
+                let inputs: Vec<TransactionInput> = rtx
+                    .inputs
+                    .iter()
+                    .map(|i| {
+                        TransactionInput::new(
+                            TransactionOutpoint::new(i.previous_outpoint.transaction_id, i.previous_outpoint.index),
+                            i.signature_script.clone(),
+                            i.sequence,
+                            i.sig_op_count,
+                        )
+                    })
+                    .collect();
+                let outputs: Vec<TransactionOutput> =
+                    rtx.outputs.iter().map(|o| TransactionOutput::new(o.value, o.script_public_key.clone())).collect();
+                let tx = Transaction::new(
+                    rtx.version,
+                    inputs,
+                    outputs,
+                    rtx.lock_time,
+                    rtx.subnetwork_id.clone(),
+                    rtx.gas,
+                    rtx.payload.clone(),
+                );
+                let id = tx.id();
+                if !seen.insert(id) {
+                    continue;
+                }
+                for input in &tx.inputs {
+                    pending_spent.insert(input.previous_outpoint);
+                }
+                for (index, output) in tx.outputs.iter().enumerate() {
+                    if output.script_public_key == my_spk {
+                        pending_change.push((
+                            TransactionOutpoint::new(id, index as u32),
+                            UtxoEntry::new(output.value, output.script_public_key.clone(), 0, false),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    let mut candidates: Vec<(kaspa_consensus_core::tx::TransactionOutpoint, UtxoEntry)> = all
+        .iter()
+        .filter(|u| u.mature && !u.bonded && !pending_spent.contains(&u.outpoint))
+        .map(|u| (u.outpoint, u.entry.clone()))
+        .collect();
+    candidates.extend(pending_change.into_iter().filter(|(outpoint, _)| !pending_spent.contains(outpoint)));
+    candidates.sort_by(|a, b| b.1.amount.cmp(&a.1.amount));
+    Ok(candidates)
+}
+
+/// **What the chain may charge this carrier as RENT rather than as carriage** (ADR-0075 SA-1/SA-2).
+///
+/// One spelling, read by every carrier builder. Paid on every network, armed fence or not: a
+/// carrier the chain drops for underpaying is a fee spent and nothing recorded.
+///
+/// The room a chunk group reserves is charged to chunk 0 alone, which is the chunk that opens the
+/// group: the carriers are CHAINED on one another's change, so no later one can be mined first.
+/// The chunk that COMPLETES the group carries the object into its block, so it owes the grading
+/// rent — and a single chunk cannot say how many vectors the assembled object holds, so it pays
+/// for the most the rules allow. `index` and `count` come off a FILE an operator hands the tool,
+/// so the comparison is widened to `u16`: `255 + 1` on a `u8` is a panic rather than a refusal.
+pub(crate) fn carrier_rent_v1(object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2) -> u64 {
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
+    match object {
+        Obj::FamilyCertified { evidence } => {
+            kaspa_consensus_core::palw_state_v2::palw_certification_min_fee_v1(evidence.vector_count())
+        }
+        Obj::ObjectChunk { index, count, .. } => {
+            let opener = if *index == 0 { kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_rent_v1() } else { 0 };
+            let completing = if u16::from(*index) + 1 == u16::from(*count) {
+                kaspa_consensus_core::palw_state_v2::palw_certification_min_fee_v1(
+                    kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_VECTORS,
+                )
+            } else {
+                0
+            };
+            opener.max(completing)
+        }
+        _ => 0,
+    }
+}
+
+/// **Build one lifecycle carrier and price it from its own mass** — the fee rule, once.
+///
+/// Size the fee from the carrier itself: build once at the floor, read its mass, rebuild. A
+/// send-sized flat fee is refused by the mempool as insufficient on a hundred-kilobyte chunk, and
+/// a flat default has already cost this repository a lane.
+pub(crate) fn build_carrier_priced_v1(
+    key: &kaspa_pq_validator_core::ValidatorKey,
+    nv: &crate::wallet::NodeView,
+    object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    funding_outpoint: kaspa_consensus_core::tx::TransactionOutpoint,
+    funding_entry: &kaspa_consensus_core::tx::UtxoEntry,
+) -> Result<(Transaction, u64, u64), String> {
+    use kaspa_consensus_core::mass::MassCalculator;
+    let floor = kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI;
+    let calc = MassCalculator::new(
+        nv.params.mass_per_tx_byte,
+        nv.params.mass_per_script_pub_key_byte,
+        nv.params.mass_per_sig_op,
+        nv.params.storage_mass_parameter,
+    );
+    let probe =
+        key.build_palw_lifecycle_tx(object, funding_outpoint, funding_entry, floor).map_err(|e| format!("build the carrier: {e}"))?;
+    let compute_mass = calc.calc_non_contextual_masses(&probe).compute_mass;
+    let fee = kaspa_pq_validator_core::relay_fee_for_compute_mass(compute_mass).max(floor).max(carrier_rent_v1(object));
+    if funding_entry.amount <= fee {
+        return Err(format!("the funding holds {} sompi, under its {fee} sompi fee", funding_entry.amount));
+    }
+    let tx =
+        key.build_palw_lifecycle_tx(object, funding_outpoint, funding_entry, fee).map_err(|e| format!("build the carrier: {e}"))?;
+    Ok((tx, compute_mass, fee))
+}
+
+/// [`build_carrier_priced_v1`] without the mass, for a caller that only reports the fee.
+pub(crate) fn build_carrier_v1(
+    key: &kaspa_pq_validator_core::ValidatorKey,
+    nv: &crate::wallet::NodeView,
+    object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    funding_outpoint: kaspa_consensus_core::tx::TransactionOutpoint,
+    funding_entry: &kaspa_consensus_core::tx::UtxoEntry,
+) -> Result<(Transaction, u64), String> {
+    build_carrier_priced_v1(key, nv, object, funding_outpoint, funding_entry).map(|(tx, _, fee)| (tx, fee))
 }
 
 #[cfg(test)]

@@ -10071,7 +10071,9 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
         anchor_daa: 1,
         job_nonce: [0x5B; 32],
         tokenizer_id: Hash64::default(),
-        prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&prompt.iter().map(|t| *t as u32).collect::<Vec<_>>()),
+        prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(
+            &prompt.iter().map(|t| *t as u32).collect::<Vec<_>>(),
+        ),
         prompt_tokens: prompt.len() as u32,
         decode_token_limit: decode,
         max_context_tokens: backend.profile().n_ctx,
@@ -10086,7 +10088,8 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
         shape_profile_id: backend.profile().shape_profile_id(),
         cu_ruleset_id: Hash64::default(),
     };
-    let commitment = palw_fp_commitment_v3(&job, &class, &run, b"misaka-palw-rc", 4_096).expect("a finished run assembles a commitment");
+    let commitment =
+        palw_fp_commitment_v3(&job, &class, &run, b"misaka-palw-rc", 4_096).expect("a finished run assembles a commitment");
     let claim_id = fp_claim_id_v3(&commitment);
     let output_root = commitment.output_root;
     let sign = |message: &[u8], context: &[u8]| {
@@ -10122,7 +10125,8 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
     // The transition's own answer first, so a refusal is named rather than counted.
     kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(&state, &params, &point, std::slice::from_ref(&committed), None)
         .unwrap_or_else(|e| panic!("the floor's commitment must open a claim on this state: {e}"));
-    let (accepted, with_claim) = vp.palw_v2_accepted_objects_and_state_for_tests(&state, &params, &point, vec![committed], ctx.consensus.get_sink());
+    let (accepted, with_claim) =
+        vp.palw_v2_accepted_objects_and_state_for_tests(&state, &params, &point, vec![committed], ctx.consensus.get_sink());
     assert_eq!(accepted.len(), 1, "the floor's commitment opens a claim");
     assert_eq!(with_claim.claim(&claim_id).expect("the claim is on chain").output_root, output_root);
 
@@ -10142,10 +10146,15 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
     };
     let signed = |o: &PalwDerivedArtifactV1, key: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair| Obj::DerivedArtifactV1 {
         object: Box::new(o.clone()),
-        signature: libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key, palw_derived_message_v1(o).as_byte_slice(), PALW_DERIVED_V1_MLDSA87_CONTEXT, [0u8; 32])
-            .expect("sign")
-            .as_ref()
-            .to_vec(),
+        signature: libcrux_ml_dsa::ml_dsa_87::sign(
+            &key.signing_key,
+            palw_derived_message_v1(o).as_byte_slice(),
+            PALW_DERIVED_V1_MLDSA87_CONTEXT,
+            [0u8; 32],
+        )
+        .expect("sign")
+        .as_ref()
+        .to_vec(),
     };
     let point2 = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
         block: Hash64::from_u64_word(0xB201),
@@ -10156,7 +10165,8 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
 
     // Signed by the executor, on this chain: accepted and recorded beside the claim.
     let good = signed(&object, keypair);
-    let (accepted, folded) = vp.palw_v2_accepted_objects_and_state_for_tests(&with_claim, &params, &point2, vec![good.clone()], point2.block);
+    let (accepted, folded) =
+        vp.palw_v2_accepted_objects_and_state_for_tests(&with_claim, &params, &point2, vec![good.clone()], point2.block);
     assert_eq!(accepted.len(), 1, "the executor's derivation rides");
     let row = folded.derived_artifact(&claim_id, &transformer).expect("recorded beside the claim");
     assert_eq!(row.kind, kind::SCENE);
@@ -10176,8 +10186,11 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
     let mut stranger = object.clone();
     stranger.executor_pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_registry_pubkey(1);
     let stranger = signed(&stranger, &stranger_key);
-    for (name, refused) in [("a mismatching signature", bad_sig), ("another network's domain", foreign), ("a stranger's key", stranger)] {
-        let (accepted, unchanged) = vp.palw_v2_accepted_objects_and_state_for_tests(&with_claim, &params, &point2, vec![refused], point2.block);
+    for (name, refused) in
+        [("a mismatching signature", bad_sig), ("another network's domain", foreign), ("a stranger's key", stranger)]
+    {
+        let (accepted, unchanged) =
+            vp.palw_v2_accepted_objects_and_state_for_tests(&with_claim, &params, &point2, vec![refused], point2.block);
         assert_eq!(accepted.len(), 0, "{name} is dropped");
         assert!(unchanged.derived_artifact(&claim_id, &transformer).is_none(), "{name} records nothing");
     }

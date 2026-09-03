@@ -229,8 +229,20 @@ mod a16_family {
                         "n_ctx 16 no longer derives the class testnet-11 registered"
                     );
                 }
-                15 | 17 | 18 | 20 => assert!(verdict.is_ok(), "n_ctx {nctx} fell out of the family's room: {verdict:?}"),
-                _ => assert!(verdict.is_err(), "n_ctx {nctx} was admitted — the family's ceiling moved, revisit the ledger comment"),
+                // **The room this family has, and what bounds it.** Under the 80 KiB
+                // one-transaction ceiling the widest admitted context was 21 and the COST is what
+                // refused 24; under ADR-0080 design A's 27-chunk group the cost stops binding
+                // below the shipped `2^22` ladder, which refuses at 40. So the admitted set grew
+                // from {15..21} to {15..39} and the REASON changed with it — see
+                // `palw_class_admission_v2::tests::the_widest_context_each_family_admits`, which
+                // measures both gates for both families.
+                15 | 17 | 18 | 20 | 24 | 32 => {
+                    assert!(verdict.is_ok(), "n_ctx {nctx} fell out of the family's room: {verdict:?}")
+                }
+                _ => assert!(
+                    verdict.is_err(),
+                    "n_ctx {nctx} was admitted — the family's ceiling moved, revisit the ledger comment: {verdict:?}"
+                ),
             }
         }
     }
@@ -354,6 +366,49 @@ pub fn qwen25_a16_profile_v2(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
     )
 }
 
+/// **The epsilon every dense artifact of this lineage actually executes.**
+///
+/// The hybrid twin is [`crate::palw_qwen36_profile::QWEN36_ARTIFACT_EPS_Q`], and this is the same
+/// defect on the dense side, found the same way: by driving a REGISTERED row through
+/// [`Qwen25A16Backend::from_registered_profile`] rather than through `::new`.
+///
+/// [`QWEN25_1_5B`] declares `rms_eps_q: 1`. `qwen25-convert` writes `eps_q: 1 << 8` into every
+/// artifact header (`Base0ShapeV1::eps_q`, the value `misaka-palw-base0::classes` also spells for
+/// this family's `artifact_shape`: "the A16 engine norms at the shipped 1 << 8"), and the engine
+/// norms with the ARTIFACT's constant. So the declared epsilon is not the executed one, and
+/// `A16Engine::plan_from_profile`'s geometry gate refuses the row over its own class's weights:
+/// `GeometryMismatch { what: "rms_eps_q", profile: 1, artifact: 256 }`. The shipped worker never
+/// saw it because it takes `Qwen25A16Backend::new`, which compiles no plan and lets the artifact's
+/// epsilon execute — the asymmetry is exactly why nobody noticed.
+///
+/// **This constant does not move a registered class.** `QWEN25_1_5B` and [`QWEN25_1_5B_A16`] stay
+/// exactly as testnet-11's genesis registered them (`params.rs` derives the registration from
+/// [`qwen25_a16_registration_v2`], and a moved `rms_eps_q` would be a moved class id and a moved
+/// consensus fingerprint). What declares the executed epsilon is the row that is not registered
+/// yet: [`qwen25_a16_artifact_row_profile_v1`], which the ADR-0080 context ladder carries. Closing
+/// the registered row means REGISTERING a corrected one, which is the integrator's cut, not a
+/// repair that can be shipped under an existing id.
+pub const QWEN25_A16_ARTIFACT_EPS_Q: i64 = 1 << 8;
+
+/// A dense geometry with its epsilon corrected to [`QWEN25_A16_ARTIFACT_EPS_Q`].
+///
+/// A field update on the SAME const rather than a second hand-kept table — the exact shape of
+/// [`crate::palw_qwen36_profile::qwen36_geometry_artifact_eps`] — so the corrected geometry cannot
+/// drift from the frozen one in any other field.
+pub const fn qwen25_geometry_artifact_eps(g: PalwQwen25GeometryV1) -> PalwQwen25GeometryV1 {
+    PalwQwen25GeometryV1 { rms_eps_q: QWEN25_A16_ARTIFACT_EPS_Q, ..g }
+}
+
+/// **The corrected graph over the epsilon the artifact executes** — the projection any row that
+/// has to be SERVED (not merely declared) must be built from.
+///
+/// [`qwen25_a16_profile_v2`] over [`qwen25_geometry_artifact_eps`]. A caller that reaches for
+/// `qwen25_a16_profile_v2` directly is declaring an epsilon nothing runs; a caller that reaches
+/// for this one gets a profile `from_registered_profile` can compile a plan for.
+pub fn qwen25_a16_artifact_row_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen25_a16_profile_v2(qwen25_geometry_artifact_eps(geometry))
+}
+
 /// **The v2 class's head node names the ENGINE's head view, not the embedding table.**
 ///
 /// The v1 spelling (`token_embd.weight`, this family's tied head) puts two row SHAPES under one
@@ -430,8 +485,7 @@ fn qwen25_a16_profile_inner(
     budget(&mut pre_nodes, pre_ir);
     let mut attn_nodes = base0_ir_nodes_v1(QWEN25_A16_LAYER_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::PerLayer, "");
     budget(&mut attn_nodes, QWEN25_A16_LAYER_IR);
-    let mut post_nodes =
-        base0_ir_nodes_v1(QWEN25_A16_POST_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, head);
+    let mut post_nodes = base0_ir_nodes_v1(QWEN25_A16_POST_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, head);
     budget(&mut post_nodes, QWEN25_A16_POST_IR);
 
     let profile = PalwShapeProfileV3 {
@@ -818,9 +872,8 @@ mod tests {
         // graph's court cost, not about who may hold weight.
         let certified = crate::palw_e2e_adjudicability::catalog_covering_family_for_tests_v1();
         bundle.court_e2e_root = crate::palw_e2e_adjudicability::palw_court_e2e_root_of_v1(&certified);
-        let admitted =
-            crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &object, &certified)
-                .expect("the corrected A16 class is admissible on a network with the shipped ceilings");
+        let admitted = crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &object, &certified)
+            .expect("the corrected A16 class is admissible on a network with the shipped ceilings");
         assert_eq!(admitted.court_cost, entry.court_cost, "the gate and the mint derive one cost");
         assert!(admitted.court_cost.max_close_bytes <= bundle.court.max_close_bytes());
         let PalwConsensusObjectV2::ClassRegistered { pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference }, .. } = object else {
@@ -887,24 +940,41 @@ mod tests {
     /// **Would the chain admit this class?** — asked against the SHIPPED bundle, which is the only
     /// bundle whose answer matters.
     ///
-    /// It used to derive the pair a Qwen2.5-1.5B registration would use and run the gate on it.
-    /// Under a `max_close_bytes` that counts what a close costs to carry there is no such pair, so
-    /// the honest form of this test is the refusal and its reason: a registration attempted today
-    /// fails on-chain, and finding that out with a 1.7 GiB artifact already on four hosts is
-    /// finding it in the worst place.
+    /// **The answer changed with ADR-0080 design A and the test is named for it.** It was
+    /// `the_shipped_court_admits_no_qwen25_geometry_and_says_why`: under a `max_close_bytes` that
+    /// counted what a close costs to carry in ONE TRANSACTION there was no admissible
+    /// `(tile_len, n_ctx)` pair at all, and the honest form of the test was the refusal and its
+    /// reason — a registration attempted with a 1.7 GiB artifact already on four hosts fails
+    /// on-chain, which is finding it in the worst place. A 27-chunk group admits a pair, and the
+    /// pair is three tokens: the shipped `2^22` ladder is what bounds it now, not the price.
     ///
-    /// What has to change is code, not the genesis number: an openable logits commitment (ADR-0049
-    /// Decision E says "O(1) in vocabulary"; the root is a flat hash over every row) and a
-    /// per-layer slice of the checkpoint the KV history arrives in.
+    /// So both halves are exercised. The pair that EXISTS is pinned, small, and useless on its
+    /// own; and the gate's refusal is still run, on the pair the LADDER would allow, because that
+    /// is the error a deployer actually reads.
+    ///
+    /// What has to change for a usable context is still code and not this genesis number: the
+    /// ladder (ADR-0077's fence), an openable logits commitment (ADR-0049 Decision E says "O(1) in
+    /// vocabulary"; this family's root is a flat hash over every row) and a per-layer slice of the
+    /// checkpoint the KV history arrives in.
     #[test]
-    fn the_shipped_court_admits_no_qwen25_geometry_and_says_why() {
+    fn the_shipped_court_admits_one_three_token_qwen25_geometry_and_says_why() {
         let bundle = match &crate::config::params::palw_rc_shipped_params().palw_consensus_mode {
             crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
             _ => return, // a build whose card is unset ships no bundle; nothing to check against
         };
-        assert!(
-            qwen25_admissible_geometry_v1(QWEN25_1_5B, &bundle.court).is_none(),
-            "the shipped court admitted a Qwen pair — either the ceiling or this expectation moved"
+        // **This asserted `is_none()` until ADR-0080 design A**, and the doc above still records
+        // why: under an 80 KiB one-transaction ceiling no `(tile_len, n_ctx)` pair of this family
+        // had a prosecutable close, so a registration attempted with a 1.7 GiB artifact already on
+        // four hosts would have failed on-chain. A 27-chunk group changes the answer, and the
+        // honest form of the test is now the PAIR — printed, pinned, and small, because the
+        // shipped `2^22` ladder is what bounds it rather than the price.
+        let pair = qwen25_admissible_geometry_v1(QWEN25_1_5B, &bundle.court)
+            .expect("the shipped court now admits a pair — if this is None again the ceiling went back");
+        println!("shipped-court admissible pair: tile_len={} n_ctx={}", pair.tile_len, pair.n_ctx);
+        assert_eq!(
+            (pair.tile_len, pair.n_ctx),
+            (64, 3),
+            "the shipped court's widest Qwen2.5-1.5B pair — three tokens, bounded by the 2^22 ladder and not by the price"
         );
 
         // The gate's own refusal, on the pair the LADDER would allow, so the error a deployer would
@@ -942,7 +1012,10 @@ mod tests {
         bundle.court_e2e_root = crate::palw_e2e_adjudicability::palw_court_e2e_root_of_v1(&certified);
         match crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &registration, &certified) {
             Err(crate::palw_class_admission_v2::PalwClassAdmissionError::CourtCostExceedsCeiling { what, got, ceiling }) => {
-                assert_eq!(what, "court close");
+                // In CHUNKS since ADR-0080 design A — the unit a close is carried in. The
+                // order-of-magnitude clause is unchanged in meaning: the widest pair the ladder
+                // admits needs more than ten times the carriers this ruleset pays for.
+                assert_eq!(what, "court close chunks");
                 assert!(got > ceiling * 10, "the refusal is by an order of magnitude: {got} against {ceiling}");
             }
             other => panic!("the shipped gate must refuse Qwen2.5-1.5B on court cost, got {other:?}"),
@@ -1428,10 +1501,14 @@ mod tests {
     fn no_qwen_geometry_is_admissible_under_a_carriable_ceiling() {
         let shipped = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).unwrap();
         for (name, model) in [("1.5B", QWEN25_1_5B), ("3B", QWEN25_3B)] {
-            assert!(
-                qwen25_admissible_geometry_v1(model, &shipped).is_none(),
-                "{name}: a pair was admitted under a ceiling no transaction can carry"
-            );
+            let pair = qwen25_admissible_geometry_v1(model, &shipped)
+                .unwrap_or_else(|| panic!("{name}: no pair is admissible — ADR-0080's ceiling went back to one transaction"));
+            println!("{name}: admissible pair tile_len={} n_ctx={}", pair.tile_len, pair.n_ctx);
+            // **Three tokens.** The pair exists now and it is not a usable class: the LADDER is
+            // what bounds it (`PALW_STEP_MAX_LEAVES` = 2^22), not the price, so widening this
+            // family is ADR-0077's fence and not this ceiling. The number is pinned so that
+            // "Qwen2.5 became registrable" cannot be read as "at a context anyone wants".
+            assert_eq!((pair.tile_len, pair.n_ctx), (64, 3), "{name}: the widest pair the shipped ladder admits");
         }
 
         // The cheapest close either model could ever be asked for — the minimum context, swept over
@@ -1455,9 +1532,16 @@ mod tests {
         };
         assert_eq!(cheapest(QWEN25_1_5B), 1_220_368, "1.5B's cheapest possible close");
         assert_eq!(cheapest(QWEN25_3B), 1_220_944, "3B's, and the two are within 0.05% — the pin dominates both");
+        // **The gap, and the ceiling it was a gap from.** This read `> 14 x
+        // DEFAULT_MAX_CLOSE_BYTES` when that constant was 80 KiB — the order-of-magnitude finding
+        // ADR-0080 was written about. It is unchanged as arithmetic and the constant it was stated
+        // against is not, so it is stated against the number that was true: 1,220,368 is 14.9x the
+        // 80 KiB one-transaction carrier and 54% of the 27-chunk group.
+        const CEILING_THAT_REFUSED_THEM: u64 = 80 * 1024;
+        assert!(cheapest(QWEN25_1_5B) > 14 * CEILING_THAT_REFUSED_THEM, "the gap was never an order of magnitude");
         assert!(
-            cheapest(QWEN25_1_5B) > 14 * crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
-            "the gap is an order of magnitude, not a tuning margin"
+            cheapest(QWEN25_1_5B) < crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
+            "the cheapest close is outside ADR-0080's ceiling too — then nothing in this family is registrable"
         );
 
         // And a court with no ceiling at all still says something useful: the LADDER alone admits a
@@ -1478,5 +1562,50 @@ mod tests {
         let impossible =
             crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2, 1, 1, 8).unwrap();
         assert!(qwen25_admissible_geometry_v1(QWEN25_1_5B, &impossible).is_none());
+    }
+
+    /// **A row that has to be SERVED declares the epsilon its artifact executes** — the dense
+    /// twin of `the_corrected_rows_declare_the_artifact_epsilon`.
+    ///
+    /// `qwen25-convert` writes `eps_q: 1 << 8` into every artifact header and the A16 engine norms
+    /// with the ARTIFACT's constant, while `QWEN25_1_5B` declares `rms_eps_q: 1`. A profile built
+    /// from the frozen geometry is therefore one `A16Engine::plan_from_profile` refuses over its
+    /// own class's weights — `GeometryMismatch { what: "rms_eps_q", profile: 1, artifact: 256 }` —
+    /// which is `Qwen25A16Backend::from_registered_profile` refusing the ladder's dense row at
+    /// every width. The hybrid's ladder row went through `qwen36_geometry_artifact_eps`; the dense
+    /// one had no twin, and the shipped worker hid it by taking `::new`, which compiles no plan.
+    ///
+    /// The frozen constants are asserted UNCHANGED in the same breath: correcting them in place
+    /// would move `qwen25_a16_class_id_v2`, which `params.rs` derives testnet-11's genesis
+    /// registration from.
+    #[test]
+    fn the_dense_ladder_row_declares_the_epsilon_its_artifacts_execute() {
+        assert_eq!(QWEN25_1_5B.rms_eps_q, 1, "the registered geometry is a chain fact and must not move");
+        assert_eq!(QWEN25_1_5B_A16.rms_eps_q, 1, "nor the registered A16 geometry");
+        assert_eq!(QWEN25_A16_ARTIFACT_EPS_Q, 1 << 8, "what qwen25-convert writes into every artifact header");
+
+        // The correction is one field and nothing else.
+        let corrected = qwen25_geometry_artifact_eps(QWEN25_1_5B);
+        assert_eq!(corrected.rms_eps_q, QWEN25_A16_ARTIFACT_EPS_Q);
+        assert_eq!(PalwQwen25GeometryV1 { rms_eps_q: QWEN25_1_5B.rms_eps_q, ..corrected }, QWEN25_1_5B, "only the epsilon moved");
+
+        for n_ctx in crate::palw_context_ladder::PALW_CONTEXT_LADDER_ROWS {
+            let dense = crate::palw_context_ladder::palw_a16_context_row_profile_v1(n_ctx).expect("the dense row projects");
+            assert_eq!(
+                dense.base0_rms_eps_q, QWEN25_A16_ARTIFACT_EPS_Q,
+                "the dense ladder row at n_ctx {n_ctx} declares an epsilon no artifact of this family executes, so \
+                 from_registered_profile refuses it before a demonstration starts"
+            );
+            // The hybrid row it is the twin of, asserted beside it so the asymmetry cannot return.
+            let hybrid = crate::palw_context_ladder::palw_qwen36_context_row_profile_v1(n_ctx).expect("the hybrid row projects");
+            assert_eq!(hybrid.base0_rms_eps_q, crate::palw_qwen36_profile::QWEN36_ARTIFACT_EPS_Q);
+        }
+
+        // And the correction is the ONLY difference from the frozen projection: the graph itself
+        // is untouched, so this is a declaration repair and not a second graph.
+        let frozen = qwen25_a16_profile_v2(QWEN25_1_5B_A16).expect("projects");
+        let served = qwen25_a16_artifact_row_profile_v1(QWEN25_1_5B_A16).expect("projects");
+        assert_ne!(frozen.shape_profile_id(), served.shape_profile_id(), "a different epsilon is a different class");
+        assert_eq!(PalwShapeProfileV3 { base0_rms_eps_q: frozen.base0_rms_eps_q, ..served.clone() }, frozen, "one field apart");
     }
 }

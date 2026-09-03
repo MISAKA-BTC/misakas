@@ -177,8 +177,19 @@ fn main() {
         let started = std::time::Instant::now();
         let artifact = misaka_palw_base0::convert::convert_qwen25_a16(&blob, &plan, &stats)
             .unwrap_or_else(|e| die(format!("a16 conversion failed: {e}")));
+        // **The tokenizer, bound here.** It was computed above and applied only on the float lane
+        // below — past this arm's `return` — so every artifact this lane has ever written carries
+        // `tokenizer_commitment: Hash64::default()`, and the dense tier's `tokenizer_id` is zero.
+        // A zero commitment pins nothing: a replay with a different `tokenizer.json` produces
+        // different ids, a different `job_context_hash`, and a claim that reproduces nothing,
+        // which defaults an honest producer instead of refusing a wrong file. Binding it moves
+        // `artifact_digest` (the commitment is inside it), so an artifact written by this line is
+        // a DIFFERENT artifact root than one written before it — a re-conversion, and a genesis
+        // decision, not a silent upgrade.
+        let artifact = artifact.with_tokenizer_commitment(commitment);
         println!("a16 converted in {:?}", started.elapsed());
         println!("a16 artifact  {}", artifact.artifact_digest());
+        println!("a16 tokenizer {commitment}");
         // **`--out` is what turns a measurement into a runtime.** Until the artifact could be
         // written, every use of this class re-read a 3 GiB checkpoint and re-quantized it, which
         // is a minute per run and is why nothing downstream of conversion had been built.

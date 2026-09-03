@@ -72,10 +72,40 @@ pub const PALW_STEP_LEG_ALL_DOMAINS: &[&[u8]] = &[
     PALW_STEP_LEG_DOMAIN_EVIDENCE_ID,
 ];
 
-/// Step-tree leaf cap = the step space's own cap.
+/// Step-tree leaf cap — **the DEFAULT ladder top, not the rule.**
+///
+/// The rule is `PalwCourtParamsV2::max_step_leaf_count`: the number a network actually froze into
+/// `palw_ruleset_id_v2`, which every shipped preset froze at this constant. The `_capped_v1` entry
+/// points below take that number; the un-capped names pass this one, so a caller with no ruleset
+/// in scope keeps exactly the behaviour it had.
 pub const PALW_STEP_LEG_MAX_LEAVES: u64 = crate::palw_step::PALW_STEP_MAX_LEAVES;
-/// Deepest step-tree opening: `ceil(log2(MAX_LEAVES))`.
-pub const PALW_STEP_LEG_MAX_OPENING_SIBLINGS: usize = 22;
+
+/// **The deepest opening a ladder of `max_step_leaf_count` leaves can need: `ceil(log2(n))`.**
+///
+/// This was the literal `22`, under a doc line that already called it `ceil(log2(MAX_LEAVES))` —
+/// a derived quantity spelled as a constant, and therefore one that does not move when the thing
+/// it derives from does. A ruleset that freezes a `2^32` ladder needs 32 siblings per opening and
+/// the leg refused at 22, so on that ladder EVERY honest opening was refused by the very court
+/// that asked for it. That, and not the ladder constant, is why "arm the deeper ladder" was never
+/// a one-line change. The derivation lives here now, and the caps are the ruleset's.
+///
+/// It is `PalwCourtParamsV2::bisection_rounds` reached by another route, and the two must agree:
+/// the court budgets one bisection round per level and the leg carries one sibling per level, so a
+/// leg cap below the court's round count is a dispute the court can schedule and the leg cannot
+/// close. The agreement is asserted over a sweep in this module's tests.
+pub const fn step_leg_max_opening_siblings_v1(max_step_leaf_count: u64) -> usize {
+    // A zero- or one-leaf tree is its own root: no level, and so no sibling.
+    if max_step_leaf_count <= 1 {
+        return 0;
+    }
+    // `ceil(log2(n)) = floor(log2(n - 1)) + 1` for `n >= 2`. Written this way rather than through
+    // `next_power_of_two`, which overflows above `2^63` instead of answering 64.
+    (max_step_leaf_count - 1).ilog2() as usize + 1
+}
+
+/// The deepest opening on the DEFAULT ladder: [`step_leg_max_opening_siblings_v1`] of
+/// [`PALW_STEP_LEG_MAX_LEAVES`] — 22, and 22 for as long as every preset freezes `2^22`.
+pub const PALW_STEP_LEG_MAX_OPENING_SIBLINGS: usize = step_leg_max_opening_siblings_v1(PALW_STEP_LEG_MAX_LEAVES);
 /// Cap on one carried tile (bytes): `4 × MAX_TILE_LEN`.
 pub const PALW_STEP_LEG_MAX_TILE_BYTES: usize = 4 * crate::palw_step::PALW_STEP_MAX_TILE_LEN as usize;
 /// Cap on one carried KV chunk (bytes).
@@ -230,9 +260,18 @@ fn step_merkle_leaf(index: u64, leaf_hash: &Hash64) -> Hash64 {
 
 /// Root of the step tree over ordered leaf hashes.
 pub fn step_merkle_root_v1(ordered_leaf_hashes: &[Hash64]) -> Result<Hash64, PalwStepLegError> {
+    step_merkle_root_capped_v1(ordered_leaf_hashes, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`step_merkle_root_v1`] against the ladder top the RULESET froze — `max_step_leaf_count`.
+///
+/// Nothing about the tree changes with the cap: the cap decides which trees this function will
+/// build, never how it folds one, so a caller that passes [`PALW_STEP_LEG_MAX_LEAVES`] gets the
+/// byte-identical root it got before the split.
+pub fn step_merkle_root_capped_v1(ordered_leaf_hashes: &[Hash64], max_step_leaf_count: u64) -> Result<Hash64, PalwStepLegError> {
     let count = ordered_leaf_hashes.len() as u64;
-    if count == 0 || count > PALW_STEP_LEG_MAX_LEAVES {
-        return Err(PalwStepLegError::LeafCountOutOfRange { got: count, max: PALW_STEP_LEG_MAX_LEAVES });
+    if count == 0 || count > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: count, max: max_step_leaf_count });
     }
     let mut level: Vec<Hash64> = ordered_leaf_hashes.iter().enumerate().map(|(i, leaf)| step_merkle_leaf(i as u64, leaf)).collect();
     while level.len() > 1 {
@@ -256,10 +295,19 @@ pub fn step_merkle_root_v1(ordered_leaf_hashes: &[Hash64]) -> Result<Hash64, Pal
 /// promote-odd shape lives in exactly two loops today and a third copy in a challenger is the
 /// "second name-to-bytes mapping" class of defect: it fails silently as an opening nobody can
 /// verify, or worse, verifies against the wrong tree.
-pub fn step_merkle_path_v1(ordered_leaf_hashes: &[Hash64], mut index: usize) -> Result<Vec<Hash64>, PalwStepLegError> {
+pub fn step_merkle_path_v1(ordered_leaf_hashes: &[Hash64], index: usize) -> Result<Vec<Hash64>, PalwStepLegError> {
+    step_merkle_path_capped_v1(ordered_leaf_hashes, index, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`step_merkle_path_v1`] against the ruleset's `max_step_leaf_count`.
+pub fn step_merkle_path_capped_v1(
+    ordered_leaf_hashes: &[Hash64],
+    mut index: usize,
+    max_step_leaf_count: u64,
+) -> Result<Vec<Hash64>, PalwStepLegError> {
     let count = ordered_leaf_hashes.len() as u64;
-    if count == 0 || count > PALW_STEP_LEG_MAX_LEAVES {
-        return Err(PalwStepLegError::LeafCountOutOfRange { got: count, max: PALW_STEP_LEG_MAX_LEAVES });
+    if count == 0 || count > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: count, max: max_step_leaf_count });
     }
     if index as u64 >= count {
         return Err(PalwStepLegError::LeafIndexOutOfRange { index: index as u64, count });
@@ -309,15 +357,27 @@ pub struct PalwStepRangeOpeningV1 {
 /// Recomputes the root a valid range opening implies; the caller compares to the committed root.
 /// Rejection means the evidence is about some other commitment, never a verdict.
 pub fn step_range_opening_root_v1(leaf_count: u64, opening: &PalwStepRangeOpeningV1) -> Result<Hash64, PalwStepLegError> {
-    if leaf_count == 0 || leaf_count > PALW_STEP_LEG_MAX_LEAVES {
-        return Err(PalwStepLegError::LeafCountOutOfRange { got: leaf_count, max: PALW_STEP_LEG_MAX_LEAVES });
+    step_range_opening_root_capped_v1(leaf_count, opening, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`step_range_opening_root_v1`] against the ruleset's `max_step_leaf_count`. The range form
+/// spends at most two siblings a level, so its depth cap is twice the single-leaf one — derived
+/// from the same [`step_leg_max_opening_siblings_v1`], never restated.
+pub fn step_range_opening_root_capped_v1(
+    leaf_count: u64,
+    opening: &PalwStepRangeOpeningV1,
+    max_step_leaf_count: u64,
+) -> Result<Hash64, PalwStepLegError> {
+    if leaf_count == 0 || leaf_count > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: leaf_count, max: max_step_leaf_count });
     }
     let k = opening.leaf_hashes.len() as u64;
     if k == 0 || opening.first_leaf_index.checked_add(k).is_none_or(|end| end > leaf_count) {
         return Err(PalwStepLegError::LeafIndexOutOfRange { index: opening.first_leaf_index, count: leaf_count });
     }
-    if opening.siblings.len() > 2 * PALW_STEP_LEG_MAX_OPENING_SIBLINGS {
-        return Err(PalwStepLegError::OpeningTooDeep { got: opening.siblings.len(), max: 2 * PALW_STEP_LEG_MAX_OPENING_SIBLINGS });
+    let sibling_cap = 2 * step_leg_max_opening_siblings_v1(max_step_leaf_count);
+    if opening.siblings.len() > sibling_cap {
+        return Err(PalwStepLegError::OpeningTooDeep { got: opening.siblings.len(), max: sibling_cap });
     }
     let mut nodes: Vec<Hash64> =
         opening.leaf_hashes.iter().enumerate().map(|(i, leaf)| step_merkle_leaf(opening.first_leaf_index + i as u64, leaf)).collect();
@@ -369,9 +429,19 @@ pub fn step_merkle_range_siblings_v1(
     start: usize,
     count: usize,
 ) -> Result<Vec<Hash64>, PalwStepLegError> {
+    step_merkle_range_siblings_capped_v1(ordered_leaf_hashes, start, count, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`step_merkle_range_siblings_v1`] against the ruleset's `max_step_leaf_count`.
+pub fn step_merkle_range_siblings_capped_v1(
+    ordered_leaf_hashes: &[Hash64],
+    start: usize,
+    count: usize,
+    max_step_leaf_count: u64,
+) -> Result<Vec<Hash64>, PalwStepLegError> {
     let total = ordered_leaf_hashes.len() as u64;
-    if total == 0 || total > PALW_STEP_LEG_MAX_LEAVES {
-        return Err(PalwStepLegError::LeafCountOutOfRange { got: total, max: PALW_STEP_LEG_MAX_LEAVES });
+    if total == 0 || total > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: total, max: max_step_leaf_count });
     }
     if count == 0 || start + count > ordered_leaf_hashes.len() {
         return Err(PalwStepLegError::LeafIndexOutOfRange { index: start as u64, count: total });
@@ -425,14 +495,26 @@ pub fn step_range_sibling_count_v1(leaf_count: u64, first: u64, k: u64) -> u64 {
 /// Recomputes the root a valid opening implies (the caller compares to the committed root).
 /// Promote levels are derived from `(leaf_index, leaf_count)` and consume nothing.
 pub fn step_opening_root_v1(leaf_count: u64, opening: &PalwStepOpeningV1) -> Result<Hash64, PalwStepLegError> {
-    if leaf_count == 0 || leaf_count > PALW_STEP_LEG_MAX_LEAVES {
-        return Err(PalwStepLegError::LeafCountOutOfRange { got: leaf_count, max: PALW_STEP_LEG_MAX_LEAVES });
+    step_opening_root_capped_v1(leaf_count, opening, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`step_opening_root_v1`] against the ruleset's `max_step_leaf_count` — **the refusal that made
+/// the deeper ladder unusable.** The sibling cap is `ceil(log2(max_step_leaf_count))`, so a court
+/// running a `2^25` ladder accepts the 25-sibling path its own bisection asked for.
+pub fn step_opening_root_capped_v1(
+    leaf_count: u64,
+    opening: &PalwStepOpeningV1,
+    max_step_leaf_count: u64,
+) -> Result<Hash64, PalwStepLegError> {
+    if leaf_count == 0 || leaf_count > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: leaf_count, max: max_step_leaf_count });
     }
     if opening.leaf_index >= leaf_count {
         return Err(PalwStepLegError::LeafIndexOutOfRange { index: opening.leaf_index, count: leaf_count });
     }
-    if opening.siblings.len() > PALW_STEP_LEG_MAX_OPENING_SIBLINGS {
-        return Err(PalwStepLegError::OpeningTooDeep { got: opening.siblings.len(), max: PALW_STEP_LEG_MAX_OPENING_SIBLINGS });
+    let sibling_cap = step_leg_max_opening_siblings_v1(max_step_leaf_count);
+    if opening.siblings.len() > sibling_cap {
+        return Err(PalwStepLegError::OpeningTooDeep { got: opening.siblings.len(), max: sibling_cap });
     }
     let mut current = step_merkle_leaf(opening.leaf_index, &opening.leaf_hash);
     let mut position = opening.leaf_index;
@@ -463,9 +545,18 @@ pub fn step_opening_root_v1(leaf_count: u64, opening: &PalwStepOpeningV1) -> Res
 /// Produces the membership proof of `leaf_index` from the same ordered leaf hashes the root
 /// was built over. Commit / open / adjudicate are held together by the mirror test.
 pub fn step_opening_v1(ordered_leaf_hashes: &[Hash64], leaf_index: u64) -> Result<PalwStepOpeningV1, PalwStepLegError> {
+    step_opening_capped_v1(ordered_leaf_hashes, leaf_index, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`step_opening_v1`] against the ruleset's `max_step_leaf_count`.
+pub fn step_opening_capped_v1(
+    ordered_leaf_hashes: &[Hash64],
+    leaf_index: u64,
+    max_step_leaf_count: u64,
+) -> Result<PalwStepOpeningV1, PalwStepLegError> {
     let count = ordered_leaf_hashes.len() as u64;
-    if count == 0 || count > PALW_STEP_LEG_MAX_LEAVES {
-        return Err(PalwStepLegError::LeafCountOutOfRange { got: count, max: PALW_STEP_LEG_MAX_LEAVES });
+    if count == 0 || count > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: count, max: max_step_leaf_count });
     }
     if leaf_index >= count {
         return Err(PalwStepLegError::LeafIndexOutOfRange { index: leaf_index, count });
@@ -2042,5 +2133,268 @@ mod tests {
         let b = state_chunk_leaf_hash_v1(&h64(2), 0, b"bytes");
         assert_ne!(a, b, "the same bytes under two map claims must be two leaves");
         assert_ne!(state_chunks_root_v1(&[a]).unwrap(), state_chunks_root_v1(&[b]).unwrap());
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The step leg's caps are the RULESET's, not this module's literals.
+    // -----------------------------------------------------------------------------------------
+
+    /// The leaf a virtual tree puts at `index` — cheap, and a pure function of the index so the
+    /// tree is reproducible without being stored.
+    fn virtual_leaf(index: u64) -> Hash64 {
+        Hash64::from_u64_word(index ^ 0x5A5A_0000_0000_0001)
+    }
+
+    /// **A perfect `2^height` tree, walked instead of stored.**
+    ///
+    /// `step_merkle_root_v1` takes a slice, and a slice of `2^25` `Hash64` is 2 GiB — a test that
+    /// allocates it is a test nobody runs, so the acceptance case would go unwritten, which is how
+    /// the 22 survived. This recursion holds one node per LEVEL and calls the module's own
+    /// exported [`step_merkle_leaf_v1`] / [`step_merkle_node_v1`]: it is a second shape, never a
+    /// second hash rule, and [`the_virtual_tree_is_the_shipped_tree`] proves the shape against the
+    /// shipped builder before anything below leans on it.
+    ///
+    /// `target` rides down only the side that contains it; each frame pushes the sibling of that
+    /// side after both children return, so the deepest frame pushes first and `path` comes back
+    /// bottom-up — the order [`step_opening_root_v1`] consumes.
+    fn virtual_subtree(first: u64, height: u32, target: Option<u64>, path: &mut Vec<Hash64>) -> Hash64 {
+        if height == 0 {
+            return step_merkle_leaf_v1(first, &virtual_leaf(first));
+        }
+        let half = 1u64 << (height - 1);
+        let mid = first + half;
+        let left = virtual_subtree(first, height - 1, target.filter(|t| *t < mid), path);
+        let right = virtual_subtree(mid, height - 1, target.filter(|t| *t >= mid), path);
+        if let Some(t) = target {
+            path.push(if t < mid { right } else { left });
+        }
+        step_merkle_node_v1(&left, &right)
+    }
+
+    fn virtual_root_and_path(height: u32, target: u64) -> (Hash64, Vec<Hash64>) {
+        let mut path = Vec::with_capacity(height as usize);
+        let root = virtual_subtree(0, height, Some(target), &mut path);
+        (root, path)
+    }
+
+    /// The walked tree IS the folded tree, at every perfect height the folded one can afford.
+    #[test]
+    fn the_virtual_tree_is_the_shipped_tree() {
+        for height in 0..=10u32 {
+            let width = 1usize << height;
+            let leaves: Vec<Hash64> = (0..width as u64).map(virtual_leaf).collect();
+            let shipped_root = step_merkle_root_v1(&leaves).expect("a shipped root");
+            for target in [0u64, 1, (width as u64) / 3, width as u64 - 1].into_iter().filter(|t| *t < width as u64) {
+                let (root, path) = virtual_root_and_path(height, target);
+                assert_eq!(root, shipped_root, "height {height}: the walk and the fold disagree");
+                let shipped = step_opening_v1(&leaves, target).expect("a shipped opening");
+                assert_eq!(path, shipped.siblings, "height {height} target {target}: sibling path");
+                assert_eq!(path.len(), height as usize, "a perfect 2^{height} tree opens {height} siblings");
+            }
+        }
+    }
+
+    /// **The leg's opening depth IS the court's bisection depth.** Two derivations of
+    /// `ceil(log2(max_step_leaf_count))` that could drift are one dispute the court schedules and
+    /// the leg cannot close, so they are checked against each other rather than against a literal.
+    #[test]
+    fn the_legs_opening_depth_is_the_courts_bisection_depth() {
+        // Not `u64::MAX`: `PalwCourtParamsV2::bisection_rounds` reaches it through
+        // `next_power_of_two`, which overflows above `2^63` rather than answering 64. That is the
+        // court's own edge and is left exactly as it is here; the leg's derivation does answer 64,
+        // asserted below.
+        for n in [2u64, 3, 4, 5, 7, 8, 9, 1023, 1024, 1025, 1 << 22, (1 << 22) + 1, 1 << 25, 1 << 32, 1 << 62] {
+            let court = crate::palw_mode_v2::PalwCourtParamsV2::new(n, 4, 2).expect("a well-formed court");
+            assert_eq!(
+                step_leg_max_opening_siblings_v1(n),
+                court.bisection_rounds() as usize,
+                "the leg and the court must count the same levels for a {n}-leaf ladder"
+            );
+        }
+        // Degenerate ladders have no level, and the top of the u64 range answers 64 rather than
+        // overflowing a `next_power_of_two`.
+        assert_eq!(step_leg_max_opening_siblings_v1(0), 0);
+        assert_eq!(step_leg_max_opening_siblings_v1(1), 0);
+        assert_eq!(step_leg_max_opening_siblings_v1(u64::MAX), 64);
+        // And the derived depth is exactly the path a real tree of that many leaves produces.
+        for width in 1..=40usize {
+            let leaves: Vec<Hash64> = (0..width as u64).map(virtual_leaf).collect();
+            let longest = (0..width as u64)
+                .map(|i| step_opening_v1(&leaves, i).expect("an opening").siblings.len())
+                .max()
+                .expect("a non-empty tree");
+            assert_eq!(
+                longest,
+                step_leg_max_opening_siblings_v1(width as u64),
+                "width {width}: the derived cap must be the deepest real path"
+            );
+        }
+    }
+
+    /// **The shipped default is unchanged, at every site, byte for byte.**
+    ///
+    /// Nothing may move while the fence is dormant, so every `_capped_v1` entry point called with
+    /// [`PALW_STEP_LEG_MAX_LEAVES`] must return exactly what the un-capped name returns — and the
+    /// two constants must still read 2^22 and 22.
+    #[test]
+    fn the_dormant_default_is_byte_identical_at_every_site() {
+        assert_eq!(PALW_STEP_LEG_MAX_LEAVES, 1 << 22, "the shipped ladder moved without a fence");
+        assert_eq!(PALW_STEP_LEG_MAX_OPENING_SIBLINGS, 22, "the shipped opening depth moved without a fence");
+        assert_eq!(PALW_STEP_LEG_MAX_OPENING_SIBLINGS, step_leg_max_opening_siblings_v1(PALW_STEP_LEG_MAX_LEAVES));
+
+        const CAP: u64 = PALW_STEP_LEG_MAX_LEAVES;
+        for width in 1..=33usize {
+            let leaves: Vec<Hash64> = (0..width as u64).map(virtual_leaf).collect();
+            assert_eq!(step_merkle_root_v1(&leaves), step_merkle_root_capped_v1(&leaves, CAP), "root, width {width}");
+            let root = step_merkle_root_v1(&leaves).expect("rooted");
+            for index in 0..width {
+                assert_eq!(
+                    step_merkle_path_v1(&leaves, index),
+                    step_merkle_path_capped_v1(&leaves, index, CAP),
+                    "path, width {width} index {index}"
+                );
+                let opening = step_opening_v1(&leaves, index as u64).expect("an opening");
+                assert_eq!(Ok(opening.clone()), step_opening_capped_v1(&leaves, index as u64, CAP), "opening, {width}/{index}");
+                assert_eq!(
+                    step_opening_root_v1(width as u64, &opening),
+                    step_opening_root_capped_v1(width as u64, &opening, CAP),
+                    "verify, {width}/{index}"
+                );
+                assert_eq!(step_opening_root_v1(width as u64, &opening), Ok(root), "the default still verifies");
+                for count in 1..=(width - index) {
+                    let siblings = step_merkle_range_siblings_v1(&leaves, index, count).expect("a range");
+                    assert_eq!(
+                        Ok(siblings.clone()),
+                        step_merkle_range_siblings_capped_v1(&leaves, index, count, CAP),
+                        "range siblings, {width}/{index}+{count}"
+                    );
+                    let range = PalwStepRangeOpeningV1 {
+                        first_leaf_index: index as u64,
+                        leaf_hashes: leaves[index..index + count].to_vec(),
+                        siblings,
+                    };
+                    assert_eq!(
+                        step_range_opening_root_v1(width as u64, &range),
+                        step_range_opening_root_capped_v1(width as u64, &range, CAP),
+                        "range verify, {width}/{index}+{count}"
+                    );
+                    assert_eq!(step_range_opening_root_v1(width as u64, &range), Ok(root));
+                }
+            }
+        }
+        // A leaf count one past the default is refused by the default entry points and by the
+        // capped ones called AT the default — the cap is a parameter, not a second rule.
+        let over = CAP + 1;
+        let opening = PalwStepOpeningV1 { leaf_index: 0, leaf_hash: virtual_leaf(0), siblings: vec![h64(0x11); 23] };
+        assert_eq!(step_opening_root_v1(over, &opening), Err(PalwStepLegError::LeafCountOutOfRange { got: over, max: CAP }));
+        assert_eq!(step_opening_root_v1(over, &opening), step_opening_root_capped_v1(over, &opening, CAP));
+    }
+
+    /// **The three sites a ladder past `2^22` is refused at today, each named.**
+    ///
+    /// A tree of `2^22 + 1` leaves is the smallest one the shipped literals refuse, and it is
+    /// refused three separate times on the way through commit → open → verify. A partial fix
+    /// cannot look green here because each refusal is asserted by NAME and by the site that
+    /// produced it, and the fourth assertion — the opening-depth cap, the literal 22 itself — is
+    /// reached with a leaf count the default admits, so it is not masked by the count guard.
+    #[test]
+    fn a_ladder_past_the_default_is_refused_at_three_named_sites_and_the_ruleset_cap_clears_them() {
+        const LADDER: u64 = PALW_STEP_LEG_MAX_LEAVES + 1;
+        let leaves: Vec<Hash64> = (0..LADDER).map(virtual_leaf).collect();
+
+        // SITE 1 — the root builder (`step_merkle_root_v1`): an honest executor cannot commit.
+        assert_eq!(
+            step_merkle_root_v1(&leaves),
+            Err(PalwStepLegError::LeafCountOutOfRange { got: LADDER, max: PALW_STEP_LEG_MAX_LEAVES }),
+            "site 1: the root builder refuses the deeper ladder"
+        );
+        // SITE 2 — the opening builder (`step_opening_v1`): the prover cannot answer the court.
+        assert_eq!(
+            step_opening_v1(&leaves, 0),
+            Err(PalwStepLegError::LeafCountOutOfRange { got: LADDER, max: PALW_STEP_LEG_MAX_LEAVES }),
+            "site 2: the opening builder refuses the deeper ladder"
+        );
+
+        // Now the same three calls against the RULESET's ladder top. All three clear.
+        let root = step_merkle_root_capped_v1(&leaves, LADDER).expect("site 1 clears under the ruleset cap");
+        let opening = step_opening_capped_v1(&leaves, 0, LADDER).expect("site 2 clears under the ruleset cap");
+        assert_eq!(opening.siblings.len(), 23, "a 2^22+1 ladder opens 23 siblings, past the literal 22");
+        assert_eq!(
+            step_opening_root_capped_v1(LADDER, &opening, LADDER),
+            Ok(root),
+            "the round trip closes once the caps are the ruleset's"
+        );
+
+        // SITE 3 — the verifier's leaf-count cap (`step_opening_root_v1`): the court cannot check
+        // the answer even if it were handed one.
+        assert_eq!(
+            step_opening_root_v1(LADDER, &opening),
+            Err(PalwStepLegError::LeafCountOutOfRange { got: LADDER, max: PALW_STEP_LEG_MAX_LEAVES }),
+            "site 3: the verifier's leaf-count cap refuses the deeper ladder"
+        );
+        // SITE 4 — the verifier's opening-DEPTH cap, the literal this item exists to delete.
+        // Reached with a leaf count the default admits, so the count guard cannot mask it: the
+        // refusal here is about the 23 siblings alone.
+        assert_eq!(
+            step_opening_root_v1(PALW_STEP_LEG_MAX_LEAVES, &opening),
+            Err(PalwStepLegError::OpeningTooDeep { got: 23, max: 22 }),
+            "site 4: the opening-depth cap refuses 23 siblings at a leaf count it admits"
+        );
+        // Under a ruleset that froze the deeper ladder the depth cap steps aside, and what is left
+        // is the honest shape refusal — this opening is not an opening of a 2^22 tree — which is a
+        // different answer and must stay a different answer.
+        assert_eq!(
+            step_opening_root_capped_v1(PALW_STEP_LEG_MAX_LEAVES, &opening, LADDER),
+            Err(PalwStepLegError::OpeningPathTooLong { extra: 1 }),
+            "a cap refusal and a shape refusal are not the same verdict"
+        );
+        // And the depth cap is still a real bound under the deeper ruleset: one sibling past the
+        // ladder's own depth is refused, with the DERIVED maximum in the error.
+        let mut too_deep = opening.clone();
+        too_deep.siblings.push(h64(0x77));
+        assert_eq!(
+            step_opening_root_capped_v1(LADDER, &too_deep, LADDER),
+            Err(PalwStepLegError::OpeningTooDeep { got: 24, max: 23 }),
+            "the derived cap still bounds the carried path"
+        );
+    }
+
+    /// **The acceptance case: a `2^25` ladder, a 25-sibling path, verified.**
+    ///
+    /// This is what ADR-0077's Phase B fence would arm, and it is the thing the shipped tree could
+    /// not demonstrate. The tree is walked rather than stored (see [`virtual_subtree`]) because
+    /// `2^25` leaf hashes are 2 GiB.
+    #[test]
+    fn a_2_25_ladder_opens_25_siblings_and_verifies_under_its_own_ruleset() {
+        const HEIGHT: u32 = 25;
+        const LADDER: u64 = 1 << HEIGHT;
+        // An index with mixed parity all the way up, so the walk exercises both node orders.
+        const TARGET: u64 = 0x0155_5555;
+
+        let (root, siblings) = virtual_root_and_path(HEIGHT, TARGET);
+        assert_eq!(siblings.len(), 25, "a 2^25 ladder needs 25 siblings and the leg refused at 22");
+        assert_eq!(step_leg_max_opening_siblings_v1(LADDER), 25);
+        let opening = PalwStepOpeningV1 { leaf_index: TARGET, leaf_hash: virtual_leaf(TARGET), siblings };
+
+        // Today, with the module constant: refused before it is even walked.
+        assert_eq!(
+            step_opening_root_v1(LADDER, &opening),
+            Err(PalwStepLegError::LeafCountOutOfRange { got: LADDER, max: PALW_STEP_LEG_MAX_LEAVES }),
+            "the default ladder still refuses 2^25 — nothing here arms anything"
+        );
+        // Under a ruleset that froze `max_step_leaf_count = 2^25`: it verifies.
+        assert_eq!(step_opening_root_capped_v1(LADDER, &opening, LADDER), Ok(root), "a 25-sibling opening must reach the 2^25 root");
+        // A bent sibling must not, and an over-long path is still refused at the DERIVED depth.
+        let mut bent = opening.clone();
+        bent.siblings[7] = h64(0xEE);
+        assert_ne!(step_opening_root_capped_v1(LADDER, &bent, LADDER), Ok(root), "a bent path must not reach the root");
+        let mut long = opening.clone();
+        long.siblings.push(h64(0xEE));
+        assert_eq!(step_opening_root_capped_v1(LADDER, &long, LADDER), Err(PalwStepLegError::OpeningTooDeep { got: 26, max: 25 }));
+        // A ruleset one rung shallower refuses the ladder itself, by leaf count.
+        assert_eq!(
+            step_opening_root_capped_v1(LADDER, &opening, LADDER / 2),
+            Err(PalwStepLegError::LeafCountOutOfRange { got: LADDER, max: LADDER / 2 })
+        );
     }
 }

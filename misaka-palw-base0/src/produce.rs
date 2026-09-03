@@ -34,7 +34,7 @@
 use crate::artifact::Base0ArtifactV1;
 use crate::engine::{Base0Engine, EngineError, KvCache, argmax_lowest};
 use crate::legs::{Base0CapturedRowV1, Base0StepCaptureV1, Base0StepTilesV1, LegError, base0_captured_rows_v1};
-use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepTableV1, step_leaf_count};
+use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepTableV1, step_leaf_count_capped_v1};
 use kaspa_consensus_core::palw_step_leg::PalwStepBindingV2;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
@@ -226,7 +226,21 @@ pub fn base0_execute_for_attempt_v1(
     ctx: &PalwJobContextV2,
     prompt: &[usize],
 ) -> Result<Base0ExecutionV1, ProduceError> {
-    base0_execute_for_attempt_streaming_v1(artifact, profile, ctx, prompt, &mut |_| {})
+    base0_execute_for_attempt_capped_v1(artifact, profile, ctx, prompt, kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`base0_execute_for_attempt_v1`] against the ladder top the RULESET froze — the floor's copy of
+/// the seam [`crate::qwen25_a16_backend::a16_execute_for_attempt_capped_v1`] documents.
+///
+/// A caller with no ruleset in scope passes the module default and nothing moves.
+pub fn base0_execute_for_attempt_capped_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    step_ladder_cap: u64,
+) -> Result<Base0ExecutionV1, ProduceError> {
+    base0_execute_for_attempt_streaming_capped_v1(artifact, profile, ctx, prompt, &mut |_| {}, step_ladder_cap)
 }
 
 /// **The same run, with each id handed over as it is SELECTED** (ADR-0077 Decision 2).
@@ -248,6 +262,26 @@ pub fn base0_execute_for_attempt_streaming_v1(
     prompt: &[usize],
     on_token: &mut dyn FnMut(u32),
 ) -> Result<Base0ExecutionV1, ProduceError> {
+    base0_execute_for_attempt_streaming_capped_v1(
+        artifact,
+        profile,
+        ctx,
+        prompt,
+        on_token,
+        kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+    )
+}
+
+/// [`base0_execute_for_attempt_streaming_v1`] against the ruleset's ladder top. The floor's one
+/// capture path, so this is where the cap arrives for the whole family.
+pub fn base0_execute_for_attempt_streaming_capped_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    on_token: &mut dyn FnMut(u32),
+    step_ladder_cap: u64,
+) -> Result<Base0ExecutionV1, ProduceError> {
     let prefill = ctx.declared_prefill_tokens as usize;
     let decode_tokens = ctx.exact_decode_tokens as usize;
     if prefill == 0 || decode_tokens == 0 {
@@ -261,7 +295,7 @@ pub fn base0_execute_for_attempt_streaming_v1(
         return Err(ProduceError::TokenOutOfVocab { token: *bad, vocab });
     }
 
-    let leaf_count = step_leaf_count(profile, ctx).map_err(ProduceError::StepSpace)?;
+    let leaf_count = step_leaf_count_capped_v1(profile, ctx, step_ladder_cap).map_err(ProduceError::StepSpace)?;
     let mut capture = Base0StepCaptureV1::new(leaf_count).map_err(ProduceError::Leg)?;
     let engine = Base0Engine::new(artifact);
     // **ADR-0049 Decision F's obligation, before the first token.**
@@ -330,8 +364,19 @@ pub fn base0_execute_for_attempt_streaming_v1(
     let tiles = capture.finish().map_err(ProduceError::Leg)?;
     let trace_root = base0_logits_trace_root_v1(ctx, &logits_rows, &generated);
     let activation_leg_root = base0_activation_leg_root_v1(ctx);
-    let binding = crate::legs::base0_binding_from_capture_v1(profile, ctx, &tiles, &checkpoints, trace_root, activation_leg_root)
-        .map_err(ProduceError::Leg)?;
+    // The COMMIT side of the same ladder — see the A16 executor's note. `checkpoint_profile` is
+    // this run's own, byte-for-byte the one the uncapped name builds for itself.
+    let binding = crate::legs::base0_binding_from_capture_with_profile_capped_v1(
+        profile,
+        ctx,
+        &tiles,
+        &checkpoints,
+        &checkpoint_profile,
+        trace_root,
+        activation_leg_root,
+        step_ladder_cap,
+    )
+    .map_err(ProduceError::Leg)?;
     let ctx_hash = ctx.context_hash();
     // BASE-0 has no tokenizer, so there are no rendered bytes — and the empty rendering is the
     // honest statement of that. Token ids are the identity in any case (v2 design §10.7).
@@ -611,6 +656,32 @@ pub fn base0_replay_from_checkpoint_v1(
     seed_token: u32,
     calls: u32,
 ) -> Result<Base0CheckpointReplayV1, ProduceError> {
+    base0_replay_from_checkpoint_capped_v1(
+        artifact,
+        profile,
+        ctx,
+        checkpoint,
+        chunks,
+        seed_token,
+        calls,
+        kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+    )
+}
+
+/// [`base0_replay_from_checkpoint_v1`] against the ruleset's ladder top. The replay prices the
+/// SAME job the capture did, so it has to be told the same ladder or a class registered against a
+/// deeper one replays nothing it produced.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_replay_from_checkpoint_capped_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    checkpoint: &kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2,
+    chunks: &[Vec<u8>],
+    seed_token: u32,
+    calls: u32,
+    step_ladder_cap: u64,
+) -> Result<Base0CheckpointReplayV1, ProduceError> {
     use kaspa_consensus_core::palw_state_chunk_map as map;
     let prefill = ctx.declared_prefill_tokens;
     let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
@@ -625,7 +696,7 @@ pub fn base0_replay_from_checkpoint_v1(
     let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions).map_err(ProduceError::Leg)?;
     let mut cache = KvCache::from_state_chunks(artifact, &geometry, chunks).map_err(ProduceError::Engine)?;
 
-    let leaf_count = step_leaf_count(profile, ctx).map_err(ProduceError::StepSpace)?;
+    let leaf_count = step_leaf_count_capped_v1(profile, ctx, step_ladder_cap).map_err(ProduceError::StepSpace)?;
     let mut capture = Base0StepCaptureV1::new(leaf_count).map_err(ProduceError::Leg)?;
     let engine = Base0Engine::new(artifact);
     // **ADR-0049 Decision F's obligation, before the first token.**
@@ -1267,7 +1338,7 @@ mod tests {
     #[test]
     fn an_honest_execution_fills_every_leaf_of_its_step_space() {
         let (artifact, profile, ctx, prompt) = small_job();
-        let expected = step_leaf_count(&profile, &ctx).expect("the job has a step space");
+        let expected = kaspa_consensus_core::palw_step::step_leaf_count(&profile, &ctx).expect("the job has a step space");
         let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
         assert_eq!(run.tiles.leaves.len() as u64, expected);
         assert!(
@@ -1622,7 +1693,7 @@ mod tests {
 
         let (artifact, profile, ctx, prompt) = small_job();
         let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
-        let leaves = step_leaf_count(&profile, &ctx).expect("the job has a step space");
+        let leaves = kaspa_consensus_core::palw_step::step_leaf_count(&profile, &ctx).expect("the job has a step space");
         assert!(profile.attn_heads > 1, "a single-head geometry cannot see two of the three defects");
 
         // One oracle over the WHOLE inventory, proven against its own root — the production path,

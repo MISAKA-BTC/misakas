@@ -13,9 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use kaspa_consensus_core::palw_derived_v1::{
-    PALW_DERIVED_V1_MLDSA87_CONTEXT, PalwDerivedArtifactV1, kind, palw_derived_message_v1,
-};
+use kaspa_consensus_core::palw_derived_v1::{PALW_DERIVED_V1_MLDSA87_CONTEXT, PalwDerivedArtifactV1, kind, palw_derived_message_v1};
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_hashes::Hash64;
 use kaspa_pq_validator_core::{VALIDATOR_SEED_LEN, ValidatorKey};
@@ -51,7 +49,10 @@ pub struct Derived {
 pub enum Outcome {
     Derived(Box<Derived>),
     /// ADR-0078 X4: the answer did not parse under the grammar — no object, the claim untouched.
-    Refused { transformer: &'static str, reason: String },
+    Refused {
+        transformer: &'static str,
+        reason: String,
+    },
 }
 
 /// A transformer name (`scene/glb/v1`) or a kind name (`scene`, which picks the kind's first
@@ -65,24 +66,43 @@ pub fn resolve_transformer(spec: &str) -> Result<&'static str, String> {
     {
         return Ok(name);
     }
-    let available: Vec<String> = registry::transformer_names().iter().map(|(n, k, _)| format!("{n} ({})", kind::name(*k).unwrap_or("?"))).collect();
+    let available: Vec<String> =
+        registry::transformer_names().iter().map(|(n, k, _)| format!("{n} ({})", kind::name(*k).unwrap_or("?"))).collect();
     Err(format!("no transformer or kind named {spec:?}; this build has: {}", available.join(", ")))
 }
 
-/// Read the seed file the gateway signs derivations with (the rail's own format: 32 raw bytes).
+/// Read the seed file the gateway signs derivations with — through the ONE reader, like everyone
+/// else.
+///
+/// This doc said "the rail's own format: 32 raw bytes", and it was the last place in the tree that
+/// was true of. The rail's private raw reader is gone: it now calls
+/// `kaspa_pq_validator_core::load_validator_seed`, which takes whitespace-trimmed HEX, because that
+/// is what `misaka-cli` and `kaspad` have always written and read for the same files. A comment
+/// naming another binary's format is a comment that goes stale when that binary changes and says
+/// nothing when it does.
+///
+/// The format was the visible half. The half that matters here is that the raw reader had no
+/// guard, and `load_validator_seed` fails CLOSED on an unsafe seed file (audit M-02): a
+/// non-regular file — symlink, device, fifo, checked WITHOUT following the link — and a group- or
+/// world-readable mode are refused rather than silently signed with. That is worth more in this
+/// process than in the rail. ADR-0079 Decision 4 is that the half which parses a stranger's HTTP
+/// text holds no key; `--derive-seed` is the one flag that hands this process one anyway, so it is
+/// the last place that should accept a key any local user can read.
 pub fn read_seed(path: &Path) -> Result<[u8; VALIDATOR_SEED_LEN], String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("cannot read the derive seed {}: {e}", path.display()))?;
-    if bytes.len() != VALIDATOR_SEED_LEN {
-        return Err(format!("the derive seed is {} bytes, not {VALIDATOR_SEED_LEN}", bytes.len()));
-    }
-    let mut seed = [0u8; VALIDATOR_SEED_LEN];
-    seed.copy_from_slice(&bytes);
-    Ok(seed)
+    let path = path.to_str().ok_or_else(|| format!("the derive seed path {} is not UTF-8", path.display()))?;
+    kaspa_pq_validator_core::load_validator_seed(path)
 }
 
 /// Derive, write the outbox files, and (with a seed) sign. `Err` is an operational failure (a
 /// disk, a key that is not the executor's); a grammar refusal is `Ok(Outcome::Refused)`.
-pub fn run(spec: &str, cfg: &DeriveConfig, binding: &ClaimBinding, answer: &[u8], outbox: &Path, stem: &str) -> Result<Outcome, String> {
+pub fn run(
+    spec: &str,
+    cfg: &DeriveConfig,
+    binding: &ClaimBinding,
+    answer: &[u8],
+    outbox: &Path,
+    stem: &str,
+) -> Result<Outcome, String> {
     let transformer = resolve_transformer(spec)?;
     let derivation = match derive_named(transformer, binding, answer) {
         Ok(d) => d,
@@ -101,7 +121,9 @@ pub fn run(spec: &str, cfg: &DeriveConfig, binding: &ClaimBinding, answer: &[u8]
         Some(seed) => {
             let key = ValidatorKey::from_seed(seed);
             if key.public_key() != binding.executor_pubkey.as_slice() {
-                return Err("the derive seed is not the executor key in the identity file — this key cannot sign this derivation".into());
+                return Err(
+                    "the derive seed is not the executor key in the identity file — this key cannot sign this derivation".into()
+                );
             }
             let message = palw_derived_message_v1(&derivation.object);
             Some(key.sign_with_context(message.as_byte_slice(), PALW_DERIVED_V1_MLDSA87_CONTEXT).to_vec())
@@ -114,7 +136,8 @@ pub fn run(spec: &str, cfg: &DeriveConfig, binding: &ClaimBinding, answer: &[u8]
     let dsl_path = outbox.join(format!("{stem}.dsl"));
     std::fs::write(&dsl_path, &derivation.canonical_dsl).map_err(|e| format!("cannot write {}: {e}", dsl_path.display()))?;
     let artifact_path = outbox.join(format!("{stem}.artifact.{}", derivation.artifact.extension));
-    std::fs::write(&artifact_path, &derivation.artifact.bytes).map_err(|e| format!("cannot write {}: {e}", artifact_path.display()))?;
+    std::fs::write(&artifact_path, &derivation.artifact.bytes)
+        .map_err(|e| format!("cannot write {}: {e}", artifact_path.display()))?;
     let by_id_dir = outbox.join("artifacts");
     std::fs::create_dir_all(&by_id_dir).map_err(|e| format!("cannot create {}: {e}", by_id_dir.display()))?;
     let by_id = by_id_dir.join(format!("{}.{}", hex(derived_id), derivation.artifact.extension));
@@ -124,9 +147,11 @@ pub fn run(spec: &str, cfg: &DeriveConfig, binding: &ClaimBinding, answer: &[u8]
         .map_err(|e| format!("cannot write {}: {e}", unsigned_path.display()))?;
     let object_path = match &signature {
         Some(sig) => {
-            let object = PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(derivation.object.clone()), signature: sig.clone() };
+            let object =
+                PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(derivation.object.clone()), signature: sig.clone() };
             let path = outbox.join(format!("{stem}.derived-object.borsh"));
-            std::fs::write(&path, borsh::to_vec(&object).map_err(|e| e.to_string())?).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+            std::fs::write(&path, borsh::to_vec(&object).map_err(|e| e.to_string())?)
+                .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
             path
         }
         None => unsigned_path.clone(),
@@ -167,7 +192,8 @@ pub fn run(spec: &str, cfg: &DeriveConfig, binding: &ClaimBinding, answer: &[u8]
         },
     });
     let summary_path = outbox.join(format!("{stem}.derived.json"));
-    std::fs::write(&summary_path, serde_json::to_vec_pretty(&summary).unwrap()).map_err(|e| format!("cannot write {}: {e}", summary_path.display()))?;
+    std::fs::write(&summary_path, serde_json::to_vec_pretty(&summary).unwrap())
+        .map_err(|e| format!("cannot write {}: {e}", summary_path.display()))?;
 
     Ok(Outcome::Derived(Box::new(Derived {
         transformer,

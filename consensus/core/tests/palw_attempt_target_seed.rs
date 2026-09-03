@@ -72,10 +72,7 @@ fn the_testnet11_tiers_are_not_priced_like_the_floor() {
     assert_eq!(rows.len(), 3, "testnet-11 registers the floor and two model tiers");
     let floor = rows.iter().min_by_key(|(_, share, pwu, _)| (*share as u128) * (*pwu as u128)).expect("a row").clone();
     for (id, share, pwu, target) in rows.iter().filter(|r| r.0 != floor.0) {
-        assert!(
-            *target > floor.3,
-            "tier {id} ({share}‰, {pwu} pwu) is not priced above the floor — this is the 5d table"
-        );
+        assert!(*target > floor.3, "tier {id} ({share}‰, {pwu} pwu) is not priced above the floor — this is the 5d table");
         // The floor draws hundreds of times faster per unit of share, so the gap is orders of
         // magnitude, not a nudge.
         assert!(*target / floor.3 > 100, "tier {id} sits only {}× above the floor", *target / floor.3);

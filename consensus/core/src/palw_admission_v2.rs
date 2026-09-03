@@ -778,7 +778,8 @@ mod tests {
 
     /// The retention the DA pin demands for a block at `daa` (ADR-0072 Decision 8).
     fn pinned_at(mut env: PalwAttemptEnvelopeV2, daa: u64) -> PalwAttemptEnvelopeV2 {
-        env.attempt.trace_retention_daa = daa.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(&state_params()));
+        env.attempt.trace_retention_daa =
+            daa.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(&state_params()));
         env
     }
 

@@ -49,9 +49,10 @@ const WINDOW_CHALLENGE: u64 = PALW_RC_WINDOWS_V1.window_challenge;
 
 /// **The lattice's windows, as ONE named set** (ADR-0077 Decision 7).
 ///
-/// Every DAA-denominated window of the claim lattice, the court's move clock and the retention
-/// spans that are derived from them. Two sets ship: [`PALW_RC_WINDOWS_V1`] is what testnet-11
-/// runs (the constants this module has always carried, byte for byte), and
+/// Every DAA-denominated window of the claim lattice, the court's move clock, the retention spans
+/// that are derived from them — and, since ADR-0080, the one court ceiling those derivations cannot
+/// be performed without ([`Self::court_max_close_bytes`]). Two sets ship: [`PALW_RC_WINDOWS_V1`]
+/// is what testnet-11 runs (the constants this module has always carried, byte for byte), and
 /// [`PALW_DEVNET_WINDOWS_V1`] is the same lattice in MINUTES, for the devnet preset only — the
 /// in-harness finding stands (a single-chain `TestConsensus` does not accrue the DAA the windows
 /// need) and a multi-node devnet chain does, so a drill that has to reach `Final` and spend a
@@ -73,6 +74,21 @@ pub struct PalwLatticeWindowsV1 {
     pub fp_abandon_hold: u64,
     pub claim_retirement: u64,
     pub withdrawal_delay: u64,
+    /// **Not a window — the one court ceiling a window's own derivations cannot be computed
+    /// without** (ADR-0080 W4).
+    ///
+    /// A court close may span several carriers, and the blocks a mover spends ASSEMBLING one are
+    /// blocks of `window_court` that carry no move. So the reserve
+    /// [`crate::palw_context_ladder::palw_close_assembly_daa_v1`] subtracts, and therefore the move
+    /// clock `window_court` can afford, are functions of this number as much as of the window. It
+    /// lives here because this struct is where a network's two answers diverge: everything else in
+    /// the bundle is one source for both sets, and a set that could not say what its own closes
+    /// cost would have to be handed a default — which is precisely the shortcut that charged the
+    /// minutes lattice for the hours lattice's closes.
+    ///
+    /// It is [`PalwCourtParamsV2::max_close_bytes`] verbatim: `with_cost_ceilings` derives the
+    /// chunk count from it, so this field and the bundle's court cannot disagree.
+    pub court_max_close_bytes: u64,
 }
 
 impl PalwLatticeWindowsV1 {
@@ -81,6 +97,14 @@ impl PalwLatticeWindowsV1 {
     /// second bind+receipt pair (see `MAX_CLAIM_EXPOSURE_DAA`).
     pub const fn max_claim_exposure_daa(&self) -> u64 {
         2 * (self.window_bind + self.window_receipt) + self.window_challenge + self.window_court + self.fp_abandon_hold
+    }
+
+    /// **The carriers one close may span under this set's court** — derived from
+    /// [`Self::court_max_close_bytes`] by the same inverse the admission gate and
+    /// `with_cost_ceilings` use, so the number a clock is derived from and the number a class is
+    /// admitted against are one number.
+    pub const fn max_close_chunks(&self) -> u64 {
+        crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(self.court_max_close_bytes)
     }
 }
 
@@ -100,13 +124,26 @@ pub const PALW_RC_WINDOWS_V1: PalwLatticeWindowsV1 = PalwLatticeWindowsV1 {
     fp_abandon_hold: 600,
     claim_retirement: 3_000,
     withdrawal_delay: 7_500,
+    // ADR-0080's ceiling: 27 carriers, 2,250,000 counted bytes, and a 216-DAA assembly reserve out
+    // of the 3,000-DAA court window. A 100-hour window can afford a 54-minute move; the set below
+    // cannot, which is why it is a field.
+    court_max_close_bytes: COURT_MAX_CLOSE_BYTES,
 };
 
 /// **The devnet lattice, in minutes** (ADR-0077 Decision 7 — "a devnet preset whose windows are
 /// minutes"). Same interlocks, one-fifteenth the spans: a commitment binds within 40 DAA, is
 /// licensed within 40 more, finalizes 100 after that and its draw matures 20 later — ~200 DAA
 /// from commitment to spendability, under an hour on a fixture-paced devnet. The court window
-/// holds a 2^32 ladder at a 4-DAA move clock (`(2 × 32 + 2) × 4 = 264 < 300`).
+/// holds a 2^32 ladder at a 4-DAA move clock (`(2 × 32 + 2) × 4 = 264`, plus an 8-DAA assembly
+/// reserve, against 300).
+///
+/// **These three numbers moved once and moved back, and the round trip is the lesson.** ADR-0080's
+/// assembly reserve is `2 × 4 × max_close_chunks`, and read from the RC's 27 it is 216 DAA — which
+/// 300 cannot hold at any clock, so `window_court` went to 600, the derived clock to 5 and
+/// `withdrawal_delay` to 900 to keep the bond interlock. They are back at 300, 4 and 600 because
+/// the reserve was never devnet's to pay: `max_close_chunks` is a RULESET quantity, this set now
+/// carries its own single-carrier close ceiling below, and its reserve is 8. A preset constant that
+/// moved for a reason that stopped being true is the defect, not the fix.
 pub const PALW_DEVNET_WINDOWS_V1: PalwLatticeWindowsV1 = PalwLatticeWindowsV1 {
     window_bind: 40,
     window_receipt: 40,
@@ -121,7 +158,42 @@ pub const PALW_DEVNET_WINDOWS_V1: PalwLatticeWindowsV1 = PalwLatticeWindowsV1 {
     fp_abandon_hold: 40,
     claim_retirement: 300,
     withdrawal_delay: 600,
+    court_max_close_bytes: DEVNET_COURT_MAX_CLOSE_BYTES,
 };
+
+/// **The devnet court's close ceiling: one carrier** (ADR-0080).
+///
+/// 81,920 — 80 KiB, the value every network carried before ADR-0080 widened the RC's, and the
+/// largest close that fits a single `ObjectChunk` after framing
+/// (`palw_close_chunks_for_bytes_v1(81_920)` = 1, with 1,696 carried bytes to spare).
+///
+/// **Why the devnet is the network that keeps it.** A split close buys context width by spending
+/// BLOCKS: the reserve is `2 × 4 × chunks` off the court window and the floor under an honest move
+/// is `replay + (chunks − 1)`, so the RC's 27 carriers cost 216 DAA of window and 26 DAA of every
+/// move. At 120 s a block that is a 54-minute move inside a 100-hour window — correct for a chain
+/// that has to prosecute the hybrid tier's 2,240,241-byte close. The devnet lattice is a DRILL that
+/// must finish in a session; paying 216 out of a minutes window needs `window_court ≥ 1998`, 66
+/// hours, and there is nothing to pay it FOR. Devnet registers the floor, whose worst close is
+/// 52,704 bytes, and every class row this build ships closes in one carrier — 78,688 bytes at the
+/// widest ([`tests::the_devnet_close_ceiling_admits_every_shipped_row`], which prints all five).
+///
+/// **What it costs, stated rather than glossed:** a narrower ceiling ADMITS LESS. Under the shipped
+/// `2^22` ladder, `palw_class_admission_v2::tests::the_widest_context_each_family_admits` measures
+/// the dense family at `n_ctx` 21 under 80 KiB against 39 under 2,250,000, and the hybrid at 8
+/// against 12. So a devnet drill that wants to register a row wider than the ones this build ships
+/// is refused here where testnet-11 would admit it — which is the trade, and it is the right way
+/// round: a ceiling admits, it does not require, and this network buys a session-length court
+/// instead of a width no drill has asked for.
+///
+/// This is the field's whole reason for existing, and `the_two_rulesets_derive_different_clocks`
+/// is the test that neither number here nor the RC's is typed.
+/// **The margin is real but it is not wide, and it is measured**: the widest shipped row is the
+/// dense A16 at 78,688 bytes, 3,232 under this ceiling —
+/// `the_devnet_close_ceiling_admits_every_shipped_row` prints all five and fails the day one of
+/// them needs a second carrier. That day is a decision about the devnet WINDOW, taken in daylight,
+/// and not a default to inherit.
+const DEVNET_COURT_MAX_CLOSE_BYTES: u64 = 81_920;
+
 /// **3,000, from the corrected worst case** (audit M2-24). The ladder's clock runs per MOVE, and a
 /// bisection round is two of them — a disclosure and a verdict — so a 22-rung ladder plus two
 /// terminal moves is `(2 x 22 + 2) x 60 = 2,760` DAA of honest prosecution. `worst_case_duration_daa`
@@ -221,6 +293,12 @@ const COURT_TERMINAL_ROUNDS: u32 = 2;
 /// own bundle must SAY them: a ruleset whose most consequential frozen numbers arrive as a
 /// default is a ruleset nobody chose. See `palw_class_admission_v2::PALW_RC_COURT_MAX_CLOSE_BYTES`
 /// for the carriage arithmetic that fixes the first.
+///
+/// **The close ceiling is the one of the three that is now per-NETWORK** (ADR-0080 W4). It reaches
+/// the bundle through [`PalwLatticeWindowsV1::court_max_close_bytes`] rather than from here,
+/// because the assembly reserve a window must fund is a function of it and the two shipped sets
+/// need different answers; this constant is the RC set's value, and [`PALW_RC_WINDOWS_V1`] is where
+/// it is spent.
 const COURT_MAX_CLOSE_BYTES: u64 = crate::palw_class_admission_v2::PALW_RC_COURT_MAX_CLOSE_BYTES;
 const COURT_MAX_TERMINAL_MACS: u64 = crate::palw_class_admission_v2::PALW_RC_COURT_MAX_TERMINAL_MACS;
 const COURT_MAX_OPERAND_COUNT: u32 = crate::palw_class_admission_v2::PALW_RC_COURT_MAX_OPERAND_COUNT;
@@ -653,7 +731,7 @@ pub fn palw_fp_bundle_with_windows_v3(
             COURT_MAX_STEP_LEAVES,
             windows.court_turn_deadline,
             COURT_TERMINAL_ROUNDS,
-            COURT_MAX_CLOSE_BYTES,
+            windows.court_max_close_bytes,
             COURT_MAX_TERMINAL_MACS,
             COURT_MAX_OPERAND_COUNT,
         )?,
@@ -927,11 +1005,73 @@ mod tests {
         assert!(w.anchor_delay + w.max_beacon_gap < w.window_bind);
         assert!(w.receipt_maturity >= w.reorg_margin);
         assert!(w.claim_retirement > w.fp_abandon_hold);
-        // Decision 12's ladder, at the shipped per-move clock: `(2 × 32 + 2) × turn < court`.
-        assert!((2 * 32 + 2) * w.court_turn_deadline < w.window_court);
+        // Decision 12's ladder, at the shipped per-move clock and with ADR-0080's assembly reserve:
+        // `(2 × 32 + 2) × turn + reserve < court`, the reserve being THIS set's.
+        assert!(
+            crate::palw_context_ladder::palw_ladder_fits_window_court_v1(
+                w.window_court,
+                crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+                2,
+                w.court_turn_deadline,
+                w.max_close_chunks()
+            ),
+            "the devnet window does not hold the 2^32 ladder at its own clock and its own close ceiling"
+        );
         assert!(w.withdrawal_delay > w.window_bind + w.window_receipt + w.window_challenge + w.window_court + w.reorg_margin);
         assert_eq!(devnet.state.window_bind(), 40);
         assert_eq!(devnet.court.turn_deadline_daa(), 4);
+
+        // **The two sets carry two close ceilings, and the bundles they build carry them too.**
+        // This is the field's whole job: the derived chunk count is what the assembly reserve, and
+        // therefore the move clock each window can afford, is a function of. The devnet's ceiling is
+        // the pre-ADR-0080 80 KiB, which frames to a single carrier; the RC's is the 27-carrier one.
+        assert_eq!(PALW_DEVNET_WINDOWS_V1.court_max_close_bytes, DEVNET_COURT_MAX_CLOSE_BYTES);
+        assert_eq!(DEVNET_COURT_MAX_CLOSE_BYTES, 81_920);
+        assert_eq!(devnet.court.max_close_bytes(), DEVNET_COURT_MAX_CLOSE_BYTES);
+        assert_eq!(devnet.court.max_close_chunks(), 1, "setting the bytes is what moves the count");
+        assert_eq!(devnet.court.max_close_chunks(), PALW_DEVNET_WINDOWS_V1.max_close_chunks());
+        assert_eq!(rc.court.max_close_bytes(), crate::palw_class_admission_v2::PALW_RC_COURT_MAX_CLOSE_BYTES);
+        assert_eq!(rc.court.max_close_chunks(), 27);
+        assert_eq!(rc.court.max_close_chunks(), PALW_RC_WINDOWS_V1.max_close_chunks());
+        assert_ne!(devnet.court.max_close_chunks(), rc.court.max_close_chunks(), "a close ceiling is a ruleset");
+    }
+
+    /// **Every class row this build ships fits the devnet court's ONE-carrier close** — the claim
+    /// [`DEVNET_COURT_MAX_CLOSE_BYTES`] rests on, measured through the shipped cost derivation
+    /// rather than asserted in a comment.
+    ///
+    /// The devnet ceiling is narrower than the RC's by design, and a narrower ceiling ADMITS LESS:
+    /// under the shipped `2^22` ladder `the_widest_context_each_family_admits` measures the dense
+    /// family at `n_ctx` 21 under 80 KiB against 39 under 2,250,000, and the hybrid at 8 against 12.
+    /// So "devnet needs no second carrier" is a claim about the rows that exist, and this is the
+    /// test that fails the day one of them outgrows it — which is the day the devnet lattice has a
+    /// decision to make about its window, not a default to inherit. The margin at the time of
+    /// writing is 3,232 bytes on the dense A16 row (78,688 of 81,920), which is thin enough that
+    /// the failure is a real possibility rather than a formality.
+    ///
+    /// Run it with `-- --nocapture` for the per-row bytes.
+    #[test]
+    fn the_devnet_close_ceiling_admits_every_shipped_row() {
+        let rows = crate::palw_court_deadline::palw_shipped_court_rows_v1().expect("the shipped rows project");
+        assert!(!rows.is_empty(), "no shipped rows — this check verified nothing");
+        for row in &rows {
+            let cost = crate::palw_class_admission_v2::derive_court_cost_v1(&row.profile).expect("a shipped row prices");
+            let chunks = crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes);
+            println!("{}: n_ctx {} closes at {} bytes = {chunks} carrier(s)", row.cost.row, row.profile.n_ctx, cost.max_close_bytes);
+            assert!(
+                cost.max_close_bytes <= DEVNET_COURT_MAX_CLOSE_BYTES,
+                "{}: closes at {} bytes against the devnet ceiling {DEVNET_COURT_MAX_CLOSE_BYTES}",
+                row.cost.row,
+                cost.max_close_bytes
+            );
+            assert_eq!(
+                chunks,
+                PALW_DEVNET_WINDOWS_V1.max_close_chunks(),
+                "{}: needs {chunks} carriers and the devnet court pays for {}",
+                row.cost.row,
+                PALW_DEVNET_WINDOWS_V1.max_close_chunks()
+            );
+        }
     }
 
     #[test]
