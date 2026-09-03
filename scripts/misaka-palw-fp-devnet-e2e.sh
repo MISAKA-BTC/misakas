@@ -198,17 +198,30 @@ done
 
 CLI=("$CLI_BIN" --network devnet --rpc 127.0.0.1:$RPC_BASE)
 blocks_of() { grep -c "produced block #" "$WORK_DIR/node-$1.log" 2>/dev/null || true; }
+# **The chain's progress is the SET's, not node-0's.**
+#
+# Every wait below wants the same thing: DAA has moved, so the next window can open. Reading it off
+# node-0 alone asks a different question — did THIS producer win a draw — and the draw is a seeded,
+# per-bond, per-class quantity (ADR-0076). Measured on this host at load 44: node-1 produced four
+# blocks and node-2 one while node-0 produced none, the chain advanced five blocks, carried a PALW
+# lifecycle object and had a panel file a "Valid" receipt — and the drill died with "node-0 produced
+# no blocks within 900s". That is a true sentence about node-0 and a false one about the chain.
+chain_blocks() {
+  local i total=0
+  for ((i=0; i<NODES; i++)); do total=$((total + $(blocks_of "$i"))); done
+  echo "$total"
+}
 
 # Wait for node-0 to gain `n` more blocks than it had on entry. Returns after the deadline rather
 # than dying: the verdict at the end is what decides PASS/FAIL, and a step that timed out should
 # reach it carrying its evidence instead of hiding the reason inside a wait.
 advance() {
   local want="${1:-1}" from now deadline
-  from=$(blocks_of 0); deadline=$((SECONDS + STEP_WAIT))
+  from=$(chain_blocks); deadline=$((SECONDS + STEP_WAIT))
   while :; do
-    now=$(blocks_of 0)
+    now=$(chain_blocks)
     [ $((now - from)) -ge "$want" ] && return 0
-    [ $SECONDS -lt $deadline ] || { log "node-0 gained $((now - from))/$want block(s) in ${STEP_WAIT}s — continuing to the verdict"; return 0; }
+    [ $SECONDS -lt $deadline ] || { log "the chain gained $((now - from))/$want block(s) in ${STEP_WAIT}s — continuing to the verdict"; return 0; }
     sleep 2
   done
 }
@@ -225,11 +238,17 @@ all_nodes_logged() {
 }
 
 deadline=$((SECONDS + WAIT))
-until [ "$(blocks_of 0)" -ge 3 ]; do
-  [ $SECONDS -lt $deadline ] || { tail -40 "$WORK_DIR/node-0.log" >&2; die "node-0 produced no blocks within ${WAIT}s"; }
+until [ "$(chain_blocks)" -ge 3 ]; do
+  [ $SECONDS -lt $deadline ] || {
+    for ((i=0; i<NODES; i++)); do log "  node-$i produced $(blocks_of $i)"; done
+    tail -40 "$WORK_DIR/node-0.log" >&2
+    die "the chain produced fewer than 3 blocks within ${WAIT}s — see the per-node counts above and node-0.log"
+  }
   sleep 3
 done
-log "stage 1 OK — node-0 produced $(blocks_of 0) blocks; waiting for the peers to follow"
+per_node=""
+for ((i=0; i<NODES; i++)); do per_node="$per_node node-$i=$(blocks_of $i)"; done
+log "stage 1 OK — the chain produced $(chain_blocks) blocks ($per_node); waiting for every node to follow"
 advance 1
 
 # ---------------------------------------------------------------------------------------------
