@@ -5440,3 +5440,8 @@ counted, as written. Whether a red block's claim is adjudicated is a reading not
 (capable) have filed nothing for either claim; `.113`'s node filed Incapable (refitted). `live_total=0` in node0's own
 state line after both. Post-cut, for the seat runbook and the ADR: on CPU-class hosts every attempt block of a model
 class will be red by construction; the announcement says "produced and merged as red blocks", not "chain blocks".
+
+**6i, continued — `.113` refitted (19:05:52 UTC):** `node.sh` now carries `qwen36.palwq36` + both A16 artifacts
+(`node.sh.pre-5f-qwen36` kept); listening after 229 s, fingerprint `2222e054…`, Qwen3.6 mapped, connected to node0,
+node1, seat4 and the pool slot, 0 panics, ALIVE; rss 8.2 GB with 5 GB free on the host (seat4 + node + pool share the
+33 GiB file through the page cache). Every panel seat now holds all three class artifacts.
