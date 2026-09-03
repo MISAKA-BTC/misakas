@@ -171,7 +171,12 @@ try:
     assert commitment_artifact.is_file() and commitment_artifact.stat().st_size > 0, "the unsigned commitment rides too"
     assert summary["trace_manifest_root"] and int(summary["trace_chunk_count"]) >= 1
     trace_dir = pathlib.Path(summary["trace_dir"])
-    assert (trace_dir / "manifest.json").is_file() and (trace_dir / "chunk-0.bin").is_file(), "the retained trace is where the summary says"
+    # The retention the worker writes is `manifest.json` + `material.bin` (fp_worker.rs `retain_v1`);
+    # `chunk-0.bin` was an older layout, and asserting it was the third stale expectation on this
+    # path (misaka-testnet-44's run: 14.7 MB of material under a name the smoke did not know).
+    assert (trace_dir / "manifest.json").is_file(), "the retention manifest is where the summary says"
+    material = trace_dir / "material.bin"
+    assert material.is_file() and material.stat().st_size > 0, "the retained material rides beside the manifest"
     assert summary["pending_for_chain_submission"] and all("trace" not in item for item in summary["pending_for_chain_submission"]),         "retention is no longer pending; the signer and the rail are"
     print(f"[3] artifact ok: {artifact.name} + unsigned commitment (exposure declared, SA-1) + retained trace ({summary['trace_chunk_count']} chunk)")
 
