@@ -251,6 +251,26 @@ unprosecutable" is **42 against 27** — refused at acceptance, by fifteen carri
 court is what takes it to 4. That is the whole of §1's reason for arming `palw_kary_court`, in one
 line, and it can now be re-derived by anyone rather than believed.
 
+**The certification vector cap does not bind either row, and v5 is the cheaper of the two.** Measured
+as an upper bound from the profile alone (`2 × |distinct (table, kernel) pairs|`, the 2 being prefill
+and decode; the drill's real count can only be lower, since a leaf whose capture the material does
+not hold is skipped):
+
+    graph-v2/v3 @ 512   12 kernels, 16 (table,kernel) pairs, vectors <= 32   cap 32  FITS
+    graph-v5    @ 512   10 kernels, 14 (table,kernel) pairs, vectors <= 28   cap 32  FITS
+
+Fusing the four-node attention site into one **removes two distinct kernels**, so the row this
+genesis registers needs fewer vectors than the graph-v2 row that sits exactly at the cap. An upper
+bound is the right instrument here: at or below the cap it cannot bind, and only a number above
+would have needed the full drill. So `PALW_CERTIFICATION_MAX_VECTORS` stays 32 and the hybrid's 74
+is deferred with its refusal asserted by name — see §5.
+
+*(That deferral is load-bearing rather than lazy: `PALW_CERTIFICATION_MASS_PER_VECTOR` is
+`(CHUNK_MAX_BYTES × CHUNK_MAX_COUNT) / MAX_VECTORS`, so the per-vector price is DERIVED FROM THE
+CAP. Raising the cap does not raise the fee — it lowers the price of each re-execution and leaves
+the total identical, buying validators 2.31× the grading work for the same payment. Any future raise
+must decouple the mass rule in the same change, or it is a fee cut wearing a bound's clothes.)*
+
 **And the same table answers a real strategic question, which is why it is worth having.** A
 graph-v2/v3 row at 512 **fits without ADR-0082 at all** — 24 chunks against 27, no fused site, no
 court arming, and its 12 kernels are already covered by the shipped A16 family. So 0082 is not a
