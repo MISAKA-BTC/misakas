@@ -3489,7 +3489,7 @@ impl PalwPanelService {
     async fn fp_interval_seat_outcome_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
-        duty: &PalwSeatDutyV2,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
         network_domain: Hash64,
         current_daa: u64,
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,

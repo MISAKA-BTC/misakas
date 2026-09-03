@@ -990,7 +990,9 @@ pub fn base0_verify_fp_interval_opening_with_state_v1<K: Base0FpIntervalKernelsV
         {
             return Base0FpIntervalSeatVerdictV1::HistoryNotAdmissible;
         }
-        Base0FpIntervalOpeningAnyV1::WithHistory(o) => Some(o.as_ref().clone()),
+        // Borrowed, never copied: the thing this arm holds is the history, and a seat that
+        // duplicated it in memory would have paid the bytes twice.
+        Base0FpIntervalOpeningAnyV1::WithHistory(o) => Some(o.as_ref()),
         Base0FpIntervalOpeningAnyV1::Recomputed(_) if state.is_none() => {
             return Base0FpIntervalSeatVerdictV1::Unverifiable;
         }
@@ -1086,7 +1088,7 @@ pub fn base0_verify_fp_interval_opening_with_state_v1<K: Base0FpIntervalKernelsV
                 // ADR-0077 Decision 8, unchanged: no own state, so the carried chunks are the
                 // only state there is — and they must re-derive the root the leaf commits.
                 None => {
-                    let Some(anchor) = carried.as_ref().and_then(|o| o.anchor.as_ref()) else {
+                    let Some(anchor) = carried.and_then(|o| o.anchor.as_ref()) else {
                         return Base0FpIntervalSeatVerdictV1::Mismatch;
                     };
                     if !checkpoint_anchor_is_the_bindings_v1(binding, anchor, covered) {
