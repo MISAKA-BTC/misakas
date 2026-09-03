@@ -418,6 +418,19 @@ gate above is the one that would have caught all three.
   **Nothing derived from the base checkpoint may be registered.** Expect digest `c00faa48…` from the
   Instruct conversion, with only the commitment field moving.
 
+  **Do it on `ibm`, where the inputs already are** — `/root/palw-class/qwen25-src/` holds the Instruct
+  config (660 B), safetensors (3,087,467,144 B, sha256 `dd924a11…` confirmed on the machine that ran
+  the original conversion) and tokenizer (7,031,645 B), and `/root/qwen25-pipeline.sh` is the script
+  that produced the shipped file. Nobody downloads 3 GB.
+
+  **Provenance, closed except one line.** The conversion ran **2026-08-27 17:10–17:20** on ibm from
+  `Qwen2.5-1.5B-Instruct`, and the artifact was then distributed as a binary — identical sha256 on
+  ibm, C and the operator box. The 08-30 23:21 timestamp on this Mac is the *copy landing*, three
+  days later, which is why a local mtime said nothing about provenance. **What is still unrecorded is
+  the converter REVISION**: the pipeline log records the build succeeding, not what it built from.
+  That is answerable by walking `/root/misakas-t11r`'s reflog — unknown rather than unknowable — and
+  the quantization code has not moved since.
+
   *Recorded because the trap is well disguised: two checkpoints of identical size, a shared
   tokenizer, and a converter that is deterministic and correct on both. The class id survives the
   swap — it hashes the PROFILE, and no weight is in the profile — so `bind --artifact` reports the
@@ -441,6 +454,13 @@ gate above is the one that would have caught all three.
   80,696 at 4,096, **192 bytes for eight times the context**. At 32,768 the binding node becomes
   the embedding gather and the generated-token ids are a second context-linear term ADR-0082 D5
   does not anchor; it Merkle-izes the prompt ids only.
+- **The dense tier's faithfulness is 45 of 57, not 57 of 57.** The shipped artifact's own conversion
+  log records `a16 top-1 agree 45/57`, `top-5 contains 56/57`, `rank corr (100) 0.8932` against the
+  float reference, and calls that FAITHFUL — which is the bar the class passed, measured at
+  conversion time rather than asserted. Say the number if the subject comes up; do not let a page
+  imply the quantized class reproduces the reference exactly. (An independent conversion here of the
+  *base* checkpoint landed at 44/57 and 0.8627, so the figure is characteristic of the quantization
+  rather than of one lucky run.)
 - **The model's answer IS the artifact's source, canonicalized** — this is the central claim and it
   is now re-runnable: `palw-model-gate` and `palw-qwen36-model-gate` ship, and
   `docs/evidence-qwen36-model-gate/` carries the answer bytes and the artifacts derived from them.
