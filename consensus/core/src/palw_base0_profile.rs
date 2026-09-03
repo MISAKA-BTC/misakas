@@ -1427,15 +1427,38 @@ mod graph_v5 {
         );
         for (family, v2, v5) in pairs() {
             assert_ne!(v2.shape_profile_id(), v5.shape_profile_id(), "{family}: a different graph must be a different class");
-            // And the ONLY difference is the attention table: the fusion touches the site and
-            // nothing else, so a v5 row that differed anywhere else would be a second change
-            // riding this one.
+            // And the only differences are the attention table and the STATE CHUNK MAP: the fusion
+            // touches the site, and ADR-0082 Decision 4 requires a v5 class to register the tiled
+            // map its dissection's bottom opens against — "the bottom of the dissection opens
+            // tiles, so the anchor is tile-addressed". A v5 row that differed anywhere ELSE would
+            // be a third change riding these two.
+            //
+            // The map is asserted rather than waved through, and both halves of the pair are
+            // named: a v5 row that quietly kept the v2 map would be charged 526,336 bytes for an
+            // opening its evidence carries in 18,432 and admitted at the width it had before the
+            // tile existed (`palw_context_ladder::u00_tiled_attention_measurement`).
+            assert_ne!(v2.state_chunk_map_id, v5.state_chunk_map_id, "{family}: a v5 row must register the tiled map");
             assert_eq!(
-                PalwShapeProfileV3 { attn_nodes: v2.attn_nodes.clone(), ..v5.clone() },
+                PalwShapeProfileV3 {
+                    attn_nodes: v2.attn_nodes.clone(),
+                    state_chunk_map_id: v2.state_chunk_map_id,
+                    ..v5.clone()
+                },
                 v2,
-                "{family}: the v5 row differs from the v2 row somewhere other than the attention table"
+                "{family}: the v5 row differs from the v2 row somewhere other than the attention table and the map"
             );
         }
+        // Which maps, by name — the dense row's cache alone, the hybrid's composition of both
+        // halves (ADR-0082 Decision 4; `palw_state_chunk_map::hybrid_composition_tests` enumerates
+        // the second).
+        assert_eq!(
+            qwen25_a16_profile_v5(QWEN25_1_5B_A16).expect("projects").state_chunk_map_id,
+            crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3()
+        );
+        assert_eq!(
+            qwen36_profile_v5(qwen36_geometry_artifact_eps(QWEN36_35B_A3B)).expect("projects").state_chunk_map_id,
+            crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3()
+        );
     }
 
     /// **The site is four nodes shorter and everything downstream still points at the right row.**

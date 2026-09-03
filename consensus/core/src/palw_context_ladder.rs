@@ -2589,67 +2589,28 @@ mod u00_tiled_attention_measurement {
     /// note is kept rather than the test because the next reader of "30 → 223" needs to know that
     /// the 223 was once a measurement no shipped function could reproduce.
 
-    /// **And the graph-v4 HYBRID composition is priced with NO recurrence anchor at all** — the
-    /// same defect in the direction that is not safe.
+    /// **`the_graph_v4_hybrid_composition_has_no_priced_recurrence_anchor` lived here, and
+    /// ADR-0082 U-04 closed the gap it measured.**
     ///
-    /// `gdn_state_terms_for_map_v1` dispatches on the WHOLE composition id and knows
-    /// `hybrid_state_chunk_map_id_v1` and `…_v2`. `palw_hybrid_state_chunk_map_name_v3` spells its
-    /// `gdn=` half as `PALW_GDN_STATE_CHUNK_MAP_NAME_V2` verbatim — so the recurrence opening it
-    /// describes is priceable, at 71,680 + path — but the dispatch answers `None` and
-    /// `palw_class_ladder_rules_v1` turns that into `.unwrap_or(0)`.
+    /// It recorded a **mainnet blocker**: `gdn_state_terms_for_map_v1` dispatched on the whole
+    /// composition id and knew `hybrid_state_chunk_map_id_v1` and `…_v2` but not `…_v3`, so it
+    /// answered `None`, `palw_class_ladder_rules_v1` turned that into `.unwrap_or(0)`, and a hybrid
+    /// class registering the tiled attention map was admitted with its recurrence anchor charged
+    /// at ZERO — "a v1 class priced at v2's … the direction that admits a class whose disputes
+    /// nobody can raise", quoting the comment it quoted. Its own message said the remedy: *"the v4
+    /// composition is priced now — close this gap in `palw_class_ladder_rules_v1` and delete this
+    /// test."*
     ///
-    /// That is "a v1 class priced at v2's … the direction that admits a class whose disputes nobody
-    /// can raise", quoting the comment two lines above the `unwrap_or`. Dormant — the fence is
-    /// `None` everywhere and no class registers the v4 composition — and a **mainnet blocker for
-    /// whoever arms `Params::palw_context_ladder`**. The fix is one arm in
-    /// `gdn_state_terms_for_map_v1`; it is not taken here because this stream changes no consensus
-    /// rule.
-    #[test]
-    fn the_graph_v4_hybrid_composition_has_no_priced_recurrence_anchor() {
-        use crate::palw_state_chunk_map::palw_hybrid_state_chunk_map_name_v3;
-        let mut row = palw_qwen36_context_row_profile_v1(512).expect("projects");
-        row.state_chunk_map_id = hybrid_state_chunk_map_id_v3();
-
-        // The composition's `gdn=` half IS v2's, so an honest price exists.
-        assert!(
-            palw_hybrid_state_chunk_map_name_v3().contains(crate::palw_state_chunk_map::PALW_GDN_STATE_CHUNK_MAP_NAME_V2),
-            "the v4 composition stopped spelling its recurrence half as gdn v2 — this test's premise moved"
-        );
-        let mut as_v2 = row.clone();
-        as_v2.state_chunk_map_id = hybrid_state_chunk_map_id_v2();
-        let honest = palw_gdn_checkpoint_opening_bytes_for_map_v1(&as_v2, LADDER).expect("the v2 composition prices");
-        assert_eq!(honest, 71_680 + step_path_bytes_v1(LADDER));
-        assert_eq!(honest, 73_728);
-
-        // And the dispatch does not reach it.
-        assert_eq!(
-            palw_gdn_checkpoint_opening_bytes_for_map_v1(&row, LADDER),
-            None,
-            "the v4 composition is priced now — close this gap in palw_class_ladder_rules_v1 and delete this test"
-        );
-        assert_eq!(
-            palw_class_ladder_rules_v1(&row).expect("mapped").cost_shape.gdn_checkpoint_bytes,
-            0,
-            "the ladder rule now charges the v4 composition a recurrence anchor — re-read this test"
-        );
-
-        // What the zero hides: with the anchor priced honestly the hybrid is over the CARRIER at
-        // EVERY context, so the tile buys the hybrid tier nothing at all inside one transaction.
-        // Without it, a sweep reports a 12-token row that the class could not actually be
-        // prosecuted at. (Against design A's 27-chunk GROUP the same 90,632 bytes is one carrier
-        // of twenty-seven — which is ADR-0080's answer to this paragraph and not a refutation of
-        // it: the dispatch still returns `None` and the ladder rule still turns that into a zero.)
-        let budget = CARRIER_80K;
-        let mut hybrid_v3 = palw_qwen36_context_row_profile_v1(1).expect("projects");
-        hybrid_v3.state_chunk_map_id = hybrid_state_chunk_map_id_v3();
-        let priced = derive_court_cost_shaped_v1(&hybrid_v3, v3_shape(&hybrid_v3, 1, true)).expect("derives");
-        assert!(
-            priced.max_close_bytes > budget,
-            "the hybrid became carriable at n_ctx 1 ({} bytes) — the tile moved the hybrid tier after all",
-            priced.max_close_bytes
-        );
-        assert_eq!(priced.max_close_bytes, 90_632);
-    }
+    /// It was dormant while nothing registered the v3 composition. ADR-0082 Decision 4 makes that
+    /// composition the map a graph-v5 hybrid registers, which turned it live, and
+    /// `gdn_state_terms_for_map_v1` has the arm now. What it cost, measured: the hybrid graph-v5
+    /// row's close moved 200,732 → 274,460 bytes and 3 carriers → 4, the delta being exactly the
+    /// 71,680-byte head-sliced opening plus its 2,048-byte path. Both halves of what it pinned are
+    /// asserted from the gate's own functions in
+    /// `palw_state_chunk_map::hybrid_composition_tests::the_recurrence_chunks_are_what_the_anchor_is_priced_at`.
+    ///
+    /// The note is kept rather than the test because ADR-0082 Decision 6 sizes the hybrid v5 row at
+    /// "two to three" carriers, and the next reader needs to know that the fourth is this charge.
 
     /// **The carrier binds long before the ladder does** — 223 against 11,477, a factor of 51.
     ///
