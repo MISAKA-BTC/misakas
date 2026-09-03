@@ -221,6 +221,8 @@ missing_tool_hint() {
 # Rule 2: say what was covered, from the log, for every gate — passing or failing.
 gate_coverage() {
     local id="$1" log="$2" n
+    # Note for anyone adding a counter here: `grep -c` prints `0` AND exits 1 on no match, so
+    # `|| echo 0` produces the two-line string "0\n0". Use `|| true`, and guard for empty.
     case "$id" in
         fmt)
             n=$(grep -c '^Diff in ' "$log" 2>/dev/null || true)
@@ -231,10 +233,10 @@ gate_coverage() {
             n=$(grep -cE '^(warning|error)(\[|:)' "$log" 2>/dev/null || true)
             printf '    coverage: %s; %s diagnostic line(s); %s crate(s) linted\n' \
                    "$(cargo clippy --version 2>/dev/null | head -1)" "${n:-0}" \
-                   "$(grep -cE '^ +(Checking|Compiling) ' "$log" 2>/dev/null || echo 0)"
+                   "$(grep -cE '^ +(Checking|Compiling) ' "$log" 2>/dev/null || true)"
             ;;
         check)
-            printf '    coverage: %s crate(s) checked\n' "$(grep -cE '^ +(Checking|Compiling) ' "$log" 2>/dev/null || echo 0)"
+            printf '    coverage: %s crate(s) checked\n' "$(grep -cE '^ +(Checking|Compiling) ' "$log" 2>/dev/null || true)"
             ;;
         pq-guard)
             # This one already names each of its six sub-gates; echo them rather than reducing
@@ -242,32 +244,46 @@ gate_coverage() {
             grep -E '^(== \[|OK:|advisories |PQ CI guard)' "$log" 2>/dev/null | sed 's/^/    /' || true
             ;;
         doc)
-            printf '    coverage: %s crate(s) documented\n' "$(grep -cE '^ +(Documenting|Compiling|Checking) ' "$log" 2>/dev/null || echo 0)"
+            printf '    coverage: %s crate(s) documented\n' "$(grep -cE '^ +(Documenting|Compiling|Checking) ' "$log" 2>/dev/null || true)"
             ;;
         nextest)
             grep -E '^ +Summary ' "$log" 2>/dev/null | sed 's/^ */    coverage: /' || true
-            # The genesis card's SS6 table cites four suites by crate. They are all in
-            # `default-members`, so `cargo nextest run` runs them -- but "it should be covered" is
-            # the claim this project keeps being wrong about, so COUNT them out of the log instead.
+            # The genesis card's SS6 table cites four suites by crate. All four are in
+            # `default-members` (Cargo.toml:126,135,139,147), so `cargo nextest run` runs them --
+            # but "it should be covered" is the claim this project keeps being wrong about, so
+            # COUNT them out of the log instead of asserting it.
+            #
+            # The pattern matches nextest's per-test line, `    PASS [   0.011s] <crate> <test>`.
+            # It was written on a machine with no cargo-nextest installed, so it is SELF-CHECKED
+            # below rather than trusted: four zeros under a Summary that says tests ran means the
+            # parse is wrong, and a coverage line that is wrong is worse than no coverage line.
             printf '    coverage: the card'"'"'s four cited suites, counted from this run:\n'
-            local c
+            local c n total=0
             for c in kaspa-consensus-core misaka-palw-base0 misaka-cli kaspad; do
-                printf '      %-22s %s test(s)\n' "$c" "$(grep -cE "^ +(PASS|FAIL|TRY|SKIP|LEAK)[^ ]* +\[[^]]*\] +$c(::| )" "$log" 2>/dev/null || echo 0)"
+                n=$(grep -cE "^ +(PASS|FAIL|TRY|SKIP|LEAK)[^ ]* +\[[^]]*\] +$c(::| )" "$log" 2>/dev/null || true)
+                [ -n "$n" ] || n=0
+                total=$((total + n))
+                printf '      %-22s %s test(s)\n' "$c" "$n"
             done
+            if [ "$total" -eq 0 ] && grep -qE '^ +Summary .*[1-9][0-9]* tests? run' "$log" 2>/dev/null; then
+                printf '      UNVERIFIED: the Summary says tests ran and none were attributed to a crate --\n'
+                printf '                  this breakdown could not be parsed from this nextest version'"'"'s output.\n'
+                printf '                  Read the Summary line above; do NOT read these four zeros as coverage.\n'
+            fi
             ;;
         derive-suite)
             printf '    coverage: %s suite(s) reported a test result line; %s binary target(s) built\n' \
-                   "$(grep -c '^test result:' "$log" 2>/dev/null || echo 0)" \
-                   "$(grep -cE '^ +Running .*(palw-evm-runner|palw-derive)' "$log" 2>/dev/null || echo 0)"
+                   "$(grep -c '^test result:' "$log" 2>/dev/null || true)" \
+                   "$(grep -cE '^ +Running .*(palw-evm-runner|palw-derive)' "$log" 2>/dev/null || true)"
             ;;
         hashes-no-asm)
             grep -E '^ +Summary ' "$log" 2>/dev/null | sed 's/^ */    coverage: /' || true
             ;;
         doctest|doctest-hashes-no-asm)
-            printf '    coverage: %s\n' "$(grep -c '^test result:' "$log" 2>/dev/null || echo 0) doctest binaries reported a 'test result:' line"
+            printf '    coverage: %s\n' "$(grep -c '^test result:' "$log" 2>/dev/null || true) doctest binaries reported a 'test result:' line"
             ;;
         build-devnet-prealloc|check-evm-send)
-            printf '    coverage: %s crate(s) compiled\n' "$(grep -cE '^ +(Checking|Compiling) ' "$log" 2>/dev/null || echo 0)"
+            printf '    coverage: %s crate(s) compiled\n' "$(grep -cE '^ +(Checking|Compiling) ' "$log" 2>/dev/null || true)"
             ;;
         example-kip10)
             grep -E '^ +Running ' "$log" 2>/dev/null | sed 's/^ */    coverage: ran /' || true
