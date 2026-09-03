@@ -974,6 +974,7 @@ mod tests {
                 // Lie about the LAST tile's value partial, and compensate in the first, so every
                 // fold is exact and only a recompute can tell.
                 let last = fx.tile_count() - 1;
+                let fx = &fx;
                 let claims = move |f: u64, c: u64| {
                     let mut claim = fx.range_claim(f, c, m, s);
                     if f <= last && last < f + c {
@@ -1247,8 +1248,11 @@ mod tests {
     /// and this is the assertion that says so rather than assuming it.
     #[test]
     fn every_shipped_preset_keeps_its_window_under_the_dissection() {
-        for (name, params) in crate::config::params::PALW_SHIPPED_PRESETS_V2 {
-            let Some(bundle) = params.palw_consensus_v2.as_ref() else { continue };
+        use crate::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS};
+        for (name, preset) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &preset.palw_consensus_mode else { continue };
             let window = bundle.state.window_court();
             let worst = palw_attn_court_admits_row_v1(&bundle.court, 0, TILE, window)
                 .unwrap_or_else(|e| panic!("{name}: the shipped court no longer fits its own window: {e}"));
