@@ -3698,3 +3698,46 @@ my  "the three palw_agent_recovery tests"   -> repeated into a peer's ledger as 
 **Both times the receiver added rigour downstream of an unchecked claim, and rigour applied there
 makes the claim harder to dislodge.** *A number does not look like it needs checking* — and the
 sharpening, not the repetition, is the dangerous half.
+
+### The test's own doc makes this the sharpest instance of the night
+
+```
+/// … Both were true measurements of different profiles: the disagreement was
+/// `qwen25_profile_v1` against **the A16 projection that actually ships**. Two measurements
+/// that cannot be reconciled by argument are reconciled by putting them in one place,
+/// **so this is that place.**
+#[test]
+fn the_registered_row_names_the_ladder_it_needs() {
+    let row = palw_a16_context_row_profile_v1(512).expect("the registered row");
+    assert_eq!(need, 59_000_848, "the registered row's worst case");
+```
+
+**The test exists to be the one place where profile-versus-profile confusion is resolved, and it
+resolves it with the wrong profile** — three times in its own strings, under a doc explaining
+precisely why that matters. *"The A16 projection that actually ships"* is `4277d84f…`; the row it
+loads is `8d2e6f16…`.
+
+**Fix, two lines, and the number written out rather than recalled because a digit here is the
+whole point:** the v5 projection at 512, and `52_778_128`.
+
+Not made here — `consensus/core/src/palw_step.rs` is shipped-tree and belongs to whoever is
+holding it tonight. **Handed over as a measurement rather than as a commit nobody asked for.**
+
+**Document state, verified rather than assumed:**
+
+```
+59,000,848  card line 307  "graph-v2/v3 @ 512"                      correctly named
+            card line 310  "the same number bind printed for the v2 row"  correctly named
+            card line 3660 this correction's own before/after       correctly named
+            announcement                                             ZERO occurrences
+```
+
+### Closing the propagation thread
+
+I reported a wrong sixth defect. It came back sharpened into better evidence than I had for it.
+I then caught it myself and corrected it before the sharpened version could settle.
+
+> **Both directions of that exchange worked** — the error travelled, and so did the correction,
+> and the correction was faster **because I went back to the code rather than to the tally.**
+> What failed was neither of us re-reading. *It was the count having an interest in being larger,
+> which is not a property anyone can read off a number.*
