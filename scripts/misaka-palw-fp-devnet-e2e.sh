@@ -204,7 +204,10 @@ for ((i=0; i<NODES; i++)); do
   # devnet (2^114.4 against 2^119.9, measured), while the dense row's seed is MAX — so three floor
   # seats alone found no block in 12 minutes, and the chain we cut is paced by the class the
   # artifact serves. The same shape as testnet-11's node0.
-  if [ "$i" -eq 0 ]; then args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT" --palw-producer-class="$EXPECTED_CLASS_ID"); fi
+  # Two dense producers (node-0 and node-1), so one lost draw does not stall stage 1: a dense
+  # attempt is ~2.4 min of inference on this host and the chain needs three blocks. node-2 stays
+  # a floor-only seat, which is the shape of a fleet host without the artifact.
+  if [ "$i" -le 1 ]; then args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT" --palw-producer-class="$EXPECTED_CLASS_ID"); fi
   if [ "$i" -gt 0 ]; then args+=(--connect=127.0.0.1:$P2P_BASE); fi
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
   # `$!` into a variable rather than `${pids[-1]}`: macOS ships bash 3.2, which rejects a negative
