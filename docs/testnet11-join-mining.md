@@ -375,6 +375,36 @@ On testnet-11's windows that is roughly **54 hours** from commitment to spendabi
 challenge and maturity — fraud-proof safety, not a progress bar someone forgot to speed up. Show
 the stage; do not promise a block.
 
+**How many of these the lane can finish in a day is a number, and it is published** (ADR-0082
+Decision 12). It is `min(PALW_V2_MAX_PAYOUTS_PER_BLOCK × blocks_per_day, the panel's measured
+replay capacity)` — `palw_fp_lane_ceiling_v1` in `palw_economic_locus_v1.rs` computes it and says
+which of the two terms is binding. At testnet-11's frozen 120 s cadence the first term is **720
+blocks a day × 8 payout rows = 5,760 finalized claims a day**, and that is the ceiling until
+somebody measures the fleet's replay rate and finds it lower. Neither half is a knob: the payout
+constant is a consensus value whose own doc states the premise it was sized against ("at most one
+new claim per block"), and raising it is a ruleset move that owes its own argument. A claim past
+the ceiling is not refused — it waits in the payout queue, one more block per eight claims ahead
+of it.
+
+**What a claim earns, and what it does not.** Past `Params::palw_fp_decode_rules` (ADR-0082
+Decision 10, dormant on every network today) a free-prompt claim's quanta are earned by the leaves
+of its **decode calls** — the answer — and the prefill of the prompt is priced at **zero**. The
+reason is arithmetic and not policy: the model is deterministic and causal, so every leaf of a
+prompt is a pure function of that prompt, and the same bond re-sending a 32,000-token prefix with
+one new token recomputes nothing. Paying for prefill would be paying for replay. Who pays the
+executor for a long prompt — the requester, in what unit, through what market — is a product
+decision outside consensus and this rule does not make it. While the fence is dormant the lane
+prices the whole capture, as it does today.
+
+**And the answer is chosen, not just taken** (ADR-0082 Decision 11, the same fence). Under it the
+committed token at each position is a *seeded* argmax — `argmax_j (logit_j × 2²⁴ + T_q × G_j)`
+with `G` a Gumbel variate from a pinned table — so `/v1/chat/completions` may carry `temperature`
+and `seed` and the answer is a real sample rather than the one repetition greedy decoding produces.
+Temperature `0` is the shipped rule byte for byte. **The gateway refuses a temperature or a seed
+while its node reports the fence dormant**, by name, before the model is loaded: a job carrying
+them would be refused by the transition as `SamplingNotArmed` after you had already paid for the
+inference.
+
 ### 7.1 The three processes
 
 ```

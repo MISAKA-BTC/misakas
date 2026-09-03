@@ -328,6 +328,8 @@ mod tests {
             max_context_tokens: 4_096,
             privacy_mode: crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: crate::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         }
     }
 
