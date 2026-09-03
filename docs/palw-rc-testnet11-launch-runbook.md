@@ -346,16 +346,18 @@ like the joiner's fault. Stop both, and clear their peer databases, before the p
     .113   misaka-t11-node   misaka-t11-seat4  misaka-minerpool  misaka-pool-slot@01  misaka-dnsseeder
     .23    misaka-t11-seat2  misaka-miner-c    misaka-validator-c  misaka-dnsseeder
 
-**One live peer is unresolved and must be settled before the cut.** `5.104.81.228` connects INBOUND
-to both of ibm's ports and is in `known_hosts` — so a previous session reached it — but it does not
-answer `claude_key` as `root` or `ubuntu`. Either it is ours under another key, in which case it
-must be wiped, or it is a stranger, in which case it is the case below. **Do not guess.** A host you
-believe is yours and do not wipe is exactly the IBD re-feed that this whole section exists to
-prevent.
+**`5.104.81.228` looks like ours and is not — settled, not assumed.** It connects INBOUND to both
+of ibm's ports and it IS in `known_hosts`, which is how it got onto the candidate list. But port 22
+is open and refuses `claude_key` for both `root` and `ubuntu` (port 2222 is filtered). We hold no
+credential for it. A `known_hosts` entry records that we once accepted a host key, not that we can
+log in — so it is evidence of contact, never of control, and it is exactly the kind of entry that
+makes a candidate list longer than the wipe list. **It cannot be wiped, so it is external**, and the
+paragraph below covers it. The general rule: an address is "ours" only if it answers a key you hold
+*today*; anything else is a stranger with a familiar address, and the check is one ssh, not a memory.
 
-**And the converse is the part that cannot be fixed by wiping:** the four external peers
-(`60.114.127.4`, `183.176.36.141`, `121.81.248.189`, `111.67.115.228`) are not ours and cannot be
-stopped. They will keep answering to this network name on their own genesis after the relaunch,
+**And the converse is the part that cannot be fixed by wiping:** the five external peers
+(`60.114.127.4`, `183.176.36.141`, `121.81.248.189`, `111.67.115.228`, `5.104.81.228`) are not ours
+and cannot be stopped. They will keep answering to this network name on their own genesis after the relaunch,
 which is exactly the state §"the name is already contested" describes. That is not a fault to
 resolve before launching; it is the reason the genesis hash is the value a joiner checks.
 
