@@ -569,6 +569,21 @@ gate above is the one that would have caught all three.
 
   The bound artifact must replace the shipped one at the cut; `from_registered_profile` refuses the
   unbound file, so the dense SDK path does not work until it does.
+
+  **Distributing it costs 128 bytes, not 1.8 GB.** Every host already holds the shipped artifact,
+  and the bound one differs from it in exactly two 64-byte fields. Writing those two fields in place
+  and checking the result's sha256 against the converted file's is a complete verification — the
+  hash covers every byte, so a wrong patch cannot produce a right hash, and there is no partial
+  state between "identical" and "not". Done and confirmed on the fleet's first host:
+
+      sha256(bound artifact, converted here)   3f8fc5066bafae28d81b2360227a08e43fdb961ee6355938c56d32edf19d7623
+      sha256(shipped artifact, patched there)  3f8fc5066bafae28d81b2360227a08e43fdb961ee6355938c56d32edf19d7623
+
+      offset 1,777,209,032   fa9a4352…a649bb   (tokenizer commitment, was 64 zero bytes)
+      offset 1,795,427,212   158314b5…bf6450   (container digest)
+
+  The alternative — transferring 1.79 GB per host over a link measured at 2 MB/s — costs half an
+  hour each and is not more trustworthy, because it would be verified by the same hash.
 - **Toolchain pinned** and the CI gates runnable in one local command
 - **The single re-pin**, in the order of §4
 
