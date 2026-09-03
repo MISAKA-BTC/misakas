@@ -1400,6 +1400,58 @@ mod tests {
         );
     }
 
+    /// **The kernel set the graph-v5 row reaches, by id AND by name** — what a fixture that
+    /// certifies this class must reach, and nothing else.
+    ///
+    /// Printed rather than only asserted, because the consumer of this fact is a person building a
+    /// drill fixture in another crate: a set stated as a count is not checkable, and one stated as
+    /// bare hashes is not readable. The names come from the adjudicator's own descriptor table
+    /// (`palw_step_refute::KDESC_*`), so a kernel this build cannot name would show as `?` rather
+    /// than be silently dropped.
+    ///
+    /// The two assertions are the shape of the gap: the v5 row reaches the fused kernel, and it
+    /// does NOT reach the four the fusion replaced. That is why a "union with the graph-v2 row"
+    /// family cannot be drilled — no profile reaches both sides — and why the fixture has to be a
+    /// v5 profile with its own family.
+    #[test]
+    fn the_graph_v5_rows_kernel_set_is_what_a_fixture_must_reach() {
+        use kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1;
+        use kaspa_consensus_core::palw_step_refute as kd;
+        // `KDESC_ALL` rather than a hand list: a kernel this build catalogues but this test forgot
+        // would print as `?` and read as a defect in the row.
+        let named: Vec<(&str, kaspa_consensus_core::Hash64)> =
+            kd::KDESC_ALL.iter().map(|d| (*d, kaspa_consensus_core::palw_step::kernel_semantics_id_v1(d))).collect();
+        let name_of = |id: &kaspa_consensus_core::Hash64| {
+            named.iter().find(|(_, k)| k == id).map(|(n, _)| *n).unwrap_or("? (not a KDESC this test lists)")
+        };
+
+        let v5 = reachable_kernels_v1(&v5_row().profile);
+        println!("graph-v5 dense @ 512 reaches {} kernels:", v5.len());
+        for id in &v5 {
+            println!("  {}  {}", &id.to_string()[..16], name_of(id));
+        }
+        let fused = kaspa_consensus_core::palw_step::kernel_semantics_id_v1(kd::KDESC_A16_ATTN_FUSED);
+        assert!(v5.contains(&fused), "the graph-v5 row must reach the fused kernel — that is what makes it graph-v5");
+
+        let v2 = reachable_kernels_v1(
+            &kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2(
+                kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B_A16,
+            )
+            .expect("the graph-v2 row projects"),
+        );
+        let replaced: Vec<&str> =
+            [kd::KDESC_A16_ATTN_SCORES, kd::KDESC_A16_SOFTMAX, kd::KDESC_A16_REQUANTIZE, kd::KDESC_A16_ATTN_VALUES]
+                .into_iter()
+                .filter(|d| {
+                    let id = kaspa_consensus_core::palw_step::kernel_semantics_id_v1(d);
+                    v2.contains(&id) && !v5.contains(&id)
+                })
+                .collect();
+        println!("graph-v2 reaches {} kernels; the fusion replaces {replaced:?}", v2.len());
+        assert!(!v5.is_subset(&v2), "the v5 row reaches a kernel the v2 row does not");
+        assert!(!v2.is_subset(&v5), "the v2 row reaches kernels v5 drops — so no single profile reaches the union");
+    }
+
     /// **The registered row declares the TILED map, and therefore registers the INVENTORY root.**
     ///
     /// Both halves by name. `tiled_kv_state_chunk_map_id_v3` is the map ADR-0082 Decision 4's
@@ -1504,7 +1556,16 @@ mod tests {
             kaspa_consensus_core::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
         )
         .expect("the canonical job counts against the fenced ladder");
-        println!("graph-v5 dense @ n_ctx {}: canonical job {:?} = {counted} step leaves", row.profile.n_ctx, row.canonical_job);
+        println!(
+            "graph-v5 dense @ n_ctx {}: canonical job {:?} = {counted} step leaves, counted against the FENCED ladder {} \
+             (PALW_CONTEXT_LADDER_MAX_STEP_LEAVES); the executor default PALW_STEP_MAX_LEAVES is {} and the RC ruleset's \
+             own ladder is {}",
+            row.profile.n_ctx,
+            row.canonical_job,
+            kaspa_consensus_core::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+            kaspa_consensus_core::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT
+        );
         let registration = kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
             class_id: row.class_id(),
             artifact_root: Hash64::from_u64_word(0xA271FAC7),
@@ -1538,7 +1599,14 @@ mod tests {
                 Some(rules.clone()),
                 Some(kary),
             );
-            assert!(admitted.is_ok(), "{name}: the graph-v5 row must be admissible under its own armed court: {admitted:?}");
+            assert!(
+                admitted.is_ok(),
+                "{name}: the graph-v5 row must be admissible under its own armed court — ruleset ladder {} \
+                 (max_step_leaf_count), ladder-rule ladder {}, arity {}: {admitted:?}",
+                bundle.court.max_step_leaf_count(),
+                rules.ladder,
+                kary.dissection_arity
+            );
 
             // The close, DERIVED here and printed with the configuration it was measured under.
             //
