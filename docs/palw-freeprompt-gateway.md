@@ -82,15 +82,28 @@ One of `--rpc` or `--anchor` is required. `--rpc` wins if both are given.
 ## Run
 
 ```bash
-./target/release/misaka-palw-gateway \
-  --worker ./target/release/palw-a16-fp-worker \
+# The worker reads its runtime from the environment — the gateway spawns it, so these three must
+# be set where the GATEWAY runs, and as absolute paths: the worker resolves them from its own cwd,
+# not from yours. Without them the gateway reports only "the worker exited before announcing its
+# manifest" (its stderr is withheld by ADR-0079 SA-7; set MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1
+# to see the worker's own line, e.g. "MISAKA_PALW_NETWORK_ID is not set").
+export MISAKA_PALW_NETWORK_ID=testnet-11
+export MISAKA_PALW_ARTIFACT=/abs/path/to/qwen25-a16-graph-v5.palwart
+export MISAKA_PALW_TOKENIZER=/abs/path/to/qwen25-tokenizer.json
+MISAKA_ROOT=$(git rev-parse --show-toplevel)
+"$MISAKA_ROOT"/target/release/misaka-palw-gateway \
+  --worker "$MISAKA_ROOT"/target/release/palw-a16-fp-worker \
   --outbox ~/.misaka-palw-outbox \
-  --identity identity.json \
+  --identity /abs/path/to/identity.json \
   --rpc 127.0.0.1:17610 \
   --class-leaves 7708 \
   --bond-exposure-room-sompi 0 \
   --claim-exposure-sompi 0
 ```
+
+`identity.json`'s `class_id` must be the class the worker's artifact derives — the worker pins
+the request's `class_id` to its own and refuses any other ("the request declares a runtime this
+worker is not"). `palw-class ledger --network testnet-11` prints it beside the model id.
 
 **The flags a fleet gateway needs**, and what each one is for:
 
@@ -286,9 +299,17 @@ carries prompt text or prompt ids: a refusal names the rule and the position it 
 ## Smokes (all run the real model)
 
 ```bash
-python3 scripts/misaka-palw-fp-v3-worker-smoke.py ./target/release/palw-a16-fp-worker "$MISAKA_PALW_GGUF"
-python3 scripts/misaka-palw-fp-gateway-smoke.py ./target/release/misaka-palw-gateway ./target/release/palw-a16-fp-worker "$MISAKA_PALW_GGUF"
-python3 scripts/misaka-palw-fp-rail-smoke.py ./target/release/misaka-palw-gateway ./target/release/misaka-palw-fp-rail ./target/release/palw-a16-fp-worker "$MISAKA_PALW_GGUF"
+# All three run the real worker, which needs MISAKA_PALW_NETWORK_ID / MISAKA_PALW_TOKENIZER in the
+# environment and an ABSOLUTE artifact path (the worker resolves paths from its own cwd). The
+# gateway smoke takes the artifact, derives the identity's class id from `palw-class ledger`
+# (built by `cargo build --release -p misaka-palw-sdk`, expected beside the gateway binary or named
+# by PALW_CLASS_BIN) and declares the exposure so the offline form actually writes a commitment.
+export MISAKA_PALW_NETWORK_ID=testnet-11
+export MISAKA_PALW_TOKENIZER=/abs/path/to/qwen25-tokenizer.json
+MISAKA_ROOT=$(git rev-parse --show-toplevel)
+python3 scripts/misaka-palw-fp-v3-worker-smoke.py "$MISAKA_ROOT"/target/release/palw-a16-fp-worker "$MISAKA_PALW_GGUF"
+python3 scripts/misaka-palw-fp-gateway-smoke.py "$MISAKA_ROOT"/target/release/misaka-palw-gateway "$MISAKA_ROOT"/target/release/palw-a16-fp-worker /abs/path/to/qwen25-a16-graph-v5.palwart
+python3 scripts/misaka-palw-fp-rail-smoke.py "$MISAKA_ROOT"/target/release/misaka-palw-gateway "$MISAKA_ROOT"/target/release/misaka-palw-fp-rail "$MISAKA_ROOT"/target/release/palw-a16-fp-worker "$MISAKA_PALW_GGUF"
 ```
 
 The worker smoke pins the property everything else stands on: the Text arm and the TokenIds
