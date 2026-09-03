@@ -35,8 +35,22 @@
 //! the middle one so that a corpus edit fails HERE as well as in `grammar_floor` — one measurement
 //! with two spellings is how they drifted apart enough to need reconciling in the first place.
 //!
-//! Skips without `MISAKA_FLOOR_TOKENIZER_DENSE`, because a token count is a claim about a
-//! particular tokenizer and this test refuses to invent one.
+//! # Absence is a decision, not a default
+//!
+//! A token count is a claim about a particular tokenizer and this file refuses to invent one — but
+//! refusing to invent one is not the same as passing without one. The checkpoint is not in the
+//! repository, so the dense tokenizer is taken from `MISAKA_FLOOR_TOKENIZER_DENSE`, else from the
+//! paths it lives at on the hosts that have it (`DENSE_TOKENIZER_FIXTURES`, the shape
+//! `answer_binding`'s fixtures use). If neither produces a file, the test **fails by name**,
+//! listing every path it looked at — unless `MISAKA_PALW_WIDTH_NO_TOKENIZER` is set, which is how
+//! a host with no checkpoint says so out loud (the SKIPPED line it prints names the test and says
+//! the widths were NOT checked).
+//!
+//! The distinction is load-bearing: `n_ctx` is inside the borsh that `shape_profile_id` hashes, so
+//! the width these numbers decide cannot be adjusted after the mint, and the announcement cites a
+//! run of this file as the measurement. Until 2026-09-03 three of these tests printed "No width
+//! was checked" and passed with exit 0 — a run that checked nothing was indistinguishable from
+//! one that checked three columns, except by its wall clock (0.00 s against 0.42 s).
 
 use misaka_palw_base0::tokenizer::QwenTokenizer;
 
@@ -49,11 +63,73 @@ const DEMONSTRATED: &[&str] = &["music/03-overlapping-melody.json", "scene/02-hi
 /// close is 80,504 bytes, one carrier, prosecutable.
 const BUDGET_AT_512: usize = 503;
 
+/// Where the dense lane's `tokenizer.json` is looked for when `MISAKA_FLOOR_TOKENIZER_DENSE` is
+/// unset — the asset is not in the repository, and an env var nobody is told to set is how a host
+/// that HAS the checkpoint still measures nothing. Only the dense lane's own tokenizer belongs
+/// here: another model's `tokenizer.json` reads perfectly well and yields different counts, which
+/// `the_three_columns_are_different_questions` would then report as the corpus having moved.
+const DENSE_TOKENIZER_FIXTURES: &[&str] = &["/Users/wata/Downloads/qwen25-tokenizer.json"];
+
+/// Set to any value on a host that has no checkpoint. It turns the refusals below into named
+/// SKIPPED lines; without it, absence FAILS.
+const NO_CHECKPOINT: &str = "MISAKA_PALW_WIDTH_NO_TOKENIZER";
+
+/// `Ok(path)` when the dense tokenizer was found. `Err(line)` only when it was not found AND
+/// `MISAKA_PALW_WIDTH_NO_TOKENIZER` is set — the caller prints `line` and returns. Otherwise this
+/// panics, by test name, naming every path it looked at.
+fn dense_tokenizer_path(test: &str) -> Result<std::path::PathBuf, String> {
+    if let Ok(p) = std::env::var("MISAKA_FLOOR_TOKENIZER_DENSE") {
+        let p = std::path::PathBuf::from(p);
+        assert!(p.exists(), "MISAKA_FLOOR_TOKENIZER_DENSE={} does not exist", p.display());
+        return Ok(p);
+    }
+    if let Some(p) = DENSE_TOKENIZER_FIXTURES.iter().map(std::path::PathBuf::from).find(|p| p.exists()) {
+        return Ok(p);
+    }
+    let looked = DENSE_TOKENIZER_FIXTURES.join(", ");
+    if std::env::var_os(NO_CHECKPOINT).is_some() {
+        return Err(format!(
+            "SKIPPED {test}: no dense checkpoint on this host and {NO_CHECKPOINT} is set. \
+             MISAKA_FLOOR_TOKENIZER_DENSE is unset and none of [{looked}] exists. \
+             NO WIDTH WAS CHECKED BY THIS RUN."
+        ));
+    }
+    panic!(
+        "{test} has no dense tokenizer: MISAKA_FLOOR_TOKENIZER_DENSE is unset and none of [{looked}] exists. \
+         This file measures the widths the registered n_ctx was chosen from, and n_ctx is inside the borsh that \
+         shape_profile_id hashes — a run that checks nothing must not read as a run that checked. Set \
+         MISAKA_FLOOR_TOKENIZER_DENSE to the dense checkpoint's tokenizer.json, or set {NO_CHECKPOINT} to declare \
+         that this host cannot check them."
+    );
+}
+
+/// The QWEN36 lane's `.gguf`, under the same rule. No fixture path is listed because no host in
+/// this tree keeps one at a fixed location; `MISAKA_QWEN36_GGUF` is the only way in.
+fn qwen36_gguf_path(test: &str) -> Result<std::path::PathBuf, String> {
+    if let Ok(p) = std::env::var("MISAKA_QWEN36_GGUF") {
+        let p = std::path::PathBuf::from(p);
+        assert!(p.exists(), "MISAKA_QWEN36_GGUF={} does not exist", p.display());
+        return Ok(p);
+    }
+    if std::env::var_os(NO_CHECKPOINT).is_some() {
+        return Err(format!(
+            "SKIPPED {test}: MISAKA_QWEN36_GGUF is unset and {NO_CHECKPOINT} is set. \
+             THE SECOND LANE'S WIDTHS WERE NOT CHECKED BY THIS RUN."
+        ));
+    }
+    panic!(
+        "{test} has no QWEN36 checkpoint: MISAKA_QWEN36_GGUF is unset. The second lane tokenizes the same JSON \
+         with a different vocabulary, and a width chosen from the first lane is only known to fit the second by \
+         measuring it. Set MISAKA_QWEN36_GGUF to the checkpoint's .gguf, or set {NO_CHECKPOINT} to declare that \
+         this host cannot check it."
+    );
+}
+
 #[test]
 fn every_demonstrated_corpus_answer_fits_the_width_the_launch_registers() {
-    let Ok(path) = std::env::var("MISAKA_FLOOR_TOKENIZER_DENSE") else {
-        println!("SKIPPED: set MISAKA_FLOOR_TOKENIZER_DENSE to a checkpoint's tokenizer.json. No width was checked.");
-        return;
+    let path = match dense_tokenizer_path("every_demonstrated_corpus_answer_fits_the_width_the_launch_registers") {
+        Ok(p) => p,
+        Err(skipped) => return println!("{skipped}"),
     };
     let t = QwenTokenizer::from_json(&std::fs::read(&path).expect("the tokenizer reads")).expect("the tokenizer parses");
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("corpus");
@@ -77,7 +153,7 @@ fn every_demonstrated_corpus_answer_fits_the_width_the_launch_registers() {
 /// **The QWEN36 lane's numbers are not the dense lane's, and nobody had measured them.**
 ///
 /// Every token count in this file and in `grammar_floor` is the shipped Qwen2.5 tokenizer's — a
-/// 151,936-entry vocabulary loaded from a `tokenizer.json`. The QWEN36 lane does not use it: its
+/// 151,665-entry vocabulary (151,643 + 22 added tokens; the model config's padded `vocab_size` is 151,936) loaded from a `tokenizer.json`. The QWEN36 lane does not use it: its
 /// checkpoint ships no `tokenizer.json` at all and carries a 248,320-entry vocabulary inside the
 /// GGUF's `tokenizer.ggml.*` metadata (`misaka_palw_base0::gguf::KEEP_ARRAYS` exists for exactly
 /// that reason).
@@ -90,11 +166,11 @@ fn every_demonstrated_corpus_answer_fits_the_width_the_launch_registers() {
 /// Skips loudly without `MISAKA_QWEN36_GGUF`, because the alternative to measuring is guessing.
 #[test]
 fn the_qwen36_lanes_tokenizer_is_measured_rather_than_assumed() {
-    let Ok(gguf_path) = std::env::var("MISAKA_QWEN36_GGUF") else {
-        println!("SKIPPED: set MISAKA_QWEN36_GGUF to the QWEN36 checkpoint's .gguf. The second lane's widths were NOT checked.");
-        return;
+    let gguf_path = match qwen36_gguf_path("the_qwen36_lanes_tokenizer_is_measured_rather_than_assumed") {
+        Ok(p) => p,
+        Err(skipped) => return println!("{skipped}"),
     };
-    let bytes = std::fs::read(&gguf_path).unwrap_or_else(|e| panic!("{gguf_path}: {e}"));
+    let bytes = std::fs::read(&gguf_path).unwrap_or_else(|e| panic!("{}: {e}", gguf_path.display()));
     let dir = misaka_palw_base0::gguf::parse_directory(&bytes).expect("the GGUF directory parses");
     let get = |k: &str| dir.metadata.get(k);
     let tokens = get("tokenizer.ggml.tokens").and_then(|v| v.as_strings()).expect("the GGUF carries its vocabulary");
@@ -103,7 +179,9 @@ fn the_qwen36_lanes_tokenizer_is_measured_rather_than_assumed() {
     let moe = QwenTokenizer::from_gguf(tokens, &merges, &types).expect("the GGUF vocabulary builds a tokenizer");
     println!("QWEN36 vocabulary: {} entries", moe.len());
 
-    let dense = std::env::var("MISAKA_FLOOR_TOKENIZER_DENSE")
+    // The companion follows the same discovery, so the instrument check at the end of this test
+    // runs on every host that has the dense checkpoint, not only on one that exported the variable.
+    let dense = dense_tokenizer_path("the_qwen36_lanes_tokenizer_is_measured_rather_than_assumed")
         .ok()
         .map(|p| QwenTokenizer::from_json(&std::fs::read(&p).expect("reads")).expect("parses"));
 
@@ -155,9 +233,9 @@ fn the_qwen36_lanes_tokenizer_is_measured_rather_than_assumed() {
 /// tables that look like a disagreement.
 #[test]
 fn the_three_columns_are_different_questions() {
-    let Ok(path) = std::env::var("MISAKA_FLOOR_TOKENIZER_DENSE") else {
-        println!("SKIPPED: set MISAKA_FLOOR_TOKENIZER_DENSE. No column was checked.");
-        return;
+    let path = match dense_tokenizer_path("the_three_columns_are_different_questions") {
+        Ok(p) => p,
+        Err(skipped) => return println!("{skipped}"),
     };
     let t = QwenTokenizer::from_json(&std::fs::read(&path).expect("the tokenizer reads")).expect("the tokenizer parses");
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("corpus");
