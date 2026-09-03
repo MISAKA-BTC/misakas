@@ -371,6 +371,8 @@ route happens to cover, and that is not "prosecutable".** The honest sentence un
 bottom opening is **40,461 bytes = 0.49 carriers at EVERY position class** — prefill, first decode,
 tile-aligned, straddling a tile boundary, and last — measured per class rather than averaged. The
 close falls from 216,019 (3 chunks) to **82,719 = ONE chunk**, binding `attn[7] AttnFused`, and
+*(both figures under this section's `2^32` ladder. The SHIPPED close, on t11's dormant ladder, is
+**81,312** — what carries out of this comparison is the RATIO, not either absolute.)*
 82,911 at n_ctx 4,096. Per-position retention is **zero**: the fold keeps no chunk bytes, where a
 chunk-retaining capture at 16 positions would have held 1,114,112.
 
