@@ -4334,10 +4334,21 @@ ssh misaka-ibm 'cd /root/misakas-t11r && git checkout cut-<5f-tip> && nice -n 19
 # 4. isolated boot on ibm MUST go green. THE TABLE CARRIES NO GENESIS HASH — do not look for one.
 #    The premine re-pin (utxo_commitment 2d882275… -> ba2612417e7e0817…) MOVES GENESIS.hash (audit M-07,
 #    utxo_set_override.rs:66: re-pin GENESIS.hash + utxo_commitment together). The expected hash is
-#    the re-pinned tree's PALW_RC_GENESIS.hash, PROVEN two ways: the M-07 test
-#    every_genesis_commits_to_the_premine_this_build_mints turns GREEN on the re-pinned tree (it is
-#    red before), and the boot prints that same hash. A candidate boot BEFORE the re-pin prints the
-#    old 08e9c8a4cb597145… — correct for the candidate, wrong for the cut.
+#    the re-pinned tree's PALW_RC_GENESIS.hash, spelled THREE ways that must agree (3e, from the tree):
+#      (1) premine.rs::print_premine_commitment — the #[ignore] printer, run with
+#          cargo test -p kaspa-consensus-core --lib print_premine_commitment -- --ignored --nocapture —
+#          rebuilds the header over the NEW utxo_commitment with the node's own header hasher and
+#          prints 'PALW_RC_GENESIS.hash (recomputed over that commitment)'. NOT the genesis tool's
+#          display, which this project has recorded as lying. The table carries it as
+#          t11_genesis_hash_implied <128 hex> — ABSENT if the printer printed nothing, never a placeholder.
+#      (2) config::genesis::tests::test_genesis_hashes AND every_genesis_commits_to_the_premine_this_build_mints
+#          both GREEN on the re-pinned tree (the second is red before the re-pin).
+#      (3) the isolated boot printing the same hash.
+#    971b2eff's printer said ad30b5cb965ad305…9b33edb7 for commitment ba2612417e7e0817…; the family
+#    adoption does not touch the premine, so the family tip's value is predicted UNCHANGED — and this
+#    session runs the same printer on its own worktree so the prediction is independent of the table.
+#    A candidate boot BEFORE the re-pin prints the old 08e9c8a4cb597145… — correct for the candidate,
+#    wrong for the cut.
 
 # 5. the fleet, in this order and no other (fleet-wipe-must-stop-every-host-first):
 scripts/relaunch-fleet-wipe.sh census     # enumerate from PROCESSES and ss, not journals
@@ -4526,3 +4537,19 @@ lists BASE-0, A16 graph-v2 and three QWEN36 geometries — **not the graph-v5 51
 that sits 158 bytes under the ceiling** (83,175 of 83,333). *The test that guards the ceiling
 does not watch the row nearest it.* The row goes in so that test is the one that notices when
 a future re-pricing crosses the carrier line.
+
+### The genesis hash now has a producer, and the guard gains a sixth line
+
+Answered by 3e from the tree, not memory: `premine.rs::print_premine_commitment` recomputes
+`PALW_RC_GENESIS.hash` over the new `utxo_commitment` with the node's header hasher; the finalize
+runs it as step 5b and the table carries `t11_genesis_hash_implied` — **absent if the printer
+printed nothing, never a placeholder.** The 971b2eff value was `ad30b5cb965ad305…9b33edb7` for
+commitment `ba2612417e7e0817…`. The family adoption does not read the premine, so the family
+tip's value is **predicted unchanged**; this session is running the same printer on its own
+worktree (`09a71652`, `premine.rs`/`genesis.rs` byte-identical to `971b2eff`) so the prediction
+is a second computation, not a copy of the table. **The guard will check it as a sixth value
+and refuse `<absent>`.**
+
+Impl now carries the drill-seat fix (`0a9068d4`, script only; `derive/src` unmoved). 3e takes
+5e's missing-row test onto impl beside T1 so `consensus/core` keeps one writer; 5e's family
+commits (fault rule + covering type/gate) still come one at a time with file lists.
