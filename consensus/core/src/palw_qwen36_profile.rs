@@ -1148,7 +1148,7 @@ mod qwen3moe_family {
     fn qwen3moe_geometry_probe() {
         let p = crate::config::params::palw_rc_shipped_params();
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &p.palw_consensus_mode else { panic!() };
-        for nctx in [4u32, 6, 8, 9, 10, 12, 16] {
+        for nctx in [4u32, 6, 8, 9, 10, 12, 16, 64, 128, 192, 256] {
             let g = PalwQwen36GeometryV1 {
                 layer_count: 48,
                 full_attention_interval: 1,
@@ -1206,8 +1206,17 @@ mod qwen3moe_family {
             b.court_e2e_root = crate::palw_e2e_adjudicability::palw_court_e2e_root_of_v1(&certified);
             let verdict = crate::palw_class_admission_v2::verify_class_admission_v2(&b, &profile, &canonical, &reg, &certified);
             match nctx {
-                4 | 6 | 8 | 9 | 10 => assert!(verdict.is_ok(), "n_ctx {nctx} fell out of the qwen3moe family's room: {verdict:?}"),
-                _ => assert!(verdict.is_err(), "n_ctx {nctx} was admitted — the qwen3moe ceiling moved, revisit the ladder comment"),
+                // Re-measured after audit D H-5: the ceiling was the EXECUTOR's `2^22` constant
+                // leaking into the gate's cost walk and canonical count, not the ruleset's `2^26`
+                // ladder. Corrected, this family's room runs to 128 and 192 is refused by the
+                // ladder itself (`DeeperThanTheLadder { worst: 67,414,472, ladder: 67,108,864 }`).
+                4 | 6 | 8 | 9 | 10 | 12 | 16 | 64 | 128 => {
+                    assert!(verdict.is_ok(), "n_ctx {nctx} fell out of the qwen3moe family's room: {verdict:?}")
+                }
+                _ => assert!(
+                    matches!(verdict, Err(crate::palw_class_admission_v2::PalwClassAdmissionError::DeeperThanTheLadder { .. })),
+                    "n_ctx {nctx} must be refused by the ruleset's ladder and nothing else: {verdict:?}"
+                ),
             }
         }
     }
