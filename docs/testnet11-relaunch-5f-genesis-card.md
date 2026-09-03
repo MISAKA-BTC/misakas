@@ -88,7 +88,7 @@ Three are armed at genesis on testnet-11 and the rest stay `None`.
 
 | fence | at genesis | why |
 |---|---|---|
-| `palw_context_ladder` | **ARM** | without it the registered class cannot price a wide row; the ladder is the whole point of the 512 registration |
+| `palw_context_ladder` | **`None` — DO NOT ARM** | **This row said ARM and its reason was false.** There is no `palw_context_ladder_active_at`: nothing reads the fence. Every use of that name is the *module*, the field, the `never()→None` normalisation, or `params.rs:3243` writing it into the FINGERPRINT. So arming it moves the fingerprint and gates nothing — and FG proves the reason wrong, because the 512 row is registered and priced at 2^26 **with this fence dormant**. The wide row prices from the bundle's `max_step_leaf_count`, which is the second of the "two moves" below; the first move is decoration. |
 | `palw_uncertified_weightless` | **ARM, `ForkActivation::always()`** | genesis is the ONLY moment this can be armed — `validate_palw_v2` refuses any other height |
 | `palw_kary_court` | **ARM, `ForkActivation::always()`** | **ADR-0082's, does not exist yet.** Without it the registered row is admitted and UNPROSECUTABLE — see §3. A bare fence: no companion value, no bundle field. `dissection_arity` stays 2 on every preset and the fence overrides it with the derived arity. |
 | `palw_prompt_ids_merkle` | `None` — **and it cannot be armed** | ADR-0082's. Not needed at the registered width: flat ids are 82,080 against a budget of 83,333. It becomes REQUIRED above about n_ctx 1,024 — but as of FD it is no longer a fence anyone may arm at that point: **`validate_palw_v2` REFUSES a ruleset that arms it** (`config/params.rs:1595`, on impl; 2310 is only the doc comment about it), because the commitment form it selects does not ship. Registering a wider row is therefore blocked on implementing the form, not on flipping the fence. |
@@ -99,9 +99,15 @@ Three are armed at genesis on testnet-11 and the rest stay `None`.
 contradiction** — it lands with ADR-0082 (§7), and the card names it now so the arming is not
 discovered at cut time.
 
-**Arming the ladder is TWO moves, not one.** `Params::palw_context_ladder` AND the bundle's
-`PalwCourtParamsV2::max_step_leaf_count`. Setting one and not the other produces a build that
-looks armed and prices the old row.
+**"Arming the ladder is TWO moves" was half right: only the SECOND move exists.** The bundle's
+`PalwCourtParamsV2::max_step_leaf_count` is the whole mechanism; `Params::palw_context_ladder` has
+no reader. Setting the fence and not the field produces a build that looks armed and prices the old
+row — which was the real warning, and it survives. Setting the field is what moves the width.
+
+*Arming a fence nothing reads is the ADR-0065 D1 mistake — a rule armed with no shipping thing to
+obey it — which is the last row of this very table. I wrote the row and the warning against it in
+the same section, and it took FG registering the row with the fence dormant to show which was
+right.*
 
 **And it is armed to `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` = 2^26 — not to 2^32.** Naming the field
 without naming its value is the same defect one level down. 2^32 is not available at this cut and
