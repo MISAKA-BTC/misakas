@@ -171,6 +171,13 @@ three sessions.
 Carrier is `PALW_OBJECT_CHUNK_MAX_BYTES` = 100,000 bytes. The `PalwStepBindingV2` the mempool
 charges for but the court does not is 13,996 at its widest.
 
+> **Every close figure on this card carries its ARITY, because two of them looked like a
+> disagreement and were one measurement at two arities.** `82,719 − 81,599 = 1,120` is exactly the
+> arity-16 move disclosure, and the difference was already named in a test's own comment. **The
+> genesis derives arity 2** from the v5 row in `genesis_objects`, on both the RC and devnet bundles
+> — not the 4 a brief assumed, not the 16 an early sweep measured at. A byte count without its arity
+> is a number from a court nobody is running.
+
 **Every graph-v5 figure below is UNDER THE DISSECTION COURT.** This is not a footnote: under the
 shipped BINARY court a fused leaf's terminal check opens the whole history it reads — about 1 MB at
 n_ctx 512, twelve to thirteen carriers — which §5 shuts. So a graph-v5 row registered with only the
@@ -224,7 +231,8 @@ evidence. It is unregistered at genesis (§2) and will need W6/W7's split accept
 |---|---|---|---|---|
 | graph-v2/v3 dense @ 512, binary court (today) | 1,154,673 | 1,168,669 | 14 | **no** |
 | graph-v5 dense @ 512, **binary** court | ~1,000,000 | — | 12–13 | **no** |
-| graph-v5 dense @ 512, **dissection** court | 80,504 | **94,500** | **1** | **yes** |
+| graph-v5 dense @ 512, **dissection** court, **arity 16** | 80,504 | **94,500** | **1** | **yes** |
+| graph-v5 dense @ 512, **dissection** court, **arity 2 — what genesis derives** | **81,599** | 95,595 | **1** | **yes** |
 | graph-v5 hybrid @ 512, dissection court | 200,732 | — | 3 | no |
 
 **How flat "flat" is, swept rather than interpolated** — graph-v5 dense, every registrable width:
