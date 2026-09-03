@@ -5396,3 +5396,34 @@ kaspa-pq-validator-core/), `cargo build --release --locked -j 2 -p misaka-palw-g
     misaka-palw-gateway                 sha256 bd9c91500872…       unchanged
 
 No public on-chain free-prompt claim is attempted before the v5 lane binding lands and 3e's run 2 has read 5b–8.
+
+### 6i — Qwen3.6 produced the chain's first attempt blocks; the explorer's lane field is not the header's (19:00 UTC)
+
+**Correction to 6f, 6g, 6h:** every lane census taken from the explorer (`/blocks/<hash>` → `header.powAlgoId`) reported
+`3` for **every** block, including the two blocks node0 logged as produced. The REST/filler does not carry the header's
+`pow_algo_id`; the field is a constant. "Heartbeat blocks carry algo 3" (6f) was that instrument, not the chain. The
+census from node0's own `getBlocks`, paged from the genesis (`/root/fp-smoke-5f/lanes.py`), at 19:00 UTC:
+
+    blocks 157 = genesis (algo 1) + 154 heartbeats (algo 8, POW_ALGO_ID_HEARTBEAT_V1 — as ADR-0066 says) + 2 attempt blocks (algo 6)
+
+    c90b028c…  algo 6  daa 40  blue 26  template ts 17:54:57Z  produced 18:18:31Z  claim e78441c7…   (node0 "produced block #1")
+    7e11fa05…  algo 6  daa 80  blue 50  template ts 18:18:31Z  produced 18:43:56Z  claim 5bc8f1cf…   (node0 "produced block #2")
+
+- Algo **6** is `POW_ALGO_ID_PALW_COMMITTED_V2`, the attempt id this ruleset pins (`PalwRulesetV2::validate` pins
+  `algorithm_id` at 6; the beacon's fence to `PALW_EXEC_V3 = 9` is not crossed on this network). The producer's own line
+  says "class ticket + Layer-0 both under target".
+- **Qwen3.6 runs one job every ~25 min on ibm** (execution materials at 18:17:58 and 18:43:42 UTC, 253 MB each) and won
+  both draws at its 0.61·MAX ticket. The template is taken at job start ("one template, one inference, one draw"), so a
+  25-minute inference lands a block whose parents are 25 min old — `isChainBlock false`, a deep side block, accepted.
+- No floor block yet (node1, the pool slot) and no v5 block yet (seat2's first 512-context job had not completed after
+  30 min); `[palw-producer] palw weight=0 live_total=0 final_claims=0 unresolved=0 courts=0` after both.
+
+**Adjudication of those two claims:** `.113`'s public node filed `Incapable` receipts for both (18:32:50, 18:33:22,
+18:57:07 UTC) — its wrapper listed only the two A16 artifacts, so it cannot resolve the QWEN36 backend. With five
+seats, quorum 3 and the executor excluded, node1, seat4 and seat2 must all file capable receipts for a QWEN36 claim
+to reach Final; none has yet (their replay of a 33 GiB class takes its own time). `qwen36.palwq36` was added to
+`node.sh` (`node.sh.pre-5f-qwen36` kept) and the node restarted. **Every panel seat must hold all three artifacts**
+was the rule in 6b; `.113`'s node was the seat it had not been applied to.
+
+The explorer-based watch for a non-heartbeat block cannot fire (the field it reads is constant) and is left to expire.
+Post-cut: the filler must store the header's `pow_algo_id`, or the explorer must not show one.

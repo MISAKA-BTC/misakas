@@ -53,6 +53,11 @@ next epoch boundary** — "no blocks yet" after registering is arithmetic, not a
 
 ## What is not claimed
 
-Block time, finality, node counts beyond the fleet's six, and anything about VLT credit. The first hour's blocks are all
-heartbeat blocks; the first attempt block from a model class is expected within hours at the previous chain's measured
-rate and will be reported when read, not before.
+Block time, finality, node counts beyond the fleet's six, and anything about VLT credit.
+
+## Qwen3.6 produced blocks
+
+At 18:18 and 18:43 UTC the Qwen3.6 seat produced the chain's first two attempt blocks (`c90b028c…`, `7e11fa05…`), each
+the result of one ~25-minute inference on an 8-core CPU host, both draws won. The dense tier's first block is expected
+when its first 512-context job completes; the floor's when its draw wins. Everything else on the chain so far is
+heartbeat blocks.
