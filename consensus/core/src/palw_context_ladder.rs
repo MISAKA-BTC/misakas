@@ -1755,8 +1755,18 @@ mod tests {
 
     /// **The shipped rows keep interval 1 and their class ids.** The derivation is `n_ctx / 32`
     /// and the widest shipped context is 16, so every shipped row lands on the interval it already
-    /// pins — and the profiles this module builds for them are byte-identical to the shipped
-    /// constructors' own, which is what "their ids did not move" means.
+    /// pins.
+    ///
+    /// **The second half of this doc used to say the profiles this module builds are
+    /// "byte-identical to the shipped constructors' own". They are not**, and the assertion
+    /// underneath it was a pure function compared to itself — which is what happens when a doc
+    /// makes a claim the code cannot support: the check degenerates into one that cannot fail,
+    /// and stays green forever in the slot where the real check would have gone.
+    ///
+    /// Writing the comparison the doc described turned it red and produced a **third** class id.
+    /// At n_ctx 16 the dense lineage has three: the v1 constructor's, the v2 constructor's (the
+    /// one the genesis registers), and this module's own projection. What is asserted now is that
+    /// all three stay distinguishable.
     #[test]
     fn the_shipped_rows_keep_interval_one_and_their_ids() {
         use crate::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
@@ -1767,9 +1777,55 @@ mod tests {
                 "{name}: the derived interval is not the one the family pins"
             );
         }
-        // The class ids, off the shipped constructors, unchanged by anything in this file.
+        // **This compared `qwen25_a16_class_id_v2()` to ITSELF** — one pure function, twice, so
+        // the assertion could not fail and its message ("the A16 id is not stable across two
+        // derivations") was unreachable. A tautology in the shape of a check is worse than no
+        // check: it occupies the slot where the real one would go, and it is green forever.
+        //
+        // The comparison the doc above describes is between THIS MODULE's projection at the
+        // shipped width and the shipped constructor's own id — "the profiles this module builds
+        // for them are byte-identical to the shipped constructors' own". That is a claim about
+        // two different code paths and it can fail, which is the whole difference.
         let a16 = crate::palw_qwen25_profile::qwen25_a16_class_id_v2();
-        assert_eq!(a16, crate::palw_qwen25_profile::qwen25_a16_class_id_v2(), "the A16 id is not stable across two derivations");
+        // The real relationship, which is NOT the one the doc claimed. This module's dense ladder
+        // projection is `palw_a16_context_row_profile_v1` — the **v1** graph — and the shipped
+        // constructor the chain registers is `qwen25_a16_class_id_v2`. They are different classes
+        // at the same width, so "byte-identical to the shipped constructors' own" was false, and
+        // writing the comparison the doc described would have gone red. That is why the assertion
+        // it replaced compared a pure function to itself.
+        // **THREE distinct dense class ids exist at n_ctx 16, and this module builds the third.**
+        // Measured when the tautology above was replaced with the comparison the doc described:
+        //
+        //   f942e268…  qwen25_a16_profile_v1(QWEN25_1_5B_A16)          the superseded v1 graph
+        //   71bbb755…  qwen25_a16_profile_v2(QWEN25_1_5B_A16)          what the genesis REGISTERS
+        //   7a76d29b…  palw_a16_context_row_profile_v1(16)             this module's projection
+        //
+        // The doc claimed this module's profiles are "byte-identical to the shipped constructors'
+        // own". They match NEITHER — not the v2 constructor the chain registers, and not even the
+        // v1 one. Three ids for one model at one width is exactly the hazard this project's notes
+        // keep warning about, and it was invisible because the only assertion here compared a pure
+        // function to itself.
+        //
+        // Pinned as three-way distinctness rather than as three literals: a literal would have to
+        // be re-pinned whenever any of the three graphs moves, and the property worth holding is
+        // that they stay TELLABLE APART. If any two ever collide, a row built here starts naming a
+        // class something else already owns, and nothing downstream can see the difference.
+        let ladder_16 = palw_a16_context_row_profile_v1(16).expect("the dense ladder row projects at the shipped width");
+        let v1_16 = crate::palw_qwen25_profile::qwen25_a16_profile_v1(crate::palw_qwen25_profile::QWEN25_1_5B_A16)
+            .expect("the v1 constructor projects")
+            .shape_profile_id();
+        for (a_name, a, b_name, b) in [
+            ("this module's ladder projection", ladder_16.shape_profile_id(), "the v1 constructor", v1_16),
+            ("this module's ladder projection", ladder_16.shape_profile_id(), "the REGISTERED v2 class", a16),
+            ("the v1 constructor", v1_16, "the REGISTERED v2 class", a16),
+        ] {
+            assert_ne!(
+                a, b,
+                "{a_name} and {b_name} now produce the same class id at n_ctx 16. Two of the three dense graphs have \
+                 collided, so a row built by one route silently names the class another route owns — which is the \
+                 defect the whole `palw-certify bind` rewrite exists to prevent."
+            );
+        }
         let q36 = crate::palw_qwen36_profile::qwen36_class_id_v3();
         // A ladder row is a DIFFERENT class from the shipped one — the point of Decision 13, and
         // the thing that would be a silent repair if it were not true.
@@ -3092,7 +3148,9 @@ mod u04_flat_close {
         let v23: Vec<(u64, u64, String)> = PALW_LADDER_FAMILIES_V1
             .iter()
             .map(|build| {
-                let (_, _, binding) = palw_widest_close_over_the_ladder_v1(&[*build], &[512], None, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("the 512 row prices");
+                let (_, _, binding) =
+                    palw_widest_close_over_the_ladder_v1(&[*build], &[512], None, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
+                        .expect("the 512 row prices");
                 (
                     binding.close_bytes,
                     palw_close_chunks_for_bytes_v1(binding.close_bytes),
@@ -3122,7 +3180,8 @@ mod u04_flat_close {
             .iter()
             .map(|build| {
                 let (_, _, binding) =
-                    palw_widest_close_over_the_ladder_v1(&[*build], &[512], Some(kary(16)), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("the v5 512 row prices");
+                    palw_widest_close_over_the_ladder_v1(&[*build], &[512], Some(kary(16)), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
+                        .expect("the v5 512 row prices");
                 (
                     binding.close_bytes,
                     palw_close_chunks_for_bytes_v1(binding.close_bytes),
@@ -3173,7 +3232,10 @@ mod u04_flat_close {
         // anchor. Decision 6 names this term and sizes it at two to three; it is four.
         assert_eq!((v5[1].0, v5[1].1), (274_460, 4), "the hybrid graph-v5 512 row's close moved");
         assert!(v5[1].2.contains("GatedDeltaNet"), "the hybrid v5 row stopped binding on its recurrence: {}", v5[1].2);
-        assert_eq!(palw_close_chunks_for_ladder_v1(&PALW_LADDER_FAMILIES_V5, &[512], Some(kary(16)), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES), Some(4));
+        assert_eq!(
+            palw_close_chunks_for_ladder_v1(&PALW_LADDER_FAMILIES_V5, &[512], Some(kary(16)), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES),
+            Some(4)
+        );
 
         // ---- and what Decision 6's own numbers ARE, so the difference is attributable rather than
         // a disagreement: the dense model width at the tile route, both id forms.
@@ -3766,7 +3828,10 @@ mod u04_flat_close {
                 for n_ctx in [512u32, 4_096, 32_768, 131_072] {
                     let Ok(profile) = build(n_ctx) else { continue };
                     let court = PalwKaryCourtV1 { prompt_ids_form: form, ..kary(16) };
-                    let Some(rules) = palw_class_ladder_rules_for_court_v1(&profile, Some(court), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES) else { continue };
+                    let Some(rules) = palw_class_ladder_rules_for_court_v1(&profile, Some(court), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
+                    else {
+                        continue;
+                    };
                     let Ok(rows) = derive_court_cost_rows_v1(&profile, rules.cost_shape) else { continue };
                     let whole = rows.first().expect("a non-empty walk").close_bytes;
                     let fused = rows
@@ -3801,7 +3866,8 @@ mod u04_flat_close {
                     if !by_ids {
                         let profile = build(b.0).expect("projects");
                         let court = PalwKaryCourtV1 { prompt_ids_form: form, ..kary(16) };
-                        let rules = palw_class_ladder_rules_for_court_v1(&profile, Some(court), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("mapped");
+                        let rules = palw_class_ladder_rules_for_court_v1(&profile, Some(court), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
+                            .expect("mapped");
                         let rows = derive_court_cost_rows_v1(&profile, rules.cost_shape).expect("derives");
                         let binding = rows.first().expect("non-empty");
                         assert_eq!(
@@ -3838,7 +3904,10 @@ mod u04_flat_close {
         // Decision 5's form is the one a `palw_kary_court`-armed ruleset carries into the shape.
         let dense = PALW_LADDER_FAMILIES_V5[0](512).expect("projects");
         assert_eq!(
-            palw_class_ladder_rules_for_court_v1(&dense, Some(kary(16)), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("mapped").cost_shape.prompt_ids_form,
+            palw_class_ladder_rules_for_court_v1(&dense, Some(kary(16)), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
+                .expect("mapped")
+                .cost_shape
+                .prompt_ids_form,
             PalwPromptIdsFormV1::MerkleV1
         );
         // And with no court the shape is the shipped one, unchanged.

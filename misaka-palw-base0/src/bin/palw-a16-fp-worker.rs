@@ -70,6 +70,15 @@ use std::path::PathBuf;
 /// genesis registers is ADR-0082's graph-v5 dense row at n_ctx 512, and that is the class whose
 /// claims a chain will actually adjudicate.
 ///
+/// **For part of 2026-09-03 that sentence was false and this constant was still right.** The RC
+/// genesis registered f1c5635c (floor) / 5bd9ae3d (QWEN36) / 71bbb755 (dense graph-v2 @ n_ctx 16),
+/// so the dense lane was broken from BOTH ends at once: the class the chain held could not be
+/// executed (`rms_eps_q` 1 against every artifact's 256, which is why this constant moved off it),
+/// and the class this worker embodies was not registered, so a commitment under it named a class
+/// no chain held. Fixer FG closed both by registering the row whose epsilon matches the artifact —
+/// which is why the two were never separable items, and why arming `palw_kary_court` had to land
+/// in the same change: `validate_palw_v2` refuses a fused row under a dormant fence.
+///
 /// **This is still one spelling too many, and the deeper repair is not this stream's.** A worker
 /// carries a MODEL_ID beside an artifact it loads; the artifact's own header states the family and
 /// the width, so the class could be DERIVED from the file rather than declared next to it
