@@ -590,9 +590,16 @@ Every guard that could catch the second one is looking somewhere else:
 
 | guard | what it actually covers |
 |---|---|
-| `every_genesis_commits_to_the_premine_this_build_mints` | **`utxo_commitment` only**. Goes green on a commitment-only paste. |
+| `every_genesis_commits_to_the_premine_this_build_mints` | **`utxo_commitment` only** — and it DOES name `PALW_RC_GENESIS` (`genesis.rs:469`). Goes green on a commitment-only paste. |
 | `config::premine::tests::print_premine_commitment` — the ceremony tool the card names | prints `*_PREMINE_UTXO_COMMITMENT` and `*.utxo_commitment` lines. **Never a genesis hash.** |
 | `test_genesis_hashes` — the test that recomputes each genesis' own hash | iterates `[GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS, SIMNET_GENESIS, DEVNET_GENESIS]` (`genesis.rs:499`). **`PALW_RC_GENESIS` is not in that list.** |
+
+**The precise shape is worse than "an unchecked constant", and the difference matters.**
+`PALW_RC_GENESIS` is *not* unwatched: `every_genesis_commits_to_the_premine_this_build_mints` names
+it directly. What is unwatched is **two of its fields** — `hash` and `hash_merkle_root` — which are
+exactly the two that abort a host at startup. **The one test that names the constant covers the
+field that is not the problem**, so the constant looks guarded, and a reader checking "is this
+pinned value tested?" finds a test, sees the name, and stops.
 
 And `TESTNET11_GENESIS` is not a near-miss for it — `genesis.rs:462` calls it a **"retired fossil"**,
 `params.rs:7969` sets `params.genesis = PALW_RC_GENESIS`, and their hashes differ
