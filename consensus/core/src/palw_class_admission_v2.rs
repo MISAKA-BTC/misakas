@@ -733,7 +733,8 @@ fn derive_court_cost_walk_v1(
                 // The cache-write route opens each row at the CACHE-WRITE node's tile, not at this
                 // node's — the same rule `source_tile_len_v1` states for every other opened run.
                 let source_tile = source_tile_len_v1(table, node, PALW_STEP_INPUT_KV_K);
-                let bottom = palw_attn_bottom_bytes_v1(d_head, history_tile, tile, source_tile, step_path_bytes).ok_or_else(over)?;
+                let bottom =
+                    palw_attn_bottom_bytes_v1(d_head, kv_dim, history_tile, tile, source_tile, step_path_bytes).ok_or_else(over)?;
                 let move_bytes = crate::palw_attn_dissect::palw_attn_dissect_move_bytes_v1(arity, disputed_lanes as usize);
                 // The committed output tile is inside `bottom` (both routes carry it), so the
                 // generic seed this arm was added after would double-count it.
@@ -1016,9 +1017,16 @@ pub struct PalwClassLadderRulesV1 {
 /// `arithmetic_close_bytes_v2` counts them.
 pub const PALW_STEP_OPENING_FRAME_BYTES: u64 = 26 + 76;
 
-/// The `PalwAttnDissectBottomV1` envelope: version `u16` (2), `session_id` `Hash64` (64), `tile`
-/// `u64` (8) and the two row vectors' length prefixes (8).
-pub const PALW_ATTN_BOTTOM_ENVELOPE_BYTES: u64 = 2 + 64 + 8 + 8;
+/// The `PalwAttnDissectBottomV1` envelope, field by field: `version` `u16` (2), `session_id`
+/// `Hash64` (64), `tile` `u64` (8), the `anchor: Option<_>` tag (1), and for each of `k` and `v`
+/// the `PalwAttnTileEvidenceV1` discriminant (1) beside its inner vector's length prefix (4).
+///
+/// Derived from the struct rather than measured off an object, and then CHECKED against one:
+/// `the_derived_bottom_bounds_the_real_bottom_object` builds the real wire type at both registered
+/// head widths and `kv_heads` 2 and asserts the derivation is not below borsh's answer. It was
+/// three bytes below before that test existed — the two enum tags and the option's — which is
+/// exactly the direction a cost bound may not be wrong in.
+pub const PALW_ATTN_BOTTOM_ENVELOPE_BYTES: u64 = 2 + 64 + 8 + 1 + 2 * (1 + 4);
 
 /// **Route A — the bottom reached through the CHECKPOINT TILE** (ADR-0082 Decision 4).
 ///
@@ -1032,11 +1040,22 @@ pub const PALW_ATTN_BOTTOM_ENVELOPE_BYTES: u64 = 2 + 64 + 8 + 8;
 /// would be smaller than the object a challenger actually files, which is the defect
 /// `the_derived_close_cost_bounds_a_real_one` exists to refuse. [`palw_attn_bottom_bytes_v1`]
 /// takes the larger of the two.
-pub fn palw_attn_bottom_tile_route_bytes_v1(d_head: u64, tile_positions: u64, out_lanes: u64, step_path_bytes: u64) -> Option<u64> {
+pub fn palw_attn_bottom_tile_route_bytes_v1(
+    d_head: u64,
+    kv_dim: u64,
+    tile_positions: u64,
+    out_lanes: u64,
+    step_path_bytes: u64,
+) -> Option<u64> {
     let opening = |lanes: u64| -> Option<u64> {
         lanes.checked_mul(4)?.checked_add(step_path_bytes)?.checked_add(PALW_STEP_OPENING_FRAME_BYTES)
     };
-    let tile_lanes = tile_positions.checked_mul(d_head)?;
+    // **`kv_dim`, not `d_head`.** ADR-0082 §4 sizes this term as `2 x 16 x 4 x d_head` — one
+    // HEAD's slice — and a checkpoint chunk cannot be narrowed to a head: the map addresses
+    // `(kind, layer, position)` and a chunk holds the whole cache ROW
+    // (`palw_attn_court_v1`'s own assertion, `chunk_bytes.len() == TILE x kv_dim x 4`). On both
+    // registered families `attn_kv_heads` is 2, so the term is twice the ADR's.
+    let tile_lanes = tile_positions.checked_mul(kv_dim)?;
     opening(d_head)?
         .checked_add(opening(tile_lanes)?)?
         .checked_add(opening(tile_lanes)?)?
@@ -1055,6 +1074,7 @@ pub fn palw_attn_bottom_tile_route_bytes_v1(d_head: u64, tile_positions: u64, ou
 /// where the tile route pays one.
 pub fn palw_attn_bottom_cache_write_bytes_v1(
     d_head: u64,
+    kv_dim: u64,
     tile_positions: u64,
     out_lanes: u64,
     source_tile: u64,
@@ -1065,8 +1085,15 @@ pub fn palw_attn_bottom_cache_write_bytes_v1(
         let leaves = lanes.div_ceil(source_tile.max(1)).max(1);
         leaves.checked_mul(per_leaf)?.checked_add(lanes.checked_mul(4)?)
     };
-    let rows = 1u64.checked_add(tile_positions.checked_mul(2)?)?;
-    rows.checked_mul(row(d_head)?)?.checked_add(row(out_lanes)?)?.checked_add(PALW_ATTN_BOTTOM_ENVELOPE_BYTES)
+    // The QUERY is the head's slice of a committed row; a CACHE row is the whole `kv_dim`, for the
+    // same reason the chunk is — the cache-write node commits `attn_kv_heads x attn_head_dim`
+    // lanes and a leaf of it is a tile of that row, not of one head's share.
+    let cache_rows = tile_positions.checked_mul(2)?;
+    cache_rows
+        .checked_mul(row(kv_dim)?)?
+        .checked_add(row(d_head)?)?
+        .checked_add(row(out_lanes)?)?
+        .checked_add(PALW_ATTN_BOTTOM_ENVELOPE_BYTES)
 }
 
 /// **What a fused leaf's bottom costs: the LARGER of the two routes** (ADR-0082 Z3).
@@ -1077,13 +1104,14 @@ pub fn palw_attn_bottom_cache_write_bytes_v1(
 /// this is where the choice stops being a max and becomes the ruleset's.
 pub fn palw_attn_bottom_bytes_v1(
     d_head: u64,
+    kv_dim: u64,
     tile_positions: u64,
     out_lanes: u64,
     source_tile: u64,
     step_path_bytes: u64,
 ) -> Option<u64> {
-    let a = palw_attn_bottom_tile_route_bytes_v1(d_head, tile_positions, out_lanes, step_path_bytes)?;
-    let b = palw_attn_bottom_cache_write_bytes_v1(d_head, tile_positions, out_lanes, source_tile, step_path_bytes)?;
+    let a = palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, tile_positions, out_lanes, step_path_bytes)?;
+    let b = palw_attn_bottom_cache_write_bytes_v1(d_head, kv_dim, tile_positions, out_lanes, source_tile, step_path_bytes)?;
     Some(a.max(b))
 }
 

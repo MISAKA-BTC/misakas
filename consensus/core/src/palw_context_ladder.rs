@@ -2731,8 +2731,33 @@ mod u04_flat_close {
         // route (90,110 bytes at `d_head` 128) rather than at Decision 4's tile route (25,610).
         // Charged at the tile route the binding node is `ffn_down` at 80,504 — ADR-0082 Decision
         // 6's own number for this family — and the row is ONE carrier.
-        assert_eq!((v5[0].0, v5[0].1), (130_832, 2), "the dense graph-v5 512 row's close moved");
+        assert_eq!((v5[0].0, v5[0].1), (216_019, 3), "the dense graph-v5 512 row's close moved");
         assert!(v5[0].2.contains("AttnFused"), "the dense v5 row stopped binding on its fused site: {}", v5[0].2);
+        // **And what the row costs if only the CHECKPOINT route can be filed** — the number the
+        // relaunch's registration decision turns on, stated here rather than reasoned about. The
+        // walk charges the larger of the two routes at the binding node, so swapping the route is
+        // exactly this difference and nothing else.
+        {
+            use crate::palw_class_admission_v2::{palw_attn_bottom_cache_write_bytes_v1, palw_attn_bottom_tile_route_bytes_v1};
+            let (d_head, kv_dim, tile, src, path) = (128u64, 256u64, 8u64, 128u64, 64 * 32u64);
+            let positions = PALW_ATTN_HISTORY_TILE_V4 as u64;
+            let cache = palw_attn_bottom_cache_write_bytes_v1(d_head, kv_dim, positions, tile, src, path).expect("derives");
+            let ckpt = palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, positions, tile, path).expect("derives");
+            let tile_route_close = v5[0].0 - cache + ckpt;
+            println!(
+                "dense v5 @ 512: {} bytes = {} chunks charged (cache-write route); {tile_route_close} bytes = {} chunks on the \
+                 checkpoint route alone",
+                v5[0].0,
+                v5[0].1,
+                palw_close_chunks_for_bytes_v1(tile_route_close)
+            );
+            assert_eq!(tile_route_close, 82_719, "the dense v5 row's checkpoint-route close moved");
+            assert_eq!(
+                palw_close_chunks_for_bytes_v1(tile_route_close),
+                1,
+                "the dense graph-v5 row stopped being ONE carrier on the checkpoint route — the relaunch's cut turns on this"
+            );
+        }
         // The hybrid: the recurrence's replay evidence, `interval x 5 refs`, plus the head-sliced
         // anchor. Decision 6 names this term and sizes it at two to three; it is four.
         assert_eq!((v5[1].0, v5[1].1), (274_460, 4), "the hybrid graph-v5 512 row's close moved");
@@ -2755,22 +2780,29 @@ mod u04_flat_close {
 
     /// **Z3, the bytes half.** The bottom of a fused dispute, both routes, at every registered
     /// `d_head` and `tile_len`, against one carrier; and the widest move at every legal arity.
+    ///
+    /// **The tile term is `kv_dim`-wide and not `d_head`-wide.** ADR-0082 §4 sizes it as
+    /// `2 x 16 x 4 x d_head` — one HEAD's slice — and a checkpoint chunk cannot be narrowed to a
+    /// head: the map addresses `(kind, layer, position)` and a chunk holds the whole cache row
+    /// (`palw_attn_court_v1` asserts `chunk_bytes.len() == TILE x kv_dim x 4` on its own object).
+    /// Both registered families carry `attn_kv_heads` 2, so the term is twice the ADR's and the
+    /// numbers below are the corrected ones.
     #[test]
     fn the_bottom_opening_and_every_move_fit_one_carrier() {
         use crate::palw_class_admission_v2::{
             palw_attn_bottom_bytes_v1, palw_attn_bottom_cache_write_bytes_v1, palw_attn_bottom_tile_route_bytes_v1,
         };
         let carrier = palw_close_bytes_for_chunks_v1(1);
-        println!("one carrier, counted: {carrier}");
+        assert_eq!(carrier, 83_333, "one carrier's counted budget moved");
         // The ladder's own path depth — 32 elements at `PALW_CONTEXT_LADDER_MAX_STEP_LEAVES`.
         let path = 64 * 32u64;
+        let mut measured: Vec<(&str, u64, u64, u64)> = Vec::new();
         for (name, build) in [("dense", PALW_LADDER_FAMILIES_V5[0]), ("hybrid", PALW_LADDER_FAMILIES_V5[1])] {
+            let mut per_family: Vec<(u64, u64)> = Vec::new();
             for n_ctx in [512u32, 4_096, 32_768] {
-                let Ok(profile) = build(n_ctx) else {
-                    println!("{name} @ {n_ctx}: does not project");
-                    continue;
-                };
+                let Ok(profile) = build(n_ctx) else { continue };
                 let d_head = profile.attn_head_dim as u64;
+                let kv_dim = profile.attn_kv_heads as u64 * d_head;
                 let node = profile
                     .attn_nodes
                     .iter()
@@ -2787,31 +2819,148 @@ mod u04_flat_close {
                     .find(|n| n.role == crate::palw_step::PalwStepNodeRoleV1::KCacheWrite)
                     .map_or(tile, |n| n.tile_len as u64);
                 let positions = (PALW_ATTN_HISTORY_TILE_V4 as u64).min(n_ctx as u64);
-                let a = palw_attn_bottom_tile_route_bytes_v1(d_head, positions, tile, path).expect("derives");
-                let b = palw_attn_bottom_cache_write_bytes_v1(d_head, positions, tile, src, path).expect("derives");
-                let both = palw_attn_bottom_bytes_v1(d_head, positions, tile, src, path).expect("derives");
+                let a = palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, positions, tile, path).expect("derives");
+                let b = palw_attn_bottom_cache_write_bytes_v1(d_head, kv_dim, positions, tile, src, path).expect("derives");
+                assert_eq!(palw_attn_bottom_bytes_v1(d_head, kv_dim, positions, tile, src, path), Some(a.max(b)));
                 println!(
-                    "{name} @ {n_ctx}: d_head {d_head} tile {tile} src_tile {src} -> tile-route {a}, cache-write {b}, charged {both}"
+                    "{name} @ {n_ctx}: d_head {d_head} kv_dim {kv_dim} tile {tile} src {src} -> tile-route {a}, cache-write {b}"
                 );
+                per_family.push((a, b));
+                // Every legal arity's move rides one carrier at the lanes this row disputes.
                 let lanes = tile.min(d_head);
                 for arity in [2u8, 4, 8, 16, 32, 64] {
-                    let mv = crate::palw_attn_dissect::palw_attn_dissect_move_bytes_v1(arity, lanes as usize);
-                    println!("    arity {arity}: move {mv} fits {}", mv <= carrier);
+                    assert!(
+                        crate::palw_attn_dissect::palw_attn_dissect_arity_fits_carrier_v1(arity, lanes as usize, carrier),
+                        "{name} @ {n_ctx}: a round at arity {arity} over {lanes} lanes is over one carrier"
+                    );
                 }
             }
+            // FLAT: the same numbers at every context, which is Decisions 1-4's whole claim.
+            assert!(per_family.windows(2).all(|w| w[0] == w[1]), "{name}: the bottom is not flat in the context: {per_family:?}");
+            measured.push((name, per_family[0].0, per_family[0].1, carrier));
         }
-        // And the derivation BOUNDS the object stream E's court actually files: their pins are
-        // 37,982 bytes at `d_head` 128 and 55,390 at 256, taken on a fixture whose step tree is
-        // eight deep and whose rows are one leaf each. Same shape, same depth, from this function.
-        for (d_head, measured) in [(128u64, 37_982u64), (256, 55_390)] {
-            let derived = palw_attn_bottom_cache_write_bytes_v1(d_head, PALW_ATTN_HISTORY_TILE_V4 as u64, d_head, d_head, 8 * 64)
-                .expect("derives");
-            println!("E's bottom @ d_head {d_head}: derived {derived} against measured {measured}");
+        // The corrected numbers, pinned.
+        assert_eq!((measured[0].1, measured[0].2), (41_997, 175_297), "the dense bottom's two routes moved");
+        assert_eq!((measured[1].1, measured[1].2), (75_277, 139_777), "the hybrid bottom's two routes moved");
+        // **The finding.** The tile route is inside one carrier on both families; the cache-write
+        // route is not, on either. So `state_chunk_opening_root_v1` is load-bearing rather than an
+        // optimisation, and a class admitted while only the cache-write route exists is admitted at
+        // a bottom no single carrier files.
+        for (name, tile_route, cache_write, carrier) in &measured {
+            assert!(tile_route <= carrier, "{name}: the tile route's bottom is {tile_route} against a carrier of {carrier}");
             assert!(
-                derived >= measured,
-                "d_head {d_head}: the derivation ({derived}) is BELOW the object the court files ({measured}) — \
-                 a class would be admitted at a price its disputes cannot be brought at"
+                cache_write > carrier,
+                "{name}: the cache-write bottom ({cache_write}) is inside one carrier now — re-read this test, the finding moved"
             );
+        }
+
+        // And the derivation BOUNDS the objects stream E's court files, at the same path depth and
+        // the same geometry their fixtures use (`kv_heads` 1, so `kv_dim == d_head`): cache-write
+        // 37,985 / 55,393 and checkpoint 19,027 / 36,435.
+        for (d_head, cache, ckpt) in [(128u64, 37_985u64, 19_027u64), (256, 55_393, 36_435)] {
+            let tile = PALW_ATTN_HISTORY_TILE_V4 as u64;
+            let derived_cache =
+                palw_attn_bottom_cache_write_bytes_v1(d_head, d_head, tile, d_head, d_head, 8 * 64).expect("derives");
+            let derived_ckpt = palw_attn_bottom_tile_route_bytes_v1(d_head, d_head, tile, d_head, 8 * 64).expect("derives");
+            println!("E @ d_head {d_head}: cache-write derived {derived_cache} >= {cache}; checkpoint derived {derived_ckpt} >= {ckpt}");
+            assert!(
+                derived_cache >= cache,
+                "d_head {d_head}: the cache-write derivation ({derived_cache}) is BELOW the object the court files ({cache})"
+            );
+            assert!(
+                derived_ckpt >= ckpt,
+                "d_head {d_head}: the checkpoint derivation ({derived_ckpt}) is BELOW the object the court files ({ckpt})"
+            );
+        }
+    }
+
+    /// **The derived bottom bounds the REAL object at `kv_heads` 2** — the geometry both registered
+    /// families carry, and the one stream E's fixtures (`kv_heads` 1) cannot exhibit.
+    ///
+    /// Built from `palw_attn_court_v1`'s own public wire types rather than from a size formula, so
+    /// what is measured is borsh's answer about the object a challenger files and not a second
+    /// opinion about it.
+    #[test]
+    fn the_derived_bottom_bounds_the_real_bottom_object() {
+        use crate::palw_attn_court_v1::{
+            PalwAttnChunkOpeningV1, PalwAttnDissectBottomV1, PalwAttnRowOpeningV1, PalwAttnTileEvidenceV1,
+            PALW_ATTN_COURT_OBJECT_VERSION_V1,
+        };
+        use crate::palw_class_admission_v2::{palw_attn_bottom_cache_write_bytes_v1, palw_attn_bottom_tile_route_bytes_v1};
+        use crate::palw_step::PalwStepCoordinateV1;
+        use crate::palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1};
+        use crate::Hash64;
+
+        let h = |w: u64| Hash64::from_u64_word(w);
+        let depth = 32usize; // the `2^32` ladder's path
+        let opening = |lanes: u64| PalwAttnRowOpeningV1 {
+            leaf: PalwStepTileLeafV1 {
+                version: 1,
+                coord: PalwStepCoordinateV1 { call_index: 0, node_slot: 7, position: 3, tile_index: 0 },
+                value_count: lanes as u32,
+                values_le: vec![0u8; lanes as usize * 4],
+            },
+            opening: PalwStepOpeningV1 { leaf_index: 11, leaf_hash: h(1), siblings: (0..depth as u64).map(h).collect() },
+        };
+        let tile = PALW_ATTN_HISTORY_TILE_V4 as u64;
+        for (name, d_head, kv_heads, out_lanes, src_tile) in [("dense", 128u64, 2u64, 8u64, 128u64), ("hybrid", 256, 2, 8, 512)] {
+            let kv_dim = d_head * kv_heads;
+            // Route B, the cache-write bottom: one opening per committed TILE of every row.
+            let rows = |lanes: u64| -> Vec<PalwAttnRowOpeningV1> {
+                let leaves = lanes.div_ceil(src_tile).max(1);
+                (0..leaves).map(|_| opening(lanes / leaves)).collect()
+            };
+            let cache_rows: Vec<PalwAttnRowOpeningV1> = (0..tile).flat_map(|_| rows(kv_dim)).collect();
+            let cache_bottom = PalwAttnDissectBottomV1 {
+                version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                session_id: h(9),
+                tile: 1,
+                query: opening(d_head),
+                anchor: None,
+                k: PalwAttnTileEvidenceV1::CacheWrites { rows: cache_rows.clone() },
+                v: PalwAttnTileEvidenceV1::CacheWrites { rows: cache_rows },
+                out_tile: opening(out_lanes),
+            };
+            let cache_measured = borsh::to_vec(&cache_bottom).expect("serializes").len() as u64;
+            let cache_derived =
+                palw_attn_bottom_cache_write_bytes_v1(d_head, kv_dim, tile, out_lanes, src_tile, 64 * depth as u64).expect("derives");
+
+            // Route A, the checkpoint bottom: ONE chunk opening per kind, `tile x kv_dim x 4` bytes.
+            let chunk = || PalwAttnChunkOpeningV1 {
+                chunk_index: 0,
+                chunk_bytes: vec![0u8; (tile * kv_dim * 4) as usize],
+                siblings: (0..depth as u64).map(h).collect(),
+            };
+            let ckpt_bottom = PalwAttnDissectBottomV1 {
+                version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                session_id: h(9),
+                tile: 1,
+                query: opening(d_head),
+                anchor: None,
+                k: PalwAttnTileEvidenceV1::Checkpoint { chunk: chunk(), rows_after: Vec::new() },
+                v: PalwAttnTileEvidenceV1::Checkpoint { chunk: chunk(), rows_after: Vec::new() },
+                out_tile: opening(out_lanes),
+            };
+            let ckpt_measured = borsh::to_vec(&ckpt_bottom).expect("serializes").len() as u64;
+            let ckpt_derived =
+                palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, tile, out_lanes, 64 * depth as u64).expect("derives");
+
+            println!(
+                "{name} kv_heads {kv_heads} d_head {d_head}: cache-write derived {cache_derived} >= measured {cache_measured}; \
+                 checkpoint derived {ckpt_derived} >= measured {ckpt_measured}"
+            );
+            assert!(
+                cache_derived >= cache_measured,
+                "{name}: the cache-write derivation ({cache_derived}) is BELOW the object ({cache_measured})"
+            );
+            assert!(
+                ckpt_derived >= ckpt_measured,
+                "{name}: the checkpoint derivation ({ckpt_derived}) is BELOW the object ({ckpt_measured})"
+            );
+            // The anchor a real checkpoint bottom also carries is NOT counted above and is the one
+            // term this derivation leaves to the `kv_checkpoint_bytes` charge the walk adds
+            // separately; the object here carries `anchor: None` so the two do not double-count.
+            assert!(ckpt_measured < cache_measured, "{name}: the tile route must be the cheaper one");
         }
     }
 
