@@ -5656,3 +5656,16 @@ link; the mechanism stands on 6a's code read (`broadcast_palw_material` before `
 "0 MB total" was integer division of ~1 MB over 45 minutes. The constant `flow-timeouts=16` in both samplers was a
 string comparison of times across the local-midnight rollover, not a parse failure. On a link that moves kilobytes
 per second a 748 MB broadcast would take hours, which is the same conclusion by a different arithmetic.
+
+### 6n — node0 stalled by memory pressure on ibm; node1 loses its Qwen3.6 mapping (23:12 UTC)
+
+node0 produced nothing after block #3 (20:06 UTC) for three hours against a ~25-minute job cadence; its third
+material is the last (18:17 / 18:43 / 20:06 UTC, 241 MB each). Not the transport: 30 KB sent toward 5.104, cwnd 10,
+no send queue. The host: **24 GB total, 541 MB free, 8.2 GB of swap in use**; node1 12.9 GB resident (it maps the
+same 33.99 GiB Qwen3.6 file since its 17:30 refit and touches it while trying to verify claims it can never obtain
+materials for), node0 9.2 GB; node0's CPU fell from ~194 % to 96 % of one core — its inference working set is being
+paged. So the seat-artifact rule (6b) and the producer compete for one 24 GB host, and until the transport carries
+5f-sized materials the panel side of that trade is worth nothing. **Action (fleet, reversible):** node1's launcher
+drops `qwen36.palwq36` (`ibm-node1.sh.pre-5f-noqwen36` kept), keeps the two A16 artifacts, the floor producer and
+the panel; restarted. Expected: swap drains, node0 returns to ~2 cores and a fourth block within the hour. Post-cut:
+one 24 GB host cannot carry a Qwen3.6 producer and a Qwen3.6-capable panel seat together; the seat runbook says so.
