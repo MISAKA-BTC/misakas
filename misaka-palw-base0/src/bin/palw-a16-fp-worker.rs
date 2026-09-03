@@ -57,9 +57,25 @@ use misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend;
 use misaka_palw_base0::tokenizer::QwenTokenizer;
 use std::path::PathBuf;
 
-/// The catalog row this worker embodies. One name: the corrected A16 graph, the only registered
-/// or registrable class whose free-prompt path reaches an execution root today.
-const MODEL_ID: &str = "Qwen/Qwen2.5-1.5B/graph-v2";
+/// **The catalog row this worker embodies: the row the genesis registers.**
+///
+/// Taken from `misaka_palw_base0::classes` rather than spelled again here, so the worker and the
+/// class ledger cannot come to name different classes — the whole defect this constant class is.
+///
+/// It was `Qwen/Qwen2.5-1.5B/graph-v2`, and that row declares `rms_eps_q` 1 against an artifact
+/// the converter builds at 256. Before fixer FE the worker compiled no plan, so nothing compared
+/// the two and the worker ran the ARTIFACT's arithmetic while committing under a class registered
+/// at the other — every step-leg dispute lost by an honest producer. After FE it dies at boot with
+/// the mismatch named, which is better and is still the wrong row: the row the testnet-11 5f
+/// genesis registers is ADR-0082's graph-v5 dense row at n_ctx 512, and that is the class whose
+/// claims a chain will actually adjudicate.
+///
+/// **This is still one spelling too many, and the deeper repair is not this stream's.** A worker
+/// carries a MODEL_ID beside an artifact it loads; the artifact's own header states the family and
+/// the width, so the class could be DERIVED from the file rather than declared next to it
+/// (`classes::a16_artifact_row_v1` already does exactly that derivation for the certification
+/// path). Until it is, the two can disagree and only a boot-time refusal catches it.
+const MODEL_ID: &str = misaka_palw_base0::classes::A16_GRAPH_V5_MODEL_ID;
 /// The environment variable the operator sets to the network this worker produces for — the
 /// same string kaspad prints for `params.net` (e.g. `testnet-11`). No default: see the module doc.
 const NETWORK_ID_ENV: &str = "MISAKA_PALW_NETWORK_ID";
@@ -117,34 +133,69 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
     }
     if binding == misaka_palw_base0::artifact::TokenizerBindingV1::Undeclared {
         // Stated at boot rather than defaulted in silence: the artifacts converted before
-        // `qwen25-convert --a16` bound a commitment carry `Hash64::default()`, so this worker's
-        // jobs publish `tokenizer_id` zero and NOTHING — here or on chain — can prove that the
-        // file below is the one the weights were converted with. Binding it needs a re-converted
-        // artifact, which moves the artifact root and is a genesis decision.
+        // `qwen25-convert --a16` bound a commitment carry `Hash64::default()`, and NOTHING — here
+        // or on chain — can prove that the file below is the one the weights were converted with.
+        //
+        // **This is a warning and no longer the last word.** `from_registered_profile` below
+        // REFUSES an unbound converted artifact by name; the only artifacts that reach past it
+        // undeclared are DERIVED ones (`Base0ArtifactV1::is_derived`, whose weights are a function
+        // of a seed every node holds), which is the exemption that constructor states. So this
+        // line now says which kind of artifact is in front of the operator, and the refusal says
+        // whether it may be served.
         eprintln!(
-            "[palw-a16-fp-worker] WARNING: artifact {artifact_path} declares no tokenizer commitment, so {tokenizer_path}              was checked against nothing and every job publishes tokenizer_id 0. A replayer using a different              tokenizer.json derives different token ids and cannot reproduce this producer's claims."
+            "[palw-a16-fp-worker] WARNING: artifact {artifact_path} declares no tokenizer commitment, so {tokenizer_path}              was checked against nothing and every job would publish tokenizer_id 0. A replayer using a different              tokenizer.json derives different token ids and cannot reproduce this producer's claims. A converted              artifact is REFUSED below; only a derived one is served past this point."
         );
     }
     let tokenizer_commitment = binding.tokenizer_id();
     let tokenizer = QwenTokenizer::from_json(&tokenizer_bytes).unwrap_or_else(|e| die(format!("{tokenizer_path}: {e}")));
     let load_ms = started.elapsed().as_millis() as u64;
 
+    // **The class id, at boot, from the profile this worker resolved.** The card wants the value
+    // and not the intent: a worker that printed only its model id would be reporting the name it
+    // was given, and the name is not the identity — `n_ctx` is inside `shape_profile_id`, so two
+    // rows can share a name and never a class id. This is the number a registration is compared
+    // against.
+    eprintln!(
+        "[palw-a16-fp-worker] class {MODEL_ID} resolves to class id {} (n_ctx {}, artifact {artifact_path})",
+        entry.profile.shape_profile_id(),
+        entry.profile.n_ctx
+    );
+
     let net = network_id.into_bytes();
-    // The constructor compiles this class's declaration into the program it runs, so a graph this
-    // build cannot serve dies here with the node named — never as a producer that executes one
-    // program while committing under another class's declaration.
-    let backend = Qwen25A16Backend::new(std::sync::Arc::new(artifact), net.clone(), entry.profile.clone(), entry.canonical_job)
-        .unwrap_or_else(|e| {
-            die(format!(
-                "{}: {e}. This is the ADR-0067 compile, and since ADR-0082 audit E's H-1 it is the SAME compile \
-                 `from_registered_profile` performs: the class's declaration IS the program this worker runs. A \
-                 `rms_eps_q` disagreement here means this catalog row declares an epsilon the converted artifact does \
-                 not execute — the row whose epsilon it DOES execute is `Qwen/Qwen2.5-1.5B/graph-v3`, and moving this \
-                 worker to it is a class decision (a different class id), not a flag",
-                entry.model_id
-            ))
-        })
-        .with_step_ladder_cap(court.max_step_leaf_count());
+    // **`from_registered_profile`, not `::new` — and after fixer FE the difference is exactly one
+    // check.**
+    //
+    // FE made `::new` compile the class's declaration into the program it runs, which closed the
+    // half this stream changed it for: `::new` used to compile no plan, so it never compared the
+    // registered profile's arithmetic against the artifact's header and the `rms_eps_q` split that
+    // refused every dense row was invisible from this process. That reason is gone.
+    //
+    // What is NOT gone is `check_tokenizer_declared_v1`, which only `from_registered_profile` runs.
+    // An artifact whose `tokenizer_commitment` is all zeros publishes `tokenizer_id` 0 on every job
+    // it produces, and nothing on chain compares that field — so the claims are honest,
+    // unreproducible by any replayer holding a different `tokenizer.json`, and default their
+    // producer at the challenge window. A refusal at boot is the cheap end of that.
+    //
+    // So this stays the fallible constructor that checks BOTH, and the message below is FE's,
+    // because a `rms_eps_q` disagreement is a class decision and the operator needs to be told
+    // which class to move to rather than which flag to pass.
+    let backend = Qwen25A16Backend::from_registered_profile(
+        std::sync::Arc::new(artifact),
+        net.clone(),
+        entry.profile.clone(),
+        entry.canonical_job,
+    )
+    .unwrap_or_else(|e| {
+        die(format!(
+            "{}: {e}. This is the ADR-0067 compile, and since ADR-0082 audit E's H-1 it is the SAME compile `::new` \
+             performs: the class's declaration IS the program this worker runs. A `rms_eps_q` disagreement here means \
+             this catalog row declares an epsilon the converted artifact does not execute — the row whose epsilon it \
+             DOES execute is `Qwen/Qwen2.5-1.5B/graph-v3`, and moving this worker to it is a class decision (a \
+             different class id), not a flag",
+            entry.model_id
+        ))
+    })
+    .with_step_ladder_cap(court.max_step_leaf_count());
     FpWorkerRuntime::new(
         backend,
         &entry.profile,
