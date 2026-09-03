@@ -5557,3 +5557,33 @@ below and decides whether node0's production is paused tonight. Fix, post-cut an
 attempt-lane claims riding the ADR-0077 interval lane (`IntervalOpening`, size-bounded) rather than whole material —
 the "one ceiling, two units" instance (748 MB per 512-context job against a 16 MiB transport cap; 2026-08-28's
 8 → 16 MiB was the previous member).
+
+### 6m — what an Unavailable quorum does on testnet-11, and the decision (22:00 UTC)
+
+The seat's attempt-lane verdict (`kaspad/src/palw_panel.rs:2405–2735`, read by 6a) uses only whole materials from
+`PalwGossipEvent::Material` and the signed pull; the free-prompt arm alone rides the ADR-0077 interval lane. Both push
+and serve refuse > `PALW_MATERIAL_MAX_BYTES` = 16 MiB; the floor's material is 2.27 MB (unaffected), QWEN36's 253 MB and
+v5's 748 MB never arrive. So every LLM attempt claim on this chain reaches its half-window as Unavailable × quorum.
+
+ADR-0065 D4 — "an Unavailable receipt stops convicting the producer" — is a top-level fence
+(`palw_unavailable_abstains`) that is **`None` on every shipped preset** ("byte-identical to not having the
+field at all", pinned by a test); its doc names exactly this failure ("a seat cannot distinguish a producer that
+withheld from a fetch that was lost … on testnet-11 roughly a third of every remote seat's verdicts were the second
+wearing the first's clothes"). Unarmed, the state's `ProducerDefaulted` arm is live: `slash_dissenting_seats`,
+`slash_silent_seats`, then `void_and_slash(ProducerWithholding)`, which takes `claim.reserved` from the producer's bond:
+
+    QWEN36  reserved 13,426,800 sompi = 0.134 MSK per claim      v5  33,152,720 sompi = 0.332 MSK per claim      collateral 10,000 MSK
+
+Economically small on a testnet; structurally an honest producer convicted for the transport's failure. The three
+QWEN36 claims already open (18:18Z, 18:43Z, 20:06Z) default on the clock whatever happens now.
+
+**Decision (fleet side, reversible):** seat2's v5 *production* is paused as soon as the 5.104 sampler has captured one
+burst (its blocks never enter the DAG and each production floods its links); its panel and heartbeat stay. node0's
+QWEN36 production is the operator's call — its blocks do propagate and are the chain's only visible LLM work, at
+0.134 MSK of defaulted reserve per claim until the transport is fixed — and is left running until they decide.
+**Post-cut, both consensus-inert in the sense the ADRs use:** (a) cap at broadcast + submit the block before the
+material, or chunk/interval the attempt-lane material as the FP lane already does; a cap sized to the largest
+registered class as the 2026-08-28 fix intended; (b) arm ADR-0065 D4 by activation on testnet-11 — a top-level fence
+normalised in `consensus_identity_id`, so it does not move the fingerprint — so that Unavailable abstains and the claim
+voids by `ReceiptTimeout` with nobody slashed. Until (a), no LLM claim can reach Final on the public chain; the
+announcement already says finality is not claimed.
