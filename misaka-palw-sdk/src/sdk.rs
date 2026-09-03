@@ -574,7 +574,7 @@ impl PalwClassSdk {
             &probe,
             &certified,
             chain_certified,
-            shape.ladder.clone(),
+            shape.ladder,
             shape.court,
             false,
         )

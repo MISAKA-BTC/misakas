@@ -410,7 +410,7 @@ pub struct PalwKaryCourtV1 {
 ///   prompt-ids form at that point, and the ruleset's court window.
 /// * `ladder` — `None` where `palw_context_ladder` is dormant (every shipped preset); otherwise
 ///   this profile's ladder rules under that court.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct PalwAdmissionShapeV1 {
     pub court: Option<PalwKaryCourtV1>,
     pub ladder: Option<PalwClassLadderRulesV1>,
@@ -1686,7 +1686,26 @@ pub fn verify_class_admission_v6(
     // Ordered after the ladder because the two answer different halves of one question — the ladder
     // bounds how many rounds a dispute takes, these bound what a round costs — and a class that
     // fails both should be told about the deeper problem first.
-    let shape = ladder.map_or_else(|| PalwCourtCostShapeV1::genesis_anchored_v1(profile, bundle_ladder), |r| r.cost_shape);
+    let shape = match ladder {
+        Some(rules) => rules.cost_shape,
+        // **A fused class under an armed court is priced for THAT court, whether or not the
+        // context-ladder fence is armed** — by the same rules the genesis assembly prices the row
+        // with (`qwen25_a16_graph_v5_registration_v1` calls `palw_class_ladder_rules_for_court_v1`
+        // unconditionally). The court is what makes the dissection price exist; the
+        // `palw_context_ladder` fence is about Decision 12's enumerations, and a ruleset that arms
+        // the court while leaving that fence dormant (testnet-11) handed a fused profile the
+        // genesis-anchored shape here — dissection `None` — so the check below refused EVERY
+        // post-genesis fused registration on the network that ships the court
+        // (`PricedForADifferentCourt { priced: None, court: 2 }`), while its own genesis admitted
+        // the same row priced for the court. Found by the SDK test written for the freeze
+        // question "is the drill's network the chain we cut?" — it was not. Non-fused profiles
+        // are untouched: no court prices them, and the genesis-anchored shape is theirs as before.
+        None if fused && court.is_some() => {
+            crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, court, bundle_ladder)
+                .map_or_else(|| PalwCourtCostShapeV1::genesis_anchored_v1(profile, bundle_ladder), |r| r.cost_shape)
+        }
+        None => PalwCourtCostShapeV1::genesis_anchored_v1(profile, bundle_ladder),
+    };
     // **One court, priced once — and ONE spelling of which court it is** (audit D H-1).
     //
     // The shape arrives from the caller (it is the ladder rule's, built from the same
@@ -3968,5 +3987,74 @@ mod admission_shape_tests {
         dormant.palw_kary_court = None;
         let shape = palw_admission_shape_at_v1(&dormant, bundle, &profile, 0).expect("a dormant fence is a shape too");
         assert!(shape.court.is_none(), "no fence, no court — the gate then refuses a fused row by name");
+    }
+}
+
+#[cfg(test)]
+mod route_agreement_tests {
+    use super::*;
+
+    /// **The genesis assembly and the acceptance gate price the same row by ONE function.** The
+    /// property that broke at the freeze was not fence-invariance but ROUTE-AGREEMENT:
+    /// `qwen25_a16_graph_v5_registration_v1` priced the graph-v5 row for the court and
+    /// `verify_class_admission_v6` priced it genesis-anchored whenever `palw_context_ladder` was
+    /// dormant (testnet-11), and nothing compared the two — so the cut chain admitted the row at
+    /// genesis and refused it from everyone afterwards (`PricedForADifferentCourt { None, 2 }`).
+    /// This is the assertion that fails for the right reason: t11's own genesis object, handed to
+    /// the gate exactly as the panel's shape would hand it (court armed, ladder dormant), must
+    /// come back as the entry the genesis assembly wrote. Fence-invariance is a corollary.
+    #[test]
+    fn the_genesis_route_and_the_acceptance_gate_price_the_fused_row_alike() {
+        let params = crate::config::params::palw_rc_shipped_params();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("testnet-11 ships a ConsensusV2 bundle");
+        };
+        let v5_id = crate::palw_qwen25_profile::qwen25_a16_graph_v5_profile_v1().expect("derives").shape_profile_id();
+        let object = bundle
+            .genesis_objects
+            .iter()
+            .find(|o| matches!(o, PalwConsensusObjectV2::ClassRegistered { class_id, .. } if *class_id == v5_id))
+            .expect("testnet-11's genesis registers the graph-v5 row")
+            .clone();
+        let PalwConsensusObjectV2::ClassRegistered {
+            artifact_root,
+            share_permille,
+            slash_value_per_pwu,
+            initial_target,
+            admission: Some(carriage),
+            ..
+        } = &object
+        else {
+            panic!("the genesis row carries its admission carriage");
+        };
+        let (profile, genesis_entry, _) = crate::palw_qwen25_profile::qwen25_a16_graph_v5_registration_v1(
+            *artifact_root,
+            *share_permille,
+            *slash_value_per_pwu,
+            *initial_target,
+            bundle,
+            params.palw_prompt_ids_form_at(0),
+            carriage.registrant_bond,
+        )
+        .expect("the genesis route derives the row it shipped");
+
+        // The shape the panel hands the gate on t11: the court the fence arms, no ladder rules.
+        let shape = palw_admission_shape_at_v1(&params, bundle, &profile, 0).expect("t11's court has a shape");
+        assert!(shape.court.is_some(), "t11 arms palw_kary_court");
+        assert!(shape.ladder.is_none(), "t11 leaves palw_context_ladder dormant — the case that ships");
+        let certified = crate::palw_e2e_adjudicability::palw_rc_certified_families_v1();
+        let gate_entry = verify_class_admission_v6(
+            bundle,
+            &profile,
+            &carriage.canonical,
+            &object,
+            &certified,
+            &[],
+            shape.ladder,
+            shape.court,
+            false,
+        )
+        .expect("the acceptance gate admits testnet-11's own genesis row when it arrives post-genesis");
+        assert_eq!(gate_entry, genesis_entry, "one price for one row: the genesis assembly and the acceptance gate agree");
     }
 }
