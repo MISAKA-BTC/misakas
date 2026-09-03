@@ -2232,3 +2232,36 @@ pass", and §5 keeps its stated gap.
 being cut**, and every worker involved is three weeks stale. Neither of those weakens the tag
 equality — it is an equality between two paths measured in the same run — and both of them are
 why nothing here is offered as a green for the cut.
+
+### Third time in one hour: a true sentence whose implication I did not check
+
+Twenty minutes ago I wrote that building a worker with `--mode pow-agent` *"requires an external
+llama.cpp checkout at `LLAMA_COMMIT`, **built, not merely cloned**, which this repository does
+not contain and the fleet has never had."* Every clause of that is true. Then I stopped.
+
+**This machine has one, built:**
+
+```
+/Users/wata/Downloads/misaka-palw-runtime/llama.cpp-cpu/build/CMakeCache.txt      Aug 11
+/Users/wata/Downloads/misaka-palw-runtime/llama.cpp-cpu/build/src/libllama.a
+                                          .../build/ggml/src/libggml.a
+                                          .../build/ggml/src/libggml-base.a
+                                          .../build/ggml/src/libggml-cpu.a
+```
+
+CMakeCache plus all four static libraries — **exactly the shape `build.rs` demands**, and the
+`-cpu` suffix matches the `MISAKA_PALW_CPU=1` profile the same file describes. The sentence I
+wrote scoped its claim to *the repository* and *the fleet*, and the reader's conclusion — and
+mine — was **"therefore nobody can build it"**. Nobody said that. Nobody checked the third place.
+
+> **Three times this hour, in three unrelated subsystems: the fact was right and the *therefore*
+> was never tested.** `llama.cpp is absent from the repo` → *therefore the tests cannot run*
+> (they need a binary, not a build). `palw-worker exists on all three hosts` → *therefore it
+> runs there* (`pgrep -x` says 0). `the repo and the fleet lack a built llama.cpp` → *therefore
+> it cannot be built* (the build machine has one). **A citation checker catches none of these,
+> because in all three the citation is correct. What needs checking is the arrow.**
+
+Recorded, not acted on: closing that gap means building `misaka-palw-worker` against this
+checkout and re-running the three tests here. It is off the block-production path by the crate's
+own statement, so **it is not a precondition for the cut** — but §5 must now say *"unbuilt here,
+buildable on the release machine"* rather than anything that sounds like *"unbuildable"*.
