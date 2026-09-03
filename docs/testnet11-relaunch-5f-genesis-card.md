@@ -4700,3 +4700,23 @@ again be allowed something the chain is not.
 
 For 5f's G: its per-carrier wait multiplies by the carrier count read from the certify log, so a
 one-carrier V5 family leaves it at `parts=1` — harmless, and correct if a family ever needs more.
+
+### Checked on impl: where the caps live, and the assertion that does not
+
+```
+PALW_CERTIFICATION_MAX_VECTORS = 32       palw_state_v2.rs:3001
+  enforced at acceptance                   palw_state_v2.rs:8566    TooManyDrillVectors { got, max }
+carriage ceiling, enforced at chunking     palw_state_v2.rs:3203    ObjectTooLargeToChunk { bytes, max }
+per-vector byte budget, DERIVED from both  palw_state_v2.rs:3066    (CHUNK_MAX_BYTES × CHUNK_MAX_COUNT) / MAX_VECTORS
+```
+
+The three tests whose names touch the genesis set and certification —
+`a_mainnet_equivalent_genesis_carries_the_certification_rules` (params.rs:11395),
+`a_chain_certified_class_takes_fp_commitments_under_the_genesis_gate` (palw_state_v2.rs:15725),
+`the_shipped_genesis_grants_weight_only_to_certified_families` (e2e_drill.rs:1168) — are about
+rules and weight, not size. **No test on impl names both the genesis set and either cap.** A name
+search, so a differently-named one could exist; but had it existed, the 74-vector family would
+have been red there rather than found by three base0 tests afterwards — which is the evidence it
+does not. Sent to 3e as a location for the cover tip: *for every family the genesis assembly
+pins, `vectors ≤ MAX_VECTORS` and `evidence bytes ≤ CHUNK_MAX_BYTES × CHUNK_MAX_COUNT`, through
+the acceptance path's own refusals.*
