@@ -46,11 +46,15 @@ use kaspa_consensus_core::palw_derived_v1::{
 // `fp_claim_id_v3` is deliberately NOT imported here: ADR-0079 SA-2 moved the claim id the rail
 // signs behind `palw_fp_sign_gate::signable_claim_id`, so the rail cannot re-derive one that the
 // gate never checked.
+use kaspa_addresses::Prefix;
+use kaspa_consensus_core::config::params::DEVNET_PARAMS;
+use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpWorkerResultV3, PalwFreePromptCommitmentV3};
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_hashes::Hash64;
-use kaspa_pq_validator_core::{VALIDATOR_SEED_LEN, ValidatorKey};
+use kaspa_pq_validator_core::{ATTESTATION_TX_FEE_FLOOR_SOMPI, VALIDATOR_SEED_LEN, ValidatorKey};
+use kaspa_txscript::{pay_to_address_script, script_class::ScriptClass};
 
 fn die(msg: String) -> ! {
     eprintln!("[misaka-palw-fp-rail] fatal: {msg}");
@@ -108,7 +112,9 @@ fn main() {
     let mut seed_path: Option<PathBuf> = None;
     let mut funding: Option<String> = None;
     let mut funding_amount: u64 = 0;
-    let mut fee: u64 = 250_000;
+    // None = size the fee from the transaction's own compute mass at the node's relay rate (the
+    // same estimator every other overlay tx uses); Some = the operator's explicit value.
+    let mut fee: Option<u64> = None;
     let mut print_claim = false;
     let mut print_pubkey = false;
     // ADR-0078 Decision 6: sign a derivation the gateway left unsigned in the outbox.
@@ -135,7 +141,7 @@ fn main() {
             "--bond-key-seed" => seed_path = Some(PathBuf::from(value("--bond-key-seed"))),
             "--funding-outpoint" => funding = Some(value("--funding-outpoint")),
             "--funding-amount" => funding_amount = value("--funding-amount").parse().unwrap_or_else(|e| die(format!("{e}"))),
-            "--fee" => fee = value("--fee").parse().unwrap_or_else(|e| die(format!("{e}"))),
+            "--fee" => fee = Some(value("--fee").parse().unwrap_or_else(|e| die(format!("{e}")))),
             "--class-id" => class_id = Some(value("--class-id")),
             "--class-leaves" => class_leaves = value("--class-leaves").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--print-claim" => print_claim = true,
@@ -282,10 +288,18 @@ fn main() {
     }
     let funding_outpoint =
         parse_outpoint(&funding.unwrap_or_else(|| die("--funding-outpoint <txid:index> is required to sign".into())));
-    if funding_amount <= fee {
-        die(format!("--funding-amount {funding_amount} does not cover the fee {fee}"));
+    // The funding UTXO is the bond key's own fee float — genesis and the registrar both pay it to
+    // the key's ML-DSA-87 P2PKH (`blake2b_512_address_payload(vk)`), which is what `funding_address`
+    // derives. The entry's script is not decorative: the ML-DSA sighash commits to it, and the
+    // builder mirrors it into the change output, so an empty script here signed the wrong digest
+    // AND produced a change output the mempool refuses as "non-standard script form". The drill's
+    // first live stage 5b (2026-09-04) found it that way; the prefix only affects the bech32 text,
+    // never the script bytes, so any prefix yields the same entry.
+    let funding_spk = pay_to_address_script(&key.funding_address(Prefix::Mainnet));
+    if !ScriptClass::from_script(&funding_spk).is_pq_standard() {
+        die("the funding entry's script is not a form the mempool relays — the rail derived it wrongly".into());
     }
-    let funding_entry = UtxoEntry::new(funding_amount, kaspa_consensus_core::tx::ScriptPublicKey::default(), 0, false);
+    let funding_entry = UtxoEntry::new(funding_amount, funding_spk, 0, false);
 
     // The bundle the network runs decides the price table and the quantization — the rail reads
     // the devnet bundle here because that is the only bundle that exists; an RC rail takes the
@@ -302,8 +316,8 @@ fn main() {
     )
     .unwrap_or_else(|e| die(format!("cannot construct the devnet bundle: {e}")));
 
-    let tx = key
-        .build_fp_commitment_tx(
+    let build = |fee: u64| {
+        key.build_fp_commitment_tx(
             commitment.job.network_domain,
             commitment.clone(),
             result.prompt_token_ids.clone(),
@@ -313,7 +327,25 @@ fn main() {
             &funding_entry,
             fee,
         )
-        .unwrap_or_else(|e| die(format!("cannot build the commitment transaction: {e}")));
+        .unwrap_or_else(|e| die(format!("cannot build the commitment transaction: {e}")))
+    };
+    // A commitment's payload carries the job's prompt token ids, so its mass — and with it the
+    // node's minimum relay fee (10 sompi per gram of compute mass) — is not a constant: the first
+    // live submit (2026-09-04, 8,186-byte payload) was refused as "250000 fees … under the required
+    // amount of 263870" with the old flat default. Build once at the floor to learn the payload's
+    // size, size the fee from that shape with the same estimator the panel and `palw fp` use, and
+    // build again at that fee unless the operator named one.
+    let fee = fee.unwrap_or_else(|| {
+        let probe = build(ATTESTATION_TX_FEE_FLOOR_SOMPI);
+        let p = &DEVNET_PARAMS;
+        let calc =
+            MassCalculator::new(p.mass_per_tx_byte, p.mass_per_script_pub_key_byte, p.mass_per_sig_op, p.storage_mass_parameter);
+        key.estimate_overlay_fee(&calc, Prefix::Mainnet, probe.payload.len(), false)
+    });
+    if funding_amount <= fee {
+        die(format!("--funding-amount {funding_amount} does not cover the fee {fee}"));
+    }
+    let tx = build(fee);
 
     let tx_path = PathBuf::from(format!("{}.commitment-tx.borsh", stem.display()));
     let tx_bytes = borsh::to_vec(&tx).unwrap_or_else(|e| die(format!("cannot serialize the transaction: {e}")));
@@ -355,6 +387,7 @@ fn main() {
         "subnetwork": "0x4a (PALW_FP_COMMITMENT)",
         "transaction_bytes": tx_bytes.len(),
         "payload_bytes": tx.payload.len(),
+        "fee_sompi": fee,
         "work_leaves": commitment.work_leaves,
         "quanta": quanta,
         "pwu": pwu,

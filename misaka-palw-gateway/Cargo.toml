@@ -19,7 +19,9 @@ name = "misaka-palw-fp-rail"
 path = "src/bin/rail.rs"
 
 [dependencies]
+kaspa-addresses.workspace = true
 kaspa-consensus-core.workspace = true
+kaspa-txscript.workspace = true
 kaspa-hashes.workspace = true
 kaspa-pq-validator-core.workspace = true
 # ADR-0078: the derivation step — registered grammars and content-named transformers.
