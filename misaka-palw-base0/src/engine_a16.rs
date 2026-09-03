@@ -1119,6 +1119,11 @@ enum PlanOp {
     AttnScores,
     Softmax,
     AttnValues,
+    /// **ADR-0082 Decision 1: the whole attention site as one op.** Scores, the row softmax, the
+    /// probability requantization and the value reduction, computed here and committed as ONE
+    /// row: the output. The three context-wide rows the four separate ops commit are internal —
+    /// never a plan row, never a leaf, never carried.
+    AttnFused,
     AddElem,
     MulElem,
     Silu,
@@ -1428,6 +1433,48 @@ impl<'a> A16Engine<'a> {
                     )
                     .map_err(refuse("attn_values"))?
                 }
+                // **The fused attention site** (ADR-0082 Decision 1). The four shipped kernels
+                // composed — W9, W11, the probability requantization, W10 — with the three
+                // intermediates living only in this frame. The row pushed below is the OUTPUT
+                // row, so the site commits `heads x d_head` codes at every context instead of
+                // three rows that grow with the position.
+                //
+                // Composed from the engine's OWN kernels rather than from
+                // `a16_attn_fused_via_tiles_v1`: the two are proven equal at every history
+                // length and tile width (`palw_base0_a16::fused::the_tile_route_is_the
+                // _composition`), and the composition is what the fast projections are asserted
+                // bit-identical against, so this keeps the executor at the runtime's speed while
+                // computing exactly what `a16_attn_fused_reference_v1` defines. The equality is
+                // held by `the_fused_arm_is_the_reference_composition` below.
+                PlanOp::AttnFused => {
+                    let q = resolve(&node.inputs[0], &rows)?;
+                    let k_series = resolve(&node.inputs[1], &rows)?;
+                    let v_series = resolve(&node.inputs[2], &rows)?;
+                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
+                    let history = k_series.len() / kv_dim.max(1);
+                    let scores = a16_attn_scores(
+                        self.fast,
+                        &q,
+                        &k_series,
+                        shape.n_heads,
+                        shape.n_kv_heads,
+                        shape.d_head,
+                        &tile(lp(li).logits, shape.n_heads * history),
+                    )
+                    .map_err(refuse("attn_scores"))?;
+                    let probs = a16_softmax_rows(&scores, history, lp(li).softmax_up).map_err(refuse("softmax"))?;
+                    let codes = a16_requant(&probs, &tile(lp(li).probs, probs.len())).map_err(refuse("requant"))?;
+                    a16_attn_values(
+                        self.fast,
+                        &codes,
+                        &v_series,
+                        shape.n_heads,
+                        shape.n_kv_heads,
+                        shape.d_head,
+                        &tile(lp(li).values, shape.n_heads * shape.d_head),
+                    )
+                    .map_err(refuse("attn_values"))?
+                }
                 PlanOp::AddElem => {
                     let a = resolve(&node.inputs[0], &rows)?;
                     let b = resolve(&node.inputs[1], &rows)?;
@@ -1491,6 +1538,7 @@ fn plan_table(
     let k_scores = kernel_semantics_id_v1(KDESC_A16_ATTN_SCORES);
     let k_soft = kernel_semantics_id_v1(KDESC_A16_SOFTMAX);
     let k_vals = kernel_semantics_id_v1(KDESC_A16_ATTN_VALUES);
+    let k_fused = kernel_semantics_id_v1(KDESC_A16_ATTN_FUSED);
     let k_add = kernel_semantics_id_v1(KDESC_A16_ADD_ELEM);
     let k_mul = kernel_semantics_id_v1(KDESC_A16_MUL_ELEM);
     let k_silu = kernel_semantics_id_v1(KDESC_Q36_SILU);
@@ -1700,6 +1748,37 @@ fn plan_table(
                     return Err(refuse(index, "values read something other than the value series".to_string()));
                 }
                 PlanOp::AttnValues
+            }
+            // **ADR-0082 Decision 1**, the fused site. Its four registered operands come from the
+            // ONE the node names, through `palw_attn_fused_tensors_v1` — the same function the
+            // adjudicator reads, so the engine and the court cannot resolve different tensors —
+            // and the derived names are then checked against the ones this store actually holds.
+            (Op::AttnFused, n) if kid == k_fused => {
+                arity(3)?;
+                let t = palw_attn_fused_tensors_v1(n)
+                    .ok_or_else(|| refuse(index, format!("fused operand {n:?} is not a softmax store this family registers")))?;
+                for (what, got, want) in [
+                    ("softmax", t.softmax_up.as_str(), "attn_softmax_up"),
+                    ("scores", t.scores.as_str(), "attn_logits.a16"),
+                    ("probs", t.probs.as_str(), "attn_probs.a16"),
+                    ("values", t.values.as_str(), "attn_values.a16"),
+                ] {
+                    if strip_layer(got) != Some(want) {
+                        let why = format!("the fused site's {what} operand derives to {got:?}, which is not one this store names");
+                        return Err(refuse(index, why));
+                    }
+                }
+                // The committed row is the OUTPUT row (Z0's first half); the query is the rotated
+                // one and the two series are the caches, in the order the court reads them.
+                width(d, "hidden")?;
+                need(0, W::Fixed(d), "the query")?;
+                if inputs.get(1) != Some(&PlanInput::CachedK) {
+                    return Err(refuse(index, "a fused attention site read something other than the key series".to_string()));
+                }
+                if inputs.get(2) != Some(&PlanInput::CachedV) {
+                    return Err(refuse(index, "a fused attention site read something other than the value series".to_string()));
+                }
+                PlanOp::AttnFused
             }
             (Op::RopeImrope, "rope") if kid == k_rope => {
                 arity(1)?;
