@@ -243,23 +243,29 @@ impl Base0FpIntervalGeometryV1 {
     /// The same geometry read off a capture's own binding — the executor's side. It must agree
     /// with [`Self::from_chain_facts_v1`] on every capture this family produces, and
     /// `the_two_interval_counts_agree_on_every_capture` is what pins that.
+    ///
+    /// **The DEFAULT ladder, for a caller that holds no ruleset.** The rule is
+    /// [`Self::from_binding_capped_v1`]; this passes [`PALW_STEP_LEG_MAX_LEAVES`], which is what
+    /// every shipped preset froze — and which is the EXECUTOR's constant, not the court's. A seat
+    /// on a network whose `PalwCourtParamsV2::max_step_leaf_count` is wider must pass that number:
+    /// see [`base0_fp_binding_step_space_v1`].
     pub fn from_binding_v1(binding: &PalwStepBindingV2, family_interval: u32) -> Result<Self, Base0FpIntervalError> {
+        Self::from_binding_capped_v1(binding, family_interval, PALW_STEP_LEG_MAX_LEAVES)
+    }
+
+    /// [`Self::from_binding_v1`] against the ladder top the CALLER states — the ruleset's
+    /// `PalwCourtParamsV2::max_step_leaf_count`, which reaches a family through
+    /// `with_step_ladder_cap` (ADR-0080 W1b).
+    pub fn from_binding_capped_v1(
+        binding: &PalwStepBindingV2,
+        family_interval: u32,
+        max_step_leaf_count: u64,
+    ) -> Result<Self, Base0FpIntervalError> {
         let committed = binding.checkpoint_profile.checkpoint_interval;
         if committed != family_interval {
             return Err(Base0FpIntervalError::CheckpointIntervalIsNotTheCommittedOne { family: family_interval, committed });
         }
-        // **The binding's price must be the price its own geometry implies.** `verify_binding_v1`
-        // checks that the carried profile is the DECLARED one and that the roots recompute; it
-        // does not check that `step_leaf_count` is `step_leaf_count(profile, context)`, because
-        // that value is a leg input rather than a derived one. Every path below sizes a replay
-        // from the profile and compares against a range priced by the field, so an opening whose
-        // two numbers disagree would have a seat replay one step space and compare it to another —
-        // and, on a hostile opening, allocate a 2^22-leaf capture to do it.
-        let derived = kaspa_consensus_core::palw_step::step_leaf_count(&binding.shape_profile, &binding.job_context)
-            .map_err(|e| Base0FpIntervalError::StepSpace(format!("{e:?}")))?;
-        if derived != binding.step_leaf_count {
-            return Err(Base0FpIntervalError::PriceIsNotTheGeometrys { declared: binding.step_leaf_count, derived });
-        }
+        base0_fp_binding_step_space_v1(binding, max_step_leaf_count)?;
         Self::from_chain_facts_v1(
             binding.job_context.declared_prefill_tokens,
             binding.job_context.exact_decode_tokens,
