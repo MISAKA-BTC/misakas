@@ -3196,3 +3196,59 @@ end in this cut's lineage, and it is worth stating plainly — **on devnet, on `
 ladder armed.** It is not the t11 shape, it is not the cut tree, and the stage that binds the
 answer to the chain is the one that failed. **The announcement's sentence still has to come from
 a run on the preset that ships.**
+
+## A red that means an exposure CLOSED — and the pattern that produced it
+
+```
+the_shipped_rc_ruleset_can_reach_the_dormant_free_prompt_retirement ... FAILED
+
+assert!(p.palw_uncertified_weightless.is_none(),
+  "the repair is dormant on the shipped RC — if this ever fails, the exposure below is
+   closed and the note can go");
+```
+
+**That assertion exists to fail.** §1 arms `palw_uncertified_weightless` at genesis
+(`e0255012` states both genesis fences on the RC preset), so the field is now `Some` there — and
+the test whose whole job is to notice that, noticed. Its sibling documents what was open:
+`known_limitation_dormant_a_spent_free_prompt_retirement_strands_its_weight` — on the shipped RC
+with `claim_retirement_daa = WINDOW_COURT = 3000`, the first free-prompt claim that spends a
+quantum and then retires produced **a durable tip its own node refuses on the next restart**,
+with `safe_weight 40` stranded.
+
+**Both notes can now go**, and this card's §5 line about the D7 exposure with them. Traced to the
+arming commit before acting, not inferred from the timing.
+
+### The pattern, which is the instrument I said was missing
+
+Hours ago I found three **favourable stalenesses** — the hybrid's exclusion, the 2^22 width
+table, the known-open list — and wrote that the only defence is to sweep every *"cannot"* and
+*"known open"* and ask what would have to change. **That is a habit, and habits did not fire for
+anyone tonight.** Someone had already built the mechanical version:
+
+```
+a claim that breaks               -> a red test               (normal)
+a constraint that lifts           -> NOTHING                  (the whole problem)
+a constraint that lifts, pinned   -> a red test whose message says
+                                     "the exposure is closed and the note can go"
+```
+
+> **Pin the limitation, not just the behaviour.** It costs one assertion. It converts the single
+> staleness class that produces *no signal at all* into one that produces a red — and the failure
+> message carries what the red **means** and what to do about it, so the person who hits it does
+> not have to reconstruct why a passing thing started failing.
+
+*This is the answer to "a decision whose premise stopped applying", which has cost this card four
+rewrites tonight — §1's ladder row twice, the wipe's timing, and the drill-report rule. Each of
+those was prose. None of them fired.*
+
+### State of the reds, after 1c's corrections
+
+```
+misaka-palw-base0      exit 0 — 371 across all targets, ZERO failures
+                       (artifact tests 14.60s / 11.16s / 9.95s — real 1.79 GB file, not skips)
+kaspa-consensus-core   5 failures:  3 re-pins        <- the ceremony performs these
+                                    1 bind-window     <- a fixture branch
+                                    1 exposure closing <- this one
+```
+
+**No red is a defect.** Three the ceremony writes, one fixture, one limitation lifting.
