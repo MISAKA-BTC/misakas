@@ -14800,7 +14800,6 @@ pub(crate) mod tests {
         assert!(s4.pending_chunk_group(&group).is_none(), "the oldest group expired and was evicted to make room");
     }
 
-
     // =============================================================================================
     // ADR-0080 design A — the split close: the table, the objects, the version
     // =============================================================================================
@@ -14879,8 +14878,9 @@ pub(crate) mod tests {
 
         // 2 chunks need 8 DAA. At `backstop - 4` that is one past the backstop.
         let late = backstop - 4;
-        let err = apply_palw_transition_v2(&s5, &p, &ctx(6, late, 6), &[declare_close(session_id, PalwCourtSideV1::Executor, 2)], None)
-            .expect_err("a declaration that cannot finish inside the backstop must be refused");
+        let err =
+            apply_palw_transition_v2(&s5, &p, &ctx(6, late, 6), &[declare_close(session_id, PalwCourtSideV1::Executor, 2)], None)
+                .expect_err("a declaration that cannot finish inside the backstop must be refused");
         assert_eq!(
             err,
             PalwStateV2Error::CourtCloseCannotAssemble { session: session_id, count: 2, needed: late + 8, deadline: backstop },

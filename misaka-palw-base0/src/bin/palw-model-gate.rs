@@ -249,12 +249,7 @@ fn main() {
         Ok(_) => eprintln!("[palw-model-gate] from_registered_profile: the n_ctx {n_ctx} row compiles against this artifact"),
         Err(e) => eprintln!("[palw-model-gate] from_registered_profile REFUSES the n_ctx {n_ctx} row: {e}"),
     }
-    match Qwen25A16Backend::from_registered_profile(
-        arc.clone(),
-        net.clone(),
-        registered.profile.clone(),
-        registered.canonical_job,
-    ) {
+    match Qwen25A16Backend::from_registered_profile(arc.clone(), net.clone(), registered.profile.clone(), registered.canonical_job) {
         Ok(_) => eprintln!("[palw-model-gate] from_registered_profile: the REGISTERED n_ctx 16 row compiles against this artifact"),
         Err(e) => eprintln!("[palw-model-gate] from_registered_profile REFUSES the REGISTERED n_ctx 16 row too: {e}"),
     }
@@ -467,7 +462,6 @@ fn main() {
             "[palw-model-gate] {}: MEASURED prefill={prefill} wanted_decode={wanted} granted_decode={decode} step_leaves={leaves}",
             case.name
         );
-
 
         if mode == "ladder" {
             report.push(serde_json::json!({

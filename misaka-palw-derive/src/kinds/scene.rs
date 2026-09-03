@@ -2637,11 +2637,7 @@ mod tests {
         for a in 0..=CHANNEL_DENOMINATOR {
             let w = walk(&glb(&with_alpha(a)));
             let m = &w.json["materials"][0];
-            assert_eq!(
-                m["pbrMetallicRoughness"]["baseColorFactor"][3].to_string(),
-                spell(a),
-                "alpha {a} reached the file wrong"
-            );
+            assert_eq!(m["pbrMetallicRoughness"]["baseColorFactor"][3].to_string(), spell(a), "alpha {a} reached the file wrong");
             match m.get("alphaMode").and_then(|v| v.as_str()) {
                 Some(mode) => {
                     assert!(a < CHANNEL_DENOMINATOR, "full scale must not spell a mode it already has by default");

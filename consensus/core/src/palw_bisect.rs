@@ -77,11 +77,7 @@ pub const fn bisect_rung_deadline_within_session_v1(
 ) -> u64 {
     let rung = accepted_daa.saturating_add(w_round);
     let cap = session_deadline_daa.saturating_sub(assembly_reserve_daa);
-    if rung < cap {
-        rung
-    } else {
-        cap
-    }
+    if rung < cap { rung } else { cap }
 }
 
 /// The pinned midpoint: `lo + (hi − lo)/2`, integer floor. One function, one witness test —
