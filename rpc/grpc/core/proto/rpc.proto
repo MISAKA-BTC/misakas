@@ -1479,3 +1479,44 @@ message GetPalwFreePromptClaimResponseMessage {
   uint32 derivedCount = 20;
   RPCError error = 1000;
 }
+
+// ADR-0080 design A — a court close too wide for one carrier rides as a signed declaration and
+// its chunks, in a table keyed (session id, side). A mover filing one under a court deadline has
+// to know how far the chain thinks it got, and before this call the only answer was a journal on
+// the mover's own disk: a file that believes itself skips a part whose carrier was orphaned and
+// completes a group that can never assemble. This is the chain's own answer.
+message GetPalwPendingChunkGroupRequestMessage {
+  // 128-hex court session id.
+  string sessionId = 1;
+  // "challenger" or "executor" — the two bonds a session id binds, and the group's other key half.
+  string side = 2;
+}
+
+message GetPalwPendingChunkGroupResponseMessage {
+  // False off ConsensusV2 and for a (session, side) that has declared no close — an honest
+  // answer, not an error. A group that has been ADJUDICATED is also gone, so `found: false`
+  // after chunks were filed means the close either completed or its session ended.
+  bool found = 1;
+  string sessionId = 2;
+  string side = 3;
+  // The chunks the declaration pinned. Every consensus rule on a split close counts these.
+  uint32 count = 4;
+  // One bit per index, exactly as `PalwCourtCloseGroupV2::present` holds it: the arrival bitmap,
+  // not a cursor — chunks may arrive in any order, so a count of parts is not a resume point.
+  uint64 present = 5;
+  uint32 partsPresent = 6;
+  bool complete = 7;
+  uint64 declaredDaa = 8;
+  // declaredDaa + 4 DAA per chunk, and never past the session's own backstop.
+  uint64 assemblyDeadlineDaa = 9;
+  // 128-hex keyed hash of the concatenation the declaration pinned. A filer compares its own cut
+  // against this before spending a carrier on a group it would convict itself by completing.
+  string closeDigest = 10;
+  // executor_guilty | challenger_defeated — what the declaration says its evidence proves.
+  string verdict = 11;
+  // "txid:index" — the bond that declared, and the outpoint backing the assembly deposit.
+  string declarerBond = 12;
+  // The assembly reserve this declaration put at risk, forfeited if the group never assembles.
+  uint64 deposit = 13;
+  RPCError error = 1000;
+}

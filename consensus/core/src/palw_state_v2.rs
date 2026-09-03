@@ -3270,9 +3270,7 @@ fn convict_close_declarer_v1(
             }
             Ok(())
         }
-        PalwCourtSideV1::Challenger => {
-            rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond)
-        }
+        PalwCourtSideV1::Challenger => rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond),
     }
 }
 
@@ -15543,12 +15541,7 @@ pub(crate) mod tests {
         let carriers = chunks
             .into_iter()
             .enumerate()
-            .map(|(index, bytes)| PalwConsensusObjectV2::CourtCloseChunk {
-                session_id: *session_id,
-                side,
-                index: index as u8,
-                bytes,
-            })
+            .map(|(index, bytes)| PalwConsensusObjectV2::CourtCloseChunk { session_id: *session_id, side, index: index as u8, bytes })
             .collect();
         (declaration, carriers)
     }
@@ -15685,8 +15678,7 @@ pub(crate) mod tests {
         // A perfectly good close — of somebody else's session.
         let another_session = |session_id: Hash64, side: PalwCourtSideV1| {
             let (declaration, carriers) = split_close_v1(&a_court_close(h64(0xBEEF), PalwCourtVerdictV2::ExecutorGuilty), side, 3);
-            let PalwConsensusObjectV2::CourtCloseDeclared { count, chunk_digests, close_digest, verdict, signature, .. } =
-                declaration
+            let PalwConsensusObjectV2::CourtCloseDeclared { count, chunk_digests, close_digest, verdict, signature, .. } = declaration
             else {
                 unreachable!()
             };
@@ -15765,15 +15757,20 @@ pub(crate) mod tests {
     /// **W10: a group that lapses past the backstop forfeits its deposit, on its own side.**
     ///
     /// The control is the identical sweep with no declaration, so the difference between the two
-    /// numbers is the deposit and nothing else — which is what makes this a test of the RULE rather
-    /// than of the fixture's arithmetic.
+    /// numbers is what the DECLARATION cost — which is what makes this a test of the RULE rather
+    /// than of the fixture's arithmetic. On the challenger's side that difference is exactly the
+    /// deposit, because a challenger that finishes nothing was already paying the challenger-side
+    /// close. On the executor's it is the deposit PLUS its own stake, because W5's whole point is
+    /// that an executor which declares and does not assemble is convicted where the bare backstop
+    /// would have acquitted it — so the two terms are asserted apart rather than summed.
     #[test]
     fn a_group_that_lapses_forfeits_its_deposit_on_the_declaring_side() {
         for (side, bond) in [(PalwCourtSideV1::Challenger, bond_key(2)), (PalwCourtSideV1::Executor, bond_key(1))] {
-            let (p, s5, _claim_id, session_id) = split_close_fixture_funded(50_000_000);
+            let (p, s5, claim_id, session_id) = split_close_fixture_funded(50_000_000);
             let backstop = s5.court_session(&session_id).unwrap().deadline_daa;
             let (declared, _) = apply(&s5, &p, &ctx(6, 200, 6), &[declare_close(session_id, side, 8)], None);
             let group = declared.court_close_group(&session_id, side).expect("the declaration wrote a row");
+            let reserved = u64::try_from(declared.claim(&claim_id).unwrap().reserved).unwrap();
             assert_eq!(group.deposit, palw_close_assembly_deposit_v1(8), "the reserve is not the ruleset's arithmetic");
             assert_eq!(group.deposit_outpoint, bond.0, "the outpoint that backs the deposit is not the declarer's own bond");
 
@@ -15781,22 +15778,31 @@ pub(crate) mod tests {
             let (swept, _) = apply(&declared, &p, &ctx(7, backstop + 1, 7), &[], None);
             let (control, _) = apply(&s5, &p, &ctx(7, backstop + 1, 7), &[], None);
             assert!(swept.court_close_group(&session_id, side).is_none(), "the group outlived its session");
+            // The conviction the declaration adds on the executor's side, and nothing on the
+            // challenger's — where the sweep already charged the failed accusation.
+            let conviction = match side {
+                PalwCourtSideV1::Executor => reserved,
+                PalwCourtSideV1::Challenger => 0,
+            };
             assert_eq!(
                 control.bond(&bond).unwrap().collateral - swept.bond(&bond).unwrap().collateral,
-                group.deposit,
-                "the {side} side's lapse cost something other than exactly the deposit"
+                group.deposit + conviction,
+                "the {side} side's lapse cost something other than the deposit and its own side's verdict"
             );
             // And it is recorded as a slash — burned by don't-mint, not moved to anyone.
             assert_eq!(
                 swept.bond(&bond).unwrap().slashed - control.bond(&bond).unwrap().slashed,
-                group.deposit,
+                group.deposit + conviction,
                 "the deposit left the bond without being recorded as destroyed"
             );
-            // The OTHER side pays nothing for it.
+            // **The OTHER side pays nothing for it** — measured against the state the declaration
+            // left, not against the control. The control is a DIFFERENT verdict (the bare backstop
+            // closes challenger-side and charges the challenger), so comparing there would ask the
+            // untouched party to match a bill somebody else was handed.
             let other = if bond == bond_key(1) { bond_key(2) } else { bond_key(1) };
             assert_eq!(
                 swept.bond(&other).unwrap().collateral,
-                control.bond(&other).unwrap().collateral,
+                declared.bond(&other).unwrap().collateral,
                 "the other party paid for a failed declaration that was not its own"
             );
         }
@@ -15971,7 +15977,10 @@ pub(crate) mod tests {
             "a chunk was charged rent a second time — the grading was bought by the declaration"
         );
         // Kind-blind is the failure this is not: an object no rule prices still answers zero.
-        assert_eq!(palw_object_rent_ceiling_v1(&PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(1), signature: vec![] }), 0);
+        assert_eq!(
+            palw_object_rent_ceiling_v1(&PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(1), signature: vec![] }),
+            0
+        );
     }
 
     /// **ADR-0075 SA-1/SA-2: the rent rate is the one `misaka palw submit-object` already pays.**

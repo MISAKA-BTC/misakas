@@ -475,6 +475,29 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwFreePromptClaimResponse>, protowir
         error: None,
     }
 });
+// ADR-0080 design A — the chain's own account of a declared close, mid-assembly. `present` crosses
+// as the bitmap it is: chunks arrive in any order, so a count of parts is not a resume point.
+from!(item: &kaspa_rpc_core::GetPalwPendingChunkGroupRequest, protowire::GetPalwPendingChunkGroupRequestMessage, {
+    Self { session_id: item.session_id.clone(), side: item.side.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwPendingChunkGroupResponse>, protowire::GetPalwPendingChunkGroupResponseMessage, {
+    Self {
+        found: item.found,
+        session_id: item.session_id.clone(),
+        side: item.side.clone(),
+        count: item.count,
+        present: item.present,
+        parts_present: item.parts_present,
+        complete: item.complete,
+        declared_daa: item.declared_daa,
+        assembly_deadline_daa: item.assembly_deadline_daa,
+        close_digest: item.close_digest.clone(),
+        verdict: item.verdict.clone(),
+        declarer_bond: item.declarer_bond.clone(),
+        deposit: item.deposit,
+        error: None,
+    }
+});
 from!(item: &kaspa_rpc_core::GetTokenSupplyRequest, protowire::GetTokenSupplyRequestMessage, { Self { asset_id: item.asset_id } });
 from!(item: RpcResult<&kaspa_rpc_core::GetTokenSupplyResponse>, protowire::GetTokenSupplyResponseMessage, {
     Self {
@@ -1240,6 +1263,26 @@ try_from!(item: &protowire::GetPalwFreePromptClaimResponseMessage, RpcResult<kas
         derived_count: item.derived_count,
     }
 });
+try_from!(item: &protowire::GetPalwPendingChunkGroupRequestMessage, kaspa_rpc_core::GetPalwPendingChunkGroupRequest, {
+    Self { session_id: item.session_id.clone(), side: item.side.clone() }
+});
+try_from!(item: &protowire::GetPalwPendingChunkGroupResponseMessage, RpcResult<kaspa_rpc_core::GetPalwPendingChunkGroupResponse>, {
+    Self {
+        found: item.found,
+        session_id: item.session_id.clone(),
+        side: item.side.clone(),
+        count: item.count,
+        present: item.present,
+        parts_present: item.parts_present,
+        complete: item.complete,
+        declared_daa: item.declared_daa,
+        assembly_deadline_daa: item.assembly_deadline_daa,
+        close_digest: item.close_digest.clone(),
+        verdict: item.verdict.clone(),
+        declarer_bond: item.declarer_bond.clone(),
+        deposit: item.deposit,
+    }
+});
 try_from!(item: &protowire::GetTokenSupplyRequestMessage, kaspa_rpc_core::GetTokenSupplyRequest, { Self { asset_id: item.asset_id } });
 try_from!(item: &protowire::GetTokenSupplyResponseMessage, RpcResult<kaspa_rpc_core::GetTokenSupplyResponse>, {
     Self {
@@ -1847,5 +1890,54 @@ mod palw_derived_artifacts_tests {
         assert_eq!(back.derived_count, 2);
         assert!(back.is_free_prompt);
         assert_eq!(back.phase, "final");
+    }
+
+    /// **ADR-0080 design A: the group's own bitmap survives the wire.**
+    ///
+    /// `present` is the field a resume is decided on, and it is a bitmap because chunks arrive in
+    /// any order — so a conversion that lost a bit, or that carried a COUNT of parts instead, would
+    /// send a mover to re-pay for a carrier the chain already holds and leave a hole it does not.
+    /// A sparse pattern with a gap in the middle is the one that catches that; a full or empty
+    /// bitmap would round-trip through either shape.
+    #[test]
+    fn a_declared_closes_arrival_bitmap_survives_the_grpc_conversion() {
+        use kaspa_rpc_core::GetPalwPendingChunkGroupResponse;
+        let response = GetPalwPendingChunkGroupResponse {
+            found: true,
+            session_id: "5e".repeat(64),
+            side: "executor".to_string(),
+            count: 27,
+            // 0, 1, 3 and 26 have landed: a gap at 2 and the top index set.
+            present: 0b1011 | (1u64 << 26),
+            parts_present: 4,
+            complete: false,
+            declared_daa: 91_300,
+            assembly_deadline_daa: 91_408,
+            close_digest: "c1".repeat(64),
+            verdict: "executor_guilty".to_string(),
+            declarer_bond: format!("{}:1", "b0".repeat(32)),
+            deposit: 33_750_000,
+        };
+        let wire: crate::protowire::GetPalwPendingChunkGroupResponseMessage = RpcResult::Ok(&response).into();
+        let back: GetPalwPendingChunkGroupResponse = GetPalwPendingChunkGroupResponse::try_from(&wire).unwrap();
+        assert_eq!(back.present, response.present, "the arrival bitmap did not survive the wire");
+        assert_eq!(back.count, 27);
+        assert_eq!(back.parts_present, 4);
+        assert!(!back.complete);
+        assert_eq!(back.side, "executor");
+        assert_eq!(back.session_id, response.session_id);
+        assert_eq!(back.close_digest, response.close_digest);
+        assert_eq!(back.assembly_deadline_daa, 91_408);
+        assert_eq!(back.declarer_bond, response.declarer_bond);
+        assert_eq!(back.deposit, 33_750_000);
+        assert_eq!(back.verdict, "executor_guilty");
+        // The borsh-ish `Serializer`/`Deserializer` path the wRPC client uses, on the same value.
+        let mut bytes = Vec::new();
+        kaspa_rpc_core::Serializer::serialize(&response, &mut bytes).unwrap();
+        let round: GetPalwPendingChunkGroupResponse =
+            <GetPalwPendingChunkGroupResponse as kaspa_rpc_core::Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert_eq!(round.present, response.present);
+        assert_eq!(round.count, response.count);
+        assert_eq!(round.close_digest, response.close_digest);
     }
 }

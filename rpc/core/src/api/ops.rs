@@ -180,6 +180,10 @@ pub enum RpcApiOps {
     /// ADR-0078 Decision 5 / ADR-0077 R0: the free-prompt claim a derivation names, so a verifier
     /// has the `output_root` and the executor key beside the row it is checking.
     GetPalwFreePromptClaim = 169,
+    /// ADR-0080 design A: one side of one court session's declared close, mid-assembly — the
+    /// `present` bitmap, the count, the deadline and the digest. What lets `misaka palw
+    /// court-close` resume a partial filing from the CHAIN rather than from a journal on disk.
+    GetPalwPendingChunkGroup = 170,
 }
 
 impl RpcApiOps {

@@ -2785,6 +2785,137 @@ impl Deserializer for GetPalwFreePromptClaimResponse {
     }
 }
 
+// -----------------------------------------------------------------------------------------------
+// ADR-0080 design A — a declared court close, mid-assembly
+// -----------------------------------------------------------------------------------------------
+//
+// A close too wide for one carrier rides as a signed `CourtCloseDeclared` and its chunks, in a
+// table keyed `(session_id, side)`. The mover is under a court deadline and its carriers can be
+// orphaned, so it has to be able to ask what the CHAIN thinks it has received. Before this call the
+// only answer was `misaka palw court-close`'s own journal on the mover's disk — and a journal that
+// believes itself skips a part whose carrier was reorged out and completes a group that can never
+// assemble. It also could not answer the two preflights that matter: whether a declaration for this
+// `(session, side)` already exists (one per side, ever) and how much time is left to assemble.
+
+/// ADR-0080 design A: which declared close to read — a session id and one of its two sides.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwPendingChunkGroupRequest {
+    /// 128-hex court session id.
+    pub session_id: String,
+    /// `challenger` or `executor`. Not defaulted: a group is keyed by the side, and answering for
+    /// the wrong one is answering about the other party's carriage.
+    pub side: String,
+}
+
+impl Serializer for GetPalwPendingChunkGroupRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.session_id, writer)?;
+        store!(String, &self.side, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwPendingChunkGroupRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let session_id = load!(String, reader)?;
+        let side = load!(String, reader)?;
+        Ok(Self { session_id, side })
+    }
+}
+
+/// **One side's declared close, as the chain holds it** (ADR-0080 design A §2.2).
+///
+/// `present` is the row's own `u64` bitmap and is carried as a bitmap rather than as a count,
+/// because chunks arrive in ANY order: "four of seven have landed" does not say which three to
+/// send, and a resume that guessed would re-pay for a carrier the chain already has and leave a
+/// hole it does not.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwPendingChunkGroupResponse {
+    /// False off `ConsensusV2` and for a `(session, side)` that has declared no close. It is also
+    /// false once the group is GONE — adjudicated, convicted or swept with its session — so a
+    /// filer that saw a group and now does not has an answer rather than a silence.
+    pub found: bool,
+    pub session_id: String,
+    pub side: String,
+    /// The chunks the declaration pinned. Every consensus rule on a split close counts these.
+    pub count: u32,
+    /// One bit per index, exactly as `PalwCourtCloseGroupV2::present` holds it.
+    pub present: u64,
+    pub parts_present: u32,
+    pub complete: bool,
+    pub declared_daa: u64,
+    /// `declared_daa + PALW_COURT_CLOSE_INCLUSION_MARGIN × count`, and never past the session's
+    /// own backstop — the declaration may not extend it.
+    pub assembly_deadline_daa: u64,
+    /// 128-hex keyed hash of the concatenation. A filer compares its own cut against this before
+    /// spending a carrier on a group it would convict itself by completing.
+    pub close_digest: String,
+    /// `executor_guilty` / `challenger_defeated`.
+    pub verdict: String,
+    /// `txid:index` — the bond that declared, which is also the outpoint backing the deposit.
+    pub declarer_bond: String,
+    /// The assembly reserve at risk, forfeited if the group never assembles.
+    pub deposit: u64,
+}
+
+impl Serializer for GetPalwPendingChunkGroupResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.found, writer)?;
+        store!(String, &self.session_id, writer)?;
+        store!(String, &self.side, writer)?;
+        store!(u32, &self.count, writer)?;
+        store!(u64, &self.present, writer)?;
+        store!(u32, &self.parts_present, writer)?;
+        store!(bool, &self.complete, writer)?;
+        store!(u64, &self.declared_daa, writer)?;
+        store!(u64, &self.assembly_deadline_daa, writer)?;
+        store!(String, &self.close_digest, writer)?;
+        store!(String, &self.verdict, writer)?;
+        store!(String, &self.declarer_bond, writer)?;
+        store!(u64, &self.deposit, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwPendingChunkGroupResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let found = load!(bool, reader)?;
+        let session_id = load!(String, reader)?;
+        let side = load!(String, reader)?;
+        let count = load!(u32, reader)?;
+        let present = load!(u64, reader)?;
+        let parts_present = load!(u32, reader)?;
+        let complete = load!(bool, reader)?;
+        let declared_daa = load!(u64, reader)?;
+        let assembly_deadline_daa = load!(u64, reader)?;
+        let close_digest = load!(String, reader)?;
+        let verdict = load!(String, reader)?;
+        let declarer_bond = load!(String, reader)?;
+        let deposit = load!(u64, reader)?;
+        Ok(Self {
+            found,
+            session_id,
+            side,
+            count,
+            present,
+            parts_present,
+            complete,
+            declared_daa,
+            assembly_deadline_daa,
+            close_digest,
+            verdict,
+            declarer_bond,
+            deposit,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetTokenSupplyRequest {
