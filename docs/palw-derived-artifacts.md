@@ -158,14 +158,74 @@ misaka palw fp-submit --tx <rail tx> --material-out <node>/palw-retention --capt
 ## Verification (Decision 5, X6) — anyone holding the answer
 
 ```bash
+# the derivation alone: is this artifact what the named transformer makes of THESE BYTES?
 palw-derive verify --object <derived-object.borsh> --answer <the DSL or the raw answer> \
-    [--artifact <file>] \
+    [--artifact <the derived artifact's bytes>] \
     [--output-token-ids <ids.json> --job-context-hash <hex> --family qwen25-a16|qwen36]
+
+# the derivation AND its binding: is this artifact what came out of THAT INFERENCE?
+palw-derive verify --object <derived-object.borsh> \
+    --output-token-ids <ids.json> --job-context <job-context.borsh> \
+    --tokenizer <tokenizer.json> --family qwen25-a16|qwen36|base0|qwen25-a16-v5 \
+    [--artifact <the class's .palwart>] [--answer <the answer you were handed>]
 ```
 
 The tool re-runs the grammar and the transformer and compares `dsl_hash`, `artifact_hash` and
-`artifact_bytes`; with the ids, the job's context hash and the family it recomputes the claim's
+`artifact_bytes`; with the ids, the job's context and the family it recomputes the claim's
 `output_root`.
+
+### The two verdict words, and why there are two
+
+**`consistent` and `consistent-given-the-supplied-answer` answer different questions, and only one
+of them is the one people read the tool for.** The first form above recomputes `dsl_hash` and
+`artifact_hash` from the answer bytes YOU passed and `output_root` from the token ids YOU passed.
+Nothing in either path takes the other's input — `rendered_output_hash_v1` is not the missing join,
+because on every shipped family it is a keyed hash of the *ids* and never reaches a byte of text —
+so both can be true of inputs with nothing to do with each other. An executor holding one honest
+claim can derive an artifact from a *completely different answer*, file the object against that
+claim (same `claim_id`, same `output_root` — the two fields the chain checks), and hand you the
+answer the artifact really came from together with the ids the claim really committed. Every check
+passes. So that path reports `binding_checked: false` and says
+`consistent-given-the-supplied-answer`, which is true and is not "this artifact came from that
+inference".
+
+The join is the RENDERING. ADR-0077 Decision 2 makes the answer's bytes every token's bytes
+concatenated, so the ids and the answer are one fact spelled twice: a derivation belongs to a claim
+exactly when the DSL it canonicalizes is the rendering of that claim's ids. The second form does
+that — it renders the ids and re-runs the derivation over those bytes, never over an answer you
+were handed — and reports `binding_checked: true` with the plain `consistent`.
+
+**Which tokenizer is not the verifier's choice.** An id is only a token because some tokenizer says
+so, so rendering under one the executor picked would put the choice back in the executor's hands.
+`--job-context` takes the whole `PalwJobContextV2` rather than its hash for exactly this reason:
+`tokenizer_id` is a field of it, `context_hash()` is computed here from the same bytes, and the two
+can no longer come from different contexts. A `--tokenizer` file that is not the pinned one is
+refused by name (exit 1), and the refusal names the other lineage too — a class whose tokenizer is
+embedded in a pinned GGUF publishes `tokenizer_id_v2_for_gguf(<gguf sha256>)`, which no
+`tokenizer.json` reproduces, so for that lineage the binding cannot be checked from a file at all
+and the tool says so rather than passing.
+
+**`--artifact` takes either file, and the FILE says which.** Historically it took the derivation's
+own bytes (the GLB, the PNG), hashed against `artifact_hash`; it now also takes the dense PALW
+class artifact whose weights ran — the same decode `palw-certify bind --artifact` uses, with the
+declared digest recomputed over every byte. A dense artifact declares itself in its first eight
+bytes; anything else is read as the derived bytes, and the verdict's `artifact_file_role` names
+which question the file answered. A class artifact that declares a `tokenizer_commitment` must
+agree with the tokenizer file and with the claim's pin, or the run is refused by name; one that
+declares none (`Hash64::default()`, the state the shipped dense artifact is in) confirms nothing
+and refuses nothing — the claim's own pin is what binds. A `--artifact` path that is not there is a
+refusal, never a check quietly dropped from the list.
+
+| verdict | exit | what it means |
+|---|---|---|
+| `consistent` | 0 | the derivation re-runs AND its DSL is the rendering of this claim's ids under the tokenizer the claim pins |
+| `consistent-given-the-supplied-answer` | 0 | the derivation re-runs over the bytes you supplied; `binding_checked: false`, and `binding_not_checked_because` names what was missing |
+| `MISMATCH — …` | 2 | a demonstrable false object: the named fields are listed in `mismatches` |
+| `UNVERIFIABLE — …` | 2 | this build does not publish that manifest (SA-5); nobody running it can check the derivation either way |
+| (a refusal, no verdict printed) | 1 | a file that is not there, a tokenizer that is not the one the claim pins, `--job-context` and `--job-context-hash` together |
+
+A caller that branches on the exit code alone cannot tell a checked binding from an unchecked one —
+both are 0. Branch on `binding_checked`; the verdict prints its own `exit_status` note saying so.
 
 **Exit 2 carries two different verdicts, and the word says which.** `MISMATCH — a demonstrable
 false object (ADR-0078 Decision 5)` is the refutation: re-running the named grammar and
