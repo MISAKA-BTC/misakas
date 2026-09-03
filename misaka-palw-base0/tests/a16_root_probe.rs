@@ -185,3 +185,165 @@ fn print_the_graph_v5_genesis_row_numbers() {
         }
     }
 }
+
+/// **The class the genesis registers and the class this build can SUPPLY are one class.**
+///
+/// Two crates spell the graph-v5 dense row, and they must: `kaspa_consensus_core` cannot read this
+/// crate (the dependency runs the other way), so the consensus-side builder derives the width and
+/// the canonical job itself while `classes::a16_graph_v5_row_v1` derives them beside the artifact
+/// shape a file must match. Nothing in either crate forces the two to agree — this test is what
+/// does, and it is the falsifier the width constant's doc names.
+///
+/// A disagreement is not cosmetic: `n_ctx` is inside `shape_profile_id`, so a moved width is a
+/// class the chain registered and no node can resolve (`resolve_class_v1` answers by class id), and
+/// a moved canonical job is a different `pwu_per_inference` under one class id — the n_ctx 17
+/// BURNED failure exactly.
+#[test]
+fn the_genesis_row_and_the_shipped_row_are_one_class() {
+    let shipped = misaka_palw_base0::classes::a16_graph_v5_row_v1().expect("this build tables the graph-v5 row");
+    let genesis = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_graph_v5_profile_v1().expect("the genesis row projects");
+    assert_eq!(
+        misaka_palw_base0::classes::A16_CONVERTER_ROTARY_SPAN_V1,
+        kaspa_consensus_core::palw_qwen25_profile::QWEN25_A16_GRAPH_V5_N_CTX,
+        "the two crates project the row at different widths, which is two classes"
+    );
+    assert_eq!(
+        shipped.class_id(),
+        genesis.shape_profile_id(),
+        "the class the genesis registers is not the class this build can supply"
+    );
+    assert_eq!(
+        shipped.canonical_job,
+        kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_graph_v5_canonical_v1(),
+        "one class id, two canonical jobs — the registration would be paid per a job the producer does not run"
+    );
+    println!("graph-v5 dense row, one class in two crates: {} job {:?}", shipped.class_id(), shipped.canonical_job);
+}
+
+/// **The row the GENESIS registers is admissible under the ruleset that registers it** — J's
+/// admission test, run over the genesis object rather than over one the test built.
+///
+/// The difference matters. J's test constructs a registration and proves the ROW can be admitted;
+/// this one takes the `ClassRegistered` out of `palw_rc_shipped_params()`'s own genesis set — the
+/// carriage, the pwu rule, the artifact root and the share the chain will actually carry — and puts
+/// that object through `verify_class_admission_v5` under the court the shipped ruleset derives. A
+/// genesis object is verified against the committed catalog rather than through this gate, so
+/// nothing on the boot path would have said whether the class the network mints could also have
+/// walked in through the door every later class uses.
+///
+/// **And the answer is "every layer but one", which is a finding and not a pass.** The row as
+/// registered — 489‰ — is refused by `NotEndToEndCertified`: the RC's pinned certified set gives
+/// the `PALW-QWEN25-A16` family the kernel set of the graph-**v2** profile, which does not reach
+/// `KDESC_A16_ATTN_FUSED`, so no certified family covers this class's kernels. That is ADR-0082
+/// stream I's end-to-end court drill and the `PALW_RC_COURT_E2E_ROOT_BYTES` re-pin that records it
+/// (5f card §6 calls the drill "the gate, and admission is not"). Until it lands the class is
+/// registered, carries cadence, and is weightless under `palw_uncertified_weightless` — which is
+/// exactly what this test says, in the refusal's own words, so the day the drill lands the first
+/// assertion goes green by measurement.
+#[test]
+fn the_genesis_registered_row_is_admissible_under_the_armed_rc_court() {
+    use kaspa_consensus_core::palw_class_admission_v2 as adm;
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+
+    let params = kaspa_consensus_core::config::params::palw_rc_shipped_params();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        panic!("the RC preset is not a v2 bundle");
+    };
+    let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_graph_v5_profile_v1().expect("projects");
+    let class_id = profile.shape_profile_id();
+    let registration = bundle
+        .genesis_objects
+        .iter()
+        .find(|o| matches!(o, PalwConsensusObjectV2::ClassRegistered { class_id: id, .. } if *id == class_id))
+        .expect("the shipped genesis registers the graph-v5 row")
+        .clone();
+    let PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), share_permille, .. } = &registration else {
+        panic!("the genesis row carries no profile, so the fold cannot know it is fused");
+    };
+    let canonical = carriage.canonical.clone();
+    let genesis_share = *share_permille;
+
+    // The court this ruleset PLAYS: the fence is armed, so the arity is the derived one.
+    let played = kaspa_consensus_core::palw_court_v2::palw_court_params_at_v2(bundle, params.palw_kary_court_active_at(0))
+        .expect("the armed court derives an arity");
+    let kary = adm::PalwKaryCourtV1 {
+        dissection_arity: played.dissection_arity(),
+        prompt_ids_form: params.palw_prompt_ids_form_at(0),
+        window_court_daa: bundle.state.window_court(),
+    };
+    let rules = kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+        &profile,
+        Some(kary),
+        bundle.court.max_step_leaf_count(),
+    )
+    .expect("a mapped class has ladder rules");
+    // **The certified set is the NETWORK's, not an empty slice.** A weight-bearing registration is
+    // checked against the family set the bundle commits to (ADR-0069 Decision 5), and this row
+    // carries the dense tier's share — passing `&[]` would ask the gate about a different network.
+    let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
+
+    // 1. Every ADR-0082 layer — the carriage, the ladder, the cost, the court — on the object the
+    //    genesis carries, with the one question certification answers taken out of the way.
+    let weightless = match registration.clone() {
+        PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            artifact_root,
+            slash_value_per_pwu,
+            pwu_rule,
+            initial_target,
+            activation_daa,
+            admission,
+            ..
+        } => PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            artifact_root,
+            slash_value_per_pwu,
+            pwu_rule,
+            initial_target,
+            share_permille: 0,
+            activation_daa,
+            admission,
+        },
+        other => panic!("not a registration: {other:?}"),
+    };
+    let admitted =
+        adm::verify_class_admission_v5(bundle, &profile, &canonical, &weightless, &certified, &certified, Some(rules), Some(kary));
+    assert!(
+        admitted.is_ok(),
+        "the class the genesis mints fails a static layer, not merely certification — ladder {}, arity {}, ids {:?}: {admitted:?}",
+        bundle.court.max_step_leaf_count(),
+        kary.dissection_arity,
+        kary.prompt_ids_form
+    );
+    let entry = admitted.expect("checked");
+    println!(
+        "genesis-registered graph-v5 row admitted weightless: close {} B = {} chunk(s), canonical {} leaves, worst {}, arity {}",
+        entry.court_cost.max_close_bytes,
+        kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(entry.court_cost.max_close_bytes),
+        entry.canonical_step_leaf_count,
+        entry.max_step_leaf_count,
+        kary.dissection_arity
+    );
+
+    // 2. And with the share the genesis grants, the ONE thing missing is named — the drill, not a
+    //    rule this stream could satisfy by editing a gate.
+    match adm::verify_class_admission_v5(bundle, &profile, &canonical, &registration, &certified, &certified, Some(rules), Some(kary))
+    {
+        Err(adm::PalwClassAdmissionError::NotEndToEndCertified { share }) => {
+            assert_eq!(share, genesis_share, "the refusal is about a share this genesis does not grant");
+            println!(
+                "graph-v5 dense @ 512 asks for {share}‰ and no certified family covers KDESC_A16_ATTN_FUSED: \
+                 ADR-0082 stream I's court drill plus the PALW_RC_COURT_E2E_ROOT_BYTES re-pin is what closes this"
+            );
+        }
+        Ok(_) => println!("the fused family is certified now — stream I's drill landed and this arm can be deleted"),
+        other => panic!("the weight-bearing row must fail on certification alone, got {other:?}"),
+    }
+
+    // 3. And WITHOUT the fence the same object is refused BY NAME — the guard the 5f card §6 names,
+    //    which is also why the assembly arms the fence rather than leaving the row unprosecutable.
+    match adm::verify_class_admission_v5(bundle, &profile, &canonical, &weightless, &certified, &certified, None, None) {
+        Err(adm::PalwClassAdmissionError::FusedAttentionNeedsTheKaryCourt) => {}
+        other => panic!("an unfenced court must refuse the genesis row by name, got {other:?}"),
+    }
+}
