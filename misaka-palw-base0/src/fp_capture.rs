@@ -2159,6 +2159,20 @@ mod tests {
             tree.retain_level(),
             tree.retained_nodes().len() * 64
         );
+        // **What the fold's retention is actually made of** — the number ADR-0082 Decision 4 is
+        // about. The tree is the part this unit made small; the checkpoint chunks are the part
+        // that still grows with the job, because a checkpoint is a copy of the cache and the
+        // cache is prefix-stable but not yet retained as one.
+        let chunk_bytes: usize = folded.checkpoints.chunks.iter().flatten().map(Vec::len).sum();
+        let rows_bytes: usize = folded.logits_rows.iter().map(|r| r.len() * 4).sum();
+        eprintln!(
+            "U-01 retention split  : tree {} B, logits rows {} B, checkpoint chunks {} B ({} checkpoints), ids {} B",
+            tree.retained_nodes().len() * 64,
+            rows_bytes,
+            chunk_bytes,
+            folded.checkpoints.chunks.len(),
+            (folded.generated_token_ids.len() + ids.len()) * 4
+        );
         eprintln!("U-01 step leaves: {leaves}, {} per position", leaves / positions.max(1));
     }
 }
