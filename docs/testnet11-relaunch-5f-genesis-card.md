@@ -4818,3 +4818,29 @@ golden `c940b5c3…`, premine `ba2612417e7e0817…`, implied genesis `ad30b5cb�
 withdrawn lines** (t11, devnet), which is precisely the shape of the table 3e expects. Finalize →
 the six-row table with `extracted_from 4d572142…` → the word, in about fifteen minutes; the drill
 runs behind it with two dense producers and does not gate the word.
+
+### ibm pre-staged on `4d572142` — the boot's fingerprint line will be the second reading of the one value that moved
+
+`candidate-4d572142` pushed (sha-named); incremental warm-up on top of the `971b2eff` build into a
+**new** log (`/tmp/warmup-build-4d572142.log` — the old log's `BUILD rc=0` would have satisfied the
+rehearsal's wait at once, a self-gate reading the wrong file); the memory watchdog re-armed; the
+corrected rehearsal script re-keyed to the sha and that log (8 sha occurrences, 0 stale). Its boot will
+M-07 by design — pre-re-pin — and its `Consensus params fingerprint:` line is the new t11 fingerprint
+from a node, a binary and a second machine, to be compared by hand with the table's row when it lands.
+
+### The drill session: stage 3 PASS on the 512 row, the pairing check agreed, and stage 4 handed the wrong file
+
+*"the registration and the certification agree on `4277d84f7d91528c…` — two independent derivations,
+one value."* All five a16-v5 carriers landed (00:55:10 → 01:12:11), the family applied, and
+`ClassLaneCertified` reached all three validators at 01:12. **Stage 4 had no colour because the
+rig's wrapper re-assigned `MISAKA_PALW_ARTIFACT` to the UNBOUND file** — the worker refused it with
+the same "declares no tokenizer commitment" as before. Stages 2–3 were unaffected (identical inventory
+root, identical class id); the wrapper now honours the caller's environment and the run was relaunched
+on `bound-candidate.palwart`. In 5e's words: *"the value to verify is the one in the gateway's log, not
+the one on the invocation."*
+
+Measured on the way and worth keeping: **chunk carriers land in the submitting node's OWN blocks** —
+4 of 5 in node-0's, and six consecutive peer-produced blocks carried none of node-0's queued parts.
+On this devnet the stage-3 clock is the submitting producer's block interval, not the chain's; T4's
+×parts absorbed it (5 parts in 17 min against a 3,000 s wait). *Post-cut question: whether peers should
+carry a submitter's queued chunk parts, or the clock should be stated as the producer's.*
