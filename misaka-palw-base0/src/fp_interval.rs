@@ -997,7 +997,10 @@ pub fn base0_verify_fp_interval_opening_with_state_v1<K: Base0FpIntervalKernelsV
         // Borrowed, never copied: the thing this arm holds is the history, and a seat that
         // duplicated it in memory would have paid the bytes twice.
         Base0FpIntervalOpeningAnyV1::WithHistory(o) => Some(o.as_ref()),
-        Base0FpIntervalOpeningAnyV1::Recomputed(_) if state.is_none() => {
+        // …but interval 0 needs no state: it resumes from the PROMPT, which the seat holds
+        // anyway, so a flat opening of it is complete evidence for a seat that has recomputed
+        // nothing. Refusing it here was refusing the one interval every job has.
+        Base0FpIntervalOpeningAnyV1::Recomputed(o) if state.is_none() && o.anchor.is_some() => {
             return Base0FpIntervalSeatVerdictV1::Unverifiable;
         }
         Base0FpIntervalOpeningAnyV1::Recomputed(_) => None,
