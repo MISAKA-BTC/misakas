@@ -473,6 +473,25 @@ gate above is the one that would have caught all three.
   swap — it hashes the PROFILE, and no weight is in the profile — so `bind --artifact` reports the
   same class for the wrong model. Only a weight-derived value, or the checkpoint's own sha256,
   tells them apart.*
+- ~~Re-bind the dense artifact's tokenizer~~ — **DONE, and characterised to the byte.**
+
+  | | value |
+  |---|---|
+  | input | `Qwen2.5-1.5B-Instruct`, `sha256 dd924a11…` verified on this machine after transfer |
+  | tokenizer commitment | was 64 zero bytes at offset 1,777,209,032; now `fa9a4352…` |
+  | container digest | `c00faa48…` → **`158314b5…`** (a genesis input) |
+  | everything else | **byte-identical** — 128 bytes differ in a 1,795,427,276-byte file, and they are those two 64-byte fields |
+  | faithfulness | 45/57 top-1, unchanged — the same weights |
+
+  **And the reproducibility claim is now proven rather than argued.** Running the ORIGINAL converter
+  on ibm against the same checkpoint reproduced the shipped artifact with **zero differing bytes**.
+  So `qwen25-convert`'s own doc — *"a verifier re-runs this and compares the class id, which is why
+  the conversion has to be bit-reproducible"* — is a property this build has, demonstrated on two
+  machines with two binaries.
+
+  The bound artifact is at `scratchpad/reconvert/instruct-bound.palwart` and must replace the
+  shipped one at the cut; `from_registered_profile` refuses the unbound file, so the dense SDK path
+  does not work until it does.
 - **Toolchain pinned** and the CI gates runnable in one local command
 - **The single re-pin**, in the order of §4
 

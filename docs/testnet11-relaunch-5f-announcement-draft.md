@@ -1,9 +1,19 @@
 # MISAKA testnet-11, Relaunch 5f — announcement draft
 
-**Status: DRAFT.** Every `<…>` is a value the cut fills in. Every number without brackets is
-measured and has a command in this document that reproduces it. Nothing here may be softened at
-publication time — the wording constraints in §8 of the genesis card exist because each of them
-replaced a sentence that was wrong.
+**Status: DRAFT.** Every `<…>` is a value the cut fills in.
+
+**Two rules this draft is held to, because a reviewer caught it breaking both.**
+
+1. **A number is either followed by the command that reproduces it, or it does not appear.** An
+   earlier revision opened by claiming every figure had a reproduction command in the document and
+   then contained *zero runnable commands* — the strongest sentence in the draft, and false. That is
+   the same defect the release itself keeps finding: a claim about coverage with nothing behind it.
+2. **Every figure names the court it was measured under.** Numbers from the dissection court
+   (ADR-0082) and numbers from the binary court that ships today are different numbers, and an
+   earlier revision mixed them — stating a close of one carrier while the branch as it stood
+   registered a class whose close was fourteen and unfileable. The genesis card carried that
+   distinction and the announcement derived from it dropped it, which is the wrong direction for
+   honesty to travel.
 
 ---
 
@@ -42,13 +52,30 @@ carries the model's own answer bytes and the artifacts derived from them.
 
 ## The numbers, as measured
 
-| | value | how it was measured |
+**Measured on this build, reproducible from a checkout:**
+
+| | value | reproduce it |
 |---|---|---|
-| registered context | **512 tokens** | the corpus's own answers cost 66 / 261 / 286 tokens; at 256 the budget is 247 and two of the three do not fit |
-| decode budget at 512 | 503 tokens | `n_ctx` minus the 8-token chat template and prefill |
-| dense class faithfulness | **45 of 57 top-1**, 56/57 top-5, rank correlation 0.893 | the conversion's own log, at conversion time |
-| dispute cost, any position | 40,461 bytes — under one carrier | every position class: prefill, first decode, tile-aligned, straddling, last |
-| close size at 512 | 82,719 bytes, one carrier | 82,911 at n_ctx 4,096 — **64 bytes per doubling of context** |
+| registered context | **512 tokens** | `cargo test -p kaspa-consensus-core --lib -- the_registered_row_names_the_ladder_it_needs --nocapture` |
+| decode budget at 512 | 503 max | `n_ctx − chat template (8) − prompt`; 503 is the ceiling, available only to a one-token prompt. The corpus needs 261 and 286, so it fits with room — but a real request costs more than one. |
+| the corpus's own cost | cad 66, music 261, scene 286 | `cargo test -p misaka-palw-derive --test corpus_width -- --nocapture` |
+| dense class faithfulness | **45 of 57 top-1**, 56/57 top-5, rank corr 0.893 | `qwen25-convert <checkpoint-dir> --a16`, which prints it at conversion time |
+| artifacts open in foreign software | 4 agreed, 0 disagreed | `python3 scripts/misaka-palw-artifact-thirdparty.py --require docs/evidence-qwen36-model-gate/artifacts/` |
+| the format checker has teeth | five injuries, each refused by name | `python3 scripts/misaka-palw-artifact-conformance.py selftest` |
+| a second implementation agrees | — | `python3 scripts/misaka-palw-derive-stranger.py` |
+| every gate this release must pass | one verdict per gate | `bash scripts/ci-gates.sh` |
+
+**Measured under the dissection court (ADR-0082), which this release is held for:**
+
+| | value |
+|---|---|
+| dispute cost, at EVERY position class | 40,461 bytes — under one carrier, measured per class rather than averaged |
+| close size at 512 | 82,719 bytes, one carrier; 82,911 at n_ctx 4,096 — **64 bytes per doubling of context** |
+
+Under the binary court alone those figures do not hold: a dense 512 close is 1,154,673 bytes and
+fourteen carriers, which the split-carriage path cannot file. **That is why this release waits for
+the dissection court rather than shipping without it**, and it is the honest statement of what the
+delay buys.
 
 **45 of 57 is not 57 of 57.** The class is an integer quantization of a float checkpoint and it
 does not reproduce the reference exactly; that number is in a log anyone can read and it is stated
@@ -105,8 +132,9 @@ inviting the reader to assume there was nothing to say.
 ## Known open
 
 * The **split-carriage court close** is refused at the acceptance layer pending its signature
-  verification and digest rules. The registered class does not need it — its close fits one carrier
-  — and no second tier can be registered until it lands.
+  verification and digest rules. The registered class does not need it **under the dissection
+  court**, where its close is one carrier; under the binary court alone it would need fourteen and
+  could not be filed. No second tier can be registered until the split path lands.
 * The **hybrid tier is not registered**, and the reason is not a margin: its close is three carriers
   at every context width, because it binds a recurrence rather than attention. There is no width at
   which it stops needing the split path.
