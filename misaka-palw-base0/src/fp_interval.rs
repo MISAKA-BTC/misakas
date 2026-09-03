@@ -613,11 +613,11 @@ fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
     span.into_iter()
         .enumerate()
         .map(|(offset, hash)| {
-            hash.ok_or(Base0FpIntervalError::SpanDoesNotCoverTheRange {
+            hash.ok_or(Base0FpIntervalError::Sparse(crate::fp_capture::Base0SparseCaptureError::SpanDoesNotCoverTheRange {
                 index: span_first + offset as u64,
                 span_first,
                 span_end,
-            })
+            }))
         })
         .collect()
 }

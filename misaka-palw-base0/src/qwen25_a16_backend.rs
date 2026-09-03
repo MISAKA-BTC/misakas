@@ -696,7 +696,7 @@ impl Qwen25A16Backend {
         let rows_root = kaspa_consensus_core::palw_step_refute::tiled_logits_rows_root_v1(&binding.job_context, &logits_rows)
             .ok_or_else(|| "the retained rows build no tree".to_string())?;
         let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::TiledV1(
-            kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated.clone() },
+            kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated },
         );
 
         // **The prompt: re-derived for an attempt, carried for a free prompt** (ADR-0073 Decision
@@ -879,7 +879,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         if self.court_capable {
             let cap = self.step_ladder_cap;
             let run = a16_execute_for_attempt_capped_v1(&self.artifact, &self.profile, self.plan.as_ref(), job, prompt, cap)?;
-            let material = crate::produce::base0_fp_material_encode_v2(&run, &prompt_ids).map_err(|e| e.to_string())?;
+            let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
             return Ok(PalwExecutionOutcomeV1 {
                 trace_root: run.trace_root,
                 output_root: run.output_root,
@@ -987,7 +987,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // The four legs, measured — the derived roots the execution root is built from, which is
         // what `palw_fp_execution_root_v3` recomputes.
         let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
-        let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
+        let material = crate::produce::base0_fp_material_encode_v2(&run, &prompt_ids).map_err(|e| e.to_string())?;
         Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
             outcome: PalwExecutionOutcomeV1 {
                 trace_root: run.trace_root,

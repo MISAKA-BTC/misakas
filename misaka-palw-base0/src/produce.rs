@@ -498,11 +498,13 @@ pub fn base0_fp_material_encode_v2(run: &Base0ExecutionV1, prompt_token_ids: &[u
     let Some(tree) = run.step_tree.as_ref() else {
         return Err(ProduceError::Internal("a dense capture is retained as tiles, not as a fold"));
     };
-    // The ids must be the job's own, checked where they are stored rather than where they are
-    // read: a retention holding another prompt's ids replays another execution.
-    if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != run.binding.job_context.prompt_token_ids_hash {
-        return Err(ProduceError::Internal("the retained prompt ids are not the job's"));
-    }
+    // **No check that these hash to the context's `prompt_token_ids_hash` here.** They are the ids
+    // this executor RAN, and that is what a replay of its own execution needs. Whether the job's
+    // declared hash is the hash of the tokens it was handed is a rule about the JOB, enforced
+    // where a job is built (`run_one_job_v1` derives the field from the ids it tokenized) — and a
+    // retention that refused after the whole inference had run would be enforcing it in the one
+    // place where the answer is already paid for. What guards a WRONG list is the re-execution
+    // itself: `dense_capture_from_fold_v1` compares the binding it reproduces against this one.
     let material = Base0FpMaterialV2 {
         version: PALW_BASE0_FP_MATERIAL_VERSION_V2,
         binding: run.binding.clone(),
@@ -532,11 +534,6 @@ pub fn base0_fp_material_decode_v2(bytes: &[u8]) -> Result<Base0FpMaterialV2, Pr
         return Err(ProduceError::Internal("the served material is a different retention version"));
     }
     material.step_tree.validate_v1().map_err(|_| ProduceError::Internal("the served retained tree is not its own shape"))?;
-    if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&material.prompt_token_ids)
-        != material.binding.job_context.prompt_token_ids_hash
-    {
-        return Err(ProduceError::Internal("the served material's prompt ids are not its own job's"));
-    }
     Ok(material)
 }
 

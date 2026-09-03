@@ -773,7 +773,7 @@ impl Qwen36Backend {
         let rows_root = kaspa_consensus_core::palw_step_refute::tiled_logits_rows_root_v1(&binding.job_context, &logits_rows)
             .ok_or_else(|| "the retained rows build no tree".to_string())?;
         let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::TiledV1(
-            kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated.clone() },
+            kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated },
         );
 
         let prompt_token_ids: Vec<u32> = match carried {
