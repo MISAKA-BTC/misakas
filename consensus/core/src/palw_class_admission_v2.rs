@@ -974,6 +974,21 @@ pub struct PalwClassLadderRulesV1 {
     pub canonical_footprint_floor: u64,
 }
 
+/// **Does this profile carry a fused attention site?** (ADR-0082 Decision 1.)
+///
+/// Read off the node kinds, which is the only place it can be read from: a class IS its graph
+/// (ADR-0049 Decision F), so "is this graph v5" is not a flag a registration carries and not a
+/// version number in the id — it is whether any table holds a [`crate::palw_step::PalwStepOpKindV1::AttnFused`]
+/// node. One spelling, here, because three consumers ask it: the cost walk (which route prices the
+/// site), the ladder rule (which interval anchors it) and the admission gate (whether a court that
+/// cannot try the leaf may admit the class at all).
+pub fn palw_profile_has_fused_attention_v1(profile: &PalwShapeProfileV3) -> bool {
+    [&profile.pre_nodes, &profile.gdn_nodes, &profile.attn_nodes, &profile.post_nodes]
+        .into_iter()
+        .flatten()
+        .any(|node| node.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused)
+}
+
 /// Every kernel a profile's graph can reach, read off the graph.
 ///
 /// Public because the coverage claim and the catalog entry must be built from the same traversal —

@@ -74,7 +74,10 @@
 //! closed one term and left three would otherwise read as success.
 
 use crate::config::constants::consensus::NETWORK_DELAY_BOUND;
-use crate::palw_class_admission_v2::{derive_court_cost_shaped_v1, PalwClassAdmissionError, PalwCourtCostShapeV1, PalwCourtCostV1};
+use crate::palw_class_admission_v2::{
+    derive_court_cost_rows_v1, derive_court_cost_shaped_v1, PalwClassAdmissionError, PalwCourtCostRowV1, PalwCourtCostShapeV1,
+    PalwCourtCostV1,
+};
 use crate::palw_fp_devnet_v3::PalwLatticeWindowsV1;
 use crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
 use crate::palw_step::{PalwShapeProfileV3, PalwStepError};
@@ -534,6 +537,33 @@ pub fn palw_kv_checkpoint_opening_bytes_v1(profile: &PalwShapeProfileV3, ladder:
     row.checked_mul(profile.n_ctx as u64)?.checked_add(step_path_bytes_v1(ladder))
 }
 
+/// **[`palw_kv_checkpoint_opening_bytes_v1`] at the cache map the class REGISTERED** (ADR-0082
+/// Decision 4) — the `_for_map_v1` twin the recurrence half has had since ADR-0077 and the cache
+/// half did not.
+///
+/// The rule is the recurrence twin's, verbatim: *the map the class REGISTERED, never one map
+/// unconditionally*. Until graph v4 there was only one cache map whose price could differ, so the
+/// unconditional reading was correct by accident; with `tiled_kv_state_chunk_map_id_v3` there are
+/// two, and the gap they leave was measured — a class that registers the tile was charged 526,336
+/// bytes for an opening its evidence carries in 18,432, **28.6x**, and was therefore admitted at
+/// exactly the width it had before the tile existed. The tile bought the dense tier nothing until
+/// this function existed.
+///
+/// * a map that addresses history TILES ([`crate::palw_state_chunk_map::palw_map_addresses_history_tiles_v1`])
+///   — one tile: `min(n_ctx, PALW_ATTN_HISTORY_TILE_V4) x kv_row`, plus the path that proves it.
+///   Flat in `n_ctx` past the tile, which is the whole content of Decision 4;
+/// * every other map — the whole history, because v1's and v2's chunk derivation is "the widest
+///   run of rows the leg admits" and on every registered geometry that run IS the history.
+///
+/// `None` only on overflow. Over-charging is the safe direction and under-charging is not, so the
+/// unrecognised case falls to the history price rather than to a cheap one.
+pub fn palw_kv_checkpoint_opening_bytes_for_map_v1(profile: &PalwShapeProfileV3, ladder: u64) -> Option<u64> {
+    if crate::palw_state_chunk_map::palw_map_addresses_history_tiles_v1(profile) {
+        return crate::palw_state_chunk_map::tiled_kv_chunk_bytes_v3(profile)?.checked_add(step_path_bytes_v1(ladder));
+    }
+    palw_kv_checkpoint_opening_bytes_v1(profile, ladder)
+}
+
 /// One step-leaf Merkle path, in bytes, at a stated ladder top. 64 bytes a `Hash64`.
 const fn step_path_bytes_v1(ladder: u64) -> u64 {
     64 * (if ladder < 2 { 1 } else { ladder.next_power_of_two().trailing_zeros() as u64 })
@@ -545,7 +575,22 @@ const fn step_path_bytes_v1(ladder: u64) -> u64 {
 /// price would read as approval — so this returns `None` for the sentinel rather than quietly
 /// answering the anchored question about an unanchored class.
 pub fn palw_anchored_court_cost_v1(profile: &PalwShapeProfileV3) -> Option<Result<PalwCourtCostV1, PalwClassAdmissionError>> {
-    let rules = palw_class_ladder_rules_v1(profile)?;
+    palw_anchored_court_cost_for_court_v1(profile, None)
+}
+
+/// [`palw_anchored_court_cost_v1`] under a `palw_kary_court`-armed ruleset (ADR-0082 Decisions 2-5).
+///
+/// `court` is `None` before the fence and `Some` past it, and the CALLER reads the fence:
+/// `params.palw_kary_court_active_at(daa)` decides whether there is a court, and
+/// `PalwCourtParamsV2::dissection_arity` / `Params::palw_prompt_ids_form_at` say what it is. A cost
+/// derivation that consulted a DAA score itself would price one class two ways depending on when
+/// it was asked, which is the shape of every "admitted at one price, prosecuted at another" defect
+/// this module records.
+pub fn palw_anchored_court_cost_for_court_v1(
+    profile: &PalwShapeProfileV3,
+    court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
+) -> Option<Result<PalwCourtCostV1, PalwClassAdmissionError>> {
+    let rules = palw_class_ladder_rules_for_court_v1(profile, court)?;
     Some(derive_court_cost_shaped_v1(profile, rules.cost_shape))
 }
 
@@ -719,6 +764,54 @@ pub fn palw_row_earns_at_most_the_cap_v1(canonical_leaves: u64, widest_leaves: u
 /// not deepen either — a class that cannot anchor gains nothing from rungs it cannot afford to
 /// climb, and giving it the deeper ladder would admit a depth its close cannot pay for.
 pub fn palw_class_ladder_rules_v1(profile: &PalwShapeProfileV3) -> Option<crate::palw_class_admission_v2::PalwClassLadderRulesV1> {
+    palw_class_ladder_rules_for_court_v1(profile, None)
+}
+
+/// **How many positions an anchored replay opens, under the court the ruleset actually runs**
+/// (ADR-0077 Decision 11, narrowed by ADR-0082 Decision 4).
+///
+/// Before the k-ary court: [`palw_checkpoint_interval_v1`], `max(1, n_ctx / 32)` — the spacing a
+/// class registers its checkpoints at, and therefore the longest replay a refutation standing on
+/// one performs.
+///
+/// Past it, for a graph-v5 row: [`crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4`]. Decision
+/// 4 says "the bottom of the dissection opens tiles, so the anchor is tile-addressed"; a class
+/// whose anchor is addressed a tile at a time commits the state at every tile boundary, so the
+/// replay after a verified anchor is one tile and not `n_ctx / 32` of them. That is what makes the
+/// hybrid's `interval x 5 refs` recurrence evidence — Decision 6's "widest flat term" for that
+/// family — actually flat: at `n_ctx / 32` it is linear in the context and the hybrid's v5 close is
+/// not two to three carriers at any width above the 512 row (where `512 / 32` and the tile happen
+/// to be the same 16).
+///
+/// **This is the one place the number is spelled, and it is NOT yet the only reader.**
+/// `palw_step_refute.rs`'s recurrence window (`gdn_anchored_positions_v1`'s interval argument)
+/// still calls [`palw_checkpoint_interval_v1`] directly, so on a graph-v5 hybrid the evidence a
+/// refutation assembles would be `n_ctx / 32` positions while this prices one tile — an
+/// under-charge, which is the direction that admits a class whose disputes nobody can carry. It is
+/// dormant on every shipped preset (`palw_kary_court` is `None` and no class carries `AttnFused`),
+/// and arming the fence without pointing that call site here is a consensus defect rather than a
+/// rounding.
+pub fn palw_anchored_interval_for_court_v1(
+    profile: &PalwShapeProfileV3,
+    court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
+) -> u32 {
+    if court.is_some() && crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(profile) {
+        return crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4.min(profile.n_ctx.max(1));
+    }
+    palw_checkpoint_interval_v1(profile.n_ctx)
+}
+
+/// [`palw_class_ladder_rules_v1`] under a `palw_kary_court`-armed ruleset (ADR-0082 Decisions 2-5).
+///
+/// Three things move and nothing else does: the anchored interval becomes the history tile
+/// ([`palw_anchored_interval_for_court_v1`]), the cost shape carries the court's arity so a fused
+/// site is priced by its bottom rather than by the row, and the prompt-id term takes the form the
+/// ruleset armed (Decision 5). `None` reproduces the shipped rule byte for byte, which is what
+/// makes every existing caller unchanged.
+pub fn palw_class_ladder_rules_for_court_v1(
+    profile: &PalwShapeProfileV3,
+    court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
+) -> Option<crate::palw_class_admission_v2::PalwClassLadderRulesV1> {
     if !palw_long_form_is_refused_v1(profile) {
         return None;
     }
@@ -731,19 +824,203 @@ pub fn palw_class_ladder_rules_v1(profile: &PalwShapeProfileV3) -> Option<crate:
         "a class with attention layers registered the recurrence map alone — its attention anchors have no geometry"
     );
     let ladder = PALW_CONTEXT_LADDER_MAX_STEP_LEAVES;
-    let interval = palw_checkpoint_interval_v1(profile.n_ctx);
+    let interval = palw_anchored_interval_for_court_v1(profile, court);
     let mut cost_shape = PalwCourtCostShapeV1::checkpoint_anchored_v1(profile, interval, ladder, 0);
-    cost_shape.kv_checkpoint_bytes = palw_kv_checkpoint_opening_bytes_v1(profile, ladder).unwrap_or(u64::MAX);
+    // **The map the class REGISTERED, on the cache half too** (ADR-0082 Decision 4). This read
+    // `palw_kv_checkpoint_opening_bytes_v1` unconditionally until U-04, which charged a class that
+    // registers the history tile the whole history's opening — 526,336 against 18,432 on the dense
+    // row — and admitted it at exactly the width it had before the tile existed.
+    cost_shape.kv_checkpoint_bytes = palw_kv_checkpoint_opening_bytes_for_map_v1(profile, ladder).unwrap_or(u64::MAX);
     // The map the class REGISTERED, never gdn v1 unconditionally: a v2 class priced at v1's
     // convolution window is charged for thirty-one heads its evidence will not carry, and a v1
     // class priced at v2's is charged less than its evidence costs — the direction that admits a
     // class whose disputes nobody can raise.
     cost_shape.gdn_checkpoint_bytes = palw_gdn_checkpoint_opening_bytes_for_map_v1(profile, ladder).unwrap_or(0);
+    // **The dissection, and the id form that rides with it** (Decisions 2, 3 and 5). Both come
+    // from the caller's reading of the ruleset — neither is inferred from the other, because they
+    // move the price in opposite directions and inferring the cheaper one is how a class is
+    // admitted at a price its challengers cannot pay. The dissection is applied only where there
+    // is a fused site to price: a court may be k-ary while the class in front of it is graph v2,
+    // and then nothing about its cost moves.
+    if let Some(k) = court {
+        cost_shape = cost_shape.with_prompt_ids_form_v1(k.prompt_ids_form);
+        if crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(profile) {
+            cost_shape = cost_shape.with_dissection_v1(k.dissection_arity);
+        }
+    }
     Some(crate::palw_class_admission_v2::PalwClassLadderRulesV1 {
         ladder,
         cost_shape,
         canonical_footprint_floor: palw_canonical_footprint_floor_v1(profile.n_ctx),
     })
+}
+
+// =================================================================================================
+// ADR-0082 Decision 6 — the close ceiling is a DERIVATION over the rows a genesis set registers
+// =================================================================================================
+
+/// One family's builder: a projection from a context width to that family's row.
+pub type PalwLadderFamilyV1 = fn(u32) -> Result<PalwShapeProfileV3, PalwStepError>;
+
+/// **The widest close any row of any registered family can be prosecuted at, and WHICH node it is**
+/// (ADR-0082 Decision 6).
+///
+/// A `max` tells you the number and never which term produced it, so this returns the breakdown
+/// row — the same walk's own answer (`derive_court_cost_rows_v1`), never a second derivation that
+/// merely agrees. A `(family, row)` pair the walk cannot price is not admissible at that width and
+/// contributes nothing; `None` means no pair priced at all, which is a genesis set that registers
+/// no prosecutable row rather than a cheap one.
+pub fn palw_widest_close_over_the_ladder_v1(
+    families: &[PalwLadderFamilyV1],
+    rows: &[u32],
+    court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
+) -> Option<(usize, u32, PalwCourtCostRowV1)> {
+    let mut best: Option<(usize, u32, PalwCourtCostRowV1)> = None;
+    for (index, build) in families.iter().enumerate() {
+        for row in rows {
+            let Ok(profile) = build(*row) else { continue };
+            let Some(rules) = palw_class_ladder_rules_for_court_v1(&profile, court) else { continue };
+            let Ok(mut breakdown) = derive_court_cost_rows_v1(&profile, rules.cost_shape) else { continue };
+            if breakdown.is_empty() {
+                continue;
+            }
+            // `derive_court_cost_rows_v1` sorts largest close first, so the binding node is row 0.
+            let binding = breakdown.remove(0);
+            if best.as_ref().is_none_or(|(_, _, b)| binding.close_bytes > b.close_bytes) {
+                best = Some((index, *row, binding));
+            }
+        }
+    }
+    best
+}
+
+/// **`DEFAULT_MAX_CLOSE_CHUNKS`, as the derivation it is supposed to be** (ADR-0082 Decision 6).
+///
+/// `palw_close_chunks_for_bytes_v1` of the widest close any row of any family the genesis set
+/// registers can be prosecuted at. Two genesis sets are on the table and this answers for both,
+/// which is the point of stating it as a function of `(families, rows, court)` rather than as a
+/// number: for the graph-v2/v3 context rows it returns design A's own count, and for graph-v5 rows
+/// under the dissection court it returns the count Decisions 1-5 buy.
+///
+/// **It is a ceiling the TRANSPORT must reach, not one the transport may ignore.** Decision 6's
+/// code condition: until ADR-0080 W5's `court_close_groups` is in the ruleset, `max_close_chunks`
+/// is ONE whatever this returns, and the admission gate refuses the rest — an admitted row whose
+/// worst close no carrier can file is exactly the 5f state ADR-0082 §1.4 describes.
+pub fn palw_close_chunks_for_ladder_v1(
+    families: &[PalwLadderFamilyV1],
+    rows: &[u32],
+    court: Option<crate::palw_class_admission_v2::PalwKaryCourtV1>,
+) -> Option<u64> {
+    let (_, _, binding) = palw_widest_close_over_the_ladder_v1(families, rows, court)?;
+    Some(crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(binding.close_bytes))
+}
+
+/// The RC's graph-v2/v3 genesis set: the dense A16 row and the hybrid QWEN36 row, the two families
+/// ADR-0077 Decision 13's ladder plans and the two `DEFAULT_MAX_CLOSE_CHUNKS`'s own doc names.
+pub const PALW_LADDER_FAMILIES_V1: [PalwLadderFamilyV1; 2] =
+    [palw_a16_context_row_profile_v1, palw_qwen36_context_row_profile_v1];
+
+/// **The graph-v5 rows, built by FUSING the four attention nodes of the shipped ones** (ADR-0082
+/// Decision 1).
+///
+/// U-04's fixtures, and deliberately a TRANSFORM of the registered rows rather than a second hand-
+/// written table: what Decision 1 changes is four nodes out of twenty-seven (dense) or forty-seven
+/// (hybrid), and a fixture that restated the whole graph could differ from the shipped one in some
+/// other way and price that difference instead. **U-02 (stream D) lands the real constructors**
+/// (`qwen25_a16_profile_v5` / the hybrid's twin) with the engine, the adjudicator and the fuzz
+/// gate behind them; when they exist these fixtures are deleted and every pin below is re-taken
+/// against them. They are `#[cfg(test)]` so nothing can register one by accident in the meantime.
+#[cfg(test)]
+pub(crate) mod v5_fixtures {
+    use super::*;
+    use crate::palw_step::{
+        kernel_semantics_id_v1, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V,
+        PALW_STEP_INPUT_SENTINEL_MIN,
+    };
+    use crate::palw_step_refute::{KDESC_A16_ATTN_FUSED, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES};
+
+    /// Replace `[scores, softmax, probs, values]` with ONE `AttnFused` node whose committed row is
+    /// the values node's, and renumber every later intra-table reference. The four are contiguous
+    /// in both shipped tables (dense 7..=10, hybrid 13..=16), which this checks rather than
+    /// assumes.
+    pub(crate) fn fuse_attention_v5(profile: &PalwShapeProfileV3) -> PalwShapeProfileV3 {
+        let table = &profile.attn_nodes;
+        let scores_id = kernel_semantics_id_v1(KDESC_A16_ATTN_SCORES);
+        let values_id = kernel_semantics_id_v1(KDESC_A16_ATTN_VALUES);
+        let s = table.iter().position(|n| n.kernel_semantics_id == scores_id).expect("the shipped row has a scores node");
+        let v = table.iter().position(|n| n.kernel_semantics_id == values_id).expect("the shipped row has a values node");
+        assert_eq!(v, s + 3, "the four attention nodes are contiguous in the shipped table");
+
+        let values = &table[v];
+        let fused = PalwStepNodeV1 {
+            op_kind: PalwStepOpKindV1::AttnFused,
+            role: PalwStepNodeRoleV1::Plain,
+            // The tensor the three narrowings and the softmax's widening byte are registered in —
+            // the coverage gate requires a fused site to name one (`palw_step_refute`'s shape arm).
+            weight_name: "blk.{layer}.attn_fused.a16".to_string(),
+            weight_dtypes: values.weight_dtypes.clone(),
+            // The committed row is `out` and nothing else: exactly what ATTN_VALUES commits today.
+            out_len: values.out_len,
+            tile_len: values.tile_len,
+            kernel_semantics_id: kernel_semantics_id_v1(KDESC_A16_ATTN_FUSED),
+            // The rotated query row, the K cache, the V cache.
+            input_refs: vec![table[s].input_refs[0], PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V],
+        };
+
+        // `map(i)`: the four collapse onto the fused node's index, everything after it shifts down.
+        let remap = |r: u16| -> u16 {
+            if r >= PALW_STEP_INPUT_SENTINEL_MIN {
+                return r;
+            }
+            let i = r as usize;
+            if i < s {
+                r
+            } else if i <= v {
+                s as u16
+            } else {
+                (i - (v - s)) as u16
+            }
+        };
+        let mut attn: Vec<PalwStepNodeV1> = Vec::with_capacity(table.len() - 3);
+        for (index, node) in table.iter().enumerate() {
+            if index == s {
+                attn.push(fused.clone());
+                continue;
+            }
+            if index > s && index <= v {
+                continue;
+            }
+            let mut node = node.clone();
+            node.input_refs = node.input_refs.iter().map(|r| remap(*r)).collect();
+            attn.push(node);
+        }
+
+        let mut out = profile.clone();
+        out.attn_nodes = attn;
+        // **A graph-v5 class registers the tiled map** (Decision 4): the anchor its bottom stands
+        // on is addressed a history tile at a time, and the composition keeps whichever recurrence
+        // half the family already declared.
+        out.state_chunk_map_id = if out.gdn_nodes.is_empty() {
+            crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3()
+        } else {
+            crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3()
+        };
+        out.validate_shape().expect("a fused row is well-formed");
+        out
+    }
+
+    /// The dense A16 tier at a ladder row, graph v5.
+    pub(crate) fn dense_v5(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
+        Ok(fuse_attention_v5(&palw_a16_context_row_profile_v1(n_ctx)?))
+    }
+
+    /// The hybrid QWEN36 tier at a ladder row, graph v5.
+    pub(crate) fn hybrid_v5(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
+        Ok(fuse_attention_v5(&palw_qwen36_context_row_profile_v1(n_ctx)?))
+    }
+
+    /// The graph-v5 genesis set, in the shape [`palw_close_chunks_for_ladder_v1`] reads.
+    pub(crate) const V5_FAMILIES: [PalwLadderFamilyV1; 2] = [dense_v5, hybrid_v5];
 }
 
 #[cfg(test)]
@@ -1429,6 +1706,9 @@ mod tests {
                     path_from_ladder: true,
                     count_ids: true,
                     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    // No dissection: this row has no fused site, and the long form is what a court
+                    // with no bottom to stand on charges.
+                    dissection: None,
                 },
             )
             .expect("derives")
@@ -2429,5 +2709,147 @@ mod u00_tiled_attention_measurement {
     fn the_tile_measure_path_constant_is_the_ladders() {
         assert_eq!(step_path_bytes_v1(LADDER), 64 * 32);
         assert_eq!(step_path_bytes_v1(LADDER), 2_048);
+    }
+}
+
+// =================================================================================================
+// U-04 — Decision 6's ceiling as a derivation, and Decision 2's bottom as a measurement
+// =================================================================================================
+
+/// **ADR-0082 U-04.** `DEFAULT_MAX_CLOSE_CHUNKS` is `palw_close_chunks_for_ladder_v1` over the
+/// genesis set, evaluated for BOTH sets that are on the table; the bottom of a fused dispute is
+/// inside one carrier at every context; and a graph-v5 row's close is flat in `n_ctx` except for
+/// the prompt-id term (Z0's second half).
+#[cfg(test)]
+mod u04_flat_close {
+    use super::v5_fixtures::V5_FAMILIES;
+    use super::*;
+    use crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1;
+    use crate::palw_class_admission_v2::{derive_court_cost_shaped_v1, PalwKaryCourtV1};
+    use crate::palw_mode_v2::{palw_close_bytes_for_chunks_v1, palw_close_chunks_for_bytes_v1, DEFAULT_MAX_CLOSE_CHUNKS};
+    use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+    use crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4;
+
+    /// The court the RC would arm: Decision 3's worked arity, Decision 5's id form, the RC's own
+    /// court window. The arity is a PARAMETER here rather than a constant — `palw_court_arity_v1`
+    /// (stream E) is what derives it from the move budget at genesis.
+    fn kary(arity: u8) -> PalwKaryCourtV1 {
+        PalwKaryCourtV1 {
+            dissection_arity: arity,
+            prompt_ids_form: PalwPromptIdsFormV1::MerkleV1,
+            window_court_daa: PALW_RC_WINDOWS_V1.window_court,
+        }
+    }
+
+    /// **Decision 6, for both genesis sets.** The count is derived from the rows a set registers,
+    /// never typed — and this is where the two answers are written down.
+    #[test]
+    fn the_close_ceiling_is_the_derivation_over_the_genesis_set() {
+        // ---- the graph-v2/v3 set, at Decision 13's first row.
+        for (name, build) in [("dense A16 graph-v2", PALW_LADDER_FAMILIES_V1[0]), ("hybrid QWEN36 graph-v3", PALW_LADDER_FAMILIES_V1[1])]
+        {
+            let (_, row, binding) = palw_widest_close_over_the_ladder_v1(&[build], &[512], None).expect("the 512 row prices");
+            println!(
+                "v2/v3 {name} @ {row}: {} bytes = {} chunks; binding {}[{}] {:?} {}",
+                binding.close_bytes,
+                palw_close_chunks_for_bytes_v1(binding.close_bytes),
+                binding.table,
+                binding.index,
+                binding.op_kind,
+                binding.weight_name
+            );
+        }
+        let derived = palw_close_chunks_for_ladder_v1(&PALW_LADDER_FAMILIES_V1, &[512], None).expect("the set prices");
+        println!("v2/v3 set @ 512 -> {derived} chunks (shipped DEFAULT_MAX_CLOSE_CHUNKS = {DEFAULT_MAX_CLOSE_CHUNKS})");
+
+        // ---- the graph-v5 set, under the dissection court.
+        for (name, build) in [("dense A16 graph-v5", V5_FAMILIES[0]), ("hybrid QWEN36 graph-v5", V5_FAMILIES[1])] {
+            for row in [512u32, 4_096, 32_768] {
+                match palw_widest_close_over_the_ladder_v1(&[build], &[row], Some(kary(16))) {
+                    Some((_, _, binding)) => println!(
+                        "v5 {name} @ {row}: {} bytes = {} chunks; binding {}[{}] {:?} {} (open {} + ev {})",
+                        binding.close_bytes,
+                        palw_close_chunks_for_bytes_v1(binding.close_bytes),
+                        binding.table,
+                        binding.index,
+                        binding.op_kind,
+                        binding.weight_name,
+                        binding.opening_bytes,
+                        binding.evidence_bytes
+                    ),
+                    None => println!("v5 {name} @ {row}: NOT PRICEABLE"),
+                }
+            }
+        }
+        let v5 = palw_close_chunks_for_ladder_v1(&V5_FAMILIES, &[512], Some(kary(16)));
+        println!("v5 set @ 512 -> {v5:?} chunks");
+    }
+
+    /// **Z3, the bytes half.** The bottom of a fused dispute fits one carrier at every registered
+    /// `d_head` and `tile_len`, and so does the widest move at every arity the derivation can pick.
+    #[test]
+    fn the_bottom_opening_and_every_move_fit_one_carrier() {
+        let carrier = palw_close_bytes_for_chunks_v1(1);
+        println!("one carrier, counted: {carrier}");
+        for (name, build) in [("dense", V5_FAMILIES[0]), ("hybrid", V5_FAMILIES[1])] {
+            for n_ctx in [512u32, 4_096, 32_768] {
+                let profile = build(n_ctx).expect("projects");
+                let d_head = profile.attn_head_dim as u64;
+                let node = profile
+                    .attn_nodes
+                    .iter()
+                    .find(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused)
+                    .expect("a v5 row has a fused site");
+                let tile = (node.tile_len as u64).min(match node.out_len {
+                    crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
+                    crate::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => multiplier as u64 * n_ctx as u64,
+                });
+                let lanes = tile.min(d_head);
+                let path = 64 * 32;
+                let history_tile = (PALW_ATTN_HISTORY_TILE_V4 as u64).min(n_ctx as u64);
+                let bottom = (d_head * 4 + path) + 2 * (history_tile * d_head * 4 + path) + (tile * 4 + path);
+                println!("{name} @ {n_ctx}: d_head {d_head} tile {tile} lanes {lanes} -> bottom {bottom}");
+                for arity in [2u8, 4, 8, 16, 32, 64] {
+                    let mv = crate::palw_attn_dissect::palw_attn_dissect_move_bytes_v1(arity, lanes as usize);
+                    let fits = crate::palw_attn_dissect::palw_attn_dissect_arity_fits_carrier_v1(arity, lanes as usize, carrier);
+                    println!("    arity {arity}: move {mv} fits {fits}");
+                }
+            }
+        }
+    }
+
+    /// **Z0's second half.** A graph-v5 class's close is independent of `n_ctx` except for the
+    /// prompt-id term, at 512 / 4,096 / 32,768 / 131,072, on both families.
+    #[test]
+    fn a_graph_v5_close_is_flat_in_the_context() {
+        for (name, build) in [("dense", V5_FAMILIES[0]), ("hybrid", V5_FAMILIES[1])] {
+            for form in [PalwPromptIdsFormV1::MerkleV1, PalwPromptIdsFormV1::Flat] {
+                let mut seen = Vec::new();
+                for n_ctx in [512u32, 4_096, 32_768, 131_072] {
+                    let Ok(profile) = build(n_ctx) else {
+                        println!("{name} {form:?} @ {n_ctx}: does not project");
+                        continue;
+                    };
+                    let court = PalwKaryCourtV1 { prompt_ids_form: form, ..kary(16) };
+                    let Some(rules) = palw_class_ladder_rules_for_court_v1(&profile, Some(court)) else {
+                        println!("{name} {form:?} @ {n_ctx}: no rules");
+                        continue;
+                    };
+                    match derive_court_cost_shaped_v1(&profile, rules.cost_shape) {
+                        Ok(cost) => {
+                            let ids =
+                                crate::palw_prompt_ids_v1::prompt_ids_close_bytes_v1(form, n_ctx as u64).expect("the id term prices");
+                            println!("{name} {form:?} @ {n_ctx}: close {} (id term {ids})", cost.max_close_bytes);
+                            seen.push((n_ctx, cost.max_close_bytes, ids));
+                        }
+                        Err(e) => println!("{name} {form:?} @ {n_ctx}: {e}"),
+                    }
+                }
+                for w in seen.windows(2) {
+                    let (a, b) = (&w[0], &w[1]);
+                    println!("    {name} {form:?} {} -> {}: close +{}, ids +{}", a.0, b.0, b.1 as i64 - a.1 as i64, b.2 as i64 - a.2 as i64);
+                }
+            }
+        }
     }
 }
