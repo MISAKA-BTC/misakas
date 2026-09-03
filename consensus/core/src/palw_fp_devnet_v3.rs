@@ -120,7 +120,28 @@ pub const PALW_RC_WINDOWS_V1: PalwLatticeWindowsV1 = PalwLatticeWindowsV1 {
     reorg_margin: 300,
     receipt_maturity: 400,
     receipt_use_window: 600,
-    court_turn_deadline: 60,
+    // **51, down from 60, because the ladder got deeper on 2026-09-03.** The turn clock and the
+    // ladder depth are one constraint, not two: `moves × turn_deadline + assembly reserve <
+    // window_court`, and raising `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` to 2^26 took the move count
+    // from 46 to 54. At the old 60 that is `54 × 60 + 216 = 3,456` against a 3,000-DAA window, and
+    // `PalwConsensusParamsV2::validate` refuses the bundle outright — "window_court does not fit
+    // the worst-case honest prosecution". It refused 59 tests before this line moved, which is the
+    // gate doing its job: a deeper ladder that did not pay for itself never assembled.
+    //
+    // **42 rather than 2^26's own derivation of 51**, and that difference is the whole point of
+    // the number. 51 is `(3,000 − 216 − 1) / 54`, correct for the ladder that ships today and
+    // wrong the moment the `2^32` context-ladder fence arms: 66 moves × 51 + 216 = 3,582, past a
+    // 3,000-DAA window, so a fence that is supposed to be a rollout would be a bundle that will
+    // not assemble. 42 is the derivation at the DEEPEST ladder the tree can reach, and it fits
+    // every shallower one — `54 × 42 + 216 = 2,484` here, `66 × 42 + 216 = 2,988` armed.
+    //
+    // A clock chosen for the ladder of the day is how a fence becomes a flag day. This is the same
+    // rule ADR-0077 Decision 12 derives and the same 42 `palw_court_turn_deadline_v1` returns at
+    // the armed depth, so the shipped constant and both derivations now agree.
+    //
+    // It is still far above every shipped row's replay floor (ADR-0077 SA-4: the hybrid's worst
+    // rung is 2 DAA), so nothing here convicts an honest responder by clock.
+    court_turn_deadline: 42,
     fp_abandon_hold: 600,
     claim_retirement: 3_000,
     withdrawal_delay: 7_500,
@@ -276,10 +297,16 @@ const RECEIPT_USE_WINDOW: u64 = PALW_RC_WINDOWS_V1.receipt_use_window;
 /// the class set of the day is how that happens, and the value is inside `palw_ruleset_id_v2`, so
 /// it cannot be raised afterwards.
 ///
-/// 2^22 leaves = 22 bisection rounds, +2 terminal, × 60 DAA per turn = 1,440 — still inside
-/// `WINDOW_COURT` (3,000). Nothing deeper than the cap is admissible at all, so this ladder cannot
-/// fail to reach a class that exists.
-const COURT_MAX_STEP_LEAVES: u64 = crate::palw_step::PALW_STEP_MAX_LEAVES;
+/// 2^26 leaves = 26 bisection rounds, +2 terminal, so 54 moves; at the derived turn deadline of 51
+/// that is `54 × 51 + 216 = 2,970`, inside `WINDOW_COURT` (3,000) with ADR-0080's assembly reserve
+/// already charged. Nothing deeper than the cap is admissible at all, so this ladder cannot fail to
+/// reach a class that exists.
+///
+/// **Raised from 2^22 with the RC set on 2026-09-03**; the measurement and the reasoning live on
+/// `PALW_RC_COURT_MAX_STEP_LEAF_COUNT`, and this const reads it so the two rulesets cannot drift.
+/// The short version: at 2^22 the A16 tier admits `n_ctx` 39, the card registers 512, and the
+/// grammars need 38/60/104 decode tokens before prefill.
+const COURT_MAX_STEP_LEAVES: u64 = crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT;
 #[allow(dead_code)] // the RC set's named reading, kept beside its rationale (ADR-0077 Decision 7)
 const COURT_TURN_DEADLINE: u64 = PALW_RC_WINDOWS_V1.court_turn_deadline;
 const COURT_TERMINAL_ROUNDS: u32 = 2;
