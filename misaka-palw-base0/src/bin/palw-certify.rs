@@ -272,7 +272,7 @@ fn main() {
                                 row.family_rows.join(", ")
                             ),
                             format!("width:     {width_source}"),
-                            "graph:     palw_a16_context_row_profile_v5 — the shipped ladder projection, under the epsilon the \
+                            "graph:     palw_a16_context_row_profile_v1 — the shipped ladder projection, under the epsilon the \
                              artifact executes"
                                 .to_string(),
                         ],
@@ -287,7 +287,7 @@ fn main() {
                         vec![
                             format!("width:     {n}, taken on your word — NOTHING here checked it against an artifact"),
                             "family:    unchecked — pass --artifact <file> to have the weights confirm it".to_string(),
-                            "graph:     palw_a16_context_row_profile_v5 — the shipped ladder projection, under the epsilon the \
+                            "graph:     palw_a16_context_row_profile_v1 — the shipped ladder projection, under the epsilon the \
                              artifact executes"
                                 .to_string(),
                         ],
