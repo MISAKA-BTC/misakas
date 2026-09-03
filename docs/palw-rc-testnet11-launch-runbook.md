@@ -320,8 +320,41 @@ Then split that list in two, because the halves need opposite treatment:
 
 | | how to tell | what to do |
 |---|---|---|
-| **ours** | answers `ssh -i ~/.ssh/claude_key`, or appears in `known_hosts` | stop, then wipe — every appdir, not "the" appdir |
+| **ours** | **answers a key you hold, today**: `ssh -i ~/.ssh/claude_key root@<ip> hostname` | stop, then wipe — every appdir, not "the" appdir |
 | **not ours** | does not | cannot be wiped, and does not need to be — see below |
+
+**The ownership test is the ssh, and only the ssh.** `known_hosts` is useful for building the
+CANDIDATE list and is worthless as the test, for two independent reasons and both of them bit
+someone today:
+
+- **It is per-machine and per-user.** It records what THAT account has SSH'd to, which is not fleet
+  membership. Run the rule while logged into a node and you may conclude nothing is yours, wipe
+  nothing, and hand the old chain back to every host you just cleaned by IBD.
+- **`grep` cannot read it.** With `HashKnownHosts yes` — the default on most distributions, and the
+  case on every entry of ibm's file — every line is `|1|<salt>|<hash>` and a plain `grep <ip>`
+  returns **zero for hosts that are present**. Use `ssh-keygen -F <ip> [-f <file>]`, which hashes
+  the query before comparing. Measured on ibm: `grep` 0, `ssh-keygen -F` 1, same host, same file.
+
+That second one is the same failure shape as everything else in this section — a tool that reports
+ABSENCE when it merely cannot see — and it is the more dangerous of the two, because the per-machine
+problem at least gives you a suspiciously empty list, while the hashing problem gives you a
+confidently wrong one on the machine you trust most.
+
+### "Connected" is three different numbers, and only one of them is peers
+
+A reader who counts `ss` output and compares it to `/health` will get a disagreement and conclude
+something is broken. Nothing is. Measured on the public entry, all three at once:
+
+    10  established TCP sockets on the p2p ports
+     6  handshake-complete peers
+    10  distinct dialers presenting a foreign genesis
+
+A peer can hold an ESTABLISHED socket and never complete a handshake — a foreign-genesis dialer is
+refused at the handshake and keeps the socket. So the TCP list is the right instrument for the WIPE
+list (it is the set of machines that could re-feed a chain) and the wrong one for "how many peers do
+we have". The loudest talker on this fleet, `111.67.115.228`, holds an established socket and is
+being refused ~3,000 times a day: it is foreign, we cannot wipe it, and it is not feeding anyone the
+old chain — it is being turned away by us.
 
 **Wipe by ENUMERATING each host's kaspad processes, never by naming an appdir.** The fleet does not
 hold one appdir per host:
