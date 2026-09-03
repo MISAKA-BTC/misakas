@@ -4473,3 +4473,56 @@ deleted binary, printing the *old* fingerprint `f3bf86b4…` — the wipe kills 
 table predicts. **What it cannot prove:** the genesis hash of the cut — the candidate is
 pre-re-pin, so it prints `08e9c8a4…`; the cut's hash exists only after the premine re-pin, and is
 proven by the M-07 test turning green, not by any table.
+
+## The family decision, and the second withdrawn pin — both by the procedure this card demands
+
+### Six leaves cannot have adjudicated ten kernels
+
+Two trees certified the a16-v5 family at two sizes, and 3e measured why before choosing:
+
+```
+impl's drill    plants one fault per (table, call class)          -> 6 leaves   -> ONE carrier
+5e's rig        plants one fault per (table, KERNEL, call class)  -> 28 vectors -> 409,069 B, FIVE carriers
+the V5 entry    declares TEN kernels via reachable_kernels_v1; impl's only gate is reachable ⊆ declared
+```
+
+**Nothing on impl can tell a drilled kernel from a declared one, and six leaves cannot have
+scored ten kernels** — whether the fused `09b81d17…` was among the six was walk-order luck. A
+certificate naming a kernel the court has never been shown to score is **ADR-0069's forbidden
+object**. The survivor is the per-kernel family, with `drilled_kernel_ids` and the gate
+**`reachable ⊆ drilled`**. The 409 KB is the price of the fused kernel being *provably*
+adjudicable rather than declared so. T4 (the drill's fixed 600 s wait against five carriers)
+becomes pre-cut and lands with it.
+
+### Consequence, named BEFORE the extraction that will move it
+
+> The certified-set root (`court_e2e_root`) moves, and with it the **testnet-11 fingerprint.
+> `71efa664…` is WITHDRAWN.** The eight transformer ids, `source_tree_sha256`, the fp golden and
+> the premine do not move — none of them read the family. The new value comes only from a table
+> whose `extracted_from` is the tip that carries the family.
+
+Encoded in the guard at `db11993a`, the old value kept in the comment. **Two pins have now
+moved tonight, both named in writing by the person moving them before the extraction, both
+refused by the guard until named** — which is the only kind of move this ceremony accepts.
+
+### What that does to the rehearsal, stated so its green cannot be misread
+
+The warm-up build and the self-gating rehearsal target `candidate-971b2eff`, one adoption behind.
+**Their fingerprint comparison now proves "matches the `971b2eff` table" — true, and not the
+cut.** The rehearsal still proves the candidate builds and boots in isolation; the final tip
+is re-pushed for the real build (incremental) and the real boot compares against the family
+tip's table. *A green line whose meaning moved is the favourable staleness that survives; this
+one is named here so it does not.*
+
+### Two independent confirmations, and a test that guards the wrong rows
+
+5e's rig (a tree that never saw the table) computes `premine ba2612417e7e0817…` and
+`fp golden c940b5c3…` — its own pins red only because its literals lag. **Two of the five pins,
+confirmed by a second tree's computation rather than a second reading of the same one.**
+
+And a finding from 5e's T1 work, for whoever owns `palw_court_deadline.rs` on impl to mirror:
+`the_devnet_close_ceiling_admits_every_shipped_row` iterates `palw_shipped_court_rows_v1()`, which
+lists BASE-0, A16 graph-v2 and three QWEN36 geometries — **not the graph-v5 512 row, the one
+that sits 158 bytes under the ceiling** (83,175 of 83,333). *The test that guards the ceiling
+does not watch the row nearest it.* The row goes in so that test is the one that notices when
+a future re-pricing crosses the carrier line.
