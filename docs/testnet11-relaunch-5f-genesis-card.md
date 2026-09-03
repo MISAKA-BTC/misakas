@@ -246,8 +246,21 @@ three sessions.
 Carrier is `PALW_OBJECT_CHUNK_MAX_BYTES` = 100,000 bytes. The `PalwStepBindingV2` the mempool
 charges for but the court does not is 13,996 at its widest.
 
-> **Every close figure on this card carries its ARITY, because two of them looked like a
-> disagreement and were one measurement at two arities.** `82,719 − 81,599 = 1,120` is exactly the
+> **Every close figure on this card carries its ARITY *and its PROMPT-IDS FORM*, because three of
+> them looked like disagreements and were one measurement under three courts.**
+>
+> The third: `classes.rs`'s pin asserts **81,599 B** and FG reports **81,312 B** for the same row.
+> Both are correct. The test's own output line says which court it used — *"arity 2 **Merkle ids**
+> … binding close 81599 B"* — and `kary_court(&bundle)` takes `dissection_arity` and
+> `window_court_daa` from the bundle and **hardcodes `prompt_ids_form: MerkleV1`**. The shipped
+> bundle cannot be Merkle: `validate_palw_v2` refuses to assemble one, because *"no writer or
+> checker on this build reads it: every producer still commits the flat prompt-ids digest"*.
+> **So 81,599 is a court the network refuses to run and 81,312 is the shipped figure.**
+>
+> *A helper that takes two of three fields from the real bundle and one from a literal produces a
+> number that LOOKS bundle-derived and is not* — the same defect as pricing the cache-write route
+> by hand, one field over, in a pin that passes and honestly prints the configuration nobody
+> checked it against. `82,719 − 81,599 = 1,120` is exactly the
 > arity-16 move disclosure, and the difference was already named in a test's own comment. **The
 > genesis derives arity 2** from the v5 row in `genesis_objects`, on both the RC and devnet bundles
 > — not the 4 a brief assumed, not the 16 an early sweep measured at. A byte count without its arity
