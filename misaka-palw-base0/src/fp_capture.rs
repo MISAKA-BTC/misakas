@@ -2036,8 +2036,22 @@ mod tests {
         let entry = crate::classes::canonical_class_by_model_id_v1(&court, "Qwen/Qwen2.5-1.5B/graph-v2")
             .expect("this build's catalog has the dense row");
         let profile = entry.profile.clone();
-        let (decode, leaves) = u01_decode_budget(&profile, prefill, court.max_step_leaf_count());
+        let (mut decode, mut leaves) = u01_decode_budget(&profile, prefill, court.max_step_leaf_count());
         assert!(decode >= 2, "a {prefill}-token prefill leaves no decode budget under this ladder");
+        // **A shorter job than the ladder allows**, for the one phase that cannot be run at full
+        // size on a shared host: the DENSE capture holds ~50 MB a position and its borsh encoding
+        // holds it again, so the §1.5 job is ~5 GB above the artifact. The fold has no such
+        // ceiling, which is the point — so the fold is measured at the full job and the dense
+        // capture at whatever this host can hold, with the difference stated rather than hidden.
+        if let Some(asked) = std::env::var("MISAKA_PALW_U01_DECODE").ok().and_then(|v| v.parse::<u32>().ok()) {
+            assert!(asked >= 2 && asked <= decode, "the ladder admits 2..={decode} decode tokens at this prefill");
+            decode = asked;
+            leaves = {
+                let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prefill, decode);
+                kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &ctx, court.max_step_leaf_count())
+                    .expect("a shorter job is inside the ladder its longer form fit")
+            };
+        }
         let positions = prefill as u64 + decode as u64 - 1;
         eprintln!(
             "U-01 job: prefill {prefill}, decode {decode}, {leaves} leaves of {} ladder, {positions} forward calls",
