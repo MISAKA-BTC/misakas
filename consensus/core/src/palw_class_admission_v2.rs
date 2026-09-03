@@ -1114,38 +1114,6 @@ pub fn palw_attn_bottom_cache_write_bytes_v1(
         .checked_add(PALW_ATTN_BOTTOM_ENVELOPE_BYTES)
 }
 
-/// **Route A plus the RESIDUE — the bottom a per-position class is actually prosecuted at**
-/// (ADR-0082 Decision 4, amended).
-///
-/// A class whose map addresses history tiles commits a checkpoint after every position, so the
-/// anchor for a dispute at position `p` covers positions `0..p` and every complete tile of the
-/// dissection is ONE chunk opening per kind. Exactly one position is left over: `p` itself, whose
-/// K and V rows no earlier checkpoint can hold. That is the residue — two cache rows, opened at the
-/// cache-write node's own tile, exactly as `PalwAttnTileEvidenceV1::Checkpoint`'s `rows_after`
-/// carries them.
-///
-/// It is bounded at ONE position and not at the tile because the anchor is at `p`, not at the last
-/// tile boundary: the ragged tile the dispute lands in is `[c, p]`, its chunk in the anchor's
-/// geometry holds `c..p`, and `p` is the remainder. Under the per-CALL cadence there is no such
-/// bound — a prefill dispute has no anchor at all and a decode dispute's tile can straddle by up to
-/// `tile − 1` positions — which is why that class is priced at the cache-write route instead.
-pub fn palw_attn_bottom_checkpoint_route_bytes_v1(
-    d_head: u64,
-    kv_dim: u64,
-    tile_positions: u64,
-    out_lanes: u64,
-    source_tile: u64,
-    step_path_bytes: u64,
-) -> Option<u64> {
-    let tile_route = palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, tile_positions, out_lanes, step_path_bytes)?;
-    // The residue, priced in the same units route B prices a cache row in: `⌈kv_dim / tile⌉`
-    // leaves, each with its own full path, and the row's lanes. Two of them, one per kind.
-    let per_leaf = step_path_bytes.checked_add(PALW_STEP_OPENING_FRAME_BYTES)?;
-    let leaves = kv_dim.div_ceil(source_tile.max(1)).max(1);
-    let row = leaves.checked_mul(per_leaf)?.checked_add(kv_dim.checked_mul(4)?)?;
-    tile_route.checked_add(row.checked_mul(2)?)
-}
-
 /// **What a fused leaf's bottom costs, at the routes the CLASS's cadence leaves open** (ADR-0082
 /// Z3, Decision 4 as amended).
 ///
@@ -1157,8 +1125,9 @@ pub fn palw_attn_bottom_checkpoint_route_bytes_v1(
 ///   is not the challenger's choice but its only option. The price is the LARGER of the two, and on
 ///   the dense graph-v5 row that is 175,297 bytes: three chunks, and the split close is shut at
 ///   acceptance on the genesis card.
-/// * **True** — a class whose map addresses history tiles. Every position has an anchor, so every
-///   bottom is route A plus the residue and the cache-write route is never the only one available.
+/// * **True** — a class whose map addresses history tiles. Every position has an anchor AFTER it,
+///   so every bottom is route A with an empty residue and the cache-write route is never the only
+///   one available.
 ///   A challenger may still file the longer route if it likes; it is filing more bytes than it
 ///   needs, and a court that priced the class for that would be charging every class for the worst
 ///   evidence any challenger might choose rather than for the evidence the class's own leg makes
@@ -1174,7 +1143,12 @@ pub fn palw_attn_bottom_bytes_for_cadence_v1(
     per_position: bool,
 ) -> Option<u64> {
     if per_position {
-        return palw_attn_bottom_checkpoint_route_bytes_v1(d_head, kv_dim, tile_positions, out_lanes, source_tile, step_path_bytes);
+        // **Route A alone, with no residue.** A per-position leg's anchor for a dispute at
+        // position `p` is the checkpoint at `p + 1` — the state once `p`'s own rows are written —
+        // and attention at `p` reads exactly the positions `0..=p` it holds. Every tile of the
+        // dissection, the ragged last one included, is one chunk opening per kind and nothing
+        // beside it.
+        return palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, tile_positions, out_lanes, step_path_bytes);
     }
     palw_attn_bottom_bytes_v1(d_head, kv_dim, tile_positions, out_lanes, source_tile, step_path_bytes)
 }

@@ -3386,13 +3386,15 @@ fn canonical_input_leaves_anchored(
             crate::palw_context_ladder::PalwCheckpointCadenceV1::PerPosition
         );
         let history: Vec<(u32, u32)> = if anchored && per_position {
-            // **The residue at ANY position** (ADR-0082 Decision 4, amended). A class whose map
-            // addresses history tiles commits a checkpoint after every position, so the anchor
-            // covers every row this step reads but its own — at a PREFILL position exactly as at a
-            // decode call. On a decode call `out_coord.position` is 0, so this is the same
-            // `(c, 0)` the per-call arm below names; the two are one expression because they are
-            // one rule read at two cadences.
-            vec![(out_coord.call_index, out_coord.position)]
+            // **No residue at all** (ADR-0082 Decision 4, amended). A class whose map addresses
+            // history tiles commits a checkpoint after EVERY position, so this step's anchor is the
+            // one at `p + 1` — the state once position `p`'s own K and V rows have been written —
+            // and attention at `p` reads exactly the positions `0..=p` that checkpoint holds. The
+            // per-call cadence has to leave the disputed call's own write as a step opening because
+            // no checkpoint of its leg covers it; this one does not, at a PREFILL position exactly
+            // as at a decode call. The anchor's rows are prepended to an empty opening list below,
+            // which reproduces the same `kv_len` rows the unanchored route concatenates.
+            Vec::new()
         } else if out_coord.call_index == 0 {
             (0..=out_coord.position).map(|p| (0, p)).collect()
         } else if anchored {
