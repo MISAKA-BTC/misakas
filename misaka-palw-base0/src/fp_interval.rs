@@ -2001,6 +2001,10 @@ mod tests {
         let (chunked_narrow, flat_narrow, state_narrow) = measure(3, 4);
         let (chunked_wide, flat_wide, state_wide) = measure(11, 4);
 
+        println!(
+            "seat bytes per opening: narrow context carried {chunked_narrow} / flat {flat_narrow} (state {state_narrow}); \
+             wide context carried {chunked_wide} / flat {flat_wide} (state {state_wide})"
+        );
         assert!(state_wide > state_narrow, "the fixture must actually widen the history ({state_narrow} → {state_wide})");
         // **The difference between the two forms IS the history**, at both contexts: the flat one
         // is the carried one minus the state, plus the few bytes borsh spends on lengths.
