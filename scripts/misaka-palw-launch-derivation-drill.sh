@@ -238,7 +238,15 @@ premise "the Qwen3.6 executor calls the constant-capped step_leaf_count" \
 # regime asserts the opposite, and additionally that the constant-capped call is GONE from the
 # executor — because both spellings surviving is not progress, it is two caps, and the one that
 # binds would be whichever the path happens to reach.
-if grep -rq 'max_step_leaf_count()' "$REPO_ROOT/misaka-palw-base0/src/" 2>/dev/null; then
+# **The detector is `with_step_ladder_cap`, and it is that because I tested it against the real
+# W1b branch before that branch merged.** The first version looked for `max_step_leaf_count()` —
+# the name the ADR uses — and found nothing on `palw-adr0080-w1b-executor-ladder-2`, because W1b
+# spells the fix as a builder (`with_step_ladder_cap`) feeding
+# `step_leaf_count_capped_v1(profile, ctx, step_ladder_cap)`. The bare name appears there only in
+# doc comments and as a parameter, so matching it would have been both a miss here and a false
+# positive elsewhere. A gate written against a spec's vocabulary rather than the code's is a gate
+# that watches for a fix nobody is going to write in those words.
+if grep -rq 'with_step_ladder_cap' "$REPO_ROOT/misaka-palw-base0/src/" 2>/dev/null; then
   RULESET_OK=1
   for f in qwen25_a16_backend qwen36_backend; do
     if grep -qE 'palw_step::step_leaf_count\(profile, ctx\)' "$REPO_ROOT/misaka-palw-base0/src/$f.rs" 2>/dev/null; then
