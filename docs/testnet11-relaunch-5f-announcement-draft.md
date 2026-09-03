@@ -91,23 +91,20 @@ disagreed, five injuries each refused by name, ladder gate 2/2, stranger RED pen
 | | value |
 |---|---|
 | dispute cost, at EVERY position class | 40,461 bytes — under one carrier, measured per class rather than averaged |
-| close size at 512 | **one carrier.** The byte figure is re-measured on the cut's own commit — see below |
+| close size at 512 | **81,599 bytes at the genesis-derived arity 2 — one carrier** |
 
-> **The close's byte count moved and must be taken from the cut, not from this draft.** It has read
-> 81,599, then 82,719, and on `5f + impl` today it is **81,312 bytes**. Each was correct when taken.
-> Publish the number the cut's own tree produces. **There is no one-line test for it yet and this
-> draft briefly claimed there was** — `the_512_close_is_one_carrier` does not exist; I wrote the
-> command before writing the test, which is the defect this release has spent the day finding in
-> other people's documents. Until it lands (must-land, below), the figure comes from
-> `derive_court_cost_shaped_v1` over `palw_a16_context_row_profile_v5(512)` at
-> `PALW_RC_COURT_MAX_STEP_LEAF_COUNT`, and **no number goes in this announcement that a reader
-> cannot reproduce with a command printed beside it.**
+> **The arity belongs in the figure, and an earlier draft of this line did not have it.** The same
+> row prices at **82,719 B under arity 16** — `palw_context_ladder`'s own sweep, a 128-lane site —
+> and the whole difference, **1,120 bytes**, is the per-move disclosure. The two sweeps agree
+> (`81,599 + 1,120 = 82,719`); they are one row priced by two courts, and **only one of those courts
+> is being run.** Publishing the arity-16 figure would not have made this document wrong — it is one
+> carrier either way — it would have made it *unverifiable*: a reader deriving the close from the
+> shipped genesis gets 81,599 and cannot reproduce the published number, which reads as the chain
+> disagreeing with its own paper.
 >
-> **And the count is one carrier at every legal arity** — measured at 2, 4, 8, 16, 32 and 64, all
-> 81,312 bytes. That matters because the genesis derives **arity 2**, not the 16 an early sweep
-> measured at, and this document nearly carried a figure from a court nobody runs. It does not,
-> because the quantity turns out to be arity-invariant — but the check was worth making and the
-> reason it was safe is not a reason to skip it next time.
+>     cargo test -p misaka-palw-base0 --lib -- the_graph_v5_row_is_admitted_by_the_kary_court_and_refused_without_it --nocapture
+>
+> That test pins 81,599 with the arity in its failure message, so the number moves loudly.
 
 Under the binary court alone those figures do not hold: a dense 512 close is 1,154,673 bytes and
 fourteen carriers, which the split-carriage path cannot file. **That is why this release waits for
