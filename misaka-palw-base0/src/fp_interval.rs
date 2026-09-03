@@ -506,6 +506,48 @@ impl Base0FpIntervalOpeningAnyV1 {
     }
 }
 
+/// **The state this seat already recomputed for the interval this opening is of**, if it has one
+/// (ADR-0082 Decision 9).
+///
+/// The opening says which class, which job and which interval; the covered call follows from the
+/// geometry; and the seat's own recompute is looked up under exactly those. `None` means this seat
+/// has not run the job — the row check then has no state to resume from and files `Unverifiable`,
+/// which is honest and is not an accusation.
+///
+/// One place, because both families ask the same question and a family that asked it its own way
+/// would be a family whose seat resumed from a state computed for another call.
+pub fn base0_fp_interval_opening_seat_state_v1(
+    opening_bytes: &[u8],
+    prompt_token_ids: &[u32],
+    family_checkpoint_interval: u32,
+) -> Option<crate::fp_recompute::Base0FpSeatStateV1> {
+    let any = base0_fp_interval_opening_decode_any_v1(opening_bytes).ok()?;
+    let binding = match &any {
+        Base0FpIntervalOpeningAnyV1::WithHistory(o) => &o.binding,
+        Base0FpIntervalOpeningAnyV1::Recomputed(o) => &o.binding,
+    };
+    let index = match &any {
+        Base0FpIntervalOpeningAnyV1::WithHistory(o) => o.interval_index,
+        Base0FpIntervalOpeningAnyV1::Recomputed(o) => o.interval_index,
+    };
+    let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, family_checkpoint_interval).ok()?;
+    let covered = geometry.anchor_covered_call(index)?;
+    crate::fp_recompute::base0_fp_seat_state_held_v1(&binding.shape_profile, &binding.job_context, prompt_token_ids, covered)
+}
+
+/// **Which classes may not be served the history** (ADR-0082 Decision 9, Decision 4).
+///
+/// The TILED maps are the graph-v5 declaration — `tiled_kv_state_chunk_map_id_v3` and the hybrid
+/// composition over it — and a class that registers one has declared that its cache is addressed a
+/// history tile at a time precisely so that nothing carries the history. Read off the class's own
+/// profile rather than passed in: the rule belongs to the class, and a caller that could pass
+/// `false` would be a caller that could spend the bytes Decision 9 exists to save.
+pub fn base0_fp_class_requires_flat_openings_v1(profile: &PalwShapeProfileV3) -> bool {
+    use kaspa_consensus_core::palw_state_chunk_map as map;
+    profile.state_chunk_map_id == map::tiled_kv_state_chunk_map_id_v3()
+        || profile.state_chunk_map_id == map::hybrid_state_chunk_map_id_v3()
+}
+
 /// **The committed root of a set of state chunks under a class's map** — the two consensus
 /// functions `Base0CheckpointCaptureV1::push_chunks` calls, spelled once.
 ///
@@ -859,6 +901,10 @@ pub enum Base0FpIntervalSeatVerdictV1 {
     /// The seat's own recompute of the state at this checkpoint does not have the root the claim
     /// committed. The seat files NOTHING and may open a court, as any bonded challenger may.
     CheckpointRootMismatch { checkpoint_index: u32, covered_decode_call: u32, committed: Hash64, recomputed: Hash64 },
+    /// The class registers a tiled map — a graph-v5 row — and the opening carried the history
+    /// anyway. Refused rather than replayed: the whole content of Decision 9 is that a seat's
+    /// bytes do not grow with the context, and a seat that accepts the history has spent them.
+    HistoryNotAdmissible,
     Mismatch,
     Unverifiable,
 }
@@ -875,7 +921,7 @@ impl Base0FpIntervalSeatVerdictV1 {
         match self {
             Self::Valid => PalwFpIntervalVerdictV1::Valid,
             Self::Fault { leaf_index } => PalwFpIntervalVerdictV1::Fault { leaf_index: *leaf_index },
-            Self::CheckpointRootMismatch { .. } => PalwFpIntervalVerdictV1::Unverifiable,
+            Self::CheckpointRootMismatch { .. } | Self::HistoryNotAdmissible => PalwFpIntervalVerdictV1::Unverifiable,
             Self::Mismatch => PalwFpIntervalVerdictV1::Mismatch,
             Self::Unverifiable => PalwFpIntervalVerdictV1::Unverifiable,
         }
@@ -916,6 +962,11 @@ pub fn base0_verify_fp_interval_opening_with_state_v1<K: Base0FpIntervalKernelsV
     // The chunkless form is evidence only for a seat that holds the state; one arriving at a seat
     // that does not is bytes this seat cannot check, and saying so is not an accusation.
     let carried = match &any {
+        Base0FpIntervalOpeningAnyV1::WithHistory(o)
+            if base0_fp_class_requires_flat_openings_v1(&o.binding.shape_profile) && o.anchor.is_some() =>
+        {
+            return Base0FpIntervalSeatVerdictV1::HistoryNotAdmissible;
+        }
         Base0FpIntervalOpeningAnyV1::WithHistory(o) => Some(o.as_ref().clone()),
         Base0FpIntervalOpeningAnyV1::Recomputed(_) if state.is_none() => {
             return Base0FpIntervalSeatVerdictV1::Unverifiable;
