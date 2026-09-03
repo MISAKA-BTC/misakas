@@ -4156,3 +4156,65 @@ Fixed on `a733b21e`: both tests price at the ruleset's ladder and assert **route
 against the genesis entry — `binding.close_bytes == …registration_v1(…).entry.court_cost.max_close_bytes`
 — and devnet's ceiling stays derived (`bytes_for_chunks(1)` = 83,333) because the literal was a
 second unit whatever the row costs. [[send-the-value-with-what-produced-it]]
+
+## GREEN: a 3D artifact derived from a LIVE free prompt — and the exact condition under which it does
+
+Same gateway, same tree (`09a71652`), same bound artifact. Request: a one-shot exemplar
+(`corpus/cad/01-extrude-l-bracket.json`, 141 bytes compact) and the natural-language ask *"a
+rectangular box 2 wide and 3 deep, extruded from z0=0 to z1=5, sketch named box"*, with
+`derive: "cad/stl/v1"`. The model answered, every run, with exactly:
+
+```
+{"v":1,"frac_bits":0,"sketches":{"box":[[0,0],[2,0],[2,3],[0,3]]},"solid":{"op":"extrude","sketch":"box","z0":0,"z1":5}}
+```
+
+**Semantically correct on the first try, and in all eight runs.** At `max_tokens 56`:
+
+```
+derivation.status        derived
+derivation.transformer   cad/stl/v1        transformer_id 83e0f508…   <- the re-pin set's cad/stl id, verbatim
+artifact                 fp-job-2a12c5dd9094ead1.artifact.stl   684 B   binary STL, 12 triangles,
+                         84 + 50×12 = 684 — a box
+committed                true   (925 B unsigned commitment + 496 B derived-unsigned.borsh)
+dsl_hash / grammar_id / artifact_hash 482b2323… / derived_id 746c94ce… — all present, with the
+verify recipe: recompute dsl_hash = H(grammar_id ‖ canonical dsl), artifact_hash = H(transformer(dsl))
+```
+
+**The launch document may say: a free prompt produced a committed, derivable 3D artifact through
+the operator gateway on the class genesis registers.** Files saved under the session scratchpad
+(`derived-stl-56/`, STL sha256 `73f0693c…`); independent `palw-derive verify` pending on a build.
+
+### The condition, measured: derivation succeeds iff the answer fills the committed budget
+
+Seven refusals preceded the one derivation, all named by the grammar and all the same cause:
+
+```
+max_tokens 160, fenced      grammar: unterminated string               (fence + tail)
+max_tokens 160, no fence    grammar: json: trailing characters at line 1 column 121
+max_tokens 72,  no fence    … trailing characters at column 121        <- the JSON is 120 chars
+max_tokens 60,  no fence    … trailing characters at column 121
+max_tokens 56,  no fence    DERIVED
+max_tokens 52 / 48 / 44     grammar: unterminated string               (the JSON cut mid-string)
+```
+
+`answer_untrimmed` shows why: `{…}<|im_end|>\n<|endoftext|>Human: Create a JSON object that
+represents a 3D model…` — **the model emits both EOG tokens and keeps generating to the exact
+budget**, by ADR-0077's design (execution runs to the declared decode budget; the commitment
+covers every executed token), and derive receives `result.rendered` — the **full** committed
+rendering, by ADR-0078 Decision 6 (*"a DSL hashed from a trimmed answer is one no verifier
+holding the ids can reach"*). Together: **a grammar sees the tail unless the budget equals the
+answer's length exactly.** The fence was never the cause — a fenceless answer refused identically.
+
+> **This is a design property, not a defect in any component, and it is the sentence the launch
+> document must NOT omit:** *a free prompt with a natural stop does not derive; one whose answer
+> fills the committed budget does.* The corpus-driven derive tests (17/17 conformant) feed the DSL
+> directly and never see a tail, which is why nothing before tonight measured this.
+
+*The repair is a design question for after the pin, and cheaper than it looks:*
+`render_answer_v1(tokenizer, ids)` lives in **`misaka-palw-base0/src/fp_worker.rs:860`, not in
+`derive/src`** — so a rule that cuts the rendering at the **first committed EOG id** (the A16
+manifest declares `eog_token_ids` from `<|im_end|>`/`<|endoftext|>`, fp_worker.rs:426) would
+not move `transformer_id` or `source_tree_sha256`. But it changes the bytes a verifier
+recomputes the derivation over, so it is a versioned rendering rule and an ADR-0078 amendment:
+D6's premise is true of the *display* trim (marker-based) and false of an EOG cut, which any
+verifier holding the ids and the manifest can recompute. **Not tonight. Stated instead.**
