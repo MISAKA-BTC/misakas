@@ -23,13 +23,13 @@ use serde_json::{Value, json};
 use std::str::FromStr;
 
 const QWEN36_CLASS: &str =
-    "ec7bbcbffe13f36f1c2c418c65bdab840dd40b2bc22b217522dae836153078ddb77a92fb0645d34f98e9e3a1302e4543448a3924b3cd152fc74774ad3f02fb3f";
+    "5bd9ae3d91df80650caffe3126a38bafb0b4feb9b046a416d353a7c3f71af6eab5aadf9b1ce41650007a980f1cc6044ef218424f4cbb8299ef9e92c97b99ef8e";
 const QWEN25_CLASS: &str =
-    "f942e268f43f05461f648adcb76a1300dbedd93f022d3bba0e88c2ef4349e38f3ac1b70871f3b5195b3b2fb3da221f9c29fe291773a094596add6951aa7902c1";
+    "4277d84f7d91528cc04aa366d51ee1c2e4f7902c4f6b16a213dead1c7e227977db732f18ed6183db3d944d44726ebd3feff7b15c48f9dba11cd526684f35f1b7";
 const QWEN36_VOCAB: usize = 248_320;
 const QWEN25_VOCAB: usize = 151_936;
-const QWEN36_JOB: (u32, u32) = (7, 2); // QWEN36_RC_CANONICAL
-const QWEN25_JOB: (u32, u32) = (14, 2);
+const QWEN36_JOB: (u32, u32) = (7, 2); // Qwen3.6-35B-A3B/graph-v3 canonical (prefill 7 / decode 2)
+const QWEN25_JOB: (u32, u32) = (63, 2); // graph-v5@512 canonical (palw-class ledger: prefill 63 / decode 2)
 
 fn die(msg: String) -> ! {
     eprintln!("palw-jobs-export: {msg}");
