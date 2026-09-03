@@ -1406,34 +1406,56 @@ mod end_to_end_tests {
         assert!(matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the prompt's claim certifies");
 
         // ---- the block: does the chain admit a receipt spending this work? --------------------
-        let beacon = PalwBeaconFactV3 { beacon_block: h(0xBEAC), beacon_daa: 130, prev_attempt_daa: 120 };
+        //
         // **The envelope the PRODUCER builds** — `build_fp_receipt_spend_envelope`, signing with
         // the bond's real key — admitted by the FULL check: stateless shape, the ML-DSA-87
         // signature, and all eight stateful items. This is the carriage a receipt block's header
         // carries under algo 7, produced by the same function a mining node calls.
+        //
+        // **The beacon is SEARCHED, not chosen.** A quantum's ticket is
+        // `H(network ‖ beacon ‖ claim ‖ q)` against the class's receipt target, seeded at
+        // `u128::MAX / 2` — a coin flip whose inputs include the claim id. Holding one beacon made
+        // this fixture pass by luck, and it came up tails the moment ADR-0082 Decision 11 put two
+        // fields inside the job id. A producer hunting a spendable quantum searches; so does this.
+        // Any refusal that is NOT the lottery is re-raised on the spot.
         let (pph, ts, nonce) = (h(0xB0), 1_700u64, 9u64);
-        let envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, h(0xBEAC));
-        let admitted = kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
-            &state,
-            &at(6, 131, 6),
-            h(999),
-            pph,
-            ts,
-            nonce,
-            MATURITY,
-            USE_WINDOW,
-            &beacon,
-            &envelope,
-            |pk: &[u8], m: &[u8], c: &[u8], sig: &[u8]| kaspa_txscript::verify_mldsa87_with_context(pk, m, c, sig).unwrap_or(false),
-        )
-        .expect("the chain admits a receipt block for a certified free-prompt claim, signature and all");
+        let mut found = None;
+        for i in 0..64u64 {
+            let beacon_block = h(0xBEAC + i);
+            let beacon = PalwBeaconFactV3 { beacon_block, beacon_daa: 130, prev_attempt_daa: 120 };
+            let envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, beacon_block);
+            match kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
+                &state,
+                &at(6, 131, 6),
+                h(999),
+                pph,
+                ts,
+                nonce,
+                MATURITY,
+                USE_WINDOW,
+                &beacon,
+                &envelope,
+                |pk: &[u8], m: &[u8], c: &[u8], sig: &[u8]| {
+                    kaspa_txscript::verify_mldsa87_with_context(pk, m, c, sig).unwrap_or(false)
+                },
+            ) {
+                Ok(id) => {
+                    found = Some((id, beacon, beacon_block));
+                    break;
+                }
+                Err(kaspa_consensus_core::palw_fp_admission_v3::PalwFpAdmissionV3Error::TicketRejected { .. }) => continue,
+                Err(e) => panic!("the chain refused a certified claim's spend for a reason that is not the lottery: {e:?}"),
+            }
+        }
+        let (admitted, beacon, beacon_block) =
+            found.expect("no beacon in 64 tries won a one-in-two draw — the target or the ticket moved");
         assert_ne!(admitted, Hash64::default(), "and it returns the spend id the block is identified by");
 
         // **The producer's envelope builder is the one the admission accepts.** `produce_receipt`
         // builds the receipt carriage this way — header position, bond key — so admitting a
         // hand-built envelope proves the check, and admitting the producer's proves the seam a
         // mining node actually uses.
-        let producer_envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, h(0xBEAC));
+        let producer_envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, beacon_block);
         let via_producer = kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
             &state,
             &at(6, 131, 6),
