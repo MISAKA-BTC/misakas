@@ -42,6 +42,14 @@
 //! inference, one ticket) rather than broken. The seed is not a lottery input: the quantum ticket
 //! still consumes a beacon that postdates the claim (ADR-0044 F6).
 //!
+//! **What `position` means, stated once because two sides must agree.** It is the index of the
+//! COMMITTED LOGITS ROW, not a cache position: row 0 is the row the LAST PREFILL position produced
+//! (the one the first answer token is selected from) and row `c` is the row decode call `c`
+//! produced. That is exactly `PalwTiledDecodePinV1::position` and exactly the index the tiled
+//! trace root commits rows under, so the engine's decode loop and the court's refutation index
+//! the same draw. An engine that passed a cache position instead would select tokens no court
+//! could reproduce.
+//!
 //! Nothing in this module is armed by its existence. The rule that selects between v1 and v2 is
 //! `Params::palw_fp_decode_rules`, `None` on every shipped preset.
 

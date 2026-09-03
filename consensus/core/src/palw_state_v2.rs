@@ -14024,6 +14024,45 @@ pub(crate) mod tests {
         assert_eq!(refused.unwrap_err(), PalwStateV2Error::FreePromptLaneUnpriced);
     }
 
+    /// **ADR-0082 Decision 10's fence, at the transition: dormant is byte-identical, and armed is
+    /// a refusal BY NAME rather than the old numerator kept quietly.**
+    ///
+    /// The dormant half is what every shipped preset runs, so it is asserted against the SAME
+    /// claim the test above builds — same quanta, same pwu, same reserve, same `work_leaves` on
+    /// the record. The armed half refuses, because the chain cannot enumerate a job's decode
+    /// leaves from what it holds (`FreePromptDecodeLeavesUnavailable` says which two inputs are
+    /// missing). Refusing is the direction that cannot silently pay for replay; the alternative —
+    /// arming a fence and keeping the old numerator — is a network whose nodes disagree about what
+    /// a block paid while every one of them thinks it applied ADR-0082.
+    #[test]
+    fn the_decode_rules_fence_is_inert_when_dormant_and_refuses_by_name_when_armed() {
+        let genesis = PalwChainStateV2::genesis();
+
+        // Dormant: exactly the prices `fp_commitments_below_a_quantum_are_refused_…` pins.
+        let dormant = params();
+        assert!(!dormant.fp_decode_rules_at(u64::MAX), "no caller has armed it");
+        let (d1, _) = apply(&genesis, &dormant, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let (d2, _) = apply(&d1, &dormant, &ctx(2, 101, 2), &[fp_commit(0xFC, 61, 3)], None);
+        let claim = d2.claim(&h64(0xFC)).unwrap();
+        assert_eq!((claim.pwu, claim.work_leaves, claim.reserved), (60, 61, 300));
+
+        // Armed at DAA 2: the same commitment is refused, and the refusal names the claim and the
+        // class whose profile the chain does not hold.
+        let armed = params().with_fp_decode_rules_v1(Some(2));
+        assert!(!armed.fp_decode_rules_at(1), "a fence is not in force before its height");
+        assert!(armed.fp_decode_rules_at(2));
+        let (a1, _) = apply(&genesis, &armed, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let refused = apply_palw_transition_v2(&a1, &armed, &ctx(2, 101, 2), &[fp_commit(0xFC, 61, 3)], None);
+        assert_eq!(
+            refused.unwrap_err(),
+            PalwStateV2Error::FreePromptDecodeLeavesUnavailable { claim: h64(0xFC), class: h64(1) }
+        );
+        // And the message tells an operator what closing it costs, rather than only that it failed.
+        let text = PalwStateV2Error::FreePromptDecodeLeavesUnavailable { claim: h64(0xFC), class: h64(1) }.to_string();
+        assert!(text.contains("prompt_tokens") && text.contains("shape profile"), "{text}");
+        assert!(text.contains("decode_leaf_count_v1"), "the arithmetic is named: {text}");
+    }
+
     /// **Weight is the price of adjudicability on this lane too** (ADR-0074 Decision 6): with a
     /// certified set in force, a commitment on a class outside it is refused by name, one inside
     /// it is admitted, and an empty set refuses every class — while `None` (fixtures) gates none.
