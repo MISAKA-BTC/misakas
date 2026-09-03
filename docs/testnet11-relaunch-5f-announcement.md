@@ -21,8 +21,10 @@ minute after the relaunch.
   from the previous chain (`misaka-premine:0–7`, `:41–48`).
 - Three classes with budget from epoch 0: the floor (BASE-0), the dense A16 tier (`4277d84f…`, Qwen2.5-1.5B graph-v5 @ 512)
   and Qwen3.6 (`5bd9ae3d…`). The court certified the four families end-to-end (`court_e2e_root e649e7c0…`).
-- Qwen3.6's free-prompt lane is certified on chain. `[PENDING]` The dense tier's free-prompt lane binding
-  (`ClassLaneCertified`) is built and is submitted as soon as the first coinbase matures.
+- Qwen3.6's free-prompt lane is certified on chain — but its job shape holds **8 tokens in total**, which the chat
+  template alone fills, so no practical prompt fits it today; practical free prompts go to the dense tier.
+  `[PENDING]` The dense tier's free-prompt lane binding (`ClassLaneCertified`) is built and is submitted as soon as
+  the first coinbase matures.
 
 ## What runs
 
