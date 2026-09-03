@@ -14413,7 +14413,7 @@ pub(crate) mod tests {
         assert!(matches!(err, Err(PalwStateV2Error::DerivedSignerIsNotTheExecutor { .. })), "{err:?}");
 
         let first = derived_object(0xFC, 0x71, output_root, fp_executor_key());
-        let (s3, _) = apply(&s2, &p, &point, &[first.clone()], None);
+        let (s3, _) = apply(&s2, &p, &point, std::slice::from_ref(&first), None);
         let err = apply_palw_transition_v2(&s3, &p, &ctx(4, 103, 4), &[first], None);
         assert!(matches!(err, Err(PalwStateV2Error::DuplicateDerivation { .. })), "{err:?}");
 
@@ -17856,7 +17856,7 @@ pub(crate) mod tests {
             let PalwClaimPhaseV2::DefaultDisputed { resumed, .. } = &mut claim.phase else {
                 panic!("the claim must be disputed");
             };
-            *resumed = Box::new(bad);
+            **resumed = bad;
             let refused = PalwStateCarriageV2::from_state(&forged).into_state(&p, None).map(|_| ());
             assert!(
                 matches!(refused, Err(PalwStateV2Error::CarriageInconsistent(_))),
@@ -17930,9 +17930,18 @@ pub(crate) mod tests {
         let (s3, claim_id, _, preimages, hashes) = da_setup(&p, 999_999);
 
         for object in [da_accuse(claim_id, 0), da_disclose(claim_id, 0, &preimages, &hashes)] {
-            let refused =
-                apply_palw_transition_v2_with_policies(&s3, &p, &ctx(4, 103, 4), &[object.clone()], None, false, false, false, false)
-                    .expect_err("a dormant fence refuses both DA objects");
+            let refused = apply_palw_transition_v2_with_policies(
+                &s3,
+                &p,
+                &ctx(4, 103, 4),
+                std::slice::from_ref(&object),
+                None,
+                false,
+                false,
+                false,
+                false,
+            )
+            .expect_err("a dormant fence refuses both DA objects");
             assert!(matches!(refused, PalwStateV2Error::DaCourtDormant), "got {refused:?}");
             // …and the v2 face every pre-ADR caller and fixture uses says exactly the same thing.
             let legacy =

@@ -1,5 +1,12 @@
-cargo fmt --all
-cargo clippy
+# `cargo fmt --all` REWRITES the tree instead of failing, and its exit code was thrown away;
+# `cargo clippy` with no flags lints neither tests nor benches nor examples, which is what the
+# CI Lints job checks. Both gates now come from one place -- the same script the CI job runs.
+# (bash ships with Git for Windows, which every Windows contributor here already has.)
+bash ./scripts/ci-gates.sh fmt clippy
+if ($LASTEXITCODE -ne 0) {
+  Write-Output "`n--> host lint gates failed ($LASTEXITCODE gate(s))`n"
+  exit $LASTEXITCODE
+}
 
 $crates = @(
   "kaspa-wrpc-wasm",

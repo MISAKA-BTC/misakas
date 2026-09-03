@@ -32,8 +32,26 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
 
       - name: Cache Cargo Build Outputs
         uses: actions/cache@6f8efc29b200d32929f49075959781ed54ec270c # v3
@@ -174,8 +192,26 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
 
       - name: Install llvm
         id: install_llvm
@@ -199,9 +235,12 @@ jobs:
           sudo apt-get update
           sudo apt install -y gcc-multilib
 
-      - name: Install stable toolchain
+      - name: Install the pinned toolchain
         if: steps.install_llvm.outcome == 'success' && steps.install_llvm.conclusion == 'success'
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
 
       - name: Install wasm-pack
         # --locked: build wasm-pack from its committed Cargo.lock for a reproducible toolchain.

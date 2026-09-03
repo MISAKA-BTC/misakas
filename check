@@ -1,12 +1,26 @@
 #!/bin/bash
-
-cargo fmt --all
-cargo clippy --workspace --tests --benches
-
+#
+# The host-side lint gates, then the wasm32 ones.
+#
+# The first half used to be two lines of its own and neither of them could fail usefully:
+#
+#     cargo fmt --all                                 # REWRITES the tree; never returns 1
+#     cargo clippy --workspace --tests --benches       # --workspace overrides default-members
+#                                                      # and dies (101) in misaka-palw-worker's
+#                                                      # build script before linting anything
+#     status=$?                                        # ...and this read the SECOND one only
+#
+# So a contributor who ran `./check` before a PR, as CONTRIBUTING.md tells them to, got their
+# tree silently reformatted and a clippy gate that had never run. The day this was written,
+# `cargo fmt --all -- --check` had been red on the release branch for an unknown length of time.
+#
+# The gates themselves now live in `scripts/ci-gates.sh`, which is the same command the CI job
+# runs, so there is one spelling of each and one place to look when one goes red.
+bash "$(dirname "$0")/scripts/ci-gates.sh" fmt clippy pq-guard
 status=$?
 if [ $status -ne 0 ]; then
     echo
-    echo "--> cargo clippy check failed"
+    echo "--> host lint gates failed ($status gate(s)); see the per-gate summary above"
     echo
     exit $status
 fi

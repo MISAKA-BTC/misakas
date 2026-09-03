@@ -10027,7 +10027,7 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
 
     let catalog = palw_v2_test_catalog();
     let bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
-    let court = bundle.court.clone();
+    let court = bundle.court;
     let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor is a canonical class");
     // The fixture bundle registers the floor under its OWN base class id (`palw_v2_test_bundle`
     // names `Hash64::from_u64_word(1)`, the id the harness's attempt carriage also names), so the
@@ -10189,7 +10189,7 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
     let stranger_key = crate::consensus::test_consensus::TestConsensus::palw_v2_registry_keypair(1);
     let mut stranger = object.clone();
     stranger.executor_pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_registry_pubkey(1);
-    let stranger = signed(&stranger, &stranger_key);
+    let stranger = signed(&stranger, stranger_key);
     for (name, refused) in
         [("a mismatching signature", bad_sig), ("another network's domain", foreign), ("a stranger's key", stranger)]
     {

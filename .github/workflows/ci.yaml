@@ -7,6 +7,105 @@ permissions:
   contents: read
 
 jobs:
+  # **The gates that need no compiler, so they cannot go silent when the compiler is unhappy.**
+  #
+  # This job exists because of what was found on the day it was written: `cargo fmt --all --
+  # --check` had been red on this branch for an unknown length of time, and nobody knew, because
+  # everybody runs `cargo test` and nobody runs the job that runs first. Two more gates were red
+  # underneath it. Nothing about that was a hard problem to see — it was a problem nobody could
+  # see WITHOUT pushing.
+  #
+  # So: one command, `bash scripts/ci-gates.sh`, runs these gates, and this job runs that same
+  # command. There is exactly one spelling of each gate, and `workflow-parity` inside it fails
+  # the build if the build gates in that script and the `run:` lines below ever drift apart.
+  #
+  # It deliberately installs no Rust. Every gate here is Python over files in the tree, so it
+  # still reports on a tree that does not compile — which is the shape of morning this is for.
+  gates:
+    name: Gates (toolchain pin + derived artifacts)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # **Why the foreign-parser check is a CI gate here and not a human one.**
+      #
+      # `scripts/misaka-palw-artifact-thirdparty.py` opens a derived artifact with the library
+      # that ecosystem actually uses and compares a quantity with MEANING — a solid's enclosed
+      # volume, a song's playback duration — against the DSL the transformer was given. Every
+      # other check on a derived artifact in this tree was written by us: the corpus goldens, the
+      # Python re-derivation, the format conformance reader. They agree by construction. The one
+      # defect none of them could see — a glTF material with `baseColorFactor` alpha 0.5 and no
+      # `alphaMode`, conformant, byte-identical to its golden, and rendering solid because glTF's
+      # default mode IGNORES alpha — was found by `pygltflib` and by nothing else.
+      #
+      # The script's own docstring says these parsers "must not become" a workspace dependency.
+      # Installing them with pip into a throwaway venv does not: the crate graph is untouched and
+      # the parsers stay written by people who have never seen this repository, which is the
+      # entire value. What a human gate would cost is the thing this whole job is about — a check
+      # that only runs when someone remembers is a check whose colour nobody knows.
+      #
+      # Versions are exact for the same reason the toolchain is: a check whose oracle changes
+      # under it reports the oracle's opinion, not the tree's.
+      #
+      # `pygltflib` is deliberately NOT installed, and that is a coverage statement, not an
+      # oversight: nothing in this job produces a `.glb`. The independent Python transformer
+      # implements `music/smf/v1` and the axis-aligned subset of `cad/stl/v1` and not
+      # `scene/glb/v1`, so the only in-CI producer of a GLB would be the Rust `palw-derive`
+      # binary, and building it would make this job depend on the compiler it is meant to survive
+      # without. glTF is covered here by `artifact-conformance`, whose selftest includes that
+      # exact alpha/OPAQUE injury; a real GLB's SEMANTICS remain a human gate, run as
+      # `misaka-palw-artifact-conformance.py demo --derive-bin target/debug/palw-derive`. The
+      # gate prints `0 GLB` on every run so the hole is visible rather than inferred.
+      - name: Install the foreign parsers (pinned, in a throwaway venv)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/artifact-venv"
+          "$RUNNER_TEMP/artifact-venv/bin/pip" install --disable-pip-version-check \
+            mido==1.3.3 numpy-stl==4.0.0
+
+      # **This job is RED right now, on purpose, and here is the one gate that is red.**
+      #
+      # `artifact-stranger` fails with `SELFTEST FAILED — 3 of 18 checks disagree with the shipped
+      # tree`: `source_tree_sha256` recomputed `98265872…` against a pinned `d2419027…`, and
+      # `cad/stl/v1` and `music/smf/v1` moved with it. Nothing is wrong with the re-derivation. A
+      # `transformer_id` is a hash of every byte under `misaka-palw-derive/src/` (ADR-0078
+      # Decision 3; `misaka-palw-derive/tests/transformer_id_pin.rs` is the pin and says so at
+      # length), and commit a87cc282 rustfmt'd `src/kinds/scene.rs` — one `if` collapsed onto one
+      # line — which moved all eight ids at once. That commit's own message states the ordering:
+      # "the freeze for the single `transformer_id` re-pin has to come AFTER this, not before."
+      #
+      # So this is the same red as `shipped_presets_have_pinned_fingerprints`: it closes at the
+      # cut's single re-pin, which is the integrator's, and a contributor who "fixes" it moves
+      # eight ids a second time. It is left red rather than skipped because a gate that goes quiet
+      # is the failure this whole job exists for.
+      #
+      # It does not hide the other five. `scripts/ci-gates.sh` prints one line per gate with that
+      # gate's OWN exit code and never a single aggregate word, so a SECOND red appears by name in
+      # the same summary. Read the summary block, not the job's colour, until the re-pin lands.
+      #
+      # **The gate that proves the other gates can fail.**
+      #
+      # `ci-toolchain-pin-check.py` answers "is the compiler pinned" and "does ci-gates.sh run what
+      # CI runs", and a checker that only ever prints OK cannot be told apart from one that looks
+      # at nothing. Every hole found in it so far was found by breaking it on purpose and none by
+      # reading it. This applies seventeen breaks, asserts each goes red WITH a named violation,
+      # restores, and asserts the untouched tree is green.
+      #
+      # It is here and not in `ci-gates.sh --group fast` on purpose: it rewrites tracked files and
+      # restores them with `git checkout -- .`. That is safe on an ephemeral CI checkout and is a
+      # trap on a laptop, so it refuses to run on a dirty tree, and the command a contributor runs
+      # before pushing does not include it. `CI_ONLY` in the pin checker records that choice, so
+      # `workflow-parity` does not report it as a gate nobody can run.
+      - name: Prove the pin and parity checks can fail
+        run: bash scripts/ci-gates-selftest.sh
+
+      # The same command a contributor runs. `--group fast` is every gate that needs no cargo
+      # build; the Lints / Check / Test Suite jobs below run the rest.
+      - name: Run the no-compiler gates
+        env:
+          CI_GATES_THIRDPARTY_PYTHON: ${{ runner.temp }}/artifact-venv/bin/python
+        run: bash scripts/ci-gates.sh --group fast
+
   check:
     name: Check
     runs-on: ubuntu-latest
@@ -19,8 +118,26 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
 
       - name: Set up cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -66,9 +183,26 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
           targets: x86_64-pc-windows-msvc
 
       - name: Set up cache
@@ -169,8 +303,26 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
       
       - name: Set up cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -199,6 +351,19 @@ jobs:
       # other network's rules: tests that assert real-PoW behaviour still get it.
       - name: Run cargo test regular features
         run: cargo nextest run
+        env:
+          MISAKA_PALW_POW_FIXTURE: "1"
+
+      # **`--lib` is absent on purpose. Do not add it.**
+      #
+      # `cargo test -p misaka-palw-derive --lib` builds no BINARIES, so `palw-evm-runner` is not on
+      # disk when the suite runs — and ADR-0079's confinement gate is written to REFUSE when the
+      # runner it must confine is missing, rather than quietly falling back to in-process
+      # execution. The seven tests that cover that refusal go red under `--lib` and green here,
+      # and the red means the opposite of what it looks like: the gate working, not the tree
+      # broken. The whole package is the unit the genesis card's §6 table cites.
+      - name: Run the misaka-palw-derive suite with its binaries
+        run: cargo test -p misaka-palw-derive
         env:
           MISAKA_PALW_POW_FIXTURE: "1"
 
@@ -283,10 +448,25 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
-          toolchain: 1.93.0
+          toolchain: ${{ env.RUST_CHANNEL }}
           components: rustfmt, clippy
 
       - name: Set up cache
@@ -316,8 +496,26 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
 
       - name: Add thumbv7em-none-eabi target
         run: rustup target add thumbv7em-none-eabi
@@ -363,9 +561,27 @@ jobs:
           sudo apt-get update
           sudo apt install -y gcc-multilib
 
-      - name: Install stable toolchain
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
         if: steps.install_llvm.outcome == 'success' && steps.install_llvm.conclusion == 'success'
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
 
       - name: Add wasm32 target
         run: rustup target add wasm32-unknown-unknown
@@ -418,9 +634,27 @@ jobs:
           sudo apt-get update
           sudo apt install -y gcc-multilib
 
-      - name: Install stable toolchain
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
         if: steps.install_llvm.outcome == 'success' && steps.install_llvm.conclusion == 'success'
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
 
       - name: Install wasm-pack
         uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2
@@ -490,9 +724,27 @@ jobs:
           sudo apt-get update
           sudo apt install -y gcc-multilib
 
-      - name: Install stable toolchain
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
         if: steps.install_llvm.outcome == 'success' && steps.install_llvm.conclusion == 'success'
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
 
       - name: Install wasm-pack
         uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2
@@ -537,8 +789,26 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # **The compiler is a pin, not a rumour.** `dtolnay/rust-toolchain`'s `toolchain` input
+      # defaults to `stable` (see its own action.yml), so `uses: ...@<sha>  # stable` pinned the
+      # ACTION and left the COMPILER floating: every job here used whatever `stable` was that
+      # morning, while `Lints` alone pinned 1.93.0. The version is read out of
+      # `rust-toolchain.toml` rather than repeated, because a second spelling of a version is a
+      # second version. `scripts/ci-toolchain-pin-check.py` fails the build if any job stops
+      # doing this.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+          components: rustfmt, clippy
 
       - name: Set up Rust cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2

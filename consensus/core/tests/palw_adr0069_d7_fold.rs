@@ -85,7 +85,7 @@ fn attempt(class: u64, pwu: u64, nonce: u64) -> PalwAttemptEnvelopeV2 {
         attempt: PalwAttemptUnsignedV2 {
             version: PALW_ATTEMPT_V2_VERSION,
             network_domain: h(999),
-            challenge: h(nonce ^ 0xC0FF_EE),
+            challenge: h(nonce ^ 0x00C0_FFEE),
             class_id: h(class),
             executor_bond: bond_key(1).0,
             executor_pubkey: vec![7; 4],
