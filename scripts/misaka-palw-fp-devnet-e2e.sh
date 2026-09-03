@@ -170,6 +170,17 @@ trap cleanup EXIT
 # ---------------------------------------------------------------------------------------------
 # 1. N validators from one build, all producing the floor and all seated on panels.
 # ---------------------------------------------------------------------------------------------
+# **The class id is the build's, by model id, before anything is registered** — so the row this
+# drill certifies, prices and drives is named once, and a chain that carries more than one
+# non-base class (devnet's genesis set is testnet-11's since the ADR-0082 drill: the floor, the
+# QWEN36 hybrid and the graph-v5@512 dense row) cannot hand the drill the wrong one. `palw-class
+# ledger` prints every class this build can supply with its id — the id `palw-certify bind` names
+# again in stage 3.
+EXPECTED_CLASS_ID=$("$CLASS_BIN" ledger --network devnet 2>/dev/null \
+  | awk -v want="$MODEL_ID" '$1 == want {found=1; next} found && $1 == "class" && $2 == "id" {print $3; exit}')
+[ -n "$EXPECTED_CLASS_ID" ] || die "palw-class ledger names no class id for $MODEL_ID on devnet — this build does not supply that row"
+log "  $MODEL_ID is class ${EXPECTED_CLASS_ID:0:16}… in this build"
+
 declare -a ADDRS
 for ((i=0; i<NODES; i++)); do
   addr="$("$CLI_BIN" --network devnet key address --key-file "$WORK_DIR/keys/bond-$i.seed" | tail -1 | awk '{print $NF}')"
@@ -187,7 +198,13 @@ for ((i=0; i<NODES; i++)); do
         --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
   # node-0 also holds the class artifact: it is the node that registers the class, and a registrar
   # must be able to derive the artifact root it is about to pin.
-  if [ "$i" -eq 0 ]; then args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT"); fi
+  # **node-0 holds the artifact AND produces the dense class.** With devnet's genesis carrying
+  # testnet-11's class set, the floor is seeded at the retarget's equilibrium for a network whose
+  # production is mostly the model tiers (ADR-0076): its target is ~45x harder than on a floor-only
+  # devnet (2^114.4 against 2^119.9, measured), while the dense row's seed is MAX — so three floor
+  # seats alone found no block in 12 minutes, and the chain we cut is paced by the class the
+  # artifact serves. The same shape as testnet-11's node0.
+  if [ "$i" -eq 0 ]; then args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT" --palw-producer-class="$EXPECTED_CLASS_ID"); fi
   if [ "$i" -gt 0 ]; then args+=(--connect=127.0.0.1:$P2P_BASE); fi
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
   # `$!` into a variable rather than `${pids[-1]}`: macOS ships bash 3.2, which rejects a negative
@@ -227,13 +244,19 @@ advance() {
   done
 }
 # Wait until every node's log matches `pattern`, or the deadline passes.
+# $2 (optional) multiplies the wait: a chunked object lands one carrier per block, so an object of
+# N chunks legitimately needs N times the single-carrier wait. A fixed 600 s against a five-carrier
+# family (~2.4 min per carrier on a devnet at this cadence) reported "no family certified" with
+# four of five chunks landed — a wait sized for one carrier fails on exactly the objects worth
+# waiting for (the launch-integration drill, 2026-09-03).
 all_nodes_logged() {
-  local pattern="$1" deadline=$((SECONDS + STEP_WAIT)) i ok
+  local pattern="$1" factor="${2:-1}" i ok
+  local budget=$((STEP_WAIT * factor)) deadline=$((SECONDS + STEP_WAIT * factor))
   while :; do
     ok=1
     for ((i=0; i<NODES; i++)); do grep -qE "$pattern" "$WORK_DIR/node-$i.log" || ok=0; done
     [ "$ok" = 1 ] && return 0
-    [ $SECONDS -lt $deadline ] || { log "not every node matched \"$pattern\" within ${STEP_WAIT}s — continuing to the verdict"; return 1; }
+    [ $SECONDS -lt $deadline ] || { log "not every node matched \"$pattern\" within ${budget}s (x$factor for the carriers) — continuing to the verdict"; return 1; }
     sleep 3
   done
 }
@@ -291,16 +314,6 @@ class_table() {
 }
 
 log "stage 2 — registering $MODEL_ID from the artifact"
-# **The class id is the build's, by model id, before anything is registered** — so the row this
-# drill certifies, prices and drives is named once, and a chain that carries more than one
-# non-base class (devnet's genesis set is testnet-11's since the ADR-0082 drill: the floor, the
-# QWEN36 hybrid and the graph-v5@512 dense row) cannot hand the drill the wrong one. `palw-class
-# ledger` prints every class this build can supply with its id — the id `palw-certify bind` names
-# again in stage 3.
-EXPECTED_CLASS_ID=$("$CLASS_BIN" ledger --network devnet 2>/dev/null \
-  | awk -v want="$MODEL_ID" '$1 == want {found=1; next} found && $1 == "class" && $2 == "id" {print $3; exit}')
-[ -n "$EXPECTED_CLASS_ID" ] || die "palw-class ledger names no class id for $MODEL_ID on devnet — this build does not supply that row"
-log "  $MODEL_ID is class ${EXPECTED_CLASS_ID:0:16}… in this build"
 reg_rpc=$RPC_BASE
 # **A class the genesis already registers is not registered again.** With devnet carrying
 # testnet-11's class set, the dense row is a genesis object — Active and budgeted from DAA 0 —
@@ -424,15 +437,20 @@ fi
 # what 5d measured: an A16 free-prompt claim was refused not by its arithmetic but because the
 # genesis certified set held the floor alone.
 # ---------------------------------------------------------------------------------------------
+# Sets LAST_SUBMIT_CHUNKS to the carrier count of what it just sent (1 for an unchunked object).
+LAST_SUBMIT_CHUNKS=1
 submit() {
   local f="$1"; local args=()
+  LAST_SUBMIT_CHUNKS=1
   if ls "$f".chunk* >/dev/null 2>&1; then
     for c in $(ls "$f".chunk* | sort -t k -k3 -n); do args+=(--object "$c"); done
+    LAST_SUBMIT_CHUNKS=${#args[@]}; LAST_SUBMIT_CHUNKS=$((LAST_SUBMIT_CHUNKS / 2))
   else
     args=(--object "$f")
   fi
   "${CLI[@]}" palw submit-object --key-file "$WORK_DIR/keys/main.seed" "${args[@]}" --yes
-  advance 2   # a chunked object needs one carrier per chunk, and the next burst spends this change
+  log "  submitted $(basename "$f") as $LAST_SUBMIT_CHUNKS carrier(s)"
+  advance $((2 * LAST_SUBMIT_CHUNKS))   # one carrier per chunk, and the next burst spends this change
 }
 log "stage 3 — certifying the family that covers $MODEL_ID on the free-prompt lane"
 # **The row names its family; this script does not.** `--family a16` was the graph-v2 family
@@ -443,9 +461,11 @@ log "stage 3 — certifying the family that covers $MODEL_ID on the free-prompt 
 # family from the catalog row exactly as `bind` does.
 "$CERTIFY_BIN" drill --model-id "$MODEL_ID" --lane fp --out "$WORK_DIR/obj/a16-fp.obj" || die "the free-prompt drill for $MODEL_ID's family did not produce evidence"
 submit "$WORK_DIR/obj/a16-fp.obj"
+FAMILY_CHUNKS=$LAST_SUBMIT_CHUNKS
 "$CERTIFY_BIN" bind --model-id "$MODEL_ID" --lane fp --out "$WORK_DIR/obj/a16-bind.obj" || die "palw-certify bind refused $MODEL_ID"
 submit "$WORK_DIR/obj/a16-bind.obj"
-all_nodes_logged "PALW lifecycle carried.*ClassLaneCertified" \
+# The binding applies only once the family's every chunk has landed, so the wait is the family's.
+all_nodes_logged "PALW lifecycle carried.*ClassLaneCertified" "$((FAMILY_CHUNKS + 1))" \
   || log "WARNING: not every node logged the class-lane binding — the commitment may be refused as uncertified"
 log "stage 3 OK"
 
