@@ -121,12 +121,20 @@ discipline is integer. **The grammar refused all three.**
 
 ## Joining
 
-**You must wipe.** Not "should". At least four chains currently answer to the name
-`misaka-testnet-11` — measured on this fleet: 3,793 genesis mismatches and 735 consensus-parameter
-mismatches in six hours, from at least four distinct genesis hashes, one of them a relaunch from
-several generations ago that is still running. An old application directory cannot complete a
-handshake with this network, and what it prints is a genesis mismatch, which reads like a defect in
-the new build rather than the expected consequence of keeping old data.
+**You must wipe.** Not "should". An old application directory cannot complete a handshake with this
+network, and what it prints is a genesis mismatch — which reads like a defect in the new build
+rather than the expected consequence of keeping old data.
+
+**Three other chains answer to the name `misaka-testnet-11`**, measured over 24.3 hours on the
+public entry node: 18,034 genesis mismatches and 3,074 consensus-parameter mismatches, from three
+distinct foreign genesis hashes — one of them a relaunch from several generations ago that is still
+dialling.
+
+**The number that will prepare you for your own logs is not the eighteen thousand.** Those come from
+**ten stuck peers, each retrying roughly every 48 seconds, indefinitely.** A page of refusals is ten
+misconfigured nodes on a retry loop, not a swarm — and over the same day this node completed 67
+inbound connections from 9 distinct peers. It is well connected AND permanently refusing ten others.
+Both halves are normal.
 
 **Check the genesis hash.** It is the only thing that distinguishes this network from the others
 using its name.
