@@ -22,6 +22,14 @@
 # FOUR. Eleven, twenty-three and four are all honest counts of different things, and
 # only the last one predicts whether the pin will go stale.
 #
+# DEMONSTRATED at the moment it mattered, 2026-09-03. `palw-artifact-names-genesis-row`
+# was still sitting at its old tip while its content had been merged into
+# `palw-merge-resolved`. Against that base this script reports "no move" — correctly,
+# because the merge result's subtree already equals the base's. The `git log` form would
+# have reported it as a blocker, and the reaction to a phantom blocker at a freeze is to
+# WAIT for a branch that is already in. Subsumption is the case that separates the three
+# questions, and it is the case that actually occurs.
+#
 #   usage: scripts/check-derive-freeze.sh [release-branch] [path]
 set -uo pipefail
 rel="${1:-palw-testnet-5f}"
