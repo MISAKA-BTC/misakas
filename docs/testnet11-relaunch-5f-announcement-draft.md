@@ -63,6 +63,13 @@ carries the model's own answer bytes and the artifacts derived from them.
 | artifacts open in foreign software | 4 agreed, 0 disagreed | `python3 scripts/misaka-palw-artifact-thirdparty.py --require docs/evidence-qwen36-model-gate/artifacts/` |
 | the format checker has teeth | five injuries, each refused by name | `python3 scripts/misaka-palw-artifact-conformance.py selftest` |
 | a second implementation agrees | — | `python3 scripts/misaka-palw-derive-stranger.py` |
+
+**Publication gate on that last row.** Running the five commands above found the stranger red on the
+pre-cut branch — the transformer ids moved when the source tree changed, which the single re-pin at
+the freeze closes. **It must be green before this announcement publishes**, because a document that
+tells a reader to run something and hands them a failure has spent its credibility on its own first
+paragraph. Verified state at the time of writing: corpus width ok, foreign parsers 4 agreed / 0
+disagreed, five injuries each refused by name, ladder gate 2/2, stranger RED pending the re-pin.
 | every gate this release must pass | one verdict per gate | `bash scripts/ci-gates.sh` |
 
 **Measured under the dissection court (ADR-0082), which this release is held for:**
