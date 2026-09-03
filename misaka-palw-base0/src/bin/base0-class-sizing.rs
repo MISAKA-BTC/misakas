@@ -123,6 +123,51 @@ fn main() {
     println!("| the whole step space | {PALW_STEP_MAX_LEAVES} | {} |", bisection_rounds(PALW_STEP_MAX_LEAVES));
     println!();
 
+    // ---------------------------------------------------------------------------------------
+    // **The A16 tier at the widths the launch actually needs.**
+    //
+    // Everything above measures `qwen25_profile_v1`, and the class that SHIPS is the A16
+    // projection — `qwen25_a16_profile_v2`, what `palw_a16_context_row_profile_v1` carries and
+    // what the registered `.palwart` produces. They are different profiles with different leaf
+    // costs, so quoting the plain row's numbers at the A16 row is how "176 positions" and "39
+    // positions" both get to be true measurements of different things. Measured here so nobody
+    // has to reconcile them from two tools again.
+    //
+    // The cap column is the point: `PALW_STEP_MAX_LEAVES` is a CONSTANT the executor hardcodes
+    // today, and ADR-0080 W1b makes it a ruleset field. Once it is a field, the question stops
+    // being "does the class fit" and becomes "what value admits the answers we promised" — so
+    // this prints the widths several candidate caps buy, beside the grammar floors that have to
+    // fit inside them.
+    println!("## The A16 tier: what each ruleset leaf cap buys\n");
+    println!("(floors from `misaka-palw-derive/tests/grammar_floor.rs`: cad 38, music 60, scene 104 decode tokens)\n");
+    println!("| ruleset leaf cap | widest admissible n_ctx (A16) |");
+    println!("|---|---|");
+    for shift in [22u32, 23, 24, 26, 28, 32] {
+        let cap = 1u64 << shift;
+        let fits = |n_ctx: u32| {
+            kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v1(n_ctx)
+                .ok()
+                .and_then(|prof| kaspa_consensus_core::palw_step::worst_case_step_leaf_count_capped_v1(&prof, cap).ok())
+                .is_some()
+        };
+        let mut lo = 0u32;
+        let mut hi = 16_384u32;
+        if !fits(2) {
+            println!("| 2^{shift} | 0 — not even a two-position job |");
+            continue;
+        }
+        while lo + 1 < hi {
+            let mid = lo + (hi - lo) / 2;
+            if fits(mid) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        println!("| 2^{shift} | {lo} |");
+    }
+    println!();
+
     // `tile_len` is the only knob that moves a class's longest job, and it buys context in exchange
     // for court granularity: a dispute localises to a tile, so a tile is how much arithmetic one
     // terminal adjudication has to redo.

@@ -960,9 +960,22 @@ mod tests {
         }
         assert!(crate::config::params::palw_rc_shipped_params().palw_context_ladder.is_none(), "the RC card arms it");
         assert!(crate::config::params::devnet_shipped_params().palw_context_ladder.is_none(), "the devnet card arms it");
-        // And the two constants the fence stands in front of are untouched.
-        assert_eq!(PALW_STEP_MAX_LEAVES, 1 << 22, "the shipped ladder moved without a fence");
-        assert_eq!(PALW_RC_WINDOWS_V1.court_turn_deadline, 60, "the shipped move clock moved without a fence");
+        // And the two constants the fence stands in front of.
+        //
+        // `PALW_STEP_MAX_LEAVES` is still 2^22 and is no longer the ladder: after ADR-0080 W1b the
+        // executor reads `PalwCourtParamsV2::max_step_leaf_count`, so this constant is a default
+        // for paths with no ruleset in hand. The RULESET's ladder is 2^26 (2026-09-03), and it is
+        // pinned where it is chosen — `PALW_RC_COURT_MAX_STEP_LEAF_COUNT`.
+        assert_eq!(PALW_STEP_MAX_LEAVES, 1 << 22, "the executor's default moved");
+        assert_eq!(
+            crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT,
+            1 << 26,
+            "the RULESET's ladder moved; the fence in front of the 2^32 rows assumes this depth"
+        );
+        // The move clock is 42: the derivation at the DEEPEST ladder the tree can reach, not at
+        // the one shipping today. A clock derived for 2^26 alone would be 51 and would refuse to
+        // assemble the moment this fence arms (66 x 51 + 216 = 3,582 > 3,000).
+        assert_eq!(PALW_RC_WINDOWS_V1.court_turn_deadline, 42, "the shipped move clock moved without a fence");
     }
 
     // ---------------------------------------------------------------------------------------
@@ -1165,8 +1178,22 @@ mod tests {
         // ---- the RC: its shipped clock still fits the shipped ladder, and Phase B costs it 3 ----
         let rc_chunks = PALW_RC_WINDOWS_V1.max_close_chunks();
         assert_eq!(PALW_RC_WINDOWS_V1.window_court, 3_000);
+        // The shipped clock is NOT the derivation at the shallow ladder any more, and that is
+        // deliberate: 2^22 would derive 60 and 2^26 would derive 51, and both are values that stop
+        // being legal when a deeper ladder arrives. The shipped clock is the derivation at the
+        // deepest reachable ladder, so it is legal at every shallower one.
         assert_eq!(palw_court_turn_deadline_v1(3_000, PALW_STEP_MAX_LEAVES, 2, rc_chunks), Some(60));
-        assert_eq!(PALW_RC_WINDOWS_V1.court_turn_deadline, 60, "the RC's shipped clock is its own derivation");
+        assert_eq!(PALW_RC_WINDOWS_V1.court_turn_deadline, 42, "the RC's shipped clock is the DEEP ladder's derivation");
+        assert!(
+            palw_ladder_fits_window_court_v1(
+                3_000,
+                crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT,
+                2,
+                42,
+                rc_chunks
+            ),
+            "the shipped clock must fit the ruleset's own 2^26 ladder, not only the fenced one"
+        );
         let rc_deep = palw_court_turn_deadline_v1(3_000, deep, 2, rc_chunks).expect("the RC window holds the deep ladder");
         assert_eq!(rc_deep, 42, "the assembly reserve costs the deep ladder three DAA of turn clock");
         assert_eq!(moves * rc_deep + palw_close_assembly_daa_v1(rc_chunks), 2_988);

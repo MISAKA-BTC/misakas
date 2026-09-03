@@ -83,8 +83,15 @@ impl CanonicalClassV1 {
             // the same predicate its backend answers `supports_court` with) registers the A16
             // operand-inventory root, because an arithmetic close's openings prove against the
             // registered root and nothing can be opened against a flat digest.
+            //
+            // **The discriminator is the backend's own `supports_court` predicate**
+            // ([`crate::qwen25_a16_backend::a16_court_capable_v1`]), not a v2 equality written out
+            // a third time. It was the equality, and ADR-0082's `graph-v5` row — which registers
+            // the TILED map precisely so a dissection's bottom can open one history tile — fell
+            // through to the flat digest: a court-capable class whose registered root nothing can
+            // be opened against, which is the A16 genesis root form defect exactly.
             ArtifactSourceV1::ConvertedA16 => {
-                if self.profile.state_chunk_map_id == kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2() {
+                if crate::qwen25_a16_backend::a16_court_capable_v1(&self.profile) {
                     Ok(crate::inventory::a16_inventory_v1(artifact, &self.profile)?.root())
                 } else {
                     Ok(artifact.artifact_digest())
@@ -98,7 +105,13 @@ impl CanonicalClassV1 {
     /// than by digest, so the error can say WHICH field disagrees — a digest comparison on a
     /// 1.7 GiB artifact says only "no".
     pub fn shape_matches(&self, artifact: &Base0ArtifactV1) -> Result<(), ClassResolveError> {
-        let a = &artifact.shape;
+        self.shape_matches_shape_v1(&artifact.shape)
+    }
+
+    /// [`Self::shape_matches`] against a header on its own. The whole check reads
+    /// `artifact.shape`, so the two are one spelling and a caller that holds only the header (a
+    /// certification tool deciding which family a file belongs to) runs the identical comparison.
+    pub fn shape_matches_shape_v1(&self, a: &Base0ShapeV1) -> Result<(), ClassResolveError> {
         let w = &self.artifact_shape;
         let fields: [(&'static str, i128, i128); 9] = [
             ("n_layers", a.n_layers as i128, w.n_layers as i128),
@@ -255,6 +268,169 @@ pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> 
         });
     }
     out
+}
+
+// =================================================================================================
+// The A16 dense row an ARTIFACT names — the width that is not in the table above
+// =================================================================================================
+
+/// Why an artifact (or a width) names no bindable A16 dense class.
+#[derive(Debug)]
+pub enum A16ArtifactRowError {
+    /// The file's header is not this family's arithmetic. Carries the FIRST field that disagrees,
+    /// from [`CanonicalClassV1::shape_matches`] — the same check the panel pairs with.
+    NotThisFamily(ClassResolveError),
+    /// This build tables no A16 row at all, so there is nothing to check a header against.
+    NoA16Rows,
+    /// A width of zero is not a graph.
+    ZeroWidth,
+    /// The width asked for is wider than the artifact's own rotary table. The file cannot serve
+    /// that row, so a certificate for it would be about weights that cannot execute it.
+    WiderThanTheArtifact { asked: u64, span: u64 },
+    /// The width projects no graph, so no class id exists for it.
+    Projection(kaspa_consensus_core::palw_step::PalwStepError),
+}
+
+impl std::fmt::Display for A16ArtifactRowError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotThisFamily(e) => write!(f, "not an artifact of the A16 dense family: {e}"),
+            Self::NoA16Rows => write!(f, "this build tables no A16 dense row, so no header can be paired against one"),
+            Self::ZeroWidth => write!(f, "n_ctx 0 is not a graph"),
+            Self::WiderThanTheArtifact { asked, span } => write!(
+                f,
+                "n_ctx {asked} is wider than the artifact's own rotary span ({span} positions) — these weights cannot serve that row"
+            ),
+            Self::Projection(e) => write!(f, "the width projects no dense A16 graph: {e:?}"),
+        }
+    }
+}
+
+impl std::error::Error for A16ArtifactRowError {}
+
+/// The A16 dense class an artifact header names, and what was checked to get there.
+#[derive(Clone, Debug)]
+pub struct A16ArtifactRowV1 {
+    /// The graph. `shape_profile_id()` is the class id.
+    pub profile: PalwShapeProfileV3,
+    /// The width the profile is at.
+    pub n_ctx: u32,
+    /// The artifact's own rotary span (`max_position`) — the widest row this file can serve, and
+    /// the width taken when the caller names none.
+    pub artifact_span: u32,
+    /// Whether `n_ctx` came from the header (`false`) or from the caller narrowing it (`true`).
+    pub narrowed: bool,
+    /// The A16 rows whose declared artifact shape this header matches. These are the FAMILY, not
+    /// the class: every row of the family declares the same artifact shape, which is precisely
+    /// why a model id cannot name a width.
+    pub family_rows: Vec<&'static str>,
+}
+
+/// **The dense A16 class an ARTIFACT can serve, at a width the artifact itself states.**
+///
+/// The A16 table above is three fixed widths (16, 18, 16), so `palw-certify bind --model-id`
+/// could only ever produce those three classes. `n_ctx` is inside `PalwShapeProfileV3` and
+/// therefore inside `shape_profile_id`, so **a model id does not determine a class**: the
+/// testnet-11 5f genesis registers the dense tier at n_ctx 512 and no row here spells it.
+///
+/// **The obvious repair — a fourth row at 512 — is the one thing that must not be done**, and the
+/// reason is falsifiability rather than taste. A row makes the width a CONSTANT again, so a wrong
+/// width binds to the wrong class in silence; naming the width, or naming the file that states
+/// it, makes a wrong width fail to bind. That difference is the whole design. This table has
+/// already failed in exactly that direction: `n_ctx` 17 is marked BURNED in its own comment above
+/// by the 2026-08-28 mispairing that registered a class on chain against the genesis constant,
+/// past a green suite.
+///
+/// Deeper: the defect is one class root spelled twice — once derived from the artifact's own
+/// inventory, once from a constant — with nothing forcing the two equal (the A16 genesis root
+/// defect). This removes the second spelling for this path rather than adding a third, so nothing
+/// new about the graph is written here. Every part is borrowed:
+///
+/// * the **family** is identified by [`CanonicalClassV1::shape_matches`] against this table's A16
+///   rows — the same call `DenseLineageV1::pair` makes when the panel pairs a holding with a class;
+/// * the **width** is the header's `max_position`, the rotary table's span, which is the widest row
+///   the file can serve — and is the number `palw_context_ladder`'s 512 already is ("the dense
+///   artifact's rotary table covers 512 positions, the converter's default");
+/// * the **graph** is `palw_a16_context_row_profile_v1`, the shipped ladder projection, under the
+///   epsilon the artifact executes (`qwen25_a16_artifact_row_profile_v1`).
+///
+/// `n_ctx` may narrow the row below the header's span (a 256-wide row on a 512-position artifact
+/// is a class those weights can serve); it may never widen it, because a rotary table that does
+/// not reach the position cannot be executed at it.
+///
+/// **This does not register anything.** The chain must already carry the derived id as an Active
+/// class; a `ClassLaneCertified` binds a lane of a class, it cannot create one.
+pub fn a16_artifact_row_v1(
+    court: &PalwCourtParamsV2,
+    artifact: &Base0ArtifactV1,
+    n_ctx: Option<u32>,
+) -> Result<A16ArtifactRowV1, A16ArtifactRowError> {
+    a16_row_for_artifact_shape_v1(court, &artifact.shape, n_ctx)
+}
+
+/// [`a16_artifact_row_v1`] over the header alone — every check the derivation makes reads the
+/// header and nothing else, and a test that had to build 1.5B parameters to exercise a width
+/// check would not be run.
+pub fn a16_row_for_artifact_shape_v1(
+    court: &PalwCourtParamsV2,
+    shape: &Base0ShapeV1,
+    n_ctx: Option<u32>,
+) -> Result<A16ArtifactRowV1, A16ArtifactRowError> {
+    let rows: Vec<CanonicalClassV1> =
+        canonical_classes_v1(court).into_iter().filter(|c| matches!(c.source, ArtifactSourceV1::ConvertedA16)).collect();
+    if rows.is_empty() {
+        return Err(A16ArtifactRowError::NoA16Rows);
+    }
+    // The panel's own pairing check, per row, so the refusal names the field that disagrees
+    // rather than saying only "no". Every A16 row declares the same artifact shape, so this
+    // either matches all of them or none — the assertion below is that fact, not an assumption.
+    let mut family_rows = Vec::new();
+    let mut first_mismatch: Option<ClassResolveError> = None;
+    for row in &rows {
+        match row.shape_matches_shape_v1(shape) {
+            Ok(()) => family_rows.push(row.model_id),
+            Err(e) => {
+                let _ = first_mismatch.get_or_insert(e);
+            }
+        }
+    }
+    if family_rows.is_empty() {
+        return Err(A16ArtifactRowError::NotThisFamily(first_mismatch.expect("a non-empty row set that matched nothing errored")));
+    }
+
+    let span = shape.max_position as u64;
+    let asked = n_ctx.map(u64::from).unwrap_or(span);
+    if asked == 0 {
+        return Err(A16ArtifactRowError::ZeroWidth);
+    }
+    if asked > span {
+        return Err(A16ArtifactRowError::WiderThanTheArtifact { asked, span });
+    }
+    let width = u32::try_from(asked).map_err(|_| A16ArtifactRowError::WiderThanTheArtifact { asked, span })?;
+    let profile =
+        kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v1(width).map_err(A16ArtifactRowError::Projection)?;
+    Ok(A16ArtifactRowV1 {
+        profile,
+        n_ctx: width,
+        artifact_span: u32::try_from(span).unwrap_or(u32::MAX),
+        narrowed: asked != span,
+        family_rows,
+    })
+}
+
+/// **The dense A16 row at a width nothing on this machine states** — the lighter form, for an
+/// operator who has no artifact where the certificate is being cut.
+///
+/// The same projection [`a16_artifact_row_v1`] ends at, with the artifact's two contributions
+/// removed: nothing confirms the family and nothing bounds the width. That is exactly the
+/// difference the doc on [`a16_artifact_row_v1`] argues about — a width taken on the operator's
+/// word can be wrong in a way a file's own header cannot — so the artifact form is the primary
+/// one and this exists for the case where the 1.7 GiB file is somewhere else.
+pub fn a16_ladder_row_v1(n_ctx: u32) -> Result<PalwShapeProfileV3, A16ArtifactRowError> {
+    if n_ctx == 0 {
+        return Err(A16ArtifactRowError::ZeroWidth);
+    }
+    kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v1(n_ctx).map_err(A16ArtifactRowError::Projection)
 }
 
 /// **One class of the qwen36 lineage this build knows the canonical form of.**
@@ -547,14 +723,6 @@ pub fn resolve_class_v1(
 #[cfg(test)]
 mod tests {
 
-    /// **The corrected A16 graph is in the catalog, registrable, and is not the class testnet-11
-    /// carries.**
-    ///
-    /// Both halves matter. Registrable, because `--palw-register-class` derives what it files from
-    /// this catalog and a class it does not know cannot be put on a running chain. Not the same id,
-    /// because the two profiles differ in what the court recomputes — and if these ever collided, a
-    /// build could change a live network's class without changing what it calls itself.
-    #[test]
     /// **A dense row whose declared epsilon is the one its artifact executes — and the older rows
     /// keep theirs.**
     ///
@@ -598,6 +766,13 @@ mod tests {
         assert_eq!(v3.profile.state_chunk_map_id, v2.profile.state_chunk_map_id);
     }
 
+    /// **The corrected A16 graph is in the catalog, registrable, and is not the class testnet-11
+    /// carries.**
+    ///
+    /// Both halves matter. Registrable, because `--palw-register-class` derives what it files from
+    /// this catalog and a class it does not know cannot be put on a running chain. Not the same id,
+    /// because the two profiles differ in what the court recomputes — and if these ever collided, a
+    /// build could change a live network's class without changing what it calls itself.
     #[test]
     fn the_corrected_a16_graph_is_a_registrable_class_of_its_own() {
         let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court");
@@ -853,5 +1028,107 @@ mod tests {
             Err(ClassResolveError::UnknownClass { class_id }) => assert_eq!(class_id, c.class_id()),
             other => panic!("an A16 class id must be UnknownClass to the floor resolver, got {other:?}"),
         }
+    }
+
+    /// **A court-capable row registers a root a court can OPEN — and `graph-v5` is court-capable.**
+    ///
+    /// The discriminator here was `state_chunk_map_id == integer_kv_state_chunk_map_id_v2()`, the
+    /// third copy of the predicate the two backend constructors also spelled. ADR-0082's v5 row
+    /// registers the TILED map, so it fell through to `artifact_digest()` — a flat hash of a whole
+    /// file, and `PalwProvenOperandsV1::from_openings_v1` proves openings against the registered
+    /// root, so an arithmetic close on the row the genesis registers could have proven nothing.
+    /// That is the A16 genesis root form defect exactly: one class root spelled two ways with
+    /// nothing forcing them equal.
+    ///
+    /// All three rows are pinned, because the fix widens a predicate and a widened predicate is
+    /// how the OTHER side gets broken: v5 → inventory (new), v2 → inventory (unmoved), and the
+    /// one-byte-map v1 row → digest (unmoved, and it is a live chain fact).
+    #[test]
+    fn a_tiled_map_row_registers_the_inventory_root_and_the_one_byte_row_still_registers_the_digest() {
+        use kaspa_consensus_core::palw_qwen25_profile::{qwen25_a16_artifact_row_profile_v5, qwen25_geometry_artifact_eps};
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+
+        let geometry = qwen25_geometry_artifact_eps(PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 8,
+            ffn_dim: 8,
+            attn_heads: 2,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 32,
+            n_threads: 1,
+            ..QWEN25_1_5B
+        });
+        let artifact_shape = Base0ShapeV1 {
+            n_layers: geometry.layer_count as usize,
+            n_heads: geometry.attn_heads as usize,
+            n_kv_heads: geometry.attn_kv_heads as usize,
+            d_head: geometry.attn_head_dim as usize,
+            d_ff: geometry.ffn_dim as usize,
+            vocab: geometry.vocab_size as usize,
+            max_position: geometry.n_ctx as usize,
+            ln_theta_gen_q: crate::artifact::LN_THETA_1000000_GEN_Q,
+            eps_q: geometry.rms_eps_q,
+        };
+        let artifact = Base0ArtifactV1::derive_deterministic(artifact_shape, 0x5A16)
+            .expect("a valid shape")
+            .with_a16_params(crate::engine_a16::derived_a16_store(&artifact_shape))
+            .expect("the derived store is sorted and unique");
+
+        let row = |profile: PalwShapeProfileV3| CanonicalClassV1 {
+            model_id: "test/a16",
+            profile,
+            artifact_shape,
+            canonical_job: QWEN25_A16_CANONICAL,
+            source: ArtifactSourceV1::ConvertedA16,
+            inventory_geometry: PALW_RC_BASE0_GEOMETRY,
+        };
+
+        let v5 = row(qwen25_a16_artifact_row_profile_v5(geometry).expect("a valid v5 profile"));
+        assert!(map::palw_map_addresses_history_tiles_v1(&v5.profile), "the row under test must be the tiled one");
+        let v5_root = v5.artifact_root(&artifact).expect("the v5 row has an inventory");
+        assert_ne!(v5_root, artifact.artifact_digest(), "a court-capable row must not register a flat digest");
+        assert_eq!(
+            v5_root,
+            crate::inventory::a16_inventory_v1(&artifact, &v5.profile).expect("the v5 inventory builds").root(),
+            "it registers the operand inventory an opening proves against"
+        );
+
+        let v2 = row(kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2(geometry).expect("a valid v2 profile"));
+        assert_eq!(v2.profile.state_chunk_map_id, map::integer_kv_state_chunk_map_id_v2());
+        assert_eq!(
+            v2.artifact_root(&artifact).expect("the v2 row has an inventory"),
+            crate::inventory::a16_inventory_v1(&artifact, &v2.profile).expect("the v2 inventory builds").root(),
+            "widening the predicate must not move the row already registered"
+        );
+
+        let v1 = row(qwen25_a16_profile_v1(geometry).expect("a valid v1 profile"));
+        assert!(!map::palw_map_addresses_history_tiles_v1(&v1.profile));
+        assert_ne!(v1.profile.state_chunk_map_id, map::integer_kv_state_chunk_map_id_v2());
+        assert_eq!(
+            v1.artifact_root(&artifact).expect("the v1 row answers"),
+            artifact.artifact_digest(),
+            "the one-byte-map row is not court-capable and keeps the digest testnet-11 registered"
+        );
+
+        // **Is the tokenizer commitment a GENESIS INPUT?** The 5f card has to know, because the
+        // shipped dense artifact declares none (64 zero bytes) and binding one is a re-conversion.
+        // `ClassRegistered` carries exactly two identities — `class_id` and `artifact_root` — and
+        // `PalwShapeProfileV3` has no tokenizer field, so the whole question is which root the row
+        // registers. It is answered here rather than reasoned about, in both directions.
+        let bound = artifact.clone().with_tokenizer_commitment(Base0ArtifactV1::tokenizer_commitment_of(b"{}"));
+        assert_ne!(bound.artifact_digest(), artifact.artifact_digest(), "the commitment is inside the artifact digest");
+        assert_eq!(
+            v5.artifact_root(&bound).expect("the v5 row has an inventory"),
+            v5_root,
+            "a court-capable row registers the operand inventory, which the tokenizer is not in — so binding one \
+             is NOT a genesis input for this row and the registered root does not move"
+        );
+        assert_ne!(
+            v1.artifact_root(&bound).expect("the v1 row answers"),
+            v1.artifact_root(&artifact).expect("the v1 row answers"),
+            "a digest-rooted row IS moved by binding a tokenizer — which is why the v1 rows on chain cannot be re-bound"
+        );
     }
 }

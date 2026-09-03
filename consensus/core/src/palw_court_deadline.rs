@@ -413,12 +413,16 @@ mod tests {
     /// **The RC's numbers, pinned**, so a change to any input fails here with its arithmetic
     /// visible rather than somewhere downstream.
     #[test]
-    fn the_rc_ladder_spends_2760_of_its_3000() {
-        // 2^22 leaves = 22 bisection rounds; 2 moves each; 2 terminal moves; 60 DAA a move.
-        assert_eq!(PALW_RC_WINDOWS_V1.court_turn_deadline, 60);
+    fn the_rc_ladder_spends_2484_of_its_3000() {
+        // The RULESET's ladder is 2^26 (2026-09-03) = 26 bisection rounds; 2 moves each; 2
+        // terminal moves; 42 DAA a move. The clock is the derivation at the deepest reachable
+        // ladder rather than at this one, so it is legal here with room and legal when the 2^32
+        // fence arms — which a clock derived for 2^26 alone (51) would not be.
+        assert_eq!(PALW_RC_WINDOWS_V1.court_turn_deadline, 42);
         assert_eq!(PALW_RC_WINDOWS_V1.window_court, 3_000);
-        assert_eq!((2 * 22 + 2) * 60, 2_760);
-        assert!(2_760 < PALW_RC_WINDOWS_V1.window_court);
+        assert_eq!((2 * 26 + 2) * 42, 2_268);
+        assert_eq!((2 * 32 + 2) * 42, 2_772, "and it still fits when the deeper fence arms");
+        assert!(2_268 < PALW_RC_WINDOWS_V1.window_court);
         // The devnet set, same arithmetic at ITS clock: (2 x 22 + 2) x 4 = 184 < 300.
         //
         // **Neither number moved with ADR-0080, and a commit in between says they did.** The

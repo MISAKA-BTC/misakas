@@ -212,7 +212,36 @@ fn gate_accepts(
     ) else {
         return false;
     };
-    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v2(bundle, profile, &canonical, &probe, &[]).is_ok()
+    // **A fused profile is judged under the court that can try it** (ADR-0082 Decision 6): the
+    // admission gate refuses a graph-v5 row by name unless the k-ary court is in force, so the
+    // corpus is gated the way an ARMED ruleset gates it — the RC's derived arity, the Merkle prompt
+    // ids the rows arm with, and the RC's court window. A profile with no fused site is gated
+    // exactly as before (`None`), so the v2 corpus reads unchanged.
+    // The court is the bundle's own (`fuzz_*_profiles_from_v1` arms the dissection arity on a fused
+    // base), the prompt ids are the Merkle form graph-v5 rows arm with, and the window is the RC's.
+    // A fused row is also PRICED for that court: the ladder rules carry the cost shape the gate
+    // compares against the arity, and a base too small for the long-form rules is priced by the
+    // anchored shape with the same dissection — `PricedForADifferentCourt` is the gate's answer
+    // when a registrant prices a row for a court the ruleset does not play, not this harness's.
+    let fused = kaspa_consensus_core::palw_class_admission_v2::palw_profile_has_fused_attention_v1(profile);
+    let arity = bundle.court.dissection_arity();
+    let court = fused.then_some(kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
+        dissection_arity: arity,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+        window_court_daa: kaspa_consensus_core::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.window_court,
+    });
+    let ladder = fused.then(|| {
+        kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, court).unwrap_or_else(|| {
+            kaspa_consensus_core::palw_class_admission_v2::PalwClassLadderRulesV1 {
+                ladder: bundle.court.max_step_leaf_count(),
+                cost_shape: kaspa_consensus_core::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(profile)
+                    .with_dissection_v1(arity),
+                canonical_footprint_floor: 0,
+            }
+        })
+    });
+    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v5(bundle, profile, &canonical, &probe, &[], &[], ladder, court)
+        .is_ok()
 }
 
 /// Drive `iterations` mutated profiles through gate → plan → court cost → double execution. The
@@ -234,7 +263,7 @@ pub fn fuzz_qwen36_profiles_from_v1(
     base: &PalwShapeProfileV3,
 ) -> FuzzTallyV1 {
     let engine = Qwen36Engine::new(artifact);
-    let bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+    let mut bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
         base.shape_profile_id(),
         kaspa_hashes::Hash64::from_u64_word(0xCA7),
         kaspa_hashes::Hash64::from_u64_word(0xC0757),
@@ -245,6 +274,13 @@ pub fn fuzz_qwen36_profiles_from_v1(
         ),
     )
     .expect("the devnet bundle assembles");
+    // **A fused base is fuzzed under the court that can try it** (ADR-0082 Decision 6): the devnet
+    // bundle plays the binary court, and the gate refuses every graph-v5 row by name under it, so
+    // the corpus would never reach execution. The RC derives 4 (`palw_court_arity_v1`, the
+    // smallest legal arity inside the window); a v2 base leaves the bundle byte for byte.
+    if kaspa_consensus_core::palw_class_admission_v2::palw_profile_has_fused_attention_v1(base) {
+        bundle.court = bundle.court.with_dissection_arity(4).expect("4 is a legal dissection arity");
+    }
     let root = artifact.artifact_root();
 
     let mut rng = FuzzRng::new(seed);

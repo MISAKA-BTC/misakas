@@ -112,6 +112,11 @@ const MAX_REQUEST_BODY_BYTES: usize = 1 << 20;
 const HARD_MAX_PROMPT_BYTES: usize = 64 * 1024;
 /// No `--max-decode-cap` may exceed this, whatever the flag says.
 const HARD_MAX_DECODE_CAP: u32 = 4_096;
+/// **The largest temperature the job's own field can hold**, derived from the field rather than
+/// chosen: `temperature_q` is a `u32` in Q24, so the representable range is `[0, u32::MAX / 2^24]`
+/// — a hair under 256. A request above it is refused by name rather than clamped, because a
+/// clamped temperature is a job that ran under a rule the requester did not ask for.
+const MAX_TEMPERATURE: f64 = (u32::MAX as f64) / (kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_T_ONE as f64);
 /// A single chat turn may not carry more messages than this.
 const MAX_CHAT_MESSAGES: usize = 64;
 /// Open connections. Past this the listener answers 503 and closes, rather than growing threads.
@@ -564,6 +569,67 @@ struct ChatRequest {
     /// to the person's prompt, and it is theirs to publish.
     #[serde(default)]
     serve_dsl: bool,
+    /// **ADR-0082 Decision 11: the sampling temperature the person asked for**, as an ordinary
+    /// float, in the class's own logit units — the number an OpenAI-shaped client already sends.
+    /// Quantized to Q24 by [`sampling_from_request`] and carried into the job id; absent or `0.0`
+    /// is the greedy default, which is the only value a network without the fence admits.
+    #[serde(default)]
+    temperature: Option<f64>,
+    /// ADR-0082 Decision 11: 64 hex characters, the seed the sampler draws under. Absent is the
+    /// zero seed. Named by the requester rather than rolled here so the same request twice is the
+    /// same answer twice — and so nothing about the draw is the gateway's to choose.
+    #[serde(default)]
+    seed: Option<String>,
+}
+
+/// **ADR-0082 Decision 11: the request's sampler inputs, quantized and gated on the chain.**
+///
+/// Returns the `(sampling_seed, temperature_q)` pair the job carries. Three rules, in refusal
+/// order:
+///
+/// 1. **The fence decides, and the chain holds the fence.** While
+///    `ChainFacts::fp_decode_rules_armed` is false — every shipped preset — anything but the
+///    greedy defaults is refused HERE, with the fence's name. It is not a gateway flag: a flag
+///    could disagree with the network, and the direction it would disagree in is the expensive one
+///    (every commitment refused by the transition, after the inference is already paid for). It is
+///    also not a silent downgrade: a user who asked for a temperature and got greedy has been told
+///    a false thing about what ran.
+/// 2. **Quantization is exact and stated.** `temperature_q = round(temperature × 2^24)` — Q24, the
+///    class's own fixed point ([`kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_T_ONE`]),
+///    so `1.0` is `16,777,216` and the number a user sets is the number the rule uses. A
+///    temperature outside `[0, MAX_TEMPERATURE]`, or one that is not a number, is refused rather
+///    than clamped.
+/// 3. **The seed is the requester's.** 64 hex characters, or absent for the zero seed. The gateway
+///    never rolls one: a seed this process chose would make the same request twice two different
+///    answers, and would put the draw in the hands of the party that is not paying for it.
+fn sampling_from_request(chat: &ChatRequest, facts: &chain::ChainFacts) -> Result<([u8; 32], u32), String> {
+    use kaspa_consensus_core::palw_decode_select_v2::{PALW_DECODE_SEED_GREEDY, PALW_DECODE_T_ONE, PALW_DECODE_TEMPERATURE_GREEDY};
+    let temperature_q = match chat.temperature {
+        None => PALW_DECODE_TEMPERATURE_GREEDY,
+        Some(t) if t.is_nan() || t < 0.0 || t > MAX_TEMPERATURE => {
+            return Err(format!("temperature must be a number in 0..={MAX_TEMPERATURE:.3}; got {t}"));
+        }
+        Some(t) => (t * PALW_DECODE_T_ONE as f64).round() as u32,
+    };
+    let sampling_seed = match chat.seed.as_deref() {
+        None | Some("") => PALW_DECODE_SEED_GREEDY,
+        Some(hex) => {
+            let mut out = [0u8; 32];
+            if hex.len() != 64 || faster_hex::hex_decode(hex.as_bytes(), &mut out).is_err() {
+                return Err("seed must be 64 hex characters".to_string());
+            }
+            out
+        }
+    };
+    if !facts.fp_decode_rules_armed && (temperature_q != PALW_DECODE_TEMPERATURE_GREEDY || sampling_seed != PALW_DECODE_SEED_GREEDY) {
+        return Err(
+            "this network has not armed ADR-0082 Decision 11's sampler (Params::palw_fp_decode_rules) — a job with a \
+             temperature or a seed would be refused by the transition as SamplingNotArmed, after the inference had \
+             already been paid for. Omit `temperature` and `seed`, or send temperature 0."
+                .to_string(),
+        );
+    }
+    Ok((sampling_seed, temperature_q))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -783,6 +849,10 @@ fn handle_chat(
     let mut job_nonce = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut job_nonce);
 
+    // ADR-0082 Decision 11, decided from the request and the CHAIN — before the model is loaded,
+    // so a refusal costs a 4xx rather than an inference.
+    let (sampling_seed, temperature_q) = sampling_from_request(&chat, &facts)?;
+
     let request = PalwFpWorkerRequestV3 {
         version: PALW_FP_V3_VERSION,
         network_domain: identity.network_domain,
@@ -797,6 +867,8 @@ fn handle_chat(
         max_context_tokens: manifest.n_ctx,
         privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
         prompt_mode: PALW_FP_PROMPT_MODE_USER,
+        sampling_seed,
+        temperature_q,
         input: PalwFpWorkerInputV3::Segments(plan.segments.clone()),
         model_profile_id: manifest.model_profile_id,
         runtime_manifest_hash: manifest.runtime_manifest_hash,
@@ -1160,11 +1232,7 @@ fn main() {
         &hex(worker.manifest().runtime_manifest_hash)[..16],
         &hex(identity.class_id)[..16],
         worker.manifest().n_ctx,
-        if wire::special_id(worker.manifest(), "<|im_start|>").is_some() {
-            wire::TEMPLATE_ID_CHAT_SEGMENTS_V1
-        } else {
-            wire::TEMPLATE_ID_PLAIN_SEGMENTS_V1
-        },
+        wire::template_id_for(worker.manifest()),
     );
     let boot_facts = chain_source.read();
     eprintln!(
@@ -1269,11 +1337,7 @@ fn serve_connection(
                 &serde_json::json!({
                     "status": "ok",
                     "runtime_manifest_hash": hex(worker.manifest().runtime_manifest_hash),
-                    "template_id": if wire::special_id(worker.manifest(), "<|im_start|>").is_some() {
-                        wire::TEMPLATE_ID_CHAT_SEGMENTS_V1
-                    } else {
-                        wire::TEMPLATE_ID_PLAIN_SEGMENTS_V1
-                    },
+                    "template_id": wire::template_id_for(worker.manifest()),
                     "n_ctx": worker.manifest().n_ctx,
                     "class_id": hex(identity.class_id),
                     "network_domain": hex(identity.network_domain),
@@ -1628,6 +1692,57 @@ mod tests {
         assert_eq!(expire_stale_commitments(&dir, 10_000, COMMITMENT_ANCHOR_TTL_DAA), 0);
         assert_eq!(misaka_palw_fp_submit::EXPIRED_SUFFIX, ".expired", "both halves of the loop share one suffix");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **ADR-0082 Decision 11 at the entrance: the fence is the chain's, the quantization is
+    /// exact, and neither is silently softened.**
+    #[test]
+    fn the_gateway_refuses_sampling_until_the_chain_arms_it() {
+        use kaspa_consensus_core::palw_decode_select_v2::{PALW_DECODE_SEED_GREEDY, PALW_DECODE_T_ONE};
+        let chat = |temperature: Option<f64>, seed: Option<&str>| ChatRequest {
+            model: None,
+            messages: Vec::new(),
+            max_tokens: None,
+            stream: None,
+            derive: None,
+            serve_dsl: false,
+            temperature,
+            seed: seed.map(str::to_string),
+        };
+        let dormant = chain::ChainFacts::default();
+        let armed = chain::ChainFacts { fp_decode_rules_armed: true, ..Default::default() };
+
+        // Greedy is admissible on every network, and is what an absent field means.
+        assert_eq!(sampling_from_request(&chat(None, None), &dormant), Ok((PALW_DECODE_SEED_GREEDY, 0)));
+        assert_eq!(sampling_from_request(&chat(Some(0.0), Some("")), &dormant), Ok((PALW_DECODE_SEED_GREEDY, 0)));
+
+        // A temperature on a network that has not armed the fence is a refusal that NAMES it —
+        // not a silent downgrade to greedy, and not an inference the operator pays for and the
+        // transition then refuses.
+        let refused = sampling_from_request(&chat(Some(0.7), None), &dormant).unwrap_err();
+        assert!(refused.contains("palw_fp_decode_rules"), "the refusal names the fence: {refused}");
+        assert!(refused.contains("SamplingNotArmed"), "and the error the transition would raise: {refused}");
+        // A seed alone is the same refusal — it is a field claiming to decide something.
+        assert!(sampling_from_request(&chat(None, Some(&"ab".repeat(32))), &dormant).is_err());
+
+        // Armed: the quantization is `round(t x 2^24)`, exactly.
+        assert_eq!(sampling_from_request(&chat(Some(1.0), None), &armed), Ok((PALW_DECODE_SEED_GREEDY, PALW_DECODE_T_ONE as u32)));
+        assert_eq!(sampling_from_request(&chat(Some(0.5), None), &armed).unwrap().1, (PALW_DECODE_T_ONE / 2) as u32);
+        assert_eq!(sampling_from_request(&chat(Some(0.7), None), &armed).unwrap().1, 11_744_051, "0.7 x 2^24 rounded");
+
+        // The seed is 64 hex characters or it is a refusal — never a truncation.
+        let hex = "0123456789abcdef".repeat(4);
+        assert_eq!(sampling_from_request(&chat(Some(1.0), Some(&hex)), &armed).unwrap().0[0], 0x01);
+        assert!(sampling_from_request(&chat(Some(1.0), Some("dead")), &armed).is_err(), "a short seed is refused");
+        assert!(sampling_from_request(&chat(Some(1.0), Some(&"zz".repeat(32))), &armed).is_err(), "non-hex is refused");
+
+        // The ceiling is the FIELD's, derived: `u32::MAX / 2^24`. Above it is a refusal, because a
+        // clamped temperature is a job that ran under a rule nobody asked for.
+        assert!((MAX_TEMPERATURE - 255.999_999).abs() < 1e-4, "u32::MAX / 2^24 = {MAX_TEMPERATURE}");
+        assert!(sampling_from_request(&chat(Some(MAX_TEMPERATURE), None), &armed).is_ok());
+        assert!(sampling_from_request(&chat(Some(MAX_TEMPERATURE + 1.0), None), &armed).is_err());
+        assert!(sampling_from_request(&chat(Some(-0.1), None), &armed).is_err());
+        assert!(sampling_from_request(&chat(Some(f64::NAN), None), &armed).is_err());
     }
 
     /// **ADR-0079 S5.** The gateway holds the executor PUBLIC key only, and refuses to boot when a
