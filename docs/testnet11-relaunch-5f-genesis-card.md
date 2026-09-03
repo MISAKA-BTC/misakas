@@ -4868,3 +4868,24 @@ beside the causes, and the guard reads **six OK**.
 The word "frozen" has not been said. The ceremony's first step — the six re-pins — waits for it. The
 rehearsal on ibm (`candidate-4d572142`) will print the t11 fingerprint from a node on another machine;
 it must equal `a5291e005aca6068…` from this table.
+
+## FROZEN — 4d57214222953bdd96d0f94e3693e09d01a995f3
+
+3e's word, with the finalize read from its log: CI clippy 0; core 1822/3 = exactly the three pin
+tests; base0 0; derive 0 with only the transformer-id pin red; sdk/cli/kaspad/gateway/certify-bin/
+probe/artifact-names/answer-binding all 0; conformance selftest 0 disagreed; stranger 15/18 with
+the three transformer pins the only disagreements; **the premine printer ran exactly one test.**
+`derive/src` unchanged since the basis. The into-5f merge `ef50c376` = 5f + tip, zero conflicts.
+
+### Ordering correction, made before the step: merge first, then the six re-pins
+
+The run-sheet said re-pins then merge. The pin sites exist in their final form only on the merged
+tree, so the merge comes first and the re-pins are applied to it. A dry-run worktree on the
+*computed* merged tree (a dangling commit; no branch touched) carries the patch — **4 files,
+12 insertions / 12 deletions** — and the five pin tests run there first; only green there lets the
+patch touch 5f, where the same five run again after the real merge + apply.
+
+*A generator defect caught by its own output:* the first patch matched the two `genesis.rs` byte
+arrays with whitespace joins and no commas, edited nothing there, and produced a 48-line "patch"
+that was four-sixths of one. Regenerated with commas: 82 lines, all six sites, every old value
+grep-checked absent from the tree before the tests were read.
