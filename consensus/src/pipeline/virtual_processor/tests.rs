@@ -2452,7 +2452,7 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
         challenge_v2, class_ticket_v3, palw_network_domain_v2_for,
     };
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
-    use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_A16_CANONICAL, qwen25_a16_class_id_v2};
+    use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_A16_CANONICAL, qwen25_a16_graph_v5_profile_v1};
     use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
     use misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend;
 
@@ -2460,7 +2460,13 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
     let opened = std::time::Instant::now();
     let bytes = std::fs::read(&path).expect("the artifact reads");
     let artifact = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).expect("the artifact decodes");
-    let artifact_root = artifact.artifact_digest();
+    // The registered dense row is the graph-v5 512 row (ADR-0082), and a court-capable row
+    // registers the A16 INVENTORY root, not the container digest — `CanonicalClassV1::artifact_root`
+    // is the one spelling (the genesis constant is measured equal to it for the shipped file).
+    let artifact_root = misaka_palw_base0::classes::a16_graph_v5_row_v1()
+        .expect("the graph-v5 dense row")
+        .artifact_root(&artifact)
+        .expect("the inventory root derives");
     eprintln!(
         "dense drill: {} layers / vocab {} / root {artifact_root} in {:?}",
         artifact.shape.n_layers,
@@ -2493,7 +2499,7 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
     // The REGISTERED dense class is the corrected `graph-v2` one (ADR-0069): the v1 declaration
     // announces a one-byte state map against an i32 cache, so its backend is not court-capable and
     // a class on it cannot hold weight.
-    let dense_class_id = qwen25_a16_class_id_v2();
+    let dense_class_id = qwen25_a16_graph_v5_profile_v1().expect("the graph-v5 dense profile").shape_profile_id();
     assert_ne!(dense_class_id, bundle.base_class_id, "the dense class is not the floor");
 
     let config = ConfigBuilder::new(params)
