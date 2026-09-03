@@ -91,7 +91,17 @@ pub(crate) fn dense_artifact_by_registered_root(
     if let Some(artifact) = dense_artifact_by_digest(holdings, root) {
         return Some(artifact);
     }
-    if profile.state_chunk_map_id != kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2() {
+    // **`a16_court_capable_v1`, the ONE spelling of "is this row court-capable"** (audit D H-4).
+    //
+    // This carried the v2-map equality by hand — a fourth copy of a predicate stream M had already
+    // collapsed into one function, and the one copy that disagreed. `CanonicalClassV1::artifact_root`
+    // registers the INVENTORY root for any court-capable row, and a graph-v5 dense row is
+    // court-capable through the TILED v3 map, not through the v2 one. Under the equality the
+    // inventory arm was skipped for exactly those rows: the digest arm missed (the registered root
+    // is an inventory root), the inventory arm never ran, and the node reported "holds no artifact
+    // whose digest is the registered root" forever, for an artifact it was holding — no producer,
+    // seat or court replay of a v5 class could be built through the SDK at all.
+    if !misaka_palw_base0::qwen25_a16_backend::a16_court_capable_v1(profile) {
         return None;
     }
     holdings
@@ -172,7 +182,15 @@ impl PalwModelLineageV1 for DenseLineageV1 {
         // root and refuses anything it cannot prove. A refusal here is not final — the id may be
         // the A16 tier's, whose entries the floor resolver deliberately does not know.
         if let Ok(resolved) = resolve_class_v1(court, class_id, artifact_root, &dense_artifacts(holdings)) {
-            return Some(Ok(Box::new(misaka_palw_base0::backend::Base0Backend::new(resolved))));
+            // **The ladder the RULESET froze, not the module constant** (ADR-0077 Decision 12).
+            // The court is right here and the backend has asked for it since W1; until this line
+            // the answer was always the default, which made the decode budget a property of the
+            // build rather than of the network. Every shipped preset freezes
+            // `max_step_leaf_count` at `PALW_STEP_MAX_LEAVES`, so this changes nothing until a
+            // preset says otherwise — which is the point.
+            return Some(Ok(Box::new(
+                misaka_palw_base0::backend::Base0Backend::new(resolved).with_step_ladder_cap(court.max_step_leaf_count()),
+            )));
         }
         // **The A16 dense class.** Its artifact rides the same container as the floor's, so it is
         // found in the same holdings — under the ROOT FORM the row registers: the v1 row's is the
@@ -189,12 +207,24 @@ impl PalwModelLineageV1 for DenseLineageV1 {
             if let Some(artifact) =
                 holdings.iter().filter_map(artifact_of).find(|a| entry.artifact_root(a).is_ok_and(|root| root == artifact_root))
             {
-                return Some(Ok(Box::new(misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
-                    artifact,
-                    network_id.to_vec(),
-                    entry.profile.clone(),
-                    entry.canonical_job,
-                ))));
+                // **The compile IS the resolve's answer** (ADR-0082 audit E, H-1). `::new` now
+                // compiles the class's declaration into the program it executes — one authority,
+                // the same one `from_registered_profile` uses — so a graph this build cannot serve
+                // is a named refusal here instead of a backend that quietly runs a different
+                // program from the one the class declares. It is also what lets a dense row move
+                // to ADR-0082's fused attention site at all: the plan-less route is the compiled
+                // twenty-seven-row v2 program and refuses a v5 declaration by name.
+                return Some(
+                    misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
+                        artifact,
+                        network_id.to_vec(),
+                        entry.profile.clone(),
+                        entry.canonical_job,
+                    )
+                    .map(|backend| -> Box<dyn PalwExecutionBackendV1> {
+                        Box::new(backend.with_step_ladder_cap(court.max_step_leaf_count()))
+                    }),
+                );
             }
             return Some(Err(format!(
                 "the chain names the {} class and this node holds no artifact whose registered root form is {artifact_root} \
@@ -203,5 +233,93 @@ impl PalwModelLineageV1 for DenseLineageV1 {
             )));
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_artifact_row_profile_v5, qwen25_a16_profile_v2};
+    use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
+    use misaka_palw_base0::engine_a16::derived_a16_store;
+
+    fn geometry() -> PalwQwen25GeometryV1 {
+        PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 16,
+            ffn_dim: 12,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 16,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        }
+    }
+
+    fn holding() -> (PalwLoadedArtifactV1, std::sync::Arc<Base0ArtifactV1>) {
+        let g = geometry();
+        let shape = Base0ShapeV1 {
+            n_layers: g.layer_count as usize,
+            n_heads: g.attn_heads as usize,
+            n_kv_heads: g.attn_kv_heads as usize,
+            d_head: g.attn_head_dim as usize,
+            d_ff: g.ffn_dim as usize,
+            vocab: g.vocab_size as usize,
+            max_position: g.n_ctx as usize,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: 1,
+        };
+        let artifact = std::sync::Arc::new(
+            Base0ArtifactV1::derive_deterministic(shape, 0xF022)
+                .expect("a valid shape")
+                .with_a16_params(derived_a16_store(&shape))
+                .expect("sorted and unique"),
+        );
+        let loaded = PalwLoadedArtifactV1::from_parts(DENSE_LINEAGE_ID, None, "test fixture".to_string(), artifact.clone());
+        (loaded, artifact)
+    }
+
+    /// **Audit D H-4: a chain-registered graph-v5 dense row resolves to the artifact this node
+    /// holds.**
+    ///
+    /// `CanonicalClassV1::artifact_root` registers the INVENTORY root for any COURT-CAPABLE row,
+    /// and `a16_court_capable_v1` is the one spelling of that predicate — true for the tiled v3
+    /// map as well as for the integer-kv v2 one. This function carried a fourth copy of the
+    /// predicate by hand as `state_chunk_map_id == integer_kv_state_chunk_map_id_v2()`, so for a
+    /// v5 row the digest arm missed (the registered root is an inventory root), the inventory arm
+    /// was skipped, and the node reported "holds no artifact whose digest is the registered root"
+    /// forever, for an artifact it was holding — no producer, seat or court replay of a v5 class
+    /// could be built through the SDK.
+    #[test]
+    fn a_chain_registered_graph_v5_row_resolves_to_its_inventory_root() {
+        let (loaded, artifact) = holding();
+        let holdings = [loaded];
+
+        let v5 = qwen25_a16_artifact_row_profile_v5(geometry()).expect("the v5 projection is a valid profile");
+        assert!(
+            misaka_palw_base0::qwen25_a16_backend::a16_court_capable_v1(&v5),
+            "the premise: a v5 row is court-capable through the tiled map"
+        );
+        assert_ne!(
+            v5.state_chunk_map_id,
+            kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2(),
+            "and it is NOT the v2 map — the equality this function used to carry"
+        );
+        let root = misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &v5).expect("the inventory roots").root();
+        assert_ne!(root, artifact.artifact_digest(), "an inventory root is not the digest, so the digest arm cannot answer");
+        assert!(
+            dense_artifact_by_registered_root(&holdings, root, &v5).is_some(),
+            "a node holding the artifact must resolve the row the chain registered"
+        );
+
+        // The v2 row is untouched: it is court-capable too, and its inventory root still resolves.
+        let v2 = qwen25_a16_profile_v2(geometry()).expect("the v2 projection is a valid profile");
+        let v2_root = misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &v2).expect("the inventory roots").root();
+        assert!(dense_artifact_by_registered_root(&holdings, v2_root, &v2).is_some(), "the v2 row still resolves");
+        // And the digest form still resolves, under either profile.
+        assert!(dense_artifact_by_registered_root(&holdings, artifact.artifact_digest(), &v5).is_some());
     }
 }

@@ -24,9 +24,18 @@
 //! by that ordering, not by a filter.
 //!
 //! What is deliberately NOT here: model / runtime / manifest identities. The job names its
-//! `class_id` and the class registration (`palw_registry`) binds the rest; admission cross-checks
-//! the job's `tokenizer_id` against the registered row. Carrying the same fact in two places is
-//! how the two drift apart — ids are lookup keys, not passengers.
+//! `class_id` and the class registration (`palw_registry`) binds the rest. Carrying the same fact
+//! in two places is how the two drift apart — ids are lookup keys, not passengers.
+//!
+//! **What NOTHING on chain checks today, stated so nobody budgets their suspicion on a guard that
+//! is not there:** the job's `tokenizer_id`. This doc used to say admission cross-checks it against
+//! the registered row; no such check exists (`palw_fp_admission_v3` never reads the field; its only
+//! consumer folds it into the job context hash). It cannot be built here either: a class
+//! registration carries `class_id` and `artifact_root`, and a court-capable row's root is the
+//! A16 inventory root, which has no tokenizer input — so the chain holds no tokenizer identity to
+//! compare against. Binding one is a change to what a class IS, not a check to add. The exposure
+//! this leaves is at the gateway, where text becomes ids: a seat replays from ids and is not
+//! affected; the person whose prompt was tokenized is. (ADR-0082 stream M, 2026-09-03.)
 
 use crate::Hash64;
 use crate::palw_attempt_v2::PALW_ATTEMPT_V2_L1_TAG_BYTES;
@@ -36,8 +45,12 @@ use blake2b_simd::Params;
 /// Object version for every FP-V3 wire object. A different version is a different object family.
 /// **3 → 4** (2026-09-02, ADR-0074): the job carries `prompt_mode`, the commitment carries
 /// `work_leaves` in place of `cu`, and a quantum is a fraction of the class's own canonical job.
+/// **4 → 5** (2026-09-03, ADR-0082 Decision 11): the job carries `sampling_seed` and
+/// `temperature_q`. Two fields inside the job id means every claim id moves, which is exactly
+/// what a ruleset move is for — and the alternative, a sampler whose inputs live outside the
+/// identity the executor signed, is a seed the executor can change after the fact.
 /// A node on the old wire cannot decode the new payload, and must not.
-pub const PALW_FP_V3_VERSION: u16 = 4;
+pub const PALW_FP_V3_VERSION: u16 = 5;
 
 /// Width of the expanded spend L1 tag — the attempt lane's width, so the Layer-0 finalizer's call
 /// shape is identical across both block kinds.
@@ -216,8 +229,10 @@ pub struct PalwFreePromptJobV3 {
     /// protocol derives randomness from it, which is exactly why grinding it buys nothing — the
     /// draw beacon postdates the claim it would try to aim at.
     pub job_nonce: [u8; 32],
-    /// MUST equal the class row's `tokenizer_id`. Carried as a cross-check because a token-id
-    /// sequence read under the wrong tokenizer is a different prompt with the same bytes.
+    /// The tokenizer the executor read the prompt under, as the executor names it. A token-id
+    /// sequence read under the wrong tokenizer is a different prompt with the same bytes — but
+    /// **no consensus rule compares this field to anything** (the registration carries no tokenizer
+    /// identity; see the module doc). It is folded into the job context hash and nothing more.
     pub tokenizer_id: Hash64,
     pub prompt_token_ids_hash: Hash64,
     pub prompt_tokens: u32,
@@ -245,6 +260,34 @@ pub struct PalwFreePromptJobV3 {
     /// when nobody is asking (ADR-0074 Decision 1); the ids are a pure function of the job and
     /// travel only in the job material. Anything else is refused.
     pub prompt_mode: u8,
+    /// **ADR-0082 Decision 11: the seed the decode sampler draws under.**
+    ///
+    /// `[0u8; 32]` is the greedy default, and at `temperature_q == 0` this field is INERT — the
+    /// key never reads it (`crate::palw_decode_select_v2::decode_lane_key_v2`). Carried anyway,
+    /// and hashed anyway, because a field outside identity is a field two objects can differ in
+    /// while claiming to be the same object (the module note above).
+    ///
+    /// It is inside [`fp_job_id_v3`] BY CONSTRUCTION — that function hashes the whole canonical
+    /// borsh of this struct — and therefore inside the claim id. Two consequences, and they are
+    /// the reason Decision 11 puts the seed here rather than in the commitment:
+    ///
+    /// * **A seed cannot be changed after the fact.** The executor signed an identity that
+    ///   already contains it, so "I meant a different seed" is a different job.
+    /// * **Grinding a seed costs a WHOLE INFERENCE per draw**, which is ADR-0072's rule kept (one
+    ///   inference, one ticket) rather than broken. Nothing here is a lottery input either: the
+    ///   quantum ticket consumes a beacon that does not exist when this field is fixed on chain
+    ///   (ADR-0044 F6), so a chosen seed buys a different ANSWER and never a better draw.
+    pub sampling_seed: [u8; 32],
+    /// **ADR-0082 Decision 11: the sampling temperature, in Q24** — `1 << 24` is a temperature of
+    /// one in the class's own logit units.
+    ///
+    /// [`crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY`] (zero) is the shipped
+    /// rule byte for byte, and is what every row carries while `Params::palw_fp_decode_rules` is
+    /// dormant; a job declaring anything else is refused BY NAME
+    /// ([`PalwFpV3Error::SamplingNotArmed`]) rather than quietly executed greedily, because a
+    /// user who asked for a temperature and silently got greedy has been told a false thing about
+    /// what ran.
+    pub temperature_q: u32,
 }
 
 /// `H(canonical(job))` — every field, no exceptions.
@@ -280,19 +323,38 @@ pub fn fp_canonical_anchor_v1(job: &PalwFreePromptJobV3) -> Hash64 {
 }
 
 /// **The identity of the work a claim commits** (ADR-0074 Decision 4):
-/// `H(domain ‖ class ‖ prompt hash ‖ decode executed ‖ bond)`. One execution committed under N
-/// nonces, N retention values or N anchors is N lottery entries at the cost of hashing; the
-/// transition refuses a commitment whose work identity a live claim already holds.
-pub fn fp_work_id_v1(
-    class_id: &Hash64,
-    prompt_token_ids_hash: &Hash64,
-    decode_tokens_executed: u32,
-    executor_bond: &TransactionOutpoint,
-) -> Hash64 {
+/// `H(domain ‖ class ‖ prompt hash ‖ bond)`. One execution committed under N nonces, N retention
+/// values or N anchors is N lottery entries at the cost of hashing; the transition refuses a
+/// commitment whose work identity a live claim already holds.
+///
+/// # Why `decode_tokens_executed` is NOT in it (audit H-4)
+///
+/// It was, and that made the same prompt run once and committed at limits `1, 2, ..., D` into `D`
+/// distinct work ids and `D` live claims — each of them a truthful, seat-replayable execution
+/// whose leaves the executor already holds, none of them colliding, each drawing up to
+/// `fp_max_quanta_per_receipt`. Tickets earned went from `min(leaves(D)/quantum, 64)` for one
+/// inference to `Sum_d min(leaves(d)/quantum, 64)`, up to `64 D`; and every one of those claims
+/// costs the network a full panel of five seats replaying a PREFIX of the same job, against the
+/// lane's own daily payout ceiling.
+///
+/// The prefixes are exactly what ADR-0082 Decision 10 prices at zero and for the same reason: "a
+/// deterministic causal model makes every prefix leaf recomputable at zero cost by the bond that
+/// computed it once, so a subsidy on them is a subsidy on replay". Nesting is not the
+/// SEGMENTATION the census showed to be unprofitable (disjoint continuations, where each segment
+/// re-prefills the last one's answer); it is prefixes of one run, where nothing is re-prefilled.
+///
+/// So the identity is `(class, prompt, bond)` and nothing else the executor chooses: **one
+/// prompt, one live claim per bond** — which is what "one inference, one claim" means when the
+/// executor picks the length. A second commitment on the same prompt is `DuplicateWork` until the
+/// first claim leaves the live set, exactly as a re-nonced one already was.
+///
+/// The sampler fields stay out for the reason they were always out — N seeds over one execution
+/// must collide, not multiply — and they are inside `fp_job_id_v3` and therefore inside the claim
+/// id, where they belong.
+pub fn fp_work_id_v1(class_id: &Hash64, prompt_token_ids_hash: &Hash64, executor_bond: &TransactionOutpoint) -> Hash64 {
     let mut state = keyed(PALW_FP_V3_DOMAIN_WORK_ID);
     state.update(class_id.as_byte_slice());
     state.update(prompt_token_ids_hash.as_byte_slice());
-    state.update(&decode_tokens_executed.to_le_bytes());
     state.update(executor_bond.transaction_id.as_bytes().as_slice());
     state.update(&executor_bond.index.to_le_bytes());
     finish(state)
@@ -395,6 +457,33 @@ pub fn fp_quanta_v3(work_leaves: u64, quantum_leaves: u64, max_quanta_per_receip
     }
     let full = work_leaves / quantum_leaves;
     full.min(max_quanta_per_receipt as u64) as u32
+}
+
+/// **ADR-0082 Decision 10: which leaves a free-prompt claim is CREDITED for.**
+///
+/// One spelling, so the transition, a builder and a seat cannot answer it differently.
+///
+/// * `decode_rules == false` (every shipped preset, `Params::palw_fp_decode_rules` dormant): the
+///   whole capture, `work_leaves`, exactly as the lane prices it today.
+/// * `decode_rules == true`: the leaves of the DECODE calls
+///   ([`crate::palw_step::decode_leaf_count_v1`]). The prefill of a user-chosen prompt is priced
+///   at ZERO.
+///
+/// The rationale is arithmetic, not policy. A pinned integer model is deterministic and causal, so
+/// every leaf of a prefix is a pure function of the prefix: the same bond re-submitting a
+/// 32,000-token prompt with one new token recomputes nothing and, under the shipped rule, is
+/// credited everything. Prefill leaves are therefore not scarce, and a subsidy on them is a
+/// subsidy on replay.
+///
+/// **The quantum is unchanged** (ADR-0074 Decision 5): the denominator stays the class's own
+/// canonical job, so a class's own scale still normalises its draws. What moves is the numerator
+/// and nothing else — which is why this is a function of one argument pair and not a new pricing
+/// rule.
+///
+/// **The attempt lane never calls this.** Its canonical job is drawn from the beacon and cannot be
+/// cached, so there is no replay to subsidise and nothing to remove.
+pub fn fp_credited_leaves_v1(decode_rules: bool, work_leaves: u64, decode_leaves: u64) -> u64 {
+    if decode_rules { decode_leaves } else { work_leaves }
 }
 
 /// The quantum's lottery draw: leading 128 bits (big-endian, matching `palw_ticket_v1`'s reading)
@@ -737,6 +826,14 @@ pub enum PalwFpV3Error {
         "privacy mode 2 (PanelDa) is not armed on this network — it arms at a height through Params::palw_panel_da, and this network has none"
     )]
     PanelDaNotArmed,
+    /// **ADR-0082 Decision 11's arming refusal.** Not `UnsupportedSampling`: this build understands
+    /// the seeded argmax completely (`crate::palw_decode_select_v2`), and what it is refusing is a
+    /// RULESET that has not armed it — a fence an operator can schedule, exactly like
+    /// [`Self::PanelDaNotArmed`] beside it.
+    #[error(
+        "sampling (temperature_q {temperature_q}) is not armed on this network — ADR-0082 Decision 11 arms at a height through Params::palw_fp_decode_rules, and this network has none; the greedy defaults are temperature_q 0 with a zero seed"
+    )]
+    SamplingNotArmed { temperature_q: u32 },
     /// A mode-2 payload that carries the prompt anyway. Refused rather than trimmed: an executor
     /// that published a prompt the user asked to keep off chain has already done the harm, and a
     /// claim built on that payload would be one the chain quietly blessed.
@@ -801,7 +898,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         // **`PanelDa` disarmed, because a caller that passed no arming has armed nothing**
         // (ADR-0077 Decision 16). This entry predates the mode; every one of its callers refuses
         // mode 2 today and keeps refusing it until it starts passing the answer.
-        self.validate_v3(Some(network_domain), false)
+        self.validate_v3(Some(network_domain), false, false)
     }
 
     /// The same rules **under this network's arming** — the entry that can admit a `PanelDa`
@@ -809,7 +906,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// at the point the caller is judging; a caller that cannot resolve it calls
     /// [`Self::validate_stateless_v3`] and gets the disarmed answer.
     pub fn validate_stateless_under_v3(&self, network_domain: Hash64, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed)
+        self.validate_v3(Some(network_domain), panel_da_armed, false)
     }
 
     /// **The half a context-free caller can run: everything except the two checks that need the
@@ -841,16 +938,16 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// Mode 2's own shape rule, that the payload carries no ids, needs no arming at all and is
     /// checked under both answers.
     pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, false)
+        self.validate_v3(None, false, false)
     }
 
     /// The shape half under a known arming — the door on a network that carries the rule, and
     /// what a builder asks before it spends an inference on a job the chain will refuse.
     pub fn validate_shape_under_v3(&self, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed)
+        self.validate_v3(None, panel_da_armed, false)
     }
 
-    fn validate_v3(&self, network_domain: Option<Hash64>, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
+    fn validate_v3(&self, network_domain: Option<Hash64>, panel_da_armed: bool, decode_rules_armed: bool) -> Result<(), PalwFpV3Error> {
         let c = &self.commitment;
         let job = &c.job;
         if job.version != PALW_FP_V3_VERSION {
@@ -874,6 +971,23 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         }
         if job.prompt_mode != PALW_FP_PROMPT_MODE_USER && job.prompt_mode != PALW_FP_PROMPT_MODE_CANONICAL {
             return Err(PalwFpV3Error::UnsupportedPromptMode(job.prompt_mode));
+        }
+        // **ADR-0082 Decision 11, refused BY NAME while the fence is dormant.** The same two-sided
+        // shape the privacy modes have directly above, and for the same reason: "no build does
+        // this" and "this ruleset does not" are different facts with different fixes. A job
+        // declaring a temperature on a network that has not armed `Params::palw_fp_decode_rules`
+        // would otherwise be executed GREEDILY by a conforming worker — a user told a false thing
+        // about what ran, and a commitment whose id says one rule while its tokens obey another.
+        //
+        // The seed is only meaningful at a non-zero temperature (the key never reads it at zero),
+        // so a non-zero seed with a greedy temperature is refused too: it is a field claiming to
+        // decide something that decides nothing, and admitting it would let two jobs with the same
+        // execution carry two different ids.
+        if !decode_rules_armed
+            && (job.temperature_q != crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY
+                || job.sampling_seed != crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY)
+        {
+            return Err(PalwFpV3Error::SamplingNotArmed { temperature_q: job.temperature_q });
         }
         if job.executor_pubkey.is_empty() {
             return Err(PalwFpV3Error::MissingPublicKey);
@@ -1080,6 +1194,12 @@ pub struct PalwFpWorkerRequestV3 {
     /// [`PALW_FP_PROMPT_MODE_USER`] or [`PALW_FP_PROMPT_MODE_CANONICAL`] (ADR-0074 Decision 1);
     /// copied onto the job verbatim.
     pub prompt_mode: u8,
+    /// ADR-0082 Decision 11's sampler inputs, copied onto the job verbatim like `prompt_mode`.
+    /// The worker does not choose them: whoever asked for the inference did, and the job id the
+    /// worker binds its trace to contains them — so a worker that ignored them would produce a
+    /// commitment whose id no replayer can rebuild.
+    pub sampling_seed: [u8; 32],
+    pub temperature_q: u32,
     pub input: PalwFpWorkerInputV3,
     /// Runtime identity pins, checked against the worker's own manifest-derived values —
     /// running a job under a mis-declared identity would let one runtime impersonate another's
@@ -1340,26 +1460,26 @@ impl PalwFpCommitmentTxPayloadV3 {
     /// The signature is verified by the caller (this crate holds no ML-DSA implementation);
     /// [`Self::signed_message`] is what it must verify over.
     pub fn validate_stateless_v3(&self, network_domain: Hash64) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), false)
+        self.validate_v3(Some(network_domain), false, false)
     }
 
     /// The same, **under this network's arming** — the entry the extraction walk uses, and the
     /// only one that can admit a `PanelDa` payload (ADR-0077 Decision 16). `panel_da_armed` is
     /// `Params::palw_panel_da_at` at the accepting block's DAA score.
     pub fn validate_stateless_under_v3(&self, network_domain: Hash64, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed)
+        self.validate_v3(Some(network_domain), panel_da_armed, false)
     }
 
     /// The context-free half — see [`PalwFreePromptCommitmentEnvelopeV3::validate_shape_v3`] for
     /// why the transaction validator can only run this one, and why the arming it asks is the
     /// height-free one.
     pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, false)
+        self.validate_v3(None, false, false)
     }
 
     /// The shape half under a known arming — `Params::palw_panel_da_admissible` at the door.
     pub fn validate_shape_under_v3(&self, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed)
+        self.validate_v3(None, panel_da_armed, false)
     }
 
     /// **The signature, on the payload that actually rides a transaction.**
@@ -1379,12 +1499,12 @@ impl PalwFpCommitmentTxPayloadV3 {
             .validate_signature_v3(verify_mldsa87)
     }
 
-    fn validate_v3(&self, network_domain: Option<Hash64>, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
+    fn validate_v3(&self, network_domain: Option<Hash64>, panel_da_armed: bool, decode_rules_armed: bool) -> Result<(), PalwFpV3Error> {
         if self.version != PALW_FP_V3_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
         }
         let envelope = PalwFreePromptCommitmentEnvelopeV3 { commitment: self.commitment.clone(), signature: self.signature.clone() };
-        envelope.validate_v3(network_domain, panel_da_armed)?;
+        envelope.validate_v3(network_domain, panel_da_armed, decode_rules_armed)?;
         // **`PanelDa` carries NO ids, and the check is a REQUIREMENT, not a tolerance** (ADR-0077
         // Decision 16). Placed before the canonical arm because the privacy mode decides what the
         // chain may hold and the prompt mode decides where the ids come from: a mode-2 payload
@@ -1457,6 +1577,8 @@ mod tests {
             max_context_tokens: 4096,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         }
     }
 
@@ -1830,6 +1952,8 @@ mod tests {
             max_context_tokens: j.max_context_tokens,
             privacy_mode: j.privacy_mode,
             prompt_mode: j.prompt_mode,
+            sampling_seed: j.sampling_seed,
+            temperature_q: j.temperature_q,
             input: PalwFpWorkerInputV3::TokenIds(ids.clone()),
             model_profile_id: Hash64::from_u64_word(0x1),
             runtime_manifest_hash: Hash64::from_u64_word(0x2),
@@ -2003,6 +2127,28 @@ pub const PALW_FP_MATERIAL_V1_MAGIC: [u8; 4] = *b"FPM1";
 /// and what changes is that failing to serve it is now the only way to withhold a prompt. That
 /// failure is never a verdict about arithmetic; which arm it reaches is
 /// [`crate::palw_panel_da_v1::palw_panel_da_withholding_arm_v1`]'s answer.
+///
+/// # This payload carries the ids WHOLE, and ADR-0081 Decision 3 does not change that
+///
+/// Decision 3 makes `prompt_token_ids_hash` an openable Merkle root so a COURT CLOSE can prove one
+/// id instead of carrying all of them — `n_ctx x 4` bytes on every node of the graph against an
+/// 80 KiB carrier. None of that reasoning applies here, and shrinking this payload to an opening
+/// would be a regression rather than an optimisation:
+///
+/// * a seat REPLAYS the job. It needs every id, not the one a dispute happens to address, and an
+///   opening of one tile is exactly what it cannot replay from.
+/// * a data-availability obligation is not a close. There is no carrier budget on this path — the
+///   payload is served peer-to-peer on request, not relayed as a transaction — so the bytes an
+///   opening would save are bytes nothing was competing for.
+/// * under `PanelDa` this is the ONLY place the ids exist off the executor's disk. A payload that
+///   carried less than the whole prompt would make withholding *representable as a well-formed
+///   response*, which is precisely the failure Decision 16's disclosure rule exists to prevent.
+///
+/// So the encoding below is deliberately NOT optimised, and [`palw_fp_prompt_ids_admit_v1`] keeps
+/// re-deriving the commitment over the whole list — the FLAT digest, on every height and under
+/// every fence this build can be started with (audit D M-2: `Params::palw_prompt_ids_merkle`
+/// cannot be armed, because no writer or checker here reads it). Should the form ever move, the
+/// LIST is what is carried either way.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwFpMaterialV1 {
     pub job: PalwFreePromptJobV3,
@@ -2023,6 +2169,13 @@ pub struct PalwFpMaterialV1 {
 /// refusal rather than a bool for the same reason: a seat that files nothing must be able to say
 /// which of "nothing was served" and "what was served is not this claim's" happened, because the
 /// first is the producer's default arm and the second is a producer serving somebody else's work.
+/// **The commitment is FLAT, here and in every writer** (audit D M-2). ADR-0081 Decision 3 /
+/// ADR-0082 Decision 5 would re-form it as a Merkle root over the ids, and
+/// `Params::palw_prompt_ids_merkle` is the fence for that move — but nothing in this tree reads
+/// the fence: this function, the seat and both payload decoders re-derive
+/// `crate::palw_v2::prompt_token_ids_hash_v2` unconditionally, and so does every producer.
+/// `Params::validate_palw_v2` therefore REFUSES a ruleset that arms it, rather than letting a
+/// network believe its close is Merkle-shaped while every id list on it is still hashed flat.
 pub fn palw_fp_prompt_ids_admit_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[u32]) -> Result<(), PalwFpV3Error> {
     if prompt_token_ids.len() != job.prompt_tokens as usize {
         return Err(PalwFpV3Error::PromptIdsCountMismatch { got: prompt_token_ids.len(), declared: job.prompt_tokens });
@@ -2148,6 +2301,8 @@ mod fp_material_tests {
             max_context_tokens: 16,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         }
     }
 
@@ -2188,6 +2343,89 @@ mod fp_material_tests {
         let back = palw_fp_material_decode_v1(&bytes).expect("round trip");
         assert_eq!(back.prompt_token_ids, ids);
         assert_eq!(back.job, job(&ids));
+    }
+
+    /// **The blast radius of arming ADR-0081 Decision 3, derived rather than described.**
+    ///
+    /// `prompt_token_ids_hash` is a field of the JOB, so it is inside `fp_job_id_v3` and inside
+    /// everything derived from it — the claim id, the spend id, the quantum ticket, the L1 tag —
+    /// and it is a field of `PalwJobContextV2`, so it is inside `context_hash()` and therefore
+    /// inside every step leaf, every leg root and the execution commitment. That is the whole
+    /// reason arming the fence is a RE-MINT and not a schedule, and it is asserted here so the
+    /// list cannot quietly fall behind the code.
+    ///
+    /// This test does NOT pin the armed values. There is no network to pin them for: the fence is
+    /// `None` on every preset, and the single re-pin belongs to the genesis cut that arms it.
+    #[test]
+    fn arming_the_merkle_prompt_form_moves_every_id_derived_from_the_job() {
+        use crate::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
+        let ids = [7u32, 11, 13];
+        let flat = job(&ids);
+        assert_eq!(
+            flat.prompt_token_ids_hash,
+            prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::Flat, &ids).expect("the flat form is total"),
+            "the shipped job commits the flat digest"
+        );
+
+        let mut merkle = flat.clone();
+        merkle.prompt_token_ids_hash = prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::MerkleV1, &ids).expect("three ids commit");
+        assert_ne!(flat.prompt_token_ids_hash, merkle.prompt_token_ids_hash, "the two forms are different commitments");
+        assert_ne!(fp_job_id_v3(&flat), fp_job_id_v3(&merkle), "the job id moves");
+
+        // And the same value inside the CONTEXT moves the execution side. One assertion for the
+        // whole subtree, because `context_hash()` is what every leaf, leg and root binds.
+        let mut ctx = crate::palw_v2::PalwJobContextV2 {
+            version: crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
+            network_id: b"blast-radius".to_vec(),
+            job_id: fp_job_id_v3(&flat),
+            job_nullifier: Hash64::from_u64_word(2),
+            assignment_id: Hash64::from_u64_word(3),
+            execution_seed: [1; 32],
+            model_profile_id: Hash64::from_u64_word(4),
+            runtime_manifest_hash: Hash64::from_u64_word(5),
+            runtime_class_id: Hash64::from_u64_word(6),
+            shape_profile_id: Hash64::from_u64_word(7),
+            trace_scheme_id: Hash64::from_u64_word(8),
+            cu_ruleset_id: Hash64::from_u64_word(9),
+            tokenizer_id: Hash64::from_u64_word(10),
+            prompt_token_ids_hash: flat.prompt_token_ids_hash,
+            declared_prefill_tokens: ids.len() as u32,
+            exact_decode_tokens: 1,
+            max_context_tokens: 16,
+        };
+        let flat_ctx_hash = ctx.context_hash();
+        ctx.prompt_token_ids_hash = merkle.prompt_token_ids_hash;
+        assert_ne!(flat_ctx_hash, ctx.context_hash(), "the job context hash moves, and every leaf and leg root with it");
+    }
+
+    /// **The DA payload still carries the ids WHOLE, and that is the design** (ADR-0081 Decision 3
+    /// carve-out).
+    ///
+    /// Decision 3 makes a COURT CLOSE log-shaped in the context. This payload is not a close: a
+    /// seat replaying the job needs every id, there is no carrier budget on a peer-to-peer fetch,
+    /// and under `PanelDa` a payload carrying less than the whole prompt would make withholding
+    /// representable as a well-formed response. So the encoding is linear in the prompt by
+    /// intent, and this test is the tripwire for anyone who reads "the ids became a Merkle root"
+    /// and shrinks the wrong thing.
+    #[test]
+    fn the_da_material_carries_every_prompt_id_and_is_deliberately_not_an_opening() {
+        let short: Vec<u32> = (0..8u32).collect();
+        let long: Vec<u32> = (0..512u32).collect();
+        let a = palw_fp_material_encode_v1(&job(&short), &short);
+        let b = palw_fp_material_encode_v1(&job(&long), &long);
+        // Linear, not logarithmic: exactly four bytes per additional id and nothing else moved.
+        assert_eq!(b.len() - a.len(), (long.len() - short.len()) * 4, "the payload is O(prompt) by design");
+        // Every id round-trips — what a replaying seat needs and what one opened tile cannot give.
+        assert_eq!(palw_fp_material_decode_v1(&b).expect("round trip").prompt_token_ids, long);
+        // …and the COURT's term at the same context is what Decision 3 actually shrank. The two
+        // paths are priced differently on purpose; asserting the gap keeps that stated.
+        let close = crate::palw_prompt_ids_v1::prompt_ids_close_bytes_v1(
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            long.len() as u64,
+        )
+        .expect("512 ids open");
+        assert_eq!(close, 472, "one tile plus a four-deep path plus the opening header");
+        assert!(b.len() as u64 > 4 * close, "the DA payload is {} bytes against a {close}-byte close term", b.len());
     }
 
     /// The decoder refuses what it can check, and only that: swapped ids (the hash binding), a

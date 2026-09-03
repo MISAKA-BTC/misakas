@@ -563,6 +563,25 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwFreePromptClaimResponse::default())
     }
 
+    /// **ADR-0080 design A: one side's declared court close, mid-assembly.**
+    ///
+    /// A close too wide for one carrier rides as a signed declaration and its chunks. The mover is
+    /// under a court deadline, its carriers can be orphaned, and until this call the only account
+    /// of what had landed was `misaka palw court-close`'s journal on the mover's own disk — which
+    /// believes itself, so it skips a part whose carrier was reorged out and completes a group that
+    /// can never assemble. This is the chain's own `present` bitmap, count and deadline.
+    async fn get_palw_pending_chunk_group(&self, session_id: String, side: String) -> RpcResult<GetPalwPendingChunkGroupResponse> {
+        self.get_palw_pending_chunk_group_call(None, GetPalwPendingChunkGroupRequest { session_id, side }).await
+    }
+    async fn get_palw_pending_chunk_group_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwPendingChunkGroupRequest,
+    ) -> RpcResult<GetPalwPendingChunkGroupResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwPendingChunkGroupResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

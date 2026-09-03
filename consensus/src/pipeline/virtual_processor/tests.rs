@@ -2528,7 +2528,11 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
         )
         .expect("a valid A16 profile"),
         QWEN25_A16_CANONICAL,
-    );
+    )
+    // Fallible since ADR-0082 audit E's H-1: the constructor compiles the class's declaration into
+    // the program it executes, so a declaration this artifact cannot serve is a named refusal here
+    // instead of a forward pass under arithmetic nobody declared.
+    .expect("the dense drill's declaration is the program this artifact runs");
     // The work, and the draw (ADR-0072): the execution IS the ticket, so a lost draw is re-rolled
     // by the next bucket — a different job, a second real inference — never by moving the nonce.
     let mut won = None;
@@ -9767,6 +9771,8 @@ async fn a_callers_prompt_on_a_registered_class_opens_a_claim_at_the_shipped_qua
         max_context_tokens: backend.profile().n_ctx,
         privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
         prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+        sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+        temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
     };
 
     let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
@@ -10079,6 +10085,8 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
         max_context_tokens: backend.profile().n_ctx,
         privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
         prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+        sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+        temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
     };
     let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
     let class = PalwFpClassFactsV3 {

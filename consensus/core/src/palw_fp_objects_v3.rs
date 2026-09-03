@@ -246,6 +246,8 @@ mod tests {
             max_context_tokens: 4_096,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: crate::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         };
         let events: Vec<Hash64> = (0..decode as u64).map(|i| h64(i + 1)).collect();
         let (manifest_root, chunk_count, _) = fp_trace_manifest_v3(h64(0xB1), &events);

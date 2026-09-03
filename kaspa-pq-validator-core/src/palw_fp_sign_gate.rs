@@ -156,6 +156,8 @@ mod tests {
             max_context_tokens: 4_096,
             privacy_mode: 0,
             prompt_mode: 0,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         };
         let result = PalwFpWorkerResultV3 {
             version: PALW_FP_V3_VERSION,

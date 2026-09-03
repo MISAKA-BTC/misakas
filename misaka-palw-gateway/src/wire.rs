@@ -652,6 +652,8 @@ mod tests {
                 max_context_tokens: 512,
                 privacy_mode: 0,
                 prompt_mode: 0,
+                sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+                temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             },
             prompt_token_ids: vec![1, 2, 3],
             trace_root: Hash64::from_u64_word(7),

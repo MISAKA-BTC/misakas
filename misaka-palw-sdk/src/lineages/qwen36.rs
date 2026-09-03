@@ -123,7 +123,7 @@ impl PalwModelLineageV1 for Qwen36LineageV1 {
 
     fn resolve(
         &self,
-        _court: &PalwCourtParamsV2,
+        court: &PalwCourtParamsV2,
         class_id: Hash64,
         artifact_root: Hash64,
         holdings: &[PalwLoadedArtifactV1],
@@ -131,13 +131,17 @@ impl PalwModelLineageV1 for Qwen36LineageV1 {
     ) -> Option<Result<Box<dyn PalwExecutionBackendV1>, String>> {
         let entry = qwen36_canonical_classes_v1().into_iter().find(|c| c.class_id() == Some(class_id))?;
         if let Some((_, artifact)) = holdings.iter().filter_map(parts_of).find(|(root, _)| *root == artifact_root) {
-            return Some(Ok(Box::new(misaka_palw_base0::qwen36_backend::Qwen36Backend::new(
-                artifact,
-                entry.model_id,
-                entry.canonical_job,
-                class_id,
-                network_id.to_vec(),
-            ))));
+            // The ladder the RULESET froze — see the dense lineage's resolve for the whole note.
+            return Some(Ok(Box::new(
+                misaka_palw_base0::qwen36_backend::Qwen36Backend::new(
+                    artifact,
+                    entry.model_id,
+                    entry.canonical_job,
+                    class_id,
+                    network_id.to_vec(),
+                )
+                .with_step_ladder_cap(court.max_step_leaf_count()),
+            )));
         }
         Some(Err(format!(
             "the chain names the {} class and this node holds no artifact whose computed root is {artifact_root} \

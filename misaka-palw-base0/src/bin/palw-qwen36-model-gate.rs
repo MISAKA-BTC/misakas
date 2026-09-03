@@ -574,6 +574,10 @@ fn main() {
             max_context_tokens: n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            // ADR-0082 Decision 11's fields at their greedy defaults: the gate measures the
+            // shipped argmax, and the sampler's fence is dormant on every preset.
+            sampling_seed: [0u8; 32],
+            temperature_q: 0,
         };
         let leaves_for = |decode: u32| -> Result<u64, String> {
             use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};

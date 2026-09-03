@@ -64,6 +64,47 @@ fn tiny_class() -> (Qwen36ArtifactV1, PalwShapeProfileV3) {
     (artifact, profile)
 }
 
+/// The SAME artifact and geometry as [`tiny_class`], projected as ADR-0082's graph v5: one fused
+/// attention node per attention layer instead of four. A second GRAPH over one model, which is
+/// what makes it worth fuzzing — the mutations reach a node whose arity, out width and operand
+/// naming rule differ from every other node in the table.
+#[cfg(test)]
+pub(crate) fn tiny_class_v5_for_tests() -> (Qwen36ArtifactV1, PalwShapeProfileV3) {
+    tiny_class_v5()
+}
+
+#[cfg(test)]
+fn tiny_class_v5() -> (Qwen36ArtifactV1, PalwShapeProfileV3) {
+    let (artifact, v2) = tiny_class();
+    let geometry = PalwQwen36GeometryV1 {
+        layer_count: 4,
+        full_attention_interval: 4,
+        hidden_dim: 32,
+        attn_heads: 4,
+        attn_kv_heads: 2,
+        attn_head_dim: 16,
+        rope_dims: 4,
+        rope_freq_base_bits: 0x4B18_9680,
+        gdn_k_heads: 2,
+        gdn_v_heads: 4,
+        gdn_head_dim: 8,
+        gdn_conv_kernel: 4,
+        n_experts: 8,
+        experts_per_token: 4,
+        moe_dim: 16,
+        shared_dim: 16,
+        attn_output_gate: 1,
+        vocab_size: 64,
+        n_ctx: 8,
+        n_threads: 1,
+        rms_eps_q: 1,
+        tile_len: 512,
+    };
+    let v5 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v5(geometry).expect("the v5 tables project");
+    assert_ne!(v2.shape_profile_id(), v5.shape_profile_id(), "a different graph is a different class");
+    (artifact, v5)
+}
+
 /// One random edit. The dense harness's vocabulary — structural (order, arity, count) and nominal
 /// (kernels, operands, widths, dtypes) — plus two this family adds: ROLE edits (cache writes are
 /// declared per node here, so a moved role is a moved program) and REAL operand names landing on
@@ -177,7 +218,48 @@ fn gate_accepts(
     ) else {
         return false;
     };
-    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v2(bundle, profile, &canonical, &probe, &[]).is_ok()
+    // **A fused profile is judged under the court that can try it** (ADR-0082 Decision 6): the
+    // admission gate refuses a graph-v5 row by name unless the k-ary court is in force, so the
+    // corpus is gated the way an ARMED ruleset gates it — the RC's derived arity, the Merkle prompt
+    // ids the rows arm with, and the RC's court window. A profile with no fused site is gated
+    // exactly as before (`None`), so the v2 corpus reads unchanged.
+    // The court is the bundle's own (`fuzz_*_profiles_from_v1` arms the dissection arity on a fused
+    // base), the prompt ids are the Merkle form graph-v5 rows arm with, and the window is the RC's.
+    // A fused row is also PRICED for that court: the ladder rules carry the cost shape the gate
+    // compares against the arity, and a base too small for the long-form rules is priced by the
+    // anchored shape with the same dissection — `PricedForADifferentCourt` is the gate's answer
+    // when a registrant prices a row for a court the ruleset does not play, not this harness's.
+    //
+    // **The arity is the one an ARMED CHAIN would play, not one written into the bundle** (audit D
+    // M-4). This read `bundle.court.dissection_arity()` while `fuzz_qwen36_profiles_from_v1` wrote
+    // the derived value into the bundle first — a configuration no chain has, because no genesis
+    // builder writes a derived arity in, and precisely the one in which H-1's stored-versus-derived
+    // mismatch is invisible. `palw_court_params_at_v2(bundle, true)` is what the court itself
+    // reads at activation, so the harness and the chain now answer the same question.
+    let fused = kaspa_consensus_core::palw_class_admission_v2::palw_profile_has_fused_attention_v1(profile);
+    let arity = kaspa_consensus_core::palw_court_v2::palw_court_params_at_v2(bundle, fused)
+        .map(|c| c.dissection_arity())
+        .unwrap_or_else(|_| bundle.court.dissection_arity());
+    let court = fused.then_some(kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1 {
+        dissection_arity: arity,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+        window_court_daa: kaspa_consensus_core::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.window_court,
+    });
+    let ladder = fused.then(|| {
+        kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, court, bundle.court.max_step_leaf_count()).unwrap_or_else(|| {
+            kaspa_consensus_core::palw_class_admission_v2::PalwClassLadderRulesV1 {
+                ladder: bundle.court.max_step_leaf_count(),
+                cost_shape: kaspa_consensus_core::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(
+                    profile,
+                    bundle.court.max_step_leaf_count(),
+                )
+                .with_dissection_v1(arity),
+                canonical_footprint_floor: 0,
+            }
+        })
+    });
+    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v5(bundle, profile, &canonical, &probe, &[], &[], ladder, court)
+        .is_ok()
 }
 
 /// Drive `iterations` mutated profiles through gate → plan → court cost → double execution. The
@@ -185,7 +267,20 @@ fn gate_accepts(
 /// column must be zero for the ADR's fence to arm for this container.
 pub fn fuzz_qwen36_profiles_v1(seed: u64, iterations: u64) -> FuzzTallyV1 {
     let (artifact, base) = tiny_class();
-    let engine = Qwen36Engine::new(&artifact);
+    fuzz_qwen36_profiles_from_v1(seed, iterations, &artifact, &base)
+}
+
+/// [`fuzz_qwen36_profiles_v1`] over a caller's BASE profile — same schedule, same mutations, same
+/// findings, driven from a different graph. A parameter rather than a second harness, for the
+/// reason `fuzz_a16_profiles_from_v1` gives: graph v5 is a new graph over the same model, and a
+/// gate that only ever saw the four-node attention site says nothing about the one-node one.
+pub fn fuzz_qwen36_profiles_from_v1(
+    seed: u64,
+    iterations: u64,
+    artifact: &Qwen36ArtifactV1,
+    base: &PalwShapeProfileV3,
+) -> FuzzTallyV1 {
+    let engine = Qwen36Engine::new(artifact);
     let bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
         base.shape_profile_id(),
         kaspa_hashes::Hash64::from_u64_word(0xCA7),
@@ -197,6 +292,10 @@ pub fn fuzz_qwen36_profiles_v1(seed: u64, iterations: u64) -> FuzzTallyV1 {
         ),
     )
     .expect("the devnet bundle assembles");
+    // **The bundle is the devnet's, unmutated** (audit D M-4). This wrote the derived arity into
+    // `bundle.court` for a fused base so that `gate_accepts` would read 4 back out of it. No chain
+    // bundle carries a derived arity, so the harness was measuring a gate no network runs — and it
+    // was exactly the configuration in which H-1's stored-versus-derived mismatch cannot be seen.
     let root = artifact.artifact_root();
 
     let mut rng = FuzzRng::new(seed);
@@ -301,6 +400,28 @@ mod tests {
         assert!(tally.max_close_bytes_seen > 0, "a zero here would mean the ceiling was never compared against anything");
     }
 
+    /// **The same gate over ADR-0082's graph v5 on the hybrid** — the fused attention site driven
+    /// through the same mutate → admit → plan → execute-twice schedule. The GDN table is
+    /// untouched by the fusion and still in the corpus, so this is the v2 space with the attention
+    /// site replaced rather than a smaller space.
+    ///
+    /// The corpus digest for THIS base is pinned separately, by
+    /// `the_v5_fuzz_corpus_digest_is_the_same_on_every_machine` below.
+    #[test]
+    fn a_bounded_fuzz_run_over_the_v5_graph_finds_no_panic_and_no_nondeterminism() {
+        let (artifact, base) = tiny_class_v5();
+        let tally = fuzz_qwen36_profiles_from_v1(0x0082_2026_0903, 400, &artifact, &base);
+        println!("qwen36 v5 fuzz tally: {tally:?}");
+        assert_eq!(tally.panics, 0, "a panic inside the interpreter is the fence staying down");
+        assert_eq!(tally.nondeterminism, 0, "two runs of one plan must be one bitstream");
+        assert!(tally.executed > 0, "the v5 corpus must actually reach execution, or this test gates nothing");
+        assert!(tally.court_costed > 0, "and the court cost must actually derive for a v5 row");
+        assert!(tally.max_close_bytes_seen > 0, "a zero here would mean the ceiling was never compared against anything");
+        // Reported, not asserted zero: pricing the fused site down from its whole-row close to the
+        // dissection's bounded one is ADR-0082 Decision 2 / the cost stream's derivation.
+        println!("qwen36 v5 closes over the shipped ceiling: {}", tally.closes_over_ceiling);
+    }
+
     /// **The cross-architecture clause for the mmap container, met by the suite** — one seed, one
     /// corpus, one number, asserted wherever the suite runs. The dense harness's re-pin
     /// discipline applies verbatim: a deliberate change that moves this value re-pins it in ONE
@@ -317,6 +438,27 @@ mod tests {
 
     /// Seed `0x0067_2026_09_01`, 400 iterations. See the test above.
     const CORPUS_DIGEST_400: &str = "5b9be0a7479f824a1d87fdd33785a226c551130a4768730855d068a4e3acf8e1";
+
+    /// **The same clause over the FUSED base on the hybrid** (ADR-0082 audit E, M-2).
+    ///
+    /// The pin above folds the graph-v2 space; the fused attention site is new arithmetic on the
+    /// executor's hot path and the two-runs-in-one-process gate beside it cannot see a machine
+    /// that computes it differently. A second base gets a second pin rather than the first one
+    /// being widened, so neither hides the other. Re-pin discipline is the v2 pin's, verbatim.
+    #[test]
+    fn the_v5_fuzz_corpus_digest_is_the_same_on_every_machine() {
+        let (artifact, base) = tiny_class_v5();
+        let tally = fuzz_qwen36_profiles_from_v1(0x0082_2026_0903, 400, &artifact, &base);
+        assert_eq!(
+            faster_hex::hex_string(&tally.corpus_digest),
+            V5_CORPUS_DIGEST_400,
+            "this machine computed a different fused corpus than the pinned one — see the doc above before touching the pin"
+        );
+        assert_ne!(V5_CORPUS_DIGEST_400, CORPUS_DIGEST_400, "two bases must not fold to one number, or one of them is unpinned");
+    }
+
+    /// Seed `0x0082_2026_0903`, 400 iterations, over the graph-v5 hybrid base. See the test above.
+    const V5_CORPUS_DIGEST_400: &str = "7e5f14c2b0d66fc53ef1057188b29ec26030f80cb73f666244a22ac33854b5fd";
 
     /// **The panic the design pass found stays closed.** A convolution declared in the ATTENTION
     /// table lands on a window the artifact's layer kinds never pre-filled, and the walk's
