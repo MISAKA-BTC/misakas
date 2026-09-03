@@ -238,6 +238,20 @@ thing done before the cut and it is done ONCE.
 4. Nothing under `misaka-palw-derive/src/` may be touched after step 3, for any reason, including a
    typo in a comment.
 
+**The re-pins, by owner. Nothing touches both sides.**
+
+| pin | where | owner |
+|---|---|---|
+| `transformer_id_pin` | `misaka-palw-derive/tests/` | here, at the cut |
+| `shipped_presets_have_pinned_fingerprints` | `consensus/core/src/config/params.rs` | here, at the cut |
+| `golden_vector_ids_are_frozen` | `consensus/core/src/palw_freeprompt_v3.rs` — ADR-0082 stream H gave the job two fields | here, at the cut |
+| state version 18 → 19, ADR-0043 goldens | `palw-adr0082-impl` | 5b, on that branch |
+
+**Careful with the third**: `golden_vector_ids_are_frozen` exists TWICE — `palw_freeprompt_v3.rs:1521`
+and `palw_derived_v1.rs:441`. One name, two homes, in the same crate. Only the free-prompt one moved.
+Re-pinning by name rather than by module is how the wrong one gets rewritten, and this is the same
+one-thing-two-homes shape that produced the two ladder caps and the class root spelled two ways.
+
 **Two re-pins, two owners, no overlap.** The state version goes 18 → 19 on `palw-adr0082-impl` (the
 court session gains its dissection phase) and the ADR-0043 goldens move with it — those are re-pinned
 there, by the session that moves them. `transformer_id_pin` and
@@ -289,6 +303,7 @@ green except the known pin" said this week was a statement about jobs that never
 | third party | `scripts/misaka-palw-artifact-thirdparty.py --require` | mido / pygltflib / numpy-stl; compares MEANING (enclosed volume, playback duration) against the DSL |
 | model gate, dense | `palw-model-gate` | A16 lane only — declared in advance |
 | model gate, QWEN36 | `palw-qwen36-model-gate` | needs the ChatML fix (§7) to pass through the production assembly |
+| fused-attention guard | `verify_class_admission_v5` | Refuses an `AttnFused` profile unless `palw_kary_court_active_at` — `FusedAttentionNeedsTheKaryCourt`, *"the class carries a fused attention site and this ruleset's court has no dissection to try it with"*; and `PricedForADifferentCourt { priced, court }` when the registered cost shape's arity is not the court's. **A guard on the way in, beside the drill and not instead of it.** |
 | **prosecutability** | ADR-0082 stream I's end-to-end court drill | **This is the gate, and admission is not.** A graph-v5 leaf disputed to the bottom under the ARMED fence set, through `apply_object`: honest acquitted, forged convicted. F's admission arm refusing an unfenced `AttnFused` profile by name is a guard on the way in — useful, and not the property. The property is that a dispute can be carried to a verdict, and only the drill asserts it. |
 
 **The two expected reds, and the condition that closes each.** A branch with unexplained reds has
