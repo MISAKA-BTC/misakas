@@ -55,40 +55,40 @@
 //! command's split path must REFUSE rather than engage. `palw_rc_shipped_params()` carries 27. One
 //! tool, two answers, each read off the network's own court rather than off a default.
 //!
-//! # What this command CANNOT do yet — and it is not the gap this file used to name
+//! # What this command does now that W6 and W7 have landed
 //!
-//! The previous version of [`court_close_chunked_carriage_v1`] said a split close was blocked on
-//! admitting `CourtClosed` into `apply_object`'s generic `ObjectChunk` arm. **That was a design
-//! nobody built.** W5 deliberately did not widen the certification lane — `palw_chunked_object_
-//! kind_admitted_v1` still admits `FamilyCertified` alone, and says why in its own doc: that
-//! table's `TooManyPendingChunkGroups` is a delay for a drill and a DISPUTE LOST for a court, so
-//! anyone able to rent eight slots could defeat every prosecution on the network. The close got its
-//! own table instead, keyed `(session_id, side)` and therefore unsquattable.
+//! The previous version of this section said the split path was shut, and named two arms. Both are
+//! open:
 //!
-//! **That table is complete and it is not reachable.** `apply_object` has both arms, the group has
-//! its bitmap and its digests, and the per-chunk digest is refused at ARRIVAL. What is missing is
-//! on either side of it:
+//! * **W6, the authentication.** [`PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT`] ships, the
+//!   message it binds is `palw_court_close_declaration_message_v1` — every field of the object but
+//!   the signature — and `palw_v2_validate_objects` verifies it against the DECLARING side's own
+//!   registered bond key instead of refusing every declaration outright. So this command signs the
+//!   declaration ([`sign_declaration_v1`]) and files it. The key must be the side's bond key: this
+//!   file cannot check that (the registry is chain state), which is why `--side` is refused rather
+//!   than defaulted.
+//! * **W7, the adjudication.** The chunk that completes a group assembles the rooted bytes, checks
+//!   them against the declaration's own `close_digest`, decodes, and applies the `CourtClosed`
+//!   through the arm a one-carrier close takes. So the digest this file computes is the one the
+//!   chain reads — a binding answer rather than a reading — and an assembly that is not the
+//!   declared close convicts the DECLARING side in the block that carries the last chunk. That is
+//!   the number one line of this file's preflight now protects: a cut whose concatenation does not
+//!   hash to what the declaration pins is not a refused filing, it is a lost dispute.
 //!
-//! * **W6, the authentication.** `palw_v2_validate_objects` refuses EVERY `CourtCloseDeclared`
-//!   outright — "no layer yet verifies the declaring side's signature … refused rather than
-//!   trusted" — and a refused lifecycle object is DROPPED with the block standing. So a declaration
-//!   filed today costs its fee, produces one `info!` line on each node, and opens no group; the
-//!   chunks behind it then fail `MissingCourtCloseGroup` one carrier at a time. There is also
-//!   nothing to sign: `PALW_COURT_V2_ALL_DOMAINS` carries no close-declaration context, so the
-//!   message a declaration binds does not yet exist to be constructed.
-//! * **W7, the adjudication.** The `CourtCloseChunk` arm names what it does not do: a completing
-//!   chunk "does not assemble, decode, check `close_digest`, run `check_close_cost_v2` /
-//!   `adjudicate_court_close_v2` or apply the `CourtClosed` state machine". So `close_digest` is
-//!   written and never read, and no shipped function says which digest it is — this tool computes
-//!   the one the only shipped court-close domain admits, and W7 is what makes that answer binding
-//!   rather than a guess.
+//! **What the seam still refuses is the RULESET's, not the build's.** `devnet_shipped_params()`
+//! frames to `max_close_chunks = 1`, and there a legal close has to fit one carrier; the acceptance
+//! layer refuses a wider declaration (`check_close_declared_chunk_count_v2`) and no carriage helps.
+//! [`court_close_chunked_carriage_v1`] says so in the operator's words.
 //!
-//! **So everything here is built and the send is gated, and the gate is the point.** The failure
-//! this command exists to prevent is an operator under a court deadline paying for twenty-four
-//! carriers and learning at the twenty-fourth that the group cannot assemble; filing into W6's
-//! refusal is that failure with an extra step. What the command does instead is plan, price, cut,
-//! digest and preview the whole carriage offline, refuse every limit it can check before the first
-//! fee, and name the two consensus arms by the work item that owns them.
+//! # And the resume is the CHAIN's answer now, not a file's
+//!
+//! `GetPalwPendingChunkGroup` returns the group's own `present` bitmap, count, deadline and pinned
+//! digest, and [`parts_to_send_v1`] turns it into exactly which carriers are still owed. The
+//! journal on disk stays — it is what chains the funding — but it no longer decides what to send:
+//! a journal believes itself, so it can only answer with a PREFIX, and a prefix is wrong the moment
+//! one carrier in the middle is orphaned. The same call answers the two preflights this command
+//! could not make: whether a declaration for this `(session, side)` already exists (one per side,
+//! ever) and how much of the assembly window is left.
 
 use crate::keys::KeySource;
 use crate::node::Ctx;
@@ -98,13 +98,17 @@ use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_court_deadline::{
     PalwShippedCourtRowV1, palw_court_move_cost_daa_v1, palw_court_replay_positions_v1, palw_shipped_court_rows_v1,
 };
-use kaspa_consensus_core::palw_court_v2::{PALW_COURT_V2_ALL_DOMAINS, PalwCourtVerdictProofV2, check_close_cost_v2};
+use kaspa_consensus_core::palw_court_v2::{
+    PALW_COURT_V2_ALL_DOMAINS, PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT, PalwCourtVerdictProofV2, check_close_cost_v2,
+    palw_court_close_declaration_message_v1,
+};
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwCourtParamsV2, palw_close_bytes_for_chunks_v1};
 use kaspa_consensus_core::palw_state_v2::{
     PALW_COURT_CLOSE_CHUNK_MAX_BYTES, PALW_COURT_CLOSE_INCLUSION_MARGIN, PALW_COURT_CLOSE_MAX_CHUNKS, PalwConsensusObjectV2,
     PalwCourtSideV1, palw_close_assembly_daa_v1, palw_court_close_chunk_digest_v1,
 };
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint, UtxoEntry};
+use kaspa_rpc_core::GetPalwPendingChunkGroupResponse;
 use kaspa_rpc_core::api::rpc::RpcApi;
 use std::path::{Path, PathBuf};
 
@@ -141,29 +145,44 @@ use std::path::{Path, PathBuf};
 ///
 /// Stated here in one place so the owning session can close it without reading this file, and so a
 /// tool that cannot yet file a split close still says exactly what would let it.
-pub(crate) fn court_close_chunked_carriage_v1() -> Result<(), CarriageGap> {
-    if let Some(context) = close_declaration_context_v1() {
-        // The domain landing is W6's own signal. It does not by itself prove the acceptance arm and
-        // W7 landed with it, so this does not open the door — it says the door has a lock now, and
-        // names the one file left to read. Deliberately not `Ok(())`: a tool that spends fees on
-        // the strength of a constant's NAME has learned nothing from the gap list it replaced.
+pub(crate) fn court_close_chunked_carriage_v1(court: &PalwCourtParamsV2) -> Result<(), CarriageGap> {
+    // **W6's own signal, and it is a fact about CONSENSUS rather than about this file agreeing with
+    // itself.** The signing context is the half `misaka-cli` can read — it depends on
+    // `kaspa-consensus-core` and not on the pipeline whose arm actually admits a declaration — and
+    // the processor's refusal named it as the other half of the same work item ("under a signing
+    // domain registered in `PALW_COURT_V2_ALL_DOMAINS`"), so the two land together. Absent, nothing
+    // below is reachable: there is no message for the side's key to bind and every declaration is
+    // dropped before a group can open.
+    if close_declaration_context_v1().is_none() {
         return Err(CarriageGap {
-            what: "a close-declaration signing context now ships, so W6 is landing and this seam is stale",
-            rule: "PALW_COURT_V2_ALL_DOMAINS carries a close context — re-read palw_v2_validate_objects' CourtCloseDeclared arm",
-            needs: &["misaka-cli/src/palw_court.rs: sign the declaration under the new context and drop this gate"],
-            context: Some(context),
+            what: "the acceptance layer drops every CourtCloseDeclared before a group can open",
+            rule: "palw_v2_validate_objects: no layer yet verifies the declaring side's signature (ADR-0080 W6) — refused rather than trusted",
+            needs: &[
+                "palw_court_v2: a close-declaration signing context in PALW_COURT_V2_ALL_DOMAINS, and the message it binds (W6)",
+                "virtual_processor::palw_v2_validate_objects, the CourtCloseDeclared arm: verify that signature instead of refusing (W6)",
+                "palw_state_v2::apply_object, the CourtCloseChunk arm: assemble the completed group, check close_digest, decode and adjudicate (W7)",
+            ],
+            context: None,
         });
     }
-    Err(CarriageGap {
-        what: "the acceptance layer drops every CourtCloseDeclared before a group can open",
-        rule: "palw_v2_validate_objects: no layer yet verifies the declaring side's signature (ADR-0080 W6) — refused rather than trusted",
-        needs: &[
-            "palw_court_v2: a close-declaration signing context in PALW_COURT_V2_ALL_DOMAINS, and the message it binds (W6)",
-            "virtual_processor::palw_v2_validate_objects, the CourtCloseDeclared arm: verify that signature instead of refusing (W6)",
-            "palw_state_v2::apply_object, the CourtCloseChunk arm: assemble the completed group, check close_digest, decode and adjudicate (W7)",
-        ],
-        context: None,
-    })
+    // **The other gate is the RULESET's, and it is not a gap in the code at all.** `devnet_shipped_
+    // params()` frames to `max_close_chunks = 1`: on that network a legal close still has to fit one
+    // carrier, the acceptance layer refuses a declaration above the count
+    // (`check_close_declared_chunk_count_v2`), and there is no carriage that helps. Said here so a
+    // mover on such a network is told the network is the reason rather than the build.
+    //
+    // [`plan_carriage_v1`] usually gets there first with a better message — it knows how many
+    // carriers THIS close needs — so this is the answer for a caller that reached the seam without
+    // one, and it stays for as long as any shipped ruleset pays for a single carrier.
+    if court.max_close_chunks() <= 1 {
+        return Err(CarriageGap {
+            what: "this network's court pays to carry one chunk per close, so a close either fits one carrier or cannot be filed",
+            rule: "PalwCourtParamsV2::max_close_chunks is 1 on this ruleset, and it is inside palw_ruleset_id_v2",
+            needs: &["a smaller close, or a network whose court admits a multi-carrier one — no build change helps"],
+            context: close_declaration_context_v1(),
+        });
+    }
+    Ok(())
 }
 
 /// **Has consensus said yet what a close declaration signs?**
@@ -175,11 +194,12 @@ pub(crate) fn court_close_chunked_carriage_v1() -> Result<(), CarriageGap> {
 /// therefore a fact about CONSENSUS rather than about this file agreeing with itself, which is the
 /// property a seam has to have to be worth keeping.
 pub(crate) fn close_declaration_context_v1() -> Option<&'static [u8]> {
-    PALW_COURT_V2_ALL_DOMAINS.iter().copied().find(|domain| contains_v1(domain, b"close"))
-}
-
-fn contains_v1(haystack: &[u8], needle: &[u8]) -> bool {
-    needle.len() <= haystack.len() && haystack.windows(needle.len()).any(|window| window == needle)
+    // By IDENTITY and not by substring. The list carries several domains now and more than one of
+    // them could contain the word "close"; a probe that matched the first would sign a declaration
+    // under whichever constant happened to sort earliest, which is a signature that verifies under
+    // nothing. What is being asked is "is the constant this file signs under actually in the shipped
+    // list", and that is what this asks.
+    PALW_COURT_V2_ALL_DOMAINS.iter().copied().find(|domain| *domain == PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT)
 }
 
 /// **What an operator is told when the split path is blocked.**
@@ -280,25 +300,96 @@ impl CarriagePlan {
     }
 }
 
-/// The side, in the word `--side` takes, so the journal and the report cannot spell it two ways.
+/// The side, in the word `--side` takes. Consensus owns the spelling now
+/// ([`PalwCourtSideV1::name`]) — the journal key, the `--side` flag, `GetPalwPendingChunkGroup`'s
+/// answer and every refusal read it from there, so three files cannot come to disagree about which
+/// bond a group belongs to.
 pub(crate) fn side_name_v1(side: PalwCourtSideV1) -> &'static str {
-    match side {
-        PalwCourtSideV1::Challenger => "challenger",
-        PalwCourtSideV1::Executor => "executor",
-    }
+    side.name()
 }
 
 /// `--side`, refused by name rather than defaulted: filing one party's move under the other's bond
 /// is not a typo the chain forgives.
 pub(crate) fn parse_side_v1(text: &str) -> Result<PalwCourtSideV1, CliError> {
-    match text.trim().to_ascii_lowercase().as_str() {
-        "challenger" => Ok(PalwCourtSideV1::Challenger),
-        "executor" => Ok(PalwCourtSideV1::Executor),
-        other => Err(CliError::new(
+    PalwCourtSideV1::from_name(text.trim().to_ascii_lowercase().as_str()).ok_or_else(|| {
+        CliError::new(
             exit::GENERIC,
-            format!("--side '{other}' is neither `challenger` nor `executor`, and a session binds exactly those two bonds"),
-        )),
+            format!("--side '{text}' is neither `challenger` nor `executor`, and a session binds exactly those two bonds"),
+        )
+    })
+}
+
+/// **Sign the declaration under the context consensus registered for it** (ADR-0080 W6).
+///
+/// The message is `palw_court_close_declaration_message_v1` — every field of the object but the
+/// signature — so this tool cannot bind a declaration to anything other than what it is about to
+/// file. Both the plan's `declaration` and `parts[0]` are replaced, because they are two handles on
+/// one object and a signer that updated one of them would file the unsigned copy.
+///
+/// The key must be the DECLARING side's bond key: the acceptance layer reads that bond out of the
+/// session (challenger) or the claim (executor) and verifies against its registered `pubkey`, so a
+/// declaration signed with any other key is refused and its carrier's fee is gone. This function
+/// cannot check that — the registry is chain state and the bond key is an outpoint the operator
+/// chose — which is exactly why `--side` is refused rather than defaulted.
+pub(crate) fn sign_declaration_v1(plan: &mut CarriagePlan, key: &kaspa_pq_validator_core::ValidatorKey) -> Result<(), CliError> {
+    let Some(declaration) = plan.declaration.as_mut() else {
+        return Ok(());
+    };
+    let PalwConsensusObjectV2::CourtCloseDeclared { session_id, side, count, chunk_digests, close_digest, verdict, signature } =
+        declaration
+    else {
+        return Err(CliError::new(exit::GENERIC, "the plan's declaration is not a CourtCloseDeclared".to_string()));
+    };
+    let message = palw_court_close_declaration_message_v1(session_id, *side, *count, chunk_digests, close_digest, *verdict);
+    *signature = key.sign_with_context(&message, PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT).to_vec();
+    let signed = declaration.clone();
+    // `parts[0]` IS the declaration (see `plan_carriage_v1`), and it is the copy that gets carried.
+    plan.parts[0] = signed;
+    Ok(())
+}
+
+/// **Which of this plan's parts the chain has NOT got yet** (ADR-0080 design A, W6/W7).
+///
+/// A pure function of the plan and the chain's own `GetPalwPendingChunkGroup` answer, so the half of
+/// a resume that is otherwise only exercised by an outage can be tested without a node.
+///
+/// The bitmap is why this exists. `present` is one bit per index and chunks arrive in ANY order, so
+/// "four of seven have landed" does not say which three are missing — the previous resume walked a
+/// journal on the mover's own disk and could only ever answer with a PREFIX, which is wrong the
+/// moment one carrier in the middle is orphaned.
+///
+/// Two refusals rather than a resume, and both are the same fact: **one declaration per
+/// `(session, side)`, ever.** If the chain's group pins a different `close_digest` or a different
+/// count, this is not this close's group and never will be — filing into it spends carriers to
+/// complete somebody else's assembly, which under W7 convicts the declaring side. Better to lose the
+/// command than the dispute.
+pub(crate) fn parts_to_send_v1(plan: &CarriagePlan, group: Option<&GetPalwPendingChunkGroupResponse>) -> Result<Vec<usize>, CliError> {
+    let Some(group) = group.filter(|g| g.found) else {
+        return Ok((0..plan.parts.len()).collect());
+    };
+    if u64::from(plan.chunk_count) != u64::from(group.count) {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!(
+                "session {} already holds a close declared in {} chunks on the {} side, and this one needs {}.\n  One declaration \
+                 per side, ever — this close cannot be filed into that group. Nothing was carried.",
+                plan.session_id, group.count, group.side, plan.chunk_count
+            ),
+        ));
     }
+    if group.close_digest != plan.close_digest.to_string() {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!(
+                "session {} already holds a declared close on the {} side pinning {}, and this close is {}.\n  Completing that \
+                 group with these bytes convicts the declaring side (ADR-0080 W7). Nothing was carried.",
+                plan.session_id, group.side, group.close_digest, plan.close_digest
+            ),
+        ));
+    }
+    // Part 0 is the declaration and the group's existence is proof it landed; part `i + 1` carries
+    // chunk `i`, and a set bit is a chunk the chain already has.
+    Ok((0..plan.chunk_count).filter(|index| group.present & (1u64 << index) == 0).map(|index| index as usize + 1).collect())
 }
 
 /// **Cut the close the way the court's own table cuts it, or say it rides whole.**
@@ -724,7 +815,7 @@ pub(crate) async fn court_close(ctx: &Ctx, ks: &KeySource, args: CourtCloseArgs<
         Some(text) => Some(parse_side_v1(text)?),
         None => None,
     };
-    let plan = plan_carriage_v1(&object, &court, side)?;
+    let mut plan = plan_carriage_v1(&object, &court, side)?;
     let class_id = match args.class {
         Some(text) => Some(
             text.trim().parse::<Hash64>().map_err(|_| CliError::new(exit::GENERIC, format!("class id '{text}' is not 128-hex")))?,
@@ -736,7 +827,7 @@ pub(crate) async fn court_close(ctx: &Ctx, ks: &KeySource, args: CourtCloseArgs<
     // ---- 3. the gap ----------------------------------------------------------------------------
     // A split close is refused by the transition that assembles it on this build. Said BEFORE the
     // dry-run preview, so an operator reading the preview is not reading a plan that cannot run.
-    let gap = if plan.declaration.is_some() { court_close_chunked_carriage_v1().err() } else { None };
+    let gap = if plan.declaration.is_some() { court_close_chunked_carriage_v1(&court).err() } else { None };
     // **The assembly window, against the two numbers only a node holds.** The declaration gate
     // compares `now + palw_close_assembly_daa_v1(count)` with the session's backstop and refuses in
     // the block that carries it, so a mover who finds this out on chain has lost the declaration's
@@ -870,7 +961,34 @@ pub(crate) async fn court_close(ctx: &Ctx, ks: &KeySource, args: CourtCloseArgs<
         return Ok(());
     };
     let key = ks.load_key()?;
+    // **W6: the declaration is signed before anything is priced against it.** Here rather than in
+    // `plan_carriage_v1`, which is a pure function with no key and is what `--offline` runs: an
+    // offline plan is a plan, and a plan is not a filing.
+    sign_declaration_v1(&mut plan, &key)?;
     let addr = key.funding_address(nv.params.prefix());
+    // **What the CHAIN says it already holds** — asked before the journal, because the journal is a
+    // file that believes itself and this is the group's own arrival bitmap. A node that does not
+    // know the call (an older build) answers the default, which is `found: false` and reads as "file
+    // everything"; that is the behaviour that shipped, so an old node costs a duplicate the chain
+    // refuses by name rather than a wrong answer.
+    let chain_group = match plan.side {
+        None => None,
+        Some(side) => nv.client.get_palw_pending_chunk_group(plan.session_id.to_string(), side_name_v1(side).to_string()).await.ok(),
+    };
+    let to_send = parts_to_send_v1(&plan, chain_group.as_ref())?;
+    if text && let Some(group) = chain_group.as_ref().filter(|g| g.found) {
+        println!(
+            "  the chain already holds this group: {} of {} chunks (present {:#b}), declared at DAA {}, assembly closes at {}",
+            group.parts_present, group.count, group.present, group.declared_daa, group.assembly_deadline_daa
+        );
+        if nv.virtual_daa > group.assembly_deadline_daa {
+            println!(
+                "  THE ASSEMBLY WINDOW HAS CLOSED: the chain is at DAA {} and this group's deadline was {}. Every remaining \
+                 chunk will be refused as CourtCloseGroupExpired, and the sweep convicts the declaring side.",
+                nv.virtual_daa, group.assembly_deadline_daa
+            );
+        }
+    }
     let spendable = crate::palw_fp::spendable_candidates_v1(&nv, &addr).await?;
     let journal_file = journal_path_v1(args.close, args.state);
     let mut journal = load_journal_v1(&journal_file, &plan.journal_key(), &ctx.network, &addr.to_string(), args.restart)?;
@@ -908,7 +1026,7 @@ pub(crate) async fn court_close(ctx: &Ctx, ks: &KeySource, args: CourtCloseArgs<
             (outpoint, entry, 0usize)
         }
     };
-    if first_part >= plan.parts.len() {
+    if first_part >= plan.parts.len() || to_send.iter().all(|offset| *offset < first_part) {
         if text {
             println!("every part of this close is already carried. Nothing to do.");
         }
@@ -917,8 +1035,14 @@ pub(crate) async fn court_close(ctx: &Ctx, ks: &KeySource, args: CourtCloseArgs<
     }
 
     // ---- 6. build every remaining carrier, chained, before sending one --------------------------
+    //
+    // Two filters, and they answer different questions. `first_part` is the JOURNAL's: how far this
+    // key's own chained carriers got, which is what decides the funding outpoint. `to_send` is the
+    // CHAIN's: which parts it has, which is a SET and not a prefix because chunks arrive in any
+    // order. A part the chain already holds is skipped whatever the journal thinks, because
+    // re-filing it is a `CourtCloseChunkDuplicate` and a wasted carrier.
     let mut carriers = Vec::with_capacity(plan.parts.len() - first_part);
-    for (offset, part) in plan.parts.iter().enumerate().skip(first_part) {
+    for (offset, part) in plan.parts.iter().enumerate().skip(first_part).filter(|(offset, _)| to_send.contains(offset)) {
         let (tx, fee) = crate::palw_fp::build_carrier_v1(&key, &nv, part, funding_outpoint, &funding_entry)
             .map_err(|e| CliError::new(exit::GENERIC, format!("part {} of {}: {e}", offset + 1, plan.parts.len())))?;
         let change = tx.outputs.first().ok_or_else(|| CliError::new(exit::GENERIC, "the carrier has no change output".to_string()))?;
@@ -1054,6 +1178,10 @@ fn proof_kind_v1(proof: &PalwCourtVerdictProofV2) -> &'static str {
         PalwCourtVerdictProofV2::Arithmetic { .. } => "Arithmetic",
         PalwCourtVerdictProofV2::DecodeToken { .. } => "DecodeToken",
         PalwCourtVerdictProofV2::DecodeTokenTiled { .. } => "DecodeTokenTiled",
+        // ADR-0082 Decision 2. Named rather than folded into a `_` arm: the whole point of printing
+        // the kind is that an operator can see WHICH close it is about to spend carriers on, and a
+        // catch-all would have printed "other" for the widest proof this ruleset admits.
+        PalwCourtVerdictProofV2::AttnDissection { .. } => "AttnDissection",
     }
 }
 
@@ -1495,7 +1623,7 @@ mod tests {
     /// What stops it is W6, and every assertion here reads it off consensus rather than off this
     /// file's own seam, so it cannot pass by agreeing with itself.
     #[test]
-    fn the_split_path_is_shut_by_a_rule_read_from_consensus() {
+    fn the_split_path_is_open_and_the_rule_that_opens_it_is_read_from_consensus() {
         // 1. The design W5 did not take, still not taken: the generic chunk lane admits one kind.
         assert!(
             !palw_chunked_object_kind_admitted_v1(&close_with_binding(&sample_profile(), 0, 0)),
@@ -1505,32 +1633,60 @@ mod tests {
         let refusal = kaspa_consensus_core::palw_state_v2::PalwStateV2Error::ChunkedObjectKindNotAllowed.to_string();
         assert!(refusal.contains("only a FamilyCertified may ride in chunks"), "{refusal}");
 
-        // 2. The rule that ACTUALLY shuts the door: no close-declaration signing context ships, so
-        //    there is no message a declaration could bind, and the acceptance arm that would check
-        //    one refuses everything instead.
+        // 2. **W6 landed, so what used to shut the door is now what opens it.** The signing
+        //    context ships, it is the constant this file signs under (asked by identity, not by a
+        //    substring that several domains could match), and the RC ruleset pays for more than one
+        //    carrier — so the seam says yes there and no on devnet, where `max_close_chunks` is 1.
         for domain in PALW_COURT_V2_ALL_DOMAINS {
             println!("shipped court domain: {}", String::from_utf8_lossy(domain));
         }
+        assert_eq!(
+            close_declaration_context_v1(),
+            Some(PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT),
+            "the close-declaration signing context left the shipped domain list — a declaration signed under it would verify \
+             against nothing"
+        );
+        let court = shipped_court();
+        assert!(court_close_chunked_carriage_v1(&court).is_ok(), "the RC ruleset pays for a carriage this build refuses to make");
+
+        // 3. And the object still says what it always said: a declaration must be signed. What
+        //    changed is that this build can sign one — under the context step 2 just read.
+        let object = close_with_binding(&sample_profile(), 1, 50_000);
+        let mut plan = plan_carriage_v1(&object, &court, Some(PalwCourtSideV1::Challenger)).expect("plans");
+        let unsigned = plan.declaration.clone().expect("a split close declares");
+        let why = palw_lifecycle_object_may_ride_v2(&unsigned).expect_err("an unsigned declaration must not ride");
+        assert!(why.contains("signature"), "the refusal stopped naming the signature: {why}");
+        let key = kaspa_pq_validator_core::ValidatorKey::from_seed([9u8; kaspa_pq_validator_core::VALIDATOR_SEED_LEN]);
+        sign_declaration_v1(&mut plan, &key).expect("this build can sign a declaration");
+        let signed = plan.declaration.clone().expect("still a split close");
+        palw_lifecycle_object_may_ride_v2(&signed).expect("a signed declaration rides");
+        assert_eq!(signed, plan.parts[0], "the plan carried the unsigned copy — `parts[0]` IS the declaration");
+        // And it is THIS declaration's own bytes that were signed, under this context and no other.
+        let PalwConsensusObjectV2::CourtCloseDeclared { session_id, side, count, chunk_digests, close_digest, verdict, signature } =
+            &signed
+        else {
+            panic!("not a declaration")
+        };
+        let message = palw_court_close_declaration_message_v1(session_id, *side, *count, chunk_digests, close_digest, *verdict);
         assert!(
-            close_declaration_context_v1().is_none(),
-            "a close-declaration signing context now ships: W6 is landing. Re-read virtual_processor's CourtCloseDeclared arm, \
-             sign the declaration under it, and delete this file's gate"
+            key.verify_with_context(&message, signature, PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT),
+            "the declaration is not signed over its own fields"
+        );
+        assert!(
+            !key.verify_with_context(&message, signature, kaspa_consensus_core::palw_court_v2::PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT),
+            "a close declaration verifies as a rung verdict — the contexts are not separating the two moves"
         );
 
-        // 3. And the object says so in this crate, with no node: an unsigned declaration may not
-        //    ride, and this build cannot sign one.
-        let court = shipped_court();
-        let object = close_with_binding(&sample_profile(), 1, 50_000);
-        let plan = plan_carriage_v1(&object, &court, Some(PalwCourtSideV1::Challenger)).expect("plans");
-        let declaration = plan.declaration.expect("a split close declares");
-        let why = palw_lifecycle_object_may_ride_v2(&declaration).expect_err("an unsigned declaration must not ride");
-        assert!(why.contains("signature"), "the refusal stopped naming the signature: {why}");
-
-        // 4. The seam agrees, and it names the work rather than a design nobody built.
-        let gap = court_close_chunked_carriage_v1().expect_err("the split path is shut on this build");
-        assert!(gap.context.is_none(), "the seam saw a context that step 2 did not");
-        assert_eq!(gap.needs.len(), 3, "the gap list moved without this test being read");
-        assert!(gap.rule.contains("W6"), "the seam no longer names the work item that owns the refusal: {}", gap.rule);
+        // 4. The seam's remaining refusal is the RULESET's, and it is devnet's.
+        let one_carrier = shipped_rulesets_v1()
+            .into_iter()
+            .filter_map(|(name, params)| court_of_v1(&params).map(|c| (name, c)))
+            .find(|(_, c)| c.max_close_chunks() <= 1);
+        if let Some((name, court)) = one_carrier {
+            let gap = court_close_chunked_carriage_v1(&court).expect_err("a one-carrier ruleset must refuse the split path");
+            assert!(gap.rule.contains("max_close_chunks"), "{}: the refusal does not name the ruleset field: {}", name, gap.rule);
+            assert!(gap.context.is_some(), "{name}: W6 shipped, so the seam must say the lock exists");
+        }
     }
 
     /// `palw_court_move_cost_daa_v1` takes `close_blocks` for exactly this, and the report must
@@ -1710,7 +1866,21 @@ mod tests {
     /// operator under a court deadline actually reads, and it has to be enough to escalate on.
     #[test]
     fn the_blocked_message_names_every_missing_piece() {
-        let gap = court_close_chunked_carriage_v1().expect_err("the split path is blocked on this build");
+        // The message that decides whether somebody under a court deadline escalates or sits
+        // re-running the command. W6 landed, so the gap it renders is the RULESET's — a network
+        // whose court pays for one carrier — and the operator has to be told the network is the
+        // reason, because no build change helps.
+        let one_carrier = PalwCourtParamsV2::with_cost_ceilings(
+            1 << 22,
+            45,
+            1,
+            kaspa_consensus_core::palw_mode_v2::palw_close_bytes_for_chunks_v1(1),
+            1 << 30,
+            64,
+        )
+        .expect("a one-carrier court");
+        assert_eq!(one_carrier.max_close_chunks(), 1);
+        let gap = court_close_chunked_carriage_v1(&one_carrier).expect_err("a one-carrier ruleset blocks the split path");
         let message = blocked_message_v1(&gap, 24);
         println!("{message}");
         assert!(message.contains("this close needs 24 carriers"), "{message}");
@@ -1718,8 +1888,71 @@ mod tests {
         for need in gap.needs {
             assert!(message.contains(need), "the message drops a missing piece: {need}\n{message}");
         }
-        assert!(message.contains("CourtCloseDeclared"), "the message does not name the object that is refused: {message}");
-        assert!(message.contains("W6"), "the message does not name the work item to escalate to: {message}");
+        assert!(message.contains("max_close_chunks"), "the message does not name the field that refused: {message}");
+        assert!(message.contains("ruleset"), "the message does not say the NETWORK is the reason: {message}");
+    }
+
+    /// **A resume is decided by the chain's bitmap, not by a journal's prefix.**
+    ///
+    /// Chunks arrive in any order, so "four of seven have landed" does not say which three are
+    /// missing — and a mover under a court deadline that re-sends the wrong three pays for
+    /// duplicates the chain refuses by name and leaves the hole that convicts it. The two refusals
+    /// are the same fact from two directions: one declaration per `(session, side)`, ever.
+    #[test]
+    fn a_resume_sends_exactly_the_chunks_the_chains_bitmap_is_missing() {
+        let court = shipped_court();
+        let object = close_with_binding(&sample_profile(), 1, 50_000);
+        let plan = plan_carriage_v1(&object, &court, Some(PalwCourtSideV1::Executor)).expect("plans");
+        assert!(plan.chunk_count >= 3, "this test needs a genuinely split close, got {}", plan.chunk_count);
+
+        // No group: everything, declaration first.
+        assert_eq!(parts_to_send_v1(&plan, None).unwrap(), (0..plan.parts.len()).collect::<Vec<_>>());
+        let mut absent = chain_group_v1(&plan);
+        absent.found = false;
+        assert_eq!(parts_to_send_v1(&plan, Some(&absent)).unwrap(), (0..plan.parts.len()).collect::<Vec<_>>());
+
+        // A group with a GAP in the middle and the top index set — the shape a prefix gets wrong.
+        let mut partial = chain_group_v1(&plan);
+        partial.present = 0b1 | (1u64 << (plan.chunk_count - 1));
+        partial.parts_present = 2;
+        let expect: Vec<usize> = (1..plan.chunk_count).map(|i| i as usize + 1).take(plan.chunk_count as usize - 2).collect();
+        assert_eq!(parts_to_send_v1(&plan, Some(&partial)).unwrap(), expect, "the resume did not skip exactly what the chain has");
+
+        // Complete: nothing to send, and in particular NOT the declaration again.
+        let mut complete = chain_group_v1(&plan);
+        complete.present = (0..plan.chunk_count).fold(0u64, |m, i| m | (1u64 << i));
+        complete.parts_present = plan.chunk_count as u32;
+        complete.complete = true;
+        assert!(parts_to_send_v1(&plan, Some(&complete)).unwrap().is_empty());
+
+        // Another close on this side: refused, not resumed. Completing it convicts the declarer.
+        let mut other = chain_group_v1(&plan);
+        other.close_digest = "ab".repeat(64);
+        let why = parts_to_send_v1(&plan, Some(&other)).expect_err("a group pinning another close must not be filed into");
+        assert!(why.msg.contains("convicts the declaring side"), "{}", why.msg);
+        let mut wider = chain_group_v1(&plan);
+        wider.count += 1;
+        let why = parts_to_send_v1(&plan, Some(&wider)).expect_err("a group of another size is another close");
+        assert!(why.msg.contains("One declaration per side, ever"), "{}", why.msg);
+    }
+
+    /// The chain's answer for a plan, as `GetPalwPendingChunkGroup` would return it.
+    fn chain_group_v1(plan: &CarriagePlan) -> GetPalwPendingChunkGroupResponse {
+        GetPalwPendingChunkGroupResponse {
+            found: true,
+            session_id: plan.session_id.to_string(),
+            side: plan.side.map(side_name_v1).unwrap_or_default().to_string(),
+            count: plan.chunk_count as u32,
+            present: 0,
+            parts_present: 0,
+            complete: false,
+            declared_daa: 1_000,
+            assembly_deadline_daa: 1_000 + plan.assembly_daa(),
+            close_digest: plan.close_digest.to_string(),
+            verdict: "executor_guilty".to_string(),
+            declarer_bond: format!("{}:0", "00".repeat(32)),
+            deposit: 0,
+        }
     }
 
     fn widest_profile() -> PalwShapeProfileV3 {

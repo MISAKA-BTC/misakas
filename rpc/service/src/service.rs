@@ -879,6 +879,66 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         })
     }
 
+    // ------------------------------------------------------------------------------------------
+    // ADR-0080 design A — a declared court close, mid-assembly
+    // ------------------------------------------------------------------------------------------
+
+    async fn get_palw_pending_chunk_group_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwPendingChunkGroupRequest,
+    ) -> RpcResult<GetPalwPendingChunkGroupResponse> {
+        // **The read the split close was filing blind without.** A close too wide for one carrier
+        // rides as a signed declaration and its chunks, one per block, under a court deadline. The
+        // mover's only account of what had landed was `misaka palw court-close`'s journal on its
+        // own disk — a file that believes itself, and therefore skips a part whose carrier was
+        // reorged out and completes a group that can never assemble. It also could not answer the
+        // two preflights that decide whether filing is worth anything: whether a declaration for
+        // this `(session, side)` already exists (one per side, ever) and how much of the assembly
+        // window is left.
+        //
+        // A malformed session id or an unknown side is an ERROR, not `found: false`: "this chain
+        // holds no such group" and "you typed a side that does not exist" must not share a reply —
+        // the first says keep filing, the second says you are asking about nothing.
+        let session_id = request
+            .session_id
+            .parse::<kaspa_hashes::Hash64>()
+            .map_err(|_| RpcError::General(format!("session id '{}' is not a 128-hex Hash64", request.session_id)))?;
+        let side = kaspa_consensus_core::palw_state_v2::PalwCourtSideV1::from_name(request.side.trim()).ok_or_else(|| {
+            RpcError::General(format!(
+                "side '{}' is neither `challenger` nor `executor`, and a court session binds exactly those two bonds",
+                request.side
+            ))
+        })?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(group) = session.palw_court_close_group_v1(session_id, side) else {
+            return Ok(GetPalwPendingChunkGroupResponse {
+                session_id: session_id.to_string(),
+                side: side.name().to_string(),
+                ..Default::default()
+            });
+        };
+        Ok(GetPalwPendingChunkGroupResponse {
+            found: true,
+            session_id: session_id.to_string(),
+            side: side.name().to_string(),
+            count: group.count as u32,
+            present: group.present,
+            parts_present: group.present.count_ones(),
+            complete: group.is_complete(),
+            declared_daa: group.declared_daa,
+            assembly_deadline_daa: group.assembly_deadline_daa,
+            close_digest: group.close_digest.to_string(),
+            verdict: match group.verdict {
+                kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ExecutorGuilty => "executor_guilty",
+                kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ChallengerDefeated => "challenger_defeated",
+            }
+            .to_string(),
+            declarer_bond: format!("{}:{}", group.declarer.0.transaction_id, group.declarer.0.index),
+            deposit: group.deposit,
+        })
+    }
+
     async fn get_palw_producer_facts_call(
         &self,
         _connection: Option<&DynRpcConnection>,

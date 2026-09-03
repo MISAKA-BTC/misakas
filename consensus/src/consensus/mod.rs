@@ -1253,6 +1253,21 @@ impl ConsensusApi for Consensus {
         palw_derived_claim_view_v1(&state, claim_id)
     }
 
+    /// ADR-0080 design A, on the node: the materialized tip, then the row itself. The tip read is
+    /// the same snapshot every other `palw_*` answer here takes.
+    fn palw_court_close_group_v1(
+        &self,
+        session_id: kaspa_hashes::Hash64,
+        side: kaspa_consensus_core::palw_state_v2::PalwCourtSideV1,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwCourtCloseGroupV2> {
+        let state_params = match &self.config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => &bundle.state,
+            _ => return None,
+        };
+        let (_chain_point, state) = self.storage.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        state.court_close_group(&session_id, side).cloned()
+    }
+
     fn get_virtual_bits(&self) -> u32 {
         self.lkg_virtual_state.load().bits
     }

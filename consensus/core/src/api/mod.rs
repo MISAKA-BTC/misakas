@@ -237,6 +237,25 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **ADR-0080 design A: one side's declared court close, mid-assembly.**
+    ///
+    /// The row `(session_id, side)` holds — count, `present` bitmap, deadlines, digest, deposit —
+    /// or `None` on a network that is not `ConsensusV2`, on one whose state store holds no tip, and
+    /// for a side that has declared no close. Three honest answers, none of them an error, and the
+    /// same shape [`Self::palw_derived_artifacts_v1`] uses.
+    ///
+    /// The bytes themselves are deliberately NOT returned. They are in rooted state because the
+    /// completing transition must be a function of the chain rather than of which blocks a node
+    /// happens to hold, and a reader that wanted them holds them already — it is the mover that
+    /// cut them. What a reader cannot know without asking is which of them the chain received.
+    fn palw_court_close_group_v1(
+        &self,
+        _session_id: kaspa_hashes::Hash64,
+        _side: crate::palw_state_v2::PalwCourtSideV1,
+    ) -> Option<crate::palw_state_v2::PalwCourtCloseGroupV2> {
+        None
+    }
+
     fn get_virtual_bits(&self) -> u32 {
         unimplemented!()
     }

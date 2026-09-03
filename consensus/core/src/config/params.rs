@@ -1463,6 +1463,21 @@ impl Params {
             return Ok(());
         };
         bundle.validate()?;
+        // **ADR-0082 Decision 3: an armed dissection court must be able to derive its arity from
+        // the ruleset it judges under, and it is checked HERE, at assembly.** The derivation
+        // (`palw_court_v2::palw_court_params_at_v2`) answers `None` when no legal arity fits the
+        // court window — a window that cannot hold its own dispute — and `None` is a refusal,
+        // never a fallback to the binary court (two is a value the derivation can legitimately
+        // return, so a fallback would be indistinguishable from a window that really fits). A
+        // node that refused only when it came to JUDGE would run, accept claims, and discover at
+        // the first dispute that its court has no shape; refusing to assemble is the only way
+        // this is a rule rather than a runbook note. Dormant, the ruleset is untouched.
+        if self.palw_kary_court_fence().is_some() && crate::palw_court_v2::palw_court_params_at_v2(bundle, true).is_err() {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_kary_court is armed and no dissection arity fits this ruleset's court window: the window \
+                 cannot hold its own dispute, so the court the fence names has no shape",
+            ));
+        }
         if self.palw_credit.is_some()
             || self.palw_fork_choice.is_some()
             || self.palw_schedule.is_some()
@@ -9611,6 +9626,37 @@ mod consensus_params_id_tests {
         assert!(matches!(legacy.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::Disabled));
         assert_eq!(legacy.palw_kary_court_fence(), None);
         assert!(!legacy.palw_kary_court_active_at(u64::MAX));
+    }
+
+    /// **ADR-0082 Decision 3: an armed dissection court derives its arity at ASSEMBLY, on the
+    /// ruleset it will judge under.** Stream I made a failed derivation a refusal to judge; the
+    /// check in `validate_palw_v2` is the other half — a node must not start on a ruleset whose
+    /// court has no shape and find out at its first dispute.
+    ///
+    /// What this test does NOT do is build a bundle the check refuses, and the reason is worth
+    /// writing down: `PalwConsensusParamsV2::validate` already refuses any window that cannot hold
+    /// the BINARY court's worst-case honest prosecution ("window_court does not fit the worst-case
+    /// honest prosecution"), so every bundle that reaches the arity check has a window the binary
+    /// ladder fits. The derivation can still answer `None` — its rounds include the dissection over
+    /// the widest REGISTERED fused site, which the binary bound never counted — but only for a
+    /// catalog with such a site, which no shipped ruleset carries and no hand-built fixture here
+    /// should pretend to. `palw_court_v2`'s own test pins that `None` is a refusal, never a
+    /// fallback to two; this one pins that the assembly reads the derivation at all, and that
+    /// arming the shipped devnet leaves it assemblable.
+    #[test]
+    fn an_armed_kary_court_derives_its_shape_at_assembly() {
+        use crate::palw_mode_v2::PalwConsensusMode;
+        let shipped = devnet_shipped_params();
+        shipped.validate_palw_v2().expect("the shipped devnet assembles");
+        let PalwConsensusMode::ConsensusV2(bundle) = &shipped.palw_consensus_mode else { panic!("a V2 bundle") };
+        let mut armed = shipped.clone();
+        armed.palw_kary_court = Some(ForkActivation::always());
+        armed.validate_palw_v2().expect("the shipped ruleset's window holds its dispute under the armed fence");
+        // The value the assembly accepted is the one the court will play: the derived arity, not
+        // the bundle literal's 2.
+        let derived = crate::palw_court_v2::palw_court_params_at_v2(bundle, true).expect("derives");
+        assert_eq!(bundle.court.dissection_arity(), crate::palw_mode_v2::PALW_COURT_BINARY_ARITY_V1, "every preset literal ships 2");
+        assert!(derived.dissection_arity() >= 2, "the armed court plays the derived arity, {}", derived.dissection_arity());
     }
 
     /// **ADR-0082 Decisions 10/11's fence is dormant on every shipped preset and visible the
