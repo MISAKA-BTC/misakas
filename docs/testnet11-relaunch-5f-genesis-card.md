@@ -5676,3 +5676,8 @@ run — a swap event every two minutes — and stalled each run on a dead `rsync
 `--retention /root/palw-class/retention-empty`, publishes 3 rows, and any text column is derived off-host. Right
 after node1's restart the host read 13.9 GB free, 15.5 GB available, swap 4.2 GB and draining. Two mappings of a
 33.99 GiB file plus a two-minute 760 MB read on a 24 GB host was the whole of the pressure.
+
+**6n, continued — node1 back (23:15 UTC):** stop completed in 103 s this time; listener up; the two A16 artifacts
+only. At +30 s: node1 9.9 GB resident (the first artifact pass touches its files; expected to settle), host 3.1 GB
+free / 5.4 GB available, swap 4.2 GB and draining, node0 at 103 % of one core. A twelve-minute deferred read follows
+for node0's recovery (target: ~2 cores, a fourth material and block).
