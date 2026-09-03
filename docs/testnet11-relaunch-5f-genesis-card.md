@@ -5181,3 +5181,42 @@ Post-cut: add the explorer units to the stop list, and seed-from-genesis to the 
 **CLI** at `/usr/local/bin/misaka` on all three = the cut's (`5fd49aca…`, `misaka 1.1.0`); 5e's kept as
 `misaka.5e-af50be7b`. `/root/t11/misaka` had no predecessor. The stale Aug-31 free-prompt gateway on ibm
 (`misaka-palw-gateway (deleted)`, `127.0.0.1:8791`) is still running and is not the cut's; step 7's gateway replaces it.
+
+## Step 7 — the announcement: draft, UNPUBLISHED, one sentence per piece of evidence
+
+Each sentence below is tied to the reading that earns it. A sentence whose reading has not happened is marked
+`[UNEARNED]` and is not published until it has. Nothing is posted by this session; the operator publishes.
+
+**Earned by steps 1–6 (readings in this card):**
+- testnet-11 relaunched on 2026-09-03 17:17 UTC from a new genesis; every earlier chain (`08e9c8a4…`, `8d2002cc…`)
+  is retired. Genesis `ad30b5cb965ad305dfa1dc7516935763ea2623105581b83bb9359c7247157d36b0f8003b337cdad366e3895c8f159e99332be16e258b144dddf483bf9b33edb7`,
+  consensus fingerprint `2222e054f87bed7a33e9c017f5403cd52070d0778776b5bd78143e7f82ff92b7`. A node on the old
+  genesis is refused at handshake (nine community nodes were refused in the first minute): **wipe your appdir and
+  run the new binary** (`kaspad` sha256 `14065c93…`, 53,913,240 B; built from `6e01ba07`).
+- The genesis premine carries 13 community allocations (648M) and eight bonded seats; every wrapper's outpoints are
+  unchanged (`misaka-premine:0–7` bonds, `:41–48` floats).
+- Three classes are genesis classes with budget from epoch 0: the floor (BASE-0), the dense A16 tier (v5,
+  `4277d84f…`) and Qwen3.6 (`5bd9ae3d…`). The court certified the four families end-to-end in genesis
+  (`court_e2e_root e649e7c0…`). Qwen3.6's free-prompt lane is CERTIFIED on chain; the v5 lane's binding is
+  `[PENDING — bind object submitted at daa …, read back with `misaka palw certified`]`.
+- Six fleet nodes (ibm ×2, `.113` ×3, 5.104 ×1) on the cut, every panel seat holding all three class artifacts;
+  the explorer at misakascan indexes the new chain from block 0; the t11 seeder serves the new peers.
+- Block production is live; the first hour's blocks are hash-floor blocks (`powAlgoId 3`), 41 in the first 40 minutes,
+  with the floor seat down for 12 of them. `[UNEARNED: any statement about block time, or that a model class has
+  produced a block — no algo-9 block has been read yet]`
+- Cadence, faucet, finality: the faucet is up and **unfunded** until the operator funds it after the first coinbase
+  matures. `[UNEARNED: "finality" — no claim has been adjudicated; earned only when `final_claims` reads non-zero]`
+
+**Earned only by step 7's own readings (pipeline on the cut's binaries, ibm):**
+- `[GATE]` A free prompt to the dense tier's gateway was answered, committed locally (offline gateway, D5-bound),
+  derived to a 3D artifact (STL, `cad/stl/v1`) and to a MIDI file (`music/smf/v1`), each verified
+  `binding_checked: true` by `palw-derive verify` on the cut, and each recomputed by the independent stranger
+  (`misaka-palw-derive-stranger.py`, links nothing) — with the exact-budget condition stated plainly: today the
+  derivation succeeds when the answer fills the decode budget exactly (56 tokens for the STL, 97 for the MIDI);
+  the EOG-cut amendment to ADR-0078 is post-cut.
+- `[UNEARNED until read on chain]` a free prompt committed ON the public chain and taken to Final — 3e's tip drill
+  and 5e's rig are producing that value on devnet; the public chain's first is not claimed here.
+- Adding a model: registration is permissionless (ADR-0054) but a class registered mid-epoch has no budget until the
+  next epoch boundary — say so, so nobody reads "no blocks" as "refused".
+
+**Never in the announcement:** block time, "finality", "N nodes" beyond the fleet's six, anything about VLT credit.
