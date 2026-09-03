@@ -959,9 +959,9 @@ use kaspa_consensus_core::palw_step::{
     PalwStepLaneV1, PalwStepNodeV1, PalwStepOutLenV1, kernel_semantics_id_v1,
 };
 use kaspa_consensus_core::palw_step_refute::{
-    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT,
-    KDESC_A16_MATMUL_RESCALE, KDESC_A16_MUL_ELEM, KDESC_A16_REQUANTIZE, KDESC_A16_RMS_NORM, KDESC_A16_ROPE, KDESC_A16_SOFTMAX,
-    KDESC_Q36_SILU,
+    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_FUSED, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED,
+    KDESC_A16_MATMUL_REQUANT, KDESC_A16_MATMUL_RESCALE, KDESC_A16_MUL_ELEM, KDESC_A16_REQUANTIZE, KDESC_A16_RMS_NORM,
+    KDESC_A16_ROPE, KDESC_A16_SOFTMAX, KDESC_Q36_SILU, palw_attn_fused_tensors_v1,
 };
 
 /// Why a profile could not be compiled to a plan. Every variant names the boundary it found —
@@ -1872,6 +1872,88 @@ mod profile_plan_tests {
             n_threads: 1,
             rms_eps_q: a.shape.eps_q,
             tile_len: 4,
+        }
+    }
+
+    /// **ADR-0082 Decision 1: the fused arm IS the four shipped kernels, and the graph around it
+    /// did not move.**
+    ///
+    /// Three claims in one walk, at every layer and every position including the sink:
+    ///
+    /// * the v5 plan's committed row at the fused site equals the v2 plan's `ATTN_VALUES` row —
+    ///   the site commits the OUTPUT row and the three context-wide rows simply stop existing;
+    /// * that row equals `a16_attn_fused_reference_v1`, which is the kernel descriptor's declared
+    ///   semantics and exactly what the court's arm recomputes, AND
+    ///   `a16_attn_fused_via_tiles_v1`, which is what a dissection folds to — so the executor,
+    ///   the whole-row court and the tile route are one number (invariant Z1);
+    /// * the logits and the cache the whole forward leaves behind are bit-identical between the
+    ///   two graphs, which is the statement that graph v5 computes the same model.
+    #[test]
+    fn the_fused_arm_is_the_reference_composition() {
+        use kaspa_consensus_core::palw_base0_a16::{A16AttnFusedParamsV1, a16_attn_fused_reference_v1, a16_attn_fused_via_tiles_v1};
+        use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v5;
+        use kaspa_consensus_core::palw_step::PalwStepOutLenV1 as OutLen;
+
+        for (layers, d_head, d_ff) in [(1usize, 4usize, 12usize), (2, 8, 16)] {
+            let artifact = artifact(layers, d_head, d_ff);
+            let engine = A16Engine::new(&artifact).expect("the store resolves");
+            let g = geometry(&artifact);
+            let v2 = qwen25_a16_profile_v2(g).expect("the v2 profile builds");
+            let v5 = qwen25_a16_profile_v5(g).expect("the v5 profile builds");
+            // Z0's first half, on the row this build will actually execute.
+            assert!(
+                v5.attn_nodes.iter().all(|n| !matches!(n.out_len, OutLen::KvScaled { .. })),
+                "a v5 layer table still commits a context-shaped row"
+            );
+            let fused_at = v5
+                .attn_nodes
+                .iter()
+                .position(|n| n.op_kind == kaspa_consensus_core::palw_step::PalwStepOpKindV1::AttnFused)
+                .expect("the v5 layer table has a fused site");
+            let plan_v2 = engine.plan_from_profile(&v2).expect("v2 is servable");
+            let plan_v5 = engine.plan_from_profile(&v5).expect("v5 is servable");
+
+            let mut cache_v2 = A16Cache::new(layers);
+            let mut cache_v5 = A16Cache::new(layers);
+            for position in 0..6usize {
+                let token = (position * 7 + 3) % artifact.shape.vocab;
+                let (a, ta) = engine.forward_token_planned(&plan_v2, &mut cache_v2, token, position).expect("v2 walks");
+                let (b, tb) = engine.forward_token_planned(&plan_v5, &mut cache_v5, token, position).expect("v5 walks");
+                assert_eq!(a, b, "the logits moved at position {position}");
+                assert_eq!(ta.pre, tb.pre, "pre rows at position {position}");
+                assert_eq!(ta.post, tb.post, "post rows at position {position}");
+                for li in 0..layers {
+                    let v2_rows = &ta.attn[li];
+                    let v5_rows = &tb.attn[li];
+                    assert_eq!(v5_rows.len() + 3, v2_rows.len(), "layer {li}: four rows became one");
+                    // The fused row is the values row, and every row after it is unchanged.
+                    assert_eq!(v5_rows[fused_at], v2_rows[fused_at + 3], "layer {li} position {position}: the fused row");
+                    assert_eq!(&v5_rows[..fused_at], &v2_rows[..fused_at], "layer {li}: the rows before the site");
+                    assert_eq!(&v5_rows[fused_at + 1..], &v2_rows[fused_at + 4..], "layer {li}: the rows after the site");
+
+                    // …and it is the catalogued composition, and the tile route, to the bit.
+                    let lp = &engine.layers[li];
+                    let params = A16AttnFusedParamsV1 {
+                        scores: lp.logits,
+                        probs: lp.probs,
+                        values: lp.values,
+                        up_bits: lp.softmax_up,
+                    };
+                    let q = &v5_rows[v5.attn_nodes[fused_at].input_refs[0] as usize];
+                    let flat = |series: &Vec<Vec<i32>>| -> Vec<i32> { series.iter().flatten().copied().collect() };
+                    let k = flat(&cache_v5.keys[li]);
+                    let v = flat(&cache_v5.values[li]);
+                    let (h, kvh, dh) = (artifact.shape.n_heads, artifact.shape.n_kv_heads, artifact.shape.d_head);
+                    let reference = a16_attn_fused_reference_v1(q, &k, &v, h, kvh, dh, params).expect("the composition runs");
+                    assert_eq!(v5_rows[fused_at], reference, "layer {li} position {position}: the engine parted from the reference");
+                    for tile in [1usize, 4, 16] {
+                        let tiled = a16_attn_fused_via_tiles_v1(q, &k, &v, h, kvh, dh, params, tile).expect("the tile route runs");
+                        assert_eq!(v5_rows[fused_at], tiled, "layer {li} position {position} tile {tile}: the tile route parted");
+                    }
+                }
+            }
+            assert_eq!(cache_v2.keys, cache_v5.keys, "the two graphs must leave the same cache");
+            assert_eq!(cache_v2.values, cache_v5.values);
         }
     }
 
