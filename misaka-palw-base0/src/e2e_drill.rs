@@ -1160,9 +1160,32 @@ mod certification_object_tests {
         use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
         let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court");
         let mut checked = 0;
+        let mut fused_uncovered = Vec::new();
         for (model_id, profile) in catalog_profiles_v1(&court) {
             let legacy = model_id != "PALW-BASE-0/rc" && !model_id.contains("/graph-v");
             if legacy {
+                continue;
+            }
+            // **ADR-0082's graph-v5 rows are the legacy case again, running the other way.** No RC
+            // family's drill reaches `AttnFused`: the fused site's terminal adjudication is a
+            // dissection PROTOCOL rather than a recompute, and every family in
+            // `PalwRcFamilyV1::ALL` was drilled against the shipped court. So under ADR-0069
+            // Decision 5 a graph-v5 row registers WEIGHTLESS and takes share only when some
+            // family covering its kernels is certified — which is the chain route
+            // (`palw-certify drill` + `misaka palw submit-object`) and not a code change.
+            //
+            // Asserted rather than skipped, in the direction that goes red when it stops being
+            // true: the day a drilled family covers the fused site, this arm fails and whoever
+            // added the family deletes it and lets the row fall through to the sweep below.
+            if kaspa_consensus_core::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&profile) {
+                for lane in [PalwCertifiedLaneV1::Attempt, PalwCertifiedLaneV1::FreePrompt] {
+                    assert!(
+                        covering_rc_family_v1(&profile, lane).is_none(),
+                        "{model_id} gained a covering RC family on the {lane} lane — the graph-v5 row is certifiable now; \
+                         delete this arm so it is checked by the sweep instead"
+                    );
+                }
+                fused_uncovered.push(model_id);
                 continue;
             }
             for lane in [PalwCertifiedLaneV1::Attempt, PalwCertifiedLaneV1::FreePrompt] {
@@ -1171,6 +1194,11 @@ mod certification_object_tests {
             }
             checked += 1;
         }
+        assert_eq!(
+            fused_uncovered,
+            vec![crate::classes::A16_GRAPH_V5_MODEL_ID],
+            "the set of catalog rows this build cannot certify is exactly ADR-0082's graph-v5 dense row"
+        );
         assert!(checked >= 5, "the floor, the A16 graph-v2 row and the three Qwen36 graph-v3 rows, checked {checked}");
     }
 

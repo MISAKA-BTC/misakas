@@ -1348,6 +1348,58 @@ mod tests {
         println!("graph-v5 dense row: {} n_ctx {} class {}", row.model_id, row.profile.n_ctx, row.class_id());
     }
 
+    /// **The genesis row's graph is the graph-v3 row with the attention site fused — one class,
+    /// one spelling.**
+    ///
+    /// The 5f integrator's ask, and the sharpest form of the falsifiability worry
+    /// [`a16_artifact_row_v1`]'s doc raises. Two paths could produce a "graph-v5 dense 512" class:
+    /// the table row (what this build supplies) and a derivation from the ARTIFACT — take the
+    /// dense graph the artifact's own arithmetic runs, at the width its header states, and apply
+    /// ADR-0082 Decision 1's fusion. If those two ever hashed differently, the chain would carry
+    /// one class under two ids and every registration would be a coin flip about which.
+    ///
+    /// So the second path is spelled out here, from its parts, rather than by calling the same
+    /// constructor twice: `qwen25_a16_artifact_row_profile_v1` (the graph-v3 dense projection
+    /// under the epsilon the artifact executes) at `A16_CONVERTER_ROTARY_SPAN_V1` — which
+    /// `the_graph_v5_row_is_the_artifacts_own_width` pins to the header field `max_position` —
+    /// then `palw_fuse_attention_site_v5` over its attention table, then Decision 4's tiled map.
+    /// Nothing else moves, which is exactly what Decision 1 claims.
+    #[test]
+    fn the_graph_v5_row_is_the_graph_v3_row_with_its_attention_site_fused() {
+        use kaspa_consensus_core::palw_base0_profile::palw_fuse_attention_site_v5;
+        use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_1_5B, qwen25_a16_artifact_row_profile_v1};
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+
+        let row = v5_row();
+        let n_ctx = A16_CONVERTER_ROTARY_SPAN_V1;
+        assert_eq!(n_ctx as usize, row.artifact_shape.max_position, "the width must be the artifact header's");
+
+        let mut derived = qwen25_a16_artifact_row_profile_v1(PalwQwen25GeometryV1 { n_ctx, ..QWEN25_1_5B })
+            .expect("the graph-v3 dense row projects at the artifact's width");
+        // The v3 row and the v5 row differ in exactly two declared things (Decision 1 and
+        // Decision 4). Asserted before the fusion so a third difference cannot hide inside it.
+        assert_eq!(derived.state_chunk_map_id, map::integer_kv_state_chunk_map_id_v2(), "the v3 row declares the one-chunk map");
+        assert_ne!(derived.shape_profile_id(), row.class_id(), "an unfused v3 row must not already be the v5 class");
+
+        derived.attn_nodes = palw_fuse_attention_site_v5(&derived.attn_nodes).expect("the v3 attention site fuses");
+        derived.state_chunk_map_id = map::tiled_kv_state_chunk_map_id_v3();
+        derived.validate_shape().expect("the fused table is a well-formed graph");
+
+        assert_eq!(
+            derived.shape_profile_id(),
+            row.class_id(),
+            "the registered graph-v5 row and the artifact-derived fusion are two spellings of one class and they disagree"
+        );
+        // And the whole struct, not just its id: an id equality could in principle be reached by
+        // two profiles the hash does not separate, and the hash is not the thing being tested.
+        assert_eq!(derived, row.profile, "the two spellings agree on the id and differ in the graph");
+        assert_eq!(
+            derived.attn_nodes.len() + 3,
+            qwen25_a16_artifact_row_profile_v1(PalwQwen25GeometryV1 { n_ctx, ..QWEN25_1_5B }).expect("projects").attn_nodes.len(),
+            "the fusion turns four committed attention nodes into one"
+        );
+    }
+
     /// **The registered row declares the TILED map, and therefore registers the INVENTORY root.**
     ///
     /// Both halves by name. `tiled_kv_state_chunk_map_id_v3` is the map ADR-0082 Decision 4's
@@ -1489,45 +1541,36 @@ mod tests {
             assert!(admitted.is_ok(), "{name}: the graph-v5 row must be admissible under its own armed court: {admitted:?}");
 
             // The close, DERIVED here and printed with the configuration it was measured under.
+            //
+            // **Which EVIDENCE ROUTE this is charged at is stream K's answer, not a choice here.**
+            // Per-position attention checkpoints cover every position, so the cache-write route is
+            // refused for this class and the walk charges the checkpoint route — which is why the
+            // binding close is one carrier rather than the three it was when the bottom was priced
+            // at the cache-write route (216,019 B). A test that swapped the route by hand would be
+            // pricing a route the ruleset no longer plays.
             let cost_rows = adm::derive_court_cost_rows_v1(&row.profile, rules.cost_shape).expect("the cost walk prices the row");
             let binding = cost_rows.first().expect("a priced row has a binding node").clone();
+            let chunks = kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(binding.close_bytes);
             println!(
-                "[{name}] graph-v5 dense @ n_ctx {} arity {} Merkle ids map tiled_v3: binding close {} B = {} chunk(s) at {}[{}] {:?} {} \
-                 (cache-write route charged)",
+                "[{name}] graph-v5 dense @ n_ctx {} arity {} Merkle ids map tiled_v3 checkpoint route: binding close {} B = {} \
+                 chunk(s) at {}[{}] {:?} {}",
                 row.profile.n_ctx,
                 kary.dissection_arity,
                 binding.close_bytes,
-                kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(binding.close_bytes),
+                chunks,
                 binding.table,
                 binding.index,
                 binding.op_kind,
                 binding.weight_name
             );
-
-            // The checkpoint route alone — the number the relaunch's registration decision turns
-            // on. `palw_context_ladder`'s own sweep pins 82,719 = 1 chunk at arity 16; this is the
-            // same route swap at the arity THIS ruleset derives.
-            let checkpoint_route = checkpoint_route_close(&row.profile, binding.close_bytes);
-            let chunks = kaspa_consensus_core::palw_mode_v2::palw_close_chunks_for_bytes_v1(checkpoint_route);
-            println!(
-                "[{name}] graph-v5 dense @ n_ctx {} arity {}: checkpoint-route close {checkpoint_route} B = {chunks} chunk(s)",
-                row.profile.n_ctx, kary.dissection_arity
-            );
-            assert_eq!(chunks, 1, "{name}: the registered row must be ONE carrier on the checkpoint route — {checkpoint_route} B");
-
+            assert_eq!(chunks, 1, "{name}: the registered row must be ONE carrier — {} B", binding.close_bytes);
             // **Pinned, with the configuration in the message.** `palw_context_ladder`'s own sweep
-            // states 216,019 / 82,719 for this row at arity 16 — the arity stream E measured with a
+            // states 82,719 B for this row at arity 16 — the arity stream E measured with a
             // 128-lane site. The derivation here reads the ruleset that registers THIS row and
             // returns 2 (window 3,000, turn deadline 42, ladder 2^26, history 512 positions at a
-            // 16-position tile, 8 lanes), and the whole difference is the per-move disclosure:
-            // 1,120 bytes on BOTH routes, which is why the chunk counts are identical. A moved
-            // arity moves these two numbers and this test says by how much.
-            assert_eq!(
-                (binding.close_bytes, checkpoint_route),
-                (214_899, 81_599),
-                "{name}: the graph-v5 512 row's close moved at arity {} (cache-write, then checkpoint route)",
-                kary.dissection_arity
-            );
+            // 16-position tile, 8 lanes); the whole difference is the per-move disclosure, 1,120
+            // bytes. A moved arity moves this number and this test says by how much.
+            assert_eq!(binding.close_bytes, 81_599, "{name}: the graph-v5 512 row's close moved at arity {}", kary.dissection_arity);
 
             // And WITHOUT the fence: the guard refuses the same row by name.
             match adm::verify_class_admission_v5(&bundle, &row.profile, &canonical, &registration, &[], &[], None, None) {
@@ -1535,37 +1578,5 @@ mod tests {
                 other => panic!("{name}: an unfenced ruleset must refuse the graph-v5 row by name, got {other:?}"),
             }
         }
-    }
-
-    /// The binding close with the fused bottom charged at Decision 4's TILE route instead of the
-    /// cache-write one. The walk charges the larger of the two at the binding node, so swapping the
-    /// route is exactly this difference and nothing else — the same arithmetic
-    /// `palw_context_ladder::the_close_ceiling_is_the_derivation_over_the_genesis_set` states.
-    fn checkpoint_route_close(profile: &PalwShapeProfileV3, cache_write_close: u64) -> u64 {
-        use kaspa_consensus_core::palw_class_admission_v2::{
-            palw_attn_bottom_cache_write_bytes_v1, palw_attn_bottom_tile_route_bytes_v1,
-        };
-        let d_head = profile.attn_head_dim as u64;
-        let kv_dim = profile.attn_kv_heads as u64 * d_head;
-        let node = profile
-            .attn_nodes
-            .iter()
-            .find(|n| n.op_kind == kaspa_consensus_core::palw_step::PalwStepOpKindV1::AttnFused)
-            .expect("a v5 row has a fused site");
-        let out_w = match node.out_len {
-            kaspa_consensus_core::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
-            kaspa_consensus_core::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => multiplier as u64 * profile.n_ctx as u64,
-        };
-        let tile = (node.tile_len as u64).min(out_w);
-        let src = profile
-            .attn_nodes
-            .iter()
-            .find(|n| n.role == kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::KCacheWrite)
-            .map_or(tile, |n| n.tile_len as u64);
-        let positions = (kaspa_consensus_core::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4 as u64).min(profile.n_ctx as u64);
-        let path = 64 * 32u64;
-        let cache = palw_attn_bottom_cache_write_bytes_v1(d_head, kv_dim, positions, tile, src, path).expect("derives");
-        let ckpt = palw_attn_bottom_tile_route_bytes_v1(d_head, kv_dim, positions, tile, path).expect("derives");
-        cache_write_close - cache + ckpt
     }
 }
