@@ -3820,3 +3820,47 @@ what an operator      "verify is broken" -> wipe anyway -> a survivor re-feeds t
 > **A gate with no documented way to satisfy it teaches people to bypass it.** The gate was the
 > only thing standing between a partial wipe and a chain-splitting survivor, and it was the part
 > that worked.
+
+## The runbook swept for the same five patterns, and the important one had been left in
+
+The card and the script were fixed; **the runbook is what an operator actually follows** and it had
+never been checked against tonight's findings.
+
+**Gap 1 — it did not know the script existed.** `scripts/relaunch-fleet-wipe.sh` appeared **zero**
+times in 609 lines, so an operator following the runbook did steps 1–3 by hand, without any of the
+five findings the script encodes. §4b now names it, lists the four commands, and carries the
+naive-versus-correct table.
+
+**Gap 2 — and this one is worse: the runbook was TEACHING the defect.** Line 400 said:
+
+```
+    pgrep -af kaspad | grep -oE 'appdir=[^ ]+' | sort -u
+```
+
+**That is the exact command proved tonight to match the asking process and print its own regex as
+an appdir — and to miss `kaspad.candidate`, a running node.** Minutes earlier I had added a table
+saying that command is wrong, four hundred lines below it. *The document would have contradicted
+itself, and the instruction is the half an operator executes.*
+
+Both forms now appear, the wrong one labelled with its two failure modes, and **the right one was
+run against a real host before being left in the document**:
+
+```
+kaspad                      --appdir=/root/.t11
+kaspad                      --appdir=/root/.t11b
+kaspad.candidate (deleted)  --appdir=/tmp/fpchk        <- the node both earlier forms missed
+```
+
+**The sweep, for the other four:**
+
+```
+pgrep -f            3 hits — all three are the WRONG label, the WRONG example, and the table row
+journalctl scrape   1 hit  — documented as the defect, with 3-vs-9 measured beside it
+list-units          1 hit  — my own table row about --plain --all
+known_hosts         3 hits — all three warn AGAINST it: "the ownership test is the ssh, and only the ssh"
+```
+
+**Clean, and clean for a reason worth stating: every one of those five had already been written up
+as a failure in this runbook, and the failing command itself was still sitting in the instructions.**
+*A document can contain the correction and the defect at the same time, and the correction does not
+disable the defect — only editing the instruction does.*
