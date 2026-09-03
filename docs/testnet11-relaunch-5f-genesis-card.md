@@ -5597,3 +5597,20 @@ field match that fails once a counter grows past the column width — `eth0:123�
 `rx +0 tx +0` for 45 minutes on a live node; the memory note on tools that report an absence they cannot see has it).
 6a's exposure correction: `palw_exposure_pwu_v1` reserves one inference's pwu (7,708 for the floor → 38,540 sompi
 per floor claim until Final); the chain's bond minimum is 400,000 sompi, the pool's 10 MSK ask is the pool's policy.
+
+**7b, continued — run 4 (6a, 22:06Z): the devnet's "carried in a block" is measured.** On `b037cdc2`'s rail with the
+script unmodified: 5b OK (`submitted a02a3334…`, claim `b557bce8…`, fee 329,837 auto-sized), then **block
+`e7a1c9c7…` carried it — every drill node logs "PALW lifecycle carried 1× FreePromptCommitted"** (node-0 07:16:39,
+node-1 07:17:39, node-2 07:17:37 JST), and node-0's panel logged "recovered funding at a02a3334…:0" — the state
+seeing the same transaction. The drill printed "NOT on every node" because its stage-6 regex wants the claim id and
+the kind on one line while the node's lifecycle line names the block and the kind — a check shaped to agree with its
+doc (the memory note by that name), which could never pass; 6a is fixing the script and re-running for PanelBound →
+ReceiptLicensed → Final → receipt → derived artifact. Card wording: "a free-prompt commitment was built, accepted
+and carried in a block on the cut's consensus code (devnet)"; "Final / receipt / derived from the chain" are the
+next run's.
+
+**6m, continued — the pause executed (22:28 UTC).** seat2's fifth production was an hour overdue and the sysfs
+sampler read its total traffic under ~70 KB/s (no stuck broadcast saturating the uplink; the path itself is slow and
+lossy). `c-seat2.sh` lost `--palw-produce` and `--palw-producer-class` (`c-seat2.sh.pre-5f-pause` kept), keeping
+`--palw-panel`, the three artifacts and the heartbeat address; restarted. Reversible in one line when the transport
+carries 5f-sized materials.
