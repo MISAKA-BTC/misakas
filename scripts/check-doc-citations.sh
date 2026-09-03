@@ -14,7 +14,15 @@
 # here would be the same unfalsifiable check the card warns about everywhere else.
 #
 #   usage: scripts/check-doc-citations.sh <doc-path> [tree-ish]
-#          tree-ish defaults to the working tree.
+#          scripts/check-doc-citations.sh <doc-path> <tree-a> <tree-b>   # diff mode
+#
+# Two trees is the mode that matters at a freeze. One tree tells you the citations
+# RESOLVE. Two tells you which ones DEPEND on which tree you meant — and those are
+# the only ones a blanket "this document is impl-relative" note can hurt. Declaring
+# a tree is not a null operation: it fixed six wrong citations in this card and
+# silently inverted one that had been right, in the very sentence warning about the
+# hazard. Everything that resolves identically on both trees is immune to the label.
+# (Mode suggested by session 1c, who found that inversion by running exactly this.)
 set -uo pipefail
 doc="${1:?usage: check-doc-citations.sh <doc-path> [tree-ish]}"
 tree="${2:-}"
@@ -33,6 +41,24 @@ if [ -n "$tree" ]; then
 else
     listing=$(git -C "$root" ls-files)
     label="the working tree"
+fi
+
+# ---- diff mode: resolve against two trees and show only what disagrees -------------
+if [ -n "${3:-}" ]; then
+    a="$2"; b="$3"; differ=0
+    echo "citations in $doc that resolve DIFFERENTLY on $a vs $b:"
+    printf '%s' "$body" | grep -oE '[a-zA-Z0-9_/.-]+\.rs:[0-9]+' | sort -u | while read -r cite; do
+        f="${cite%%:*}"; n="${cite##*:}"
+        la=$(git ls-tree -r --name-only "$a" | grep -E "(^|/)${f}$" | head -1)
+        lb=$(git ls-tree -r --name-only "$b" | grep -E "(^|/)${f}$" | head -1)
+        va=$([ -n "$la" ] && git show "${a}:${la}" | sed -n "${n}p" | sed 's/^[[:space:]]*//' || echo "<no such file>")
+        vb=$([ -n "$lb" ] && git show "${b}:${lb}" | sed -n "${n}p" | sed 's/^[[:space:]]*//' || echo "<no such file>")
+        if [ "$va" != "$vb" ]; then
+            printf '  %s\n    %-9s %s\n    %-9s %s\n' "$cite" "$a" "${va:-<line absent>}" "$b" "${vb:-<line absent>}"
+        fi
+    done
+    echo "-- citations not listed resolve identically on both trees, so the document's tree label cannot change what they mean."
+    exit 0
 fi
 
 echo "citations in $doc, resolved against $label:"
