@@ -1542,9 +1542,13 @@ pub struct PalwClassStateV2 {
     /// DAA and the sync walker cannot resolve it differently.
     ///
     /// Written at the single construction site from the registration's own carriage
-    /// (`palw_profile_has_fused_attention_v1`), and `false` for a GENESIS registration, which
-    /// carries no profile — a genesis row whose class is fused is refused by name at boot
-    /// (`verify_palw_genesis_v2`), because the fold cannot resolve a graph it was never given.
+    /// (`palw_profile_has_fused_attention_v1`). A registration that carries NO carriage folds
+    /// `false`, because the fold holds no catalog and cannot resolve a graph it was never given —
+    /// so `verify_palw_genesis_v2` refuses by name a genesis row whose committed catalog entry
+    /// reaches the fused kernel and which carries no profile
+    /// (`GenesisFusedRowCarriesNoProfile`), and refuses a carriage whose answer disagrees with
+    /// that catalog in either direction. A fused row on a shipped card therefore carries its
+    /// graph, which is the form ADR-0049 Decision H already gives every checkable registration.
     pub fused_attention: bool,
 }
 
@@ -8433,14 +8437,16 @@ fn apply_object(
                     // (`palw_profile_has_fused_attention_v1`) — never declared, because a class
                     // that declared its own adjudication rule would be choosing its own court.
                     //
-                    // A GENESIS registration carries no graph (`admission: None` — "the catalog IS
-                    // the profile in committed form"), and the fold holds no catalog, so there is
-                    // nothing here to read: it folds `false`, and the refusal that makes that
-                    // honest lives at the boot gate, where the catalog IS in hand
-                    // (`verify_palw_genesis_v2`'s `GenesisClassIsFused`). Deriving it here from a
-                    // table of the rows THIS BUILD ships would be worse than a gap: the fold's
-                    // answer would be a function of the binary rather than of the chain, and two
-                    // builds shipping different row sets would root the same genesis differently.
+                    // A registration with no carriage (the genesis form, "the catalog IS the
+                    // profile in committed form") folds `false`: the fold holds no catalog and
+                    // there is nothing here to read. What makes that honest is the boot gate,
+                    // where the catalog IS in hand — `verify_palw_genesis_v2` refuses a genesis
+                    // row whose catalogued graph reaches the fused kernel and carries no profile,
+                    // and refuses a carriage that disagrees with the catalog either way. Deriving
+                    // it here from a table of the rows THIS BUILD ships would be worse than a gap:
+                    // the fold's answer would be a function of the binary rather than of the
+                    // chain, and two builds shipping different row sets would root the same
+                    // genesis differently.
                     fused_attention: admission.as_ref().is_some_and(|carriage| {
                         crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&carriage.profile)
                     }),

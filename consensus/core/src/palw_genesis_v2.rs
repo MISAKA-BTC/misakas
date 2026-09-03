@@ -66,12 +66,25 @@ pub enum PalwGenesisV2Error {
     )]
     ClassIsNotDerived(Hash64),
     #[error(
-        "genesis registers class {class_id}, whose catalogued graph reaches the fused attention kernel — \
-         a fused class must enter through the post-genesis door that carries its profile, because a \
-         genesis registration carries none and the fold cannot resolve a graph it was never given \
+        "genesis registers class {class_id}, whose catalogued graph reaches the fused attention kernel, \
+         without an admission carriage — a fused row must carry its profile, because that graph is the \
+         only thing the fold can read `PalwClassStateV2::fused_attention` from and without it the \
+         class's terminal leaf is clocked as though nobody owed a root claim \
          (ADR-0082 Decision 2, audit A C-5)"
     )]
-    GenesisClassIsFused { class_id: Hash64 },
+    GenesisFusedRowCarriesNoProfile { class_id: Hash64 },
+    #[error(
+        "genesis registers class {class_id} whose carriage says fused = {carried} while the committed \
+         catalog's reachable kernels say {catalogued} — the fold writes the carriage's answer into the \
+         state root, so the two must be one answer (ADR-0082 Decision 2, audit A C-5)"
+    )]
+    GenesisFusedDisagreesWithCatalog { class_id: Hash64, carried: bool, catalogued: bool },
+    #[error(
+        "genesis registers class {class_id} carrying a profile whose id is {derived} — a class id IS its \
+         shape profile id, so a carriage describing another graph would let the fold record facts about \
+         a class nobody registered"
+    )]
+    GenesisCarriageIsNotTheClass { class_id: Hash64, derived: Hash64 },
     #[error("genesis registers no class at all — a network with no liveness floor cannot produce a block")]
     NoRegistrations,
     #[error("the first class genesis registers is {first}, not the bundle's liveness floor {base}")]
@@ -161,7 +174,7 @@ pub fn verify_palw_genesis_v2(
             bonds.push((*bond, *collateral, crate::palw_state_v2::palw_operator_id_v2(operator_pubkey)));
             continue;
         }
-        let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, .. } = object else {
+        let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, admission, .. } = object else {
             continue;
         };
         if registered.contains(class_id) {
@@ -190,26 +203,49 @@ pub fn verify_palw_genesis_v2(
                 }
             }
         }
-        // **A fused class may not be registered at genesis** (ADR-0082 Decision 2, audit A C-5).
+        // **A fused genesis row must CARRY its graph** (ADR-0082 Decision 2, audit A C-5).
         //
-        // `PalwClassStateV2::fused_attention` is what tells the sweep that this class's terminal
-        // leaf owes a ROOT CLAIM rather than a close, and the fold writes it from the graph the
-        // registration CARRIES. A genesis registration carries none — "the catalog IS the profile
-        // in committed form" — and the fold holds no catalog, so it folds `false` and the class's
-        // guilty responders would win by silence, which is exactly the defect C-5 names.
+        // `PalwClassStateV2::fused_attention` is what tells the court sweep that this class's
+        // terminal leaf owes a ROOT CLAIM rather than a close, and the fold can only read it off
+        // the profile the registration carries: the fold holds no catalog, and resolving a class
+        // id against a table of the rows THIS BUILD ships would make the state root a function of
+        // the binary — two builds shipping different row sets would root the same genesis
+        // differently. So a fused row registered with `admission: None` folds `false` and its
+        // guilty responders would win by silence, which is the defect C-5 names, arriving through
+        // the one door that skips the admission gate.
         //
-        // Deriving it in the fold from a table of the rows THIS BUILD ships would be worse: the
-        // state root would become a function of the binary, and two builds shipping different row
-        // sets would root the same genesis differently. So the refusal is here, at the boot gate,
-        // where the catalog IS in hand — an operator holding two artifacts is told which one is
-        // wrong, and no node ever folds a genesis it cannot clock.
-        //
-        // The catalog's `reachable_kernels` is the committed form of the question: a fused site
-        // carries `KDESC_A16_ATTN_FUSED`, the one description of that kernel
-        // (`kernel_can_serve_node_v1` refuses a fused node whose operands do not match it), and
-        // `reachable_kernels_v1` is the same traversal the entry was minted from.
-        if entry.reachable_kernels.contains(&crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_A16_ATTN_FUSED)) {
-            return Err(PalwGenesisV2Error::GenesisClassIsFused { class_id: *class_id });
+        // The catalog is the committed form of the question and it is in hand HERE, which is why
+        // the demand lives at the boot gate: `reachable_kernels` is the same traversal the entry
+        // was minted from, and a fused site carries `KDESC_A16_ATTN_FUSED`, the one description of
+        // that kernel (`kernel_can_serve_node_v1` refuses a fused node whose operands do not match
+        // it). So the two answers — what the fold will write, and what the network committed to —
+        // are compared, in BOTH directions, and a disagreement names the class rather than being
+        // discovered as a court that convicts the wrong party.
+        let catalogued_fused =
+            entry.reachable_kernels.contains(&crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_A16_ATTN_FUSED));
+        match admission.as_ref() {
+            None => {
+                if catalogued_fused {
+                    return Err(PalwGenesisV2Error::GenesisFusedRowCarriesNoProfile { class_id: *class_id });
+                }
+            }
+            Some(carriage) => {
+                // A class id IS its shape profile id (`check_close_profile_is_the_registered_class`
+                // is the court's spelling of the same rule). Without this the carriage could
+                // describe any graph and the fold would record its answer under this class's name.
+                let derived = carriage.profile.shape_profile_id();
+                if derived != *class_id {
+                    return Err(PalwGenesisV2Error::GenesisCarriageIsNotTheClass { class_id: *class_id, derived });
+                }
+                let carried = crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&carriage.profile);
+                if carried != catalogued_fused {
+                    return Err(PalwGenesisV2Error::GenesisFusedDisagreesWithCatalog {
+                        class_id: *class_id,
+                        carried,
+                        catalogued: catalogued_fused,
+                    });
+                }
+            }
         }
         registered.push(*class_id);
     }
@@ -343,37 +379,105 @@ mod tests {
         PalwClassCatalogV2::new(vec![catalog_entry(h64(1))]).expect("the fixture catalog is well-formed")
     }
 
-    /// **A fused class may not be registered at GENESIS, and the refusal names the class.**
+    /// The smallest fused row this crate projects — a class id nothing else has, and the one
+    /// property the gate reads.
+    fn fused_profile() -> crate::palw_step::PalwShapeProfileV3 {
+        crate::palw_qwen25_profile::qwen25_a16_profile_v5(crate::palw_qwen25_profile::PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 16,
+            ffn_dim: 12,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 16,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        })
+        .expect("the v5 projection is a valid profile")
+    }
+
+    fn catalog_of(entries: Vec<PalwClassCatalogEntryV2>) -> PalwClassCatalogV2 {
+        let mut entries = entries;
+        entries.sort_by(|a, b| a.class_id.cmp(&b.class_id));
+        PalwClassCatalogV2::new(entries).expect("the fixture catalog is well-formed")
+    }
+
+    fn carried(class_id: Hash64, profile: crate::palw_step::PalwShapeProfileV3) -> PalwConsensusObjectV2 {
+        let PalwConsensusObjectV2::ClassRegistered { artifact_root, slash_value_per_pwu, pwu_rule, initial_target, .. } =
+            registration(class_id, CANONICAL)
+        else {
+            unreachable!("registration builds a ClassRegistered")
+        };
+        PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            artifact_root,
+            slash_value_per_pwu,
+            pwu_rule,
+            initial_target,
+            share_permille: 0,
+            activation_daa: 0,
+            admission: Some(Box::new(crate::palw_state_v2::PalwClassAdmissionCarriageV2 {
+                canonical: crate::palw_base0_profile::rc_job_context(&profile, 4, 2),
+                profile,
+                registrant_bond: PalwBondKeyV2(TransactionOutpoint {
+                    transaction_id: TransactionId::from_u64_word(0x0082_F5ED),
+                    index: 0,
+                }),
+                signature: Vec::new(),
+            })),
+        }
+    }
+
+    /// **A fused genesis row must CARRY the graph the fold reads its clock from** (ADR-0082
+    /// Decision 2, audit A C-5).
     ///
     /// `PalwClassStateV2::fused_attention` is what tells the court sweep that this class's terminal
-    /// leaf owes a ROOT CLAIM rather than a close (audit A C-5), and the fold writes it from the
-    /// graph the registration CARRIES. A genesis registration carries none, so the fold writes
-    /// `false` and the class's guilty responders would win by silence — the exact defect C-5 names,
+    /// leaf owes a ROOT CLAIM rather than a close, and the fold can only read it off the carriage:
+    /// it holds no catalog, and resolving a class id against a table of the rows this build ships
+    /// would make the state root a function of the binary. So a fused row registered with
+    /// `admission: None` would fold `false` and its guilty responders would win by silence — C-5
     /// arriving through the one door that skips the admission gate.
     ///
-    /// Refused HERE and not in the fold on purpose: resolving a genesis class id against a table of
-    /// the rows this build ships would make the state root a function of the binary, and two builds
-    /// shipping different row sets would root the same genesis differently. The catalog is the
-    /// committed form of the graph and it is in hand at boot, so this is where the question can be
-    /// asked without inventing an answer.
+    /// The catalog is the committed form of the same question and it is in hand at boot, so the
+    /// two answers are compared here in both directions, and the carriage is pinned to the class
+    /// it claims to describe.
     #[test]
-    fn a_fused_genesis_row_is_refused_by_name() {
-        let mut entry = catalog_entry(h64(1));
-        entry.reachable_kernels.insert(fused_kernel());
-        let fused_catalog = PalwClassCatalogV2::new(vec![entry]).expect("the fixture catalog is well-formed");
-        let fused_bundle = bundle(&fused_catalog);
-        let objects = [registration(h64(1), CANONICAL), a_bond()];
-        let err = verify_palw_genesis_v2(&fused_bundle, &fused_catalog, &objects, funded).unwrap_err();
-        assert_eq!(err, PalwGenesisV2Error::GenesisClassIsFused { class_id: h64(1) });
-        assert!(err.to_string().contains("post-genesis door"), "the message says which door the class must use: {err}");
+    fn a_fused_genesis_row_must_carry_the_graph_the_fold_reads_it_from() {
+        let profile = fused_profile();
+        let fused_id = profile.shape_profile_id();
+        let mut fused_entry = catalog_entry(fused_id);
+        fused_entry.reachable_kernels.insert(fused_kernel());
+        let cat = catalog_of(vec![catalog_entry(h64(1)), fused_entry]);
+        let b = bundle(&cat);
 
-        // And the same artifact without the fused kernel loads, so the refusal is about that one
-        // kernel and not about the shape of the test.
-        let clean = catalog();
+        // (1) Catalogued fused, carrying nothing: refused by name.
+        let mut objects = vec![registration(h64(1), CANONICAL), registration(fused_id, CANONICAL)];
+        objects.extend(a_seatable_registry(&b));
+        let err = verify_palw_genesis_v2(&b, &cat, &objects, funded).unwrap_err();
+        assert_eq!(err, PalwGenesisV2Error::GenesisFusedRowCarriesNoProfile { class_id: fused_id });
+        assert!(err.to_string().contains("fused_attention"), "the message names the field the fold cannot write: {err}");
+
+        // (2) The same row carrying its graph loads — which is the shape a shipped card uses.
+        let mut objects = vec![registration(h64(1), CANONICAL), carried(fused_id, profile.clone())];
+        objects.extend(a_seatable_registry(&b));
+        verify_palw_genesis_v2(&b, &cat, &objects, funded).expect("a fused row that carries its graph loads");
+
+        // (3) A carriage that disagrees with the catalog is refused in the other direction too:
+        // here the catalog says nothing fused and the carriage says otherwise.
+        let clean = catalog_of(vec![catalog_entry(h64(1)), catalog_entry(fused_id)]);
         let clean_bundle = bundle(&clean);
-        let mut clean_objects = vec![registration(h64(1), CANONICAL)];
-        clean_objects.extend(a_seatable_registry(&clean_bundle));
-        verify_palw_genesis_v2(&clean_bundle, &clean, &clean_objects, funded).expect("a non-fused row loads");
+        let mut objects = vec![registration(h64(1), CANONICAL), carried(fused_id, profile.clone())];
+        objects.extend(a_seatable_registry(&clean_bundle));
+        let err = verify_palw_genesis_v2(&clean_bundle, &clean, &objects, funded).unwrap_err();
+        assert_eq!(err, PalwGenesisV2Error::GenesisFusedDisagreesWithCatalog { class_id: fused_id, carried: true, catalogued: false });
+
+        // (4) And a carriage describing another graph is refused before either answer is read.
+        let mut objects = vec![carried(h64(1), profile)];
+        objects.extend(a_seatable_registry(&b));
+        let err = verify_palw_genesis_v2(&b, &cat, &objects, funded).unwrap_err();
+        assert_eq!(err, PalwGenesisV2Error::GenesisCarriageIsNotTheClass { class_id: h64(1), derived: fused_id });
     }
 
     /// A bundle whose `class_catalog_root` really is this catalog's, so the tests below fail on
