@@ -14,6 +14,14 @@ someone's decision rather than an arithmetic consequence, it says so and says wh
 > prints the line it lands on**; run it against the merged tree at the freeze and read the output,
 > because a citation that resolves is not the same as a citation that is right. Caught by the
 > session verifying this card, not by the one writing it.
+>
+> **And relabelling is not a null operation.** Declaring the card impl-relative fixed those six and
+> silently INVERTED one that had been right against 5f — `golden_vector_ids_are_frozen` in
+> `palw_freeprompt_v3.rs`, 1521 on this branch and **1643** on impl — inside the very sentence
+> warning that the function has two homes. So the freeze check is the TWO-tree form:
+> `check-doc-citations.sh <doc> <tree-a> <tree-b>` lists only the citations that resolve
+> DIFFERENTLY, and those are the only ones any tree label can hurt. Seven of this card's citations
+> are tree-dependent; everything it does not list is immune to the label.
 
 ---
 
@@ -455,7 +463,7 @@ apart on this branch: `a7baab79…` was the pin, one reading gave `d201a54f…`,
 value is a function of the consensus parameters and every merge moves it. A re-pin taken before the
 last merge lands is a value that was true when it was read and false when it shipped.
 
-**Careful with the third**: `golden_vector_ids_are_frozen` exists TWICE — `palw_freeprompt_v3.rs:1521`
+**Careful with the third**: `golden_vector_ids_are_frozen` exists TWICE — `palw_freeprompt_v3.rs:1643`
 and `palw_derived_v1.rs:441`. One name, two homes, in the same crate. Only the free-prompt one moved.
 Re-pinning by name rather than by module is how the wrong one gets rewritten, and this is the same
 one-thing-two-homes shape that produced the two ladder caps and the class root spelled two ways.
@@ -545,7 +553,7 @@ green except the known pin" said this week was a statement about jobs that never
 | derive | `cargo test -p misaka-palw-derive` | **NOT `--lib`** — `--lib` builds no binaries, `palw-evm-runner` is absent, and ADR-0079's confinement gate refuses rather than falling back in-process. Those seven reds are the gate HOLDING. |
 | cli | `cargo test -p misaka-cli` | 73/0 |
 | artifact selftest | `scripts/misaka-palw-artifact-conformance.py selftest` | five damaged artifacts, each refused BY NAME — a test on the exit code alone would call four-of-five a pass |
-| doc citations | `scripts/check-doc-citations.sh docs/testnet11-relaunch-5f-genesis-card.md <merged-tree>` | every `file.rs:NNNN` in this card, resolved against the tree it claims. A REPORT, not a verdict — it exits non-zero only on a missing file or line, so the lines have to be read. |
+| doc citations | `scripts/check-doc-citations.sh docs/…-genesis-card.md <merged-tree> palw-testnet-5f`, then the same without the second tree | **the two-tree form first**: it lists only citations that resolve differently on the two trees — the only ones a tree label can change the meaning of. Then the one-tree form against the merged tree, and READ the lines. A REPORT, not a verdict: it exits non-zero only on a missing file or line, because a citation that resolves to the WRONG line still resolves. |
 | stranger | `scripts/misaka-palw-derive-stranger.py selftest` | recomputes the bytes in Python, independently of the Rust. **RED right now, and correctly so — read its two halves separately** (below). |
 | third party | `scripts/misaka-palw-artifact-thirdparty.py --require` | mido / pygltflib / numpy-stl; compares MEANING (enclosed volume, playback duration) against the DSL |
 | model gate, dense | `palw-model-gate` | A16 lane only — declared in advance |
