@@ -83,8 +83,15 @@ impl CanonicalClassV1 {
             // the same predicate its backend answers `supports_court` with) registers the A16
             // operand-inventory root, because an arithmetic close's openings prove against the
             // registered root and nothing can be opened against a flat digest.
+            //
+            // **The discriminator is the backend's own `supports_court` predicate**
+            // ([`crate::qwen25_a16_backend::a16_court_capable_v1`]), not a v2 equality written out
+            // a third time. It was the equality, and ADR-0082's `graph-v5` row — which registers
+            // the TILED map precisely so a dissection's bottom can open one history tile — fell
+            // through to the flat digest: a court-capable class whose registered root nothing can
+            // be opened against, which is the A16 genesis root form defect exactly.
             ArtifactSourceV1::ConvertedA16 => {
-                if self.profile.state_chunk_map_id == kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2() {
+                if crate::qwen25_a16_backend::a16_court_capable_v1(&self.profile) {
                     Ok(crate::inventory::a16_inventory_v1(artifact, &self.profile)?.root())
                 } else {
                     Ok(artifact.artifact_digest())
@@ -547,14 +554,6 @@ pub fn resolve_class_v1(
 #[cfg(test)]
 mod tests {
 
-    /// **The corrected A16 graph is in the catalog, registrable, and is not the class testnet-11
-    /// carries.**
-    ///
-    /// Both halves matter. Registrable, because `--palw-register-class` derives what it files from
-    /// this catalog and a class it does not know cannot be put on a running chain. Not the same id,
-    /// because the two profiles differ in what the court recomputes — and if these ever collided, a
-    /// build could change a live network's class without changing what it calls itself.
-    #[test]
     /// **A dense row whose declared epsilon is the one its artifact executes — and the older rows
     /// keep theirs.**
     ///
@@ -598,6 +597,13 @@ mod tests {
         assert_eq!(v3.profile.state_chunk_map_id, v2.profile.state_chunk_map_id);
     }
 
+    /// **The corrected A16 graph is in the catalog, registrable, and is not the class testnet-11
+    /// carries.**
+    ///
+    /// Both halves matter. Registrable, because `--palw-register-class` derives what it files from
+    /// this catalog and a class it does not know cannot be put on a running chain. Not the same id,
+    /// because the two profiles differ in what the court recomputes — and if these ever collided, a
+    /// build could change a live network's class without changing what it calls itself.
     #[test]
     fn the_corrected_a16_graph_is_a_registrable_class_of_its_own() {
         let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court");
@@ -853,5 +859,88 @@ mod tests {
             Err(ClassResolveError::UnknownClass { class_id }) => assert_eq!(class_id, c.class_id()),
             other => panic!("an A16 class id must be UnknownClass to the floor resolver, got {other:?}"),
         }
+    }
+
+    /// **A court-capable row registers a root a court can OPEN — and `graph-v5` is court-capable.**
+    ///
+    /// The discriminator here was `state_chunk_map_id == integer_kv_state_chunk_map_id_v2()`, the
+    /// third copy of the predicate the two backend constructors also spelled. ADR-0082's v5 row
+    /// registers the TILED map, so it fell through to `artifact_digest()` — a flat hash of a whole
+    /// file, and `PalwProvenOperandsV1::from_openings_v1` proves openings against the registered
+    /// root, so an arithmetic close on the row the genesis registers could have proven nothing.
+    /// That is the A16 genesis root form defect exactly: one class root spelled two ways with
+    /// nothing forcing them equal.
+    ///
+    /// All three rows are pinned, because the fix widens a predicate and a widened predicate is
+    /// how the OTHER side gets broken: v5 → inventory (new), v2 → inventory (unmoved), and the
+    /// one-byte-map v1 row → digest (unmoved, and it is a live chain fact).
+    #[test]
+    fn a_tiled_map_row_registers_the_inventory_root_and_the_one_byte_row_still_registers_the_digest() {
+        use kaspa_consensus_core::palw_qwen25_profile::{qwen25_a16_artifact_row_profile_v5, qwen25_geometry_artifact_eps};
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+
+        let geometry = qwen25_geometry_artifact_eps(PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 8,
+            ffn_dim: 8,
+            attn_heads: 2,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 32,
+            n_threads: 1,
+            ..QWEN25_1_5B
+        });
+        let artifact_shape = Base0ShapeV1 {
+            n_layers: geometry.layer_count as usize,
+            n_heads: geometry.attn_heads as usize,
+            n_kv_heads: geometry.attn_kv_heads as usize,
+            d_head: geometry.attn_head_dim as usize,
+            d_ff: geometry.ffn_dim as usize,
+            vocab: geometry.vocab_size as usize,
+            max_position: geometry.n_ctx as usize,
+            ln_theta_gen_q: crate::artifact::LN_THETA_1000000_GEN_Q,
+            eps_q: geometry.rms_eps_q,
+        };
+        let artifact = Base0ArtifactV1::derive_deterministic(artifact_shape, 0x5A16)
+            .expect("a valid shape")
+            .with_a16_params(crate::engine_a16::derived_a16_store(&artifact_shape))
+            .expect("the derived store is sorted and unique");
+
+        let row = |profile: PalwShapeProfileV3| CanonicalClassV1 {
+            model_id: "test/a16",
+            profile,
+            artifact_shape,
+            canonical_job: QWEN25_A16_CANONICAL,
+            source: ArtifactSourceV1::ConvertedA16,
+            inventory_geometry: PALW_RC_BASE0_GEOMETRY,
+        };
+
+        let v5 = row(qwen25_a16_artifact_row_profile_v5(geometry).expect("a valid v5 profile"));
+        assert!(map::palw_map_addresses_history_tiles_v1(&v5.profile), "the row under test must be the tiled one");
+        let v5_root = v5.artifact_root(&artifact).expect("the v5 row has an inventory");
+        assert_ne!(v5_root, artifact.artifact_digest(), "a court-capable row must not register a flat digest");
+        assert_eq!(
+            v5_root,
+            crate::inventory::a16_inventory_v1(&artifact, &v5.profile).expect("the v5 inventory builds").root(),
+            "it registers the operand inventory an opening proves against"
+        );
+
+        let v2 = row(kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2(geometry).expect("a valid v2 profile"));
+        assert_eq!(v2.profile.state_chunk_map_id, map::integer_kv_state_chunk_map_id_v2());
+        assert_eq!(
+            v2.artifact_root(&artifact).expect("the v2 row has an inventory"),
+            crate::inventory::a16_inventory_v1(&artifact, &v2.profile).expect("the v2 inventory builds").root(),
+            "widening the predicate must not move the row already registered"
+        );
+
+        let v1 = row(qwen25_a16_profile_v1(geometry).expect("a valid v1 profile"));
+        assert!(!map::palw_map_addresses_history_tiles_v1(&v1.profile));
+        assert_ne!(v1.profile.state_chunk_map_id, map::integer_kv_state_chunk_map_id_v2());
+        assert_eq!(
+            v1.artifact_root(&artifact).expect("the v1 row answers"),
+            artifact.artifact_digest(),
+            "the one-byte-map row is not court-capable and keeps the digest testnet-11 registered"
+        );
     }
 }
