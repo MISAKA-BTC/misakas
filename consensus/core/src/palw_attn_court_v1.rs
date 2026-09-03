@@ -1154,6 +1154,37 @@ mod tests {
         assert_eq!(phase.declare_no_show(231).expect("the challenger is now due").silent_party, PalwBisectPartyV1::Challenger);
     }
 
+    /// **The dissection and the whole-row arm are the same arithmetic** — stream D's hook comment
+    /// in `palw_step_refute`'s `Qwen36Op::AttnFused` arm, as a test: "neither may convict where the
+    /// other acquits".
+    ///
+    /// The output tile the dissection's root claim finalizes to IS the slice
+    /// `a16_attn_fused_reference_v1` computes for the same head, byte for byte, at every history
+    /// length and every ragged tail — so an execution the whole-row arm would acquit is one the
+    /// dissection acquits, and the responder's claim is checked against the same row either way.
+    #[test]
+    fn the_dissection_and_the_whole_row_arm_are_the_same_arithmetic() {
+        for d_head in [8usize, 16] {
+            for positions in [16usize, 50] {
+                let fx = fixture(d_head, positions, 4, 47);
+                let row = crate::palw_base0_a16::a16_attn_fused_reference_v1(&fx.q, &fx.k, &fx.v, 1, 1, d_head, params())
+                    .expect("the whole-row arm recomputes");
+                assert_eq!(
+                    fx.out_tile.as_slice(),
+                    &row[..fx.lanes.1],
+                    "d_head {d_head}, positions {positions}: the dissection's tile is not the whole row's slice"
+                );
+                let mut phase = open_phase(&fx, 16, fx.root.clone()).expect("an honest root");
+                let (m, s) = phase.root_scale();
+                assert_eq!(
+                    play(&fx, 16, &mut phase, &|f, c| fx.range_claim(f, c, m, s)),
+                    Played::Acquitted,
+                    "d_head {d_head}, positions {positions}: the dissection convicted what the whole-row arm acquits"
+                );
+            }
+        }
+    }
+
     /// **What it costs a challenger to name a child — the ADR's own worry, counted.**
     ///
     /// The fold binds a disclosure to the parent's claim and to nothing else: a responder is free
@@ -1259,7 +1290,10 @@ mod tests {
         assert_eq!(palw_attn_dissect_move_bytes_v1(64, 256), 132_102);
         assert!(palw_attn_dissect_move_bytes_v1(64, 256) > carrier);
 
-        // The BOTTOM, at both head widths, with the real openings and the real paths.
+        // The BOTTOM, at both head widths, with the real openings and the real paths — PINNED,
+        // because "it fits" is a claim a later change can quietly stop honouring and a number is
+        // one it cannot.
+        let mut bottoms = Vec::new();
         for d_head in [128usize, 256] {
             let fx = fixture(d_head, 64, d_head.min(PALW_ATTN_DISSECT_MAX_LANES), 37);
             let bottom = fx.bottom(h64(9), 1);
@@ -1269,7 +1303,17 @@ mod tests {
             // plus the paths. The tile rows dominate and they are flat in the context.
             let rows = 2 * TILE as u64 * d_head as u64 * 4;
             assert!(measured > rows, "d_head {d_head}: the measured bottom must at least carry its tiles");
+            bottoms.push((d_head, measured));
         }
+        // Measured, not predicted: 34 opened rows (one query, sixteen K, sixteen V, one output
+        // tile) of `4 × lanes` payload and an eight-sibling path each, plus the object's frame.
+        // The 256-lane row costs exactly 512 bytes more, thirty-four times over.
+        assert_eq!(
+            bottoms,
+            vec![(128usize, 37_982u64), (256, 55_390)],
+            "the bottom's measured wire size at the two registered head widths"
+        );
+        assert_eq!(55_390 - 37_982, 34 * 128 * 4, "the whole difference between the two tiers is the lanes");
     }
 
     /// **The bottom does not grow with the context.** The same tile at 64 positions of history and
