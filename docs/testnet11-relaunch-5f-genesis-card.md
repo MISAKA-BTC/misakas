@@ -2705,3 +2705,70 @@ the tree. Instead: **check that all five of the probe's dependencies exist on `8
 it fail to compile because **three other tests in it** want impl-only symbols, trim to the 55
 lines that are the probe, run that. **12 KB of network against the 1.79 GB that copying the
 artifact would have cost.** The copied file was removed afterwards; ibm's checkout is clean.
+
+## LAUNCH-STOPPER, found by asking: t11 would have admitted the fused row at genesis and refused it from everyone after
+
+The question in the previous section — *"is that registration exercised under
+`palw_rc_shipped_params()`?"* — was answered by writing the test, and it is **RED**:
+
+```
+under palw_rc_shipped_params()   (court ARMED, palw_context_ladder DORMANT)
+verify_class_admission_v6 refuses the graph-v5 row:
+    PricedForADifferentCourt — "the class is priced for a dissection of None
+                                and this ruleset's court plays 2"
+```
+
+**Mechanism.** v6 derives the priced cost shape as
+`ladder.map_or_else(genesis_anchored, |r| r.cost_shape)`, and the processor's registration arm
+passes `ladder: None` whenever the **context-ladder** fence is dormant. So on t11 a fused
+profile gets the genesis-anchored shape (dissection `None`) and the court check refuses it.
+
+**The genesis route never goes through v6.** `qwen25_a16_graph_v5_registration_v1` calls
+`palw_class_ladder_rules_for_court_v1(profile, Some(court), ladder)` unconditionally and prices
+the row *for the court*.
+
+> **So the chain we were about to cut would register the fused class at genesis and refuse the
+> same class from every later applicant.** ADR-0054's permissionless admission, the demonstration
+> class, the whole *"anyone can bring a model"* sentence — refused by the gate on the shipped
+> preset, while devnet says yes. **The genesis set would have worked perfectly and the chain
+> would have been closed to newcomers**, which is the failure that looks healthiest from inside.
+
+Devnet admits (ladder armed), t11 refuses. *The drill asks a network the chain is not* — and the
+three near-misses 5b enumerated were all one step away from the shipped case:
+
+```
+the genesis route          prices from the bundle regardless of any fence — bypasses the gate
+armed_rulesets test        passes Some(rules) for BOTH devnet and rc — never asks with None
+the new SDK test           runs on devnet
+```
+
+### Why this rule change can ship tonight, and only tonight
+
+The fix is a **consensus rule change on the acceptance path**. It is safe *because we are
+re-genesising*: the behaviour it modifies is currently **"always refuse"**, so no chain holds a
+post-genesis fused registration the new rule would re-judge, and every node starts from the new
+genesis running the new rule. **The same change on a live chain would need a fence.**
+
+That reasoning depends on the wipe being complete. **A missed host is now not merely a stale peer
+but a node judging registrations by a different rule** — which raises the price of the wipe
+defects §4b already lists, and is one more reason `verify` must be clean before `wipe` runs.
+
+### The test to write is route-agreement, not fence-invariance
+
+The proposed test is *"the gate prices a fused row identically with the ladder fence armed or
+dormant."* **That pins fence-invariance, and fence-invariance was not the defect.** Two *routes*
+priced the same row differently and nothing compared them; a fence-invariance test passes if both
+routes are wrong in the same way, and it would have passed on `e5651de0` had v6 simply ignored
+the fence and stayed genesis-anchored.
+
+```
+the property that broke:
+    price( GENESIS assembly, row, bundle, court )  ==  price( v6, row, bundle, court )
+fence-invariance is a COROLLARY of that, not a substitute for it
+```
+
+> **Third instance tonight of one object spelled twice with no equality between the spellings:**
+> the preflight asked a court the chain does not run; the drill asked a network the chain is not;
+> the genesis assembly and the acceptance gate price the same row by two different functions.
+> **This project's most-repeated defect, and each time the two spellings were individually
+> correct.**
