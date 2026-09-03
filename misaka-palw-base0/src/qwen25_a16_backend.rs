@@ -942,6 +942,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
         start: &crate::fp_interval::Base0FpIntervalStartV1<'_>,
         first_call: u32,
         last_call: u32,
+        step_leaf_count: u64,
     ) -> Result<Vec<(u64, Hash64)>, String> {
         let engine = A16Engine::new(self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
         let layers = self.artifact.shape.n_layers;
@@ -955,7 +956,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
             }
         };
         let vocab = self.artifact.shape.vocab;
-        crate::fp_interval::base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, |token, position| {
+        crate::fp_interval::base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, step_leaf_count, |token, position| {
             if token >= vocab {
                 return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
             }
@@ -1290,9 +1291,13 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
 
     fn fp_interval_count(&self, capture: &[u8]) -> Option<u32> {
         let retention = crate::produce::base0_material_decode_any_v1(capture).ok()?;
-        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(retention.binding(), self.checkpoint_interval())
-            .ok()
-            .map(|g| g.interval_count)
+        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_capped_v1(
+            retention.binding(),
+            self.checkpoint_interval(),
+            self.step_ladder_cap,
+        )
+        .ok()
+        .map(|g| g.interval_count)
     }
 
     fn fp_interval_count_for(&self, prompt_tokens: u32, decode_tokens_executed: u32) -> Option<u32> {
@@ -1311,18 +1316,23 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // state), because the class's own declaration decides, not this executor's preference.
         let chunked =
             match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
-                crate::produce::Base0RetentionV1::Folded(material) => crate::fp_interval::base0_open_fp_interval_sparse_v1(
+                crate::produce::Base0RetentionV1::Folded(material) => crate::fp_interval::base0_open_fp_interval_sparse_capped_v1(
                     &material,
                     index,
                     prompt_token_ids,
                     self.checkpoint_interval(),
+                    self.step_ladder_cap,
                     &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
                 )
                 .map_err(|e| e.to_string())?,
-                crate::produce::Base0RetentionV1::Dense(material) => {
-                    crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, self.checkpoint_interval())
-                        .map_err(|e| e.to_string())?
-                }
+                crate::produce::Base0RetentionV1::Dense(material) => crate::fp_interval::base0_open_fp_interval_capped_v1(
+                    &material,
+                    index,
+                    prompt_token_ids,
+                    self.checkpoint_interval(),
+                    self.step_ladder_cap,
+                )
+                .map_err(|e| e.to_string())?,
             };
         if crate::fp_interval::base0_fp_class_requires_flat_openings_v1(&self.profile) {
             return crate::fp_interval::base0_strip_fp_interval_history_v1(&chunked).map_err(|e| e.to_string());
@@ -1341,14 +1351,20 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // The state this seat recomputed for this interval, if it did (ADR-0082 Decision 9). With
         // one, the replay resumes from the seat's OWN bytes and a chunkless opening is evidence;
         // without one, this is ADR-0077 Decision 8 unchanged.
-        let state = crate::fp_interval::base0_fp_interval_opening_seat_state_v1(opening, prompt_token_ids, self.checkpoint_interval());
-        crate::fp_interval::base0_verify_fp_interval_opening_with_state_v1(
+        let state = crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+            opening,
+            prompt_token_ids,
+            self.checkpoint_interval(),
+            self.step_ladder_cap,
+        );
+        crate::fp_interval::base0_verify_fp_interval_opening_with_state_capped_v1(
             opening,
             claim,
             index,
             prompt_token_ids,
             work_leaves,
             self.checkpoint_interval(),
+            self.step_ladder_cap,
             state.as_ref(),
             &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
         )

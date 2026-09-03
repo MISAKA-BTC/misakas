@@ -172,6 +172,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
         start: &crate::fp_interval::Base0FpIntervalStartV1<'_>,
         first_call: u32,
         last_call: u32,
+        step_leaf_count: u64,
     ) -> Result<Vec<(u64, Hash64)>, String> {
         use crate::engine::{Base0Engine, KvCache};
         let engine = Base0Engine::new(self.artifact);
@@ -193,7 +194,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
             }
         };
         let vocab = self.artifact.shape.vocab;
-        crate::fp_interval::base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, |token, position| {
+        crate::fp_interval::base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, step_leaf_count, |token, position| {
             if token >= vocab {
                 return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
             }
@@ -475,7 +476,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
 
     fn fp_interval_count(&self, capture: &[u8]) -> Option<u32> {
         let (binding, ..) = base0_material_decode_v1(capture).ok()?;
-        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&binding, self.checkpoint_interval())
+        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_capped_v1(&binding, self.checkpoint_interval(), self.step_ladder_cap)
             .ok()
             .map(|g| g.interval_count)
     }
@@ -486,8 +487,14 @@ impl PalwExecutionBackendV1 for Base0Backend {
 
     fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
         let material = base0_material_decode_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
-        crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, self.checkpoint_interval())
-            .map_err(|e| e.to_string())
+        crate::fp_interval::base0_open_fp_interval_capped_v1(
+            &material,
+            index,
+            prompt_token_ids,
+            self.checkpoint_interval(),
+            self.step_ladder_cap,
+        )
+        .map_err(|e| e.to_string())
     }
 
     fn verify_fp_interval_opening(
@@ -498,13 +505,14 @@ impl PalwExecutionBackendV1 for Base0Backend {
         prompt_token_ids: &[u32],
         work_leaves: u64,
     ) -> kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1 {
-        crate::fp_interval::base0_verify_fp_interval_opening_v1(
+        crate::fp_interval::base0_verify_fp_interval_opening_capped_v1(
             opening,
             claim,
             index,
             prompt_token_ids,
             work_leaves,
             self.checkpoint_interval(),
+            self.step_ladder_cap,
             &Base0IntervalKernels { artifact: &self.artifact },
         )
     }
