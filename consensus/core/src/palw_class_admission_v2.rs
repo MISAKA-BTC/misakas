@@ -910,14 +910,12 @@ fn derive_court_cost_walk_v1(
                 // lane. The exponent and the probability are per element given the root's
                 // `(m*, S*)` — one table lookup and one multiply-shift each — which is exactly
                 // what makes the tile recomputable without the row, so they ride the same count.
-                Op::AttnFused if fused_dissection.is_some() => history_tile
-                    .checked_mul(d_head.checked_add(disputed_lanes).ok_or_else(over)?)
-                    .ok_or_else(over)?,
+                Op::AttnFused if fused_dissection.is_some() => {
+                    history_tile.checked_mul(d_head.checked_add(disputed_lanes).ok_or_else(over)?).ok_or_else(over)?
+                }
                 // Without the dissection the court has no bottom to stand on and recomputes the
                 // whole row: the history's scores and the history's weighted sum.
-                Op::AttnFused => {
-                    history.checked_mul(d_head.checked_add(disputed_lanes).ok_or_else(over)?).ok_or_else(over)?
-                }
+                Op::AttnFused => history.checked_mul(d_head.checked_add(disputed_lanes).ok_or_else(over)?).ok_or_else(over)?,
                 // The head-sliced form divides the recomputation by the head count: the court
                 // replays ONE head's `k_dim x v_dim` state, which is what lets a 40-layer hybrid
                 // have a context at all (the whole-graph form priced 536 M at the declared
@@ -1136,9 +1134,8 @@ pub fn palw_attn_bottom_tile_route_bytes_v1(
     out_lanes: u64,
     step_path_bytes: u64,
 ) -> Option<u64> {
-    let opening = |lanes: u64| -> Option<u64> {
-        lanes.checked_mul(4)?.checked_add(step_path_bytes)?.checked_add(PALW_STEP_OPENING_FRAME_BYTES)
-    };
+    let opening =
+        |lanes: u64| -> Option<u64> { lanes.checked_mul(4)?.checked_add(step_path_bytes)?.checked_add(PALW_STEP_OPENING_FRAME_BYTES) };
     // **`kv_dim`, not `d_head`.** ADR-0082 §4 sizes this term as `2 x 16 x 4 x d_head` — one
     // HEAD's slice — and a checkpoint chunk cannot be narrowed to a head: the map addresses
     // `(kind, layer, position)` and a chunk holds the whole cache ROW

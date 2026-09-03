@@ -153,9 +153,7 @@ pub struct PalwAttnFusedTensorsV1 {
 /// answer: a court that guessed a prefix would be choosing which bytes it recomputes against.
 pub fn palw_attn_fused_tensors_v1(weight_name: &str) -> Option<PalwAttnFusedTensorsV1> {
     let hybrid = format!("{PALW_ATTN_FUSED_SOFTMAX_STEM}{PALW_ATTN_FUSED_A16_SUFFIX}");
-    let prefix = weight_name
-        .strip_suffix(hybrid.as_str())
-        .or_else(|| weight_name.strip_suffix(PALW_ATTN_FUSED_SOFTMAX_STEM))?;
+    let prefix = weight_name.strip_suffix(hybrid.as_str()).or_else(|| weight_name.strip_suffix(PALW_ATTN_FUSED_SOFTMAX_STEM))?;
     // A prefix is a layer prefix (`blk.7.`) or nothing at all; anything else is a name that merely
     // ends in the stem, and the three triples it would imply are names nobody registered.
     if !prefix.is_empty() && !prefix.ends_with('.') {
@@ -1770,10 +1768,7 @@ fn qwen36_row(
             // this arm recompute over positions the leg never saw. Refused, never recomputed
             // against — a court that guessed the history would convict honest producers.
             let kv_dim = kv_heads.checked_mul(d_head).ok_or(PalwStepRefuteError::Unadjudicable)?;
-            let want = usize::try_from(kv_len)
-                .ok()
-                .and_then(|n| n.checked_mul(kv_dim))
-                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let want = usize::try_from(kv_len).ok().and_then(|n| n.checked_mul(kv_dim)).ok_or(PalwStepRefuteError::Unadjudicable)?;
             if k_series.len() != want || v_series.len() != want {
                 return Err(PalwStepRefuteError::InputSetNotCanonical(
                     "a fused attention site's opened series are not the challenged position's history",

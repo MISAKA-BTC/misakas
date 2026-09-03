@@ -261,10 +261,8 @@ fn a_fused_attention_leaf_adjudicates_both_ways() {
         kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&honest_openings, inventory.root())
             .expect("every operand the fused arm resolves proves against the class's registered root");
     let court = PalwCourtParamsV2::new(binding.step_leaf_count, 50, 4).expect("court params");
-    let honest_proof = PalwCourtVerdictProofV2::Arithmetic {
-        refutation: honest_refutation.clone(),
-        operand_openings: honest_openings.clone(),
-    };
+    let honest_proof =
+        PalwCourtVerdictProofV2::Arithmetic { refutation: honest_refutation.clone(), operand_openings: honest_openings.clone() };
     // The whole-row route opens the K and V history, which is the price ADR-0082 Decision 2's
     // dissection exists to replace — so the cost is REPORTED here rather than asserted small.
     println!("fused close bytes: {:?}", kaspa_consensus_core::palw_court_v2::arithmetic_close_bytes_v2(&honest_proof));

@@ -290,10 +290,7 @@ impl PalwHybridStateGeometryV1 {
 
     /// Bytes the composition covers. The enumeration covers exactly this many, once each.
     pub fn total_bytes(&self) -> u64 {
-        self.attn.total_bytes()
-            + self.gdn_layers.len() as u64
-                * self.gdn_heads as u64
-                * (self.delta_head_bytes + self.conv_head_bytes)
+        self.attn.total_bytes() + self.gdn_layers.len() as u64 * self.gdn_heads as u64 * (self.delta_head_bytes + self.conv_head_bytes)
     }
 }
 
@@ -373,16 +370,11 @@ pub fn hybrid_state_geometry_at_v3(
             conv_head_bytes: 0,
         });
     }
-    let gdn_layers: Vec<u16> =
-        (0..profile.layer_count).filter(|&l| profile.layer_kind(l) == PalwLayerKindV1::GatedDeltaNet).collect();
-    let delta_head_bytes = gdn_delta_head_slice_bytes_v1(profile).ok_or(PalwStateChunkMapError::ZeroRowWidth {
-        kv_heads: profile.gdn_heads,
-        head_dim: profile.gdn_head_k_dim,
-    })?;
-    let conv_head_bytes = gdn_conv_head_slice_bytes_v2(profile).ok_or(PalwStateChunkMapError::ZeroRowWidth {
-        kv_heads: profile.gdn_heads,
-        head_dim: profile.gdn_head_v_dim,
-    })?;
+    let gdn_layers: Vec<u16> = (0..profile.layer_count).filter(|&l| profile.layer_kind(l) == PalwLayerKindV1::GatedDeltaNet).collect();
+    let delta_head_bytes = gdn_delta_head_slice_bytes_v1(profile)
+        .ok_or(PalwStateChunkMapError::ZeroRowWidth { kv_heads: profile.gdn_heads, head_dim: profile.gdn_head_k_dim })?;
+    let conv_head_bytes = gdn_conv_head_slice_bytes_v2(profile)
+        .ok_or(PalwStateChunkMapError::ZeroRowWidth { kv_heads: profile.gdn_heads, head_dim: profile.gdn_head_v_dim })?;
     // One head slice is one chunk; a geometry whose slice does not fit is a different map, refused
     // rather than silently re-chunked. (`gdn_delta_head_slice_bytes_v1` already applies the same
     // cap to its ROW; this applies it to the slice the enumeration actually addresses.)
@@ -638,7 +630,9 @@ pub fn gdn_state_terms_for_map_v1(profile: &PalwShapeProfileV3) -> Option<(u64, 
     // anchor charged at ZERO — the direction that admits a class whose disputes nobody can carry.
     // Dormant until ADR-0082 Decision 4 made the v3 composition the map a graph-v5 hybrid
     // registers, which is what turned a documented gap into a live one.
-    if declared == gdn_state_chunk_map_id_v2() || declared == hybrid_state_chunk_map_id_v2() || declared == hybrid_state_chunk_map_id_v3()
+    if declared == gdn_state_chunk_map_id_v2()
+        || declared == hybrid_state_chunk_map_id_v2()
+        || declared == hybrid_state_chunk_map_id_v3()
     {
         Some((delta, gdn_conv_head_slice_bytes_v2(profile)?))
     } else if declared == gdn_state_chunk_map_id_v1() || declared == hybrid_state_chunk_map_id_v1() {

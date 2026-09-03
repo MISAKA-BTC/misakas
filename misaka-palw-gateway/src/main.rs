@@ -622,12 +622,10 @@ fn sampling_from_request(chat: &ChatRequest, facts: &chain::ChainFacts) -> Resul
         }
     };
     if !facts.fp_decode_rules_armed && (temperature_q != PALW_DECODE_TEMPERATURE_GREEDY || sampling_seed != PALW_DECODE_SEED_GREEDY) {
-        return Err(
-            "this network has not armed ADR-0082 Decision 11's sampler (Params::palw_fp_decode_rules) — a job with a \
+        return Err("this network has not armed ADR-0082 Decision 11's sampler (Params::palw_fp_decode_rules) — a job with a \
              temperature or a seed would be refused by the transition as SamplingNotArmed, after the inference had \
              already been paid for. Omit `temperature` and `seed`, or send temperature 0."
-                .to_string(),
-        );
+            .to_string());
     }
     Ok((sampling_seed, temperature_q))
 }
