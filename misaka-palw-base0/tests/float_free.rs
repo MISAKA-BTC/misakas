@@ -121,6 +121,7 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/reference.rs", "the float reference forward: it measures the checkpoint's ranges so the PTQ can pick scales"),
     ("src/bin/base0-depth-sweep.rs", "measurement tool"),
     ("src/bin/base0-class-sizing.rs", "measurement tool"),
+    ("src/bin/palw-tile-measure.rs", "measurement tool: U-00's close sweep over derive_court_cost_shaped_v1; it prices, it computes no engine arithmetic"),
     ("src/bin/palw-rc-genesis.rs", "genesis card generator"),
     // Off the path by CATEGORY, not because it holds a float — it holds none today. It drives
     // `A16Engine` over HTTP and its own module doc is explicit that a run served here is "a real

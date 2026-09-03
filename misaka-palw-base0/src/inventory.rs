@@ -326,6 +326,7 @@ pub fn a16_inventory_v1(
     let k_scores = kid(kd::KDESC_A16_ATTN_SCORES);
     let k_values = kid(kd::KDESC_A16_ATTN_VALUES);
     let k_soft = kid(kd::KDESC_A16_SOFTMAX);
+    let k_fused = kid(kd::KDESC_A16_ATTN_FUSED);
     let k_rope = kid(kd::KDESC_A16_ROPE);
     let k_none = [kid(kd::KDESC_A16_RMS_NORM), kid(kd::KDESC_A16_ADD_ELEM), kid(kd::KDESC_A16_MUL_ELEM), kid(kd::KDESC_Q36_SILU)];
 
@@ -412,6 +413,31 @@ pub fn a16_inventory_v1(
                 return Err(missing(&format!("{name}: the softmax widening is one registered byte")));
             }
             push(&mut rows, &mut seen, name, layer, 0, bytes.to_vec());
+        } else if kidv == k_fused {
+            // **ADR-0082 Decision 1: ONE node, FOUR registered operands, and the artifact is
+            // unchanged.** A fused site reads exactly the tensors the four nodes it replaces read
+            // — W9's score triple, the probability triple, W10's value triple and the softmax's
+            // widening byte — so the inventory it implies is byte for byte the one the v2 graph
+            // implies at this site, and no re-conversion follows from graph v5.
+            //
+            // The three it does not NAME are derived from the one it does, through the single
+            // description the engine's plan compiler and the court's arm also read
+            // (`palw_attn_fused_tensors_v1`). Two spellings of this mapping would be an operand
+            // the court resolves and the inventory cannot open, which is `Unadjudicable` on
+            // honest material.
+            let t = kd::palw_attn_fused_tensors_v1(name).ok_or_else(|| missing(name))?;
+            let up = store_row(&t.softmax_up, layer).ok_or_else(|| missing(&t.softmax_up))?;
+            if up.len() != 1 {
+                return Err(missing(&format!("{}: the softmax widening is one registered byte", t.softmax_up)));
+            }
+            push(&mut rows, &mut seen, &t.softmax_up, layer, 0, up.to_vec());
+            for triple in [&t.scores, &t.probs, &t.values] {
+                let bytes = store_row(triple, layer).ok_or_else(|| missing(triple))?;
+                if bytes.len() != w {
+                    return Err(missing(&format!("{triple}: the attention sites register exactly one triple")));
+                }
+                push(&mut rows, &mut seen, triple, layer, 0, bytes.to_vec());
+            }
         } else if kidv == k_rope {
             let mut offset = 0u32;
             for position in 0..artifact.shape.max_position {
@@ -528,6 +554,7 @@ pub fn qwen36_inventory_v1(
     let k_soft = kid(kd::KDESC_A16_SOFTMAX);
     let k_scores = kid(kd::KDESC_A16_ATTN_SCORES);
     let k_values = kid(kd::KDESC_A16_ATTN_VALUES);
+    let k_fused = kid(kd::KDESC_A16_ATTN_FUSED);
     let k_grouped = kid(kd::KDESC_Q36_MATMUL_GROUPED);
     let k_grouped_wide = kid(kd::KDESC_Q36_MATMUL_GROUPED_WIDE);
     let k_conv = kid(kd::KDESC_Q36_SSM_CONV);
@@ -747,6 +774,20 @@ pub fn qwen36_inventory_v1(
                 return Err(missing(&format!("{name}: the softmax widening is one registered scalar")));
             }
             push(&mut rows, &mut seen, name, layer, 0, vec![store[0].zero.clamp(0, 62) as u8]);
+        } else if kidv == k_fused {
+            // **ADR-0082 Decision 1**, the hybrid's half: the same four operands the four nodes it
+            // replaces read, derived from the one the node names — the softmax byte normalised the
+            // way this family's softmax arm normalises it, and one triple each for the scores, the
+            // probabilities and the values.
+            let t = kd::palw_attn_fused_tensors_v1(name).ok_or_else(|| missing(name))?;
+            let store = param_rows(&sub(&t.softmax_up, layer))?;
+            if store.len() != 1 {
+                return Err(missing(&format!("{}: the softmax widening is one registered scalar", t.softmax_up)));
+            }
+            push(&mut rows, &mut seen, &t.softmax_up, layer, 0, vec![store[0].zero.clamp(0, 62) as u8]);
+            for triple in [&t.scores, &t.probs, &t.values] {
+                one_triple(&mut rows, &mut seen, triple, layer)?;
+            }
         } else if kidv == k_decay {
             let width = fixed.ok_or_else(|| missing(name))?;
             let stem = name.strip_suffix("linear_decay.a16").ok_or_else(|| missing(name))?;
@@ -1058,5 +1099,79 @@ mod tests {
             base0_inventory_v1(&artifact, PalwBase0GeometryV1 { tile_len: 0, ..PALW_RC_BASE0_GEOMETRY }),
             Err(InventoryBuildError::ZeroTile)
         ));
+    }
+}
+
+/// **ADR-0082 Decision 1's strongest claim, checked directly: fusing the attention site changes
+/// the GRAPH and not the ARTIFACT.**
+#[cfg(test)]
+mod graph_v5 {
+    use crate::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
+    use crate::engine_a16::derived_a16_store;
+    use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v2, qwen25_a16_profile_v5};
+    use kaspa_consensus_core::palw_step::PalwStepOpKindV1;
+    use kaspa_consensus_core::palw_step_refute::palw_attn_fused_tensors_v1;
+
+    /// **The v5 inventory is the v2 inventory, row for row, and therefore root for root.**
+    ///
+    /// The four nodes the fusion replaces contribute exactly four operand rows between them — the
+    /// scores triple, the probability triple, the values triple and the softmax's widening byte —
+    /// and the fused node contributes the SAME four, derived from the one name it carries. So a
+    /// v5 class registers the identical `artifact_root` a v2 class does, which is what "the
+    /// artifact is UNCHANGED" means in bytes rather than in prose: an operator converts nothing,
+    /// re-hashes nothing, and downloads nothing new to run graph v5.
+    ///
+    /// It is also the tightest available statement that the derivation is right. A wrong prefix, a
+    /// wrong suffix or a missing operand would each show up here as a row the v2 inventory has and
+    /// the v5 one does not — before any dispute, and without an oracle.
+    #[test]
+    fn the_v5_inventory_is_the_v2_inventory_and_names_every_derived_tensor() {
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 16,
+            ffn_dim: 12,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 16,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let shape = Base0ShapeV1 {
+            n_layers: 2,
+            n_heads: 4,
+            n_kv_heads: 2,
+            d_head: 4,
+            d_ff: 12,
+            vocab: 64,
+            max_position: 32,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: 1,
+        };
+        let artifact = Base0ArtifactV1::derive_deterministic(shape, 0xF022)
+            .expect("a valid shape")
+            .with_a16_params(derived_a16_store(&shape))
+            .expect("sorted and unique");
+        let v2 = qwen25_a16_profile_v2(geometry).expect("the v2 row projects");
+        let v5 = qwen25_a16_profile_v5(geometry).expect("the v5 row projects");
+
+        let inv_v2 = super::a16_inventory_v1(&artifact, &v2).expect("the v2 inventory builds");
+        let inv_v5 = super::a16_inventory_v1(&artifact, &v5).expect("the v5 inventory builds");
+        assert_eq!(inv_v5.operands(), inv_v2.operands(), "graph v5 implies a different artifact, which it must not");
+        assert_eq!(inv_v5.root(), inv_v2.root(), "and therefore a different artifact_root");
+
+        // …and every tensor the fused node derives is one of those rows, at every layer.
+        let fused = v5.attn_nodes.iter().find(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+        let t = palw_attn_fused_tensors_v1(fused.weight_name.as_str()).expect("the site's operands derive");
+        for layer in 0..geometry.layer_count {
+            for name in [&t.softmax_up, &t.scores, &t.probs, &t.values] {
+                assert!(
+                    inv_v5.operands().iter().any(|o| o.tensor_name == *name && o.layer == Some(layer)),
+                    "the fused site reads {name:?} at layer {layer}, and no inventory row can open it"
+                );
+            }
+        }
     }
 }

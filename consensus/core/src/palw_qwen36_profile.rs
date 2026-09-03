@@ -1213,7 +1213,7 @@ mod qwen3moe_family {
     }
 }
 pub fn qwen36_profile_v1(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
-    qwen36_profile_with(g, QWEN36_PRE_IR, QWEN36_LINEAR_IR, QWEN36_ATTN_IR, QWEN36_POST_IR)
+    qwen36_profile_with(g, QWEN36_PRE_IR, QWEN36_LINEAR_IR, QWEN36_ATTN_IR, QWEN36_POST_IR, false)
 }
 
 /// **graph-v2: the same computation, described with the names the engine reads.**
@@ -1223,7 +1223,36 @@ pub fn qwen36_profile_v1(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, 
 /// this is the row an interpreter can actually follow, and the mmap interpreter (ADR-0067's
 /// fourth clause) builds against THIS, never against v1.
 pub fn qwen36_profile_v2(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
-    qwen36_profile_with(g, QWEN36_PRE_IR, QWEN36_LINEAR_IR_V2, QWEN36_ATTN_IR_V2, QWEN36_POST_IR)
+    qwen36_profile_with(g, QWEN36_PRE_IR, QWEN36_LINEAR_IR_V2, QWEN36_ATTN_IR_V2, QWEN36_POST_IR, false)
+}
+
+/// **`graph-v5`: the hybrid's gated-attention layer with ONE fused attention node** (ADR-0082
+/// Decision 1).
+///
+/// The `graph-v3` pairing's projection in every respect but the attention site, where
+/// `ATTN_SCORES`, the row `SoftMax`, the probability requantization and `ATTN_VALUES` — three of
+/// them committing `attn_heads x kv_len` rows at every position — become one
+/// [`crate::palw_step::PalwStepOpKindV1::AttnFused`] node whose committed row is the OUTPUT
+/// (`QDim`, exactly what `ATTN_VALUES` emits today) and nothing else. The GDN layers are untouched:
+/// their table declares no attention site, and the fusion is applied only to the attention table.
+///
+/// The fusion is `palw_base0_profile::palw_fuse_attention_site_v5`, the SAME function the dense
+/// tier's `qwen25_a16_profile_v5` calls, applied to the projected table rather than to a second IR
+/// const — one description of one graph change, for both families.
+///
+/// A class IS its graph, so this is a new class id; v1, v2 and the `graph-v3` pairing are untouched
+/// live chain facts. The artifact is UNCHANGED — the fused node reads `attn_logits.a16`,
+/// `attn_probs.a16`, `attn_values.a16` and `attn_softmax_up.a16`, the four tensors the four v2
+/// nodes read.
+pub fn qwen36_profile_v5(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen36_profile_with(g, QWEN36_PRE_IR, QWEN36_LINEAR_IR_V2, QWEN36_ATTN_IR_V2, QWEN36_POST_IR, true)
+}
+
+/// **The `graph-v5` row over the epsilon the artifact executes** — the v5 projection paired with
+/// [`qwen36_geometry_artifact_eps`], the same pairing `qwen36_class_id_v3` uses, so a v5 row that
+/// has to be SERVED is built from one spelling rather than two.
+pub fn qwen36_artifact_row_profile_v5(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen36_profile_v5(qwen36_geometry_artifact_eps(g))
 }
 
 fn qwen36_profile_with(
@@ -1232,6 +1261,10 @@ fn qwen36_profile_with(
     gdn: &[Ir],
     attn: &[Ir],
     post: &[Ir],
+    // **ADR-0082 Decision 1.** Graph v5 fuses the ATTENTION table's four attention nodes into one
+    // `AttnFused` node after projection, so the fused node inherits the budgeted tile of the row it
+    // commits. `false` is every shipped row, which is why their ids cannot move.
+    fuse_attention: bool,
 ) -> Result<PalwShapeProfileV3, PalwStepError> {
     let (gdn_span, attn_span) = layer_spans(&g);
     // **The gate is STORED here and DERIVED in the engine, so they must be checked against each
@@ -1290,7 +1323,18 @@ fn qwen36_profile_with(
         n_threads: g.n_threads,
         pre_nodes: project(pre, &g, 1),
         gdn_nodes: project(gdn, &g, gdn_span),
-        attn_nodes: project(attn, &g, attn_span),
+        // **ADR-0082 Decision 1**, on the PROJECTED table and through the one function both
+        // families read (`palw_fuse_attention_site_v5`). An empty attention table (a span of zero)
+        // has no site to fuse and is left alone — the fusion refuses a table with no site, which
+        // is right for a table that should have one and wrong for one that has no layers at all.
+        attn_nodes: {
+            let projected = project(attn, &g, attn_span);
+            if fuse_attention && !projected.is_empty() {
+                crate::palw_base0_profile::palw_fuse_attention_site_v5(&projected)?
+            } else {
+                projected
+            }
+        },
         post_nodes: project(post, &g, 1),
         reference_ruleset_id: crate::palw_reference::reference_arithmetic_ruleset_id_v2(),
         transcendental_bindings: Vec::new(),
