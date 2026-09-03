@@ -65,6 +65,21 @@ pub struct ChainFacts {
     /// never enter the state — a refusal with a name, not a silent no-op.
     pub fp_quanta_per_canonical_job: u32,
     pub fp_max_quanta_per_receipt: u32,
+    /// **ADR-0082 Decisions 10/11: has this network armed `Params::palw_fp_decode_rules`?**
+    ///
+    /// `false` — every shipped preset, and every node that does not report it — means the lane is
+    /// greedy: a request asking for a temperature is refused with the fence's name rather than
+    /// answered greedily under a job id that says otherwise.
+    ///
+    /// It is a CHAIN fact and not a gateway flag on purpose. A flag could disagree with the
+    /// network, and the direction it would disagree in is the expensive one: the operator turns
+    /// sampling "on", every commitment the gateway files is refused by the transition
+    /// (`SamplingNotArmed`), and the exposure has already been spent on the inference.
+    ///
+    /// Today no node reports it — `GetPalwProducerFactsResponse` has no such field — so this stays
+    /// `false` on every read. That is the correct answer on every shipped preset; when the RPC
+    /// grows the field, the mapping in `RpcChainSource::read` is one line.
+    pub fp_decode_rules_armed: bool,
     /// The freshness binding, from the node's sink (`--rpc`) or from `anchor.json`.
     pub anchor_block: Hash64,
     pub anchor_daa: u64,
@@ -152,6 +167,7 @@ impl ChainFacts {
             "chain_claim_exposure_sompi": self.claim_exposure_sompi,
             "fp_quanta_per_canonical_job": self.fp_quanta_per_canonical_job,
             "fp_max_quanta_per_receipt": self.fp_max_quanta_per_receipt,
+            "fp_decode_rules_armed": self.fp_decode_rules_armed,
             "anchor_daa": self.anchor_daa,
         })
     }

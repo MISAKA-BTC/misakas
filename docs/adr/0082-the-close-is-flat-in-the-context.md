@@ -33,7 +33,13 @@ unlanded half on 5f is named as a prerequisite).
 Line numbers below are those of the two branches the status block names: `palw-testnet-5f` for
 the transport, worker, kernel, profile and economics facts (§1.2, §1.4–1.6), and
 `palw-adr0080-verification-segment` for the refutation, U-00 and U-04 facts (§1.1–1.2). Every
-citation names the item as well as the line, so a moved line is still findable.
+citation names the item as well as the line, so a moved line is still findable. **And every
+figure in this ADR names the CONFIGURATION it was measured under** — which court (the shipped
+binary ladder, or the dissection court with its arity), which prompt-id form, which evidence
+route, which host load — because the same defect bit three subsystems on the day this was
+written: a number measured under one configuration and quoted as if it held under another, never
+caught by the person who wrote it down. A figure without its configuration is not a measurement
+here; it is a hope with a decimal point.
 
 ### 1.1 The refutation of ADR-0080/0081 stands, and it was correct
 
@@ -225,7 +231,15 @@ registered through ADR-0075's route or minted at the relaunch; the shipped v2/v3
 and stay exactly as narrow as they are. Consequence for the leaf count: an attention site costs
 `⌈heads × d_head / tile_len⌉` leaves a position at every context — 24 on the dense tier at a 64-lane
 tile, 32 on the hybrid at 128 — and the job's leaf count returns to the BASE count ADR-0077
-Decision 12 was sized against: `~43,000` dense and `~14,000` hybrid positions under `2^32`.
+Decision 12 was sized against: `~43,000` dense and `~14,000` hybrid positions under `2^32`
+(measured by U-04 at the fence's ladder: dense 41,695, hybrid 13,105). **A width clears the close
+AND the ladder, and the two are different caps**: the RC bundle the 5f genesis freezes carries a
+`2^26` ladder, not the fence's `2^32`, and at `2^26` the widest admissible dense graph-v5 row is
+**574** positions (the release branch's own gate) — 512 fits with about twelve per cent of margin,
+and 1,024 is not the next rung on the ladder side but a different cap (`2^28`). So on the close
+side 1,024 costs 64 bytes more than 512; on the ladder side it needs a re-genesis. Every figure in
+this ADR that quotes a 32-element Merkle path is the fence's number; the ruleset's is read from the
+bundle, never typed.
 
 **Decision 2 — a fused attention leaf is refuted by DISSECTION over the history, and nothing
 context-wide is ever carried.** This is the mechanism Ambient does not have (§1.7) and the one the
@@ -364,12 +378,13 @@ engine produces it (`Base0SparseStepAccumulatorV1`), retains the tree at
 re-derived by replay from the checkpoint chunks (`fp_interval`). The executor's per-position cost
 becomes the forward pass plus the hashing of the rows it commits, and that ratio — not a context
 width — is the practical lane's first number. **Measured (U-01, the real dense artifact, §1.5's own
-job of 26 prefill + 12 decode = 4,074,040 leaves, the host shared at load ~20):** the un-captured
-forward 0.2138 s a token; the dense capture 5.806 s a token (27.2×; 13.46 MB a position retained —
-§1.5's 5.66 reproduced at 5.81, so §1.5's 94× and this 27× are one measurement over a forward
-that was 3.5× slower here); **the fold 0.491 s a token — 2.3× the forward, 11.8× faster than the
-capture, 0.74 MB a position retained, 18.1× less.** What the fold leaves above the forward is
-0.82 µs a leaf, the hashing the step leg commits, as §4 predicted; nothing is attributable to
+job of 26 prefill + 12 decode = 4,074,040 leaves, 110,109 leaves a position, one process, three
+phases):** on a quiet host, the un-captured forward 0.0938 s a token; the dense capture 4.527 s a
+token (48.3×; 13.46 MB a position retained); **the fold 0.356 s a token — 3.8× the forward, 12.7×
+faster than the capture, 0.74 MB a position retained, 18.1× less.** On the same host at load ~20
+the three were 0.214 / 5.806 / 0.491 (27.2× and 2.3×), which brackets §1.5's 5.66 s a token and
+says both ends of the ratio move with the host. What the fold leaves above the forward is
+0.77 µs a leaf, the hashing the step leg commits, as §4 predicted; nothing is attributable to
 tiles, allocation or I/O. Of what the fold retains, 73% is checkpoint chunks — the term Decision 4
 and Decision 9 remove. Under Decision 1 the rows to hash per
 position are the base count; the fold's retained set at `2^32` is 64 MiB, and a deeper ladder

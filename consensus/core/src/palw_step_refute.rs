@@ -2875,6 +2875,36 @@ pub fn check_tiled_decode_token_refutation_v1(
     binding: &PalwStepBindingV2,
     pin: &PalwTiledDecodePinV1,
 ) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    check_tiled_decode_token_refutation_v2(binding, pin, crate::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY)
+}
+
+/// **ADR-0082 Decision 11's arm: the same two disclosures, compared as KEYS.**
+///
+/// Identical to [`check_tiled_decode_token_refutation_v1`] in everything the court carries — the
+/// authentication order, the two openings, the row root, the tile widths, the ragged last tile —
+/// and different in exactly one line: the two opened lanes are turned into keys
+/// (`value · 2^24 + ((T_q · G) >> 24)`) before they are compared. At
+/// [`crate::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY`] the key is a strictly increasing
+/// function of the value, so this IS the v1 arm; `the_seeded_arm_is_the_shipped_arm_when_greedy`
+/// sweeps that.
+///
+/// **`sampling` must come from the CLAIM, never from the pin.** A challenger who could state the
+/// temperature would state zero, recompute the greedy argmax and convict an honestly sampled
+/// token; a challenger who could state the seed would search for one whose argmax is a different
+/// lane. The claim's job carries both, inside `fp_job_id_v3` and therefore inside the claim id
+/// (ADR-0082 Decision 11), which is why the fields are there and not on the commitment.
+///
+/// **What the caller owes, and does not yet pay.** The court's close arms reach this through a
+/// `PalwStepBindingV2`, whose `job_context` (`PalwJobContextV2`) does not carry the sampler — so
+/// the shipped caller passes `GREEDY` and every shipped row is adjudicated exactly as it is
+/// today. Arming `Params::palw_fp_decode_rules` requires the pair to reach here from the claim;
+/// the ruleset move that arms it is the one that moves `PalwJobContextV2`, because that is the
+/// structure whose hash the execution root already binds.
+pub fn check_tiled_decode_token_refutation_v2(
+    binding: &PalwStepBindingV2,
+    pin: &PalwTiledDecodePinV1,
+    sampling: crate::palw_decode_select_v2::PalwDecodeSamplingV2,
+) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     let bad = PalwStepRefuteError::InputSetNotCanonical;
     // The mirror of the flat arm's rule: this arm adjudicates only the class that registered the
     // tiled commitment.
@@ -2960,8 +2990,15 @@ pub fn check_tiled_decode_token_refutation_v1(
     let v_committed = open_tile(&pin.committed_tile_lanes, &pin.committed_opening, committed)?;
     let v_beat = open_tile(&pin.beat_tile_lanes, &pin.beat_opening, beat_lane)?;
 
-    // The rule, exactly as the engine selects: strictly greater wins; equal goes to the LOWER index.
-    let beats = v_beat > v_committed || (v_beat == v_committed && beat_lane < committed);
+    // The rule, exactly as the engine selects: strictly greater wins; equal goes to the LOWER
+    // index — over the KEYS, which at `GREEDY` are the values scaled by a positive constant and
+    // therefore order identically (ADR-0082 Decision 11).
+    let beats = crate::palw_decode_select_v2::decode_lane_beats_v2(
+        sampling.lane_key(v_beat, pin.position, beat_lane),
+        beat_lane,
+        sampling.lane_key(v_committed, pin.position, committed),
+        committed,
+    );
     if beats {
         let fault = crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: pin.position };
         return Ok(crate::palw_step_leg::PalwStepRefutationVerdictV1 {
@@ -3073,6 +3110,24 @@ pub fn check_base0_decode_token_refutation_v1(
     pin: &PalwBase0DecodeTokensV1,
     position: u32,
 ) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    check_base0_decode_token_refutation_v2(binding, pin, position, crate::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY)
+}
+
+/// **The flat arm's ADR-0082 Decision 11 twin.** The whole row is already open here, so the
+/// seeded rule needs nothing extra: the expected token is the keyed argmax rather than the plain
+/// one. `GREEDY` is the shipped arm exactly.
+///
+/// It exists beside the tiled one for a correctness reason and not for symmetry: a class that
+/// commits FLAT logits and a class that commits tiled ones must be adjudicated under the same
+/// selection rule, or arming the fence would convict every honestly sampled token on one of the
+/// two families. `sampling` comes from the claim, never from the pin — see
+/// [`check_tiled_decode_token_refutation_v2`].
+pub fn check_base0_decode_token_refutation_v2(
+    binding: &PalwStepBindingV2,
+    pin: &PalwBase0DecodeTokensV1,
+    position: u32,
+    sampling: crate::palw_decode_select_v2::PalwDecodeSamplingV2,
+) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     crate::palw_step_leg::verify_binding_v1(binding).map_err(PalwStepRefuteError::Leg)?;
     if binding.shape_profile.lane != crate::palw_step::PalwStepLaneV1::Int32 {
         return Err(PalwStepRefuteError::InputSetNotCanonical(
@@ -3085,7 +3140,7 @@ pub fn check_base0_decode_token_refutation_v1(
         .get(position as usize)
         .ok_or(PalwStepRefuteError::InputSetNotCanonical("the challenged position is outside the job's decode calls"))?;
     let committed = pin.generated_token_ids[position as usize];
-    let expected = base0_decode_token_select_v1(row) as u32;
+    let expected = sampling.select(row, position) as u32;
     if committed != expected {
         let fault = crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position };
         return Ok(crate::palw_step_leg::PalwStepRefutationVerdictV1 {
@@ -6212,6 +6267,107 @@ pub(crate) mod tests {
             matches!(check_tiled_decode_token_refutation_v1(&binding, &bent), Err(PalwStepRefuteError::InputSetNotCanonical(_))),
             "a bent tile must be refused as evidence, never adjudicated"
         );
+    }
+
+    /// **Z8's refutation half: under a seed and `T_q > 0` the two-disclosure arm convicts a token
+    /// that is not the keyed argmax and acquits the one that is** — and at `GREEDY` it is the
+    /// shipped arm, verdict for verdict, on the same fixture the test above uses.
+    ///
+    /// The whole point of Decision 11's key being a PER-LANE function is exercised here: the court
+    /// opens exactly two tiles, computes two keys, and compares. Nothing about the row's other
+    /// 9,998 lanes is fetched, at any temperature.
+    #[test]
+    fn the_seeded_arm_convicts_the_token_that_is_not_the_keyed_argmax() {
+        use crate::palw_decode_select_v2::PalwDecodeSamplingV2;
+        // A temperature of 16 in the class's own logit units (Q24), which is large beside this
+        // fixture's ~6-unit spacing between adjacent logits — the row has to be genuinely
+        // re-orderable by the noise or the test proves nothing about the sampler.
+        let sampling = PalwDecodeSamplingV2 { seed: [0x2Bu8; 32], temperature_q: 1 << 28 };
+        let (mut binding, _m, _r, _) = base0_honest_decode_commitment();
+        let vocab = 10_000usize;
+        let decode = binding.job_context.exact_decode_tokens as usize;
+        binding.shape_profile.vocab_size = vocab as u32;
+        binding.shape_profile.logits_scheme_id = tiled_logits_scheme_id_v1();
+        let logits_rows: Vec<Vec<i32>> =
+            (0..decode).map(|c| (0..vocab).map(|i| ((c * 131 + i * 7919) % 65_536) as i32 - 32_768).collect()).collect();
+
+        // The HONEST producer under this seed commits the keyed argmax, which is a different token
+        // from the greedy one — otherwise the test would prove nothing about the sampler.
+        let seeded: Vec<u32> = logits_rows.iter().enumerate().map(|(p, r)| sampling.select(r, p as u32) as u32).collect();
+        let greedy: Vec<u32> = logits_rows.iter().map(|r| base0_decode_token_select_v1(r) as u32).collect();
+        assert_ne!(seeded, greedy, "the fixture's temperature must actually move the selection");
+
+        binding.full_logits_trace_root =
+            tiled_logits_trace_root_v1(&binding.job_context, &logits_rows, &seeded).expect("the fixture's rows build a tree");
+        rebind_committed_root(&mut binding);
+
+        // Acquits the honest seeded token against EVERY other lane a challenger might open.
+        for p in 0..decode as u32 {
+            for beat in [0u32, 1, seeded[p as usize].wrapping_add(1) % vocab as u32, greedy[p as usize], vocab as u32 - 1] {
+                if beat == seeded[p as usize] {
+                    continue;
+                }
+                let pin = tiled_pin(&binding.job_context, &logits_rows, &seeded, p, beat);
+                assert!(
+                    matches!(check_tiled_decode_token_refutation_v2(&binding, &pin, sampling), Err(PalwStepRefuteError::NoFaultFound)),
+                    "the keyed argmax at position {p} must clear against lane {beat}"
+                );
+            }
+        }
+
+        // And convicts a producer that committed the GREEDY token while its job declared a
+        // temperature — the exact fraud a sampler makes possible, caught by the same two tiles.
+        binding.full_logits_trace_root =
+            tiled_logits_trace_root_v1(&binding.job_context, &logits_rows, &greedy).expect("the fixture's rows build a tree");
+        rebind_committed_root(&mut binding);
+        let differs = (0..decode as u32).find(|p| seeded[*p as usize] != greedy[*p as usize]).expect("checked above");
+        let pin = tiled_pin(&binding.job_context, &logits_rows, &greedy, differs, seeded[differs as usize]);
+        let verdict = check_tiled_decode_token_refutation_v2(&binding, &pin, sampling).expect("the keyed argmax beats the greedy one");
+        assert_eq!(verdict.fault, crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: differs });
+
+        // The same close, under GREEDY, is the shipped verdict — an acquittal, because the greedy
+        // token IS the greedy argmax. The v1 entry point and the v2 arm at GREEDY agree.
+        assert!(matches!(check_tiled_decode_token_refutation_v1(&binding, &pin), Err(PalwStepRefuteError::NoFaultFound)));
+        assert!(matches!(
+            check_tiled_decode_token_refutation_v2(&binding, &pin, PalwDecodeSamplingV2::GREEDY),
+            Err(PalwStepRefuteError::NoFaultFound)
+        ));
+    }
+
+    /// **The flat arm's twin of the same property**, so arming the fence cannot convict honest
+    /// tokens on one family while acquitting them on the other.
+    #[test]
+    fn the_seeded_flat_arm_agrees_with_the_seeded_tiled_one() {
+        use crate::palw_decode_select_v2::PalwDecodeSamplingV2;
+        // 16 in logit units, against a 40-lane row whose values span ~429 — see the tiled twin.
+        let sampling = PalwDecodeSamplingV2 { seed: [0x77u8; 32], temperature_q: 1 << 28 };
+        let (b, _, _, _) = base0_honest_decode_commitment();
+        let vocab = b.shape_profile.vocab_size as usize;
+        let decode = b.job_context.exact_decode_tokens as usize;
+        let logits_rows: Vec<Vec<i32>> =
+            (0..decode).map(|c| (0..vocab).map(|i| ((c * 37 + i * 11) % 4_096) as i32 - 2_048).collect()).collect();
+        let seeded: Vec<u32> = logits_rows.iter().enumerate().map(|(p, r)| sampling.select(r, p as u32) as u32).collect();
+        let greedy: Vec<u32> = logits_rows.iter().map(|r| base0_decode_token_select_v1(r) as u32).collect();
+        assert_ne!(seeded, greedy, "the fixture's temperature must actually move the selection");
+
+        let (honest, _, _, pin) = base0_binding_with_decode_root(logits_rows.clone(), seeded.clone());
+        for p in 0..decode as u32 {
+            assert!(matches!(
+                check_base0_decode_token_refutation_v2(&honest, &pin, p, sampling),
+                Err(PalwStepRefuteError::NoFaultFound)
+            ));
+        }
+        // The first position the two rules disagree about — the seed moves some positions and not
+        // others, and a test that assumed position 0 was one of them was asserting the fixture.
+        let differs = (0..decode as u32).find(|p| seeded[*p as usize] != greedy[*p as usize]).expect("checked above");
+        let (lying, _, _, lying_pin) = base0_binding_with_decode_root(logits_rows, greedy);
+        let verdict =
+            check_base0_decode_token_refutation_v2(&lying, &lying_pin, differs, sampling).expect("the greedy token is not the draw");
+        assert_eq!(verdict.fault, crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: differs });
+        // GREEDY is the shipped arm: the same commitment clears at every position.
+        for p in 0..decode as u32 {
+            assert!(matches!(check_base0_decode_token_refutation_v1(&lying, &lying_pin, p), Err(PalwStepRefuteError::NoFaultFound)));
+        }
     }
 
     /// **Neither close arm speaks the other class's scheme.** A flat pin against a tiled class

@@ -367,6 +367,16 @@ impl PalwPanelService {
                 // exact wrong thing to read while waiting for that worker to report.
                 if config.register_bond {
                     info!("[{PALW_PANEL}] no bond yet; registering one (--palw-register-bond)");
+                } else if config.register_class.is_some() {
+                    // A class is registered UNDER a bond, so this one really does need an
+                    // outpoint — but "panel service disabled" tells a class registrant nothing
+                    // about the flag it is missing, and the worker then prints "not running",
+                    // which reads like patience. Say what to pass.
+                    warn!(
+                        "[{PALW_PANEL}] --palw-register-class needs a bond to register the class under, and \
+                         --palw-producer-bond is {err}. Pass --palw-producer-bond <txid>:<index> for a bond this \
+                         key already holds, or --palw-register-bond to obtain one first. Nothing will be registered."
+                    );
                 } else {
                     warn!("[{PALW_PANEL}] --palw-producer-bond: {err} — panel service disabled");
                 }
@@ -1338,6 +1348,8 @@ impl PalwPanelService {
             max_context_tokens: 0,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: PALW_FP_PROMPT_MODE_CANONICAL,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         };
         // The anchor is a function of the job's own facts, not of its prompt — so the prompt
         // can be derived from it and then written into the job.

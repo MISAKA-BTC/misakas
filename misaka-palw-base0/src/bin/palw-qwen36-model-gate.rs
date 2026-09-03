@@ -18,7 +18,13 @@
 //!
 //! ```text
 //!   MISAKA_PALW_ARTIFACT=... MISAKA_PALW_GGUF=... palw-qwen36-model-gate --n-ctx 256 --out <dir>
+//!       [--mode wide|ladder|both] [--only <case>] [--template auto|chat-segments-v1]
 //! ```
+//!
+//! The prompt is built by `misaka_palw_base0::chat_template`, which is what the gateway builds
+//! its prompts with — this gate has no private copy of the template. `--template` forces the
+//! other registered transform onto this model, which is how the pre-fix assembly is reproduced
+//! for a red run; `auto` (the default) is what a user's request gets.
 //!
 //! Nothing here is consensus code and nothing here is on a producer's path. It writes each raw
 //! answer to `<dir>/<case>.raw` (every generated id rendered, EOG included and everything after
@@ -34,6 +40,7 @@ use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2;
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_hashes::Hash64;
+use misaka_palw_base0::chat_template::{QwenChatPlanV1, QwenChatVariantV1};
 use misaka_palw_base0::fp_worker::{
     FpWorkerFamilyV1, FpWorkerRuntime, MappedArtifactV1, QWEN_EOG_TOKEN_NAMES, prompt_ids_for_input_v1, render_answer_v1,
 };
@@ -121,68 +128,33 @@ fn read_gguf_header(path: &str) -> Vec<u8> {
     }
 }
 
-/// **The Qwen3.5 generation prompt this tree's ChatML assembly does not emit.**
+/// **The prompt, built by the SHIPPED assembly.**
 ///
-/// Measured, not guessed: the GGUF's own `tokenizer.chat_template` ends its `add_generation_prompt`
-/// branch with `'<|im_start|>assistant\n'` followed by `'<think>\n'` when `enable_thinking` is
-/// true and by `'<think>\n\n</think>\n\n'` otherwise — so under the model's OWN template the think
-/// opener is part of the PROMPT in both modes, and the model never generates it.
-/// [`misaka_palw_base0::tokenizer::qwen_chat_prompt`] stops at `assistant\n`, which leaves this
-/// reasoning model to emit the block itself, into the answer bytes, where
-/// `grammar.canonicalize(answer)` sees leading non-JSON and refuses. `--assistant-prefill`
-/// supplies it so the two assemblies can be compared on the same model.
-const QWEN35_NOTHINK_PREFILL: &str = "<think>\n\n</think>\n\n";
-/// Whether `--assistant-prefill nothink` was asked for. The bytes above are what it MEANS;
-/// the segments that carry it are built in [`chatml_user_segments`], because two of them
-/// must be `Special(id)` and not text.
-
-/// **The gateway's ChatML template, as segments** — the same reproduction `palw-model-gate` uses,
-/// checked against this tree's other spelling so a divergence in either is a failed assertion and
-/// not a silently different prompt. `assistant_prefill` is appended AFTER that check, so the
-/// shipped template is verified on every run and the variant is visibly a variant.
-fn chatml_user_segments(tokenizer: &QwenTokenizer, content: &str, assistant_prefill: bool) -> (Vec<PalwFpPromptSegmentV1>, String) {
-    let start = tokenizer.added_id("<|im_start|>").unwrap_or_else(|| die("this tokenizer has no <|im_start|>".into()));
-    let end = tokenizer.added_id("<|im_end|>").unwrap_or_else(|| die("this tokenizer has no <|im_end|>".into()));
-    let mut segments = Vec::new();
-    let mut displayed = String::new();
-
-    segments.push(PalwFpPromptSegmentV1::Special(start));
-    displayed.push_str("<|im_start|>");
-    let body = format!("user\n{content}");
-    segments.push(PalwFpPromptSegmentV1::Text(body.as_bytes().to_vec()));
-    displayed.push_str(&body);
-    segments.push(PalwFpPromptSegmentV1::Special(end));
-    displayed.push_str("<|im_end|>");
-    segments.push(PalwFpPromptSegmentV1::Text(b"\n".to_vec()));
-    displayed.push('\n');
-    segments.push(PalwFpPromptSegmentV1::Special(start));
-    displayed.push_str("<|im_start|>");
-    segments.push(PalwFpPromptSegmentV1::Text(b"assistant\n".to_vec()));
-    displayed.push_str("assistant\n");
-
-    let shipped = misaka_palw_base0::tokenizer::qwen_chat_prompt(None, &[("user", content)]);
-    assert_eq!(displayed, shipped, "the harness's template is not this tree's Qwen chat template");
-
-    // **`<think>` has to be the ID, not the text.** ADR-0079 Decision 7 / S7: a `Text` segment is
-    // encoded with `encode_without_specials`, so a stranger's `<|im_start|>` stays ordinary text —
-    // and so does a template's `<think>`. Spelling the preamble as text produced the BPE pieces
-    // `[13314, 741, 29, 271, 510, 26003, 29, 271]` instead of `[248068, 271, 248069, 271]`, i.e. a
-    // MISSPELLED think block, and the model answered it with degenerate closing tags. The segment
-    // API's `Special(id)` is the documented way a template names a control token, and
-    // `prompt_ids_for_input_v1` refuses an id this tokenizer does not hold as one.
-    if assistant_prefill {
-        let open = tokenizer.added_id("<think>").unwrap_or_else(|| die("this tokenizer has no <think>".into()));
-        let close = tokenizer.added_id("</think>").unwrap_or_else(|| die("this tokenizer has no </think>".into()));
-        segments.push(PalwFpPromptSegmentV1::Special(open));
-        displayed.push_str("<think>");
-        segments.push(PalwFpPromptSegmentV1::Text(b"\n\n".to_vec()));
-        displayed.push_str("\n\n");
-        segments.push(PalwFpPromptSegmentV1::Special(close));
-        displayed.push_str("</think>");
-        segments.push(PalwFpPromptSegmentV1::Text(b"\n\n".to_vec()));
-        displayed.push_str("\n\n");
-    }
-    (segments, displayed)
+/// `misaka_palw_base0::chat_template` is the one place this tree renders a chat template — the
+/// gateway's `build_prompt` calls it and so does this gate, so what the gate measures is what a
+/// user's request runs under, and not a harness's reproduction of it. It also means the
+/// anti-drift check inside that builder (the segments, re-rendered, against
+/// `tokenizer::qwen_chat_prompt` plus the variant's preamble) runs on every case here.
+///
+/// `variant` is `None` for "let the model choose", which is production. Forcing
+/// [`QwenChatVariantV1::Chatml`] on this model reproduces the pre-fix assembly — the red arm.
+fn chatml_user_segments(
+    tokenizer: &QwenTokenizer,
+    content: &str,
+    variant: Option<QwenChatVariantV1>,
+) -> (QwenChatPlanV1, Vec<PalwFpPromptSegmentV1>) {
+    let specials: Vec<(String, u32)> = tokenizer.added_tokens().iter().map(|a| (a.content.clone(), a.id)).collect();
+    let plan = match variant {
+        Some(variant) => {
+            misaka_palw_base0::chat_template::qwen_chat_prompt_plan_for_variant_v1(variant, &specials, &[("user", content)])
+                .unwrap_or_else(|e| die(format!("the chat template refused this prompt: {e}")))
+        }
+        None => misaka_palw_base0::chat_template::qwen_chat_prompt_plan_v1(&specials, &[("user", content)])
+            .unwrap_or_else(|e| die(format!("the chat template refused this prompt: {e}")))
+            .unwrap_or_else(|| die("this tokenizer declares no ChatML markers, so there is no chat prompt to build".into())),
+    };
+    let segments = plan.segments.clone();
+    (plan, segments)
 }
 
 struct Case {
@@ -262,12 +234,15 @@ fn main() {
     let out = PathBuf::from(flag("--out").unwrap_or_else(|| die("--out <dir> is required".into())));
     let only = flag("--only");
     let mode = flag("--mode").unwrap_or_else(|| "both".to_string());
-    // Empty by default: the SHIPPED assembly is what a gate measures unless it is told
-    // otherwise. `--assistant-prefill nothink` is the model's own template's branch.
-    let assistant_prefill = match flag("--assistant-prefill").as_deref() {
-        None | Some("") | Some("shipped") => false,
-        Some("nothink") => true,
-        Some(other) => die(format!("--assistant-prefill takes `shipped` or `nothink`, not {other:?}")),
+    // The SHIPPED assembly is what a gate measures unless it is told otherwise, and after the fix
+    // the shipped assembly is "the model chooses". `--template chat-segments-v1` forces the OLD
+    // transform onto this model — the red arm, still built by production code so that what the red
+    // arm measures is a transform this tree can actually emit and not a harness's invention.
+    let forced_variant = match flag("--template").as_deref() {
+        None | Some("") | Some("auto") => None,
+        Some("chat-segments-v1") => Some(QwenChatVariantV1::Chatml),
+        Some("chat-segments-think-closed-v1") => Some(QwenChatVariantV1::ChatmlThinkClosed),
+        Some(other) => die(format!("--template takes `auto`, `chat-segments-v1` or `chat-segments-think-closed-v1`, not {other:?}")),
     };
     std::fs::create_dir_all(&out).unwrap_or_else(|e| die(format!("{}: {e}", out.display())));
 
@@ -435,19 +410,34 @@ fn main() {
     // -------------------------------------------------------------------------------------
     // 4. The template's own cost, measured: the empty-content user turn.
     // -------------------------------------------------------------------------------------
-    let (empty_segments, empty_displayed) = chatml_user_segments(rt.tokenizer(), "", assistant_prefill);
+    // What the SELECTION saw, named rather than asserted: a verdict without its coverage is
+    // unfalsifiable, so the markers this model declares are printed beside the variant they chose.
+    let declared: Vec<&str> = ["<|im_start|>", "<|im_end|>", "<think>", "</think>"]
+        .into_iter()
+        .filter(|name| rt.tokenizer().added_id(name).is_some())
+        .collect();
+    let auto = misaka_palw_base0::chat_template::qwen_chat_variant_v1(
+        &rt.tokenizer().added_tokens().iter().map(|a| (a.content.clone(), a.id)).collect::<Vec<_>>(),
+    );
+    eprintln!(
+        "[palw-qwen36-model-gate] template selection: this tokenizer declares {declared:?} of the four markers the rule reads \
+         -> auto {auto:?}; forced {forced_variant:?}"
+    );
+
+    let (empty_plan, empty_segments) = chatml_user_segments(rt.tokenizer(), "", forced_variant);
     let empty_ids = prompt_ids_for_input_v1(rt.tokenizer(), rt.manifest(), &PalwFpWorkerInputV3::Segments(empty_segments))
         .unwrap_or_else(|e| die(e));
     eprintln!(
         "[palw-qwen36-model-gate] MEASURED template overhead: {} prompt tokens for zero content ({:?}); ids {:?}",
         empty_ids.len(),
-        empty_displayed,
+        empty_plan.displayed,
         empty_ids
     );
-
     eprintln!(
-        "[palw-qwen36-model-gate] assistant_prefill: {}",
-        if assistant_prefill { QWEN35_NOTHINK_PREFILL } else { "<none — the shipped assembly>" }
+        "[palw-qwen36-model-gate] template_id {} (variant {:?}); generation preamble {:?}",
+        empty_plan.template_id,
+        empty_plan.variant,
+        empty_plan.variant.generation_preamble()
     );
     let eog: Vec<u32> = rt.manifest().eog_token_ids.clone();
     eprintln!("[palw-qwen36-model-gate] eog ids {eog:?}");
@@ -458,12 +448,13 @@ fn main() {
 
     let mut report = Vec::new();
     for case in cases() {
-        if let Some(only) = &only {
-            if &case.name != only {
-                continue;
-            }
+        if let Some(only) = &only
+            && case.name != *only
+        {
+            continue;
         }
-        let (segments, displayed) = chatml_user_segments(rt.tokenizer(), &case.prompt, assistant_prefill);
+        let (prompt_plan, segments) = chatml_user_segments(rt.tokenizer(), &case.prompt, forced_variant);
+        let displayed = prompt_plan.displayed.clone();
         let prompt_ids = match prompt_ids_for_input_v1(rt.tokenizer(), rt.manifest(), &PalwFpWorkerInputV3::Segments(segments)) {
             Ok(ids) => ids,
             Err(e) => {
@@ -545,7 +536,9 @@ fn main() {
                 "model_id": model_id,
                 "transformer": case.transformer,
                 "n_ctx": n_ctx,
-                "assistant_prefill": assistant_prefill,
+                "template_id": prompt_plan.template_id,
+                "template_variant": format!("{:?}", prompt_plan.variant),
+                "prompt_token_ids_hash_v2": faster_hex::hex_string(prompt_token_ids_hash_v2(&prompt_ids).as_byte_slice()),
                 "prompt": case.prompt,
                 "prefill_tokens": prefill,
                 "decode_budget": wanted,
@@ -581,6 +574,10 @@ fn main() {
             max_context_tokens: n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            // ADR-0082 Decision 11's fields at their greedy defaults: the gate measures the
+            // shipped argmax, and the sampler's fence is dormant on every preset.
+            sampling_seed: [0u8; 32],
+            temperature_q: 0,
         };
         let leaves_for = |decode: u32| -> Result<u64, String> {
             use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
@@ -684,7 +681,9 @@ fn main() {
             "model_id": model_id,
             "transformer": case.transformer,
             "n_ctx": n_ctx,
-            "assistant_prefill": assistant_prefill,
+            "template_id": prompt_plan.template_id,
+                "template_variant": format!("{:?}", prompt_plan.variant),
+                "prompt_token_ids_hash_v2": faster_hex::hex_string(prompt_token_ids_hash_v2(&prompt_ids).as_byte_slice()),
             "prompt": case.prompt,
             "displayed_prompt": displayed,
             "prefill_tokens": prefill,
@@ -702,7 +701,11 @@ fn main() {
         }));
     }
 
-    let tag = if assistant_prefill { "nothink" } else { "shipped" };
+    let tag = match forced_variant {
+        None => "auto",
+        Some(QwenChatVariantV1::Chatml) => "forced-chat-segments-v1",
+        Some(QwenChatVariantV1::ChatmlThinkClosed) => "forced-think-closed-v1",
+    };
     let report_path = out.join(format!("report-n{n_ctx}-{tag}.json"));
     std::fs::write(&report_path, serde_json::to_vec_pretty(&serde_json::json!(report)).unwrap())
         .unwrap_or_else(|e| die(format!("{}: {e}", report_path.display())));
