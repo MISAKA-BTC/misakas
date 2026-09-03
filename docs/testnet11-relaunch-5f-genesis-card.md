@@ -3252,3 +3252,50 @@ kaspa-consensus-core   5 failures:  3 re-pins        <- the ceremony performs th
 ```
 
 **No red is a defect.** Three the ceremony writes, one fixture, one limitation lifting.
+
+## The announcement's central "verify it yourself" command does not run on 5f
+
+Run verbatim, on `palw-testnet-5f`, from the public draft's §3:
+
+```
+$ palw-certify drill --family a16-v5 --lane attempt --out attempt.json
+palw-certify: unknown family `a16-v5`          exit 2, no file written
+```
+
+```
+palw-testnet-5f     drill (--family <base0|qwen36|a16>        | --model-id <catalog model id>)
+palw-adr0082-impl   drill (--family <base0|qwen36|a16|a16-v5> | --model-id <catalog model id>)
+```
+
+**`a16-v5` exists only on impl.** The command is correct for the tree that ships and wrong for the
+branch the document currently lives on — and the document is the one thing a reader executes
+without checking anything first. *Same class as the fabricated test name removed from this draft
+earlier: a command written from knowledge rather than from a run.*
+
+> **GATE, added to the pre-announcement list: every command in the announcement is executed on
+> the cut tree, and its output pasted into the card, before the draft is published.** Not read,
+> not reasoned about — run. The draft holds roughly a dozen; there is no version of "obviously
+> fine" that survives tonight's record.
+
+**And the derived spelling is the better one anyway**, for the reason 5b's script defect just
+demonstrated: `--family a16-v5` is a family named by hand, and the devnet e2e died at stage 5b
+because a script named `--family a16` where the row's family is `PALW-QWEN25-A16-V5`. `drill`
+accepts `--model-id <catalog model id>` on both trees. **One spelling — the row's — and the
+operator never types a family name that can drift from the class.** To be changed after the
+merge and *after the changed command has been run*, not before.
+
+### And my first reading of that run was wrong, in the way I have a note about
+
+```
+palw-certify … | head -4 ; echo "exit=$?"     ->  exit=0    <- head's
+palw-certify … > file 2>&1 ; echo $?          ->  2         <- the tool's
+```
+
+I was one sentence from reporting *"`palw-certify` exits 0 on an unknown family"* as a defect.
+**It exits 2 and writes no file — it is correct.** The pipe swallowed the status and `$?` answered
+for `head`.
+
+> **Fourth measurement artefact tonight**, after `pgrep -f` matching the asker (twice) and
+> `\b` in `git grep -E` matching nothing. Every one produced *a plausible number from a command
+> that was not measuring what I thought.* And this one would have been a public accusation
+> against a tool that was behaving properly.
