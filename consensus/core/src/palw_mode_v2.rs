@@ -293,6 +293,25 @@ pub const fn palw_close_chunks_for_bytes_v1(bytes: u64) -> u64 {
     carried.div_ceil(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64)
 }
 
+/// **Can this ruleset carry AND verify a close of `bytes`?** — the ONE reading of the two bounds a
+/// court holds over a close: the verification-cost ceiling ADR-0049 Decision C put in the ruleset
+/// (`max_close_bytes`, what a validating node will hash) and ADR-0080 design A's carriage count
+/// (`max_close_chunks`, what the network pays to relay).
+///
+/// They are the same refusal only on a ruleset whose byte ceiling sits on the chunk grid. The RC's
+/// does (2,250,000 = `palw_close_bytes_for_chunks_v1(27)`); the devnet's does not (81,920 against
+/// a carrier of 83,333), and until this predicate the admission gate and the boot gate compared
+/// CHUNKS only while `check_close_cost_v2` compared BYTES only — so on devnet a permissionless
+/// class whose worst close fell in [81,921 .. 83,334] was admitted, and every honest close of its
+/// widest dispute was refused `CloseTooLarge`: a class admitted and unprosecutable at its own
+/// widest dispute, 1,414 bytes wide (measured 2026-09-03; no shipped row is in the gap — the
+/// graph-v5@512 row closes at 81,312 B on both presets). Every reader asks this predicate now, so
+/// the two units can no longer disagree; which unit IS the ruleset — whether devnet's 81,920 should
+/// be restated on the grid as 83,333 — is an ADR question that moves a ruleset id, not this one.
+pub const fn palw_close_fits_court_v1(bytes: u64, court: &PalwCourtParamsV2) -> bool {
+    bytes <= court.max_close_bytes && palw_close_chunks_for_bytes_v1(bytes) <= court.max_close_chunks
+}
+
 /// **The mempool's standard-transaction mass, mirrored** — the number
 /// [`DEFAULT_MAX_CLOSE_BYTES`] is derived from.
 ///
@@ -1206,9 +1225,11 @@ impl PalwConsensusParamsV2 {
         // asserts the derived cost, the ruleset asserts what it will pay for, and a class whose
         // disputes cannot ride a carrier must fail the BOOT gate, not its first challenger.
         for entry in catalog.entries() {
-            // In CHUNKS, the unit the registration gate compares in (ADR-0080 design A), so a
-            // class cannot be admitted at one rule and refused at boot by another.
-            if palw_close_chunks_for_bytes_v1(entry.court_cost.max_close_bytes) > self.court.max_close_chunks() {
+            // BOTH units — bytes (what a validating node will hash) and chunks (what the network
+            // pays to relay) — through the one predicate the registration gate and the close gate
+            // ask, so a class cannot be admitted at one rule and refused at boot by another, nor
+            // admitted here and refused at its first close (`palw_close_fits_court_v1`).
+            if !palw_close_fits_court_v1(entry.court_cost.max_close_bytes, &self.court) {
                 return Err(PalwModeV2Error::Invalid(
                     "a registered class's terminal opening exceeds the ceiling this ruleset pays for",
                 ));
@@ -1862,6 +1883,72 @@ pub(crate) mod tests {
         let catalog = PalwClassCatalogV2::new(vec![entry]).expect("well-formed");
         bundle.class_catalog_root = catalog.root();
         bundle.verify_against_catalog(&catalog).expect("a class at the ceiling is a class the ruleset pays for");
+    }
+
+    /// **One ceiling, two units — and the reader that counted carriers admitted what the reader
+    /// that counts bytes refuses.** On the RC the byte ceiling sits on the chunk grid
+    /// (2,250,000 = 27 carriers exactly) so the two readings coincide; on devnet it does not
+    /// (81,920 against a carrier of 83,333), and a class whose worst close is 81,921 bytes was
+    /// admitted by the boot gate and by `verify_class_admission_v6` — one carrier, inside the
+    /// count — while `check_close_cost_v2` refuses every honest close of its widest dispute:
+    /// admitted and unprosecutable, 1,414 bytes wide. `palw_close_fits_court_v1` is the one
+    /// predicate now; this pins the devnet boundary from both sides and the RC's coincidence.
+    #[test]
+    fn a_close_the_carrier_count_admits_but_the_byte_ceiling_refuses_fails_at_boot() {
+        // **Both shipped presets sit on the chunk grid now** — the byte ceiling IS the carrier
+        // count restated, so the two units are one number (devnet's 81,920 literal was the one
+        // that did not, and the graph-v5@512 row's 83,175-byte close sat in its gap).
+        for (name, params) in [
+            ("devnet", crate::config::params::devnet_shipped_params()),
+            ("testnet-11", crate::config::params::palw_rc_shipped_params()),
+        ] {
+            let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("{name} ships a V2 bundle") };
+            assert_eq!(
+                bundle.court.max_close_bytes(),
+                palw_close_bytes_for_chunks_v1(bundle.court.max_close_chunks()),
+                "{name}: the byte ceiling must be the carrier count restated"
+            );
+        }
+        // The off-grid court, built on purpose: devnet's own court with the literal it used to
+        // carry, so the predicate's two halves can be seen to disagree and the gate to follow the
+        // stricter one.
+        let devnet = crate::config::params::devnet_shipped_params();
+        let PalwConsensusMode::ConsensusV2(shipped) = &devnet.palw_consensus_mode else { panic!("devnet ships a V2 bundle") };
+        let on_grid = shipped.court;
+        let court = PalwCourtParamsV2::with_cost_ceilings(
+            on_grid.max_step_leaf_count(),
+            on_grid.turn_deadline_daa(),
+            on_grid.terminal_rounds(),
+            81_920,
+            on_grid.max_terminal_macs(),
+            on_grid.max_operand_count(),
+        )
+        .expect("a court with an off-grid byte ceiling is legal to build");
+        assert_eq!(court.max_close_chunks(), 1, "one carrier — the count rounds UP from the literal");
+        assert!(court.max_close_bytes() < palw_close_bytes_for_chunks_v1(1), "and the byte ceiling is BELOW that carrier");
+        // The gap, both sides: the carrier count says yes to 81,921, the byte ceiling says no.
+        let just_over = court.max_close_bytes() + 1;
+        assert!(palw_close_chunks_for_bytes_v1(just_over) <= court.max_close_chunks(), "one carrier holds it");
+        assert!(!palw_close_fits_court_v1(just_over, &court), "and the ruleset still cannot verify it");
+        assert!(palw_close_fits_court_v1(court.max_close_bytes(), &court), "at the byte ceiling, both bounds hold");
+
+        // And the boot gate asks the predicate: a class priced one byte over devnet's byte ceiling
+        // does not boot there, though one carrier would have carried it.
+        let mut entry = catalog_entry(h64(1), 1 << 10);
+        entry.court_cost.max_close_bytes = just_over;
+        let catalog = PalwClassCatalogV2::new(vec![entry]).expect("well-formed");
+        let mut bundle = shipped.clone();
+        bundle.court = court;
+        bundle.genesis_objects.clear();
+        bundle.base_class_id = h64(1);
+        bundle.class_catalog_root = catalog.root();
+        let err = bundle.verify_against_catalog(&catalog).expect_err("one byte over the byte ceiling must not boot");
+        assert!(format!("{err:?}").contains("terminal opening"), "refused by the cost gate, by name: {err:?}");
+        let mut entry = catalog_entry(h64(1), 1 << 10);
+        entry.court_cost.max_close_bytes = court.max_close_bytes();
+        let catalog = PalwClassCatalogV2::new(vec![entry]).expect("well-formed");
+        bundle.class_catalog_root = catalog.root();
+        bundle.verify_against_catalog(&catalog).expect("at the byte ceiling the class boots");
     }
 
     /// **Audit C1/H2: the invariants that need the catalog PREIMAGE, not just its root.**

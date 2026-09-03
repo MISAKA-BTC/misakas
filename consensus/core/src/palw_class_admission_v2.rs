@@ -1730,19 +1730,22 @@ pub fn verify_class_admission_v6(
         return Err(PalwClassAdmissionError::PricedForADifferentCourt { priced: shape.dissection, court: k.dissection_arity });
     }
     let cost = derive_court_cost_shaped_v1(profile, shape)?;
-    // **In chunks, not bytes** (ADR-0080 design A). A close rides an `ObjectChunk` group, so what
-    // a ruleset pays for is a count of carriers and half a chunk is a whole transaction. With the
-    // shipped pair the two readings are the same refusal — `max_close_bytes` IS
-    // `palw_close_bytes_for_chunks_v1(max_close_chunks)`, and `chunks(b) <= C` iff
-    // `b <= bytes_for_chunks(C)` — and the chunk form is the one that stays true if a court is
-    // ever built off the chunk grid. `PalwConsensusParamsV2::validate` compares the same unit, so
-    // a class cannot be admitted at registration and refused at boot.
+    // **In chunks AND in bytes** (ADR-0080 design A; ADR-0049 Decision C). A close rides an
+    // `ObjectChunk` group, so what a ruleset pays to RELAY is a count of carriers and half a chunk
+    // is a whole transaction; what a validating node will HASH is `max_close_bytes`, and that is
+    // the unit `check_close_cost_v2` refuses a real close in. The two are one refusal only on a
+    // ruleset whose byte ceiling sits on the chunk grid — the RC's does, the devnet's (81,920
+    // against a carrier of 83,333) does not, and comparing chunks alone here admitted a class the
+    // close gate would refuse at its widest dispute. `palw_close_fits_court_v1` is the one
+    // predicate; `PalwConsensusParamsV2::validate` asks it too, so a class cannot be admitted at
+    // registration and refused at boot, nor admitted anywhere and refused at its first close.
     for (what, got, ceiling) in [
         (
             "court close chunks",
             crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes),
             bundle.court.max_close_chunks(),
         ),
+        ("court close bytes", cost.max_close_bytes, bundle.court.max_close_bytes()),
         ("terminal multiply-accumulates", cost.max_terminal_macs, bundle.court.max_terminal_macs()),
         ("operand count", cost.max_operand_count as u64, bundle.court.max_operand_count() as u64),
     ] {
@@ -2572,7 +2575,8 @@ mod tests {
     /// `genesis_anchored_v1` carried `PALW_STEP_MAX_LEAVES` (2^22) in its `ladder` field, and
     /// `derive_court_cost_walk_v1` uses that field as the CAP of the leaf enumeration and not
     /// merely as a path depth. On a `2^26` ruleset the dense 512 row — 59,000,848 leaves worst
-    /// case — therefore cleared `DeeperThanTheLadder` at the ruleset's number and was refused two
+    /// case for the graph-v2 projection this audit measured; the registered graph-v5 row is
+    /// 52,778,128 — therefore cleared `DeeperThanTheLadder` at the ruleset's number and was refused two
     /// lines later by `Profile("TooManyLeaves { max: 4194304 }")`: a refusal naming neither the
     /// ladder nor the ruleset, on exactly the row the ladder had been raised for.
     #[test]

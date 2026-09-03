@@ -1718,10 +1718,14 @@ mod tests {
 
         for (name, bundle, prompt_ids_form) in armed_rulesets(&registration) {
             let kary = kary_court(&bundle, prompt_ids_form);
-            // Priced for the court that can try it — the ladder rules the fence selects.
-            let rules =
-                ladder::palw_class_ladder_rules_for_court_v1(&row.profile, Some(kary), ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
-                    .expect("a mapped class has ladder rules");
+            // Priced for the court that can try it — at the RULESET's ladder, the number the chain
+            // recounts against. This priced at `PALW_CONTEXT_LADDER_MAX_STEP_LEAVES` (2^32) and
+            // pinned 83,175 B: six rungs more disclosure than the 2^26 court either preset runs,
+            // 1,863 bytes above the 81,312 B the genesis assembly registers the same row at — two
+            // routes, one row, two prices, and nothing compared them (misaka-testnet-44,
+            // 2026-09-03). The route-agreement assertion below is what compares them now.
+            let rules = ladder::palw_class_ladder_rules_for_court_v1(&row.profile, Some(kary), bundle.court.max_step_leaf_count())
+                .expect("a mapped class has ladder rules");
             let admitted =
                 adm::verify_class_admission_v5(&bundle, &row.profile, &canonical, &registration, &[], &[], Some(rules), Some(kary));
             assert!(
@@ -1784,12 +1788,36 @@ mod tests {
             //
             // The Merkle figure came from this very helper hardcoding `prompt_ids_form` between
             // two fields it read off the bundle. 287 bytes moved by a field nobody chose.
+            // **Route agreement, not a literal**: the genesis assembly prices this row through
+            // `qwen25_a16_graph_v5_registration_v1` and the admission/bind route through the rules
+            // above; one row under one court has one price, and the chain's is the genesis one.
+            let (_, genesis_entry, _) = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_graph_v5_registration_v1(
+                Hash64::from_u64_word(0xA271FAC7),
+                0,
+                1,
+                1,
+                &bundle,
+                prompt_ids_form,
+                kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+                    kaspa_consensus_core::tx::TransactionId::default(),
+                    0,
+                )),
+            )
+            .expect("the genesis route prices the row on this ruleset");
             assert_eq!(
-                binding.close_bytes, 83_175,
-                "{name}: the graph-v5 512 row's close moved — measured at arity {}, {:?} ids, window_court {}. \
-                 A close figure without those three is not a figure; check which of them moved before \
-                 re-pinning the number.",
-                kary.dissection_arity, kary.prompt_ids_form, kary.window_court_daa
+                binding.close_bytes,
+                genesis_entry.court_cost.max_close_bytes,
+                "{name}: the graph-v5 512 row is priced differently by the genesis route and the admission route — \
+                 measured at arity {}, {:?} ids, window_court {}, ladder {}. One row under one court has one price; \
+                 check which input the two routes disagree on before touching either number.",
+                kary.dissection_arity,
+                kary.prompt_ids_form,
+                kary.window_court_daa,
+                bundle.court.max_step_leaf_count()
+            );
+            assert_eq!(
+                binding.close_bytes, 81_312,
+                "{name}: the shipped row's close at the ruleset's 2^26 ladder (was 83,175 at the 2^32 constant)"
             );
 
             // And WITHOUT the fence: the guard refuses the same row by name.

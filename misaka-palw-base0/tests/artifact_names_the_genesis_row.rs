@@ -387,10 +387,13 @@ fn the_registered_row_prices_at_one_carrier_under_the_bundle_that_registers_it()
                 prompt_ids_form: params.palw_prompt_ids_form_at(0),
                 window_court_daa: bundle.state.window_court(),
             };
+            // At the RULESET's ladder — pricing at `PALW_CONTEXT_LADDER_MAX_STEP_LEAVES` (2^32)
+            // gave 83,175 B here, a court neither preset runs; the chain's price is the genesis
+            // assembly's at 2^26, and the assertion below is the equality between the two routes.
             let Some(rules) = kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
                 &a.profile,
                 Some(kary),
-                kaspa_consensus_core::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+                bundle.court.max_step_leaf_count(),
             ) else {
                 println!("GENESIS class {}… has no ladder rules", &id[..16]);
                 continue;
@@ -425,11 +428,26 @@ fn the_registered_row_prices_at_one_carrier_under_the_bundle_that_registers_it()
             );
             // And the byte figure, pinned so a silent move is visible — with the court beside it,
             // because this number has been three different correct values in one afternoon.
+            let PalwConsensusObjectV2::ClassRegistered { artifact_root, share_permille, slash_value_per_pwu, initial_target, .. } = o
+            else {
+                unreachable!("matched above")
+            };
+            let (_, genesis_entry, _) = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_graph_v5_registration_v1(
+                *artifact_root,
+                *share_permille,
+                *slash_value_per_pwu,
+                *initial_target,
+                bundle,
+                params.palw_prompt_ids_form_at(0),
+                a.registrant_bond,
+            )
+            .expect("the genesis route prices the row it registered");
             assert_eq!(
-                b.close_bytes, 83_175,
-                "the registered row's close moved: {} B at arity {}, {:?} ids, window {}. Check WHICH of those \
-                 three moved before re-pinning — the last time this number changed it was the ids form, chosen \
-                 by nobody.",
+                b.close_bytes, genesis_entry.court_cost.max_close_bytes,
+                "the registered row is priced differently by the genesis route and the admission route: {} B at arity {}, \
+                 {:?} ids, window {}. One row under one court has one price — check WHICH input the routes disagree on \
+                 before touching either number (the last time this number changed it was the ladder, then the ids \
+                 form, chosen by nobody).",
                 b.close_bytes, kary.dissection_arity, kary.prompt_ids_form, kary.window_court_daa
             );
             priced += 1;

@@ -265,7 +265,18 @@ pub const PALW_DEVNET_WINDOWS_V1: PalwLatticeWindowsV1 = PalwLatticeWindowsV1 {
 /// `the_devnet_close_ceiling_admits_every_shipped_row` prints all five and fails the day one of
 /// them needs a second carrier. That day is a decision about the devnet WINDOW, taken in daylight,
 /// and not a default to inherit.
-const DEVNET_COURT_MAX_CLOSE_BYTES: u64 = 81_920;
+/// **The one quantity devnet chooses about its close: ONE carrier.** The byte ceiling below is
+/// that count restated through `palw_close_bytes_for_chunks_v1`, the way `DEFAULT_MAX_CLOSE_BYTES`
+/// is the RC's 27 restated — never a second literal. It WAS a literal (81,920, a pre-ADR-0080
+/// single-transaction relay budget), and a byte ceiling that does not sit on the chunk grid is a
+/// ruleset that reads one ceiling in two units: the admission gate and the boot gate counted
+/// carriers (one holds up to 83,333 bytes) while `check_close_cost_v2` refused bytes above 81,920,
+/// so a class whose worst close fell in [81,921 .. 83,333] was admitted and unprosecutable at its
+/// widest dispute — and the graph-v5@512 dense row, priced with its dissection, closes at 83,175
+/// bytes (measured by `palw-certify bind` and pinned in `classes.rs`), INSIDE that gap. Derived,
+/// the two units are one number and the gap does not exist (misaka-testnet-44, 2026-09-03).
+const DEVNET_COURT_MAX_CLOSE_CHUNKS: u64 = 1;
+const DEVNET_COURT_MAX_CLOSE_BYTES: u64 = crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(DEVNET_COURT_MAX_CLOSE_CHUNKS);
 
 /// **3,000, from the corrected worst case** (audit M2-24). The ladder's clock runs per MOVE, and a
 /// bisection round is two of them — a disclosure and a verdict — so a 22-rung ladder plus two
@@ -1112,7 +1123,11 @@ mod tests {
         // therefore the move clock each window can afford, is a function of. The devnet's ceiling is
         // the pre-ADR-0080 80 KiB, which frames to a single carrier; the RC's is the 27-carrier one.
         assert_eq!(PALW_DEVNET_WINDOWS_V1.court_max_close_bytes, DEVNET_COURT_MAX_CLOSE_BYTES);
-        assert_eq!(DEVNET_COURT_MAX_CLOSE_BYTES, 81_920);
+        // Derived from the carrier count, so the byte ceiling sits ON the chunk grid: the two
+        // units a close is measured in are one number here, as on the RC.
+        assert_eq!(DEVNET_COURT_MAX_CLOSE_CHUNKS, 1);
+        assert_eq!(DEVNET_COURT_MAX_CLOSE_BYTES, crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(1));
+        assert_eq!(DEVNET_COURT_MAX_CLOSE_BYTES, 83_333, "one carrier after framing; 81,920 was the literal this replaced");
         assert_eq!(devnet.court.max_close_bytes(), DEVNET_COURT_MAX_CLOSE_BYTES);
         assert_eq!(devnet.court.max_close_chunks(), 1, "setting the bytes is what moves the count");
         assert_eq!(devnet.court.max_close_chunks(), PALW_DEVNET_WINDOWS_V1.max_close_chunks());
