@@ -577,8 +577,9 @@ fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
     let first_needed = call_of(span_first)?;
     let last_needed = call_of(span_end - 1)?;
     let interval = interval_of_call_v1(geometry, first_needed);
-    let (first_call, _) =
-        geometry.calls_for(interval).ok_or(Base0FpIntervalError::IntervalOutOfRange { index: interval, count: geometry.interval_count })?;
+    let (first_call, _) = geometry
+        .calls_for(interval)
+        .ok_or(Base0FpIntervalError::IntervalOutOfRange { index: interval, count: geometry.interval_count })?;
 
     let prompt_usize: Vec<usize> = prompt_token_ids.iter().map(|t| *t as usize).collect();
     let operands = match geometry.anchor_covered_call(interval) {
@@ -600,9 +601,7 @@ fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
         (Some(_), None) => return Err(Base0FpIntervalError::NoCheckpointAt { covered: 0 }),
     };
 
-    let replayed = kernels
-        .replay_interval(profile, ctx, &start, first_call, last_needed)
-        .map_err(Base0FpIntervalError::Replay)?;
+    let replayed = kernels.replay_interval(profile, ctx, &start, first_call, last_needed).map_err(Base0FpIntervalError::Replay)?;
     let width = (span_end - span_first) as usize;
     let mut span = vec![None; width];
     for (at, hash) in replayed {
@@ -677,9 +676,7 @@ pub fn base0_open_fp_interval_sparse_v1<K: Base0FpIntervalKernelsV1>(
     for (offset, leaf) in seed_row_tiles.iter().enumerate() {
         let at = leaves_geometry.range_first + offset as u64;
         let recomputed = step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
-        let derived = span_leaves
-            .get((at - span_first) as usize)
-            .ok_or(Base0FpIntervalError::CaptureHasNoTile { index: at })?;
+        let derived = span_leaves.get((at - span_first) as usize).ok_or(Base0FpIntervalError::CaptureHasNoTile { index: at })?;
         if recomputed != *derived {
             return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
         }
@@ -730,7 +727,6 @@ fn base0_seed_row_tiles_from_rows_v1(
         })
         .collect())
 }
-
 
 /// **The committed checkpoint covering `covered`, as the operands an anchored replay resumes
 /// from** (ADR-0077 Decision 10).

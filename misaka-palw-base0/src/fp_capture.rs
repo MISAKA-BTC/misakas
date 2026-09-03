@@ -176,7 +176,9 @@ impl std::fmt::Display for Base0SparseCaptureError {
                 write!(f, "a captured row at layer {layer} index {index} is not a slot of this class's graph")
             }
             Self::TwoRowsForOneSlot => write!(f, "two captured rows name one global node slot"),
-            Self::MissingRowForSlot { slot } => write!(f, "this position's enumeration reaches slot {slot} and no row was captured for it"),
+            Self::MissingRowForSlot { slot } => {
+                write!(f, "this position's enumeration reaches slot {slot} and no row was captured for it")
+            }
             Self::RowForASlotThePositionDoesNotHave { slot } => {
                 write!(f, "a row was captured for slot {slot}, which this position's enumeration does not reach")
             }
@@ -792,16 +794,15 @@ impl Base0SparseStepCaptureV1 {
             for (tile_index, chunk) in row.row.chunks(tile_len).enumerate() {
                 let leaf = PalwStepTileLeafV1 {
                     version: PALW_STEP_LEG_OBJECT_VERSION_V1,
-                    coord: PalwStepCoordinateV1 {
-                        call_index,
-                        node_slot: slot,
-                        position,
-                        tile_index: tile_index as u32,
-                    },
+                    coord: PalwStepCoordinateV1 { call_index, node_slot: slot, position, tile_index: tile_index as u32 },
                     value_count: chunk.len() as u32,
                     values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
                 };
-                self.acc.push(kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&self.ctx_hash, &self.profile_hash, &leaf))?;
+                self.acc.push(kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(
+                    &self.ctx_hash,
+                    &self.profile_hash,
+                    &leaf,
+                ))?;
                 self.cursor += 1;
             }
         }
@@ -830,7 +831,6 @@ impl Base0SparseStepCaptureV1 {
         self.acc.finish()
     }
 }
-
 
 // =============================================================================================
 // ADR-0077 Decision 10 — the recurrence's replay state, chunked
@@ -2091,7 +2091,13 @@ mod tests {
             let rss = U01Rss::start();
             let started = std::time::Instant::now();
             let run = crate::qwen25_a16_backend::a16_execute_for_attempt_streaming_capped_v1(
-                &artifact, &profile, None, &ctx, &prompt, cap, &mut |_| {},
+                &artifact,
+                &profile,
+                None,
+                &ctx,
+                &prompt,
+                cap,
+                &mut |_| {},
             )
             .expect("the dense capture runs this job");
             let took = started.elapsed();
@@ -2103,7 +2109,13 @@ mod tests {
         let rss = U01Rss::start();
         let started = std::time::Instant::now();
         let folded = crate::qwen25_a16_backend::a16_execute_free_prompt_streaming_v1(
-            &artifact, &profile, None, &ctx, &prompt, cap, &mut |_| {},
+            &artifact,
+            &profile,
+            None,
+            &ctx,
+            &prompt,
+            cap,
+            &mut |_| {},
         )
         .expect("the folded capture runs this job");
         let fold_took = started.elapsed();

@@ -304,9 +304,9 @@ pub fn fp_worker_court_params_v1(network_id: &str) -> Result<kaspa_consensus_cor
     use kaspa_consensus_core::config::params::Params;
     use kaspa_consensus_core::network::NetworkId;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
-    let net: NetworkId = network_id
-        .parse()
-        .map_err(|e| format!("{network_id} is not a network this build knows ({e}); it must be the string kaspad prints for params.net"))?;
+    let net: NetworkId = network_id.parse().map_err(|e| {
+        format!("{network_id} is not a network this build knows ({e}); it must be the string kaspad prints for params.net")
+    })?;
     let params = Params::from(net);
     match &params.palw_consensus_mode {
         PalwConsensusMode::ConsensusV2(bundle) => Ok(bundle.court.clone()),

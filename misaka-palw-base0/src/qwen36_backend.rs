@@ -476,7 +476,16 @@ pub fn qwen36_execute_free_prompt_streaming_v1(
     max_step_leaf_count: u64,
     on_token: &mut dyn FnMut(u32),
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
-    qwen36_execute_streaming_v1(artifact, profile, plan, ctx, prompt, max_step_leaf_count, crate::legs::Base0CaptureKindV1::Fold, on_token)
+    qwen36_execute_streaming_v1(
+        artifact,
+        profile,
+        plan,
+        ctx,
+        prompt,
+        max_step_leaf_count,
+        crate::legs::Base0CaptureKindV1::Fold,
+        on_token,
+    )
 }
 
 /// **The one capture loop this family has**, over either sink.
@@ -507,8 +516,8 @@ fn qwen36_execute_streaming_v1(
     let engine = Qwen36Engine::new(artifact);
     let leaf_count =
         kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, ctx, max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
-    let mut capture =
-        crate::legs::Base0CaptureSinkV1::for_kind(capture_kind, profile, ctx, leaf_count, max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
+    let mut capture = crate::legs::Base0CaptureSinkV1::for_kind(capture_kind, profile, ctx, leaf_count, max_step_leaf_count)
+        .map_err(|e| format!("{e:?}"))?;
     let checkpoint_profile = qwen36_checkpoint_profile_v1(profile);
     let checkpoints = crate::legs::Base0CheckpointCaptureV1::new(ctx, profile, &checkpoint_profile);
     let mut cache = Qwen36Cache::new(&artifact.shape);
@@ -759,7 +768,8 @@ impl Qwen36Backend {
         index: u64,
         carried: Option<&[u32]>,
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
-        let retention = crate::produce::base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        let retention =
+            crate::produce::base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
         let binding = retention.binding().clone();
         let logits_rows = retention.logits_rows().to_vec();
         let generated = retention.generated_token_ids().to_vec();

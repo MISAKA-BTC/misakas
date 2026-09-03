@@ -886,7 +886,9 @@ pub fn base0_binding_from_step_root_v1(
     full_logits_trace_root: Hash64,
     activation_leg_root: Hash64,
 ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, LegError> {
-    use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, checkpoint_empty_root_v2, execution_commitment_root_v2};
+    use kaspa_consensus_core::palw_step_leg::{
+        PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, checkpoint_empty_root_v2, execution_commitment_root_v2,
+    };
     if step_leaf_count == 0 {
         return Err(LegError::EmptySpace);
     }
