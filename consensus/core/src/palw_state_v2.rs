@@ -6322,7 +6322,22 @@ fn rearm_claim_after_da_session(
 /// split. The structural cap is `>=` the ruleset's on every preset, so it reserves at least the
 /// room a legal close can need — the direction to be wrong in is the one that leaves the mover
 /// more time, not less.
-fn cap_session_rung_deadline_v2(session: &mut PalwCourtSessionStateV2) {
+fn cap_session_rung_deadline_v2(session: &mut PalwCourtSessionStateV2, params: &PalwStateParamsV2) {
+    // **A ruleset with no rung clock must not be given one by the cap** (the sweep's own rule,
+    // one level up: "a rung clock counts only if it runs out STRICTLY inside the session
+    // budget … letting it try would silently invert the outcome").
+    //
+    // `turn_deadline_daa` DEFAULTS to `window_court`, which puts every rung deadline on or past
+    // the backstop: no rung can fire, and the backstop closes challenger-side. Capping there
+    // would pull the rung strictly inside the budget and CREATE a rung clock the ruleset
+    // configured none of — and the first silence would convict the responder instead of ending
+    // the session on the accuser's side. So the question is the RULESET's, not the instance's:
+    // a network that configured a real rung window gets the reserve honoured, and one that did
+    // not keeps exactly the behaviour it had. `palw_v2_without_a_rung_window_the_backstop_still_decides`
+    // is what says so, and it went red the first time this was written as a test of the rung.
+    if params.turn_deadline_daa() >= params.window_court() {
+        return;
+    }
     let reserve = palw_close_assembly_daa_v1(PALW_COURT_CLOSE_MAX_CHUNKS);
     let backstop = session.deadline_daa;
     match session.dissection.as_mut() {
@@ -8264,7 +8279,7 @@ fn apply_object(
             // ADR-0080 W4 item 4: the opening rung is a rung, so it takes the same cap — before
             // the record is written, so the deadline index is built from the capped value and one
             // write is one write.
-            cap_session_rung_deadline_v2(&mut opened);
+            cap_session_rung_deadline_v2(&mut opened, builder.params);
             builder.write_court(*session_id, Some(opened));
             // An open court freezes the path to Final: the claim keeps no deadline while any
             // session is open (void-by-timeout of the COURT is PR-07's deadline system).
@@ -8310,7 +8325,7 @@ fn apply_object(
                 .ladder
                 .apply_disclosure(disclosure, ctx.daa_score, builder.params.turn_deadline_daa)
                 .map_err(|e| PalwStateV2Error::LadderRefused(*session_id, e.to_string()))?;
-            cap_session_rung_deadline_v2(&mut session);
+            cap_session_rung_deadline_v2(&mut session, builder.params);
             builder.write_court(*session_id, Some(session));
         }
         PalwConsensusObjectV2::CourtVerdictPosted { session_id, verdict, signature: _ } => {
@@ -8320,7 +8335,7 @@ fn apply_object(
                 .ladder
                 .apply_verdict(verdict, ctx.daa_score, builder.params.turn_deadline_daa)
                 .map_err(|e| PalwStateV2Error::LadderRefused(*session_id, e.to_string()))?;
-            cap_session_rung_deadline_v2(&mut session);
+            cap_session_rung_deadline_v2(&mut session, builder.params);
             builder.write_court(*session_id, Some(session));
         }
         PalwConsensusObjectV2::CourtCloseDeclared { session_id, side, count, chunk_digests, close_digest, verdict, signature: _ } => {
@@ -8487,7 +8502,7 @@ fn apply_object(
             )
             .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
             session.dissection = Some(phase);
-            cap_session_rung_deadline_v2(&mut session);
+            cap_session_rung_deadline_v2(&mut session, builder.params);
             builder.write_court(*session_id, Some(session));
         }
         PalwConsensusObjectV2::CourtAttnDissected { session_id, round, signature: _ } => {
@@ -8497,7 +8512,7 @@ fn apply_object(
             phase
                 .apply_round(round, ctx.daa_score, builder.params.turn_deadline_daa())
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
-            cap_session_rung_deadline_v2(&mut session);
+            cap_session_rung_deadline_v2(&mut session, builder.params);
             builder.write_court(*session_id, Some(session));
         }
         PalwConsensusObjectV2::CourtAttnChildChosen { session_id, choice, signature: _ } => {
@@ -8507,7 +8522,7 @@ fn apply_object(
             phase
                 .apply_choice(choice, ctx.daa_score, builder.params.turn_deadline_daa())
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
-            cap_session_rung_deadline_v2(&mut session);
+            cap_session_rung_deadline_v2(&mut session, builder.params);
             builder.write_court(*session_id, Some(session));
         }
         PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts } => {
@@ -16088,7 +16103,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&18u16.to_le_bytes()); // version_le(2) = 18, restated from the ADR (ADR-0080: the court's close-group table)
+            s.update(&19u16.to_le_bytes()); // version_le(2) = 19, restated from the ADR (ADR-0082: the court session's dissection phase)
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -16465,6 +16480,13 @@ pub(crate) mod tests {
     /// both. **This is the ONE constant pair in this repo that a version bump is SUPPOSED to move**
     /// — unlike a preset fingerprint, which is re-pinned once by the integrator at the cut.
     ///
+    /// A seventh, for ADR-0082 Decision 2: `PALW_STATE_V2_VERSION` 18 → 19 because a court
+    /// session gained one additive field (`dissection`) and the object enum gained the three
+    /// moves that write it. The empty root moves for the version alone — no shipped preset can
+    /// open a phase, so the field is `None` wherever it exists — and the inhabited root moves for
+    /// the version and for the session record's own new `Option` tag byte. That is the same pair
+    /// of signals these two constants exist to separate.
+    ///
     /// A fourth, for the UNION 13 (bond economics + ADR-0060/0061, merged 2026-08-30): the
     /// bond-economics half DID change the schema — `PalwClaimStateV2` gained `rebound_daa`, so
     /// the inhabited root moves for the record shape as well as for the version; the liveness
@@ -16472,14 +16494,14 @@ pub(crate) mod tests {
     /// schema and rides the same number. The empty root moves for the version alone, which is
     /// exactly the pair of signals these two constants exist to separate.
     #[test]
-    fn the_version_18_state_root_golden_vectors() {
+    fn the_version_19_state_root_golden_vectors() {
         let empty = PalwChainStateV2::genesis().state_root().to_string();
         let full = m02_populated_state().state_root().to_string();
-        let want_empty = "506a0f756875af5063aa0f90a4b4be555d59e372d87fb86ce8dfbd2b9e2dfc21345b80e12667262f47935e2dd3a263d974cf3ecacde90b0f64da1a61e4b7de23";
-        let want_full = "3e2c706c5554bfd215daeebc4249b8335487150180326c89b9b4381af3abe44acfd5f44588d95f6f0427c622293de07c910356888e20b7162d4a81ba17f09158";
+        let want_empty = "db89973498cc72eaa3e3a021ba452c3bd4744fde816b4ca737bbb5e7d1e23b6d8d8de08f893a7ab1ea91e5ed2573e7bbe95fb6a11de017ad9056362503771097";
+        let want_full = "1fdc85eaa34b7515c9d9f0119f6c2239cc98137e09e3091acd57c1a23ffb3adc8c3f3dfb28164d2132f21e4b094474e8bbacccc0fa21c37942d1fc558d9fc86f";
         assert!(
             empty == want_empty && full == want_full,
-            "a version-18 root moved: empty {empty} (want {want_empty}); inhabited {full} (want {want_full})"
+            "a version-19 root moved: empty {empty} (want {want_empty}); inhabited {full} (want {want_full})"
         );
     }
 
@@ -18264,7 +18286,9 @@ pub(crate) mod tests {
             );
             // A turn window WIDER than the session's whole reserve-adjusted budget, so the cap is
             // what decides the rung rather than the window.
-            let p = params().with_turn_deadline_daa(params().window_court()).unwrap();
+            // A real rung clock (strictly inside the backstop, or there is no rung to cap) that is
+            // nonetheless wide enough that the RESERVE is what decides the deadline.
+            let p = params().with_turn_deadline_daa(params().window_court() - 10).unwrap();
             let drill = Drill::new(false);
             let (state, _claim_id, sid, daa) = court_at_the_fused_leaf(&p, &drill);
             let session = state.court_session(&sid).expect("the session lives");

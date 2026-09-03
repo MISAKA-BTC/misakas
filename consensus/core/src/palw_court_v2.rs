@@ -2227,7 +2227,9 @@ mod tests {
         // The party id, and the two rung signing contexts. The count is pinned so ADDING a domain
         // is a decision someone makes here rather than a line that slips in; the cross-family
         // collision test reads the list itself.
-        assert_eq!(PALW_COURT_V2_ALL_DOMAINS.len(), 4);
+        // Six: the party id, the opening, the two ladder rungs, and ADR-0082's two dissection
+        // contexts (the responder's moves and the challenger's).
+        assert_eq!(PALW_COURT_V2_ALL_DOMAINS.len(), 6);
         let unique: std::collections::BTreeSet<_> = PALW_COURT_V2_ALL_DOMAINS.iter().collect();
         assert_eq!(unique.len(), PALW_COURT_V2_ALL_DOMAINS.len(), "a repeated domain is a collision inside one family");
         // The two rung contexts in particular: the parties have opposite interests, so one shared
