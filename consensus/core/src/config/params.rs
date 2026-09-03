@@ -5063,6 +5063,23 @@ pub const PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE: u16 = 489;
 /// carries the family, so this line cannot claim more than the certificate supports.
 ///
 /// Weight follows the certificate, not the intent. It did when the number was zero and it does now.
+///
+/// # And since ADR-0082 this number funds the graph-v5 512 row, whose family is NOT yet certified
+///
+/// The paragraph above is about the graph-v2 row and is now half true of the row this share funds.
+/// The dense slot holds ADR-0082's fused 512 row (5f card §2), and the RC's pinned certified set
+/// gives `PALW-QWEN25-A16` the kernel set of the graph-v2 profile — which does not reach
+/// `KDESC_A16_ATTN_FUSED`. So `verify_class_admission_v5` refuses this share by name
+/// (`NotEndToEndCertified { share: 489 }`), measured by
+/// `misaka-palw-base0/tests/a16_root_probe.rs::the_genesis_registered_row_is_admissible_under_the_armed_rc_court`.
+///
+/// A GENESIS registration does not pass through that gate — it is verified against the committed
+/// catalog — so this number is granted and the class holds the cadence. What it does not hold is
+/// weight: `palw_uncertified_weightless` is the rule that reads the certificate at production time.
+/// Closing it is ADR-0082 stream I's court drill over a fused class plus the
+/// `PALW_RC_COURT_E2E_ROOT_BYTES` re-pin that records it — the 5f card §6 calls that drill "the
+/// gate, and admission is not". Until then this line allocates cadence to a class that cannot yet
+/// convert it into weight, which is a launch fact and not a silent one.
 pub const PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE: u16 = 489;
 
 /// The same assembly, with the A16 dense class when its root is pinned. `None` is the two-class
@@ -5102,6 +5119,14 @@ pub fn palw_v2_params_with_classes_on_base(
     let invalid = |what: &'static str| E::Invalid(what);
 
     let mut params = palw_v2_params_from_artifacts_on_base(base, base0_artifact_root, genesis_bonds)?;
+    // **Which prompt-id form the dense row is PRICED at, read before the bundle is borrowed.**
+    //
+    // ADR-0082 Decision 5's fence (`palw_prompt_ids_merkle`) is `None` on every shipped preset, so
+    // this is `Flat` — the more expensive of the two forms (82,080 bytes of ids against 80,504),
+    // which is the safe direction for a ceiling. It is read from the network's own fence rather
+    // than chosen here, because a class priced under a form its ruleset does not run is the
+    // "figure measured under one configuration" defect ADR-0082 §1 opens with.
+    let prompt_ids_form = params.palw_prompt_ids_form_at(0);
     let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else {
         unreachable!("palw_rc_params_from_artifacts installs a ConsensusV2 bundle or returns Err");
     };
@@ -5166,11 +5191,39 @@ pub fn palw_v2_params_with_classes_on_base(
             .map_err(|_| invalid("the Qwen3.6 registration does not derive"))?;
     // The A16 dense class, when its artifact root is pinned. It registers last, so what it declares
     // is what it keeps — no dilution follows it.
+    //
+    // **GENESIS DECISION (8e): the dense slot holds ADR-0082's `graph-v5` 512 row, and the
+    // `graph-v2` `n_ctx`-16 row it replaces is not registered.** The 5f genesis card §2 registers
+    // "dense A16 **512 row** — the only wide row registered", and §6 states why the narrow one
+    // cannot stand in for it: at `n_ctx` 16 the decode budget is 7 tokens against grammar floors of
+    // 38 / 60 / 104, so the demonstration the launch is about cannot be expressed. A class is its
+    // graph, so this is a NEW class id and not a repair — `qwen25_a16_registration_v2` and the row
+    // it builds stay exactly where they are for the networks that already registered them.
+    //
+    // **GENESIS DECISION (8e): the share is the dense tier's existing
+    // `PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE`, unchanged.** One class leaves the slot and
+    // another takes it, so the cadence table the chain starts with is the one the card's arithmetic
+    // was written against, and the hybrid's dilution inversion above is unmoved.
     let dense = match qwen25_a16_artifact_root {
         Some(root) => Some(
-            // The dense tier's correction shares its geometry, so its row is simply `_v2`.
-            crate::palw_qwen25_profile::qwen25_a16_registration_v2(root, dense_share, slash, target)
-                .map_err(|_| invalid("the Qwen2.5 A16 registration does not derive"))?,
+            crate::palw_qwen25_profile::qwen25_a16_graph_v5_registration_v1(
+                root,
+                dense_share,
+                slash,
+                target,
+                bundle,
+                prompt_ids_form,
+                // **Whose bond the registration is charged to: nobody's.** A fused row must carry
+                // its graph (`PalwClassStateV2::fused_attention` is readable from nowhere else) and
+                // the carriage has a `registrant_bond` field, but a genesis registration has no
+                // registrant — the network itself decided it, and ADR-0056 Decision 3 says it pays
+                // nothing. Naming a real registry row instead would charge that operator a
+                // reservation it never asked for AND make the class stop looking like a genesis
+                // class to ADR-0071 SA-3's exemption, which with the capability fence armed leaves
+                // no bond able to judge it. See `palw_genesis_registrant_bond_v1`.
+                crate::palw_state_v2::palw_genesis_registrant_bond_v1(),
+            )
+            .map_err(|_| invalid("the Qwen2.5 A16 graph-v5 registration does not derive"))?,
         ),
         None => None,
     };
@@ -5260,6 +5313,35 @@ pub fn palw_v2_params_with_classes_on_base(
     // nothing and `converge_idle_target_v1` moves an idle class only toward a price it is already
     // paying. A shared seed is therefore not a slow start; it is a permanent one.
     palw_seed_attempt_targets_v1(bundle)?;
+
+    // **A genesis that registers a FUSED row arms the court that can try it** (ADR-0082
+    // Decision 3; 5f genesis card §1, "ARM, `ForkActivation::always()`").
+    //
+    // This is not a preference and it is not a schedule. `validate_palw_v2` refuses to assemble a
+    // ruleset whose genesis set registers a graph-v5 class while `palw_kary_court` is dormant —
+    // "a court with no dissection cannot try that leaf, so every dispute of that class would end
+    // unprosecuted at the price it was admitted for" — so on this path the two are one decision
+    // and the only question is where it is spelled. It is spelled HERE, as a function of the class
+    // set, rather than as a literal on a preset: a preset that registered the row and forgot the
+    // fence would be a binary that panics at startup, and a preset that armed the fence without
+    // registering the row would be ADR-0065 D1's mistake (a rule with nothing shipping to obey
+    // it). Deriving it from the set is what makes both impossible.
+    //
+    // `always()` and never a height: a chain that acquired a dissection court mid-life would be
+    // two courts wearing one ruleset id, and the arity the court derives is inside
+    // `palw_ruleset_id_v2`. Genesis is the only moment this can be armed.
+    //
+    // Networks with no fused row in their genesis set are untouched — the field stays `None` and
+    // the build fingerprints byte-identically to one without it.
+    let registers_a_fused_row = match &params.palw_consensus_mode {
+        crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+            crate::palw_court_v2::palw_attn_widest_registered_site_v2(bundle).0 > 0
+        }
+        _ => false,
+    };
+    if registers_a_fused_row && params.palw_kary_court.is_none() {
+        params.palw_kary_court = Some(ForkActivation::always());
+    }
 
     // Both gates again, from scratch, over the network actually being shipped.
     params.validate_palw_v2()?;
@@ -5426,6 +5508,35 @@ pub const PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT: crate::Hash64 = crate::Hash6
     0x8e, 0xd7, 0xfe, 0x7a, 0x2f, 0x72, 0x9d, 0x10, 0xf0, 0x08, 0x21, 0xf9, 0x4b, 0x1e, 0x85, 0x62, 0xe4, 0xe2, 0x17, 0xb7, 0x27,
     0x08,
 ]);
+
+/// **The genesis root of ADR-0082's graph-v5 dense row — the same value, and that is the
+/// measurement rather than a shortcut.**
+///
+/// The 5f card registers the dense tier as the graph-v5 512 row
+/// ([`crate::palw_qwen25_profile::qwen25_a16_graph_v5_registration_v1`]), which is a court-capable
+/// row and therefore pins an INVENTORY root, not a container digest
+/// (`misaka_palw_base0::classes::CanonicalClassV1::artifact_root`). Two things could have moved it
+/// and neither does:
+///
+/// * **the graph.** Decision 1 fuses four attention nodes into one; it moves no tensor, so the
+///   operand inventory the root is taken over is the same set in the same order.
+/// * **the tokenizer binding.** The file the cut ships is the re-bound conversion, whose digest is
+///   `158314b5…` against the deployed file's `c00faa48…` — binding writes the commitment field, and
+///   the commitment field is not an operand.
+///
+/// **Measured 2026-09-03 with `misaka-palw-base0/tests/a16_root_probe.rs`
+/// (`print_a16_v5_root_forms`) over BOTH files under `palw_a16_context_row_profile_v5(512)`:**
+///
+/// | file | `artifact_digest()` | `a16_inventory_v1(.., v5).root()` |
+/// |---|---|---|
+/// | `/Users/wata/Downloads/qwen25-1.5b-a16.palwart` (deployed) | `c00faa48…` | `1a7457f1…` |
+/// | `instruct-bound.palwart` (the bound file the cut ships) | `158314b5…` | `1a7457f1…` |
+///
+/// So this is an ALIAS and not a second byte array: the two rows are one file's one inventory, and
+/// a second spelling of a value that is equal by measurement is the two-mappings defect this
+/// family has already paid for once. If a future conversion ever moves the operand set, the probe
+/// above is what says so — and then this becomes its own constant, with its own measurement.
+pub const PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT: crate::Hash64 = PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT;
 
 pub fn palw_rc_qwen25_a16_is_registered() -> bool {
     PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT != crate::Hash64::from_bytes([0u8; 64])
@@ -7872,7 +7983,9 @@ pub fn palw_rc_shipped_params() -> Params {
     // backend registry at the moment a claim names it (`--palw-class-artifact`); a node without
     // the weights still validates the chain, it simply cannot produce for that class.
     if palw_rc_qwen36_is_registered() {
-        let dense = palw_rc_qwen25_a16_is_registered().then_some(PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT);
+        // The dense slot is ADR-0082's graph-v5 512 row (5f card §2); its root is the same
+        // inventory root by measurement — see `PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT`.
+        let dense = palw_rc_qwen25_a16_is_registered().then_some(PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT);
         return palw_rc_arm_phase1(
             palw_rc_params_with_classes(PALW_RC_GENESIS_ARTIFACT_ROOT, PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT, dense, bonds)
                 .unwrap_or_else(|e| panic!("the pinned PALW-RC genesis card does not assemble: {e}")),
@@ -9786,10 +9899,21 @@ mod consensus_params_id_tests {
         assert!(matches!(armed_devnet.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)));
         assert!(armed_devnet.palw_kary_court_active_at(0), "the bundled devnet plays the dissection court from genesis");
 
-        // The dormancy/visibility property itself, on a ruleset that has NOT armed it — the RC's,
-        // which is the one the fence's own doc is about.
+        // **The RC ARMS it too, and it is not a decision this test can restate.** This half read
+        // "the RC card leaves the fence dormant", and that was true while the RC registered no
+        // fused row. It registers ADR-0082's graph-v5 512 row now (5f genesis card §2), and
+        // `validate_palw_v2` refuses to ASSEMBLE a ruleset that registers a fused row with a
+        // dormant court — so on this preset the two are one fact and the assertion below is the
+        // one that can be made: the fence is armed exactly when the set needs it.
         let shipped = palw_rc_shipped_params();
-        assert!(!shipped.palw_kary_court_active_at(u64::MAX), "the RC card leaves the fence dormant");
+        assert!(
+            shipped.palw_kary_court_active_at(0),
+            "the RC genesis registers a fused-attention row, so its dissection court is armed from block one"
+        );
+        // The dormancy/visibility property itself, on a ruleset that has NOT armed it — the
+        // class-free RC base, which is what the fence's own doc is about.
+        let bare = palw_rc_base_params();
+        assert!(!bare.palw_kary_court_active_at(u64::MAX), "a ruleset with no fused row leaves the fence dormant");
         let mut armed = shipped.clone();
         armed.palw_kary_court = Some(ForkActivation::new(9_000_000));
         assert_ne!(shipped.consensus_params_id(), armed.consensus_params_id(), "arming the k-ary court must move the fingerprint");
@@ -9798,11 +9922,11 @@ mod consensus_params_id_tests {
         assert!(!armed.palw_kary_court_active_at(8_999_999));
         // A never-arming fence collapses to absence in the IDENTITY (the normalised commitment),
         // like every bare fence beside it; the raw params id is the un-normalised preimage.
-        let mut never_armed = shipped.clone();
+        let mut never_armed = bare.clone();
         never_armed.palw_kary_court = Some(ForkActivation::never());
         assert_eq!(
             never_armed.consensus_identity_id(),
-            shipped.consensus_identity_id(),
+            bare.consensus_identity_id(),
             "a never-arming fence collapses to absence, like every bare fence beside it"
         );
         // The mode condition is folded in: outside ConsensusV2 the fence answers nothing.
