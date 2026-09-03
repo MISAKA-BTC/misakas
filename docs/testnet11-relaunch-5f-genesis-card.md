@@ -5587,3 +5587,13 @@ registered class as the 2026-08-28 fix intended; (b) arm ADR-0065 D4 by activati
 normalised in `consensus_identity_id`, so it does not move the fingerprint — so that Unavailable abstains and the claim
 voids by `ReceiptTimeout` with nobody slashed. Until (a), no LLM claim can reach Final on the public chain; the
 announcement already says finality is not claimed.
+
+**6m, continued — seat2's link (22:25 UTC).** seat2 is not in IBD and has no orphans; in 40 minutes it accepted 24
+blocks by relay against ~68 the fleet produced, its sink's past-median age is 1,950 s, and every peer socket reads
+cwnd 2–4 at 250–356 ms RTT with retransmits — about 10 KB/s per connection. The lag (daa 335 vs the fleet's 489)
+is the link, not the DAG: either the four never-completed 748 MB broadcasts still occupy the transport, or the path
+is lossy on its own; a sysfs byte sampler is measuring the steady rate (the first sampler read `/proc/net/dev` with a
+field match that fails once a counter grows past the column width — `eth0:123…` with no space — and printed
+`rx +0 tx +0` for 45 minutes on a live node; the memory note on tools that report an absence they cannot see has it).
+6a's exposure correction: `palw_exposure_pwu_v1` reserves one inference's pwu (7,708 for the floor → 38,540 sompi
+per floor claim until Final); the chain's bond minimum is 400,000 sompi, the pool's 10 MSK ask is the pool's policy.
