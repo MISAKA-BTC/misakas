@@ -386,8 +386,8 @@ pub fn a16_row_for_artifact_shape_v1(
         return Err(A16ArtifactRowError::WiderThanTheArtifact { asked, span });
     }
     let width = u32::try_from(asked).map_err(|_| A16ArtifactRowError::WiderThanTheArtifact { asked, span })?;
-    let profile = kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v1(width)
-        .map_err(A16ArtifactRowError::Projection)?;
+    let profile =
+        kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v1(width).map_err(A16ArtifactRowError::Projection)?;
     Ok(A16ArtifactRowV1 {
         profile,
         n_ctx: width,

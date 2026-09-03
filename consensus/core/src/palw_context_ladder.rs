@@ -980,7 +980,13 @@ mod tests {
         assert_eq!(palw_court_turn_deadline_v1(3_000, PALW_STEP_MAX_LEAVES, 2, rc_chunks), Some(60));
         assert_eq!(PALW_RC_WINDOWS_V1.court_turn_deadline, 42, "the RC's shipped clock is the DEEP ladder's derivation");
         assert!(
-            palw_ladder_fits_window_court_v1(3_000, crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT, 2, 42, rc_chunks),
+            palw_ladder_fits_window_court_v1(
+                3_000,
+                crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT,
+                2,
+                42,
+                rc_chunks
+            ),
             "the shipped clock must fit the ruleset's own 2^26 ladder, not only the fenced one"
         );
         let rc_deep = palw_court_turn_deadline_v1(3_000, deep, 2, rc_chunks).expect("the RC window holds the deep ladder");

@@ -186,10 +186,10 @@ fn main() {
             // Exactly one source names the class. Two would be two widths for one graph, and the
             // whole point of this subcommand is that a width is part of the identity.
             let (profile, named_by, checked) = match (flag(&args, "--artifact"), flag(&args, "--model-id"), n_ctx) {
-                (Some(_), Some(_), _) => die(
-                    "--artifact and --model-id name the class two ways. Use --artifact (the file states its own width) \
-                     or --model-id (a catalog row's width is part of the row)",
-                ),
+                (Some(_), Some(_), _) => {
+                    die("--artifact and --model-id name the class two ways. Use --artifact (the file states its own width) \
+                     or --model-id (a catalog row's width is part of the row)")
+                }
                 (None, Some(model_id), Some(n)) => die(format!(
                     "--model-id {model_id} --n-ctx {n} names two widths for one class: a catalog row's n_ctx is part of the \
                      row, so a width beside it would be a third spelling of the graph. Use --artifact <file> (checked \
@@ -255,7 +255,9 @@ fn main() {
                     (
                         profile,
                         model_id.to_string(),
-                        vec![format!("width:     n_ctx {n}, the width the `{model_id}` catalog row is DEFINED at, not a width you named")],
+                        vec![format!(
+                            "width:     n_ctx {n}, the width the `{model_id}` catalog row is DEFINED at, not a width you named"
+                        )],
                     )
                 }
                 (None, None, None) => usage(),
@@ -264,9 +266,7 @@ fn main() {
             // Everything below is the chain's own acceptance of a `ClassLaneCertified`
             // (`palw_state_v2::apply_object`), run here so an object the chain would refuse never
             // leaves this machine — the same seal `drill` puts on its evidence.
-            profile
-                .validate_shape()
-                .unwrap_or_else(|e| die(format!("{named_by}: the derived profile is not a valid graph: {e:?}")));
+            profile.validate_shape().unwrap_or_else(|e| die(format!("{named_by}: the derived profile is not a valid graph: {e:?}")));
             let class_id = profile.shape_profile_id();
             let reachable = kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&profile);
             let covering = covering_rc_family_v1(&profile, lane).unwrap_or_else(|| {
@@ -296,11 +296,7 @@ fn main() {
             for line in &checked {
                 println!("  {line}");
             }
-            println!(
-                "  kernels:   {} reachable, covered by the {} RC family's {lane}-lane drill",
-                reachable.len(),
-                covering.name()
-            );
+            println!("  kernels:   {} reachable, covered by the {} RC family's {lane}-lane drill", reachable.len(), covering.name());
             match &tabled {
                 Some(id) => println!("  catalog:   this id IS the `{id}` row of this build's catalogs"),
                 None => println!(
