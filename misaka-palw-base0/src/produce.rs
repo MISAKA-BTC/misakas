@@ -886,18 +886,16 @@ pub fn base0_replay_from_checkpoint_capped_v1(
     calls: u32,
     step_ladder_cap: u64,
 ) -> Result<Base0CheckpointReplayV1, ProduceError> {
-    use kaspa_consensus_core::palw_state_chunk_map as map;
     let prefill = ctx.declared_prefill_tokens;
     let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
     let covered = checkpoint.covered_decode_call;
     if covered > decode_calls || calls == 0 || covered.saturating_add(calls) > decode_calls {
         return Err(ProduceError::Internal("the replay window is not inside this job's decode calls"));
     }
-    let positions = map::integer_kv_positions_at_v1(ctx, covered);
-    // **The map the CLASS declares, not the one this function knew first** — see
-    // `crate::legs::base0_state_chunk_geometry_v1`. Chunking at capture and un-chunking at replay
-    // are one decision; they were two, and the second one ignored the class.
-    let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions).map_err(ProduceError::Leg)?;
+    // **The map the CLASS declares, at the cadence the CLASS counts in** — see
+    // `crate::legs::base0_checkpoint_geometry_at_v1`. Chunking at capture and un-chunking at
+    // replay are one decision; they were two, and the second one ignored the class.
+    let geometry = crate::legs::base0_checkpoint_geometry_at_v1(profile, ctx, covered).map_err(ProduceError::Leg)?;
     let mut cache = KvCache::from_state_chunks(artifact, &geometry, chunks).map_err(ProduceError::Engine)?;
 
     let leaf_count = step_leaf_count_capped_v1(profile, ctx, step_ladder_cap).map_err(ProduceError::StepSpace)?;
@@ -1506,6 +1504,7 @@ mod tests {
             leaf_hashes: run.checkpoints.leaf_hashes.clone(),
             merkle_root: run.checkpoints.merkle_root,
             chunks: run.checkpoints.chunks.clone(),
+            bytes_serialised: run.checkpoints.bytes_serialised,
         };
         thinned.leaves.remove(0);
         thinned.leaf_hashes.remove(0);

@@ -1792,8 +1792,8 @@ mod tests {
             let mut cache = match start {
                 Base0FpIntervalStartV1::Genesis { .. } => KvCache::new(self.0),
                 Base0FpIntervalStartV1::Checkpoint { covered_decode_call, chunks, .. } => {
-                    let positions = kaspa_consensus_core::palw_state_chunk_map::integer_kv_positions_at_v1(ctx, *covered_decode_call);
-                    let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions).map_err(|e| format!("{e:?}"))?;
+                    let geometry = crate::legs::base0_checkpoint_geometry_at_v1(profile, ctx, *covered_decode_call)
+                        .map_err(|e| format!("{e:?}"))?;
                     KvCache::from_state_chunks(self.0, &geometry, chunks).map_err(|e| format!("{e:?}"))?
                 }
             };
@@ -2517,4 +2517,305 @@ mod tests {
              would have spent the bytes Decision 9 exists to save"
         );
     }
+    // =============================================================================================
+    // ADR-0082 Decision 4, amended — a graph-v5 DENSE row, end to end (audit B, C-1 / C-2 / L-2)
+    // =============================================================================================
+
+    /// The registered graph-v5 dense row, its plan, a small free-prompt job, and the FOLDED
+    /// retention an executor of that class keeps. One helper, because C-1's three consumers and
+    /// C-2's acceptance test are all questions about the same run.
+    #[cfg(test)]
+    #[allow(clippy::type_complexity)]
+    fn dense_v5_run() -> (
+        crate::artifact::Base0ArtifactV1,
+        PalwShapeProfileV3,
+        PalwJobContextV2,
+        Vec<usize>,
+        crate::produce::Base0ExecutionV1,
+    ) {
+        use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v5};
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 8,
+            ffn_dim: 8,
+            attn_heads: 2,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 32,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let profile = qwen25_a16_profile_v5(geometry).expect("a valid graph-v5 A16 profile");
+        let shape = crate::artifact::Base0ShapeV1 {
+            n_layers: geometry.layer_count as usize,
+            n_heads: geometry.attn_heads as usize,
+            n_kv_heads: geometry.attn_kv_heads as usize,
+            d_head: geometry.attn_head_dim as usize,
+            d_ff: geometry.ffn_dim as usize,
+            vocab: geometry.vocab_size as usize,
+            max_position: geometry.n_ctx as usize,
+            ln_theta_gen_q: crate::artifact::LN_THETA_10000_GEN_Q,
+            eps_q: geometry.rms_eps_q,
+        };
+        let artifact = crate::artifact::Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+            .expect("a valid shape")
+            .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
+            .expect("the derived store is sorted and unique");
+        let (ctx, prompt) =
+            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x0082_C1), geometry.vocab_size as usize, 3, 4);
+        let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
+        let plan = engine.plan_from_profile(&profile).expect("the v5 declaration is this engine's program");
+        let run = crate::qwen25_a16_backend::a16_execute_free_prompt_streaming_v1(
+            &artifact,
+            &profile,
+            Some(&plan),
+            &ctx,
+            &prompt,
+            kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+            &mut |_| {},
+        )
+        .expect("the folded graph-v5 sink runs the job");
+        (artifact, profile, ctx, prompt, run)
+    }
+
+    /// **C-1, test 1: an honest graph-v5 material passes its own seat's check, with zero state
+    /// retained.**
+    ///
+    /// The fold drops every checkpoint chunk (`Base0CheckpointRetentionV1::Fold`), so before this
+    /// the material carried an empty `checkpoint_chunks`, `base0_material_tail_matches_v1` rebuilt
+    /// the leg from `&[]` — the EMPTY leg, whose root is `checkpoint_empty_root_v2` — and compared
+    /// it to a real `checkpoint_merkle_root`. `Mismatch`: every seat read every honest producer of
+    /// the class as forged. The leg is now rebuilt from the LEAVES, which is what the fold retains
+    /// and what decides the question without a byte of history.
+    #[test]
+    fn a_graph_v5_material_is_checkable_and_carries_no_state() {
+        let (_artifact, profile, _ctx, prompt, run) = dense_v5_run();
+        assert_eq!(
+            kaspa_consensus_core::palw_context_ladder::palw_checkpoint_cadence_v1(&profile),
+            kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1::PerPosition,
+        );
+        assert!(run.checkpoints.chunks.is_empty(), "the fold retains no state at all");
+        assert!(!run.checkpoints.leaves.is_empty(), "…and it does retain the leg it committed");
+
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let bytes = crate::produce::base0_fp_material_encode_v2(&run, &ids).expect("the fold retains");
+        let material = crate::produce::base0_fp_material_decode_v2(&bytes).expect("its own retention decodes");
+        assert!(material.checkpoint_chunks.is_empty(), "a folded class serves no history (Decision 9)");
+        assert_eq!(material.checkpoint_leaves.len(), run.checkpoints.leaves.len());
+
+        assert_eq!(
+            crate::produce::base0_fp_material_matches_claim_v2(&material, run.execution_root, run.trace_root),
+            Ok(true),
+            "an honest graph-v5 material must pass the seat's check"
+        );
+
+        // **Zero state per POSITION, measured**: the leaves are the whole checkpoint retention and
+        // none of them is a cache byte.
+        let leaf_bytes = borsh::to_vec(&material.checkpoint_leaves).expect("leaves serialize").len();
+        let positions = material.checkpoint_leaves.len();
+        eprintln!(
+            "C-1: {positions} checkpoints, {} state bytes retained, {leaf_bytes} leaf bytes ({} a position)",
+            material.checkpoint_chunks.iter().flatten().map(|c| c.len()).sum::<usize>(),
+            leaf_bytes / positions.max(1)
+        );
+        assert_eq!(material.checkpoint_chunks.iter().flatten().map(|c| c.len()).sum::<usize>(), 0);
+
+        // And a folded class that nevertheless served state is not this class's retention.
+        let mut lying = material.clone();
+        lying.checkpoint_chunks = vec![vec![vec![0u8; 4]]];
+        assert_eq!(
+            crate::produce::base0_fp_material_matches_claim_v2(&lying, run.execution_root, run.trace_root),
+            Ok(false),
+            "a per-position class serving chunks is serving the history Decision 9 keeps off the wire"
+        );
+
+        // A tampered LEAF is what the check can still catch, and does.
+        let mut tampered = material.clone();
+        tampered.checkpoint_leaves[1].state_chunks_root = Hash64::from_u64_word(0xDEAD);
+        assert_eq!(
+            crate::produce::base0_fp_material_matches_claim_v2(&tampered, run.execution_root, run.trace_root),
+            Ok(false),
+            "a leaf that is not the committed one must not rebuild the committed root"
+        );
+    }
+
+    /// **C-1, test 2 and C-2, test 5: every interval of a graph-v5 claim opens, and a seat holding
+    /// its own state licenses it.**
+    ///
+    /// Two defects met here. C-1: the opening's anchor was built by rebuilding the leg from served
+    /// chunks the fold does not keep, so `base0_open_fp_interval_sparse_v1` returned
+    /// `CaptureIsNotTheBindings` for every `index ≥ 1`. C-2: the anchor's `covered` was
+    /// `index × interval` — a DECODE CALL — while the leaf's counter is a POSITION, so the seat
+    /// selected the checkpoint after the fourth PREFILL position and compared a 403-position state
+    /// against a 3-position root. Either one alone makes the class unseatable.
+    #[test]
+    fn every_graph_v5_interval_opens_and_a_recomputing_seat_licenses_it() {
+        use kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1;
+        let (artifact, profile, ctx, prompt, run) = dense_v5_run();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let bytes = crate::produce::base0_fp_material_encode_v2(&run, &ids).expect("the fold retains");
+        let material = crate::produce::base0_fp_material_decode_v2(&bytes).expect("its own retention decodes");
+        let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
+        let plan = engine.plan_from_profile(&profile).expect("the plan");
+
+        let interval = kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
+        let geometry = Base0FpIntervalGeometryV1::from_binding_v1(&run.binding, interval).expect("a geometry");
+        assert!(geometry.interval_count >= 2, "a one-interval job proves nothing about an anchor");
+
+        let claim = PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor: ctx.job_id };
+        let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
+        for index in 0..geometry.interval_count {
+            let opened = base0_open_fp_interval_sparse_v1(&material, index, &ids, interval, &kernels)
+                .unwrap_or_else(|e| panic!("interval {index} must open from a fold that retained nothing: {e}"));
+            // A folded class is served FLAT: the anchor is named, never carried.
+            assert!(
+                opened.starts_with(&PALW_BASE0_FP_INTERVAL_MAGIC_V2),
+                "interval {index}: a class that folds is served the named anchor (Decision 9)"
+            );
+
+            // The seat's own recompute, ordered exactly as the panel orders it — by the `covered`
+            // the opening carries, in the class's own cadence unit.
+            crate::fp_recompute::base0_fp_seat_state_forget_v1();
+            let state = match geometry.anchor_covered_call(index) {
+                None => None,
+                Some(covered) => {
+                    assert_eq!(
+                        palw_checkpoint_positions_at_v1(&profile, &ctx, covered),
+                        geometry.anchor_covered_positions_v1(index).expect("an anchored interval"),
+                        "interval {index}: the leaf's counter and the state's row count must name one state"
+                    );
+                    let mut kernels = crate::fp_recompute::A16RecomputeKernelsV1::new(&artifact, Some(&plan)).expect("kernels");
+                    crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+                        &profile,
+                        &ctx,
+                        &ids,
+                        &run.generated_token_ids,
+                        covered,
+                        &mut kernels,
+                    )
+                    .expect("this seat can recompute its own state");
+                    base0_fp_interval_opening_seat_state_v1(&opened, &ids, interval)
+                }
+            };
+            if index > 0 {
+                assert!(state.is_some(), "interval {index}: the seat's own state must be findable under the opening's covered");
+            }
+            assert_eq!(
+                base0_verify_fp_interval_opening_with_state_v1(
+                    &opened,
+                    claim,
+                    index,
+                    &ids,
+                    run.binding.step_leaf_count,
+                    interval,
+                    state.as_ref(),
+                    &kernels,
+                ),
+                Base0FpIntervalSeatVerdictV1::Valid,
+                "interval {index}: a seat holding its own state must license an honest graph-v5 opening"
+            );
+        }
+    }
+
+    /// **C-2's unit split, pinned.** The interval's boundary is a CALL; the checkpoint that anchors
+    /// it is named in the class's cadence unit; both name ONE state. Swept over both cadences at
+    /// the same chain facts, so the difference is the cadence and nothing else.
+    #[test]
+    fn the_anchors_two_units_name_one_state() {
+        use kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1;
+        for interval in [1u32, 2, 3] {
+            for (prefill, decode) in [(4u32, 9u32), (7, 5), (1, 12)] {
+                let per_call = Base0FpIntervalGeometryV1::from_chain_facts_v1(
+                    prefill,
+                    decode,
+                    interval,
+                    PalwCheckpointCadenceV1::PerDecodeCall,
+                )
+                .expect("a geometry");
+                let per_position =
+                    Base0FpIntervalGeometryV1::from_chain_facts_v1(prefill, decode, interval, PalwCheckpointCadenceV1::PerPosition)
+                        .expect("a geometry");
+                assert_eq!(
+                    per_call.interval_count, per_position.interval_count,
+                    "the interval count is cadence-free — which is what lets the seam derive it without a profile"
+                );
+                for index in 0..per_call.interval_count {
+                    assert_eq!(per_call.calls_for(index), per_position.calls_for(index), "the calls are the same partition");
+                    assert_eq!(
+                        per_call.anchor_seed_call_v1(index),
+                        per_position.anchor_seed_call_v1(index),
+                        "the seed row is a coordinate and does not move with the cadence"
+                    );
+                    let Some(positions) = per_call.anchor_covered_positions_v1(index) else {
+                        assert_eq!(index, 0, "only interval 0 has no anchor");
+                        continue;
+                    };
+                    assert_eq!(per_call.anchor_covered_call(index), Some(index * interval));
+                    assert_eq!(
+                        per_position.anchor_covered_call(index),
+                        Some(prefill + index * interval),
+                        "a per-position leaf's counter IS the row count"
+                    );
+                    assert_eq!(positions, prefill + index * interval, "and both name the same state");
+                }
+            }
+        }
+    }
+
+    /// **C-1, test 3: every committed leaf of a graph-v5 leg has an anchor, and it is the one the
+    /// COURT will demand.**
+    ///
+    /// `base0_kv_anchor_for_step_v1` reached `checkpoints.chunks.get(at)` and a folded leg's vector
+    /// is empty, so it answered `None` for every step of the class — the executor could not
+    /// assemble the anchored refutation ADR-0082 Decision 4 is about, at any coordinate. The
+    /// chunks now come from the cache the executor is holding anyway, which the map's own
+    /// prefix-stability makes byte-identical to the ones it folded away.
+    ///
+    /// The `covered` is checked against `palw_checkpoint_covered_for_step_v1` — the one spelling of
+    /// which checkpoint a step's anchor is — and the operands are then run through the COURT's own
+    /// `verify_kv_anchor` by way of the chunk-count and root rules it applies.
+    #[test]
+    fn every_step_of_a_graph_v5_class_has_the_anchor_the_court_demands() {
+        use kaspa_consensus_core::palw_context_ladder::palw_checkpoint_covered_for_step_v1;
+        let (artifact, profile, ctx, prompt, run) = dense_v5_run();
+        assert!(run.checkpoints.chunks.is_empty(), "the fold retained nothing — this is the case that answered None");
+
+        // The executor's own cache, run to the end of the job: what it is holding anyway.
+        let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
+        let plan = engine.plan_from_profile(&profile).expect("the plan");
+        let mut cache = crate::engine_a16::A16Cache::new(artifact.shape.n_layers);
+        let prefill = ctx.declared_prefill_tokens as usize;
+        for (position, token) in prompt.iter().take(prefill).enumerate() {
+            engine.forward_token_planned(&plan, &mut cache, *token, position).expect("the prefill runs");
+        }
+        for (call, token) in run.generated_token_ids.iter().enumerate().take(ctx.exact_decode_tokens as usize - 1) {
+            engine.forward_token_planned(&plan, &mut cache, *token as usize, prefill + call).expect("the decode runs");
+        }
+
+        let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
+        let mut checked = 0u32;
+        for (call_index, position) in
+            (0..prefill as u32).map(|p| (0u32, p)).chain((1..=decode_calls).map(|c| (c, 0u32)))
+        {
+            let want = palw_checkpoint_covered_for_step_v1(&profile, &ctx, call_index, position).expect("a per-position anchor");
+            let anchor = crate::legs::base0_kv_anchor_for_step_v1(&run.checkpoints, &profile, &ctx, call_index, position, |entry| {
+                cache.state_chunk_bytes_v1(entry)
+            })
+            .unwrap_or_else(|| panic!("call {call_index} position {position} has no anchor in its own producer's leg"));
+            assert_eq!(anchor.leaf.covered_decode_call, want, "the anchor must be the one the court's own rule names");
+            assert_eq!(anchor.chunks.len(), anchor.leaf.state_chunk_count as usize, "the re-derived chunks are the leaf's own");
+            // …and they must rebuild the state root the producer committed, which is what makes
+            // the re-derivation-from-a-later-cache argument true rather than merely stated.
+            assert_eq!(
+                base0_state_chunks_root_v1(&profile.state_chunk_map_id, &anchor.chunks).expect("a root"),
+                anchor.leaf.state_chunks_root,
+                "a chunk re-derived from a later cache must be the byte the earlier checkpoint committed"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, run.checkpoints.leaves.len() as u32, "every committed leaf was reached from some step");
+    }
+
 }

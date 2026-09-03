@@ -1903,4 +1903,90 @@ mod tests {
             dense_bytes as f64 / bytes.len().max(1) as f64
         );
     }
+
+    /// **C-3, plan item 4: a graph-v5 hybrid executes a job, and its checkpoints are the ones its
+    /// own seat recomputes** (ADR-0082 Decision 4, amended; audit B, C-3 and H-1).
+    ///
+    /// The v5 hybrid row registers `hybrid_state_chunk_map_id_v3()`, so its cadence is
+    /// `PerPosition` and `palw_checkpoint_count_v1` is `prefill + decode_calls` — never zero. The
+    /// producer constructed a capture, pushed nothing, and sealed at that count:
+    /// `CheckpointCaptureIncomplete`, so the class produced no block and no free-prompt claim at
+    /// all. It now has the two push sites the dense producer has.
+    ///
+    /// The second half is H-1: the chunks the producer commits must be the ones the SEAT
+    /// enumerates. The producer used to walk the attention half alone while
+    /// `Qwen36RecomputeKernelsV1::state_chunks` walked attention plus recurrence; both now walk
+    /// `base0_composed_state_chunks_v1`, and this compares the roots that come out.
+    ///
+    /// The job is sized below the recurrence's derived spacing
+    /// (`palw_anchored_interval_for_profile_v1`, which is `min(16, n_ctx)` = 8 on this fixture), so
+    /// every leaf here carries the attention half alone. That is not a dodge: it is the case the
+    /// per-position cadence spends almost every position in, and the spacing boundary itself is
+    /// pinned by `the_hybrid_composition_serializes_in_the_order_its_map_name_spells`, which
+    /// records that this fixture's own mismatched gdn head counts are what stop the recurrence
+    /// serializer there.
+    #[test]
+    fn a_graph_v5_hybrid_executes_and_its_checkpoints_are_its_seats() {
+        use kaspa_consensus_core::palw_context_ladder::{
+            PalwCheckpointCadenceV1, palw_anchored_interval_for_profile_v1, palw_checkpoint_cadence_v1,
+            palw_checkpoint_count_v1, palw_checkpoint_leaf_carries_recurrence_v1,
+        };
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+
+        let (artifact, profile) = crate::fuzz_qwen36::tiny_class_v5_for_tests();
+        assert_eq!(profile.state_chunk_map_id, map::hybrid_state_chunk_map_id_v3(), "a v5 hybrid registers the composition");
+        assert_eq!(palw_checkpoint_cadence_v1(&profile), PalwCheckpointCadenceV1::PerPosition);
+
+        let engine = Qwen36Engine::new(&artifact);
+        let plan = engine.plan_from_profile(&profile).expect("the fixture's declaration is its program");
+        let (ctx, prompt) =
+            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x0082_C3), artifact.shape.vocab, 3, 4);
+        let positions_total = ctx.declared_prefill_tokens + ctx.exact_decode_tokens.saturating_sub(1);
+        assert!(
+            positions_total < palw_anchored_interval_for_profile_v1(&profile),
+            "this job must stay below the recurrence's spacing — see the doc comment"
+        );
+
+        let run = qwen36_execute_for_attempt_v1(&artifact, &profile, &plan, &ctx, &prompt)
+            .expect("a graph-v5 hybrid must execute its own job — this returned CheckpointCaptureIncomplete");
+        assert_eq!(
+            run.checkpoints.leaves.len() as u32,
+            palw_checkpoint_count_v1(&profile, &ctx, profile.n_ctx.max(1)),
+            "the leg is the count the class's own cadence says the job has"
+        );
+        assert_eq!(run.checkpoints.leaves.len() as u32, positions_total);
+        assert!(run.checkpoints.chunks.is_empty(), "the per-position cadence folds: zero state retained");
+
+        // **H-1: the producer's chunks are the seat's.** The seat re-runs the job with its own
+        // kernels and roots the state it reaches; a producer enumerating only the attention half
+        // would disagree here at every leaf that carries the recurrence, and about the COUNT at
+        // every leaf.
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        for leaf in &run.checkpoints.leaves {
+            let positions = leaf.covered_decode_call; // POSITIONS, on this cadence
+            assert!(!palw_checkpoint_leaf_carries_recurrence_v1(&profile, positions) || positions == 0);
+            let geometry = map::hybrid_state_geometry_for_covered_v1(&profile, positions).expect("the composition derives");
+            assert_eq!(
+                leaf.state_chunk_count as u64,
+                geometry.chunk_count(),
+                "checkpoint {} must commit one chunk per entry the CLASS's map names",
+                leaf.checkpoint_index
+            );
+            let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&artifact, &plan);
+            let state = crate::fp_recompute::base0_fp_recompute_state_at_covered_v1(
+                &profile,
+                &ctx,
+                &ids,
+                &run.generated_token_ids,
+                positions,
+                &mut kernels,
+            )
+            .expect("the seat can stop at any position of a per-position class");
+            assert_eq!(
+                state.state_chunks_root, leaf.state_chunks_root,
+                "checkpoint {} (covering {positions} positions): producer and seat must root the same composition",
+                leaf.checkpoint_index
+            );
+        }
+    }
 }

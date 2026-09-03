@@ -516,8 +516,13 @@ pub struct Base0CheckpointsV1 {
     /// Per checkpoint, its chunk bytes in map order.
     ///
     /// Retained for exactly the reason the step tiles are: a producer that discarded them could not
-    /// answer a checkpoint challenge and would lose its bond by default.
+    /// answer a checkpoint challenge and would lose its bond by default. EMPTY under the
+    /// per-position cadence, whose retention is the leaves (`Base0CheckpointRetentionV1::Fold`).
     pub chunks: Vec<Vec<Vec<u8>>>,
+    /// **Payload bytes this capture actually serialised**, over every push — the H-3 measurement,
+    /// carried onto the finished leg so a test can read it without holding the capture. Not a
+    /// consensus quantity and not in any hash.
+    pub bytes_serialised: u64,
 }
 
 /// **The state layout the CLASS declares, at `positions`** — the one dispatch on
@@ -565,6 +570,25 @@ pub fn base0_state_chunk_geometry_v1(
         return Err(LegError::CheckpointStateUnavailable { chunk_index: 0 });
     };
     geometry.map_err(LegError::CheckpointStateMap)
+}
+
+/// **The cache layout the checkpoint carrying `covered` was chunked at** (audit B, C-2).
+///
+/// The one spelling of "un-chunk what that checkpoint chunked", which four replay sites were each
+/// writing as `integer_kv_state_geometry_*(profile, integer_kv_positions_at_v1(ctx, covered))` —
+/// the PER-CALL conversion. Under the per-position cadence `covered` already IS the row count, so
+/// that spelling asks for `prefill + covered` rows, `from_state_chunks_v1` is handed chunks for a
+/// shorter state, and an honest seat's replay refuses an honest producer.
+///
+/// Chunking at capture and un-chunking at replay are one decision; deriving it here is what keeps
+/// them one.
+pub fn base0_checkpoint_geometry_at_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    covered: u32,
+) -> Result<kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1, LegError> {
+    let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, ctx, covered);
+    base0_state_chunk_geometry_v1(profile, positions)
 }
 
 /// **The layout ONE checkpoint of this class is taken under** — the attention cache alone, or the
@@ -1158,7 +1182,13 @@ impl Base0CheckpointCaptureV1 {
         } else {
             step_merkle_root_v1(&self.leaf_hashes).map_err(|_| LegError::EmptySpace)?
         };
-        Ok(Base0CheckpointsV1 { leaves: self.leaves, leaf_hashes: self.leaf_hashes, merkle_root, chunks: self.chunks })
+        Ok(Base0CheckpointsV1 {
+            leaves: self.leaves,
+            leaf_hashes: self.leaf_hashes,
+            merkle_root,
+            chunks: self.chunks,
+            bytes_serialised: self.bytes_serialised,
+        })
     }
 }
 
@@ -2047,6 +2077,135 @@ mod a16_row_tests {
             assert_eq!((row.layer, row.index), (0, i));
             assert_eq!(row.row, trace.post[i]);
         }
+    }
+
+    /// **H-3, plan item 7: the per-position capture touches ONE ragged tile a position, not the
+    /// whole cache.**
+    ///
+    /// The fold's economy was a RETENTION economy only: `push` enumerated every chunk and
+    /// serialized it, so checkpoint `p` wrote `2 · layers · (p+1) · row` bytes and the job's total
+    /// was `Θ(n²)` — 7.5 GB on the dense graph-v5 row at `n_ctx` 512, 1.9 TB at the ladder's top,
+    /// on the block-producing path. The attention cache is append-only, so a COMPLETE tile's chunk
+    /// hash is the value it already had; only the ragged last tile of each `(kind, layer)` slice
+    /// moves.
+    ///
+    /// Measured on the shape the report names (28 attention layers, `kv_row = 2·128·4 = 1024 B`)
+    /// and asserted against derived bounds rather than against a constant.
+    ///
+    /// # What does NOT go away, and why it is the map's and not this memo's
+    ///
+    /// The leaf hash binds the chunk's INDEX (`state_chunk_leaf_hash_v1(map_id, index, bytes)`),
+    /// and the tiled map's index is `(kind · layers + layer_ordinal) · chunks_per_slice + block`.
+    /// So when a slice grows a block — once every `PALW_ATTN_HISTORY_TILE_V4` positions — every
+    /// index above the first slice MOVES, and a chunk whose bytes did not change is nevertheless a
+    /// different leaf. Its hash cannot be reused, and hashing it needs its bytes, so that
+    /// checkpoint re-serialises the whole cache. That leaves a `2 · layers · row · n² / (2 · tile)`
+    /// term, which is `tile` times smaller than the `Θ(n²/2)` it replaced and is a fact about the
+    /// MAP: only a second copy of the cache (a full retention) or an index scheme that does not
+    /// move could remove it, and this capture is allowed neither.
+    ///
+    /// So the assertion is the ORDER, stated in both directions: an order below the whole-cache
+    /// form, and at most the map's own residual.
+    #[test]
+    fn the_per_position_capture_touches_one_tile_a_position() {
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+        let mut profile = per_position_profile();
+        profile.layer_count = 28;
+        profile.full_attention_interval = 1; // every layer is an attention layer, as the dense tier's are
+        profile.attn_kv_heads = 2;
+        profile.attn_head_dim = 128;
+        profile.n_ctx = 512;
+        let n: u32 = 512;
+        let shape = base0_state_chunk_geometry_v1(&profile, n).expect("the tiled map describes this shape");
+        let row_bytes = shape.row_bytes as u64;
+        let layers = shape.attn_layers.len() as u64;
+        assert_eq!((layers, row_bytes), (28, 1024), "the shape the report's number is derived over");
+        let ctx = {
+            let mut ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, n - 1, 2);
+            ctx.job_id = Hash64::from_u64_word(0x0082_43);
+            ctx
+        };
+        assert_eq!(
+            kaspa_consensus_core::palw_context_ladder::palw_checkpoint_count_v1(&profile, &ctx, 1),
+            n,
+            "the leg is one checkpoint a position"
+        );
+        let cp = map::integer_kv_checkpoint_profile_v1(map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
+        let mut capture = Base0CheckpointCaptureV1::new(&ctx, &profile, &cp);
+        assert_eq!(capture.retention(), Base0CheckpointRetentionV1::Fold);
+        // The bytes are not a cache's — nothing here runs a model — but they are exactly the
+        // lengths the map declares, which is all the capture's arithmetic reads.
+        for _ in 0..n {
+            capture.push_with_v1(|entry| Some(vec![0u8; entry.byte_len() as usize])).expect("the fold takes every position");
+        }
+        let leg = capture.finish_canonical_v1().expect("sealed at the canonical count");
+        assert_eq!(leg.leaves.len() as u32, n);
+
+        let touched = leg.bytes_serialised;
+        let tile = map::PALW_ATTN_HISTORY_TILE_V4 as u64;
+        let quadratic = 2 * layers * row_bytes * (n as u64) * (n as u64 + 1) / 2;
+        // One ragged tile per `(kind, layer)` slice at every position…
+        let linear_bound = 2 * layers * row_bytes * (n as u64) * tile;
+        // …plus the whole cache once at every slice-growth boundary, where every chunk index above
+        // the first slice moves and its leaf hash therefore moves with it.
+        let residual = 2 * layers * row_bytes * (n as u64) * (n as u64 + tile) / (2 * tile);
+        eprintln!(
+            "H-3 at n_ctx {n}, {layers} attention layers, kv_row {row_bytes} B: {touched} bytes serialised \
+             ({:.2} MB) against {quadratic} ({:.2} GB) for the whole-cache form — {:.0}x less",
+            touched as f64 / 1e6,
+            quadratic as f64 / 1e9,
+            quadratic as f64 / touched.max(1) as f64
+        );
+        assert!(touched < quadratic / 8, "the whole-cache term must be gone by an order: {touched} against {quadratic}");
+        assert!(
+            touched <= linear_bound + residual,
+            "what may remain is one ragged tile a position plus the map's index-shift term: {touched} against {}",
+            linear_bound + residual
+        );
+    }
+
+    /// **M-3 is the guard, and it is measured rather than assumed.**
+    ///
+    /// `tiled_kv_state_geometry_v3` pins `positions_per_chunk = min(16, positions)`, so below 16
+    /// positions the tile boundaries move with every position and NO complete tile is prefix-
+    /// stable. A memo keyed by chunk index that assumed otherwise would produce a wrong root for
+    /// every job whose prefill starts inside the first tile — so the roots the memoising capture
+    /// commits are compared, position by position, against a capture that reuses nothing.
+    #[test]
+    fn the_memo_agrees_with_a_capture_that_reuses_nothing_across_the_sixteen_position_boundary() {
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+        let profile = per_position_profile();
+        let n = 3 * map::PALW_ATTN_HISTORY_TILE_V4 + 1; // across two boundaries and past them
+        let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, n - 1, 2);
+        let cp = map::integer_kv_checkpoint_profile_v1(map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
+
+        // The bytes are a function of (kind, layer, position) alone — which is what "the cache is
+        // append-only" means — so a chunk's content is the same however the geometry is tiled.
+        let byte_of = |entry: &map::PalwStateChunkEntryV1, offset: usize| -> u8 {
+            let position = entry.position_start as usize + offset / entry.row_bytes as usize;
+            let within = offset % entry.row_bytes as usize;
+            (position as u8).wrapping_mul(31).wrapping_add(within as u8).wrapping_add(entry.attn_layer as u8) ^ (entry.kind as u8)
+        };
+        let fill = |entry: &map::PalwStateChunkEntryV1| -> Option<Vec<u8>> {
+            Some((0..entry.byte_len() as usize).map(|o| byte_of(entry, o)).collect())
+        };
+
+        let mut memoising = Base0CheckpointCaptureV1::new(&ctx, &profile, &cp);
+        let mut naive = Base0CheckpointCaptureV1::new(&ctx, &profile, &cp);
+        for _ in 0..n {
+            memoising.push_with_v1(fill).expect("the memoising capture takes it");
+            // `push_chunks` is the route that reuses nothing: it is handed every chunk's bytes.
+            let geometry = naive.next_geometry().expect("a geometry");
+            let chunks: Vec<Vec<u8>> = (0..geometry.chunk_count())
+                .map(|i| fill(&map::integer_kv_state_chunk_entry_v1(&geometry, i).expect("an entry")).expect("bytes"))
+                .collect();
+            naive.push_chunks(chunks).expect("the naive capture takes it");
+        }
+        let a = memoising.finish_canonical_v1().expect("sealed");
+        let b = naive.finish_canonical_v1().expect("sealed");
+        assert_eq!(a.leaf_hashes, b.leaf_hashes, "the memo must commit exactly what a full re-hash commits");
+        assert_eq!(a.merkle_root, b.merkle_root);
+        assert!(a.bytes_serialised < b.bytes_serialised, "…and it must do less work to get there");
     }
 }
 

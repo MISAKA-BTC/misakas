@@ -884,6 +884,16 @@ impl Qwen25A16Backend {
 /// loop — and this supplies only what the family owns: restoring the cache the interval resumes
 /// from and running one forward call, through the SAME plan-or-traced dispatch the capture uses.
 /// A replay that took the other arm would recompute rows the capture never committed.
+/// The dense tier's interval kernels, for tests in sibling modules that need to replay an interval
+/// the way this backend does. Not a second implementation — the same struct the backend uses.
+#[cfg(test)]
+pub(crate) fn a16_interval_kernels_for_tests_v1<'a>(
+    artifact: &'a Base0ArtifactV1,
+    plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
+) -> impl crate::fp_interval::Base0FpIntervalKernelsV1 + 'a {
+    A16IntervalKernels { artifact, plan }
+}
+
 struct A16IntervalKernels<'a> {
     artifact: &'a Base0ArtifactV1,
     plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
@@ -904,8 +914,8 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
         let mut cache = match start {
             crate::fp_interval::Base0FpIntervalStartV1::Genesis { .. } => A16Cache::new(layers),
             crate::fp_interval::Base0FpIntervalStartV1::Checkpoint { covered_decode_call, chunks, .. } => {
-                let positions = kaspa_consensus_core::palw_state_chunk_map::integer_kv_positions_at_v1(ctx, *covered_decode_call);
-                let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions).map_err(|e| format!("{e:?}"))?;
+                let geometry =
+                    crate::legs::base0_checkpoint_geometry_at_v1(profile, ctx, *covered_decode_call).map_err(|e| format!("{e:?}"))?;
                 A16Cache::from_state_chunks_v1(layers, row_elements, &geometry, chunks).map_err(|e| format!("{e:?}"))?
             }
         };
