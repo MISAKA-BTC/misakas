@@ -1145,3 +1145,93 @@ mod tests {
         assert!(matches!(err, PalwStateChunkMapError::RowExceedsChunk { .. }), "{err:?}");
     }
 }
+
+#[cfg(test)]
+mod hybrid_composition_tests {
+    use super::*;
+
+    fn hybrid_row() -> PalwShapeProfileV3 {
+        crate::palw_context_ladder::palw_qwen36_context_row_profile_v5(512).expect("the hybrid graph-v5 row projects")
+    }
+
+    /// **The section order is the map's own NAME, not this module's opinion.**
+    ///
+    /// The name string is the preimage of the id a class registers, so a composition that spelled
+    /// its halves the other way round would be a different map and must enumerate in that order.
+    /// Asserted against the string rather than against a comment.
+    #[test]
+    fn the_hybrid_sections_are_ordered_by_the_maps_own_name() {
+        let name = palw_hybrid_state_chunk_map_name_v3();
+        let attn = name.find("attn=").expect("the composition names its attention half");
+        let gdn = name.find("gdn=").expect("the composition names its recurrence half");
+        assert!(attn < gdn, "the v3 composition stopped naming its attention half first: {name}");
+        assert!(
+            (PalwHybridChunkSectionV1::AttentionCache as u8) < (PalwHybridChunkSectionV1::RecurrenceState as u8),
+            "the enumeration order disagrees with the name the id is minted over"
+        );
+        // The halves it embeds are the standalone maps, verbatim — so neither can drift.
+        assert!(name.contains(PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V3));
+        assert!(name.contains(PALW_GDN_STATE_CHUNK_MAP_NAME_V2));
+    }
+
+    /// **The composition covers every element exactly once** — the property
+    /// `the_map_covers_every_element_exactly_once` holds for the v1 map, held for the hybrid's two
+    /// halves together. A gap would let a producer omit state a replay needs; an overlap would let
+    /// it commit two values for one element and open whichever the dispute favours.
+    #[test]
+    fn the_composition_covers_every_element_exactly_once() {
+        let profile = hybrid_row();
+        for positions in [1u32, 16, 17, 512] {
+            let geometry = hybrid_state_geometry_v3(&profile, positions).expect("the composition derives");
+            let mut covered_bytes = 0u64;
+            // (section, kind, layer, start) coordinates, each of which must appear once.
+            let mut attn_seen: Vec<(PalwStateChunkKindV1, u16, u32)> = Vec::new();
+            let mut gdn_seen: Vec<(PalwGdnChunkKindV1, u16, u16)> = Vec::new();
+            let mut last_section = PalwHybridChunkSectionV1::AttentionCache;
+            for index in 0..geometry.chunk_count() {
+                let entry = hybrid_state_chunk_entry_v3(&geometry, index).expect("every index in range resolves");
+                // The order the name fixes: attention first, and never back again.
+                assert!(entry.section() >= last_section, "chunk {index} went back to an earlier section");
+                last_section = entry.section();
+                covered_bytes += entry.byte_len();
+                assert!(entry.byte_len() > 0, "chunk {index} covers nothing");
+                match entry {
+                    PalwHybridChunkEntryV1::AttentionCache(e) => {
+                        let key = (e.kind, e.attn_layer, e.position_start);
+                        assert!(!attn_seen.contains(&key), "attention chunk {key:?} appears twice");
+                        attn_seen.push(key);
+                    }
+                    PalwHybridChunkEntryV1::RecurrenceState { kind, gdn_layer, head, .. } => {
+                        let key = (kind, gdn_layer, head);
+                        assert!(!gdn_seen.contains(&key), "recurrence chunk {key:?} appears twice");
+                        gdn_seen.push(key);
+                    }
+                }
+            }
+            assert_eq!(hybrid_state_chunk_entry_v3(&geometry, geometry.chunk_count()), None, "one past the end resolves");
+            assert_eq!(covered_bytes, geometry.total_bytes(), "the enumeration covers exactly the state, at {positions} positions");
+            assert_eq!(attn_seen.len() as u64, geometry.attn.chunk_count());
+            assert_eq!(gdn_seen.len() as u64, geometry.gdn_chunk_count());
+            // Both halves are present. A composition that enumerated one of them is the defect the
+            // hybrid's `.unwrap_or(0)` recurrence charge was.
+            assert!(geometry.attn.chunk_count() > 0 && geometry.gdn_chunk_count() > 0);
+        }
+    }
+
+    /// **The recurrence half's chunk bytes are the price the court is charged**, from the same two
+    /// functions — so the enumeration and `gdn_state_row_bytes_for_map_v1` cannot describe
+    /// different objects.
+    #[test]
+    fn the_recurrence_chunks_are_what_the_anchor_is_priced_at() {
+        let profile = hybrid_row();
+        let geometry = hybrid_state_geometry_v3(&profile, 512).expect("derives");
+        let (delta, conv) = gdn_state_terms_for_map_v1(&profile).expect("the v3 composition prices its recurrence half");
+        assert_eq!((geometry.delta_head_bytes, geometry.conv_head_bytes), (delta, conv));
+        assert_eq!(delta + conv, gdn_state_row_bytes_for_map_v1(&profile).expect("prices"));
+        // And the v3 composition prices at v2's window, because its `gdn=` half IS v2's.
+        let mut as_v2 = profile.clone();
+        as_v2.state_chunk_map_id = hybrid_state_chunk_map_id_v2();
+        assert_eq!(gdn_state_terms_for_map_v1(&as_v2), Some((delta, conv)));
+        assert_eq!(delta + conv, 71_680, "the head-sliced recurrence opening moved");
+    }
+}

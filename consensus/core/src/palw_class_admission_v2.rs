@@ -1844,6 +1844,216 @@ mod tests {
             assert!(at(family, true, now).3 >= 512, "{family}: the 512 row is still not admitted");
             assert!(at(family, true, OLD_CEILING).3 < 512, "{family}: the 512 row was admissible before — re-read ADR-0080");
         }
+
+        // ---- **And the graph-v5 rows** (ADR-0082 Decisions 1-6, Z11). Their width is bound by the
+        // LADDER or by the WINDOW and never by the close, which is Decisions 1-4's whole point —
+        // and the test says which, from the gate's own refusal rather than from a claim.
+        let v5 = |build: fn(u32) -> Result<PalwShapeProfileV3, crate::palw_step::PalwStepError>, n_ctx: u32| -> Result<(), String> {
+            let profile = build(n_ctx).map_err(|e| format!("the profile does not project: {e:?}"))?;
+            let court = kary_court_v1();
+            let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&profile, Some(court))
+                .ok_or_else(|| "the row registers no state chunk map".to_string())?;
+            let mut bundle = conforming_bundle();
+            bundle.court = PalwCourtParamsV2::with_cost_ceilings(
+                crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+                RC_TURN_DEADLINE,
+                2,
+                now,
+                crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
+                crate::palw_mode_v2::DEFAULT_MAX_OPERAND_COUNT,
+            )
+            .expect("a court at the deep ladder is legal")
+            .with_dissection_arity(court.dissection_arity)
+            .expect("the derived arity is legal");
+            let canonical = context(&profile, n_ctx.saturating_sub(2).max(1), 2);
+            let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, rules.ladder)
+                .map_err(|e| format!("the canonical job has no step space: {e:?}"))?;
+            let registration = weightless_registration(profile.shape_profile_id(), counted);
+            verify_class_admission_v5(&bundle, &profile, &canonical, &registration, &[], &[], Some(rules), Some(court))
+                .map(|_| ())
+                .map_err(|e| format!("{e:?}"))
+        };
+        let widest_v5 = |build: fn(u32) -> Result<PalwShapeProfileV3, crate::palw_step::PalwStepError>| -> (u32, String) {
+            let (mut lo, mut hi) = (2u32, 262_144u32);
+            if v5(build, lo).is_err() {
+                return (0, v5(build, lo).unwrap_err());
+            }
+            while lo + 1 < hi {
+                let mid = lo + (hi - lo) / 2;
+                if v5(build, mid).is_ok() { lo = mid } else { hi = mid }
+            }
+            let why = v5(build, lo + 1).err().unwrap_or_else(|| "ADMITTED — the search's bound bound it".into());
+            (lo, why)
+        };
+        for (family, build) in [
+            ("dense A16 (graph-v5)", crate::palw_context_ladder::palw_a16_context_row_profile_v5 as fn(u32) -> _),
+            ("hybrid QWEN36 (graph-v5)", crate::palw_context_ladder::palw_qwen36_context_row_profile_v5 as fn(u32) -> _),
+        ] {
+            let (w, why) = widest_v5(build);
+            println!("{family}: widest admitted n_ctx = {w}; n_ctx {} refused by {why}", w + 1);
+            assert!(w >= 512, "{family}: the 512 row is not admitted at all — {why}");
+            assert!(
+                !why.contains("court close chunks"),
+                "{family}: the CLOSE is what refuses a v5 row at {} — Decisions 1-4 exist so that it is not: {why}",
+                w + 1
+            );
+            assert!(
+                why.contains("TooManyLeaves") || why.contains("DeeperThanTheLadder") || why.contains("CourtWindowTooShort"),
+                "{family}: a v5 row must be bound by the ladder or the window, got {why}"
+            );
+        }
+    }
+
+    /// A registration at `share_permille: 0` — every test here measures SHAPE and COST, so
+    /// ADR-0069's weight gate is out of the question rather than waved past with a fixture family.
+    fn weightless_registration(class_id: Hash64, pwu_per_inference: u64) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            artifact_root: Hash64::from_u64_word(0xA271FAC7),
+            slash_value_per_pwu: 1,
+            pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference },
+            initial_target: 1,
+            share_permille: 0,
+            activation_daa: 0,
+            admission: None,
+        }
+    }
+
+    /// The `palw_kary_court` a `PALW_RC_WINDOWS_V1`-shaped ruleset derives — every field read off
+    /// the ruleset, none chosen. `palw_court_arity_v1` returns 4 at this window and clock.
+    fn kary_court_v1() -> PalwKaryCourtV1 {
+        PalwKaryCourtV1 {
+            dissection_arity: 4,
+            prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            window_court_daa: crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.window_court,
+        }
+    }
+
+    /// The move clock `palw_court_turn_deadline_v1` derives for the RC's 3,000-DAA court window at
+    /// the `2^32` ladder — asserted against the derivation in
+    /// `the_rc_derives_its_own_arity_and_the_moves_it_buys`, restated here as the constant this
+    /// harness builds its court at.
+    const RC_TURN_DEADLINE: u64 = 42;
+
+    /// **Z10: a court that cannot try the leaf must not admit the class** (ADR-0082 Decision 1,
+    /// under ADR-0049 Decision C), and the refusal names the COURT rather than the graph.
+    #[test]
+    fn a_fused_row_is_refused_where_the_kary_court_is_dormant() {
+        let profile = crate::palw_context_ladder::palw_a16_context_row_profile_v5(512).expect("the v5 row projects");
+        let rules = crate::palw_context_ladder::palw_class_ladder_rules_v1(&profile).expect("mapped");
+        let mut bundle = conforming_bundle();
+        bundle.court = PalwCourtParamsV2::with_cost_ceilings(
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            RC_TURN_DEADLINE,
+            2,
+            crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
+            crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
+            crate::palw_mode_v2::DEFAULT_MAX_OPERAND_COUNT,
+        )
+        .expect("legal");
+        let canonical = context(&profile, 510, 2);
+        let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, rules.ladder).expect("counts");
+        let registration = weightless_registration(profile.shape_profile_id(), counted);
+
+        // The shipped gate — `palw_kary_court` dormant on every preset — refuses it BY NAME.
+        let err = verify_class_admission_v4(&bundle, &profile, &canonical, &registration, &[], &[], Some(rules))
+            .expect_err("a fused row must not be admitted by a court with no dissection");
+        assert_eq!(err, PalwClassAdmissionError::FusedAttentionNeedsTheKaryCourt, "got {err}");
+        assert!(format!("{err}").contains("no dissection to try it with"), "the refusal must name the court: {err}");
+
+        // And a graph-v2 row is untouched by the same gate: this refuses the CLASS's leaf, not
+        // every class on a dormant network.
+        let v2 = crate::palw_context_ladder::palw_a16_context_row_profile_v1(512).expect("projects");
+        let v2_rules = crate::palw_context_ladder::palw_class_ladder_rules_v1(&v2).expect("mapped");
+        let v2_canonical = context(&v2, 510, 2);
+        let v2_counted = crate::palw_step::step_leaf_count_capped_v1(&v2, &v2_canonical, v2_rules.ladder).expect("counts");
+        let v2_reg = weightless_registration(v2.shape_profile_id(), v2_counted);
+        verify_class_admission_v4(&bundle, &v2, &v2_canonical, &v2_reg, &[], &[], Some(v2_rules))
+            .expect("the shipped graph-v2 row is admitted exactly as before");
+    }
+
+    /// **Z11: all three bounds at once, and the refusal names which one.**
+    #[test]
+    fn a_v5_row_clears_the_close_the_ladder_and_the_window_or_names_the_one_it_does_not() {
+        let court = kary_court_v1();
+        let profile = crate::palw_context_ladder::palw_a16_context_row_profile_v5(512).expect("projects");
+        let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&profile, Some(court)).expect("mapped");
+        let canonical = context(&profile, 510, 2);
+        let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, rules.ladder).expect("counts");
+        let registration = weightless_registration(profile.shape_profile_id(), counted);
+        let court_at = |chunks: u64, deadline: u64| {
+            PalwCourtParamsV2::with_cost_ceilings(
+                crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+                deadline,
+                2,
+                crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(chunks),
+                crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
+                crate::palw_mode_v2::DEFAULT_MAX_OPERAND_COUNT,
+            )
+            .expect("legal")
+            .with_dissection_arity(court.dissection_arity)
+            .expect("legal")
+        };
+        let admit = |bundle_court: PalwCourtParamsV2, k: PalwKaryCourtV1| {
+            let mut bundle = conforming_bundle();
+            bundle.court = bundle_court;
+            verify_class_admission_v5(&bundle, &profile, &canonical, &registration, &[], &[], Some(rules), Some(k))
+        };
+        // All three clear.
+        admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, RC_TURN_DEADLINE), court)
+            .expect("the dense graph-v5 512 row clears the close, the ladder and the window");
+        // The CLOSE alone refuses, and says so: the row needs two carriers (its bottom is charged
+        // at the cache-write route) and one is what the ruleset pays for.
+        let err = admit(court_at(1, RC_TURN_DEADLINE), court).expect_err("one carrier does not carry this row");
+        assert!(format!("{err}").contains("court close chunks"), "the close must name itself: {err}");
+        // The WINDOW alone refuses, and says so.
+        let err = admit(court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, RC_TURN_DEADLINE), PalwKaryCourtV1 {
+            window_court_daa: 100,
+            ..court
+        })
+        .expect_err("a 100-DAA court window prosecutes nothing");
+        assert!(matches!(err, PalwClassAdmissionError::CourtWindowTooShort { .. }), "the window must name itself: {err}");
+        // And a shape priced for a court the ruleset does not play is refused rather than corrected.
+        let mut mispriced = rules;
+        mispriced.cost_shape.dissection = Some(64);
+        let mut bundle = conforming_bundle();
+        bundle.court = court_at(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, RC_TURN_DEADLINE);
+        let err = verify_class_admission_v5(&bundle, &profile, &canonical, &registration, &[], &[], Some(mispriced), Some(court))
+            .expect_err("a class priced at an arity the court does not play must not be admitted");
+        assert!(matches!(err, PalwClassAdmissionError::PricedForADifferentCourt { priced: Some(64), court: 4 }), "got {err}");
+    }
+
+    /// **The two graph-v5 class ids, pinned.** They are NEW ids — the fused graph and the tiled map
+    /// are both inside `shape_profile_id` — so nothing shipped moves, and pinning them is what
+    /// makes that checkable rather than asserted.
+    #[test]
+    fn the_graph_v5_rows_have_their_own_class_ids() {
+        let dense = crate::palw_context_ladder::palw_a16_context_row_profile_v5(512).expect("projects");
+        let hybrid = crate::palw_context_ladder::palw_qwen36_context_row_profile_v5(512).expect("projects");
+        let dense_v2 = crate::palw_context_ladder::palw_a16_context_row_profile_v1(512).expect("projects");
+        let hybrid_v3 = crate::palw_context_ladder::palw_qwen36_context_row_profile_v1(512).expect("projects");
+        println!("dense  graph-v5 @ 512: {}", dense.shape_profile_id());
+        println!("hybrid graph-v5 @ 512: {}", hybrid.shape_profile_id());
+        assert_ne!(dense.shape_profile_id(), dense_v2.shape_profile_id(), "a v5 row must be a different class");
+        assert_ne!(hybrid.shape_profile_id(), hybrid_v3.shape_profile_id(), "a v5 row must be a different class");
+        assert_ne!(dense.shape_profile_id(), hybrid.shape_profile_id());
+        // The two facts that make them different, named rather than left to the id.
+        assert!(palw_profile_has_fused_attention_v1(&dense) && palw_profile_has_fused_attention_v1(&hybrid));
+        assert!(!palw_profile_has_fused_attention_v1(&dense_v2) && !palw_profile_has_fused_attention_v1(&hybrid_v3));
+        assert_eq!(dense.state_chunk_map_id, crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3());
+        assert_eq!(hybrid.state_chunk_map_id, crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3());
+        // And no committed row of a v5 class is context-shaped (Z0's first half, from this side).
+        for (name, profile) in [("dense", &dense), ("hybrid", &hybrid)] {
+            for table in [&profile.pre_nodes, &profile.gdn_nodes, &profile.attn_nodes, &profile.post_nodes] {
+                for node in table {
+                    assert!(
+                        !matches!(node.out_len, crate::palw_step::PalwStepOutLenV1::KvScaled { .. }),
+                        "{name}: a graph-v5 row still commits a context-shaped row at {:?}",
+                        node.op_kind
+                    );
+                }
+            }
+        }
     }
 
     /// **The scheme is class law and the gate enforces both halves of it.** A scheme this build
