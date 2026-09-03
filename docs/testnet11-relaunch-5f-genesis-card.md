@@ -4958,3 +4958,19 @@ line now holds `2222e054…` with `params.rs:3058` as its cause and the pre-re-p
 it; a table row extracted before the genesis re-pin is *expected* to differ from it.
 
 v3 pin tests on the patched dry-run tree: CORE rc=0, DERIVE rc=0 (read at 01:34).
+
+## STEPS 1–2 DONE ON 5f: the merge, then the re-pins — proven green on a dry run of the same tree first
+
+```
+11241594  Merge palw-adr0082-impl at 4d572142 into palw-testnet-5f   zero conflicts, derive/src 4969f8dc…
+6e01ba07  the re-pins for the cut — genesis first, then everything that hashes it
+          GENESIS.hash 08e9c8a4… -> ad30b5cb…   utxo_commitment 2d882275… -> ba261241…
+          t11 a7baab79… -> 2222e054…   devnet 84153175… -> b40976b2…
+          six fp goldens; source_tree d2419027… -> 637858db…; PINNED ids from actual(), sorted
+```
+
+Dry run of the identical consensus tree: **core 5 passed, derive 3 passed** before the patch
+touched 5f; every superseded value grep-checked absent on 5f after it. The same five run on 5f
+itself now. The freeze checker's standing caveat (formatting is inside the hash) is met by 3e's
+fmt being a no-op on the tip; the citation checker caught one line number of mine that moved with
+the merge, fixed against HEAD.
