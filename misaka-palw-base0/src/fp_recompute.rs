@@ -557,4 +557,109 @@ mod tests {
     fn the_measured_rate_rounds_against_the_width() {
         assert_eq!(base0_fp_seat_ms_per_position_v1(3, 2), 2);
     }
+
+    /// **The dense tier's own recompute reaches its own committed checkpoints** — the family that
+    /// registers graph-v5 first, on a real A16 capture rather than on the shared driver alone.
+    ///
+    /// This is the half of Z5 that a floor-only test cannot reach: the kernels, the cache, and the
+    /// serializer under the class's four-byte map are the dense tier's, and a seat that wired any
+    /// of the three differently from the executor would produce an honest root that is not the
+    /// committed one — a seat that accuses every honest producer of the class.
+    #[test]
+    fn the_dense_tiers_recompute_reaches_its_committed_checkpoints() {
+        use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v2};
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 8,
+            ffn_dim: 8,
+            attn_heads: 2,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 32,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let profile = qwen25_a16_profile_v2(geometry).expect("a valid A16 profile");
+        assert_ne!(profile.state_chunk_map_id, Hash64::default(), "the v2 class declares a map, or it takes no checkpoints");
+        let shape = crate::artifact::Base0ShapeV1 {
+            n_layers: geometry.layer_count as usize,
+            n_heads: geometry.attn_heads as usize,
+            n_kv_heads: geometry.attn_kv_heads as usize,
+            d_head: geometry.attn_head_dim as usize,
+            d_ff: geometry.ffn_dim as usize,
+            vocab: geometry.vocab_size as usize,
+            max_position: geometry.n_ctx as usize,
+            ln_theta_gen_q: crate::artifact::LN_THETA_10000_GEN_Q,
+            eps_q: geometry.rms_eps_q,
+        };
+        let artifact = crate::artifact::Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+            .expect("a valid shape")
+            .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
+            .expect("the derived store is sorted and unique");
+        let (ctx, prompt) =
+            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0xA16_5EA7), geometry.vocab_size as usize, 3, 4);
+        let run = crate::qwen25_a16_backend::a16_execute_for_attempt_v1(&artifact, &profile, None, &ctx, &prompt)
+            .expect("the dense fixture runs");
+        assert!(!run.checkpoints.leaves.is_empty(), "the fixture must commit at least one checkpoint");
+
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        for leaf in &run.checkpoints.leaves {
+            let mut kernels = A16RecomputeKernelsV1::new(&artifact, None).expect("the dense kernels");
+            let state =
+                base0_fp_recompute_state_v1(&profile, &ctx, &ids, &run.generated_token_ids, leaf.covered_decode_call, &mut kernels)
+                    .expect("the seat can run the dense fixture");
+            assert_eq!(
+                state.state_chunks_root, leaf.state_chunks_root,
+                "checkpoint {} (covering call {}): the seat's recompute must reach the committed state root",
+                leaf.checkpoint_index, leaf.covered_decode_call
+            );
+            assert_eq!(state.positions, ctx.declared_prefill_tokens + leaf.covered_decode_call);
+        }
+    }
+
+    /// **The memo answers the second question with the first question's pass.**
+    ///
+    /// A seat asks twice about one interval — once for the 64-byte root, once for the state its
+    /// replay resumes from — and Decision 9 prices a seat at ONE forward pass of the job. The
+    /// counter here is the number of forwards the kernels actually performed.
+    #[test]
+    fn the_second_question_costs_no_second_forward_pass() {
+        struct CountingKernels {
+            forwards: std::cell::Cell<u32>,
+            chunks: Vec<Vec<u8>>,
+        }
+        impl Base0FpRecomputeKernelsV1 for CountingKernels {
+            fn forward_no_capture(&mut self, _token: usize, _position: usize) -> Result<(), Base0FpRecomputeError> {
+                self.forwards.set(self.forwards.get() + 1);
+                Ok(())
+            }
+            fn state_chunks(&self, _profile: &PalwShapeProfileV3, _positions: u32) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
+                Ok(self.chunks.clone())
+            }
+        }
+
+        let geometry = kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY;
+        let profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(geometry).expect("expressible");
+        let (ctx, prompt) = crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(7), geometry.vocab_size as usize, 3, 4);
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let output = vec![1u32, 2, 3];
+        let mut kernels = CountingKernels { forwards: std::cell::Cell::new(0), chunks: vec![vec![0u8; 8]] };
+
+        base0_fp_seat_state_forget_v1();
+        let first = base0_fp_seat_state_memoized_v1(&profile, &ctx, &ids, &output, 1, &mut kernels).expect("a state");
+        let after_first = kernels.forwards.get();
+        assert_eq!(after_first, ids.len() as u32 + 1, "the prefill plus one teacher-forced decode call");
+        // The row check's question, asked the way `verify_fp_interval_opening` asks it: by the
+        // class, the context, the prompt and the covered call — the four things an opening names.
+        let held = base0_fp_seat_state_held_v1(&profile, &ctx, &ids, 1).expect("the state is held");
+        assert_eq!(held, first, "the second question is answered with the first question's state");
+        assert_eq!(kernels.forwards.get(), after_first, "and it costs no second forward pass");
+
+        // A different covered call is a different question, and is not answered from the memo.
+        assert!(base0_fp_seat_state_held_v1(&profile, &ctx, &ids, 2).is_none());
+        base0_fp_seat_state_forget_v1();
+        assert!(base0_fp_seat_state_held_v1(&profile, &ctx, &ids, 1).is_none(), "forgetting is what a node gets its memory back with");
+    }
 }
