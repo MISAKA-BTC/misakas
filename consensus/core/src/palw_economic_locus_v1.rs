@@ -144,11 +144,14 @@ pub struct PalwEconomicQuantityV1 {
 pub const PALW_ECONOMIC_LOCUS_CENSUS_V1: &[PalwEconomicQuantityV1] = &[
     PalwEconomicQuantityV1 {
         name: "credited leaves (fp_credited_leaves_v1)",
-        locus: PalwEconomicLocusV1::PerLeaf,
+        locus: PalwEconomicLocusV1::PerLeafInBand,
         cited_at: "palw_freeprompt_v3.rs fp_credited_leaves_v1 / palw_step.rs job_leaf_split_capped_v1",
-        under_n_segments: "unchanged — the numerator is the job's own leaves (all of them, or its decode calls' \
-                           past Params::palw_fp_decode_rules), and both halves of the split are additive over \
-                           positions, so cutting one answer into N does not create or destroy one",
+        under_n_segments: "STRICTLY FALLS past Params::palw_fp_decode_rules, and rises before it. The numerator \
+                           is the leaves of the job's DECODE CALLS, and a split turns each segment's first \
+                           answer token into the next segment's PREFILL — so N segments move N-1 decode calls \
+                           onto the unpaid side and lose their leaves. Before the fence the numerator is the \
+                           whole capture, and a split RE-PREFILLS every earlier segment's output, so the total \
+                           grows. Neither direction is invariance, which is why this is not a PerLeaf row",
     },
     PalwEconomicQuantityV1 {
         name: "quantum leaves (fp_class_quantum_leaves_v1)",
@@ -1010,11 +1013,42 @@ mod tests {
             "the envelope the ADR left out: 37 x (1 tag + 64 claim + 4 len) + 111 x 145 bytes of receipt frame"
         );
 
-        let carrier = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
-        assert_eq!(carrier, 81_920, "the 80 KiB carrier this whole exercise exists to respect");
+        // **Re-pinned 2026-09-03: the CARRIER moved, the receipts did not.**
+        //
+        // This line read `DEFAULT_MAX_CLOSE_BYTES == 81_920` — "the 80 KiB carrier" — because when
+        // the census was written a court close was ONE transaction payload and that constant was
+        // what one payload relays. `cd77d477` (ADR-0080 design A, merged from `palw-testnet-5f`)
+        // made a close a chunk GROUP: `DEFAULT_MAX_CLOSE_BYTES` is now
+        // `palw_close_bytes_for_chunks_v1(DEFAULT_MAX_CLOSE_CHUNKS)` = 27 carriers' worth =
+        // 2,250,000. Nothing about a receipt changed — every byte count above is unmoved, which is
+        // the point: what this test measures is the RECEIPT carriage, and the only number that
+        // moved is the yardstick it was being held against.
+        //
+        // So the yardstick is re-stated as the quantity that still means "one carrier", derived
+        // rather than typed: `palw_close_bytes_for_chunks_v1(1)` — one `ObjectChunk` of
+        // `PALW_OBJECT_CHUNK_MAX_BYTES` (100,000) de-framed at the measured 12/10 encoding
+        // factor. 83,333 counted bytes, not 81,920, and the difference is that 80 KiB was a
+        // transaction's relay budget while this is a chunk's.
+        let one_carrier = crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(1);
+        assert_eq!(one_carrier, 83_333, "one ObjectChunk of 100,000 bytes, de-framed at 12/10");
+        assert_eq!(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS, 27, "design A's count — the one number a network chooses");
+        assert_eq!(
+            crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
+            2_250_000,
+            "and the ceiling is its consequence: 27 x 100,000 x 10 / 12"
+        );
         assert!(
-            cost.licensed_object_bytes > 6 * carrier,
-            "the receipts alone outweigh six of the 80 KiB carriers the segmentation was for"
+            cost.licensed_object_bytes > 6 * one_carrier,
+            "the receipts alone outweigh six of the carriers the segmentation was for: {} vs {}",
+            cost.licensed_object_bytes,
+            6 * one_carrier
+        );
+        // In the unit the admission gate actually compares in: seven carriers of RECEIPTS, before
+        // a single byte of the close they are supposed to be making room for.
+        assert_eq!(
+            crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.licensed_object_bytes),
+            7,
+            "532,245 counted bytes is ceil(532,245 x 12 / 10 / 100,000) = 7 chunk-group parts"
         );
 
         // The one-claim baseline, so the multiple is on the record rather than in a reader's head.

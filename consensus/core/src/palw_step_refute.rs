@@ -6320,9 +6320,10 @@ pub(crate) mod tests {
         binding.full_logits_trace_root =
             tiled_logits_trace_root_v1(&binding.job_context, &logits_rows, &greedy).expect("the fixture's rows build a tree");
         rebind_committed_root(&mut binding);
-        let pin = tiled_pin(&binding.job_context, &logits_rows, &greedy, 0, seeded[0]);
+        let differs = (0..decode as u32).find(|p| seeded[*p as usize] != greedy[*p as usize]).expect("checked above");
+        let pin = tiled_pin(&binding.job_context, &logits_rows, &greedy, differs, seeded[differs as usize]);
         let verdict = check_tiled_decode_token_refutation_v2(&binding, &pin, sampling).expect("the keyed argmax beats the greedy one");
-        assert_eq!(verdict.fault, crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: 0 });
+        assert_eq!(verdict.fault, crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: differs });
 
         // The same close, under GREEDY, is the shipped verdict — an acquittal, because the greedy
         // token IS the greedy argmax. The v1 entry point and the v2 arm at GREEDY agree.
@@ -6356,11 +6357,17 @@ pub(crate) mod tests {
                 Err(PalwStepRefuteError::NoFaultFound)
             ));
         }
+        // The first position the two rules disagree about — the seed moves some positions and not
+        // others, and a test that assumed position 0 was one of them was asserting the fixture.
+        let differs = (0..decode as u32).find(|p| seeded[*p as usize] != greedy[*p as usize]).expect("checked above");
         let (lying, _, _, lying_pin) = base0_binding_with_decode_root(logits_rows, greedy);
-        let verdict = check_base0_decode_token_refutation_v2(&lying, &lying_pin, 0, sampling).expect("the greedy token is not the draw");
-        assert_eq!(verdict.fault, crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: 0 });
-        // GREEDY is the shipped arm: the same commitment clears.
-        assert!(matches!(check_base0_decode_token_refutation_v1(&lying, &lying_pin, 0), Err(PalwStepRefuteError::NoFaultFound)));
+        let verdict =
+            check_base0_decode_token_refutation_v2(&lying, &lying_pin, differs, sampling).expect("the greedy token is not the draw");
+        assert_eq!(verdict.fault, crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: differs });
+        // GREEDY is the shipped arm: the same commitment clears at every position.
+        for p in 0..decode as u32 {
+            assert!(matches!(check_base0_decode_token_refutation_v1(&lying, &lying_pin, p), Err(PalwStepRefuteError::NoFaultFound)));
+        }
     }
 
     /// **Neither close arm speaks the other class's scheme.** A flat pin against a tiled class
