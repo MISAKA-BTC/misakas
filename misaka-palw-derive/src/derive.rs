@@ -598,10 +598,28 @@ mod tests {
         let ctx = h(0x42);
         let ids: Vec<u32> = vec![1, 2, 3, 5, 8];
         let mut seen = std::collections::BTreeSet::new();
+        let mut seen_renderings = std::collections::BTreeSet::new();
         for family in PalwRcFamilyV1::ALL {
             let root = recompute_output_root(family, &ctx, &ids);
             assert_eq!(root, output_commitment_v2(&ctx, &ids, &rendered_output_hash_for_family(family, &ids)));
-            assert!(seen.insert(root), "{} shares a root with another family", family.name());
+            // **Distinctness across families is NOT the commitment's contract, and asserting it
+            // here was incidental.** `output_commitment_v2`'s three inputs are the job context
+            // hash, the generated ids and the rendered-output hash — the family is deliberately
+            // not one of them. So two families sharing a root means the context, the tokens AND
+            // the rendering all matched: the same output, produced twice. That is a fact about
+            // the answer, not a collision.
+            //
+            // It held only while every family happened to render differently, and the fused and
+            // unfused A16 rows do not — rendering is the tokenizer's, and the fusion changes no
+            // output id. Making the root depend on the family instead would make a derivation
+            // depend on WHO CERTIFIED IT, which breaks the property this release is about: the
+            // model's answer IS the artifact's source, and a stranger recomputes from the answer
+            // alone. So the check is narrowed to families that render differently, and what it no
+            // longer covers is said here rather than left to be rediscovered.
+            let renders = rendered_output_hash_for_family(family, &ids);
+            if seen_renderings.insert(renders) {
+                assert!(seen.insert(root), "{} shares a root with a family that renders DIFFERENTLY", family.name());
+            }
             assert_ne!(root, recompute_output_root(family, &h(0x43), &ids), "the job's context hash is an input");
             assert_ne!(root, recompute_output_root(family, &ctx, &[1, 2, 3, 5, 9]), "the ids are an input");
         }
