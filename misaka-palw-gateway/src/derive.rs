@@ -71,15 +71,26 @@ pub fn resolve_transformer(spec: &str) -> Result<&'static str, String> {
     Err(format!("no transformer or kind named {spec:?}; this build has: {}", available.join(", ")))
 }
 
-/// Read the seed file the gateway signs derivations with (the rail's own format: 32 raw bytes).
+/// Read the seed file the gateway signs derivations with — through the ONE reader, like everyone
+/// else.
+///
+/// This doc said "the rail's own format: 32 raw bytes", and it was the last place in the tree that
+/// was true of. The rail's private raw reader is gone: it now calls
+/// `kaspa_pq_validator_core::load_validator_seed`, which takes whitespace-trimmed HEX, because that
+/// is what `misaka-cli` and `kaspad` have always written and read for the same files. A comment
+/// naming another binary's format is a comment that goes stale when that binary changes and says
+/// nothing when it does.
+///
+/// The format was the visible half. The half that matters here is that the raw reader had no
+/// guard, and `load_validator_seed` fails CLOSED on an unsafe seed file (audit M-02): a
+/// non-regular file — symlink, device, fifo, checked WITHOUT following the link — and a group- or
+/// world-readable mode are refused rather than silently signed with. That is worth more in this
+/// process than in the rail. ADR-0079 Decision 4 is that the half which parses a stranger's HTTP
+/// text holds no key; `--derive-seed` is the one flag that hands this process one anyway, so it is
+/// the last place that should accept a key any local user can read.
 pub fn read_seed(path: &Path) -> Result<[u8; VALIDATOR_SEED_LEN], String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("cannot read the derive seed {}: {e}", path.display()))?;
-    if bytes.len() != VALIDATOR_SEED_LEN {
-        return Err(format!("the derive seed is {} bytes, not {VALIDATOR_SEED_LEN}", bytes.len()));
-    }
-    let mut seed = [0u8; VALIDATOR_SEED_LEN];
-    seed.copy_from_slice(&bytes);
-    Ok(seed)
+    let path = path.to_str().ok_or_else(|| format!("the derive seed path {} is not UTF-8", path.display()))?;
+    kaspa_pq_validator_core::load_validator_seed(path)
 }
 
 /// Derive, write the outbox files, and (with a seed) sign. `Err` is an operational failure (a
