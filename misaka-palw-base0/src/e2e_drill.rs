@@ -28,7 +28,7 @@ use kaspa_consensus_core::palw_e2e_adjudicability::{
     PalwE2eFreePromptDrillEvidenceV1, certify_e2e_family_v1, certify_e2e_free_prompt_lane_v1, table_of_slot_v1,
 };
 use kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3;
-use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepTableV1, canonical_step_coordinates};
+use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepTableV1, canonical_step_leaf_index};
 use kaspa_hashes::Hash64;
 
 /// Why a family could not be drilled. Separated from [`PalwE2eError`] — which is the CERTIFIER's
@@ -64,6 +64,97 @@ struct Candidate {
     leaf: u64,
     table: PalwStepTableV1,
     decode: bool,
+}
+
+/// **The leaves the drill will plant faults at: one per `(table, call class)` the profile reaches.**
+///
+/// # Why this is a probe and no longer a walk
+///
+/// This was `for leaf in 0..step_leaf_count { canonical_step_coordinates(…, leaf) }`, and that
+/// walk is QUADRATIC in the step space: `canonical_step_coordinates` decrements a cursor position
+/// by position, so one call costs `O(positions + slots)`, and the loop makes `step_leaf_count` of
+/// them. On the classes it was written for that is invisible — the floor's canonical job
+/// enumerates a few thousand leaves. On the graph-v5 dense 512 row it is 6,630,544 leaves × ~552
+/// node visits ≈ **3.7e9 operations for the candidate search alone**, before a single fault is
+/// planted; `the_candidate_probe_is_a_closed_cost_on_the_512_row` measures the real numbers.
+///
+/// So raising the drill's leaf cap from the executor's `2^22` to the ruleset's `2^26` had to bound
+/// the WALK, not the count: a bound on the count is what was refusing the class in the first place.
+///
+/// # And the probe visits the same leaves the walk would have found
+///
+/// The walk's answer is, for each `(table, decode)` pair, the FIRST leaf in canonical order
+/// carrying it. Canonical order is call-major, then position, then node slot, then tile — so that
+/// leaf is always tile 0 of some node at one of three positions:
+///
+/// * `(call 0, position 0)` — the first prefill position, which carries every table except the
+///   post nodes (the logits row exists only at the LAST prefill position);
+/// * `(call 0, position prefill − 1)` — where the post nodes live;
+/// * `(call 1, position 0)` — the first decode call, which carries every table.
+///
+/// Three probe points × the profile's node slots, each one forward
+/// [`canonical_step_leaf_index`] — a CLOSED cost in the class's graph, with no `n_ctx` and no
+/// decode factor at all. `the_probe_finds_what_the_exhaustive_walk_finds` pins the two answers
+/// equal on a real capture, which is the only claim that matters here.
+///
+/// The one behavioural difference is the fallback: when `drillable` refuses a pair's first leaf
+/// (the capture does not hold that coordinate), the walk moved on to the next leaf with the same
+/// pair — including the next TILE of the same node — while this moves on to the next node of the
+/// same table. A family whose capture holds a node's second tile but not its first would lose that
+/// candidate; the drill then reports `NoCandidate` or certifies a narrower covering set, which the
+/// CERTIFIER scores. It is a refusal, never a silent pass.
+fn drill_candidates_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+    step_leaf_count: u64,
+    mut drillable: impl FnMut(u64) -> bool,
+) -> Vec<Candidate> {
+    let prefill = ctx.declared_prefill_tokens;
+    let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
+    let mut points: Vec<(u32, u32)> = Vec::new();
+    if prefill > 0 {
+        points.push((0, 0));
+        if prefill > 1 {
+            points.push((0, prefill - 1));
+        }
+    }
+    if decode_calls >= 1 {
+        points.push((1, 0));
+    }
+
+    // Probed in whatever order the points come, then SORTED into the enumeration's own order —
+    // "first leaf carrying this pair" is a statement about leaf index, and a probe that reported
+    // its finds in probe order would answer it with whichever point was asked first.
+    let mut probes: Vec<(u64, PalwStepTableV1, bool)> = Vec::new();
+    for (call, position) in points {
+        for slot in 0..profile.global_node_count() {
+            let Some(table) = table_of_slot_v1(profile, slot) else { continue };
+            let coord = PalwStepCoordinateV1 { call_index: call, node_slot: slot, position, tile_index: 0 };
+            let Some(leaf) = canonical_step_leaf_index(profile, ctx, &coord) else { continue };
+            if leaf >= step_leaf_count {
+                continue;
+            }
+            probes.push((leaf, table, call > 0));
+        }
+    }
+    // By leaf index alone, and STABLY: `PalwStepTableV1` carries no ordering (it is a classifier,
+    // not a scale), and two probe points never produce the same leaf, so the key is total.
+    probes.sort_by_key(|(leaf, ..)| *leaf);
+
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for (leaf, table, decode) in probes {
+        if candidates.iter().any(|c| c.table == table && c.decode == decode) {
+            continue;
+        }
+        // A leaf is only drillable if the capture HOLDS it — `execute_with_injected_fault` corrupts
+        // a tile the material carries, and a coordinate the capture never filled has none. Asked of
+        // the backend rather than assumed, because which leaves a family retains is a family fact.
+        if !drillable(leaf) {
+            continue;
+        }
+        candidates.push(Candidate { leaf, table, decode });
+    }
+    candidates
 }
 
 /// **Drill one family and record what it proved** — the half that needs the model.
@@ -106,27 +197,22 @@ pub fn drill_family_evidence_v1(
 
     // **Candidates: one leaf per (table, call class) the profile actually reaches.**
     //
-    // Walked in the step space's own enumeration rather than computed, so the drill cannot disagree
-    // with `canonical_step_coordinates` about which leaf is which — the same reason
-    // `base0_anchored_ladder_v1` walks instead of doing arithmetic on the space.
-    let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count(profile, &job)
-        .map_err(|e| PalwDrillError::Backend { what: "count its own step space", why: format!("{e:?}") })?;
-    let mut candidates: Vec<Candidate> = Vec::new();
-    for leaf in 0..leaf_count {
-        let Some(coord) = canonical_step_coordinates(profile, &job, leaf) else { continue };
-        let Some(table) = table_of_slot_v1(profile, coord.node_slot) else { continue };
-        let decode = coord.call_index > 0;
-        if candidates.iter().any(|c| c.table == table && c.decode == decode) {
-            continue;
-        }
-        // A leaf is only drillable if the capture HOLDS it — `execute_with_injected_fault` corrupts
-        // a tile the material carries, and a coordinate the capture never filled has none. Asked of
-        // the backend rather than assumed, because which leaves a family retains is a family fact.
-        if backend.refutation_for_index(&honest.material, leaf).is_err() {
-            continue;
-        }
-        candidates.push(Candidate { leaf, table, decode });
-    }
+    // **The size of the space is the capture's own, never re-derived here.** It was
+    // `step_leaf_count(profile, &job)`, which counts against the EXECUTOR's `PALW_STEP_MAX_LEAVES`
+    // (`2^22`) — so the graph-v5 dense 512 row, whose canonical job is 6,630,544 leaves and which
+    // the chain admits under a `2^26` ruleset, could not be drilled at all: the drill refused to
+    // count the space of the run it had just performed. The producer committed that number, the
+    // backend states it, and the backend's own ladder (`with_step_ladder_cap`, ADR-0080 W1b) is
+    // what bounded it there.
+    let leaf_count = backend
+        .capture_shape(&honest.material)
+        .ok_or(PalwDrillError::Backend {
+            what: "state the size of its own step space",
+            why: "capture_shape returned None".to_string(),
+        })?
+        .step_leaf_count;
+    let candidates =
+        drill_candidates_v1(profile, &job, leaf_count, |leaf| backend.refutation_for_index(&honest.material, leaf).is_ok());
     if candidates.is_empty() {
         return Err(PalwDrillError::NoCandidate { what: "any table at any call class" });
     }
@@ -272,21 +358,19 @@ pub fn drill_free_prompt_evidence_v1(
         });
     }
 
-    let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count(profile, &ctx)
-        .map_err(|e| PalwDrillError::Backend { what: "count its own step space", why: format!("{e:?}") })?;
-    let mut candidates: Vec<Candidate> = Vec::new();
-    for leaf in 0..leaf_count {
-        let Some(coord) = canonical_step_coordinates(profile, &ctx, leaf) else { continue };
-        let Some(table) = table_of_slot_v1(profile, coord.node_slot) else { continue };
-        let decode = coord.call_index > 0;
-        if candidates.iter().any(|c| c.table == table && c.decode == decode) {
-            continue;
-        }
-        if backend.refutation_for_free_prompt_index(&honest.material, leaf, prompt_token_ids).is_err() {
-            continue;
-        }
-        candidates.push(Candidate { leaf, table, decode });
-    }
+    // The capture's own size, for the reason the attempt lane states: the ladder this space was
+    // priced against is the backend's, and re-deriving it here would price it at the executor's
+    // constant instead.
+    let leaf_count = backend
+        .capture_shape(&honest.material)
+        .ok_or(PalwDrillError::Backend {
+            what: "state the size of its own step space",
+            why: "capture_shape returned None".to_string(),
+        })?
+        .step_leaf_count;
+    let candidates = drill_candidates_v1(profile, &ctx, leaf_count, |leaf| {
+        backend.refutation_for_free_prompt_index(&honest.material, leaf, prompt_token_ids).is_ok()
+    });
     if candidates.is_empty() {
         return Err(PalwDrillError::NoCandidate { what: "any table at any call class" });
     }
@@ -1921,5 +2005,107 @@ mod evidence_size_probe {
                 v.operand_openings.len()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod candidate_probe {
+    use super::*;
+
+    /// **The probe answers what the exhaustive walk answered**, on a real capture of the shipped
+    /// floor — the same backend, the same job, the same `refutation_for_index` filter.
+    ///
+    /// The retired walk is spelled out here rather than described, because "these two searches
+    /// agree" is the entire licence for having replaced one with the other, and a description
+    /// cannot be run.
+    #[test]
+    fn the_probe_finds_what_the_exhaustive_walk_finds() {
+        let (backend, profile, _root) = floor_fixture_v1().expect("the floor fixture builds");
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0E2E_D8111)).expect("a job");
+        let honest = backend.execute(&job, &prompt).expect("an honest run");
+        let leaf_count = backend.capture_shape(&honest.material).expect("the capture states its shape").step_leaf_count;
+        assert!(leaf_count > 0);
+
+        let probed: Vec<(u64, PalwStepTableV1, bool)> = drill_candidates_v1(&profile, &job, leaf_count, |leaf| {
+            backend.refutation_for_index(&honest.material, leaf).is_ok()
+        })
+        .into_iter()
+        .map(|c| (c.leaf, c.table, c.decode))
+        .collect();
+
+        // The walk this replaced, verbatim.
+        let mut walked: Vec<(u64, PalwStepTableV1, bool)> = Vec::new();
+        for leaf in 0..leaf_count {
+            let Some(coord) = kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &job, leaf) else { continue };
+            let Some(table) = table_of_slot_v1(&profile, coord.node_slot) else { continue };
+            let decode = coord.call_index > 0;
+            if walked.iter().any(|(_, t, d)| *t == table && *d == decode) {
+                continue;
+            }
+            if backend.refutation_for_index(&honest.material, leaf).is_err() {
+                continue;
+            }
+            walked.push((leaf, table, decode));
+        }
+
+        assert!(!walked.is_empty(), "the floor's own capture must yield candidates at all");
+        assert_eq!(probed, walked, "the probe and the walk must name the same leaves, in the same order");
+    }
+
+    /// **What the walk would have cost on the class the genesis registers, measured.**
+    ///
+    /// The graph-v5 dense 512 row's canonical job is 6,630,544 leaves. `canonical_step_coordinates`
+    /// is a cursor walk, so the retired loop is `leaf_count` walks of `O(positions + slots)` each;
+    /// this samples the real per-leaf cost and reports the product, beside the probe's own wall
+    /// time on the same profile. The assertion is the weak, non-flaky half — the probe is faster
+    /// than the walk it replaced — and the numbers are the point.
+    #[test]
+    fn the_candidate_probe_is_a_closed_cost_on_the_512_row() {
+        use std::time::Instant;
+
+        let Some(row) = crate::classes::a16_graph_v5_row_v1() else {
+            eprintln!("the graph-v5 512 row is not built into this configuration; nothing to measure");
+            return;
+        };
+        let (prefill, decode) = row.canonical_job;
+        let (ctx, _prompt) = crate::produce::base0_rc_job_v1(
+            &row.profile,
+            Hash64::from_u64_word(0x0000_082B_2512),
+            row.artifact_shape.vocab,
+            prefill,
+            decode,
+        );
+        let ladder = kaspa_consensus_core::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
+        let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&row.profile, &ctx, ladder)
+            .expect("the canonical job of an admitted class fits the ruleset's ladder");
+        assert!(
+            leaf_count > kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+            "this measurement is only interesting because the row outruns the executor's constant"
+        );
+
+        // The probe, on the real row.
+        let started = Instant::now();
+        let candidates = drill_candidates_v1(&row.profile, &ctx, leaf_count, |_| true);
+        let probe = started.elapsed();
+
+        // One `canonical_step_coordinates` call, sampled across the space, times the leaf count.
+        let samples = 64u64;
+        let started = Instant::now();
+        for i in 0..samples {
+            let at = leaf_count / samples * i;
+            std::hint::black_box(kaspa_consensus_core::palw_step::canonical_step_coordinates(&row.profile, &ctx, at));
+        }
+        let per_leaf = started.elapsed() / samples as u32;
+        let walk = per_leaf * (leaf_count.min(u32::MAX as u64) as u32);
+
+        eprintln!(
+            "graph-v5 512 row: job ({prefill}, {decode}) = {leaf_count} leaves (ruleset ladder {ladder}, executor constant {}); \
+             probe {probe:?} over {} slots × ≤3 positions → {} candidates; retired walk ≈ {per_leaf:?} × {leaf_count} = {walk:?}",
+            kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+            row.profile.global_node_count(),
+            candidates.len(),
+        );
+        assert!(!candidates.is_empty(), "the row's own canonical job must offer a leaf to drill");
+        assert!(probe < walk, "the probe must cost less than the walk it replaced");
     }
 }

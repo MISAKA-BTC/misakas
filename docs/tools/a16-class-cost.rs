@@ -23,7 +23,9 @@ use kaspa_consensus_core::palw_class_admission_v2::{PALW_RC_COURT_MAX_STEP_LEAF_
 use kaspa_consensus_core::palw_qwen25_profile::{
     PALW_RC_QWEN25_1_5B, PalwQwen25GeometryV1, qwen25_a16_profile_v1, qwen25_profile_v1,
 };
-use kaspa_consensus_core::palw_step::{PALW_STEP_MAX_LEAVES, PalwStepError, step_leaf_count, worst_case_step_leaf_count_v1};
+use kaspa_consensus_core::palw_step::{
+    PALW_STEP_MAX_LEAVES, PalwStepError, step_leaf_count_capped_v1, worst_case_step_leaf_count_capped_v1,
+};
 
 /// What testnet-11's shipped bundle declares, for the "would it fit today" column.
 const T11_MAX_OPENING_BYTES: u64 = 1_048_576;
@@ -39,9 +41,15 @@ fn row(name: &str, g: PalwQwen25GeometryV1, a16: bool) {
         }
     };
     let canonical = rc_job_context(&profile, 8, 4);
-    let pwu = step_leaf_count(&profile, &canonical).map(|n| n.to_string()).unwrap_or_else(|e| format!("{e:?}"));
-    // The walk stops at the cap, so a refused number is a lower bound and is printed as one.
-    let worst = match worst_case_step_leaf_count_v1(&profile) {
+    // **Counted at the RC ruleset's ladder, not at the executor's constant.** Both were already
+    // printed side by side below, and the columns were nevertheless taken against
+    // `PALW_STEP_MAX_LEAVES` — so a class the RC ruleset admits read as `TooManyLeaves` in the
+    // very table meant to price it.
+    let pwu = step_leaf_count_capped_v1(&profile, &canonical, PALW_RC_COURT_MAX_STEP_LEAF_COUNT)
+        .map(|n| n.to_string())
+        .unwrap_or_else(|e| format!("{e:?}"));
+    // The count stops at the cap, so a refused number is a lower bound and is printed as one.
+    let worst = match worst_case_step_leaf_count_capped_v1(&profile, PALW_RC_COURT_MAX_STEP_LEAF_COUNT) {
         Ok(n) => format!("{n}"),
         Err(PalwStepError::TooManyLeaves { got, .. }) => format!("≥{got} OVER"),
         Err(e) => format!("{e:?}"),
@@ -73,8 +81,8 @@ fn row(name: &str, g: PalwQwen25GeometryV1, a16: bool) {
 fn main() {
     println!("# What the A16 Qwen class costs a court");
     println!();
-    println!("PALW_STEP_MAX_LEAVES (code constant) = {PALW_STEP_MAX_LEAVES}");
-    println!("PALW_RC_COURT_MAX_STEP_LEAF_COUNT (the RC ladder) = {PALW_RC_COURT_MAX_STEP_LEAF_COUNT}");
+    println!("PALW_STEP_MAX_LEAVES (the EXECUTOR's code constant, not what these columns count at) = {PALW_STEP_MAX_LEAVES}");
+    println!("PALW_RC_COURT_MAX_STEP_LEAF_COUNT (the RC ladder — every leaf column below is counted at THIS) = {PALW_RC_COURT_MAX_STEP_LEAF_COUNT}");
     println!("testnet-11 shipped: open {T11_MAX_OPENING_BYTES} · macs {T11_MAX_TERMINAL_MACS} · operands {T11_MAX_OPERANDS}");
     println!();
     println!("| profile | geometry | pwu/inference (8+4) | worst case | max_opening_bytes | max_terminal_macs | operands | against t11 |");
