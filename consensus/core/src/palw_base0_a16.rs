@@ -521,8 +521,9 @@ pub fn a16_attn_tile_triple_v1(
     if positions > A16_MAX_DOT_LEN {
         return Err(PalwA16OpError::DotTooLong { got: positions });
     }
-    // An honest row's sum is at least `int_exp(0) = ONE` (its max contributes exp(0)), so a
-    // non-positive `S*` is a claim no execution produced: refused, never divided by.
+    // An honest row's sum is positive — its max contributes `int_exp(0)`, which is positive (the
+    // pinned polynomial's value at zero, within a rounding of `ONE`) — so a non-positive `S*` is a
+    // claim no execution produced: refused, never divided by.
     if s_star <= 0 {
         return Err(PalwA16OpError::Empty);
     }
@@ -687,11 +688,18 @@ mod fused {
         }
     }
 
-    /// **`int_exp(0)` is ONE**, so an honest row's sum is positive and the uniform branch of
-    /// `softmax_shifted` is unreachable — the premise `a16_attn_tile_triple_v1` refuses on.
+    /// **`int_exp(0)` is positive**, so an honest row's sum is positive and the uniform branch of
+    /// `softmax_shifted` is unreachable — the premise `a16_attn_tile_triple_v1` refuses on. It is
+    /// the pinned polynomial's value at zero, near `ONE` but not `ONE` itself: the premise is the
+    /// SIGN, and this pins exactly that.
     #[test]
-    fn an_honest_rows_sum_is_at_least_one() {
-        assert_eq!(crate::palw_base0::int_exp(0) as i64, crate::palw_base0::ONE);
+    fn an_honest_rows_sum_is_positive() {
+        let at_zero = crate::palw_base0::int_exp(0) as i64;
+        assert!(at_zero > 0, "int_exp(0) = {at_zero}");
+        // The pinned polynomial is ~3e-4 above ONE at zero (16,781,800 against 16,777,216); the
+        // premise this module rests on is the sign, and the bound below only says the value is
+        // exp(0)'s neighbourhood rather than a table artefact.
+        assert!((at_zero - crate::palw_base0::ONE).abs() * 100 <= crate::palw_base0::ONE, "int_exp(0) = {at_zero} is not within 1% of ONE");
     }
 
     /// **The tile route is the composition** — byte for byte, at every history length and every
