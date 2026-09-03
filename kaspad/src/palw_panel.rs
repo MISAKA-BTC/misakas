@@ -3505,6 +3505,13 @@ impl PalwPanelService {
         let Ok(mut backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else {
             return Some(PalwReceiptVerdictV2::Incapable);
         };
+        // **Nothing this claim's replay resumes from was computed for another claim.** The state
+        // the row check reads is keyed by the class, the context, the prompt and the covered call
+        // — the four things an opening can name — and the answer's ids are not among them, because
+        // the check is handed an opening and no ids. Dropping the held state at the claim
+        // boundary is what makes that safe: the only state this claim's row check can find is the
+        // one this claim's own recompute put there, seconds earlier and from this claim's ids.
+        misaka_palw_base0::fp_recompute::base0_fp_seat_state_forget_v1();
         // Both counts are the job's own, and the job is hash-bound to the claim through
         // `fp_job_id_v3` — never read off a capture, which is the executor's to shape.
         let counts = PalwFpChainCountsV1 { prompt_tokens: job.prompt_tokens, decode_tokens_executed: job.decode_token_limit };
