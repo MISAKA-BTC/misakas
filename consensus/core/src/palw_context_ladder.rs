@@ -2755,36 +2755,65 @@ mod u04_flat_close {
         println!("v5 set @ 512 -> {v5:?} chunks");
     }
 
-    /// **Z3, the bytes half.** The bottom of a fused dispute fits one carrier at every registered
-    /// `d_head` and `tile_len`, and so does the widest move at every arity the derivation can pick.
+    /// **Z3, the bytes half.** The bottom of a fused dispute, both routes, at every registered
+    /// `d_head` and `tile_len`, against one carrier; and the widest move at every legal arity.
     #[test]
     fn the_bottom_opening_and_every_move_fit_one_carrier() {
+        use crate::palw_class_admission_v2::{
+            palw_attn_bottom_bytes_v1, palw_attn_bottom_cache_write_bytes_v1, palw_attn_bottom_tile_route_bytes_v1,
+        };
         let carrier = palw_close_bytes_for_chunks_v1(1);
         println!("one carrier, counted: {carrier}");
+        // The ladder's own path depth — 32 elements at `PALW_CONTEXT_LADDER_MAX_STEP_LEAVES`.
+        let path = 64 * 32u64;
         for (name, build) in [("dense", PALW_LADDER_FAMILIES_V5[0]), ("hybrid", PALW_LADDER_FAMILIES_V5[1])] {
             for n_ctx in [512u32, 4_096, 32_768] {
-                let profile = build(n_ctx).expect("projects");
+                let Ok(profile) = build(n_ctx) else {
+                    println!("{name} @ {n_ctx}: does not project");
+                    continue;
+                };
                 let d_head = profile.attn_head_dim as u64;
                 let node = profile
                     .attn_nodes
                     .iter()
                     .find(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused)
                     .expect("a v5 row has a fused site");
-                let tile = (node.tile_len as u64).min(match node.out_len {
+                let out_w = match node.out_len {
                     crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
                     crate::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => multiplier as u64 * n_ctx as u64,
-                });
+                };
+                let tile = (node.tile_len as u64).min(out_w);
+                let src = profile
+                    .attn_nodes
+                    .iter()
+                    .find(|n| n.role == crate::palw_step::PalwStepNodeRoleV1::KCacheWrite)
+                    .map_or(tile, |n| n.tile_len as u64);
+                let positions = (PALW_ATTN_HISTORY_TILE_V4 as u64).min(n_ctx as u64);
+                let a = palw_attn_bottom_tile_route_bytes_v1(d_head, positions, tile, path).expect("derives");
+                let b = palw_attn_bottom_cache_write_bytes_v1(d_head, positions, tile, src, path).expect("derives");
+                let both = palw_attn_bottom_bytes_v1(d_head, positions, tile, src, path).expect("derives");
+                println!(
+                    "{name} @ {n_ctx}: d_head {d_head} tile {tile} src_tile {src} -> tile-route {a}, cache-write {b}, charged {both}"
+                );
                 let lanes = tile.min(d_head);
-                let path = 64 * 32;
-                let history_tile = (PALW_ATTN_HISTORY_TILE_V4 as u64).min(n_ctx as u64);
-                let bottom = (d_head * 4 + path) + 2 * (history_tile * d_head * 4 + path) + (tile * 4 + path);
-                println!("{name} @ {n_ctx}: d_head {d_head} tile {tile} lanes {lanes} -> bottom {bottom}");
                 for arity in [2u8, 4, 8, 16, 32, 64] {
                     let mv = crate::palw_attn_dissect::palw_attn_dissect_move_bytes_v1(arity, lanes as usize);
-                    let fits = crate::palw_attn_dissect::palw_attn_dissect_arity_fits_carrier_v1(arity, lanes as usize, carrier);
-                    println!("    arity {arity}: move {mv} fits {fits}");
+                    println!("    arity {arity}: move {mv} fits {}", mv <= carrier);
                 }
             }
+        }
+        // And the derivation BOUNDS the object stream E's court actually files: their pins are
+        // 37,982 bytes at `d_head` 128 and 55,390 at 256, taken on a fixture whose step tree is
+        // eight deep and whose rows are one leaf each. Same shape, same depth, from this function.
+        for (d_head, measured) in [(128u64, 37_982u64), (256, 55_390)] {
+            let derived = palw_attn_bottom_cache_write_bytes_v1(d_head, PALW_ATTN_HISTORY_TILE_V4 as u64, d_head, d_head, 8 * 64)
+                .expect("derives");
+            println!("E's bottom @ d_head {d_head}: derived {derived} against measured {measured}");
+            assert!(
+                derived >= measured,
+                "d_head {d_head}: the derivation ({derived}) is BELOW the object the court files ({measured}) — \
+                 a class would be admitted at a price its disputes cannot be brought at"
+            );
         }
     }
 

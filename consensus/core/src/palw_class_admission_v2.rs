@@ -730,16 +730,16 @@ fn derive_court_cost_walk_v1(
             // arity derivation applies it; charging it here is what makes the CLASS's admission
             // depend on it rather than the court's configuration alone.
             if let Some(arity) = fused_dissection {
-                let opened = |lanes: u64| -> Option<u64> { lanes.checked_mul(4)?.checked_add(step_path_bytes) };
-                let tile_lanes = history_tile.checked_mul(d_head).ok_or_else(over)?;
-                let query = opened(d_head).ok_or_else(over)?;
-                let k_tile = opened(tile_lanes).ok_or_else(over)?;
-                let v_tile = opened(tile_lanes).ok_or_else(over)?;
+                // The cache-write route opens each row at the CACHE-WRITE node's tile, not at this
+                // node's — the same rule `source_tile_len_v1` states for every other opened run.
+                let source_tile = source_tile_len_v1(table, node, PALW_STEP_INPUT_KV_K);
+                let bottom = palw_attn_bottom_bytes_v1(d_head, history_tile, tile, source_tile, step_path_bytes).ok_or_else(over)?;
                 let move_bytes = crate::palw_attn_dissect::palw_attn_dissect_move_bytes_v1(arity, disputed_lanes as usize);
+                // The committed output tile is inside `bottom` (both routes carry it), so the
+                // generic seed this arm was added after would double-count it.
                 evidence = evidence
-                    .checked_add(query)
-                    .and_then(|e| e.checked_add(k_tile))
-                    .and_then(|e| e.checked_add(v_tile))
+                    .checked_sub(leaf_bytes(tile).ok_or_else(over)?)
+                    .and_then(|e| e.checked_add(bottom))
                     .and_then(|e| e.checked_add(move_bytes))
                     .ok_or_else(over)?;
             }
@@ -1004,6 +1004,87 @@ pub struct PalwClassLadderRulesV1 {
     pub cost_shape: PalwCourtCostShapeV1,
     /// Decision 14's floor under the canonical job's footprint.
     pub canonical_footprint_floor: u64,
+}
+
+/// **What one opening's FRAME costs on the wire**, derived from the two structs an opening is
+/// (`PalwStepTileLeafV1` and `PalwStepOpeningV1`) rather than measured off an object.
+///
+/// `PalwStepTileLeafV1`: version `u16` (2), the four `u32`s of `PalwStepCoordinateV1` (16),
+/// `value_count` (4) and the values vector's length prefix (4) — 26. `PalwStepOpeningV1`:
+/// `leaf_index` `u64` (8), `leaf_hash` `Hash64` (64) and the siblings vector's length prefix (4) —
+/// 76. The payload and the path are counted separately by every caller, exactly as
+/// `arithmetic_close_bytes_v2` counts them.
+pub const PALW_STEP_OPENING_FRAME_BYTES: u64 = 26 + 76;
+
+/// The `PalwAttnDissectBottomV1` envelope: version `u16` (2), `session_id` `Hash64` (64), `tile`
+/// `u64` (8) and the two row vectors' length prefixes (8).
+pub const PALW_ATTN_BOTTOM_ENVELOPE_BYTES: u64 = 2 + 64 + 8 + 8;
+
+/// **Route A — the bottom reached through the CHECKPOINT TILE** (ADR-0082 Decision 4).
+///
+/// The head's query slice, one K tile and one V tile as SINGLE openings against the class's
+/// registered state chunk map, and the committed output tile: four openings, four paths, flat in
+/// `n_ctx`. This is the route Decision 4 exists to make available and the one ADR-0082 §4's
+/// "~25 KB on the dense tier, ~42 KB on the hybrid" prices.
+///
+/// It is not the route the court can play today — `PalwAttnDissectBottomV1` carries cache-write
+/// leaves, and `state_chunk_opening_root_v1` is not landed — so a cost that charged only this
+/// would be smaller than the object a challenger actually files, which is the defect
+/// `the_derived_close_cost_bounds_a_real_one` exists to refuse. [`palw_attn_bottom_bytes_v1`]
+/// takes the larger of the two.
+pub fn palw_attn_bottom_tile_route_bytes_v1(d_head: u64, tile_positions: u64, out_lanes: u64, step_path_bytes: u64) -> Option<u64> {
+    let opening = |lanes: u64| -> Option<u64> {
+        lanes.checked_mul(4)?.checked_add(step_path_bytes)?.checked_add(PALW_STEP_OPENING_FRAME_BYTES)
+    };
+    let tile_lanes = tile_positions.checked_mul(d_head)?;
+    opening(d_head)?
+        .checked_add(opening(tile_lanes)?)?
+        .checked_add(opening(tile_lanes)?)?
+        .checked_add(opening(out_lanes)?)?
+        .checked_add(PALW_ATTN_BOTTOM_ENVELOPE_BYTES)
+}
+
+/// **Route B — the bottom reached through the CACHE-WRITE LEAVES**, which is what the court plays
+/// today (`palw_attn_court_v1::PalwAttnDissectBottomV1`).
+///
+/// One opening per committed TILE of every row it carries: the query row, the tile's K rows and V
+/// rows, and the output tile. That is the difference that matters and the reason this is derived
+/// rather than copied from the object's measured size — a cache row is committed at the CLASS's
+/// `tile_len`, so opening one row's `d_head` lanes is `⌈d_head / tile_len⌉` leaves and each one
+/// carries its own full Merkle path. At the shipped 8-lane dense tile that is sixteen paths a row
+/// where the tile route pays one.
+pub fn palw_attn_bottom_cache_write_bytes_v1(
+    d_head: u64,
+    tile_positions: u64,
+    out_lanes: u64,
+    source_tile: u64,
+    step_path_bytes: u64,
+) -> Option<u64> {
+    let per_leaf = step_path_bytes.checked_add(PALW_STEP_OPENING_FRAME_BYTES)?;
+    let row = |lanes: u64| -> Option<u64> {
+        let leaves = lanes.div_ceil(source_tile.max(1)).max(1);
+        leaves.checked_mul(per_leaf)?.checked_add(lanes.checked_mul(4)?)
+    };
+    let rows = 1u64.checked_add(tile_positions.checked_mul(2)?)?;
+    rows.checked_mul(row(d_head)?)?.checked_add(row(out_lanes)?)?.checked_add(PALW_ATTN_BOTTOM_ENVELOPE_BYTES)
+}
+
+/// **What a fused leaf's bottom costs: the LARGER of the two routes** (ADR-0082 Z3).
+///
+/// A challenger picks the route it can file, and the court must be able to carry whichever that
+/// is; a derivation that priced only the cheaper one would admit a class at a price its disputes
+/// cannot be brought at. When `state_chunk_opening_root_v1` lands, route A becomes playable and
+/// this is where the choice stops being a max and becomes the ruleset's.
+pub fn palw_attn_bottom_bytes_v1(
+    d_head: u64,
+    tile_positions: u64,
+    out_lanes: u64,
+    source_tile: u64,
+    step_path_bytes: u64,
+) -> Option<u64> {
+    let a = palw_attn_bottom_tile_route_bytes_v1(d_head, tile_positions, out_lanes, step_path_bytes)?;
+    let b = palw_attn_bottom_cache_write_bytes_v1(d_head, tile_positions, out_lanes, source_tile, step_path_bytes)?;
+    Some(a.max(b))
 }
 
 /// **Does this profile carry a fused attention site?** (ADR-0082 Decision 1.)
@@ -1336,13 +1417,26 @@ pub fn verify_class_admission_v5(
     // refuse a devnet row for an RC reason.
     if let Some(k) = court {
         let history = if fused { profile.n_ctx as u64 } else { 0 };
-        let needed = bundle
-            .court
-            .worst_case_duration_with_history_daa(history, crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4)
-            .ok_or_else(|| PalwClassAdmissionError::CourtWindowTooShort { needed: u64::MAX, window: k.window_court_daa })?;
-        if needed > k.window_court_daa {
-            return Err(PalwClassAdmissionError::CourtWindowTooShort { needed, window: k.window_court_daa });
-        }
+        // **The tile is the CLASS's, read off the map it registered.** A v2-mapped class's chunk is
+        // the whole history and its dissection has one tile; assuming
+        // `PALW_ATTN_HISTORY_TILE_V4` here would price a search the class's own evidence cannot be
+        // cut into. `None` — no attention cache to chunk — is a row with no history dissection,
+        // and the bound is then the ladder's alone.
+        let tile = crate::palw_state_chunk_map::palw_map_history_tile_positions_v1(profile, profile.n_ctx).unwrap_or(1);
+        // The rule lives beside the protocol whose cost it is (stream E), and it counts the
+        // ruleset's own assembly reserve — a window that is exactly full leaves no DAA to file the
+        // close in.
+        crate::palw_attn_court_v1::palw_attn_court_admits_row_v1(&bundle.court, history, tile, k.window_court_daa).map_err(|e| {
+            match e {
+                crate::palw_attn_court_v1::PalwAttnCourtError::OverrunsWindow { moves, deadline, reserve, window_court } => {
+                    PalwClassAdmissionError::CourtWindowTooShort {
+                        needed: moves.saturating_mul(deadline).saturating_add(reserve),
+                        window: window_court,
+                    }
+                }
+                _ => PalwClassAdmissionError::CourtWindowTooShort { needed: u64::MAX, window: k.window_court_daa },
+            }
+        })?;
     }
 
     let counted = match ladder {

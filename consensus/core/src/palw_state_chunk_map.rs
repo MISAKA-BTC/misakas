@@ -185,6 +185,23 @@ pub fn palw_map_addresses_history_tiles_v1(profile: &PalwShapeProfileV3) -> bool
     declared == tiled_kv_state_chunk_map_id_v3() || declared == hybrid_state_chunk_map_id_v3()
 }
 
+/// **How many positions of the cache one chunk of THIS class's map addresses.**
+///
+/// The court's history dissection bottoms out at one chunk of the class's own map, so this is the
+/// `tile` every rounds derivation and every window bound has to be asked for — never the constant
+/// [`PALW_ATTN_HISTORY_TILE_V4`], which is only the answer for a class that registered the tiled
+/// map. A v2-mapped class's chunk is "the widest run of rows the leg admits", which on every
+/// registered geometry is the whole history: its dissection has ONE tile and no rounds, and the
+/// number that says so has to come from the map rather than from an assumption.
+///
+/// `None` for a profile with no attention cache to chunk.
+pub fn palw_map_history_tile_positions_v1(profile: &PalwShapeProfileV3, positions: u32) -> Option<u32> {
+    if palw_map_addresses_history_tiles_v1(profile) {
+        return Some(PALW_ATTN_HISTORY_TILE_V4.min(positions.max(1)));
+    }
+    integer_kv_state_geometry_v2(profile, positions.max(1)).ok().map(|g| g.positions_per_chunk)
+}
+
 /// **A hybrid's map with its attention half tiled** — [`palw_hybrid_state_chunk_map_name_v2`] with
 /// `attn=` at v3, spelled as its two parts for the reason both earlier compositions are.
 pub fn palw_hybrid_state_chunk_map_name_v3() -> String {
