@@ -391,6 +391,14 @@ green except the known pin" said this week was a statement about jobs that never
 | fused-attention guard | `verify_class_admission_v5` | Refuses an `AttnFused` profile unless `palw_kary_court_active_at` — `FusedAttentionNeedsTheKaryCourt`, *"the class carries a fused attention site and this ruleset's court has no dissection to try it with"*; and `PricedForADifferentCourt { priced, court }` when the registered cost shape's arity is not the court's. **A guard on the way in, beside the drill and not instead of it.** |
 | **prosecutability** | ADR-0082 stream I's end-to-end court drill | **This is the gate, and admission is not.** A graph-v5 leaf disputed to the bottom under the ARMED fence set, through `apply_object`: honest acquitted, forged convicted. F's admission arm refusing an unfenced `AttnFused` profile by name is a guard on the way in — useful, and not the property. The property is that a dispute can be carried to a verdict, and only the drill asserts it. |
 
+**The whole workspace, measured: 3,809 tests run, 3,807 passed, 2 failed** —
+`cargo nextest run --no-fail-fast`, 720 seconds. Both failures are the pins below.
+
+**Run it with `--no-fail-fast` or do not quote it.** The default run reported *"353/3809 tests run:
+352 passed, 1 failed"* and stopped at the first pin. "One red" was true and said nothing about the
+other 3,456 tests, which had not executed. A count of failures among tests that ran is not a count
+of failures, and the gap between the two was three and a half thousand.
+
 **The two expected reds, and the condition that closes each.** A branch with unexplained reds has
 no gate; a branch with reds nobody wrote down has a worse one, because the next person greens them.
 
