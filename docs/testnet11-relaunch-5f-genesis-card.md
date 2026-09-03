@@ -5143,3 +5143,41 @@ not by "the seats are running".
 
 **Liveness watchdogs come last on purpose:** `misaka node liveness` reads a node in its artifact pass as WEDGED
 (RPC refused), and a watchdog armed then would restart the node it is waiting for.
+
+### 6d — the fleet, measured 17:48 UTC (fingerprint from each node's own log; genesis from the rejects it generated; liveness over borsh)
+
+    host   unit                 role                         fp        genesis   peers      Incapable  panic  liveness
+    ibm    misaka-t11-node0     QWEN36 producer+panel+hb     2222e054  ad30b5cb  in 9       0          0      ALIVE daa=26
+    ibm    misaka-t11-node1     floor producer+panel (refit) 2222e054  (no inbound rejects; handshakes with node0/.113/seat4)  0 since refit  0  ALIVE daa=26
+    .113   misaka-t11-node      public entry, panel+hb       2222e054  ad30b5cb  out 2 in 5 0          0      ALIVE daa=26
+    .113   misaka-t11-seat4     panel (artifacts already)    2222e054  —         out 3 in 1 0          0      ALIVE daa=26
+    .113   misaka-pool-slot@01  pool floor node              2222e054  —         out 3 in 3 0          0      —
+    5.104  misaka-t11-seat2     producer class 71bbb755…     2222e054  —         out 3      0          0      ALIVE daa=26
+
+All six hold the same `daa=26 blocks=26` at the same read — a node on another genesis cannot accept these blocks, so
+the lockstep is the same-chain proof for the four that generated no inbound rejects. node1's six `Incapable`
+receipts in its journal window are stamped 16:49–16:57 UTC — the 5e node1, before the stop — and none since the
+refit; no panel on any seat has filed a receipt of any kind since the cut, i.e. no claim block has been adjudicated
+yet. The 5.104 `validator-c` unit describes itself as a **testnet-10** validator and stayed down; 5.104's dnsseeder
+and miner-c likewise. `.113`'s t11 dnsseeder serves its two anchors; minerpool + pool-slot@01 are up. Watchdogs
+(`palw-liveness-watch` on ibm and 5.104) were armed last, after every node's RPC answered. VLT reports `0 validators
+with credit` — the overlay had no running validator before the cut either (`misaka-mtp` was not in the pre-cut
+census); not a regression, not a claim the announcement may make.
+
+**Cadence, as measured:** 26 blocks in the first 31 minutes (17:17 → 17:48 UTC), the floor seat down for 12 of them
+during its refit. Reported as measured; nothing about block time is claimed.
+
+**Faucet** (`misaka-faucet` on ibm): active, `balance_msk: 0.0`, address `misakatest:qgklfukcp0aj…`. Its key has no
+premine row by design (5e funded it by a `wallet send` from the producer's pay address); it reports `funded: false`
+honestly until the operator funds it on the new chain after coinbase maturity. Not performed by this session.
+
+**Explorer** (`.113`): `kaspa-t11-db-filler` and `kaspa-t11-rest-server` were never in the fleet stop's unit pattern
+and kept writing the new chain into 5e's `kaspa_t11` (378 rows, blue 1–299, two lineages). Rotated the way every
+previous re-genesis did (`kaspa_t11_old_08e9c8a4_20260903` kept; fresh `kaspa_t11` owner `kaspa`); the filler
+starts at the tip when its `vars.vspc_last_start_hash` is empty, so that key was seeded with the genesis on the
+fresh DB — it now indexes from block 0 (34 blocks, blue 0–22 at 17:52 UTC). REST answers `misaka-testnet-11`.
+Post-cut: add the explorer units to the stop list, and seed-from-genesis to the rotation script.
+
+**CLI** at `/usr/local/bin/misaka` on all three = the cut's (`5fd49aca…`, `misaka 1.1.0`); 5e's kept as
+`misaka.5e-af50be7b`. `/root/t11/misaka` had no predecessor. The stale Aug-31 free-prompt gateway on ibm
+(`misaka-palw-gateway (deleted)`, `127.0.0.1:8791`) is still running and is not the cut's; step 7's gateway replaces it.
