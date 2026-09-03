@@ -235,7 +235,7 @@ fn a_fused_attention_leaf_adjudicates_both_ways() {
     );
     let backend = Qwen25A16Backend::from_registered_profile(artifact.clone(), NETWORK.to_vec(), v5.clone(), (4, 3))
         .expect("the v5 row is servable by this build");
-    let anchor = Hash64::from_u64_word(0x0082_F0_5ED);
+    let anchor = Hash64::from_u64_word(0x0000_082F_05ED);
     let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job");
     let honest = backend.execute(&job, &prompt).expect("the honest run");
     let (binding, _, _, _, _) =

@@ -2361,7 +2361,7 @@ mod free_prompt_tests {
         let profile = qwen25_a16_artifact_row_profile_v5(geometry).expect("the v5 projection is a valid profile");
         let backend = Qwen25A16Backend::from_registered_profile(artifact, NETWORK.to_vec(), profile.clone(), (4, 2))
             .expect("the served v5 row compiles a plan");
-        let (ctx, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0082_5)).expect("the anchor implies a job");
+        let (ctx, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0000_0825)).expect("the anchor implies a job");
         let outcome = backend.execute(&ctx, &prompt).expect("the compiled v5 plan executes its own canonical job");
         let (binding, ..) = crate::produce::base0_material_decode_v1(&outcome.material).expect("the capture decodes");
         assert_eq!(binding.shape_profile.shape_profile_id(), profile.shape_profile_id(), "it produced for the class it was given");
@@ -2392,7 +2392,7 @@ mod free_prompt_tests {
 
         let backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile.clone(), (4, 2))
             .expect("the constructor compiles the declared graph instead of assuming a v2 program");
-        let (ctx, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0082_01)).expect("the anchor implies a job");
+        let (ctx, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0000_8201)).expect("the anchor implies a job");
         let outcome = backend.execute(&ctx, &prompt).expect("the shipped constructor executes its own class's fused graph");
         let (binding, ..) = crate::produce::base0_material_decode_v1(&outcome.material).expect("the capture decodes");
         assert_eq!(
@@ -2430,7 +2430,7 @@ mod free_prompt_tests {
         let artifact = v5_artifact(geometry);
         let profile = qwen25_a16_artifact_row_profile_v5(geometry).expect("the v5 projection is a valid profile");
         let (ctx, prompt) =
-            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x0082_00), geometry.vocab_size as usize, 3, 2);
+            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x0000_8200), geometry.vocab_size as usize, 3, 2);
 
         let message = a16_execute_for_attempt_v1(&artifact, &profile, None, &ctx, &prompt)
             .err()

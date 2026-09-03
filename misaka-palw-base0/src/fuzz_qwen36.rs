@@ -401,7 +401,7 @@ mod tests {
     #[test]
     fn a_bounded_fuzz_run_over_the_v5_graph_finds_no_panic_and_no_nondeterminism() {
         let (artifact, base) = tiny_class_v5();
-        let tally = fuzz_qwen36_profiles_from_v1(0x0082_2026_09_03, 400, &artifact, &base);
+        let tally = fuzz_qwen36_profiles_from_v1(0x0082_2026_0903, 400, &artifact, &base);
         println!("qwen36 v5 fuzz tally: {tally:?}");
         assert_eq!(tally.panics, 0, "a panic inside the interpreter is the fence staying down");
         assert_eq!(tally.nondeterminism, 0, "two runs of one plan must be one bitstream");
@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn the_v5_fuzz_corpus_digest_is_the_same_on_every_machine() {
         let (artifact, base) = tiny_class_v5();
-        let tally = fuzz_qwen36_profiles_from_v1(0x0082_2026_09_03, 400, &artifact, &base);
+        let tally = fuzz_qwen36_profiles_from_v1(0x0082_2026_0903, 400, &artifact, &base);
         assert_eq!(
             faster_hex::hex_string(&tally.corpus_digest),
             V5_CORPUS_DIGEST_400,
@@ -448,7 +448,7 @@ mod tests {
         assert_ne!(V5_CORPUS_DIGEST_400, CORPUS_DIGEST_400, "two bases must not fold to one number, or one of them is unpinned");
     }
 
-    /// Seed `0x0082_2026_09_03`, 400 iterations, over the graph-v5 hybrid base. See the test above.
+    /// Seed `0x0082_2026_0903`, 400 iterations, over the graph-v5 hybrid base. See the test above.
     const V5_CORPUS_DIGEST_400: &str = "7e5f14c2b0d66fc53ef1057188b29ec26030f80cb73f666244a22ac33854b5fd";
 
     /// **The panic the design pass found stays closed.** A convolution declared in the ATTENTION
