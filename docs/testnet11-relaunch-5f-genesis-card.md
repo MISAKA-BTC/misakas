@@ -5268,3 +5268,35 @@ ibm has no client library), node0:
   zero attempt blocks in 50 min is a ~40% outcome. If no algo-9 block exists by ~20:10 UTC (≈2 h of QWEN36
   production), investigate `produce_one`'s silent `continue` paths (`palw_producer.rs` 383/401/414/461 on the cut)
   before anything else. The announcement does not say a model class produced a block until one is read.
+
+### 7a — the gate, measured on the cut's binaries (ibm, 18:02–18:20 UTC)
+
+Binaries built from `candidate-6e01ba07` on ibm at 19:44–19:55 CEST: `misaka-palw-gateway` sha `bd9c9150…`,
+`palw-a16-fp-worker` `a113d351…`, `palw-derive` `c6e6b608…` (the Aug-31 gateway file and the 14:11 workers were NOT
+these; `misaka-palw-base0/src/classes.rs` had moved since my Mac smoke tree, so only a rebuild counts). Inputs:
+`bound-candidate.palwart` (v5 class `4277d84f…`), tokenizer `/root/palw-class/qwen25-src/tokenizer.json`,
+`MISAKA_PALW_NETWORK_ID=testnet-11`; offline `--anchor` form, identity with the v5 class id (no chain, no bond).
+
+    stage 0   stranger selftest on the cut tree (294128ba)           PASSED — 18 checks, agrees with the shipped Rust
+    smoke     fp-smoke-v5.py [1]–[6]                                  ALL PASS  (health, chat "2+2 equals 4.", artifact,
+                                                                       anti-replay re-ask, SSE + W5, userless refusal)
+    cad       derive cad/stl/v1, max_tokens 56                        stop_reason exact_budget · 684 B STL
+                artifact_hash 482b23231a42dc5689bb3983…  == the Mac run's (09a71652 build, Apple silicon) — same bytes
+                palw-derive verify: consistent | binding_checked: true
+                stranger derive: UNIMPLEMENTED — cad op 'extrude' outside its subset (named refusal, not a failure)
+    music     derive music/smf/v1, max_tokens 97                      stop_reason exact_budget · 91 B MIDI
+                artifact_hash 7a4f0eba065508e098cfccd9…  == the Mac run's
+                palw-derive verify: consistent | binding_checked: true
+                stranger derive (links nothing, crate-root = the cut checkout, derive/src 4969f8dc…):
+                  bytes IDENTICAL to the gateway's (sha256 8a23a44a…), artifact_hash ==, dsl_hash 3f64e301… ==,
+                  transformer_id cb5f27b4… (the pinned music transformer)
+
+The stranger's `verify` subcommand refused both with "the chain read says this claim is not on that chain" — correct:
+it is stage 10's tool for an on-chain derivation (`--chain` = `misaka palw derived <claim> --json`), and these
+commitments are local. The on-chain form is the `[UNEARNED until read on chain]` line of the draft.
+
+**Earned sentences (7):** a free prompt to the dense tier was answered on the cut's binaries, committed locally
+(D5-bound), derived to a 3D artifact and to a MIDI file at exact budget, each verified bound by the shipped verifier;
+the MIDI was recomputed byte-for-byte by an independent path that links nothing; the STL's bytes are identical across
+two builds on two architectures. Condition stated with it: today the derivation succeeds when the answer fills the
+decode budget exactly (56 / 97 tokens); the EOG-cut amendment is post-cut.
