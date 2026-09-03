@@ -226,7 +226,17 @@ pub fn rendered_output_hash_for_family(family: PalwRcFamilyV1, output_token_ids:
         // the honest statement of that (the same call `misaka_palw_base0::produce` makes).
         PalwRcFamilyV1::Base0 => rendered_output_hash_v2(&[]),
         PalwRcFamilyV1::Qwen36 => misaka_palw_base0::qwen36_backend::rendered_output_hash_v1(output_token_ids),
-        PalwRcFamilyV1::Qwen25A16 => misaka_palw_base0::qwen25_a16_backend::rendered_output_hash_v1(output_token_ids),
+        // **The fused graph renders exactly as the unfused one does**, and that is a fact about
+        // what a family is rather than a convenience. `PalwRcFamilyV1` distinguishes GRAPHS,
+        // because a class is its graph and the court must know which one it is trying. Rendering
+        // is a property of the TOKENIZER and the model's vocabulary, which the fusion does not
+        // touch — it replaces attention's scores/softmax/values nodes with one fused node and
+        // changes no output ids. So the two A16 rows share this call, and a reader who expects the
+        // arms to be one-per-graph should know the split is deliberate and the sharing is checked
+        // by `the_fused_family_renders_as_the_unfused_one` below.
+        PalwRcFamilyV1::Qwen25A16 | PalwRcFamilyV1::Qwen25A16V5 => {
+            misaka_palw_base0::qwen25_a16_backend::rendered_output_hash_v1(output_token_ids)
+        }
     }
 }
 
