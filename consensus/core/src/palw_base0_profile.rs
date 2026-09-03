@@ -791,8 +791,38 @@ pub fn base0_catalog_entry_v1(
     canonical: &crate::palw_v2::PalwJobContextV2,
     worst_case: &crate::palw_v2::PalwJobContextV2,
 ) -> Result<crate::palw_mode_v2::PalwClassCatalogEntryV2, PalwStepError> {
-    let canonical_step_leaf_count = crate::palw_step::step_leaf_count(profile, canonical)?;
-    let max_step_leaf_count = crate::palw_step::step_leaf_count(profile, worst_case)?;
+    // The executor's constant as the DEFAULT, for a caller with no ruleset in hand. Every caller
+    // in this tree that builds a GENESIS row has one — see [`base0_catalog_entry_capped_v1`].
+    base0_catalog_entry_capped_v1(class_id, artifact_root, profile, canonical, worst_case, crate::palw_step::PALW_STEP_MAX_LEAVES)
+}
+
+/// [`base0_catalog_entry_v1`] against the ladder the RULESET froze (ADR-0082 Decision 1).
+///
+/// **Three numbers in this entry are ladder-bounded and all three were the executor's `2^22`**:
+/// the canonical count, the worst case, and — through `derive_court_cost_v1` —
+/// `PalwCourtCostShapeV1::genesis_anchored_v1`'s `ladder` field, which
+/// `derive_court_cost_walk_v1` uses as the CAP of its enumeration and not merely as a path depth.
+/// On a ruleset whose `max_step_leaf_count` is `2^26` that left two wrong outcomes and no right
+/// one: either the row does not build at all (`TooManyLeaves { max: 4194304 }` on a class the
+/// admission gate accepts), or it builds and the catalog publishes a cost derived for a court that
+/// is not the one that will play. The caller holds the bundle;
+/// `bundle.court.max_step_leaf_count()` is what it passes.
+///
+/// For every class whose worst case is inside `2^22` the entry is byte-identical at either ladder
+/// — the cost walk measures the path from the CLASS's own worst case
+/// (`PalwCourtCostShapeV1::path_from_ladder` is `false` for the genesis-anchored form) — so this
+/// moves no shipped row and no fingerprint. `the_floors_catalog_entry_is_the_same_at_either_ladder`
+/// is what says so rather than the sentence.
+pub fn base0_catalog_entry_capped_v1(
+    class_id: Hash64,
+    artifact_root: Hash64,
+    profile: &PalwShapeProfileV3,
+    canonical: &crate::palw_v2::PalwJobContextV2,
+    worst_case: &crate::palw_v2::PalwJobContextV2,
+    ladder: u64,
+) -> Result<crate::palw_mode_v2::PalwClassCatalogEntryV2, PalwStepError> {
+    let canonical_step_leaf_count = crate::palw_step::step_leaf_count_capped_v1(profile, canonical, ladder)?;
+    let max_step_leaf_count = crate::palw_step::step_leaf_count_capped_v1(profile, worst_case, ladder)?;
     // Every kernel the graph can reach, read off the graph itself. A hand-maintained list here
     // would be the coverage gate certifying a set nobody derived from the thing it covers.
     let reachable_kernels = [&profile.pre_nodes, &profile.gdn_nodes, &profile.attn_nodes, &profile.post_nodes]
@@ -802,8 +832,11 @@ pub fn base0_catalog_entry_v1(
         .collect();
     // The SAME derivation the post-genesis gate runs — mint and admission build entries with one
     // function, or the genesis door enforces a different metric than the running chain.
-    let court_cost = crate::palw_class_admission_v2::derive_court_cost_v1(profile)
-        .map_err(|_| PalwStepError::ProfileNotCanonical("the class's court cost does not derive"))?;
+    let court_cost = crate::palw_class_admission_v2::derive_court_cost_shaped_v1(
+        profile,
+        crate::palw_class_admission_v2::PalwCourtCostShapeV1::genesis_anchored_v1(profile, ladder),
+    )
+    .map_err(|_| PalwStepError::ProfileNotCanonical("the class's court cost does not derive"))?;
     Ok(crate::palw_mode_v2::PalwClassCatalogEntryV2 {
         court_cost,
         class_id,
@@ -895,7 +928,19 @@ pub fn palw_rc_base0_registration_v1(
     let class_id = profile.shape_profile_id();
     let canonical = rc_job_context(&profile, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
     let worst = rc_job_context(&profile, PALW_RC_BASE0_WORST_CASE.0, PALW_RC_BASE0_WORST_CASE.1);
-    let entry = base0_catalog_entry_v1(class_id, artifact_root, &profile, &canonical, &worst)?;
+    // **The ladder is the one this network's own bundle freezes**, not the executor's constant:
+    // `palw_fp_bundle_with_windows_v3` builds `court` from `COURT_MAX_STEP_LEAVES` on EVERY
+    // shipped preset (devnet and the RC alike), and `palw_rc_identity_v2`'s gate 5 refuses a
+    // bundle whose ladder is anything else. One spelling, so the row a genesis publishes and the
+    // court that will play it cannot come to disagree.
+    let entry = base0_catalog_entry_capped_v1(
+        class_id,
+        artifact_root,
+        &profile,
+        &canonical,
+        &worst,
+        crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES,
+    )?;
     let catalog = crate::palw_mode_v2::PalwClassCatalogV2::new(vec![entry])
         .map_err(|_| PalwStepError::ProfileNotCanonical("the RC catalog is not well-formed"))?;
     Ok((profile, catalog))
@@ -1273,6 +1318,30 @@ mod tests {
         tableless.weight_name = String::new();
         tableless.weight_dtypes = Vec::new();
         assert!(kernel_can_serve_node_v1(&tableless, true).is_err(), "a gather must name the table it reads");
+    }
+
+    /// **A node's op kind and its kernel must be the same op** (ADR-0082 audit, fixer A2's note):
+    /// the court reads the op kind and the catalog reads the program the kernel id resolves to,
+    /// and nothing else forced them to agree. A profile declaring `AttnFused` over another
+    /// catalogued kernel, or the fused kernel under another op kind, is refused by name.
+    #[test]
+    fn a_nodes_op_kind_and_its_kernel_must_be_the_same_op() {
+        use crate::palw_step::PalwStepOpKindV1;
+        use crate::palw_step_refute::kernel_can_serve_node_v1;
+        let v5 = crate::palw_qwen25_profile::qwen25_a16_profile_v5(crate::palw_qwen25_profile::QWEN25_1_5B_A16)
+            .expect("the graph-v5 dense profile");
+        let fused = v5.attn_nodes.iter().find(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+        let other = v5.attn_nodes.iter().find(|n| n.op_kind != PalwStepOpKindV1::AttnFused).expect("another node");
+        assert!(kernel_can_serve_node_v1(fused, false).is_ok(), "the fused site as registered is served");
+        assert!(kernel_can_serve_node_v1(other, false).is_ok(), "an ordinary node as registered is served");
+        let mut fused_kind_other_kernel = fused.clone();
+        fused_kind_other_kernel.kernel_semantics_id = other.kernel_semantics_id;
+        let err = kernel_can_serve_node_v1(&fused_kind_other_kernel, false).expect_err("AttnFused over another kernel");
+        assert!(err.contains("same op"), "the refusal names the rule: {err}");
+        let mut other_kind_fused_kernel = other.clone();
+        other_kind_fused_kernel.kernel_semantics_id = fused.kernel_semantics_id;
+        let err = kernel_can_serve_node_v1(&other_kind_fused_kernel, false).expect_err("the fused kernel under another op kind");
+        assert!(err.contains("same op"), "the refusal names the rule: {err}");
     }
 
     /// Every weighted node carries one dtype byte per layer its table covers, all int8 — BASE-0

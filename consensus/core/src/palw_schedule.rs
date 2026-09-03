@@ -220,12 +220,34 @@ pub fn class_is_adjudicable_v1(
     profile: &crate::palw_step::PalwShapeProfileV3,
     params: &PalwScheduleParamsV1,
 ) -> Result<u64, PalwScheduleError> {
+    // **The executor's constant, and it is the DEFAULT rather than the rule** — for a caller with
+    // no ruleset in hand. `Params::validate_palw_v2` HAS one (`palw_consensus_mode`'s
+    // `court.max_step_leaf_count()`) and should call [`class_is_adjudicable_capped_v1`] with it;
+    // see this fixer's patch note. Every shipped preset leaves `palw_schedule` at `None`, so the
+    // gate below is unreachable on all four and the difference is latent rather than live.
+    class_is_adjudicable_capped_v1(profile, params, crate::palw_step::PALW_STEP_MAX_LEAVES)
+}
+
+/// [`class_is_adjudicable_v1`] against the ladder the RULESET froze (ADR-0082 Decision 1: the
+/// ruleset's ladder is read from the bundle, never typed).
+///
+/// The two refusals are different facts and only one of them is this gate's: a class whose worst
+/// case is deeper than the LADDER is not a schedule problem at all (admission refuses it by name,
+/// `DeeperThanTheLadder`), while a class the ladder admits and these WINDOWS cannot walk is
+/// exactly `LadderCannotReachTheClass`. Counting against the executor's `2^22` collapsed the two:
+/// on a `2^26` ruleset the honest answer "your windows afford ten rounds, the class needs
+/// twenty-three" arrived as `ParamsNotCanonical`, naming neither number the operator can move.
+pub fn class_is_adjudicable_capped_v1(
+    profile: &crate::palw_step::PalwShapeProfileV3,
+    params: &PalwScheduleParamsV1,
+    max_step_leaf_count: u64,
+) -> Result<u64, PalwScheduleError> {
     // The longest job this class admits. `exact_decode_tokens` of 1 with the whole context as
     // prefill is the largest leaf count the enumeration can reach for a given `n_ctx`.
     // `step_leaf_count` reads only the token counts off the context, so the worst case is computed
     // from those alone rather than by inventing a whole job — a synthetic job id or seed here would
     // be a value nobody checks that a reader could mistake for one that matters.
-    let leaves = crate::palw_step::worst_case_step_leaf_count_v1(profile)
+    let leaves = crate::palw_step::worst_case_step_leaf_count_capped_v1(profile, max_step_leaf_count)
         .map_err(|_| PalwScheduleError::ParamsNotCanonical { reason: "the class's own shape exceeds the step-space cap" })?;
     let reachable = max_ladder_space_v1(params);
     if leaves > reachable {

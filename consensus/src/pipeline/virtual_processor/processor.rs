@@ -7211,11 +7211,28 @@ impl VirtualStateProcessor {
             self.network_id_bytes.as_slice(),
             Some(self.genesis.hash),
         );
-        let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_v3(
+        // **The ladder this network froze, read off the bundle and never typed** (ADR-0082
+        // Decision 1). `max_step_leaf_count` is a bundle field — inside `palw_ruleset_id_v2`, so
+        // it cannot move on a running chain — and it is DAA-free: `palw_court_params_at_v2` only
+        // ever changes the dissection arity, never the ladder, so reading it here rather than
+        // through the fence keeps this walk a pure function of the accepted set and the ruleset.
+        //
+        // A node with no bundle has no ladder to apply and falls back to the structural top, which
+        // is what the arming-free entry uses; the walk is then exactly as permissive as it was.
+        let ladder = self
+            .palw_v2_bundle
+            .as_ref()
+            .map(|bundle| bundle.court.max_step_leaf_count())
+            .unwrap_or(kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
+        let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_under_ruleset_v3(
             &txs,
             network_domain,
             freeprompt,
             kaspa_consensus_core::BlockHash::default(),
+            // `false`: this call site has never resolved the `PanelDa` arming and this change does
+            // not start — the ladder and the privacy mode are separate fences.
+            false,
+            ladder,
             // Who authored the commitment. Unverified, a 0x4a transaction from any stranger created
             // a claim bound to any bond outpoint it named — the genesis premine bond among them.
             Self::verify_mldsa87_with_context_bool,
