@@ -8803,6 +8803,7 @@ fn apply_object(
                 *session_id,
                 root,
                 derived.head_lanes,
+                derived.history_positions,
                 &committed,
                 derived.site.params.values,
                 *arity,
@@ -18551,17 +18552,27 @@ pub(crate) mod tests {
                 .expect("a graph-v5 row projects exactly one fused attention site per layer table")
         }
 
-        /// Two slots that are not the fused one and are not post nodes — the committed series the drill's
-        /// K and V rows ride on. They exist at every position, which is what makes their canonical leaf
-        /// index a function of the position alone.
-        fn series_slots(profile: &PalwShapeProfileV3, avoid: u32) -> (u32, u32, u32) {
-            let mut slots: Vec<u32> = (0..profile.global_node_count())
-                .filter(|slot| *slot != avoid)
-                .filter(|slot| (*slot as usize) < profile.global_node_count() as usize - profile.post_nodes.len())
-                .collect();
-            slots.truncate(3);
-            assert!(slots.len() == 3, "the drill needs three non-post slots beside the fused one");
-            (slots[0], slots[1], slots[2])
+        /// **The CLASS's own slots for the three series the bottom opens** — the K cache writer, the
+        /// V cache writer and the rotated query — `(k, v, query)`.
+        ///
+        /// These used to be "the first three non-post slots that are not the fused one", which was
+        /// enough while the court checked a row's width and its position and nothing else. It now
+        /// checks the whole committed coordinate against the coordinate the CLASS puts that row at
+        /// (audit A C-3), so a drill that invented slots would be drilling a graph nobody
+        /// registered — and the three real ones are exactly as derivable here as they are in
+        /// `palw_attn_dispute_site_v2`: two roles and one input ref.
+        fn series_slots(profile: &PalwShapeProfileV3, fused: u32) -> (u32, u32, u32) {
+            use crate::palw_step::{PalwStepNodeRoleV1, PalwStepTableV1};
+            let (node, layer) = profile.resolve_node_slot(fused).expect("the fused slot resolves");
+            let layer = layer.expect("a fused attention site sits in a layer table");
+            let table = profile.layer_table(layer);
+            let global = |index: usize| {
+                profile.global_node_slot(PalwStepTableV1::Attn, layer, index).expect("an index of this layer table has a global slot")
+            };
+            let by_role = |want: PalwStepNodeRoleV1| {
+                global(table.iter().position(|n| n.role == want).expect("a graph-v5 row names both of its cache writers"))
+            };
+            (by_role(PalwStepNodeRoleV1::KCacheWrite), by_role(PalwStepNodeRoleV1::VCacheWrite), global(node.input_refs[0] as usize))
         }
 
         impl Drill {
@@ -19141,10 +19152,7 @@ pub(crate) mod tests {
         /// Play the dissection to its bottom through `apply_object`, and return the verdict the close
         /// adjudicates plus the state at the moment before it.
         /// Open the dissection and narrow it to its terminal tile — every move through the chain.
-        fn narrow_to_the_terminal(
-            p: &PalwStateParamsV2,
-            drill: &Drill,
-        ) -> (PalwChainStateV2, Hash64, Hash64, u64, u64) {
+        fn narrow_to_the_terminal(p: &PalwStateParamsV2, drill: &Drill) -> (PalwChainStateV2, Hash64, Hash64, u64, u64) {
             let (mut state, claim_id, sid, mut daa) = court_at_the_fused_leaf(p, drill);
             let (next, _) = apply(&state, p, &ctx(daa, daa, daa), &[root_claimed(sid, drill, 2)], None);
             daa += 1;
@@ -19261,7 +19269,10 @@ pub(crate) mod tests {
                 "the refusal must name the route: {err}"
             );
             // And the anchored route, on the same tile, still adjudicates.
-            assert_eq!(adjudicate_the_bottom(&state, sid, &drill, true, tile).expect("anchored adjudicates"), PalwCourtVerdictV2::ChallengerDefeated);
+            assert_eq!(
+                adjudicate_the_bottom(&state, sid, &drill, true, tile).expect("anchored adjudicates"),
+                PalwCourtVerdictV2::ChallengerDefeated
+            );
         }
 
         /// **The site is the CLASS's, and a root claim about another head is refused.**
