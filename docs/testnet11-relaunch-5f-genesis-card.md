@@ -3469,3 +3469,54 @@ solid**, on an artifact derived tonight rather than on a stored one.
 *That is the goal's "practical output" item, measured: a MIDI that plays 6.75 seconds and 9
 notes, a 20-triangle solid of volume 36.0, and a glTF scene of 3 nodes — each produced by the
 chain's deriver and each accepted by software that owes it nothing.*
+
+## Announcement gate, defect 4 — and this one reports success while checking nothing
+
+```
+$ cargo test -p misaka-palw-derive --test corpus_width -- --nocapture
+running 3 tests
+SKIPPED: set MISAKA_FLOOR_TOKENIZER_DENSE to a checkpoint's tokenizer.json. No width was checked.
+SKIPPED: set MISAKA_QWEN36_GGUF to the QWEN36 checkpoint's .gguf. The second lane's widths were NOT checked.
+SKIPPED: set MISAKA_FLOOR_TOKENIZER_DENSE. No column was checked.
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+                                                                                      exit 0
+```
+
+**The draft cites this as the evidence for `cad 66, music 261, scene 286`, and it prints none of
+those numbers.** Three tests announce that they checked nothing, and the verdict line says `ok`,
+`3 passed`, exit 0. *A reader who checks the exit code — which is the careful thing to do — is
+told it worked.*
+
+With the two variables it does exactly what the draft claims:
+
+```
+music/03-overlapping-melody.json: 261 tokens        cad/01-extrude-l-bracket.json: 66 tokens
+scene/02-hierarchy.json:          286 tokens
+QWEN36 vocabulary: 248320 entries
+music … qwen36 261, dense 261 (+0)   scene … 286/286 (+0)   cad … 66/66 (+0)
+test result: ok. 3 passed                                              finished in 0.42s
+```
+
+**0.42 s against 0.00 s.** The wall clock separates the real run from the skip, for the fourth
+time tonight, and it is the only field that does — the count, the verdict and the exit code are
+identical in both.
+
+Fixed by putting the variables in the command **and** the warning beside it:
+*"without both variables all three tests SKIP and still report `ok`."*
+
+### Four commands run, four defects, none of them visible by reading
+
+```
+stranger.py                no subcommand -> exit 2 usage error                    FIXED
+palw-certify drill         --family a16-v5 is unknown on 5f                       PENDING merge
+artifact-thirdparty.py     0 agreed / 4 unchecked without mido + numpy-stl        FIXED
+corpus_width               3 SKIPPED, "ok", exit 0, none of the cited numbers     FIXED
+```
+
+**Every one was correct-looking prose in a document about verification.** Two of the four report
+success while doing nothing — and the two that *fail* (`exit 2`) are the harmless ones, because a
+reader sees the failure. **The dangerous half of this list is the half that exits 0.**
+
+> *The row asserting foreign software opens these files could not open them; the row asserting a
+> corpus fits a width measured no width.* **A document's claims and its commands drift apart
+> silently, because nothing runs a document.** The gate is one hour old and is 4-for-4.
