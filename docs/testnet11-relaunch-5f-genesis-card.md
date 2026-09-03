@@ -2809,3 +2809,50 @@ the row is fused or that the preset was right. They verified **that their invoca
 the panel asks** — `palw_panel.rs` → `palw_admission_shape_at_v1` → `preflight_admission_with_chain`'s
 own doc saying it probes v6 with *exactly those* inputs. **Checking the arrow, on their own
 result, against themselves** — which is the failure mode that has bitten three times tonight.
+
+## §4b, fourth defect: the wipe census invented one appdir and lost a running node
+
+Found by re-running the census after the launch-stopper made a surviving host expensive — a
+missed node is no longer a stale peer, it is **a node judging registrations by a different rule.**
+
+**Three forms of the same enumeration, wrong in both directions:**
+
+```
+pgrep -af kaspad | grep -oE "appdir=[^ ]+"
+    -> printed `appdir=[^` on ALL THREE HOSTS, for as long as this script has existed.
+       The remote shell's own argv holds both "kaspad" and the literal regex, so the grep
+       extracted its own pattern out of itself. THIRD instance tonight of `pgrep -f`
+       answering the asker — and this one is in the wipe script.
+
+pgrep -x kaspad
+    -> the repair. It dropped `kaspad.candidate` on ibm — a RUNNING NODE on /tmp/fpchk.
+       **A false positive repaired into a false negative**, which is the direction that
+       loses a host on wipe night.
+
+walk /proc, match the EXECUTABLE's basename by prefix
+    -> correct. The asker's exe is `bash`, so it cannot appear; any `kaspad*` build does,
+       whatever it is called.
+```
+
+**The corrected census — seven running nodes, not five and not six:**
+
+```
+169.58.39.220    kaspad                       --appdir=/root/.t11
+                 kaspad                       --appdir=/root/.t11b
+                 kaspad.candidate (deleted)   --appdir=/tmp/fpchk      <- invisible to both
+                                                                          earlier forms
+169.58.232.113   kaspad                       --appdir=/root/.t11
+                 kaspad                       --appdir=/root/.t11c
+                 kaspad                       --appdir=/var/lib/misaka-minerpool/slots/slot-01/appdir
+5.104.81.23      kaspad                       --appdir=/root/.t11
+```
+
+**`(deleted)`** is the third thing the new form reports and neither old one could: that binary
+has been **unlinked from disk while the process runs.** Nothing can be read off it, and it will
+not come back after a kill — which is convenient here and would be alarming anywhere else.
+
+> **A repair aimed at a false positive should be checked for the false negative it creates.**
+> `[^` in a wipe list is noise; a missing node is the whole failure. The check that caught it was
+> noticing that `/tmp/fpchk` **disappeared between two runs** and asking why, rather than reading
+> the tidier output as the better one. *The output got cleaner and less true, and clean is what
+> a repair is supposed to look like.*

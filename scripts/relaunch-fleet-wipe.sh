@@ -62,7 +62,21 @@ census)
     say "== what each host runs, ENUMERATED FROM THE PROCESSES =="
     for h in "${HOSTS[@]}"; do
         say "-- $h ($(r "$h" hostname)) --"
-        r "$h" 'pgrep -af kaspad 2>/dev/null | grep -oE "appdir=[^ ]+" | sort -u | sed "s/^/  /"'
+        # Three forms of this have been wrong, in both directions:
+        #   pgrep -af kaspad | grep -oE "appdir=[^ ]+"   matched THIS COMMAND — the remote shell's
+        #       argv holds both "kaspad" and the literal regex, so it printed `appdir=[^` as an
+        #       appdir on all three hosts, for as long as this script existed.
+        #   pgrep -x kaspad                              missed `kaspad.candidate` on ibm — a
+        #       RUNNING NODE on /tmp/fpchk, dropped from the wipe list. The repair for a false
+        #       positive produced a FALSE NEGATIVE, which is the direction that loses a host.
+        # So: walk /proc and match the EXECUTABLE's basename by prefix. The asker's exe is `bash`,
+        # so it cannot appear; and any `kaspad*` build does, whatever it is called.
+        r "$h" 'for d in /proc/[0-9]*; do
+                    exe=$(readlink -f "$d/exe" 2>/dev/null) || continue
+                    case "${exe##*/}" in kaspad*) ;; *) continue ;; esac
+                    printf "  %-18s %s\n" "${exe##*/}" "$(tr "\0" "\n" < "$d/cmdline" 2>/dev/null | grep -E "^--appdir=" || echo "--appdir=<none>")"
+                done | sort -u'
+
         r "$h" 'systemctl list-units --type=service --no-pager --no-legend --plain --all 2>/dev/null \
              | grep -iE "kaspad|misaka|palw|minerpool|dnsseeder" | awk "{print \"  unit \"\$1\" \"\$4}"'
     done
