@@ -200,8 +200,12 @@ fn print_human(r: &GetPalwDerivedArtifactsResponse) {
     }
     println!(
         "  the answer's token ids are on no chain — verify with the gateway response: \
-         misaka palw derived-verify {} --answer <response.json>",
+         misaka palw derived-verify {} --answer <response.json> --tokenizer <tokenizer.json>",
         r.claim_id
+    );
+    println!(
+        "    (without --tokenizer the verdict is `consistent-given-the-supplied-answer`: the derivation re-runs over \
+         bytes YOU supplied and nothing says it came from this claim's inference)"
     );
 }
 
