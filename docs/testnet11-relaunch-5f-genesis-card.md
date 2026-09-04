@@ -6099,3 +6099,24 @@ The old-build stragglers refused nothing and were refused by nothing (the gate i
 binary — §10g); the chain simply keeps ticking on the new-build heartbeats through the cycle.
 External nodes on pre-5f genesis kept knocking on node0 (`Genesis mismatch on network
 misaka-testnet-11`, three addresses) — the M-07 guard doing its job, unrelated to the flag day.
+
+### 10i. The public add-a-model path, walked as a user: Qwen3.8-27B (2026-09-04 05:00Z →)
+
+Operator's ask: add Qwen 3.8 27B as an ordinary user would, through the documented path, and check
+that registration and certification work — stop before block production. Host: `.113` as the
+user's machine (`/root/misakas-user`, a fresh clone of main; `/root/palw-user` for everything else).
+
+| step (doc) | what happened | evidence |
+|---|---|---|
+| model | `Qwen/Qwen3.8-27B` exists (2026-08-14): `model_type qwen3_5`, 64 layers, hidden 5120, full attention every 4th, attn 24/4 @ 256, rotation 64 @ 1e7, GDN 16k/48v @ 128 conv 4, DENSE FFN 17,408, vocab 248,320 | config.json; ggml-org GGUF metadata (`arch qwen35`) agrees field for field |
+| SDK step 1–3: geometry + row + conformance | **needs a code change** — the class table is node-local, so a user forks: `QWEN38_27B` in `palw_qwen36_profile.rs`, one graph-v3 row `Qwen/Qwen3.8-27B/graph-v3` (dense FFN as the one-expert mixture, the Qwen3.5-2B precedent); consensus untouched, fingerprint unchanged. `misaka-palw-sdk` 23/23; consensus-core qwen36 30/30; base0 class/plan 27/27 after moving one pin from "three servable rows" to four — **the interpreter planned the 27B graph and its planned and compiled forward passes agreed** | branch `palw-add-qwen38-27b` (ea5f48a6 row, d0d0822c test pin), pushed |
+| SDK step 4: convert | `qwen36-convert --url … --header … --out qwen38-27b.palwq36 --context 512`, streaming the 18,973,870,432-byte Q4_K_M by HTTP range; the converter read "64/64 layers (48 linear, 16 full) … gdn 16k/48v @ 128 … moe 1/1 @ 17408 + shared 0", plan 1,395 tensors, **25.79 GiB of int8** | running from 05:17Z, ~1.2 GiB/min |
+| join doc §2: key + funds | `misaka key gen` → `misakatest:qtqtgeu0…`; the public faucet paid **12 tMSK** (txid `3f94fd76…`) | faucet `/faucet/v1/claim` 200 |
+| join doc §3: bond | user node on the flag-day binary (`--palw-register-bond --palw-producer-key`, pay address defaulted from the key — f1604dd3): fingerprint `71b35c25…`, seeders 1/3 answered (2/4 dead, known), anchors connected, IBD in ~1 min, **bond `d9067d09…:0` registered with 8,333,751 sompi collateral**, carried by the chain ("PALW lifecycle carried 1× BondRegistered") | node.log |
+| next | `qwen36-run --root-only` → `palw-class inspect` / `preflight --network testnet-11 --model-id Qwen/Qwen3.8-27B/graph-v3` (the admission gate, before any fee) → `--palw-register-class` from the user node → `palw-certify drill` (family evidence) → `FamilyCertified` / `ClassLaneCertified`. No `--palw-produce`. | |
+
+**First finding for "does the path work":** the chain side is permissionless as ADR-0054 says, but
+the tooling side is not "no code": a new checkpoint of a known lineage needs a geometry constant and
+a table row in the node's own crates (the SDK doc says so; the `Adding a model` paragraphs in README
+and the announcement do not). A user who cannot build the node cannot add a model. Everything up to
+the bond needed no code and worked first time on the doc's commands.
