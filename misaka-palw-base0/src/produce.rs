@@ -433,6 +433,37 @@ pub fn base0_execute_for_attempt_streaming_capped_v1(
 /// The canonical wire/disk encoding of the retained material — one codec, used by the producer's
 /// retention file, the P2P material broadcast, and the panel seat's decode, so the three cannot
 /// drift. borsh over the tuple, exactly the bytes `retain_execution` has always written.
+/// **The free-prompt lane's retained-trace events** (palw_freeprompt_v3's definition, ADR-0077
+/// Decision 8): the ORDERED event-hash list a producer retains and serves is the trace's own
+/// selecting-row roots — the leaves `rows_root` is the Merkle root of, one per executed decode
+/// token — so a served list is checkable against the committed trace root without a replay:
+/// `step_merkle_root_v1(events) == tiled_logits_rows_root_v1(ctx, rows)`.
+pub fn base0_fp_trace_events_v3(ctx: &PalwJobContextV2, logits_rows: &[Vec<i32>]) -> Option<Vec<Hash64>> {
+    let ctx_hash = ctx.context_hash();
+    logits_rows
+        .iter()
+        .enumerate()
+        .map(|(r, row)| kaspa_consensus_core::palw_step_refute::tiled_logits_row_root_v1(&ctx_hash, r as u32, row))
+        .collect()
+}
+
+/// **The free-prompt lane's retained-trace manifest**: the events above, chunked at
+/// `PALW_FP_TRACE_CHUNK_EVENTS_V3` under the job id as the binding (what the worker reports as
+/// `trace_binding`), through the lane's own `fp_trace_manifest_v3`.
+///
+/// Not the attempt lane's `attempt_trace_manifest_root_v1(trace_root, 1)`, which
+/// [`Base0ExecutionV1`] carries because admission pins ATTEMPTS to it by equality (ADR-0072
+/// Decision 8). A free-prompt commitment's chunk count is checked against the executed shape —
+/// `trace_event_count.div_ceil(256)` — and a run past 256 tokens is two chunks; until this
+/// derivation existed every free-prompt run of 257 tokens or more was refused as "the
+/// retained-trace chunk count is not the executed shape's", 256 being the observed edge, and
+/// the manifest root of every shorter run was another lane's function of the trace root.
+pub fn base0_fp_trace_manifest_v3(ctx: &PalwJobContextV2, logits_rows: &[Vec<i32>]) -> Option<(Hash64, u32)> {
+    let events = base0_fp_trace_events_v3(ctx, logits_rows)?;
+    let (root, count, _) = kaspa_consensus_core::palw_freeprompt_v3::fp_trace_manifest_v3(ctx.job_id, &events);
+    Some((root, count))
+}
+
 pub fn base0_material_encode_v1(run: &Base0ExecutionV1) -> Result<Vec<u8>, ProduceError> {
     // **A folded run has no tiles, and an empty tile vector is not a capture.** Encoded through
     // here it would produce material that decodes, carries a binding, and reproduces no step root
@@ -2407,5 +2438,44 @@ mod tests {
             kaspa_consensus_core::palw_step_leg::step_merkle_root_v1(&leaves).is_err(),
             "the default ladder does not reach this space"
         );
+    }
+    /// **The free-prompt manifest is the trace's own leaves, chunked at 256** (palw_freeprompt_v3,
+    /// ADR-0077 D8): 256 rows are one chunk and 257 are two — the edge the Studio hit when the
+    /// producer carried the attempt lane's fixed count — the events are the row roots `rows_root`
+    /// is the Merkle root of, and the root is the lane's own function, never the attempt lane's.
+    #[test]
+    fn the_free_prompt_manifest_is_the_traces_leaves_chunked_at_256() {
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_TRACE_CHUNK_EVENTS_V3, fp_trace_chunk_digest_v3, fp_trace_manifest_root_v3,
+        };
+        use kaspa_consensus_core::palw_step_refute::tiled_logits_rows_root_v1;
+        let (_artifact, _profile, ctx, _prompt) = small_job();
+        let rows_of = |n: usize| -> Vec<Vec<i32>> {
+            (0..n).map(|r| (0..128).map(|l| ((r * 131 + l * 7) % 251) as i32 - 125).collect()).collect()
+        };
+        for (n, chunks) in [(1usize, 1u32), (255, 1), (256, 1), (257, 2), (512, 2), (513, 3)] {
+            let rows = rows_of(n);
+            let events = base0_fp_trace_events_v3(&ctx, &rows).expect("rows build roots");
+            assert_eq!(events.len(), n);
+            assert_eq!(
+                kaspa_consensus_core::palw_step_leg::step_merkle_root_v1(&events).ok(),
+                tiled_logits_rows_root_v1(&ctx, &rows),
+                "{n} rows: the events are the rows root's leaves"
+            );
+            let (root, count) = base0_fp_trace_manifest_v3(&ctx, &rows).expect("a manifest");
+            assert_eq!(count, chunks, "{n} rows");
+            assert_eq!(count, (n as u32).div_ceil(PALW_FP_TRACE_CHUNK_EVENTS_V3), "the verifier's own formula");
+            let digests: Vec<Hash64> = events
+                .chunks(PALW_FP_TRACE_CHUNK_EVENTS_V3 as usize)
+                .enumerate()
+                .map(|(i, c)| fp_trace_chunk_digest_v3(ctx.job_id, i as u32, c))
+                .collect();
+            assert_eq!(root, fp_trace_manifest_root_v3(ctx.job_id, &digests), "{n} rows: the root is the lane's own");
+            assert_ne!(
+                root,
+                kaspa_consensus_core::palw_attempt_v2::attempt_trace_manifest_root_v1(Hash64::from_u64_word(n as u64), 1),
+                "and not the attempt lane's function of anything"
+            );
+        }
     }
 }

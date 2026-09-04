@@ -1190,13 +1190,17 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // what `palw_fp_execution_root_v3` recomputes.
         let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
         let material = crate::produce::base0_fp_material_encode_v2(&run, &prompt_ids).map_err(|e| e.to_string())?;
+        // The free-prompt lane's own manifest (palw_freeprompt_v3), not the attempt lane's the run carries.
+        let (fp_trace_manifest_root, fp_trace_chunk_count) =
+            crate::produce::base0_fp_trace_manifest_v3(&run.binding.job_context, &run.logits_rows)
+                .ok_or_else(|| "the run's rows build no retained-trace manifest".to_string())?;
         Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
             outcome: PalwExecutionOutcomeV1 {
                 trace_root: run.trace_root,
                 output_root: run.output_root,
                 execution_root: run.execution_root,
-                trace_manifest_root: run.trace_manifest_root,
-                trace_chunk_count: run.trace_chunk_count,
+                trace_manifest_root: fp_trace_manifest_root,
+                trace_chunk_count: fp_trace_chunk_count,
                 material,
             },
             facts: PalwFpRunFactsV3 {

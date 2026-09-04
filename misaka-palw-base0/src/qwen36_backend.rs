@@ -1023,10 +1023,15 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         use kaspa_consensus_core::palw_backend::PalwReplayRootsV1;
         let (Some(plan), Some(profile)) = (&self.plan, &self.profile) else {
             let outcome = self.execute(job, prompt)?;
-            return Ok(PalwReplayRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, work_leaves: None });
+            return Ok(PalwReplayRootsV1 {
+                execution_root: outcome.execution_root,
+                trace_root: outcome.trace_root,
+                work_leaves: None,
+            });
         };
         // The fold sink: one execution, the dense run's roots, none of its tiles (ADR-0084 D7).
-        let run = qwen36_execute_free_prompt_streaming_v1(&self.artifact, profile, plan, job, prompt, self.step_ladder_cap, &mut |_| {})?;
+        let run =
+            qwen36_execute_free_prompt_streaming_v1(&self.artifact, profile, plan, job, prompt, self.step_ladder_cap, &mut |_| {})?;
         Ok(PalwReplayRootsV1 {
             execution_root: run.execution_root,
             trace_root: run.trace_root,
@@ -1142,13 +1147,17 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
         let prompt_ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
         let material = crate::produce::base0_fp_material_encode_v2(&run, &prompt_ids).map_err(|e| e.to_string())?;
+        // The free-prompt lane's own manifest (palw_freeprompt_v3), not the attempt lane's the run carries.
+        let (fp_trace_manifest_root, fp_trace_chunk_count) =
+            crate::produce::base0_fp_trace_manifest_v3(&run.binding.job_context, &run.logits_rows)
+                .ok_or_else(|| "the run's rows build no retained-trace manifest".to_string())?;
         Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
             outcome: PalwExecutionOutcomeV1 {
                 trace_root: run.trace_root,
                 output_root: run.output_root,
                 execution_root: run.execution_root,
-                trace_manifest_root: run.trace_manifest_root,
-                trace_chunk_count: run.trace_chunk_count,
+                trace_manifest_root: fp_trace_manifest_root,
+                trace_chunk_count: fp_trace_chunk_count,
                 material,
             },
             facts: PalwFpRunFactsV3 {
