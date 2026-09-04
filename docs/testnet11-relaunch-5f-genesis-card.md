@@ -6060,3 +6060,13 @@ and if a restart is late the fallback is to stop that seat rather than let it cr
 red). `4d572142` exonerated by ff's experiment (fails identically at 8). The underpay assertion had
 been passing vacuously — the rent check runs before the transition, so an opener that could never
 open was "dropped" at both prices; the fixed test asserts the parts ride the carriage by name.
+
+**Provenance addendum (03:1xZ).** The sweep found one more pin that the scheduled fence moves:
+`fork_id_v1::tests::the_shipped_schedules_are_measured_not_assumed` (testnet-11's fence schedule is
+now `[1150, 2_125_000]`). Re-pinned as `16a2f277`, a test-only commit on top of `cef2ecdb`; the fence is
+**on the schedule and off the fork-id gate** (`fork_id_gate_fences_v1` still names only ADR-0072's
+fence), so this build refuses no peer at 1150 — the separation is at the block level, as on every
+previous relaunch — and arming the gate on it is a chip for the operator (first arming of that gate
+on a shipped preset; the module's own test forbids it today). The fleet's binary is built from
+`cef2ecdb`; main's tip is `16a2f277` = `cef2ecdb` + that pin. Functionally identical binaries; the
+provenance line in every seat's log names `cef2ecdb`.
