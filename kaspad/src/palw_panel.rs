@@ -2780,8 +2780,9 @@ impl PalwPanelService {
                                     if replay_licenses_v1(&roots, duty.execution_root, duty.trace_root, duty.work_leaves) {
                                         info!(
                                             "[{PALW_PANEL}] claim {}: licensed by replay — the anchor's job reproduces the claim's roots \
-                                             ({} leaves, {:.0?}); no material moved (ADR-0084 D7)",
+                                             ({} leaves replayed, priced {}, {:.0?}); no material moved (ADR-0084 D7)",
                                             duty.claim_id,
+                                            roots.work_leaves.map(|w| w.to_string()).unwrap_or_else(|| "unpriced".into()),
                                             duty.work_leaves,
                                             started.elapsed()
                                         );
