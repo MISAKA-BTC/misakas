@@ -152,6 +152,20 @@ it is the node's.
 capture's ids only through it. The panel names no family decoder; the fold gap in §1 closes with
 it.
 
+**Decision 7 — the attempt lane's verdict is by execution (added 2026-09-04, after §7.2).**
+A seat that holds no material for an attempt-lane claim re-runs the canonical job the claim's
+anchor implies and licenses the claim when the run reproduces its execution root, trace root and
+priced work — `PalwExecutionBackendV1::execute_for_verdict`, which a base0 family answers from the
+fold (ADR-0082 Decision 7): the producer's roots without the producer's tiles, 64 KiB in memory
+where the dense run is 784 MB. The seat replays once per claim, and only after
+`PALW_ATTEMPT_REPLAY_GRACE_DAA` (2) past the binding, so a material inside the cap that is merely
+late still arrives by push first. Nothing is fetched; the 784 MB never moves. §7.2 measured why
+this is not optional: no graph-v5 interval opening fits the opening lane, and 5f licensed these
+blocks only because the uncapped push delivered the material — which Decision 3 closes. A replay
+that does NOT reproduce the roots files nothing here (the opening lane decides from there); filing
+`Invalid` from a replay is deliberately left until the replay has been seen agreeing on the fleet,
+because a seat defect that produced mass `Invalid` would slash honest producers (ADR-0027).
+
 ## 4. What this costs, stated before it is measured
 
 * **Bytes per seat, per claim**: the envelope (≤ 3 KB at 512, ≤ 512 KB at 131,072) plus `k` = 4

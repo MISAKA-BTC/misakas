@@ -1015,6 +1015,24 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         Ok((ctx, prompt))
     }
 
+    fn execute_for_verdict(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwReplayRootsV1, String> {
+        use kaspa_consensus_core::palw_backend::PalwReplayRootsV1;
+        let (Some(plan), Some(profile)) = (&self.plan, &self.profile) else {
+            let outcome = self.execute(job, prompt)?;
+            return Ok(PalwReplayRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, work_leaves: None });
+        };
+        // The fold sink: one execution, the dense run's roots, none of its tiles (ADR-0084 D7).
+        let run = qwen36_execute_free_prompt_streaming_v1(&self.artifact, profile, plan, job, prompt, self.step_ladder_cap, &mut |_| {})?;
+        Ok(PalwReplayRootsV1 {
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            work_leaves: Some(run.binding.step_leaf_count),
+        })
+    }
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
         // **The captured attempt, where the declaration is the program.** A plan proves this
         // build serves the registered graph node for node, and the planned traced walk is what a

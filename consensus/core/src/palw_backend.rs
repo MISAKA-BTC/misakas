@@ -53,6 +53,17 @@ pub struct PalwExecutionOutcomeV1 {
     pub material: Vec<u8>,
 }
 
+/// **What a replay of an attempt job yields for a verdict** (ADR-0084 Decision 7): the two roots
+/// the claim committed and, when the family prices work in step leaves, the leaves the replay
+/// covered — a seat refuses a claim whose roots match but whose work does not, as the free-prompt
+/// lane does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwReplayRootsV1 {
+    pub execution_root: Hash64,
+    pub trace_root: Hash64,
+    pub work_leaves: Option<u64>,
+}
+
 /// The two roots a seat checks material against — the claim's own, read from chain state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwClaimRootsV1 {
@@ -155,6 +166,17 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// Run the job and commit to it. Pure CPU/GPU work with no chain access: the caller runs it off
     /// the async runtime.
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String>;
+    /// **The attempt lane's verdict by execution** (ADR-0084 Decision 7). A seat that holds no
+    /// material for an attempt claim re-runs the canonical job the anchor implies and compares
+    /// these roots with the claim's; nothing is fetched. Pure CPU work, run off the runtime like
+    /// [`Self::execute`]. A base0 family answers from the FOLD (ADR-0082 Decision 7) — the same
+    /// roots as the producer's dense run without the tiles the producer retains, which on graph-v5
+    /// is the difference between 784 MB and 64 KiB in memory. The default runs [`Self::execute`]
+    /// and keeps the roots, which is right for a family that has no fold.
+    fn execute_for_verdict(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwReplayRootsV1, String> {
+        let outcome = self.execute(job, prompt)?;
+        Ok(PalwReplayRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, work_leaves: None })
+    }
 
     /// **The free-prompt lane's run — the one verb whose tokens the caller chooses.**
     ///

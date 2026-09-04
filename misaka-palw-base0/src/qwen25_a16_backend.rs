@@ -1042,6 +1042,32 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         Ok((ctx, prompt))
     }
 
+    fn execute_for_verdict(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwReplayRootsV1, String> {
+        use kaspa_consensus_core::palw_backend::PalwReplayRootsV1;
+        if !self.court_capable {
+            let outcome = self.execute(job, prompt)?;
+            return Ok(PalwReplayRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, work_leaves: None });
+        }
+        // The fold sink: one execution, the dense run's roots, none of its tiles (ADR-0084 D7).
+        let run = a16_execute_free_prompt_streaming_v1(
+            &self.artifact,
+            &self.profile,
+            self.plan.as_ref(),
+            job,
+            prompt,
+            self.step_ladder_cap,
+            &mut |_| {},
+        )?;
+        Ok(PalwReplayRootsV1 {
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            work_leaves: Some(run.binding.step_leaf_count),
+        })
+    }
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
         // **The captured attempt, for the class that can carry one.** Its `execution_root` is the
         // step binding's own commitment — the value `check_execution_root_binding` compares a
@@ -2129,6 +2155,23 @@ mod free_prompt_tests {
     /// from its checkpoint. If that replay were a different execution — a different seed id, a
     /// different resume point, a different order — the bytes would differ here, and a seat would
     /// have read the difference as this producer's fault.
+    /// **The verdict replay is the producer's run, minus the tiles** (ADR-0084 Decision 7): the
+    /// fold sink reproduces the dense run's execution root, trace root and priced work for the
+    /// job an anchor implies — what a seat that holds no material compares a claim against.
+    #[test]
+    fn the_verdict_replay_reproduces_the_dense_runs_roots_and_work() {
+        let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
+        let backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile, (4, 3))
+            .expect("the fixture's declaration is this engine's program");
+        let (ctx, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0D7)).expect("the anchor implies a job");
+        let dense = backend.execute(&ctx, &prompt).expect("the producer's run");
+        let (binding, ..) = crate::produce::base0_material_decode_v1(&dense.material).expect("the dense material decodes");
+        let replay = backend.execute_for_verdict(&ctx, &prompt).expect("the seat's replay");
+        assert_eq!(replay.execution_root, dense.execution_root, "the fold's execution root is the dense run's");
+        assert_eq!(replay.trace_root, dense.trace_root, "and its trace root");
+        assert_eq!(replay.work_leaves, Some(binding.step_leaf_count), "and it prices the same work");
+    }
+
     #[test]
     fn a_replayed_interval_opening_is_the_dense_ones() {
         let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);

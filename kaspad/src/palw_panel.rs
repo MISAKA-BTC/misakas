@@ -62,6 +62,12 @@ use kaspa_txscript::MLDSA87_TX_CONTEXT;
 use kaspa_utils::triggers::SingleTrigger;
 
 const PALW_PANEL: &str = "palw-panel";
+
+/// **How long an attempt claim's material may still arrive before the seat replays the job**
+/// (ADR-0084 Decision 7), in DAA score past the claim's binding. A material inside the transport
+/// cap reaches every seat by push within seconds of the block; one over it never will (Decision
+/// 3), and the replay is minutes of CPU the seat should not spend on a push that is merely late.
+pub const PALW_ATTEMPT_REPLAY_GRACE_DAA: u64 = 2;
 /// How many receipts one claim's pool holds. A panel has 5 seats; the rest is an attacker's spam,
 /// and the assembler drops garbage anyway — the cap only bounds memory.
 const RECEIPTS_PER_CLAIM: usize = 16;
@@ -1650,6 +1656,9 @@ impl PalwPanelService {
         // re-binds at the sweep's own score.
         let mut answered: HashSet<(Hash64, u64)> = HashSet::new();
         let mut first_seen: HashMap<Hash64, u64> = HashMap::new();
+        // Attempt claims this seat has replayed once (ADR-0084 Decision 7): a replay that did not
+        // reproduce the claim's roots is not re-run every tick — the opening lane decides from there.
+        let mut replayed: HashSet<Hash64> = HashSet::new();
         // When this seat last pulled for a claim it holds no material for, so a slow answer is
         // not re-asked every 2-second tick.
         let mut requested: HashMap<Hash64, u64> = HashMap::new();
@@ -2733,6 +2742,59 @@ impl PalwPanelService {
                         )
                         && let Ok((ctx, prompt)) = resolved.job_for_anchor(anchor)
                     {
+                        // **ADR-0084 Decision 7 — the verdict by execution.** No material of this
+                        // claim's is held and, past the grace a push needs, none is coming: the seat
+                        // re-runs the canonical job the anchor implies and compares the roots. A
+                        // graph-v5 attempt is 784 MB of tiles the seat never fetches and one
+                        // execution it can afford — the producer's own cost.
+                        let resolved = if current_daa >= duty.bound_daa.saturating_add(PALW_ATTEMPT_REPLAY_GRACE_DAA)
+                            && replayed.insert(duty.claim_id)
+                        {
+                            let (ctx_for_blocking, prompt_for_blocking) = (ctx.clone(), prompt.clone());
+                            let started = std::time::Instant::now();
+                            info!(
+                                "[{PALW_PANEL}] claim {}: no material held after {} DAA — replaying the anchor's job for a verdict (ADR-0084 D7)",
+                                duty.claim_id,
+                                current_daa.saturating_sub(duty.bound_daa)
+                            );
+                            match offload(resolved, move |b| b.execute_for_verdict(&ctx_for_blocking, &prompt_for_blocking)).await {
+                                Ok((backend, Ok(roots))) => {
+                                    let work_matches = roots.work_leaves.is_none_or(|w| w == duty.work_leaves);
+                                    if roots.execution_root == duty.execution_root && roots.trace_root == duty.trace_root && work_matches {
+                                        info!(
+                                            "[{PALW_PANEL}] claim {}: licensed by replay — the anchor's job reproduces the claim's roots \
+                                             ({} leaves, {:.0?}); no material moved (ADR-0084 D7)",
+                                            duty.claim_id,
+                                            duty.work_leaves,
+                                            started.elapsed()
+                                        );
+                                        break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                                    }
+                                    warn!(
+                                        "[{PALW_PANEL}] claim {}: the anchor's job does NOT reproduce the claim's roots (execution {} vs claimed {}, \
+                                         trace {} vs {}, work {:?} vs priced {}) — no verdict from the replay; the opening lane decides",
+                                        duty.claim_id,
+                                        roots.execution_root,
+                                        duty.execution_root,
+                                        roots.trace_root,
+                                        duty.trace_root,
+                                        roots.work_leaves,
+                                        duty.work_leaves
+                                    );
+                                    backend
+                                }
+                                Ok((backend, Err(e))) => {
+                                    warn!("[{PALW_PANEL}] claim {}: the replay refused: {e}", duty.claim_id);
+                                    backend
+                                }
+                                Err(e) => {
+                                    warn!("[{PALW_PANEL}] claim {}: the replay did not run: {e}", duty.claim_id);
+                                    break 'verdict None;
+                                }
+                            }
+                        } else {
+                            resolved
+                        };
                         let prompt_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
                         let held = materials.get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
                         if let Some(output_ids) =
