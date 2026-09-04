@@ -99,6 +99,14 @@ fn main() {
     let mut blocks_path = None;
     let mut retention = None;
     let mut generated_cache: Option<String> = None;
+    // **The free-prompt lane, from the gateway's own outbox** (ADR-0044/0077). A free-prompt claim
+    // rides a transaction, not a header, and the chain carries its prompt's HASH and its output's
+    // ROOT — never the text (the prompt is its author's). Text can only come from the gateway that
+    // executed it: `fp-job-<id>.json` (`fp_claim_id`, `family`, `answer_untrimmed`, counts) beside
+    // `<claim>.material` in its traces dir (the folded capture's `prompt_token_ids`) and, when the
+    // author committed one, `fp-job-<id>.derived.json` (ADR-0078). Comma-separated, like
+    // `--retention`; each entry is an outbox dir whose `traces/` holds the materials.
+    let mut fp_outbox: Option<String> = None;
     let mut out_path = None;
     // The DISPLAY prefix ("misaka-…") is not the consensus identity: the domain is derived from
     // `NetworkId::to_string()` ("testnet-11") plus the genesis, exactly as every verifier derives
@@ -116,6 +124,7 @@ fn main() {
             // (measured 2026-09-04, when two 34 GiB mappings had already pushed it into swap).
             // With a cache the read happens once per new claim.
             "--generated-cache" => generated_cache = it.next().cloned(),
+            "--fp-outbox" => fp_outbox = it.next().cloned(),
             "--out" => out_path = it.next().cloned(),
             "--network" => network = it.next().cloned().unwrap_or(network),
             other => die(format!("unknown arg {other}")),
@@ -259,7 +268,99 @@ fn main() {
     {
         let _ = std::fs::write(path, bytes);
     }
-    let out = json!({ "network": network, "rows": rows, "hash_mismatches": hash_mismatch });
+    let fp_rows = fp_outbox.as_deref().map(|dirs| free_prompt_rows(dirs, &mut cache)).unwrap_or_default();
+    if let Some(path) = generated_cache.as_ref()
+        && let Ok(bytes) = serde_json::to_vec(&cache)
+    {
+        let _ = std::fs::write(path, bytes);
+    }
+    let out = json!({ "network": network, "rows": rows, "fp_rows": fp_rows, "hash_mismatches": hash_mismatch });
     std::fs::write(&out_path, serde_json::to_vec_pretty(&out).unwrap()).unwrap_or_else(|e| die(format!("{out_path}: {e}")));
-    eprintln!("palw-jobs-export: {} LLM rows, {} hash mismatches → {}", rows.len(), hash_mismatch, out_path);
+    eprintln!(
+        "palw-jobs-export: {} LLM rows, {} free-prompt rows, {} hash mismatches → {}",
+        rows.len(),
+        fp_rows.len(),
+        hash_mismatch,
+        out_path
+    );
+}
+
+/// The gateway's committed free-prompt jobs as rows: one per `fp-job-*.json` with `committed: true`.
+/// The prompt ids come from the retained material (cached under `fp:<claim>` so the 750 MB v5 capture
+/// is decoded once); the answer text is the gateway's own `answer_untrimmed`; derived artifacts are
+/// joined by claim id from `*.derived.json`. Nothing here is verified against the chain — the page
+/// joins these rows to the `FreePromptCommitted` events it decodes from transactions, by claim id,
+/// and a row with no event is shown as what it is: the gateway's word.
+fn free_prompt_rows(dirs: &str, cache: &mut std::collections::BTreeMap<String, Vec<u32>>) -> Vec<Value> {
+    fn family_class(family: &str) -> String {
+        match family {
+            "qwen25-a16" | "a16-v5" | "a16" => "QWEN25-A16".to_string(),
+            "qwen36" => "QWEN36".to_string(),
+            "qwen38-27b" => "QWEN38-27B".to_string(),
+            other => other.to_string(),
+        }
+    }
+    let mut rows = Vec::new();
+    for dir in dirs.split(',').map(str::trim).filter(|d| !d.is_empty()) {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        let mut derived_by_claim: std::collections::BTreeMap<String, Vec<Value>> = Default::default();
+        let mut jobs: Vec<Value> = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            if !name.starts_with("fp-job-") {
+                continue;
+            }
+            let Some(v) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { continue };
+            if name.ends_with(".derived.json") {
+                if let Some(claim) = v.get("claim_id").and_then(|c| c.as_str()) {
+                    derived_by_claim.entry(claim.to_string()).or_default().push(json!({
+                        "kind": v.get("kind"),
+                        "kind_name": v.get("kind_name"),
+                        "artifact_bytes": v.get("artifact_bytes"),
+                        "transformer": v.get("transformer"),
+                        "derived_id": v.get("derived_id"),
+                    }));
+                }
+            } else if name.ends_with(".json") && !name.ends_with(".rail.json") {
+                jobs.push(v);
+            }
+        }
+        for v in jobs {
+            if v.get("committed").and_then(|c| c.as_bool()) != Some(true) {
+                continue;
+            }
+            let Some(claim) = v.get("fp_claim_id").and_then(|c| c.as_str()).map(str::to_string) else { continue };
+            let key = format!("fp:{claim}");
+            let prompt_ids: Option<Vec<u32>> = if let Some(ids) = cache.get(&key) {
+                Some(ids.clone())
+            } else {
+                let ids = std::fs::read(format!("{dir}/traces/{claim}.material")).ok().and_then(|bytes| {
+                    match misaka_palw_base0::produce::base0_material_decode_any_v1(&bytes) {
+                        Ok(misaka_palw_base0::produce::Base0RetentionV1::Folded(folded)) => Some(folded.prompt_token_ids),
+                        _ => None,
+                    }
+                });
+                if let Some(ids) = ids.as_ref() {
+                    cache.insert(key, ids.clone());
+                }
+                ids
+            };
+            let family = v.get("family").and_then(|f| f.as_str()).unwrap_or("");
+            let chain = v.get("chain").cloned().unwrap_or(Value::Null);
+            rows.push(json!({
+                "claim": claim,
+                "class": family_class(family),
+                "family": family,
+                "prompt_ids": prompt_ids,
+                "prompt_tokens": v.get("prompt_tokens"),
+                "generated_text": v.get("answer_untrimmed"),
+                "decode_tokens": v.get("decode_tokens_executed"),
+                "work_leaves": v.get("work_leaves"),
+                "daa": chain.get("daa_score").cloned().unwrap_or(Value::Null),
+                "derived": derived_by_claim.get(&claim).cloned().unwrap_or_default(),
+            }));
+        }
+    }
+    rows
 }
