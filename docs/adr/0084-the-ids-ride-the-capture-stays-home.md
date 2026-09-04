@@ -364,6 +364,12 @@ two flags and nothing else; the paused script is kept as `c-seat2.sh.paused-unti
 seat2 respawned at 15:48:48Z with the producer loading its artifacts. The cosmetic `0085e2bb`
 (the licence line names the replayed leaves) is on the branch, not on the fleet.
 
+By 00:50 JST run 6 had replayed every a16 attempt claim its producers put on the chain — node-0
+eight of node-1's, node-1 four of node-0's, each licensed in 7–8 s, zero Unavailable on either —
+and ibm's node0 was filing Valid receipts and a ReceiptLicensed of its own eighteen minutes after
+its forced restart, with blocks flowing through it: the post-swap check the public node's hang
+record prescribes.
+
 ## 8. What is deliberately not decided
 
 * **A close assembled from an opening (U-07c).** §4 names the stall. The refutation of a step
