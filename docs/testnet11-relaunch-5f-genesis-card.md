@@ -5775,3 +5775,25 @@ certify → serve → budget gate), the sentinel-guard fix `0f12727a`, and two s
 `load_tip(...).ok()` silent swallow; a genesis state written under one ladder and read back under another fails
 silently). Its last hypothesis — that the 2^32/2^26 ladder divergence explained the v5 registration's Decision F
 mismatch — was refuted by test (`9c853d31`: numbers unmoved), leaving the mismatch on the engine's recording side.
+
+## Step 9 — a free-prompt job on the public chain (01:09 UTC onward, 2026-09-04)
+
+**Faucet funded (ff, 01:05 UTC):** 2,000 tMSK from bond-0's matured coinbase by `wallet send --coinbase-only`
+(tx `316edbd4…`); `/faucet/v1/status` reads funded, grant 12, and a Studio pool slot (slot-02 on `.113`) took the
+first grant (`bc2a3daf…`). The operator's remaining money call is only whether to add more later.
+
+**The gateway, online on the public chain:** the Aug-31 leftover on `:8791` stopped; sibling directories
+`/root/fp-5f/{identity,outbox,work}`; identity built the drill's way — `network_domain` = blake2b-512 keyed
+`misaka-palw/attempt-v2/network-domain/v1` over `u64le(len) ‖ "testnet-11" ‖ genesis` (`d8ef6446…`), class
+`4277d84f…`, bond `misaka-premine:0`, `executor_pubkey` from the rail's `--print-bond-pubkey` (2,592 B) **equal to the
+chain's registered pubkey for bond 0**, `operator_id` the chain's own (`0f00d433…`). The worker's manifest on
+`bound-candidate.palwart`: `shape_profile_id 4277d84f…` = the certified class, `model_profile_id 158314b5…`,
+`tokenizer_id fa9a4352…`, n_ctx 512. Started as a transient unit (`fp-gateway-5f`) with `--rpc 127.0.0.1:26313`
+(node0's borsh), `--derive-seed` the hex key file, worker stderr logged; resident after 27 s. `/health`:
+
+    chain rpc ws://127.0.0.1:26313 | registered true | fp_certified true | bond_active true | exposure_room 499,959,719,600
+    can_submit true · commit_refusal none · anchor_daa 745 · n_ctx 512 · template chat-segments/v1 · one job slot, 8 may queue
+
+e1's seven traps (network-domain preimage with `testnet-11`, sibling dirs, hex seed files, the worker env allowlist,
+worker stderr, the rail's auto-sized fee, the manifest's shape id) were followed in order; none bit.
+First request: the cad exemplar prompt at max_tokens 56 with `derive: cad/stl/v1`, temperature 0.
