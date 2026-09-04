@@ -5842,3 +5842,9 @@ The derivation's ids, local for now: derived id `e154bd36541ed808…`, artifact 
 684-byte STL the Mac and ibm produced from this prompt all night), signed by the gateway's `--derive-seed`. Next in
 the running job: the block that carries `FreePromptCommitted`, then `submit-object` of the derived object, then
 `misaka palw derived b15ef21c… --json`.
+
+**Step 9 — carried (01:25:20 UTC).** node0: `Block 8a1a6c5361624c732750005dfecfd83390322c8736406499fae8a32767b913d1789c1e01832f0a51b72a3e869d22dd2ba250a9a42cc5998732de74f193206c26:
+PALW lifecycle carried 1× FreePromptCommitted`; tx `44227bdc…` out of the mempool, the explorer's row accepted. **The
+first free-prompt claim on the public testnet-11 is on chain**: claim `b15ef21cf1f55581…` in block `8a1a6c53…`, from
+a 147-token prompt answered in 56 tokens by the v5 512 class on the certified lane. The derived object's carriage
+(the third hash) is the running job's next step; a MIDI job (music/smf/v1, 97 tokens) runs on the gateway in parallel.
