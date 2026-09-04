@@ -5999,3 +5999,36 @@ suites. Recorded so the next reader does not count this branch's sweep as the fi
 
 Branch head: `b2c12aa2` (three commits over `0870b7ee`: 55b13b77 consensus + ADR, 0547677d producer
 visibility, b2c12aa2 lint). Not pushed; not armed anywhere.
+
+### 10e. The exact replay: legacy bits reproduced 273/273, and the fence holds MAX through the whole history (2026-09-04 02:45–02:55Z)
+
+ff's replay from `getBlocks` rows did not reproduce the chain's bits (first divergence at DAA 150,
+four row-order variants, best 7 % off), so "the fenced trajectory" was not yet evidence. The
+header processor's construction, read from `window.rs:138–335` and `difficulty.rs:216`, is:
+
+* **window(B)** = the 264 largest rows by `(blue_work, hash-bytes)` over
+  **window(SP(B)) ∪ {SP(B)} ∪ mergeSetBlues(B) ∪ mergeSetReds(B)**, minus rows whose
+  `blue_score < blue_score(B) − 264` and minus genesis (marked non-DAA by the builder). B itself is
+  not in its own window. `blue_work`, `blue_score`, `timestamp`, `bits`, `powAlgoId` are all on the
+  RPC **header** object; the mergeset and selected parent are in `verboseData`.
+* **bits(B)** = legacy retarget over window(B) when it holds ≥ 150 rows, else `bits(SP(B))`
+  (genesis bits when SP(B) is genesis). The min-timestamp row leaves the average, tie-broken by
+  `(timestamp, blue_work, hash)`; `T = 120 000 ms`, sample rate 1, cap at `target(0x207fffff)`;
+  the compact encoding is `math/src/lib.rs::compact_target_bits`.
+
+Run on node0 (`/root/fp-smoke-5f/exact-window.py`, 885 blocks, chain of 274):
+
+| tie-break on equal blue work | legacy replay vs the chain's bits |
+|---|---|
+| hash bytes descending (= `Hash64::Ord`) | **273 / 273 exact**, DAA 150 → 882 |
+| hash bytes ascending | 194 / 273 — first miss at DAA 275, one unit of mantissa |
+
+With the same windows and `priced_rows_only = true`: **`0x207fffff` at all 273 rows.** The
+three attempt rows at DAA 40/80/226 are 1–3 priced rows in windows spanning ~10 000 s, ratio ≥ 27,
+capped; every window after DAA ≈ 310 holds no priced row at all (ff's independent bound) and
+answers MAX by construction. So the rule, applied from genesis, would have kept `bits` at MAX
+through the entire 5f history, and armed now it carries MAX from its first block.
+
+Row order was the whole difference between "2–7 % off" and exact: the window is a heap by blue
+work with a byte-order hash tie-break, not the last 264 rows in mergeset order; on a heartbeat
+chain blue work grows by ε = 1 per block, so the tie-break decides membership at the margin.
