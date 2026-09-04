@@ -258,10 +258,15 @@ on the branch (see the commits for the exact test names):**
   approaches it; the whole-capture pull for the court is the only consumer that could want more,
   and U-07c removes that consumer. A cap that follows the largest class is the 2026-08-28 rule
   restated, and it was wrong twice.
-* **Arming ADR-0065 Decision 4 on testnet-11.** The card's item (b). With this ADR an honest
-  producer's claims certify, so the fence's job — that an `Unavailable` quorum slashes nobody — is
-  again the safety net it was written as, not the only thing between a producer and a default.
-  Separate activation, the operator's decision.
+* **Arming ADR-0065 Decision 4 on testnet-11 — already the case, and the card's item (b) was a
+  misreading.** `palw_rc_shipped_params()` (what `--netsuffix=11` resolves to) runs
+  `palw_rc_arm_phase1`, which sets `palw_unavailable_abstains = Some(ForkActivation::always())`
+  from genesis; the test `the_rc_ruleset_arms_the_unavailable_abstains_rule_from_genesis` pins it.
+  The "None on every shipped preset" reading (card §6m) came from the pin on the RAW preset
+  (`MAINNET_PARAMS.palw_unavailable_abstains.is_none()`), which is the assembly's input, not the
+  ruleset the fleet runs. So an `Unavailable` quorum already abstains on this chain; nothing here
+  to activate, and §6m's correction ("nobody is slashed on the shipped path") stands for a second,
+  independent reason.
 * **A retention directory flag on kaspad.** The directory is derived from the app dir and reported
   over RPC; a flag would be a second place the answer lives.
 

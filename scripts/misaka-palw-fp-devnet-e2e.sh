@@ -623,12 +623,39 @@ else:
 PY
   die "the gateway queued no commitment for job ${JOB_ID:0:16} — there is nothing for the rail to sign"
 fi
+# **Where the capture goes, and where the node reads** (ADR-0084 Decision 5). This used to pass
+# `--retention-dir "$WORK_DIR/traces"` — the GATEWAY's trace directory — and no `--capture`, so the
+# rail staged a question-only `FPM1` into a directory node-0's panel never reads
+# (`<appdir>/misaka-devnet/palw-retention`), every seat's pull answered `NotHeld`, and the claim
+# could reach `PanelBound` and nothing after it. The public chain's first two free-prompt claims
+# were staged the same way (5f card §7b step 9). Now: the worker's own capture is named, and the
+# directory is the one node-0 reports over `getPalwProducerFacts` — the rail asks for it when
+# `--retention-dir` is absent and refuses one that is not on this host.
+CAPTURE_BIN="$WORK_DIR/outbox/traces/$JOB_ID/material.bin"
+if [ -f "$CAPTURE_BIN" ]; then
+  CAPTURE_BYTES=$(stat -f %z "$CAPTURE_BIN" 2>/dev/null || stat -c %s "$CAPTURE_BIN")
+  log "  the worker's capture is $CAPTURE_BYTES bytes ($CAPTURE_BIN)"
+  # ADR-0084 Y1 is only exercised when the capture does NOT fit the transport (16 MiB): a seat that
+  # could pull the whole material proves nothing about the envelope path.
+  if [ "$CAPTURE_BYTES" -gt $((16 * 1024 * 1024)) ]; then
+    log "  → over PALW_MATERIAL_MAX_BYTES: the seats can only obtain the answer envelope (ADR-0084 Y1 is live)"
+    CAPTURE_OVER_CAP=1
+  else
+    log "  → within PALW_MATERIAL_MAX_BYTES: the seats may pull the capture whole (ADR-0084 Y1 is NOT exercised)"
+    CAPTURE_OVER_CAP=0
+  fi
+  capture_args=(--capture "$CAPTURE_BIN")
+else
+  log "  WARNING: no capture at $CAPTURE_BIN — the rail stages the question-only FPM1 and no seat can open an interval"
+  CAPTURE_OVER_CAP=0
+  capture_args=()
+fi
 if "$RAIL_BIN" --artifact "$ARTIFACT_STEM" \
      --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
      --funding-outpoint "$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1))" \
      --funding-amount "$BOND_FEE_FLOAT_SOMPI" \
      --class-id "$CLASS_ID" --class-leaves "$CLASS_LEAVES" \
-     --retention-dir "$WORK_DIR/traces" \
+     "${capture_args[@]}" \
      --submit --rpc 127.0.0.1:$RPC_BASE >"$WORK_DIR/rail-submit.log" 2>&1; then
   # Exit 0 is necessary and not sufficient — this tree's own rule. Every failure inside the rail's
   # submit path calls `die` and exits 1, so a zero here is meaningful, but the thing that says a
@@ -640,6 +667,14 @@ try: print(json.load(open(sys.argv[1])).get("submitted") or "")
 except Exception: print("")' "$ARTIFACT_STEM.rail.json" 2>/dev/null)
   if [ -n "$RAIL_TXID" ]; then
     log "stage 5b OK — commitment submitted in tx ${RAIL_TXID:0:16}…"
+    # ADR-0084 Decision 5: say where the material and the answer envelope went, from the rail's
+    # own summary — the fact that was missing when the first public claims were staged wrong.
+    python3 -c '
+import json, sys
+r = json.load(open(sys.argv[1]))
+print(f"  retention dir: {r.get(\"retention_dir\")} (source: {r.get(\"retention_dir_source\")})")
+print(f"  material file: {r.get(\"material_file\")}")
+print(f"  answer file:   {r.get(\"answer_file\")}")' "$ARTIFACT_STEM.rail.json" >&2 || true
   else
     tail -20 "$WORK_DIR/rail-submit.log" >&2
     log "stage 5b — the rail exited 0 but its summary names no txid; stage 6 will not see FreePromptCommitted"
@@ -836,6 +871,22 @@ fi
 fail=0
 log "================ verdict ================"
 log "ADR-0078 derived leg: $derived_note"
+# **ADR-0084 Y1 — the seats concluded without the capture.** Read off the nodes' own log lines:
+# the interval arm's "replayed against this seat's own recomputed state — no history fetched" on a
+# seat that is not the executor, and, on the executor's node, either a staged `.answer` served or
+# the envelope derived for a material over the cap. Only meaningful when the capture was over the
+# cap (CAPTURE_OVER_CAP=1); otherwise reported as not exercised, never as passed.
+interval_valid=$(grep -l "no history fetched" "$WORK_DIR"/node-[1-9]*.log 2>/dev/null | wc -l | tr -d ' ')
+envelope_served=$(grep -c "answer envelope" "$WORK_DIR/node-0.log" 2>/dev/null || echo 0)
+if [ "${CAPTURE_OVER_CAP:-0}" = 1 ]; then
+  if [ "$interval_valid" -gt 0 ]; then
+    log "ADR-0084 Y1: $interval_valid seat(s) replayed their drawn intervals against recomputed state with no history fetched — the capture ($CAPTURE_BYTES bytes) never moved"
+  else
+    log "ADR-0084 Y1: NOT reached — no non-executor seat logged an interval replay (node-0 envelope lines: $envelope_served)"
+  fi
+else
+  log "ADR-0084 Y1: not exercised on this run (capture ${CAPTURE_BYTES:-?} bytes fits the transport cap)"
+fi
 for ((i=0; i<NODES; i++)); do
   log "node-$i blocks=$(blocks_of $i) committed=$(grep -c 'FreePromptCommitted' "$WORK_DIR/node-$i.log" 2>/dev/null || echo 0) final=$(grep -c 'Final' "$WORK_DIR/node-$i.log" 2>/dev/null || echo 0)"
 done

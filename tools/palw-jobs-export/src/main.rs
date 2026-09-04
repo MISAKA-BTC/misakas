@@ -202,7 +202,20 @@ fn main() {
         let generated: Option<Vec<u32>> = if cached.is_some() {
             cached
         } else {
-            retention.split(',').find_map(|dir| std::fs::read(format!("{dir}/{claim}.material")).ok()).and_then(|bytes| {
+            // **The answer envelope first** (ADR-0084): `<claim>.answer` is a few kilobytes — the
+            // `FPA1`/`ATA1` payload the node serves to seats in place of a capture over the
+            // transport cap — and it carries exactly the ids this column shows. Reading it spares
+            // the exporter a decode of a 253–748 MB retention every two minutes, and it is present
+            // for every claim submitted through the ADR-0084 rail or produced by an ADR-0084 node.
+            retention
+                .split(',')
+                .find_map(|dir| std::fs::read(format!("{dir}/{claim}.answer")).ok())
+                .and_then(|bytes| {
+                    kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(&bytes)
+                        .map(|a| a.output_token_ids)
+                        .or_else(|| kaspa_consensus_core::palw_attempt_v2::palw_attempt_answer_decode_v1(&bytes).map(|a| a.output_token_ids))
+                })
+                .or_else(|| retention.split(',').find_map(|dir| std::fs::read(format!("{dir}/{claim}.material")).ok()).and_then(|bytes| {
                 match misaka_palw_base0::produce::base0_material_decode_any_v1(&bytes) {
                     Ok(misaka_palw_base0::produce::Base0RetentionV1::Folded(folded)) => Some(folded.generated_token_ids),
                     // **The attempt lane's retention is the DENSE tuple, and its fourth element is
@@ -223,7 +236,7 @@ fn main() {
                         }
                     }
                 }
-            })
+            }))
         };
         if let Some(ids) = generated.as_ref() {
             cache.insert(claim.to_string(), ids.clone());

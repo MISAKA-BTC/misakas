@@ -6255,3 +6255,10 @@ directory over `getPalwProducerFacts` (v5) and the rail/CLI stage `<claim>.answe
 default. Unit suites green; the loopback-devnet run that measures Y1/Y6 (a v5 claim certified through the interval arm
 with no capture moved) is the next step, then the fleet rebuild — after which §6m's pause of seat2's v5 production is
 reversible and QWEN36 claims can reach Final.
+
+**Correction to §6m (b), read in `params.rs` while implementing:** ADR-0065 D4 IS armed on the live chain.
+`palw_rc_shipped_params()` — the function `--netsuffix=11` resolves to — calls `palw_rc_arm_phase1`, which sets
+`palw_unavailable_abstains = Some(ForkActivation::always())`, and the test
+`the_rc_ruleset_arms_the_unavailable_abstains_rule_from_genesis` pins it. §6m's "None on every shipped preset, pinned
+by a test" read the pin on the RAW preset (`MAINNET_PARAMS.palw_unavailable_abstains.is_none()` — the assembly's input).
+Item (b) therefore needs no activation; an Unavailable quorum already abstains here.

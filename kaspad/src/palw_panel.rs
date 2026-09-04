@@ -1605,7 +1605,13 @@ impl PalwPanelService {
             let me = self.clone();
             self.flow_context.palw_gossip().set_material_resolver(std::sync::Arc::new(move |claim| me.serve_material_or_answer(claim)));
             // The directory this node serves from, published to the wallet-facing RPC so a
-            // submitter on this host stages where this panel reads (ADR-0084 Decision 5).
+            // submitter on this host stages where this panel reads (ADR-0084 Decision 5) — and
+            // CREATED here, before it is named: a submitter refuses a directory that does not
+            // exist on its host, and this one used to appear only with the first retained
+            // material, so a fresh node named a directory nobody could stage into.
+            if let Err(e) = std::fs::create_dir_all(&self.config.retention_dir) {
+                warn!("[{PALW_PANEL}] cannot create the retention directory {}: {e}", self.config.retention_dir.display());
+            }
             self.flow_context.palw_declare_retention_dir(self.config.retention_dir.clone());
         }
         // **And it answers interval openings, to bonded requesters only** (ADR-0077 Decision 8 and
