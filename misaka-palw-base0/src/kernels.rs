@@ -1041,8 +1041,18 @@ fn grouped_fast(weights: &[i8], exps: &[i8], x: &[i32], params: &[A16QuantParams
     if exps.len() != out_dim * groups {
         return Err(PalwQwen36OpError::LengthMismatch { a: exps.len(), b: out_dim * groups });
     }
-    // One-channel probe through the reference to run ITS validation (A16 range, exponent domain,
-    // the i64 bound), then the fast path for the row.
+    // **Every channel's exponents, through the reference's own rule** (mainnet audit,
+    // 2026-09-05). The one-channel probe below runs the reference's A16 range check and its shape
+    // rules; it could not run the exponent domain or the accumulator bound for any channel but the
+    // FIRST, because those are properties of the `exps` slice it was handed — `&exps[..groups]`.
+    // The comment here used to say "the reference IS the validator … this path cannot admit
+    // anything the reference refuses", and for channels 1.. it was false: a negative exponent
+    // reached `partial << *exp` in `dot_grouped` and panicked the node under the release profile's
+    // overflow-checks, and an out-of-domain positive one made this path compute what the court
+    // would refuse to adjudicate. The rule is the reference's, called here over the whole slice.
+    kaspa_consensus_core::palw_qwen36_ops::q36_check_group_exponents_v1(exps, n)?;
+    // One-channel probe through the reference to run ITS validation (A16 range, the shape rules),
+    // then the fast path for the row.
     if wide {
         kaspa_consensus_core::palw_qwen36_ops::q36_matmul_grouped_wide(&weights[..n], &exps[..groups], x, &params[..1])?;
     } else {
@@ -1069,6 +1079,52 @@ mod grouped_tests {
             self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             self.0 >> 33
         }
+    }
+
+    /// **A bad exponent in a channel the probe never saw is refused, not executed** (mainnet
+    /// audit, 2026-09-05).
+    ///
+    /// The fast path validated by probing the reference with channel 0 alone, so channels 1.. put
+    /// their exponents straight into `partial << exp`: negative panicked the node, out-of-domain
+    /// diverged from the court. Both arms here, and both forms, against the reference's own answer.
+    #[test]
+    fn a_bad_exponent_outside_channel_zero_is_refused_by_both_forms() {
+        use kaspa_consensus_core::palw_qwen36_ops::{QWEN36_MAX_GROUP_EXP, q36_matmul_grouped, q36_matmul_grouped_wide};
+
+        const N: usize = 32; // one group per channel
+        const CHANNELS: usize = 2;
+        let weights = vec![1i8; CHANNELS * N];
+        let x: Vec<i32> = (0..N as i32).map(|i| i % 7).collect();
+        let params = vec![A16QuantParams { multiplier: 1, shift: 0, zero: 0 }; CHANNELS];
+
+        // Channel 0 is impeccable; channel 1 carries the fault. This is exactly the shape the
+        // one-channel probe cannot see.
+        for bad in [-1i8, QWEN36_MAX_GROUP_EXP + 1] {
+            let exps = vec![0i8, bad];
+            let reference = q36_matmul_grouped(&weights, &exps, &x, &params);
+            assert!(reference.is_err(), "the reference refuses exponent {bad}");
+            assert_eq!(
+                q36_matmul_grouped_fast(&weights, &exps, &x, &params).map(|_| ()),
+                reference.map(|_| ()),
+                "the fast narrow form must refuse what the reference refuses (exponent {bad})"
+            );
+            let reference_wide = q36_matmul_grouped_wide(&weights, &exps, &x, &params);
+            assert!(reference_wide.is_err());
+            assert_eq!(
+                q36_matmul_grouped_wide_fast(&weights, &exps, &x, &params).map(|_| ()),
+                reference_wide.map(|_| ()),
+                "and so must the wide one (exponent {bad})"
+            );
+        }
+
+        // …and a table that is legal in every channel still computes, so the check is a gate and
+        // not a wall.
+        let good = vec![0i8, 1i8];
+        assert_eq!(
+            q36_matmul_grouped_fast(&weights, &good, &x, &params).unwrap(),
+            q36_matmul_grouped(&weights, &good, &x, &params).unwrap(),
+            "a legal table is still bit-identical to the reference"
+        );
     }
 
     /// The fast grouped pair against the reference, exact over shapes, exponents and signs —

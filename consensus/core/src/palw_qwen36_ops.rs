@@ -429,6 +429,38 @@ pub const QWEN36_MAX_GROUP_EXP: i8 = 20;
 /// ```text
 /// out[c] = narrow( Σ_g 2^exps[c,g] · Σ_{i in group g} w[c·n+i] · x[i] )
 /// ```
+/// **The exponent domain and the accumulator bound of a grouped projection, in ONE place.**
+///
+/// The accumulator's bound, checked once rather than assumed: a group contributes at most
+/// `32 · 128 · 32767 · 2^max_exp`, and there are `groups` of them.
+///
+/// **Every exponent is checked, not the largest one.** `max()` answers the accumulator's question
+/// and says nothing about the smallest: a table holding `[0, -1]` has a maximum of 0, clears a
+/// range test written against that maximum, and reaches `partial << exps[..]` with a NEGATIVE
+/// shift — which panics under the release profile's `overflow-checks`, in virtual processing, on a
+/// block that has already been stored and relayed.
+///
+/// **Extracted so the ENGINE can run the same rule** (mainnet audit, 2026-09-05).
+/// `misaka_palw_base0::kernels::grouped_fast` validated by probing this module's reference with
+/// **channel 0 only** (`&exps[..groups]`) under a comment claiming "the reference IS the
+/// validator … this path cannot admit anything the reference refuses". Every other channel's
+/// exponents reached `partial << exp` unchecked, so an artifact whose second channel carried a
+/// negative exponent exited every node that ran the class, and one carrying an out-of-domain
+/// positive exponent made the engine compute what the court would refuse to adjudicate. A rule
+/// with two spellings is a rule that holds in one of them.
+pub fn q36_check_group_exponents_v1(exps: &[i8], n: usize) -> Result<(), PalwQwen36OpError> {
+    if let Some(bad) = exps.iter().copied().find(|e| !(0..=QWEN36_MAX_GROUP_EXP).contains(e)) {
+        return Err(PalwQwen36OpError::BadK { k: bad.unsigned_abs() as usize, experts: QWEN36_MAX_GROUP_EXP as usize });
+    }
+    let groups = n.div_ceil(QWEN36_WEIGHT_GROUP);
+    let max_exp = exps.iter().copied().max().unwrap_or(0);
+    let per_group = (QWEN36_WEIGHT_GROUP as i128) * 128 * (A16_CODE_MAX as i128) * (1i128 << max_exp);
+    if per_group * groups as i128 > i64::MAX as i128 {
+        return Err(PalwQwen36OpError::NotAMultiple { got: n, unit: QWEN36_WEIGHT_GROUP });
+    }
+    Ok(())
+}
+
 pub fn q36_matmul_grouped(weights: &[i8], exps: &[i8], x: &[i32], params: &[A16QuantParams]) -> Result<Vec<i32>, PalwQwen36OpError> {
     check_a16(x)?;
     let n = x.len();
@@ -443,24 +475,7 @@ pub fn q36_matmul_grouped(weights: &[i8], exps: &[i8], x: &[i32], params: &[A16Q
     if exps.len() != out_dim * groups {
         return Err(PalwQwen36OpError::LengthMismatch { a: exps.len(), b: out_dim * groups });
     }
-    // The accumulator's bound, checked once rather than assumed: a group contributes at most
-    // `32 · 128 · 32767 · 2^max_exp`, and there are `groups` of them.
-    //
-    // **Every exponent is checked, not the largest one.** `max()` answers the accumulator's
-    // question and says nothing about the smallest: a table holding `[0, -1]` has a maximum of 0,
-    // clears a range test written against that maximum, and reaches `partial << exps[..]` below
-    // with a NEGATIVE shift — which panics under the release profile's `overflow-checks`, in
-    // virtual processing, on a block that has already been stored and relayed. The doc above
-    // already calls the exponent non-negative; this is the line that makes that true of a
-    // stranger's bytes and not only of ours.
-    if let Some(bad) = exps.iter().copied().find(|e| !(0..=QWEN36_MAX_GROUP_EXP).contains(e)) {
-        return Err(PalwQwen36OpError::BadK { k: bad.unsigned_abs() as usize, experts: QWEN36_MAX_GROUP_EXP as usize });
-    }
-    let max_exp = exps.iter().copied().max().unwrap_or(0);
-    let per_group = (QWEN36_WEIGHT_GROUP as i128) * 128 * (A16_CODE_MAX as i128) * (1i128 << max_exp);
-    if per_group * groups as i128 > i64::MAX as i128 {
-        return Err(PalwQwen36OpError::NotAMultiple { got: n, unit: QWEN36_WEIGHT_GROUP });
-    }
+    q36_check_group_exponents_v1(exps, n)?;
     Ok((0..out_dim)
         .map(|c| {
             let row = &weights[c * n..(c + 1) * n];
