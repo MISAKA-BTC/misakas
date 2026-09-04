@@ -98,6 +98,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut blocks_path = None;
     let mut retention = None;
+    let mut generated_cache: Option<String> = None;
     let mut out_path = None;
     // The DISPLAY prefix ("misaka-…") is not the consensus identity: the domain is derived from
     // `NetworkId::to_string()` ("testnet-11") plus the genesis, exactly as every verifier derives
@@ -109,6 +110,12 @@ fn main() {
         match a.as_str() {
             "--blocks" => blocks_path = it.next().cloned(),
             "--retention" => retention = it.next().cloned(),
+            // **Decode each claim once.** The publish cron runs every two minutes and the answer
+            // for a given claim never changes, but the material is 253 MB and its decode peaks at
+            // ~575 MB — on the fleet's 24 GB producer host that is a swap event per row per run
+            // (measured 2026-09-04, when two 34 GiB mappings had already pushed it into swap).
+            // With a cache the read happens once per new claim.
+            "--generated-cache" => generated_cache = it.next().cloned(),
             "--out" => out_path = it.next().cloned(),
             "--network" => network = it.next().cloned().unwrap_or(network),
             other => die(format!("unknown arg {other}")),
@@ -131,6 +138,13 @@ fn main() {
         .unwrap_or_else(|e| die(format!("--network {network}: {e}")));
     let domain = palw_network_domain_v2_for(network.as_bytes(), Some(genesis));
 
+    // claim hex -> the generated ids that claim's material holds. Loaded before the walk, written
+    // after it; a missing or unreadable file is an empty cache, never a failure.
+    let mut cache: std::collections::BTreeMap<String, Vec<u32>> = generated_cache
+        .as_ref()
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
     let mut rows = Vec::new();
     let mut hash_mismatch = 0usize;
     for b in blocks {
@@ -175,14 +189,45 @@ fn main() {
         let claim = attempt_id_v2(a);
         // `--retention` is comma-separated: each producer holds only its own executions, and this
         // host may run several (the QWEN36 producer and the QWEN25 producer are different nodes).
-        let generated: Option<Vec<u32>> =
+        //
+        // **One codec, asked in the order the producer might have written.** The per-class
+        // decoders (`qwen36_material_decode_v1` / `qwen25_a16_material_decode_v1`) read the flat
+        // rows-then-generated layout; since ADR-0077 a producer retains the FOLDED capture
+        // (`base0_fp_material_encode_v2`: version, binding, sparse step tree, logits rows,
+        // generated ids, prompt ids, checkpoints), and every 5f material on the public chain is
+        // that shape — 253 MB each, and the flat decoder returns None on the first field, so the
+        // page's answer column was empty for every row. `base0_material_decode_any_v1` tries the
+        // folded form and falls back to the flat one, which is exactly what a seat does.
+        let cached = cache.get(&claim.to_string()).cloned();
+        let generated: Option<Vec<u32>> = if cached.is_some() {
+            cached
+        } else {
             retention.split(',').find_map(|dir| std::fs::read(format!("{dir}/{claim}.material")).ok()).and_then(|bytes| {
-                if class_hex == QWEN36_CLASS {
-                    qwen36_material_decode_v1(&bytes).map(|r| r.generated)
-                } else {
-                    qwen25_a16_material_decode_v1(&bytes).map(|r| r.generated)
+                match misaka_palw_base0::produce::base0_material_decode_any_v1(&bytes) {
+                    Ok(misaka_palw_base0::produce::Base0RetentionV1::Folded(folded)) => Some(folded.generated_token_ids),
+                    // **The attempt lane's retention is the DENSE tuple, and its fourth element is
+                    // the answer** — `(binding, tiles, logits_rows, generated, checkpoints)`. A
+                    // 5f QWEN36 material is 253 MB of which 2,685,360 entries are tiles, and it
+                    // decodes in 0.15 s at 575 MB peak; measured on e78441c7…, generated
+                    // `[979, 7287]`. Reading this arm and then falling through to the flat
+                    // decoders — which is what this did for one revision — throws away the answer
+                    // it just decoded and prints an empty column.
+                    Ok(misaka_palw_base0::produce::Base0RetentionV1::Dense((_, _, _, generated, ..))) => Some(generated),
+                    // The flat layout the earlier producers wrote, kept so an archived material
+                    // still renders: the class decides which of the two readers understands it.
+                    Err(_) => {
+                        if class_hex == QWEN36_CLASS {
+                            qwen36_material_decode_v1(&bytes).map(|r| r.generated)
+                        } else {
+                            qwen25_a16_material_decode_v1(&bytes).map(|r| r.generated)
+                        }
+                    }
                 }
-            });
+            })
+        };
+        if let Some(ids) = generated.as_ref() {
+            cache.insert(claim.to_string(), ids.clone());
+        }
         rows.push(json!({
             "block": dumped_hash,
             "daa": h.get("daaScore").map(u64of),
@@ -195,6 +240,11 @@ fn main() {
             "prefill": job.0,
             "decode": job.1,
         }));
+    }
+    if let Some(path) = generated_cache.as_ref()
+        && let Ok(bytes) = serde_json::to_vec(&cache)
+    {
+        let _ = std::fs::write(path, bytes);
     }
     let out = json!({ "network": network, "rows": rows, "hash_mismatches": hash_mismatch });
     std::fs::write(&out_path, serde_json::to_vec_pretty(&out).unwrap()).unwrap_or_else(|e| die(format!("{out_path}: {e}")));
