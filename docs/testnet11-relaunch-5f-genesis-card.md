@@ -5897,3 +5897,19 @@ free prompts to the dense tier's certified lane, each as a claim and a derivatio
 the committed answer. The gateway (`fp-gateway-5f`) is stopped; ibm's memory returns to the two nodes. What remains
 post-cut is unchanged: the material transport (6k–6m) for the seats' verification and the dense tier's own attempt
 blocks, and ADR-0065 D4.
+
+## Step 10 — the first public newcomer, and its first wall (01:45 UTC, 2026-09-04)
+
+ff (the Studio integrator) pointed a Studio-supervised kaspad at testnet-11 from a Mac. The binary was built from
+`palw-adr0082-impl` — the frozen cut plus tool commits, **without the genesis re-pin** — so it printed
+`Consensus params fingerprint: a5291e00…` (the pre-re-pin value) and then **panicked**:
+`consensus/src/consensus/utxo_set_override.rs:60: assertion left == right failed: genesis utxo_commitment`. That is
+audit M-07's guard (a node must not boot when its pinned genesis disagrees with the premine it mints) — the same
+line ibm's un-re-pinned binary died on in step 4 — and it is the right refusal in the wrong voice: a newcomer who
+builds from a checkout one commit stale gets a stack trace, with the fingerprint line above it as the only clue,
+before any peer is contacted. **Fourth newcomer wall**, beside the three the memory names; post-cut: a named refusal
+("this build's genesis is X; the network's is Y; build from tag …"), not an assertion. ff is rebuilding from the tag
+`testnet-11-relaunch-5f` (`6e01ba07`), which is also the binary a Studio user needs — the argument for a GitHub
+release carrying binaries, which is the operator's to cut. Nothing was spent; bond-0 untouched. The join readings
+(which seed names answer, whether the two anchors handshake, whether pruned-IBD or the registration meets a wall)
+come from the tagged build's run, with the bond outpoint.
