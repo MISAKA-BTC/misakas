@@ -124,6 +124,10 @@ pub struct PalwProducerService {
     /// a holding is the artifact the CHAIN registered is decided per block, against the producer
     /// facts.
     class_holdings: Vec<misaka_palw_sdk::PalwLoadedArtifactV1>,
+    /// Draws whose class ticket WON and whose Layer-0 digest then lost against the template's
+    /// `bits` — the count that names a chain whose `bits` has priced the lane out (5f card §10b:
+    /// bits at p = 1.5e-3 while every class ticket that won lost here, and nothing said so).
+    network_draw_lost: std::sync::atomic::AtomicU64,
     consensus_manager: Arc<ConsensusManager>,
     mining_manager: MiningManagerProxy,
     flow_context: Arc<FlowContext>,
@@ -225,6 +229,7 @@ impl PalwProducerService {
             bond,
             miner_data,
             class_holdings,
+            network_draw_lost: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -367,6 +372,11 @@ impl PalwProducerService {
         // loop wrote 5,281 identical warnings on a live testnet node while it produced nothing.
         let mut last_hold: Option<String> = None;
         let mut last_hold_at: Option<std::time::Instant> = None;
+        // Lost draws are the ordinary state and log nothing each; the count is what says whether
+        // the lottery this node is drawing can be won at all (testnet-11 5f: 8 h at 40 % CPU and
+        // not one line, against a chance per draw of 1e-7).
+        let mut draws: u64 = 0;
+        let mut draws_reported_at: Option<std::time::Instant> = None;
         // Where the bucket walk stands on the template last drawn against — see `produce_one`.
         let mut cursor: Option<(Hash64, u64)> = None;
         loop {
@@ -391,10 +401,25 @@ impl PalwProducerService {
                 // participation are checked separately below, so `--enable-unsynced-mining` buys
                 // exactly the "my sink is older than the window" waiver a network's first block
                 // needs — never permission to mine alone or on a quarantined chain.
-                let peers_and_participation =
-                    self.flow_context.hub().has_peers() && self.flow_context.is_consensus_participation_allowed();
-                if !(self.config.enable_unsynced_mining && peers_and_participation) {
-                    trace!("[{PALW_PRODUCER}] holding: the mining rule engine says this node should not mine");
+                let has_peers = self.flow_context.hub().has_peers();
+                let participation_allowed = self.flow_context.is_consensus_participation_allowed();
+                if !(self.config.enable_unsynced_mining && has_peers && participation_allowed) {
+                    // Visible, once per change and then every five minutes — this was a `trace!`,
+                    // and a pool slot on testnet-11 sat behind it for hours at 5 % CPU while its
+                    // operator read "registered, healthy chain view, drawing nothing" (5f card §10b).
+                    // The three predicates are the whole diagnosis: a sink older than the sync
+                    // window needs `--enable-unsynced-mining`; no peers or a closed participation
+                    // gate hold regardless of that flag.
+                    let detail = format!(
+                        "the mining rule engine says this node should not mine [enable_unsynced_mining={} peers={} participation_allowed={}]",
+                        self.config.enable_unsynced_mining, has_peers, participation_allowed
+                    );
+                    let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
+                    if last_hold.as_deref() != Some(detail.as_str()) || stale {
+                        info!("[{PALW_PRODUCER}] holding: {detail}");
+                        last_hold = Some(detail);
+                        last_hold_at = Some(std::time::Instant::now());
+                    }
                     if !self.tick(std::time::Duration::from_secs(2)).await {
                         break;
                     }
@@ -407,7 +432,13 @@ impl PalwProducerService {
                 }
             }
             let Some(facts) = session.palw_producer_facts_v2(self.config.class_id, Some(bond)) else {
-                trace!("[{PALW_PRODUCER}] this network has no ConsensusV2 facts — nothing to produce");
+                let detail = format!("this network has no ConsensusV2 facts for class {} — nothing to produce", self.config.class_id);
+                let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
+                if last_hold.as_deref() != Some(detail.as_str()) || stale {
+                    info!("[{PALW_PRODUCER}] holding: {detail}");
+                    last_hold = Some(detail);
+                    last_hold_at = Some(std::time::Instant::now());
+                }
                 if !self.tick(std::time::Duration::from_secs(5)).await {
                     break;
                 }
@@ -465,6 +496,7 @@ impl PalwProducerService {
             }
             match self.produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor).await {
                 Ok(Some(hash)) => {
+                    draws += 1;
                     produced += 1;
                     info!("[{PALW_PRODUCER}] produced block #{produced} {hash} (class ticket + Layer-0 both under target)");
                     // **The two numbers that say whether this is a PALW network or a hash chain
@@ -480,7 +512,21 @@ impl PalwProducerService {
                         facts.safe_weight, facts.live_total, facts.final_claims, facts.unresolved_claims, facts.open_courts
                     );
                 }
-                Ok(None) => {} // A lost draw. The next call draws the next bucket, or a fresh template.
+                Ok(None) => {
+                    // A lost draw. The next call draws the next bucket, or a fresh template. Once
+                    // every five minutes, the count and the odds — so a lottery that cannot be won
+                    // reads as one from the log an operator already watches, not from a silence.
+                    draws += 1;
+                    if draws_reported_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300)) {
+                        let class_p = facts.class_target as f64 / u128::MAX as f64;
+                        let network_lost = self.network_draw_lost.load(std::sync::atomic::Ordering::Relaxed);
+                        info!(
+                            "[{PALW_PRODUCER}] {draws} draws this run, {produced} produced, {network_lost} won the class ticket and lost the network draw against bits; class ticket p = {class_p:.3e} per draw (1 in {:.3e})",
+                            1.0 / class_p.max(f64::MIN_POSITIVE)
+                        );
+                        draws_reported_at = Some(std::time::Instant::now());
+                    }
+                }
                 Err(err) => warn!("[{PALW_PRODUCER}] {err}"),
             }
         }
@@ -710,6 +756,7 @@ impl PalwProducerService {
                 if state.check_pow_layer0(nonce).map(|(ok, _)| ok).unwrap_or(false) {
                     Some((nonce, attempt.clone()))
                 } else {
+                    self.network_draw_lost.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     trace!("[{PALW_PRODUCER}] bucket {nonce_bucket}: the class draw won, the network draw lost");
                     None
                 }
