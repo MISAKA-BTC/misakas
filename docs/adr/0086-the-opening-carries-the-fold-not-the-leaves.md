@@ -179,7 +179,19 @@ the next cut, not this one.
 * **Not landed:** the P2P request and serve of `Base0FpBlockLeavesV1` (with ADR-0085's items 4
   and 5); the seed row's replacement by the seat's own selection (§3, not taken); the fold
   opener's edge-only replay.
-* **Devnet Y:** recorded below when run 7 (`MAX_TOKENS=40`, a fold material over the cap) ends.
+* **Devnet Y, live (run 7, 2026-09-05 07:17–08:14 JST, `62fec794`, three nodes on this Mac).** A
+  graph-v5 free-prompt claim of 40 tokens (`d9ad65d0…`) staged a **24,423,539-byte** fold
+  capture — over `PALW_MATERIAL_MAX_BYTES`, the drill's own line: "ADR-0084 Y1 is live". The
+  panel bound on every node at 08:08; node-1 (holds the artifact) drew intervals `[17, 4, 0, 10]`
+  of 39, asked node-0, and held four served V4 openings: interval 17 **1,110,705 bytes**,
+  interval 4 **1,110,513**, interval 0 **33,655**, interval 10 **1,110,449** — the seed row
+  (the vocabulary-wide logits row) is the decode intervals' whole size, as §4 said, and interval
+  0 is the prefill's digests and the binding. Then "4 interval(s) replayed against this seat's
+  own recomputed state — no history fetched" and **a `Valid` receipt** at 08:13:46, five minutes
+  after the draw. Node-2 (no artifact) filed `Incapable`. On the attempt lane the same build
+  served interval 0 of a v5 claim as **108,791 bytes** where run 5 had served 424,359,978, and
+  Decision 7's replay kept licensing (the line now reads "6630544 leaves replayed, priced 0, 7s").
+  Nothing over the cap moved on either lane.
 
 ## 8. What is deliberately not decided
 

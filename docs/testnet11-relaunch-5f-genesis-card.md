@@ -6298,3 +6298,15 @@ for this chain: no material over 16 MiB is pushed (D3); seats license v5 attempt
 instead of from a 784 MB push; a served `.answer` envelope beside every material; the ladder fix for any pulled dense
 material. What it does NOT change: v5 FREE-PROMPT claims still void (no a16 interval opening fits the 4 MiB lane — ADR-0084
 §7.2, user decision pending), and the court still cannot refute a class above 2^22 leaves (U-08, activation needed).
+
+### 10o. ADR-0086 — the opening carries the fold, not the leaves (2026-09-05, `palw-adr0084-served-answer`)
+
+The operator chose ADR-0084 §7.2's first option on 2026-09-05; ADR-0086 designs it and `3d56b57a`/`62fec794` land it: the
+interval opening carries the fold's digests and the Merkle frontier, the named checkpoint claim for every class, the seed row —
+and no leaf hash and no state chunk; the seat replays and supplies its own leaves. **Measured on the devnet (run 7):** a
+24,423,539-byte free-prompt capture (over the 16 MiB cap) was licensed `Valid` by a seat that fetched four openings of
+1,110,705 / 1,110,513 / 33,655 / 1,110,449 bytes and "no history"; the attempt lane's interval 0 opening fell from
+424,359,978 to 108,791 bytes. The fleet binary is rebuilt from `62fec794` (sha `7a67157217379f87`) and staged on all three
+hosts; the restart follows the same order as §10n (seat2 → .113 → ibm → verify; node0 may need SIGKILL after a stuck
+shutdown). What this closes on the public chain: v5 free-prompt claims can be licensed without moving their material. What
+it does not: the court's refutation walkers (U-08) and the annex's P2P wiring (ADR-0085 items 4–5, ADR-0086 D6's transport).
