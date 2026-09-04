@@ -5744,3 +5744,8 @@ commits cherry-picked from `palw-adr0082-impl` (the rail pair `7aa3d5ad`/`b037cd
 devnet runs 4–5; the exporter's class ids `1b2bff36`, in service on ibm; the drill's stage-6 fix `ee252944`/`0e175f9b`).
 Left on its branch: `f1604dd3` (kaspad's default pay address — not what the fleet runs). The push is a fast-forward
 (`origin/main` `dcbfe361` is an ancestor; 0 commits behind) and carries the tag `testnet-11-relaunch-5f` at `6e01ba07`.
+
+**7c, continued (01:02 UTC).** The family's two carriers (`3631d02c…`, `e62e7cb0…`, funded in chain from the
+dropped bind's change) were accepted, and block `f9af403c…` at 00:59:01 UTC logs "PALW lifecycle carried 1×
+FamilyCertified" with no drop line — the a16-v5 family is free-prompt-lane certified on the public chain. The bind
+was re-broadcast as carrier `bf3e37fc…` (funded from `e62e7cb0…:0`); the lane flips in the block that carries it.
