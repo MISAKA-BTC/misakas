@@ -5761,3 +5761,8 @@ next step, not claimed.
 
 **Step 8 — pushed.** `palw-testnet-5f` → `origin/main` as a fast-forward from `dcbfe361`, with the tag
 `testnet-11-relaunch-5f` at the deployed cut `6e01ba07`; the sha below is main's head after the push.
+
+**Step 8 — verified on GitHub (01:07 UTC):** `git ls-remote origin refs/heads/main` → `efbef639`; the tag's peeled
+commit → `6e01ba07`. https://github.com/MISAKA-BTC/misakas/commit/efbef639d9d2c5453c126e3e0f6002a930dea853 ·
+https://github.com/MISAKA-BTC/misakas/releases/tag/testnet-11-relaunch-5f. (A plain `git fetch` in this repo does
+not move `origin/main` — its fetch refspec is a single tag, the memory note's trap — hence `ls-remote`.)
