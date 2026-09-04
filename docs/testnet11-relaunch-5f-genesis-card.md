@@ -5722,3 +5722,25 @@ free-prompt lane, family `5c22b8d0…`, 14 fault vectors, 198,754 B → two carr
 `63ae283e…`). A chained job submits the two chunks from bond-0, waits for the grading line at the completing block,
 then re-submits the bind and reads the lane. 6a's session ended before the result; the bond-0 reservation was relayed
 to the two successor sessions (`misaka-testnet-e1`, `-ff`) so no wallet send races the carriers.
+
+## Step 8 — verification pass before the push to main (00:59 UTC, 2026-09-04)
+
+    host   unit               role              fp        genesis   panic  liveness
+    ibm    misaka-t11-node0   QWEN36 producer   2222e054  ad30b5cb  0      ALIVE daa=729
+    ibm    misaka-t11-node1   floor + panel     2222e054  (handshakes)  0  ALIVE daa=729
+    .113   misaka-t11-node    public + panel    2222e054  ad30b5cb  0      ALIVE daa=729
+    .113   misaka-t11-seat4   panel             2222e054  (handshakes)  0  ALIVE daa=729
+    5.104  misaka-t11-seat2   panel (paused)    2222e054  (handshakes)  0  ALIVE daa=400, catching up
+    explorer misaka-testnet-11 at 729 (db 733 rows from blue 0) · seeder answers 169.58.232.113 169.58.39.220, publicly too
+    pool active · faucet active, grant 12, balance 0 (operator funds it) · QWEN36 3 blocks · kaspad sha 14065c93 on all hosts
+    ibm 9 GB available / swap 4.5 GB · .113 10 GB available
+
+Normal: the chain, the six-node fleet on the cut, discovery, the explorer, the gate (7a). Known and documented, not
+blockers to publishing the code that runs: the dense tier's blocks do not cross real links and LLM claims cannot be
+verified by the seats until the material transport carries 5f-sized materials (6k–6m, post-cut code); the v5
+free-prompt lane binding is being carried now (7c). **What goes to `main`:** `palw-testnet-5f` — the cut `6e01ba07`
+(the kaspad every host runs), the card and the announcement draft, the fleet-script fixes, and five verified tool
+commits cherry-picked from `palw-adr0082-impl` (the rail pair `7aa3d5ad`/`b037cdc2`, built on ibm and proven on
+devnet runs 4–5; the exporter's class ids `1b2bff36`, in service on ibm; the drill's stage-6 fix `ee252944`/`0e175f9b`).
+Left on its branch: `f1604dd3` (kaspad's default pay address — not what the fleet runs). The push is a fast-forward
+(`origin/main` `dcbfe361` is an ancestor; 0 commits behind) and carries the tag `testnet-11-relaunch-5f` at `6e01ba07`.
