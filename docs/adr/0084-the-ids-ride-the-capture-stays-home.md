@@ -340,6 +340,30 @@ class's canonical job) and the rule compared the replay's count against it. `c24
 rule once (`replay_licenses_v1`: roots reproduce; work reproduces when the claim prices it) with
 tests for the unpriced, the priced and the mismatching cases. Run 6 records the licence.
 
+### 7.4 Run 6 licences by replay; the fleet is on `c24c3b9d` (2026-09-05, 00:00–00:50 JST)
+
+Run 6 (`c24c3b9d`, 4 tokens, nothing else on the CPU): node-1 replayed node-0's a16 claim
+`…2d155f08` after the 2-DAA grace and filed **Valid** — "licensed by replay — the anchor's job
+reproduces the claim's roots … 7s; no material moved" — from the fold, in seven seconds, where the
+producer's dense draw is minutes; node-2 (no artifact) filed Incapable. That was the gate for the
+fleet. Run 5 had also served interval 0 of an a16 attempt claim as **424,359,978 bytes** in 14 s
+(the §7.2 figure, measured) and the transport dropped it without a line; the asking seat stayed at
+"0 openings held". The 16-token free-prompt fold capture was 9,788,323 bytes — still inside the
+material cap, so the drill's Y1 verdict line says "NOT exercised" up to about thirty tokens on
+this class.
+
+Fleet, in the order the runbook fixes (seat2 → .113 → ibm → verify), binary sha `5c21b1a87fb2e868`
+= `c24c3b9d`, fingerprint `71b35c25…` unchanged on every host: seat2 respawned in 15 s (15:19:52Z);
+.113's node, seat4 and three pool slots in 18–27 s each; ibm's node1 in 36 s; ibm's **node0
+acknowledged the SIGINT (RPC and P2P servers stopped, "panel stopping" at 15:31:14Z) and then sat
+for 16 minutes at 0 % CPU with all 47 threads in futex wait** — the public node's recorded
+silent-hang signature, this time on the way down. SIGKILL at 15:46:56Z; systemd respawned it in
+21 s and it printed the fingerprint at 15:47:47Z. seat2's `--palw-produce
+--palw-producer-class=4277d84f…` were restored from `c-seat2.sh.pre-5f-pause` (the diff was those
+two flags and nothing else; the paused script is kept as `c-seat2.sh.paused-until-20260905`) and
+seat2 respawned at 15:48:48Z with the producer loading its artifacts. The cosmetic `0085e2bb`
+(the licence line names the replayed leaves) is on the branch, not on the fleet.
+
 ## 8. What is deliberately not decided
 
 * **A close assembled from an opening (U-07c).** §4 names the stall. The refutation of a step

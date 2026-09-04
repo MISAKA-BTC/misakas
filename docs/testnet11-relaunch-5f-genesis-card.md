@@ -6288,3 +6288,13 @@ stood, the branch would have stopped v5 attempt-lane licensing on this chain (th
 (`3c6ea28b`, `c24c3b9d`): a seat that holds nothing replays the anchor's job from the fold and licenses on the roots — run
 5 reproduced both roots exactly on the first try and was refused by a work comparison that does not apply to an unpriced
 attempt claim; fixed, run 6 pending. The fleet binary is rebuilt from `c24c3b9d`; the restart waits for run 6's licence.
+
+**§10n, closed (2026-09-05 00:50 JST) — the fleet runs `c24c3b9d` (sha `5c21b1a87fb2e868`), seat2 produces v5 again:** gate = devnet
+run 6 licensed an a16 attempt claim by replay in 7 s with no material moved. Order seat2 → .113 (node, seat4, pool-slot@01–03)
+→ ibm (node1, node0) → verify; fingerprint `71b35c25…` unchanged everywhere. **node0 wedged on shutdown** (servers stopped
+15:31:14Z, then 16 min at 0 % CPU, 47 threads in futex wait — the §10-era hang signature): SIGKILL 15:46:56Z, respawned in
+21 s. seat2's two production flags restored from `c-seat2.sh.pre-5f-pause`, respawned 15:48:48Z. What the new binary changes
+for this chain: no material over 16 MiB is pushed (D3); seats license v5 attempt blocks by replaying the anchor's job (D7)
+instead of from a 784 MB push; a served `.answer` envelope beside every material; the ladder fix for any pulled dense
+material. What it does NOT change: v5 FREE-PROMPT claims still void (no a16 interval opening fits the 4 MiB lane — ADR-0084
+§7.2, user decision pending), and the court still cannot refute a class above 2^22 leaves (U-08, activation needed).
