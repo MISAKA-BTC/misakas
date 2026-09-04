@@ -6212,3 +6212,26 @@ applies (the one a16-v5's free-prompt lane took in §7): `palw-certify drill --f
 carriers through the fleet node, then the binding again. **Finding for the doc:** the bind tool's coverage
 sentence is a build fact, not a chain fact, and it should say so — or read the chain's certified set through
 the node it is pointed at.
+
+### 10m. "My Studio chat is not on #/llm" — three layers, two fixed, two decisions (2026-09-04 07:50–08:35Z)
+
+The operator chatted in the Studio and expected the exchanges on misakascan.com/#/llm, which listed
+QWEN36 canonical jobs only.
+
+| layer | fact (measured, ff on the operator's Mac for the Studio half) | state |
+|---|---|---|
+| Studio chat | `ChatView` → `/api/v1/chat/completions` → the Studio's **llama.cpp** (123 tok/s, first token 53 ms); the path contains no gateway/commit/palw code; the gateway is not running there | by design: chat commits nothing |
+| Studio prompt-mining | `PromptMiningPanel` → gateway → palw-worker → a signed commitment in the outbox; `api/prompt_mining.rs`: "whether anything reached the chain … nothing does. The rail signs and deliberately stops" (`ChainReach::CommittedNotSubmitted` is its only variant) | no submitter exists; ff owns adding one (operator's instruction to ff at 08:2xZ) |
+| explorer | the exporter decoded attempt-lane headers only; the page's client-side lifecycle decoder had a variant table one behind the enum from `BondCapabilityDeclared` on (`ClassRegistered` rendered as `ClassFrozen`, `FreePromptCommitted` as `object#12`, the four ADR-0075/0078 objects unknown) | **fixed**: deployed `app.js` (backup `app.js.bak-llmfp-…`, mirrored as explorer repo `c3d4aa5`): table in the enum's order, `FreePromptCommitted` rows typed "free-prompt" with class and leaves, event descriptions for the new kinds, QWEN38-27B in the class table; exporter branch `palw-jobs-export-fp` (`6d2b2794`) adds `--fp-outbox`: 4 free-prompt rows now published (STL `b15ef21c…` → derived cad 684 B, MIDI `d575928f…` → music 91 B, and the two refused-derivation claims) with the gateway's answer text; ibm cron carries it every 2 min |
+
+What the page cannot do: show a chat that never left the Mac, or the text of anyone's free prompt —
+the chain carries `prompt_token_ids_hash` and `output_root`, the text stays with the executing gateway
+(the site shows it only for the fleet gateway's own claims). Prompt text for those four is still empty:
+the v5 retention is the dense tuple, which carries no prompt ids — next entry.
+
+Two decisions for the operator, stated in the report: (1) a submitter for the Studio's outbox — ff owns
+it (rail `--submit`, funds split from the panel's fee chain, the same-key reservation caveat handed over);
+(2) chat is NOT routed through the gateway (ff and I both recommend an explicit "commit this answer"
+action instead). And the blocker nobody's Studio can fix: a v5 free-prompt claim voids at the receipt
+deadline today because its ~750 MB material exceeds the 16 MiB serve cap (§6a) — a submitter makes the
+claim exist on chain; Final waits for the transport fix.
