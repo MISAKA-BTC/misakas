@@ -5716,3 +5716,9 @@ spend from bond-0, so the key stays reserved. The lane reads uncertified at daa 
 **ibm at 00:52 UTC:** used 15.4 GB / available 8.7 GB, swap 4.5 GB; node0 9.1 GB resident, still on its fourth job
 (three materials); node1 12.6 GB resident of which **12.5 GB anonymous** — a heap, not the A16 mappings — to be
 compared over time and restarted if the host's available memory falls under ~4 GB.
+
+**7c, continued (01:00 UTC).** `palw-certify drill --family a16-v5 --lane fp` on ibm: exit 0 in 2 s, `FamilyCertified`
+free-prompt lane, family `5c22b8d0…`, 14 fault vectors, 198,754 B → two carriers (100,071 + 98,825 B, group
+`63ae283e…`). A chained job submits the two chunks from bond-0, waits for the grading line at the completing block,
+then re-submits the bind and reads the lane. 6a's session ended before the result; the bond-0 reservation was relayed
+to the two successor sessions (`misaka-testnet-e1`, `-ff`) so no wallet send races the carriers.
