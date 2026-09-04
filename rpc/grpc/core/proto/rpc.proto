@@ -1365,6 +1365,10 @@ message GetPalwProducerFactsResponseMessage {
   // hash and decode leaves are what earn, so a builder must know before it builds. False whenever
   // `available` is false.
   bool fpDecodeRulesArmed = 25;
+  // ADR-0084 Decision 5: the directory this node's PALW panel serves material from, so a
+  // submitter on this host stages a claim's material and answer envelope where the panel reads.
+  // Empty on a node running no panel.
+  string palwRetentionDir = 26;
   RPCError error = 1000;
 }
 

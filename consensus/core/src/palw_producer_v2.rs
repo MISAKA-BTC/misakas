@@ -499,6 +499,11 @@ pub struct PalwSeatDutyV2 {
     pub executor_bond: PalwBondKeyV2,
     pub execution_root: Hash64,
     pub trace_root: Hash64,
+    /// The claim's committed `output_root` (ADR-0084 Decision 1): what a seat binds a served
+    /// answer envelope's ids to before it recomputes anything from them. Read off the claim
+    /// record beside the two roots above, for the same reason they ride — a seat that fetched it
+    /// separately could be handed a different value than the chain holds.
+    pub output_root: Hash64,
     /// When the panel was bound. The receipt window runs from here, and a receipt signed outside
     /// it is refused by `validate_receipt_quorum_v2`.
     pub bound_daa: u64,
@@ -731,6 +736,7 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
                 executor_bond: claim.bond,
                 execution_root: claim.execution_root,
                 trace_root: claim.trace_root,
+                output_root: claim.output_root,
                 bound_daa,
                 receipt_deadline: bound_daa.saturating_add(state_params.window_receipt()),
                 pwu: claim.pwu,

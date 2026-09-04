@@ -99,7 +99,7 @@ pub async fn submit(
             // Decision 1a); without it, the question alone (`FPM1`) and a seat's only verifier is
             // a re-run. Checked before the broadcast like everything else here: a capture that
             // does not decode as the family's tuple is refused now, not discovered by a seat.
-            let bytes = match capture {
+            let (bytes, answer_bytes): (Vec<u8>, Option<Vec<u8>>) = match capture {
                 Some(capture_path) => {
                     let capture_bytes = std::fs::read(capture_path)
                         .map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", capture_path.display())))?;
@@ -115,21 +115,63 @@ pub async fn submit(
                             format!("{} is not a family capture (expected the worker's material.bin)", capture_path.display()),
                         ));
                     }
-                    kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_encode_v1(
+                    // **The answer envelope beside the material** (ADR-0084 Decision 5): the
+                    // answer's ids, read off the capture by the family decoder, so the node serves
+                    // a few kilobytes to a seat when the capture itself would not fit the
+                    // transport. Refused by name when the capture's answer is not this
+                    // commitment's (its count is not `decode_tokens_executed`).
+                    let ids = misaka_palw_base0::produce::base0_material_decode_any_v1(&capture_bytes)
+                        .map(|retention| retention.generated_token_ids().to_vec())
+                        .map_err(|e| CliError::new(exit::GENERIC, format!("{}: the capture does not decode: {e:?}", capture_path.display())))?;
+                    if ids.len() != payload.commitment.decode_tokens_executed as usize {
+                        return Err(CliError::new(
+                            exit::GENERIC,
+                            format!(
+                                "{} holds an answer of {} ids and this commitment executed {} decode tokens — not this claim's capture",
+                                capture_path.display(),
+                                ids.len(),
+                                payload.commitment.decode_tokens_executed
+                            ),
+                        ));
+                    }
+                    let answer = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_v1(
                         &payload.commitment.job,
                         &payload.prompt_token_ids,
-                        &capture_bytes,
+                        &ids,
+                    );
+                    (
+                        kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_encode_v1(
+                            &payload.commitment.job,
+                            &payload.prompt_token_ids,
+                            &capture_bytes,
+                        ),
+                        Some(answer),
                     )
                 }
-                None => kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(
-                    &payload.commitment.job,
-                    &payload.prompt_token_ids,
+                None => (
+                    kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(
+                        &payload.commitment.job,
+                        &payload.prompt_token_ids,
+                    ),
+                    None,
                 ),
             };
             std::fs::create_dir_all(dir).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dir.display())))?;
             let file = dir.join(format!("{claim}.material"));
             let partial = file.with_extension("material.partial");
             std::fs::write(&partial, &bytes).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", partial.display())))?;
+            let answer = match answer_bytes {
+                Some(answer) => {
+                    // `.answer` beside `.material`: the suffix the node's resolver reads
+                    // (`palw_retained_answer_path`) and `misaka-palw-fp-submit::ANSWER_SUFFIX` spell.
+                    let answer_file = dir.join(format!("{claim}.answer"));
+                    let answer_partial = answer_file.with_extension("answer.partial");
+                    std::fs::write(&answer_partial, &answer)
+                        .map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", answer_partial.display())))?;
+                    Some((answer_partial, answer_file))
+                }
+                None => None,
+            };
             // ADR-0078 Decision 6: the DSL under the data-availability election. Staged the same
             // way, beside the material, only when the operator passed the gateway's `FPD1`
             // payload — the default is off, and "off" means no file for the node to serve.
@@ -153,7 +195,7 @@ pub async fn submit(
                 }
                 None => None,
             };
-            Some((partial, file, dsl))
+            Some((partial, file, answer, dsl))
         }
         None => {
             if dsl_payload.is_some() {
@@ -169,8 +211,11 @@ pub async fn submit(
     let nv = connect(ctx).await?;
     let submitted = nv.client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| {
         // The staged file is not a claim's material if the claim never reached the chain.
-        if let Some((partial, _, dsl)) = &staged {
+        if let Some((partial, _, answer, dsl)) = &staged {
             let _ = std::fs::remove_file(partial);
+            if let Some((answer_partial, _)) = answer {
+                let _ = std::fs::remove_file(answer_partial);
+            }
             if let Some((dsl_partial, _)) = dsl {
                 let _ = std::fs::remove_file(dsl_partial);
             }
@@ -180,10 +225,16 @@ pub async fn submit(
 
     // Accepted: the obligation is real, so the file takes its real name.
     let mut material_note: Option<String> = None;
+    let mut answer_note: Option<String> = None;
     let mut dsl_note: Option<String> = None;
-    if let Some((partial, file, dsl)) = staged {
+    if let Some((partial, file, answer, dsl)) = staged {
         std::fs::rename(&partial, &file).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", file.display())))?;
         material_note = Some(file.display().to_string());
+        if let Some((answer_partial, answer_file)) = answer {
+            std::fs::rename(&answer_partial, &answer_file)
+                .map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", answer_file.display())))?;
+            answer_note = Some(answer_file.display().to_string());
+        }
         if let Some((dsl_partial, dsl_file)) = dsl {
             std::fs::rename(&dsl_partial, &dsl_file)
                 .map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dsl_file.display())))?;
@@ -195,13 +246,16 @@ pub async fn submit(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::json!({ "submitted": true, "txid": submitted.to_string(), "material": material_note, "dsl": dsl_note })
+                serde_json::json!({ "submitted": true, "txid": submitted.to_string(), "material": material_note, "answer": answer_note, "dsl": dsl_note })
             )
         }
         _ => {
             println!("submitted {submitted}");
             if let Some(file) = &material_note {
                 println!("  DA material written: {file}");
+            }
+            if let Some(file) = &answer_note {
+                println!("  answer envelope beside it (served when the capture is over the transport cap, ADR-0084): {file}");
             }
             if let Some(file) = &dsl_note {
                 println!("  DSL under the DA election (ADR-0078 Decision 6): {file}");

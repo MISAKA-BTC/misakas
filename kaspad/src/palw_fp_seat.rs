@@ -391,6 +391,7 @@ mod tests {
             executor_bond: bond(2),
             execution_root: h(4),
             trace_root: h(5),
+            output_root: h(6),
             bound_daa: 100,
             receipt_deadline: 1_300,
             panel_anchor: h(anchor),

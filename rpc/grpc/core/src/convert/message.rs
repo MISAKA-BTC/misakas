@@ -409,6 +409,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwProducerFactsResponse>, protowire:
         fp_quanta_per_canonical_job: item.fp_quanta_per_canonical_job,
         fp_max_quanta_per_receipt: item.fp_max_quanta_per_receipt,
         fp_decode_rules_armed: item.fp_decode_rules_armed,
+        palw_retention_dir: item.palw_retention_dir.clone(),
         error: None,
     }
 });
@@ -1204,6 +1205,7 @@ try_from!(item: &protowire::GetPalwProducerFactsResponseMessage, RpcResult<kaspa
         fp_quanta_per_canonical_job: item.fp_quanta_per_canonical_job,
         fp_max_quanta_per_receipt: item.fp_max_quanta_per_receipt,
         fp_decode_rules_armed: item.fp_decode_rules_armed,
+        palw_retention_dir: item.palw_retention_dir.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwDerivedArtifactsRequestMessage, kaspa_rpc_core::GetPalwDerivedArtifactsRequest, {
@@ -1688,6 +1690,7 @@ mod palw_producer_facts_tests {
             // round trip can distinguish "carried" from "defaulted" — the field's own default is
             // false, and a conversion that dropped it would pass against a false fixture.
             fp_decode_rules_armed: true,
+            palw_retention_dir: "/var/lib/misaka/testnet-11/palw-retention".to_string(),
         };
         let wire: crate::protowire::GetPalwProducerFactsResponseMessage = RpcResult::Ok(&response).into();
         let back: GetPalwProducerFactsResponse = GetPalwProducerFactsResponse::try_from(&wire).unwrap();
@@ -1721,6 +1724,10 @@ mod palw_producer_facts_tests {
         assert!(
             back.fp_decode_rules_armed,
             "a builder that loses fp_decode_rules_armed builds jobs for the wrong decode ruleset — honest and unreproducible"
+        );
+        assert_eq!(
+            back.palw_retention_dir, response.palw_retention_dir,
+            "a submitter that loses the retention directory stages a claim's material where the node never looks (ADR-0084)"
         );
     }
 }

@@ -2371,10 +2371,85 @@ pub fn palw_fp_capture_decode_v1(bytes: &[u8]) -> Option<PalwFpCaptureV1> {
     Some(payload)
 }
 
-/// The job material of EITHER free-prompt payload — `FPC1` (question and answer) or `FPM1`
-/// (question alone). Readers that need only the job and the user's prompt take this.
+pub const PALW_FP_ANSWER_V1_MAGIC: [u8; 4] = *b"FPA1";
+
+/// **The answer's ids beside the question — and nothing that grows with the history** (ADR-0084
+/// Decision 1).
+///
+/// `FPM1` is the question; `FPC1` is the question and the executor's whole capture. A seat on the
+/// interval lane (ADR-0077 Decision 8, ADR-0082 Decision 9) needs neither the capture nor the
+/// history: it recomputes the state from the prompt it holds and the ids the commitment binds, and
+/// replays `k` openings fetched one at a time. What it could not get without the capture was the
+/// ids — `fp_committed_output_ids_v1` read them off an `FPC1` payload's capture, so a claim whose
+/// capture exceeded `PALW_MATERIAL_MAX_BYTES` (the graph-v5 fold is ~700 MB at 512) delivered
+/// nothing to any seat and voided at its receipt deadline. This payload is the ids' own object:
+/// the job, the prompt ids and the answer's ids, `4 × (prompt_tokens + decode_tokens_executed)`
+/// bytes plus the job, inside the transport cap at every ladder the ruleset admits.
+///
+/// **What binds here and what binds at the seat.** The decoder proves the one thing the bytes can
+/// prove themselves — the prompt ids hash to the job's `prompt_token_ids_hash`, exactly as `FPM1`
+/// — and refuses an empty answer. The ANSWER's ids are bound by the seat to the chain: ADR-0078
+/// X6's recompute, `output_commitment_v2(job_context_hash, ids, rendered_output_hash_for_family)`,
+/// must equal the claim's committed `output_root` (`PalwExecutionBackendV1::fp_output_root_v1`).
+/// That check belongs to the seat because only a family holds the context and the rendered-hash
+/// rule; a decoder that claimed to have bound the answer would be trusting the bytes about a fact
+/// only the class can witness.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpAnswerV1 {
+    pub material: PalwFpMaterialV1,
+    /// The answer, as the commitment's `output_root` commits it: `decode_tokens_executed` ids.
+    pub output_token_ids: Vec<u32>,
+}
+
+pub fn palw_fp_answer_encode_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[u32], output_token_ids: &[u32]) -> Vec<u8> {
+    let body = borsh::to_vec(&PalwFpAnswerV1 {
+        material: PalwFpMaterialV1 { job: job.clone(), prompt_token_ids: prompt_token_ids.to_vec() },
+        output_token_ids: output_token_ids.to_vec(),
+    })
+    .expect("an answer payload serializes");
+    let mut out = Vec::with_capacity(4 + body.len());
+    out.extend_from_slice(&PALW_FP_ANSWER_V1_MAGIC);
+    out.extend_from_slice(&body);
+    out
+}
+
+/// `None` for anything that is not an `FPA1` payload, for a job material that fails
+/// [`palw_fp_material_decode_v1`]'s own checks, and for an empty answer — a question with no answer
+/// is `FPM1`, not this. The answer's ids are NOT bound here (see the type's doc): a reader that
+/// files anything on them binds them to the claim's `output_root` first.
+pub fn palw_fp_answer_decode_v1(bytes: &[u8]) -> Option<PalwFpAnswerV1> {
+    let body = bytes.strip_prefix(&PALW_FP_ANSWER_V1_MAGIC)?;
+    let payload: PalwFpAnswerV1 = borsh::from_slice(body).ok()?;
+    palw_fp_prompt_ids_admit_v1(&payload.material.job, &payload.material.prompt_token_ids).ok()?;
+    if payload.output_token_ids.is_empty() {
+        return None;
+    }
+    Some(payload)
+}
+
+/// **The answer's ids of EITHER payload that carries them** — `FPA1` directly, or `FPC1` through
+/// the family that wrote the capture (the seam, never a family decoder named by the caller).
+/// `None` for `FPM1`, for junk, and for a capture this family cannot read. What is returned is
+/// UNBOUND: the caller binds it to the claim's `output_root` before believing it.
+pub fn palw_fp_committed_output_ids_decode_v1(
+    bytes: &[u8],
+    ids_of_capture: impl Fn(&[u8]) -> Option<Vec<u32>>,
+) -> Option<Vec<u32>> {
+    if let Some(answer) = palw_fp_answer_decode_v1(bytes) {
+        return Some(answer.output_token_ids);
+    }
+    let payload = palw_fp_capture_decode_v1(bytes)?;
+    ids_of_capture(&payload.capture).filter(|ids| !ids.is_empty())
+}
+
+/// The job material of ANY free-prompt payload — `FPC1` (question and capture), `FPA1` (question
+/// and the answer's ids, ADR-0084) or `FPM1` (question alone). Readers that need only the job and
+/// the user's prompt take this.
 pub fn palw_fp_job_material_decode_v1(bytes: &[u8]) -> Option<PalwFpMaterialV1> {
-    palw_fp_capture_decode_v1(bytes).map(|payload| payload.material).or_else(|| palw_fp_material_decode_v1(bytes))
+    palw_fp_capture_decode_v1(bytes)
+        .map(|payload| payload.material)
+        .or_else(|| palw_fp_answer_decode_v1(bytes).map(|answer| answer.material))
+        .or_else(|| palw_fp_material_decode_v1(bytes))
 }
 
 #[cfg(test)]
@@ -2542,5 +2617,77 @@ mod fp_material_tests {
         let mut bytes = PALW_FP_MATERIAL_V1_MAGIC.to_vec();
         bytes.extend_from_slice(&body);
         assert!(palw_fp_material_decode_v1(&bytes).is_none(), "a count the ids contradict");
+    }
+}
+
+#[cfg(test)]
+mod fp_answer_tests {
+    use super::*;
+
+    fn job(ids: &[u32]) -> PalwFreePromptJobV3 {
+        PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: kaspa_hashes::Hash64::from_u64_word(9),
+            class_id: kaspa_hashes::Hash64::from_u64_word(7),
+            executor_bond: crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_u64_word(1), index: 0 },
+            executor_pubkey: vec![7; 8],
+            operator_id: kaspa_hashes::Hash64::from_u64_word(4),
+            anchor_block: kaspa_hashes::Hash64::from_u64_word(0xA0),
+            anchor_daa: 100,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: kaspa_hashes::Hash64::default(),
+            prompt_token_ids_hash: crate::palw_v2::prompt_token_ids_hash_v2(ids),
+            prompt_tokens: ids.len() as u32,
+            decode_token_limit: 3,
+            max_context_tokens: 16,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        }
+    }
+
+    /// **`FPA1` is `FPM1` with the answer's ids attached** (ADR-0084 Decision 1): it round-trips,
+    /// the either-decoder reads the job material out of it, the prompt binding is enforced, and an
+    /// empty answer is not an answer.
+    #[test]
+    fn the_answer_envelope_round_trips_and_binds_the_prompt() {
+        let prompt = [5u32, 6, 7];
+        let job = job(&prompt);
+        let answer = [11u32, 12, 13];
+        let bytes = palw_fp_answer_encode_v1(&job, &prompt, &answer);
+        assert_eq!(&bytes[..4], &PALW_FP_ANSWER_V1_MAGIC);
+        let decoded = palw_fp_answer_decode_v1(&bytes).expect("FPA1 decodes");
+        assert_eq!(decoded.material.job, job);
+        assert_eq!(decoded.material.prompt_token_ids, prompt);
+        assert_eq!(decoded.output_token_ids, answer);
+        assert_eq!(palw_fp_job_material_decode_v1(&bytes).expect("FPA1 yields its material").job, job);
+        assert!(palw_fp_capture_decode_v1(&bytes).is_none(), "FPA1 is not a capture payload");
+        assert!(palw_fp_material_decode_v1(&bytes).is_none(), "FPA1 is not a bare material");
+        // The prompt binding, through the shared predicate.
+        assert!(palw_fp_answer_decode_v1(&palw_fp_answer_encode_v1(&job, &[5, 6, 8], &answer)).is_none());
+        // A question with no answer is FPM1, not this.
+        assert!(palw_fp_answer_decode_v1(&palw_fp_answer_encode_v1(&job, &prompt, &[])).is_none());
+        // Size: the job plus 4 x (prompt + answer) bytes plus borsh lengths — a few hundred bytes,
+        // not a capture (ADR-0084 Y1's shape at this width).
+        assert!(bytes.len() < 1_024, "{} bytes", bytes.len());
+    }
+
+    /// The ids come off `FPA1` directly and off `FPC1` only through the family seam; `FPM1` has
+    /// none; an empty seam answer is `None`, never an empty answer.
+    #[test]
+    fn the_committed_ids_reader_takes_either_carrier_through_the_seam() {
+        let prompt = [5u32, 6, 7];
+        let job = job(&prompt);
+        let answer = vec![11u32, 12, 13];
+        let fpa = palw_fp_answer_encode_v1(&job, &prompt, &answer);
+        let fpc = palw_fp_capture_encode_v1(&job, &prompt, b"family-capture");
+        let fpm = palw_fp_material_encode_v1(&job, &prompt);
+        let seam = |capture: &[u8]| (capture == b"family-capture").then(|| answer.clone());
+        assert_eq!(palw_fp_committed_output_ids_decode_v1(&fpa, seam), Some(answer.clone()));
+        assert_eq!(palw_fp_committed_output_ids_decode_v1(&fpc, seam), Some(answer.clone()));
+        assert_eq!(palw_fp_committed_output_ids_decode_v1(&fpm, seam), None);
+        assert_eq!(palw_fp_committed_output_ids_decode_v1(&fpc, |_| Some(Vec::new())), None, "an empty seam answer is no answer");
+        assert_eq!(palw_fp_committed_output_ids_decode_v1(&fpc, |_| None), None);
     }
 }

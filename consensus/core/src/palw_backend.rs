@@ -445,6 +445,21 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         None
     }
 
+    /// **The claim's `output_root`, recomputed from the answer's ids** (ADR-0084 Decision 1;
+    /// ADR-0078 X6's rule, `output_commitment_v2(job_context_hash, ids, rendered_hash)`, spelled by
+    /// the family that holds the context and the rendered-hash rule).
+    ///
+    /// This is how a seat binds a served answer envelope (`FPA1`) to the chain before it spends a
+    /// forward pass on its ids: the root the ids recompute must equal the root the claim
+    /// committed. The context is built exactly as [`Self::fp_recompute_checkpoint_root`] builds
+    /// it — the executed count is the job's budget and the stop reason is `ExactBudgetReached`,
+    /// which is the one shape this lane's runs have — so an honest claim's ids recompute its root
+    /// and a forged list never does. `None` when this family has no free-prompt path; a caller
+    /// then holds no binding and files nothing on those ids.
+    fn fp_output_root_v1(&self, _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3, _output_token_ids: &[u32]) -> Option<crate::Hash64> {
+        None
+    }
+
     /// **A DRILL fault: run the job, corrupt one lane of one tile, and commit to the result.**
     ///
     /// A court that has never convicted on a live chain is a court nobody has evidence works, and

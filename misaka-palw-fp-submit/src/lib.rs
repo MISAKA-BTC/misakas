@@ -87,6 +87,12 @@ pub enum FpSubmitError {
     /// one mistake a hand can make, pointing this at a staged material instead of at the run's own
     /// `material.bin`.
     NotACapture,
+    /// The answer's ids offered for the `FPA1` envelope are not the commitment's: their count is
+    /// not `decode_tokens_executed` (ADR-0084 Decision 5). A result frame from another job.
+    AnswerCountMismatch {
+        got: usize,
+        committed: usize,
+    },
     /// The claim the DSL names is not the claim this transaction commits.
     DslClaimMismatch {
         dsl_claim: Hash64,
@@ -138,6 +144,11 @@ impl std::fmt::Display for FpSubmitError {
             }
             Self::UndecodablePayload(e) => write!(f, "this payload does not decode, so no material can be written: {e}"),
             Self::NotACapture => write!(f, "these bytes are not a family capture (expected the worker's material.bin)"),
+            Self::AnswerCountMismatch { got, committed } => write!(
+                f,
+                "the answer offered for the envelope has {got} ids and the commitment executed {committed} decode tokens — not this \
+                 claim's answer (ADR-0084)"
+            ),
             Self::DslClaimMismatch { dsl_claim, tx_claim } => {
                 write!(f, "the DSL payload names claim {dsl_claim} but this transaction commits claim {tx_claim}")
             }
@@ -273,6 +284,27 @@ pub fn encode_claim_material(payload: &PalwFpCommitmentTxPayloadV3, capture: Opt
     }
 }
 
+/// The file suffix of the answer envelope beside `<claim>.material` (ADR-0084 Decision 5) — the
+/// node's `palw_retained_answer_path` spells the same one.
+pub const ANSWER_SUFFIX: &str = ".answer";
+
+/// **The `FPA1` answer envelope** (ADR-0084 Decision 1): the job, the prompt ids and the answer's
+/// ids. Refused here when the ids are not the commitment's — their count must be
+/// `decode_tokens_executed`, the one fact about the answer the commitment states in the clear —
+/// so a rail handed the wrong result frame is stopped before a file exists. The chain-side
+/// binding (the ids recompute `output_root`) is the seat's, through the family seam.
+pub fn encode_claim_answer(payload: &PalwFpCommitmentTxPayloadV3, output_token_ids: &[u32]) -> Result<Vec<u8>, FpSubmitError> {
+    let executed = payload.commitment.decode_tokens_executed as usize;
+    if output_token_ids.is_empty() || output_token_ids.len() != executed {
+        return Err(FpSubmitError::AnswerCountMismatch { got: output_token_ids.len(), committed: executed });
+    }
+    Ok(kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_v1(
+        &payload.commitment.job,
+        &payload.prompt_token_ids,
+        output_token_ids,
+    ))
+}
+
 /// The capture-shape check on its own, so a caller can refuse a bad path before it has a payload
 /// to encode against (the CLI reads the capture from a file the operator names).
 pub fn check_capture_shape(bytes: &[u8]) -> Result<(), FpSubmitError> {
@@ -329,6 +361,12 @@ pub struct FpStaging<'a> {
     pub retention_dir: Option<&'a Path>,
     /// The worker's own capture (`material.bin`). `None` yields the question-only `FPM1` form.
     pub capture: Option<&'a [u8]>,
+    /// **The answer's ids, for the `FPA1` envelope staged beside the material** (ADR-0084
+    /// Decision 5). The worker result carries them; the node serves the envelope in place of a
+    /// material the transport would refuse, and a seat on the interval lane needs exactly it.
+    /// `None` stages no envelope — the node then derives one from an `FPC1` capture on the first
+    /// pull, which is a 700 MB decode a submitter holding the ids can spare it.
+    pub output_token_ids: Option<&'a [u32]>,
     /// ADR-0078 Decision 6: this claim's `FPD1` DSL payload, when the operator elected the DSL
     /// into the data-availability obligation. Off by default, and "off" means no file for the
     /// node to serve.
@@ -350,6 +388,9 @@ pub struct SubmissionPlan {
     pub txid: String,
     /// `(file name, bytes)` — `None` when the caller retains the material itself.
     pub material: Option<(String, Vec<u8>)>,
+    /// `(file name, bytes)` — the `FPA1` answer envelope (ADR-0084), `None` without ids or
+    /// without a retention directory.
+    pub answer: Option<(String, Vec<u8>)>,
     pub dsl: Option<(String, Vec<u8>)>,
     /// The DAA past which this commitment may not be submitted, when the caller declared an
     /// anchor policy. Echoed so a caller can log the bound it just cleared.
@@ -366,6 +407,10 @@ pub fn plan_submission(tx: &Transaction, staging: &FpStaging<'_>, chain_daa: u64
     if let Some(expiry) = staging.expiry {
         expiry.check(chain_daa)?;
     }
+    let answer = match (staging.retention_dir, staging.output_token_ids) {
+        (Some(_), Some(ids)) => Some((format!("{claim_id}{ANSWER_SUFFIX}"), encode_claim_answer(&payload, ids)?)),
+        _ => None,
+    };
     let (material, dsl) = match staging.retention_dir {
         Some(_) => {
             let bytes = encode_claim_material(&payload, staging.capture)?;
@@ -392,7 +437,7 @@ pub fn plan_submission(tx: &Transaction, staging: &FpStaging<'_>, chain_daa: u64
             (None, None)
         }
     };
-    Ok(SubmissionPlan { claim_id, txid: tx.id().to_string(), material, dsl, expires_at_daa: staging.expiry.map(|e| e.expires_at()) })
+    Ok(SubmissionPlan { claim_id, txid: tx.id().to_string(), material, answer, dsl, expires_at_daa: staging.expiry.map(|e| e.expires_at()) })
 }
 
 /// What a completed submission produced.
@@ -401,6 +446,8 @@ pub struct FpSubmitted {
     pub txid: String,
     pub claim_id: Hash64,
     pub material_path: Option<PathBuf>,
+    /// The staged `FPA1` answer envelope (ADR-0084), when ids were offered.
+    pub answer_path: Option<PathBuf>,
     pub dsl_path: Option<PathBuf>,
 }
 
@@ -431,10 +478,24 @@ pub async fn execute_handoff(
     broadcaster: impl FpBroadcast,
 ) -> Result<FpSubmitted, FpSubmitError> {
     let mut staged_material = None;
+    let mut staged_answer = None;
     let mut staged_dsl = None;
     if let Some(dir) = retention_dir {
         if let Some((name, bytes)) = &plan.material {
             staged_material = Some(StagedFile::stage(dir, name, bytes)?);
+        }
+        // The answer envelope, under the same discipline (ADR-0084 Decision 5): half a staging is
+        // not a staging.
+        if let Some((name, bytes)) = &plan.answer {
+            match StagedFile::stage(dir, name, bytes) {
+                Ok(file) => staged_answer = Some(file),
+                Err(e) => {
+                    if let Some(material) = staged_material {
+                        material.discard();
+                    }
+                    return Err(e);
+                }
+            }
         }
         if let Some((name, bytes)) = &plan.dsl {
             match StagedFile::stage(dir, name, bytes) {
@@ -444,6 +505,9 @@ pub async fn execute_handoff(
                     // not be written would advertise an obligation this producer cannot serve.
                     if let Some(material) = staged_material {
                         material.discard();
+                    }
+                    if let Some(answer) = staged_answer {
+                        answer.discard();
                     }
                     return Err(e);
                 }
@@ -458,6 +522,9 @@ pub async fn execute_handoff(
             if let Some(material) = staged_material {
                 material.discard();
             }
+            if let Some(answer) = staged_answer {
+                answer.discard();
+            }
             if let Some(dsl) = staged_dsl {
                 dsl.discard();
             }
@@ -470,11 +537,15 @@ pub async fn execute_handoff(
         Some(material) => Some(material.commit()?),
         None => None,
     };
+    let answer_path = match staged_answer {
+        Some(answer) => Some(answer.commit()?),
+        None => None,
+    };
     let dsl_path = match staged_dsl {
         Some(dsl) => Some(dsl.commit()?),
         None => None,
     };
-    Ok(FpSubmitted { txid: submitted, claim_id: plan.claim_id, material_path, dsl_path })
+    Ok(FpSubmitted { txid: submitted, claim_id: plan.claim_id, material_path, answer_path, dsl_path })
 }
 
 /// The chain's own DAA, for the freshness check. Read from the node rather than taken from the
@@ -878,6 +949,60 @@ mod tests {
             matches!(load_unsigned_commitment(&retired), Err(FpSubmitError::ArtifactRetired { .. })),
             "naming the retired file directly is not a way around the rename"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **ADR-0084 Decision 5 / Y5: the answer envelope is staged beside the material, under the
+    /// same ordering.** Planned only with a retention dir AND the answer's ids; refused by name
+    /// when the ids are not the commitment's; written `.partial` with the material; renamed on
+    /// acceptance; gone on refusal, together with the material.
+    #[test]
+    fn the_answer_envelope_is_staged_beside_the_material_under_the_same_ordering() {
+        use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_ANSWER_V1_MAGIC, palw_fp_answer_decode_v1};
+        let (payload, bytes) = sample_payload();
+        let claim = fp_claim_id_v3(&payload.commitment);
+        let tx = commitment_tx(bytes, SUBNETWORK_ID_PALW_FP_COMMITMENT);
+        let ids: Vec<u32> = (100..116).collect();
+        assert_eq!(ids.len(), payload.commitment.decode_tokens_executed as usize);
+
+        // Without a retention dir the ids stage nothing; without ids no envelope is planned.
+        let plan = plan_submission(&tx, &FpStaging { output_token_ids: Some(&ids), ..Default::default() }, 0).unwrap();
+        assert!(plan.answer.is_none(), "no retention dir stages nothing");
+        let dir = tempdir("answer");
+        let plan = plan_submission(&tx, &FpStaging { retention_dir: Some(dir.as_path()), ..Default::default() }, 0).unwrap();
+        assert!(plan.answer.is_none(), "no ids, no envelope");
+
+        // The wrong answer is refused by name, before anything is written.
+        let short: Vec<u32> = ids[..15].to_vec();
+        let staging = FpStaging { retention_dir: Some(dir.as_path()), output_token_ids: Some(&short), ..Default::default() };
+        assert!(matches!(
+            plan_submission(&tx, &staging, 0),
+            Err(FpSubmitError::AnswerCountMismatch { got: 15, committed: 16 })
+        ));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "planning writes NOTHING");
+
+        // The right answer is planned beside the material, and decodes as FPA1 with these ids.
+        let staging = FpStaging { retention_dir: Some(dir.as_path()), output_token_ids: Some(&ids), ..Default::default() };
+        let plan = plan_submission(&tx, &staging, 0).unwrap();
+        let (name, encoded) = plan.answer.as_ref().expect("ids and a retention dir stage the envelope");
+        assert_eq!(name, &format!("{claim}{ANSWER_SUFFIX}"));
+        assert!(encoded.starts_with(&PALW_FP_ANSWER_V1_MAGIC));
+        let decoded = palw_fp_answer_decode_v1(encoded).expect("the staged envelope decodes");
+        assert_eq!(decoded.output_token_ids, ids);
+        assert_eq!(decoded.material.job, payload.commitment.job);
+
+        // Refused by the chain: neither file survives, in either form.
+        let err = futures::executor::block_on(execute_handoff(&plan, &tx, Some(&dir), Refuse("no"))).unwrap_err();
+        assert!(matches!(err, FpSubmitError::Rejected { .. }));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "a refused claim leaves neither the material nor the answer");
+
+        // Accepted: both take their real names, and the envelope is exactly what was planned.
+        let done = futures::executor::block_on(execute_handoff(&plan, &tx, Some(&dir), Accept)).unwrap();
+        let answer_path = done.answer_path.expect("the answer was staged");
+        assert_eq!(answer_path, dir.join(name));
+        assert_eq!(std::fs::read(&answer_path).unwrap(), *encoded);
+        assert!(done.material_path.unwrap().exists());
+        assert!(!dir.join(format!("{name}.partial")).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

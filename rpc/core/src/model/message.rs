@@ -2334,6 +2334,11 @@ pub struct GetPalwProducerFactsResponse {
     /// fail-closed reading `fp_certified` takes, and for the same reason: a submitter that held
     /// back on a stale `false` loses nothing it cannot retry.
     pub fp_decode_rules_armed: bool,
+    /// **The directory this node's PALW panel serves material from** (ADR-0084 Decision 5),
+    /// derived from the app dir and named by no flag — so a submitter on this host learns where
+    /// to stage a claim's material and answer envelope from the node itself. Empty on a node
+    /// running no panel, and on a version-4 peer. Node-local, like `locked_bond_outpoints`.
+    pub palw_retention_dir: String,
     /// **Every outpoint a wallet must not spend**, `txid:index` with a 128-hex transaction id.
     ///
     /// Two sources, deliberately in ONE list so a wallet cannot read half of it (audit3 H3, H12):
@@ -2353,12 +2358,13 @@ pub struct GetPalwProducerFactsResponse {
 
 impl Serializer for GetPalwProducerFactsResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        // Version 4: `fp_decode_rules_armed` (ADR-0082 Decisions 10/11's fence). Version 3 added
+        // Version 5: `palw_retention_dir` (ADR-0084 Decision 5). Version 4 added
+        // `fp_decode_rules_armed` (ADR-0082 Decisions 10/11's fence). Version 3 added
         // `fp_certified` and the free-prompt price (ADR-0077 Decision 3). Version 2 added
         // `locked_bond_outpoints` (audit3 H3). Every version is a strict suffix, so an older
         // reader stops where its version ended and this reader tolerates an older writer by
         // leaving the later fields at their defaults — additive, never re-ordered.
-        store!(u16, &4, writer)?;
+        store!(u16, &5, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.chain_point, writer)?;
         store!(u64, &self.daa_score, writer)?;
@@ -2384,6 +2390,7 @@ impl Serializer for GetPalwProducerFactsResponse {
         store!(u32, &self.fp_quanta_per_canonical_job, writer)?;
         store!(u32, &self.fp_max_quanta_per_receipt, writer)?;
         store!(bool, &self.fp_decode_rules_armed, writer)?;
+        store!(String, &self.palw_retention_dir, writer)?;
         Ok(())
     }
 }
@@ -2423,6 +2430,9 @@ impl Deserializer for GetPalwProducerFactsResponse {
         // holds back retries. The opposite default would have a gateway building jobs with decode
         // fields against a chain that will not read them.
         let fp_decode_rules_armed = if version >= 4 { load!(bool, reader)? } else { false };
+        // Version 5 (ADR-0084 Decision 5): an older writer names no directory, which reads as "this
+        // node told us nothing" — a submitter then refuses to stage anywhere it was not told to.
+        let palw_retention_dir = if version >= 5 { load!(String, reader)? } else { String::new() };
         Ok(Self {
             available,
             chain_point,
@@ -2449,6 +2459,7 @@ impl Deserializer for GetPalwProducerFactsResponse {
             fp_quanta_per_canonical_job,
             fp_max_quanta_per_receipt,
             fp_decode_rules_armed,
+            palw_retention_dir,
         })
     }
 }

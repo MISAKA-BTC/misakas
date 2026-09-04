@@ -154,6 +154,11 @@ pub(crate) fn parse_outpoint(s: &str) -> Result<TransactionOutpoint, String> {
 /// The extension a retained capture is stored under. Named once, because two files write it and
 /// three read it.
 pub(crate) const PALW_RETAINED_MATERIAL_SUFFIX: &str = ".material";
+/// **The answer envelope beside the material** (ADR-0084 Decisions 2 and 5): `<claim>.answer`,
+/// the `FPA1` payload the resolver serves in place of a material the transport would refuse.
+/// Staged by the submitter at submission, or derived once from the retained capture by the
+/// panel and cached under this name.
+pub(crate) const PALW_RETAINED_ANSWER_SUFFIX: &str = ".answer";
 
 /// **Where a claim's retained capture lives — the one place that decides.**
 ///
@@ -164,6 +169,12 @@ pub(crate) const PALW_RETAINED_MATERIAL_SUFFIX: &str = ".material";
 /// writer and the reader cannot disagree about what a claim's file is called.
 pub(crate) fn palw_retained_material_path(dir: &std::path::Path, claim: &Hash64) -> std::path::PathBuf {
     dir.join(format!("{claim}{PALW_RETAINED_MATERIAL_SUFFIX}"))
+}
+
+/// Where a claim's answer envelope is retained (ADR-0084): the material's path with the answer
+/// suffix, so the two are siblings and a directory listing pairs them.
+pub(crate) fn palw_retained_answer_path(dir: &std::path::Path, claim: &Hash64) -> std::path::PathBuf {
+    dir.join(format!("{claim}{PALW_RETAINED_ANSWER_SUFFIX}"))
 }
 
 impl PalwProducerService {
@@ -315,7 +326,12 @@ impl PalwProducerService {
         for entry in entries.flatten() {
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
-            let Some(stem) = name.strip_suffix(PALW_RETAINED_MATERIAL_SUFFIX) else { continue };
+            // The answer envelope (ADR-0084) is pruned on the material's horizon; nothing is
+            // announced for either — a seat that needs the bytes asks for them.
+            let Some(stem) = name.strip_suffix(PALW_RETAINED_MATERIAL_SUFFIX).or_else(|| name.strip_suffix(PALW_RETAINED_ANSWER_SUFFIX))
+            else {
+                continue;
+            };
             let Ok(claim) = stem.parse::<Hash64>() else { continue };
             // The bind + receipt windows at the frozen 120 s cadence are ~40 h; two days of
             // re-serving covers every claim that can still be licensed, and stops for the rest.
@@ -778,18 +794,22 @@ impl PalwProducerService {
             .to_vec();
             // The promise, kept before it is made. See `retain_execution`.
             let material = self.retain_execution(message, &run.material)?;
-            // And SERVED, not just kept: the panel's seats verify these bytes against the claim's
-            // committed roots, and a receipt cannot be filed about material nobody has.
-            self.flow_context.broadcast_palw_material(message, material).await;
             template.block.header.nonce = nonce;
             template.block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature }.encode_wire();
             template.block.header.finalize();
             let block: kaspa_consensus_core::block::Block = template.block.clone().to_immutable();
             let hash = block.hash();
+            // **The block first, the announcement after** (ADR-0084 Decision 3). This broadcast
+            // used to come before the submit, and on 5f a 748 MB material announced to five peers
+            // occupied every link for longer than the flow window: the routers were torn down and
+            // the block — queued behind the bytes — never entered the DAG (card §6l). The material
+            // is retained and SERVED (the pull, answered with the answer envelope when the capture
+            // does not fit); the announcement is a courtesy the transport skips over the cap.
             self.flow_context
                 .submit_rpc_block(session, block)
                 .await
                 .map_err(|e| format!("the chain refused a block this node produced: {e}"))?;
+            self.flow_context.broadcast_palw_material(message, material).await;
             return Ok(Some(hash));
         }
         Ok(None)

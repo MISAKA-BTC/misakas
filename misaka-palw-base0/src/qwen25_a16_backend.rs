@@ -1447,6 +1447,43 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         }
     }
 
+    /// **The committed answer's ids, read by the family that wrote the capture** (ADR-0084
+    /// Decision 6): the fold and the dense tuple alike, through `base0_material_decode_any_v1`.
+    /// `None` when the bytes are not this family's, and never an empty answer.
+    fn fp_committed_output_ids(&self, capture: &[u8]) -> Option<Vec<u32>> {
+        let retention = crate::produce::base0_material_decode_any_v1(capture).ok()?;
+        let ids = retention.generated_token_ids().to_vec();
+        (!ids.is_empty()).then_some(ids)
+    }
+
+    /// **`output_root` from the answer's ids** (ADR-0084 Decision 1; ADR-0078 X6). The context is
+    /// the one [`Self::execute_free_prompt`] runs under and [`Self::fp_recompute_checkpoint_root`]
+    /// rebuilds — the budget decoded exactly, `ExactBudgetReached` — and the rendered hash is this
+    /// family's keyed hash of the ids. An honest claim's ids recompute its committed root; any
+    /// other list does not, which is how a seat refuses a forged answer envelope before a forward
+    /// pass.
+    fn fp_output_root_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, output_token_ids: &[u32]) -> Option<Hash64> {
+        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
+        let class = PalwFpClassFactsV3 {
+            model_profile_id: self.shape_id,
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: self.shape_id,
+            shape_profile_id: self.class_profile_id,
+            cu_ruleset_id: Hash64::default(),
+        };
+        let shape = PalwFpRunFactsV3 {
+            decode_tokens_executed: job.decode_token_limit,
+            stop_reason: kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached,
+            full_logits_trace_root: Hash64::default(),
+            activation_leg_root: Hash64::default(),
+            checkpoint_leg_root: Hash64::default(),
+            step_leg_root: Hash64::default(),
+            step_leaf_count: 0,
+        };
+        let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).ok()?;
+        Some(output_commitment_v2(&ctx.context_hash(), output_token_ids, &rendered_output_hash_v1(output_token_ids)))
+    }
+
     fn operand_openings_for(
         &self,
         refutation: &kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1,

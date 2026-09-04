@@ -370,6 +370,9 @@ fn main() {
             &tx,
             retention_dir.as_deref(),
             capture.as_deref(),
+            // ADR-0084 Decision 5: the answer's ids ride beside the material as the `FPA1`
+            // envelope, from the same result frame the commitment was checked against.
+            &result.output_token_ids,
             dsl.as_deref(),
             misaka_palw_fp_submit::AnchorExpiry::new(commitment.job.anchor_daa, anchor_ttl_daa),
         ))
@@ -396,8 +399,14 @@ fn main() {
         "trace_manifest_root": hex(commitment.trace_manifest_root),
         "trace_retention_daa": commitment.trace_retention_daa,
         "tx_file": tx_path.display().to_string(),
-        "submitted": submitted.as_ref().map(|s| s.0.clone()),
-        "material_file": submitted.as_ref().and_then(|s| s.1.clone()),
+        "submitted": submitted.as_ref().map(|s| s.txid.clone()),
+        "material_file": submitted.as_ref().and_then(|s| s.material_file.clone()),
+        // ADR-0084 Decision 5: the answer envelope beside the material, and the directory the
+        // node serves both from — the fact that was missing when the first two public
+        // free-prompt claims were staged where the node never looked.
+        "answer_file": submitted.as_ref().and_then(|s| s.answer_file.clone()),
+        "retention_dir": submitted.as_ref().and_then(|s| s.retention_dir.clone()),
+        "retention_dir_source": submitted.as_ref().map(|s| s.retention_source),
         "commit_by_anchor_daa": commitment.job.anchor_daa.saturating_add(anchor_ttl_daa),
         "not_done_here": if submitted.is_some() {
             vec!["funding selection (the outpoint and amount are supplied, not discovered)"]
@@ -424,9 +433,11 @@ fn submit_through_the_one_path(
     tx: &kaspa_consensus_core::tx::Transaction,
     retention_dir: Option<&Path>,
     capture: Option<&[u8]>,
+    output_token_ids: &[u32],
     dsl: Option<&[u8]>,
     expiry: misaka_palw_fp_submit::AnchorExpiry,
-) -> (String, Option<String>) {
+) -> RailSubmitted {
+    use kaspa_rpc_core::api::rpc::RpcApi;
     use kaspa_wrpc_client::{
         KaspaRpcClient, WrpcEncoding,
         client::{ConnectOptions, ConnectStrategy},
@@ -447,11 +458,65 @@ fn submit_through_the_one_path(
             ..Default::default()
         };
         client.connect(Some(options)).await.unwrap_or_else(|e| die(format!("cannot reach {url}: {e}")));
-        let staging = misaka_palw_fp_submit::FpStaging { retention_dir, capture, dsl_payload: dsl, expiry: Some(expiry) };
+        // **Where the node reads** (ADR-0084 Decision 5). Without `--retention-dir` the node is
+        // asked for the directory its panel serves from, and the files go there — on this host,
+        // which is the only place the answer means anything. A node that names none (no panel,
+        // or a pre-ADR-0084 build) leaves nothing to stage into, and the rail says so rather than
+        // writing a material the operator will find later beside a claim nobody could serve.
+        let (retention_dir, retention_source) = match retention_dir {
+            Some(dir) => (Some(dir.to_path_buf()), "--retention-dir"),
+            None => {
+                let facts = client
+                    .get_palw_producer_facts(String::new(), String::new(), 0, false)
+                    .await
+                    .unwrap_or_else(|e| die(format!("cannot read the node's producer facts for its retention directory: {e}")));
+                if facts.palw_retention_dir.is_empty() {
+                    eprintln!(
+                        "warning: the node names no PALW retention directory (no panel, or a build before ADR-0084) and \
+                         --retention-dir was not given — the material and the answer envelope are NOT staged; nothing \
+                         will serve this claim to its seats"
+                    );
+                    (None, "none")
+                } else {
+                    let dir = PathBuf::from(&facts.palw_retention_dir);
+                    if !dir.is_dir() {
+                        die(format!(
+                            "the node serves PALW material from {} and that directory is not on this host — run the rail on the \
+                             node's host, or pass --retention-dir for a directory the node's panel reads",
+                            dir.display()
+                        ));
+                    }
+                    (Some(dir), "the node's own (getPalwProducerFacts)")
+                }
+            }
+        };
+        let staging = misaka_palw_fp_submit::FpStaging {
+            retention_dir: retention_dir.as_deref(),
+            capture,
+            output_token_ids: Some(output_token_ids),
+            dsl_payload: dsl,
+            expiry: Some(expiry),
+        };
         let done = misaka_palw_fp_submit::submit_fp_commitment(&client, tx, staging)
             .await
             .unwrap_or_else(|e| die(format!("the commitment was not submitted: {e}")));
         let _ = client.disconnect().await;
-        (done.txid, done.material_path.map(|p| p.display().to_string()))
+        RailSubmitted {
+            txid: done.txid,
+            material_file: done.material_path.map(|p| p.display().to_string()),
+            answer_file: done.answer_path.map(|p| p.display().to_string()),
+            retention_dir: retention_dir.map(|p| p.display().to_string()),
+            retention_source,
+        }
     })
+}
+
+/// What `--submit` produced, for the summary: the transaction, and where the node will serve
+/// this claim from (ADR-0084 Decision 5).
+struct RailSubmitted {
+    txid: String,
+    material_file: Option<String>,
+    answer_file: Option<String>,
+    retention_dir: Option<String>,
+    retention_source: &'static str,
 }

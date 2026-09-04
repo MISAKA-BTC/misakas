@@ -973,10 +973,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect();
+        // ADR-0084 Decision 5: where this node's panel serves from, empty on a node with no panel.
+        let palw_retention_dir = self.flow_context.palw_retention_dir().map(|d| d.display().to_string()).unwrap_or_default();
         if request.class_id.is_empty() {
             return Ok(GetPalwProducerFactsResponse {
                 available: !locked_bond_outpoints.is_empty(),
                 locked_bond_outpoints,
+                palw_retention_dir,
                 ..Default::default()
             });
         }
@@ -1034,6 +1037,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             epoch_budget_blocks: facts.epoch_budget_blocks,
             epoch_produced_blocks: facts.epoch_produced_blocks,
             locked_bond_outpoints,
+            palw_retention_dir,
             ..Default::default()
         };
         if let Some(bond_facts) = facts.bond.as_ref() {

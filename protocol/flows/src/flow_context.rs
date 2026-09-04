@@ -421,6 +421,12 @@ pub struct FlowContextInner {
     /// Node-local rather than chain state, which is why it lives here and not in consensus: the
     /// chain has no opinion about which of a producer's outputs its own panel intends to spend.
     palw_reserved_outpoints: Arc<ReservedOutpoints>,
+    /// **The directory this node's PALW panel serves material from** (ADR-0084 Decision 5) —
+    /// `None` on a node running no panel. Node-local like the reserved outpoints above, and
+    /// published over the same wallet-facing RPC for the same reason: a submitter on this host
+    /// must stage a claim's material and answer envelope where THIS panel reads, and the
+    /// directory is derived from the app dir rather than named by any flag.
+    palw_retention_dir: RwLock<Option<std::path::PathBuf>>,
     pub address_manager: Arc<Mutex<AddressManager>>,
     connection_manager: RwLock<Option<Arc<ConnectionManager>>>,
     mining_manager: MiningManagerProxy,
@@ -620,6 +626,7 @@ impl FlowContext {
                 active_consensus_replaced: Default::default(),
                 sidecar_shortfalls: Default::default(),
                 palw_reserved_outpoints: Default::default(),
+                palw_retention_dir: RwLock::new(None),
                 hub,
                 address_manager,
                 connection_manager: Default::default(),
@@ -685,6 +692,23 @@ impl FlowContext {
     /// claim is unresolved); the bytes prove themselves against the claim's committed roots.
     pub async fn broadcast_palw_material(&self, claim: kaspa_hashes::Hash64, bytes: Vec<u8>) {
         if !self.palw_v2_active() {
+            return;
+        }
+        // **Nothing over the cap leaves this node** (ADR-0084 Decision 3). The receiver refuses
+        // a material over `PALW_MATERIAL_MAX_BYTES` — but only after it has arrived, and on
+        // testnet-11 5f a 748 MB announcement to five peers did not arrive inside the 120 s flow
+        // window: the ping and relay flows timed out, the routers were torn down, and the block
+        // queued behind it was lost (card §6l). The announcement is a courtesy since protocol 104
+        // (a seat that needs the bytes asks for them); the pull, answered with the claim's answer
+        // envelope when the capture does not fit, is the obligation. So the refusal is here, before
+        // the broadcast, and named once per attempt.
+        if bytes.len() > crate::palw_gossip::PALW_MATERIAL_MAX_BYTES {
+            warn!(
+                "PALW material for claim {claim} is {} bytes, over the {} byte transport cap — not announced (seats pull the \
+                 claim's answer envelope instead; ADR-0084)",
+                bytes.len(),
+                crate::palw_gossip::PALW_MATERIAL_MAX_BYTES
+            );
             return;
         }
         self.palw_gossip.mark_own_material(claim, &bytes);
@@ -1303,6 +1327,17 @@ impl FlowContext {
     /// Everything this node has reserved, for the wallet-facing RPC.
     pub fn palw_reserved_outpoints(&self) -> Vec<kaspa_consensus_core::tx::TransactionOutpoint> {
         self.palw_reserved_outpoints.all()
+    }
+
+    /// Declare the directory this node's panel serves PALW material from (ADR-0084 Decision 5).
+    /// Called once by the panel service as it registers its resolvers.
+    pub fn palw_declare_retention_dir(&self, dir: std::path::PathBuf) {
+        *self.palw_retention_dir.write() = Some(dir);
+    }
+
+    /// The panel's retention directory, for the wallet-facing RPC; `None` on a node with no panel.
+    pub fn palw_retention_dir(&self) -> Option<std::path::PathBuf> {
+        self.palw_retention_dir.read().clone()
     }
 
     /// An IBD got past the sidecars, so the run of shortfalls is over.

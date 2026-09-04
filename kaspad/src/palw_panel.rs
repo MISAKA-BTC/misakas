@@ -1185,12 +1185,7 @@ impl PalwPanelService {
         executor_bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
         pooled: &[Vec<u8>],
     ) -> Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFpMaterialV1> {
-        let disk = [
-            crate::palw_producer::palw_retained_material_path(&self.config.retention_dir, claim),
-            self.config.retention_dir.join("foreign").join(format!("{claim}.material")),
-        ]
-        .into_iter()
-        .filter_map(|path| std::fs::read(path).ok());
+        let disk = self.fp_retained_payload_paths(claim).into_iter().filter_map(|path| std::fs::read(path).ok());
         pooled.iter().cloned().chain(disk).find_map(|bytes| {
             let material = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_job_material_decode_v1(&bytes)?;
             // **Every mode the CHAIN admits, this seat must be able to judge** (ADR-0077
@@ -1604,12 +1599,14 @@ impl PalwPanelService {
         // the panel is the party that owns a retention directory; a node running no panel stays
         // silent, which is the resolver's None.
         {
-            let retention = self.config.retention_dir.clone();
-            self.flow_context.palw_gossip().set_material_resolver(std::sync::Arc::new(move |claim| {
-                std::fs::read(crate::palw_producer::palw_retained_material_path(&retention, &claim))
-                    .ok()
-                    .or_else(|| std::fs::read(retention.join("foreign").join(format!("{claim}.material"))).ok())
-            }));
+            // ADR-0084 Decision 2: the material when it fits the transport, the claim's answer
+            // envelope when it does not — decided here, by the party holding the directory, so
+            // the transport is never handed what it would refuse.
+            let me = self.clone();
+            self.flow_context.palw_gossip().set_material_resolver(std::sync::Arc::new(move |claim| me.serve_material_or_answer(claim)));
+            // The directory this node serves from, published to the wallet-facing RPC so a
+            // submitter on this host stages where this panel reads (ADR-0084 Decision 5).
+            self.flow_context.palw_declare_retention_dir(self.config.retention_dir.clone());
         }
         // **And it answers interval openings, to bonded requesters only** (ADR-0077 Decision 8 and
         // SA-2, ADR-0079 SA-3). Registered here and not above because the two registrations are
@@ -2441,7 +2438,7 @@ impl PalwPanelService {
                             self.fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, &held)
                             && let Ok(resolved) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
                             && let Some(prompt_ids) = Self::fp_prompt_for_job(resolved.as_ref(), &material)
-                            && let Some(output_ids) = self.fp_committed_output_ids_v1(&duty.claim_id, &held)
+                            && let Some(output_ids) = self.fp_committed_output_ids_v1(resolved.as_ref(), duty, &held)
                             && let Some(verdict) = self
                                 .fp_interval_seat_outcome_v1(
                                     &session,
@@ -3460,34 +3457,142 @@ impl PalwPanelService {
         slot.push(bytes);
     }
 
-    /// **The answer's ids, as the claim committed them** — what ADR-0082 Decision 9's recompute
-    /// teacher-forces on.
+    /// **The answer's ids, as the claim committed them, bound to the chain** — what ADR-0082
+    /// Decision 9's recompute teacher-forces on (ADR-0084 Decisions 1 and 6).
     ///
-    /// A seat needs the ids and nothing else about the answer: they are `4 × decode_tokens`
-    /// bytes, flat in the CONTEXT, which is the axis Z5 measures. Today the only place a seat can
-    /// read them is a served `FPC1` payload's capture, and this reads exactly that field out of
-    /// it — the pooled copies first, then this node's own retention, the same two sources every
-    /// other arm of the seat reads.
+    /// A seat needs the ids and nothing else about the answer: `4 × decode_tokens` bytes. They
+    /// arrive on the answer envelope (`FPA1`) the executor's node serves in place of a capture
+    /// the transport would refuse, or on an `FPC1` payload's capture read THROUGH THE SEAM
+    /// (`fp_committed_output_ids`, the fold and the dense tuple alike — this used to name the
+    /// dense decoder and returned nothing for every graph-v5 fold). The pooled copies first, then
+    /// this node's own retention and its foreign directory, the same sources every other arm reads.
     ///
-    /// **This is the one place the panel names a family's decoder**, and it should not stay that
-    /// way: the ids belong on the seam
-    /// (`PalwBackend::fp_committed_output_ids`) or in a small served object of their own, so a
-    /// seat that fetches no capture does not have to hold one to get them. Until then a claim
-    /// whose capture nobody served falls through to the whole-capture arms, which is what the
-    /// seat did before this path existed.
-    fn fp_committed_output_ids_v1(&self, claim: &Hash64, pooled: &[Vec<u8>]) -> Option<Vec<u32>> {
-        let disk = [
-            crate::palw_producer::palw_retained_material_path(&self.config.retention_dir, claim),
-            self.config.retention_dir.join("foreign").join(format!("{claim}.material")),
-        ]
-        .into_iter()
-        .filter_map(|path| std::fs::read(path).ok());
+    /// **Bound before believed.** Every candidate's ids must recompute the claim's committed
+    /// `output_root` under the candidate's own job (ADR-0078 X6, `fp_output_root_v1`): a forged
+    /// envelope is refused BY NAME here, before a forward pass is spent on it, so it cannot make
+    /// this seat file nothing — the pool is iterated and the honest one binds. A candidate that
+    /// binds is retained under `foreign/`, write-once and a few kilobytes, so this node can serve
+    /// it to the next seat that asks.
+    fn fp_committed_output_ids_v1(
+        &self,
+        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
+        pooled: &[Vec<u8>],
+    ) -> Option<Vec<u32>> {
+        use kaspa_consensus_core::palw_freeprompt_v3::{palw_fp_committed_output_ids_decode_v1, palw_fp_job_material_decode_v1};
+        let disk = self.fp_retained_payload_paths(&duty.claim_id).into_iter().filter_map(|path| std::fs::read(path).ok());
         pooled.iter().cloned().chain(disk).find_map(|bytes| {
-            let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes)?;
-            let (_binding, _tiles, _logits, generated, _chunks) =
-                misaka_palw_base0::produce::base0_material_decode_v1(&payload.capture).ok()?;
-            (!generated.is_empty()).then_some(generated)
+            let material = palw_fp_job_material_decode_v1(&bytes)?;
+            let ids = palw_fp_committed_output_ids_decode_v1(&bytes, |capture| backend.fp_committed_output_ids(capture))?;
+            let recomputed = backend.fp_output_root_v1(&material.job, &ids)?;
+            if recomputed != duty.output_root {
+                warn!(
+                    "[{PALW_PANEL}] claim {}: a served answer's ids recompute output root {recomputed} and the claim committed {} — \
+                     not this claim's answer, refused before any replay (ADR-0084)",
+                    duty.claim_id, duty.output_root
+                );
+                return None;
+            }
+            if kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(&bytes).is_some() {
+                self.persist_foreign_answer(&duty.claim_id, &bytes);
+            }
+            Some(ids)
         })
+    }
+
+    /// Every file a free-prompt payload for `claim` may be retained under, own retention first:
+    /// the material and the answer envelope, then their foreign twins (ADR-0084 Decision 2).
+    fn fp_retained_payload_paths(&self, claim: &Hash64) -> [std::path::PathBuf; 4] {
+        let dir = &self.config.retention_dir;
+        [
+            crate::palw_producer::palw_retained_material_path(dir, claim),
+            crate::palw_producer::palw_retained_answer_path(dir, claim),
+            dir.join("foreign").join(format!("{claim}.material")),
+            dir.join("foreign").join(format!("{claim}{}", crate::palw_producer::PALW_RETAINED_ANSWER_SUFFIX)),
+        ]
+    }
+
+    /// Persist a foreign answer envelope under `retention/foreign/`, write-once, best-effort — a
+    /// few kilobytes proven the claim's (its ids recompute the committed `output_root`), so this
+    /// node can serve the next seat's pull for the claim.
+    fn persist_foreign_answer(&self, claim: &Hash64, bytes: &[u8]) {
+        let dir = self.config.retention_dir.join("foreign");
+        let path = dir.join(format!("{claim}{}", crate::palw_producer::PALW_RETAINED_ANSWER_SUFFIX));
+        if path.exists() {
+            return;
+        }
+        if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, bytes)) {
+            warn!("[{PALW_PANEL}] cannot retain the answer envelope for claim {claim}: {e}");
+        }
+    }
+
+    /// **What a pull for `claim` is answered with** (ADR-0084 Decision 2).
+    ///
+    /// The retained material — this node's own capture or a foreign one it proved — when it is
+    /// within `PALW_MATERIAL_MAX_BYTES`, exactly as before. Otherwise the claim's answer envelope:
+    /// the `<claim>.answer` the submitter staged beside the material (Decision 5), or one derived
+    /// here from the capture through the family seam and cached under that name, once. The
+    /// transport's "never serve what it would refuse" then never fires on an honest claim: a
+    /// graph-v5 fold is ~700 MB and its envelope is a few kilobytes, and a seat on the interval
+    /// lane needs exactly the envelope. `None` is the honest silence of a node holding nothing.
+    ///
+    /// Runs on a blocking thread (the transport arranges that): it stats and reads files.
+    fn serve_material_or_answer(&self, claim: Hash64) -> Option<Vec<u8>> {
+        use kaspa_p2p_flows::palw_gossip::PALW_MATERIAL_MAX_BYTES;
+        let dir = &self.config.retention_dir;
+        let own = crate::palw_producer::palw_retained_material_path(dir, &claim);
+        let foreign = dir.join("foreign").join(format!("{claim}.material"));
+        let (material_path, answer_path) = if own.exists() {
+            (own, crate::palw_producer::palw_retained_answer_path(dir, &claim))
+        } else if foreign.exists() {
+            (foreign, dir.join("foreign").join(format!("{claim}{}", crate::palw_producer::PALW_RETAINED_ANSWER_SUFFIX)))
+        } else {
+            // No material at all: the envelope alone may still be here (a seat that proved one,
+            // Decision 1's persistence), and it is what an interval-lane seat needs.
+            let own_answer = crate::palw_producer::palw_retained_answer_path(dir, &claim);
+            let foreign_answer = dir.join("foreign").join(format!("{claim}{}", crate::palw_producer::PALW_RETAINED_ANSWER_SUFFIX));
+            return std::fs::read(own_answer).ok().or_else(|| std::fs::read(foreign_answer).ok());
+        };
+        let size = std::fs::metadata(&material_path).ok()?.len();
+        if size <= PALW_MATERIAL_MAX_BYTES as u64 {
+            return std::fs::read(&material_path).ok();
+        }
+        if let Ok(answer) = std::fs::read(&answer_path) {
+            return Some(answer);
+        }
+        let bytes = std::fs::read(&material_path).ok()?;
+        let answer = self.derive_answer_envelope_v1(&bytes)?;
+        // Cached beside the material, written whole then renamed, so the next pull costs a read
+        // of kilobytes and a reader never sees a half file. Best-effort: a failed cache is a
+        // slower serve, not a refused one.
+        let partial = answer_path.with_extension("answer.partial");
+        if let Err(e) = std::fs::write(&partial, &answer).and_then(|()| std::fs::rename(&partial, &answer_path)) {
+            warn!("[{PALW_PANEL}] cannot cache the answer envelope for claim {claim}: {e}");
+        } else {
+            info!(
+                "[{PALW_PANEL}] claim {claim}: the retained material is {size} bytes, over the {PALW_MATERIAL_MAX_BYTES} byte transport \
+                 cap — derived its answer envelope ({} bytes) and serving that instead (ADR-0084)",
+                answer.len()
+            );
+        }
+        Some(answer)
+    }
+
+    /// The answer envelope of a retained `FPC1` payload: its job and prompt, and the answer's ids
+    /// read off the capture by the family that wrote it. `None` for a payload that is not an
+    /// `FPC1`, a class this node does not hold, or a capture the family cannot read — a raw
+    /// attempt-lane capture is Decision 4's, not this function's.
+    fn derive_answer_envelope_v1(&self, bytes: &[u8]) -> Option<Vec<u8>> {
+        let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(bytes)?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let facts = session.palw_producer_facts_v2(payload.material.job.class_id, None)?;
+        let backend = self.resolve_backend(&session, payload.material.job.class_id, facts.artifact_root).ok()?;
+        let ids = backend.fp_committed_output_ids(&payload.capture)?;
+        Some(kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_v1(
+            &payload.material.job,
+            &payload.material.prompt_token_ids,
+            &ids,
+        ))
     }
 
     /// **The seat's duty under ADR-0082 Decision 9: recompute the cache, fetch only the rows.**
