@@ -51,31 +51,30 @@ instructions built on them are marked where they no longer apply. If a section t
 `palw-worker`, a GGUF sha, `CPU_THREADS`, or a per-header inference cost, it is describing the old
 lane.
 
-> **Current identity — "Relaunch 5e": ADR-0075 (a model's certification is a consensus object) and
-> ADR-0076 (each class's attempt lane is priced from its own share and its own counted work), on
-> the SAME genesis card as 5c and 5d. Wipe your datadir whatever you joined earlier — the state
-> version moved to 16 and a node started over an older one refuses at boot and names the remedy —
-> and rebuild: every earlier fingerprint is refused at the handshake.**
+> **Current identity — "Relaunch 5f + ADR-0083 (2026-09-04)": a re-minted genesis (2026-09-03) and,
+> from DAA 1150, the difficulty window counts only rows priced by `bits` (ADR-0083 Decision 1; the
+> heartbeat lane had priced every attempt lane off the chain — card §10b). Wipe your datadir whatever
+> you joined before 5f, and build from the tag or later: every earlier fingerprint is refused at the
+> handshake, and the 5f cut itself parts from the chain at DAA 1150.**
 >
-> * consensus fingerprint: **`a7baab7957d27bbd2591cd24f70ee92b555ab26cd49ef425cbd7093f06e222d9`**
-> * genesis hash: **`08e9c8a4cb59714574bc76e25e4dc16bb24e213fc2f0f6c8c6fd5d8c4a25ef70…`** (`PALW_RC_GENESIS`,
+> * consensus fingerprint: **`71b35c250d01598ee8925146e66e8200945503ce2de1030bfd167e799b2498e9`**
+> * genesis hash: **`ad30b5cb965ad305dfa1dc7516935763ea2623105581b83bb9359c7247157d36b0f8003b337cdad366e3895c8f159e99332be16e258b144dddf483bf9b33edb7`** (`PALW_RC_GENESIS`,
 >   coinbase payload marker `misaka-palw-rc`) — measured from the running node's own startup line,
 >   which is the only value your node will be judged by.
-> * build: `v1.1.0` from `main` at the Relaunch 5e landing. Any commit whose build announces the
->   fingerprint above will do — and that, not a commit id, is the check:
->   `kaspad --testnet --netsuffix=11` prints it on the second line of its startup log.
-> * registered classes, court-certified end-to-end: BASE-0 `f1c5635c…` (the floor, no model),
->   PALW-QWEN36 `5bd9ae3d…` (graph-v3, 33.27 GiB artifact root `f4aad4fd…`), PALW-QWEN25-A16
->   `71bbb755…` (artifact root `1a7457f1…`); the previous ids `ec7bbcbf…` and `f942e268…` do not
->   exist on this chain. **The ids did not move at 5e** — a class id is its profile's id, and the
->   per-class target ADR-0076 changed is economics, not identity — so a producer flag written for
->   5c or 5d still names the right class.
-> * what a miner will meet: the model tiers hold 489‰ of cadence each and the floor 22‰, and as of
->   5e the three are PRICED for that (5d gave all three one target and the floor took 100 % of the
->   blocks for its first hour). A floor block is ~12,664 expected inferences; a Qwen3.6 block is
->   about one. Mining the floor is now the slow lane, on purpose.
+> * build: tag **`testnet-11-relaunch-5f-adr0083-h1150`** (`16a2f277`) or any later `main`; the fleet runs
+>   `cef2ecdb` (sha256 `002cee6a…`, the same code). Any commit whose build announces the fingerprint above
+>   will do — and that, not a commit id, is the check: `kaspad --testnet --netsuffix=11` prints it on the
+>   second line of its startup log. The 5f cut (`2222e054…`, binary `14065c93…`) peers with this build
+>   until DAA 1150 and is refused after it.
+> * classes registered at genesis: BASE-0 `f1c5635c…` (the floor, no model, 22‰), PALW-QWEN25-A16
+>   graph-v5@512 `4277d84f…` (489‰, artifact root `bcf2d9eb…`), PALW-QWEN36 graph-v3 `5bd9ae3d…`
+>   (489‰, artifact root `f4aad4fd…`). Post-genesis registrations are chain data: read them from the
+>   explorer or `--palw-dump-classes` on a scratch node, not from this page.
+> * what a miner will meet: a floor block is ~12,664 expected class draws, each also needing the
+>   Layer-0 digest under `bits` — which the fence restored to MAX (p = 0.5) at DAA 1150 after the
+>   heartbeat lane had tightened it ×3,100. Mining the floor is the slow lane, on purpose.
 >
-> Predecessors `e2b91c16…` (Relaunch 5d), `d38abe44…` (5c), `accaadce…` and `f0e50f83…` (all
+> Predecessors `a7baab79…` (Relaunch 5e, genesis `08e9c8a4…`), `e2b91c16…` (Relaunch 5d), `d38abe44…` (5c), `accaadce…` and `f0e50f83…` (all
 > 2026-09-02) and `5ccdd684…` (Relaunch 4, genesis `8d2002cc…`) are archived, not continued. The 10B premine cap,
 > the eight genesis bond seats and the community allocations are unchanged from Relaunch 4.
 > Post-genesis class registrations from any previous chain do not carry over and must be

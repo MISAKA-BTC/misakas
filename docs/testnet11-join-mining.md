@@ -55,21 +55,22 @@ was withdrawn on 2026-08-29.)
 A node on the right chain logs
 
 ```
-Consensus params fingerprint: a7baab7957d27bbd2591cd24f70ee92b555ab26cd49ef425cbd7093f06e222d9 (network testnet-11)
+Consensus params fingerprint: 71b35c250d01598ee8925146e66e8200945503ce2de1030bfd167e799b2498e9 (network testnet-11)
 ```
 
-(Identity as of **Relaunch 5e, 2026-09-02** — genesis `08e9c8a4…` (`PALW_RC_GENESIS`), which 5e
-keeps. **Do not read that as a property of the chain.** Genesis held from 5c through 5e because
-those relaunches moved only the ruleset over it; a relaunch that changes the genesis UTXO set —
-premine entries, community allocations, the class set seated at block zero — moves the genesis
-hash itself, and then no earlier appdir and no earlier binary can join at all. Both values below
-are dated facts about a past relaunch, not constants: take the live ones from your own node's
-first log lines rather than from this page. Earlier values —
-`e2b91c16…` (5d), `d38abe44…` (5c), `f0e50f83…` and `accaadce…` (all 2026-09-02), `5ccdd684…`
-(2026-08-31), `f3bf86b4…` (2026-08-30), `95265934…` (2026-08-29) — name archived rulesets; a node
-still announcing any of them is refused at the handshake by every node on this one. **Wipe the
-appdir whatever you joined before**: the fleet archives its datadirs at every relaunch and starts
-an empty chain, and 5e's state version refuses an older one at boot outright.)
+(Identity as of **Relaunch 5f + the ADR-0083 flag day, 2026-09-04** — genesis **`ad30b5cb…edb7`**
+(`PALW_RC_GENESIS`; 5f re-minted the genesis on 2026-09-03, so 5e's `08e9c8a4…` is gone), fingerprint
+**`71b35c25…`** from the build that schedules ADR-0083's fence at **DAA 1150** (tag
+`testnet-11-relaunch-5f-adr0083-h1150`, commit `16a2f277`; the fleet's binary is from `cef2ecdb`, the same
+code). The 5f cut's own fingerprint `2222e054…` (binary `14065c93…`) names the SAME chain and peers with this
+one — with a log warning about the future fence — but **parts from it at DAA 1150**: past that height its
+blocks are refused as `UnexpectedDifficulty`. Rebuild from the tag or later; if you ran the cut past 1150,
+wipe the appdir and resync (the chain is small). **Do not read either value as a property of the chain.**
+Both are dated facts about a relaunch: take the live ones from your own node's first log lines rather than
+from this page. Earlier values — `a7baab79…` (5e), `e2b91c16…` (5d), `d38abe44…` (5c), `f0e50f83…` and
+`accaadce…` (2026-09-02), `5ccdd684…` (2026-08-31), `f3bf86b4…` (2026-08-30), `95265934…` (2026-08-29) —
+name archived rulesets; a node still announcing any of them is refused at the handshake. **Wipe the appdir
+whatever you joined before 5f**: the fleet archived its datadirs at the re-mint and started an empty chain.)
 
 A different fingerprint means a different ruleset, and the two will refuse each other at handshake.
 Do not treat that as a connectivity problem.
@@ -110,9 +111,11 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
   --listen=0.0.0.0:26311 --rpclisten=127.0.0.1:26312 --rpclisten-borsh=default \
   --addpeer=169.58.39.220:26311 \
   --palw-register-bond \
-  --palw-producer-key=~/.misaka/miner.seed \
-  --palw-producer-pay-address=<your misakatest: address>
+  --palw-producer-key=~/.misaka/miner.seed
 ```
+
+(`--palw-producer-pay-address` is optional since the flag-day build: it defaults to the key's own
+address — the one `misaka key address` printed. Pass it only to be paid elsewhere.)
 
 The node waits until it is synced, builds one `BondRegistered`, submits it in a transaction that
 **locks the collateral in its own output**, and then waits for the bond to actually appear on the
@@ -256,7 +259,7 @@ you tell them apart (`budget=0` is the second).
 ## 5. Which class you are mining
 
 Omitting `--palw-producer-class` mines `bundle.base_class_id`, which on testnet-11 is the **BASE-0
-floor** — `c185df95…c654a`, a deterministic-integer class whose artifact is derived from a seed on
+floor** — `f1c5635c…f623c8` on this chain (5f re-seated the classes at genesis; `c185df95…` was 5e's), a deterministic-integer class whose artifact is derived from a seed on
 every node. **No GGUF, no download, no worker binary.** The floor is also exempt from the per-class epoch
 budget, so it is the one class that can always produce.
 

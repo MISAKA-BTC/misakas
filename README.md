@@ -4,13 +4,15 @@
 
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
-> **Status (2026-08-27).** The live public network is **`testnet-11`** — the PALW release candidate.
+> **Status (2026-09-04).** The live public network is **`testnet-11`** — the PALW release candidate, Relaunch 5f with the ADR-0083 fence live since DAA 1150.
 > Explorer at **[misakascan.com](https://misakascan.com)**, web wallet at
 > **[wallet.misakascan.com](https://wallet.misakascan.com)**. Current network identity: consensus
-> fingerprint **`15bab795442ec3ef…`**, genesis **`c664a224…`** (three execution classes and the
-> 347M MSK community allocation in genesis). The chain was re-minted 2026-08-27 for ADR-0058
-> (merged work is counted) — a node with older state must wipe its appdir and resync; a node on an
-> older ruleset is refused at handshake by fingerprint, which is the intended behaviour.
+> fingerprint **`71b35c25…`**, genesis **`ad30b5cb…`** (three execution classes and the
+> 347M MSK community allocation in genesis). The chain was re-minted 2026-09-03 (Relaunch 5f) and
+> scheduled ADR-0083's fence at DAA 1150 on 2026-09-04 — build from tag
+> `testnet-11-relaunch-5f-adr0083-h1150` or later; the 5f cut (`2222e054…`) parts from the chain at that
+> height. A node with older state must wipe its appdir and resync; a node on an older ruleset is refused
+> at handshake by fingerprint, which is the intended behaviour.
 > `testnet-10` has been **stopped**; its parameter set still exists so historical data can be read,
 > but nothing operates it and its public entry point is closed.
 >
@@ -70,11 +72,11 @@ cargo build --release -p kaspad
 The log must show this fingerprint, or you are on the wrong ruleset:
 
 ```
-Consensus params fingerprint: 15bab795442ec3efc3a58e02dd9c7a6f3015ff0634bc4a50a7af589338857ad0 (network testnet-11)
+Consensus params fingerprint: 71b35c250d01598ee8925146e66e8200945503ce2de1030bfd167e799b2498e9 (network testnet-11)
 ```
 
 and the genesis the network builds on is
-`c664a224acb3f53b…` (the node prints it in any `Genesis mismatch` warning). If your log shows
+`ad30b5cb965ad305…` (the node prints it in any `Genesis mismatch` warning). If your log shows
 **`Genesis mismatch … local: d25a80b9…`**, your datadir holds a RETIRED pre-relaunch chain —
 most likely synced from a stale node that was still answering on the network name (observed live
 2026-08-28). The current network refuses that history at handshake, so the node sits peerless
@@ -82,7 +84,7 @@ forever. Recovery: stop the node, delete the app dir (`~/.kaspa-pq/misaka-testne
 `--appdir`), rebuild from current `main`, and resync — the real chain re-downloads in minutes.
 
 If DNS is blocked where you run, add the public entry nodes by hand:
-`--addpeer=169.58.232.113:26311 --addpeer=169.58.232.114:26311 --addpeer=169.58.39.220:26311`.
+`--addpeer=169.58.232.113:26311 --addpeer=169.58.39.220:26311`.
 
 | I want to… | read |
 |---|---|
@@ -118,6 +120,11 @@ Authoritative design & spec live under [`docs/`](docs/):
 **Scope of PQ claims** (per the design doc): "tx authorization uses ML-DSA-87", "secp256k1 signing disabled in PQ consensus mode", "64-byte BLAKE2b-512 consensus identity". Transport-layer (network) traffic is **not** PQ unless an ML-KEM hybrid is enabled.
 
 ## Prebuilt binaries
+
+The release for the live chain is
+[`testnet-11-relaunch-5f-adr0083-h1150`](https://github.com/MISAKA-BTC/misakas/releases/tag/testnet-11-relaunch-5f-adr0083-h1150)
+— the Linux x86_64 `kaspad` the fleet runs (sha256 `002cee6a153f5d2abda7792ee0209ddb827ae21160674cc455871cb1695bed8a`).
+Older releases on that page are earlier chains and are refused at the handshake.
 
 Linux x86_64 binaries (`kaspad`, `kaspa-pq-miner`, `kaspa-pq-validator`, `kaspa-pq-signer`, `misaka`) are published under [Releases](https://github.com/MISAKA-BTC/misakas/releases). Each release is built from the source snapshot of the same tag; verify with the `SHA256SUMS` attached to the release.
 
