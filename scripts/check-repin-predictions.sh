@@ -46,7 +46,13 @@ PREDICTED_SOURCE_TREE_SHA=637858dba5ea5e34b9459a580b2b81d1361aecf450bc615a4ee962
 # from a pre-re-pin extraction is EXPECTED to differ from this line; 3e renames that row
 # t11_fingerprint_pre_genesis_repin so it can never again be read as the cut's.
 #   pre-re-pin (the table):  a5291e005aca6068d465434c317e05ad24f054faa04a68c38ec0857566c38fa9
-PREDICTED_T11_FP=2222e054f87bed7a33e9c017f5403cd52070d0778776b5bd78143e7f82ff92b7
+# NAMED MOVE 2026-09-04 03:00Z, before the paste: ADR-0083 Decision 1 scheduled at DAA 1150 on the
+# live chain (`palw_difficulty_priced_rows = Some(ForkActivation::new(1150))` in palw_rc_base_params).
+# The fence's Some-only write enters consensus_params_id; genesis (ad30b5cb…) and the eight transformer
+# ids do not move; the fence-normalised identity does not move. Value read from
+# shipped_presets_have_pinned_fingerprints on the tree that carries the arming.
+#   previous value (5f cut, dormant fence): 2222e054f87bed7a33e9c017f5403cd52070d0778776b5bd78143e7f82ff92b7
+PREDICTED_T11_FP=71b35c250d01598ee8925146e66e8200945503ce2de1030bfd167e799b2498e9
 # WITHDRAWN 2026-09-03: devnet genesis now registers the same class set as testnet-11
 # (floor + graph-v5@512 + QWEN36) so the drill rehearses the chain being cut. That moves this
 # fingerprint by design. The prediction is NOT updated by guessing — the new value comes from

@@ -8220,6 +8220,18 @@ pub fn palw_rc_base_params() -> Params {
     // it would move the fingerprint and gate nothing (ADR-0065 D1's mistake).
     params.palw_uncertified_weightless = Some(ForkActivation::always());
     params.palw_kary_court = Some(ForkActivation::always());
+    // **ADR-0083 Decision 1, SCHEDULED on the live chain — testnet-11 Relaunch 5f's flag day.**
+    //
+    // Measured 2026-09-04 (5f card §10b/§10e): five heartbeat emitters on the two-minute cadence
+    // tightened `bits` from p = 0.5 to p = 1.5e-3 in 826 blocks and no attempt lane could win.
+    // The operator chose path (a) of the ADR's §5: a fence at a future height rather than a
+    // re-mint. Genesis is unchanged; `consensus_params_id` moves (the Some-only write below), the
+    // fence-normalised identity does not, so a seat on the previous build peers with a warning
+    // until the height and forks off at it — every seat restarts on this build BEFORE DAA 1150.
+    // Chosen at DAA 894 (02:50Z) with ~93 DAA/h: ~2.7 h of lead over a 15-minute build and a
+    // six-seat restart. At the height the window holds no priced row (last attempt block at DAA
+    // 226), so the first fenced block carries `max_difficulty_target`.
+    params.palw_difficulty_priced_rows = Some(ForkActivation::new(1150));
     // **The EVM lane is ON from DAA 0, inherited from `TESTNET_PARAMS` and kept deliberately.**
     //
     // It was briefly turned off here on the reasoning that `MAINNET_PARAMS` never activates the
@@ -11178,7 +11190,13 @@ mod consensus_params_id_tests {
                 // target. `initial_target` is a field of `ClassRegistered`, so the seeds are
                 // inside the ruleset id — which is the property that keeps a 5d node and a 5e
                 // node from agreeing on a name while disagreeing about which class may produce.
-                "2222e054f87bed7a33e9c017f5403cd52070d0778776b5bd78143e7f82ff92b7",
+                // …and once more for ADR-0083 Decision 1, SCHEDULED at DAA 1150 on the live chain
+                // (Relaunch 5f's flag day, 2026-09-04): the Some-only write of
+                // `palw_difficulty_priced_rows` enters the fingerprint, the genesis does not move,
+                // and the fence-normalised identity is unchanged — so a seat on the previous
+                // build peers with this one until the height. Previous value, for the record:
+                // 2222e054f87bed7a33e9c017f5403cd52070d0778776b5bd78143e7f82ff92b7.
+                "71b35c250d01598ee8925146e66e8200945503ce2de1030bfd167e799b2498e9",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
