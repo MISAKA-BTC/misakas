@@ -6167,3 +6167,35 @@ fingerprint `71b35c25…`, floor `f1c5635c…`, the tag, the DAA-1150 parting ru
 and the withdrawn `.114` entry node is gone (main `03c90495`). GitHub release
 **`testnet-11-relaunch-5f-adr0083-h1150`** carries `kaspad-linux-x86_64` (53,938,328 B, sha256
 `002cee6a…`, built from `cef2ecdb`) with the identity, the flag-day facts and the parting rule in its notes.
+
+### 10l. After the fence: the first attempt blocks, the cadence, and a same-key trap (06:00–06:30Z)
+
+| DAA | block | lane | producer | when |
+|---|---|---|---|---|
+| 1169 | `9499375e…` | attempt (algo 6), chain block | **.113 pool slot-02** (the Studio's pool path; the seat ff reported held at 5 % CPU) | 05:56:25Z, 13 min after the fence |
+| 1174 | `4b22ca52…` | attempt, chain block | ibm node1 (floor; its counter read 3,982 draws / 1 produced / 3 class wins) | 05:59:34Z |
+| 1175 | `598b3635…` | attempt, chain block | **ff's Studio desktop node** — the first block a non-fleet producer has won on the public testnet (bond `ffbeb993…:0`, 16,599 draws in 22.7 min) | 06:07:34Z |
+
+All three carry `bits 0x207fffff`; coinbases hold zero outputs (escrow until Final). `palw weight=0
+live_total=… final_claims=0 unresolved=6–7`: the claims are counted and not yet Final.
+
+**The cadence changed with the first bonded block — by design.** `heartbeat_interval_ms` is one hour
+after a bonded parent (`HEARTBEAT_NOMINAL_INTERVAL_MS`), so the heartbeat lane stepped back and the
+chain's clock is now the attempt lanes' win rate: no block from 06:07:34 to past 06:22, DAA parked at
+1176. With ~6 floor producers at 1 in 6,332 per draw the expected gap is minutes, with a long tail;
+the floor's class target eases only ×4 per 1,000-DAA epoch, which at this pace is days. This is
+ADR-0060/0066's "calm weather" and ADR-0071/0076's economics doing what they say; whether a public
+testnet wants an hour-long heartbeat interval while the floor converges is an operator question, not a
+defect to fix here.
+
+**A newcomer trap found by walking the path (recorded, not fixed):** `misaka palw submit-object` on
+the SAME key the node's panel uses refuses to fund the carrier — "no mature, unbonded, unspent UTXO" —
+although the wallet holds 11.9 tMSK of ordinary change. The wallet's bonded set is `getStakeBonds`
+(empty) ∪ the empty-class `getPalwProducerFacts.lockedBondOutpoints`, which on the node that runs the
+panel includes **the output the panel has reserved as its own fee chain** — after the class
+registration that is the registration's change `2803209b…:0`, the user's only spendable output. Correct
+as double-spend prevention, silent as a message: the CLI names the output "bonded" (`wallet utxo list`:
+bonded 2, mature 0) while the chain's locked set (13 outpoints) does not contain it. Workaround used:
+submit through a node that does not reserve it (the fleet node on the same host). The right fix is
+either a named reason ("reserved by this node's panel as its fee outpoint") or letting the CLI chain on
+the panel's reservation the way `spendable_candidates_v1` already chains on the mempool.
