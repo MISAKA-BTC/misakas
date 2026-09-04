@@ -5955,3 +5955,28 @@ ff's report was "slot-02 has drawn nothing since it registered". The answer is n
 **What this changes in the announcement.** The claims it names were real and are on the chain (STL, MIDI, the v5 lane certification — all at DAA ≤ 700, all carried by heartbeat blocks' mempool). "Produced and counted" for QWEN36 stands (3 blocks, DAA 40/80/226). What the draft must not imply is that attempt lanes are live now: since DAA 226 no attempt block exists and none is possible at the current bits. Line added to the draft.
 
 **The fix is a consensus change, not an operator knob.** The difficulty window's *rate* must count only rows whose lane is priced by `bits` (exclude algo 8 from the count and the span), and when fewer than `min_difficulty_window_size` such rows exist the V2 answer is `max_difficulty_target` (ADR-0066: "a V2 network runs at MAX because the class lottery is its throttle"), not the selected parent's bits — otherwise a chain whose attempts died stays dead at whatever bits killed them. Both halves change `bits` on every header past the point they apply, so they ship either as a `ForkActivation` in `DnsParams` (fingerprint moves, genesis does not — a flag-day restart of the six seats, no wipe) or folded into a 5g re-mint. That is the operator's decision; the branch and its tests are the next entry. Until one ships, the only thing worth doing operationally is stopping the bleed: leave **one** heartbeat emitter running and remove `--palw-heartbeat-miner-address` from the other four, so the bits an activation inherits is not another 2¹⁰ tighter.
+
+### 10c. The fix, written and tested, not armed — ADR-0083 on branch `palw-daa-bits-priced-rows` (2026-09-04 04:10–05:40Z)
+
+Two commits, local (the branch is not pushed; the operator decides §5 of the ADR first):
+
+| commit | what | fingerprint |
+|---|---|---|
+| `55b13b77` | ADR-0083 Decision 1: `Params::palw_difficulty_priced_rows` (top-level `Option<ForkActivation>`, `None` everywhere, Some-only in `consensus_params_id`, `never()→None`, on the `for_each_fence` walk); past it `calculate_difficulty_bits` multiplies the expected duration by the rows whose lane satisfies `algo_id_is_priced_by_bits` (everything but algo 8), and a window with no priced row answers `max_difficulty_target`. `retarget_bits_from_rows` is public for replay. ADR text + README row. | unchanged on every preset — `shipped_presets_have_pinned_fingerprints` and the t11 announce-pin test green |
+| `0547677d` | kaspad only: the two `trace!` holds become deduped INFO lines carrying the three predicates; every five minutes the loop prints draws / produced / "won the class ticket, lost against bits" / class p per draw. | none (no consensus change) |
+
+Verified: core lib tests 65/65 on the fence + pin + params-id suites; `processes::difficulty` 3/3
+including the new shape test (5f window: legacy tightens, fenced eases ×2.95; no priced row → MAX;
+all priced → identical to legacy; attempts every 30 s against 120 s still tighten); kaspad builds;
+`cargo fmt` clean on the three crates. The fuller sweep (whole consensus + core lib suites, clippy)
+is running as this is written and is recorded in the next entry.
+
+**What the second reader can do that the author cannot:** replay the chain's own 841 rows through
+`retarget_bits_from_rows` with both flags — ff holds those rows and offered exactly that.
+
+**Second finding carried from ff:** slot-02 on .113 at 5 % CPU with a healthy chain view was HELD
+(the silent `should_mine` trace), while ff's Studio node drew at 41 %; the pool's kaspad has no
+borsh listener so `getPalwProducerFacts` cannot be asked of it. `0547677d` makes the hold and its three
+predicates visible; `--rpclisten-borsh` in the pool's `run-slot.sh` is the pool owner's change.
+ff stopped their node's producing run (the bond `ffbeb993…:0` stays registered) — nothing to win
+until the rule ships.
