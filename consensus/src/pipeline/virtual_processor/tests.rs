@@ -10268,8 +10268,9 @@ async fn palw_v2_certification_and_chunk_carriage_pay_rent_past_the_fence() {
     use kaspa_consensus_core::config::params::ForkActivation;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     use kaspa_consensus_core::palw_state_v2::{
-        PALW_CERTIFICATION_MAX_PER_BLOCK, PalwCertificationEvidenceV1, PalwCertifiedLaneV1, PalwConsensusObjectV2,
-        palw_certification_min_fee_v1, palw_object_chunk_group_rent_v1, palw_object_chunks_with_cap_v1,
+        PALW_CERTIFICATION_MAX_PER_BLOCK, PALW_OBJECT_CHUNK_MAX_BYTES, PALW_OBJECT_CHUNK_MAX_COUNT, PalwCertificationEvidenceV1,
+        PalwCertifiedLaneV1, PalwConsensusObjectV2, palw_certification_min_fee_v1, palw_object_chunk_group_rent_v1,
+        palw_object_chunks_with_cap_v1,
     };
     use misaka_palw_base0::e2e_drill::{PalwRcFamilyV1, rc_attempt_evidence_v1, rc_free_prompt_evidence_v1};
 
@@ -10376,9 +10377,22 @@ async fn palw_v2_certification_and_chunk_carriage_pay_rent_past_the_fence() {
     assert_eq!(attempt_families(&folded), vec![floor_family], "and recorded: the rent buys the grading, it does not forbid it");
 
     // ── SA-1, armed: opening a chunk group ───────────────────────────────────────────────────
+    // Cut at the carriage the lane actually rides at. This was `bytes.len().div_ceil(4)` — "a
+    // four-part group" — written when the floor's drill evidence was under 400 KB. The evidence is
+    // 754,377 B today, so a quarter of it is 188,595 B, the transition refused every part as
+    // `ChunkTooLarge` (cap 100,000), the rehearsal dropped the opener, and the assertion below read
+    // "left 0, right 1" for a reason that had nothing to do with rent. Worse, the underpay
+    // assertion above it kept passing: the rent check runs BEFORE the transition, so an opener
+    // that could never open was "dropped" for both prices. Asserted here by name so the next
+    // growth of the evidence fails as what it is and not as a rent regression.
     let bytes = borsh::to_vec(&floor_object).expect("the object serializes");
-    let chunks = palw_object_chunks_with_cap_v1(&floor_object, bytes.len().div_ceil(4)).expect("it chunks").expect("it needs to");
-    let PalwConsensusObjectV2::ObjectChunk { group, count, .. } = chunks[0].clone() else { panic!("a chunk") };
+    let chunks = palw_object_chunks_with_cap_v1(&floor_object, PALW_OBJECT_CHUNK_MAX_BYTES).expect("it chunks").expect("it needs to");
+    let PalwConsensusObjectV2::ObjectChunk { group, count, bytes: part0, .. } = chunks[0].clone() else { panic!("a chunk") };
+    assert!(
+        part0.len() <= PALW_OBJECT_CHUNK_MAX_BYTES && (count as usize) <= PALW_OBJECT_CHUNK_MAX_COUNT as usize,
+        "the floor's {}-byte evidence must ride the lane's carriage as {count} parts of at most {PALW_OBJECT_CHUNK_MAX_BYTES} B",
+        bytes.len()
+    );
     let room = palw_object_chunk_group_rent_v1();
     assert!(room > FLOOR, "taking a pending-chunk slot costs more than the flat floor");
 
