@@ -6120,3 +6120,15 @@ the tooling side is not "no code": a new checkpoint of a known lineage needs a g
 a table row in the node's own crates (the SDK doc says so; the `Adding a model` paragraphs in README
 and the announcement do not). A user who cannot build the node cannot add a model. Everything up to
 the bond needed no code and worked first time on the doc's commands.
+
+**§10i, continued (05:35Z): the class is covered by an already-certified family.**
+`palw-certify bind --model-id Qwen/Qwen3.8-27B/graph-v3 --lane attempt|fp` (the `--model-id` form is
+the one for a `.palwq36` row) wrote both `ClassLaneCertified` objects (11,147 B each) for class
+**`2705b8f6…7755f3`**: 23 reachable kernels, **covered by the PALW-QWEN36 RC family's attempt-lane drill
+and by its free-prompt-lane drill**; worst case 9,000,776 step leaves inside the ruleset's 67,108,864
+cap. So the operator's two questions have their answer for this model: the graph is statically
+adjudicable (the gate's coverage and ladder checks) and its kernels sit under a family the chain already
+certifies end-to-end — the registration will not be weightless, and no new family drill is needed;
+"certified" here is the two lane bindings, submitted once `ClassRegistered` is on the chain.
+`palw-class ledger --network testnet-11` lists the row beside the genesis ones. Bond change
+`d9067d09…:1` (11.913 tMSK) is the fee outpoint for registration and the objects' rent.
