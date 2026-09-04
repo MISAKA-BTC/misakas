@@ -55,19 +55,90 @@ mod unix_daemon {
         #[arg(long = "allowed-uid")]
         allowed_uids: Vec<u32>,
         /// Refuse to sign for these purposes (repeatable): `transaction`, `attestation`, `unbond`,
-        /// `takeover`. E.g. a validator-only signer can pass `--deny-purpose transaction` so it never
-        /// signs arbitrary transactions. Default: none denied.
+        /// `takeover`, `palw-attempt`, `palw-fp-commitment`, `palw-fp-spend`, `palw-derived`.
+        /// E.g. a validator-only signer can pass `--deny-purpose transaction` so it never signs
+        /// arbitrary transactions, and a signer that must never spend a free-prompt quantum can
+        /// pass `--deny-purpose palw-fp-spend`. Default: none denied.
         #[arg(long = "deny-purpose")]
         deny_purposes: Vec<String>,
     }
 
+    /// **The name `--deny-purpose` accepts for a purpose, matched exhaustively** (mainnet audit,
+    /// 2026-09-05).
+    ///
+    /// `SigningPurpose` has grown to eight variants and the parser named four of them, so the four
+    /// PALW purposes — the block-production attempt, the free-prompt commitment, the free-prompt
+    /// QUANTUM SPEND and the derived artifact — could not be denied on any signer or HSM. An
+    /// operator who wanted a signer that attests and never spends had no way to say it. The match
+    /// here is exhaustive, so a purpose added tomorrow does not compile until it is nameable.
+    fn purpose_cli_name(purpose: SigningPurpose) -> &'static str {
+        match purpose {
+            SigningPurpose::Transaction => "transaction",
+            SigningPurpose::Attestation => "attestation",
+            SigningPurpose::Unbond => "unbond",
+            SigningPurpose::TakeoverToken => "takeover",
+            SigningPurpose::PalwAttemptV2 => "palw-attempt",
+            SigningPurpose::PalwFpCommitmentV3 => "palw-fp-commitment",
+            SigningPurpose::PalwFpSpendV3 => "palw-fp-spend",
+            SigningPurpose::PalwDerivedArtifactV1 => "palw-derived",
+        }
+    }
+
+    /// Every purpose a signer can be asked for. The array length is the only hand-kept fact, and
+    /// `every_signing_purpose_can_be_denied` checks it against the discriminants.
+    const ALL_SIGNING_PURPOSES: [SigningPurpose; 8] = [
+        SigningPurpose::Transaction,
+        SigningPurpose::Attestation,
+        SigningPurpose::Unbond,
+        SigningPurpose::TakeoverToken,
+        SigningPurpose::PalwAttemptV2,
+        SigningPurpose::PalwFpCommitmentV3,
+        SigningPurpose::PalwFpSpendV3,
+        SigningPurpose::PalwDerivedArtifactV1,
+    ];
+
     fn parse_purpose(s: &str) -> Result<SigningPurpose, String> {
-        match s.to_ascii_lowercase().as_str() {
-            "transaction" | "tx" => Ok(SigningPurpose::Transaction),
-            "attestation" | "attest" => Ok(SigningPurpose::Attestation),
-            "unbond" => Ok(SigningPurpose::Unbond),
-            "takeover" | "takeover-token" => Ok(SigningPurpose::TakeoverToken),
-            other => Err(format!("unknown --deny-purpose '{other}' (want transaction|attestation|unbond|takeover)")),
+        let want = s.to_ascii_lowercase();
+        // The short aliases that shipped, kept so existing unit files keep working.
+        match want.as_str() {
+            "tx" => return Ok(SigningPurpose::Transaction),
+            "attest" => return Ok(SigningPurpose::Attestation),
+            "takeover-token" => return Ok(SigningPurpose::TakeoverToken),
+            _ => {}
+        }
+        ALL_SIGNING_PURPOSES.into_iter().find(|p| purpose_cli_name(*p) == want).ok_or_else(|| {
+            let names: Vec<&str> = ALL_SIGNING_PURPOSES.into_iter().map(purpose_cli_name).collect();
+            format!("unknown --deny-purpose '{s}' (want {})", names.join("|"))
+        })
+    }
+
+    #[cfg(test)]
+    mod deny_purpose_tests {
+        use super::*;
+
+        /// **Every purpose a signer can be asked for can be denied.** The four PALW purposes were
+        /// unnameable, so the free-prompt quantum spend could not be refused on an HSM.
+        #[test]
+        fn every_signing_purpose_can_be_denied() {
+            for purpose in ALL_SIGNING_PURPOSES {
+                let name = purpose_cli_name(purpose);
+                assert_eq!(parse_purpose(name), Ok(purpose), "--deny-purpose {name} must name {purpose:?}");
+                assert_eq!(parse_purpose(&name.to_ascii_uppercase()), Ok(purpose), "and case must not matter");
+            }
+            // The array is the whole enum: discriminants 0..8, each mapped to a distinct name.
+            let names: std::collections::BTreeSet<&str> = ALL_SIGNING_PURPOSES.into_iter().map(purpose_cli_name).collect();
+            assert_eq!(names.len(), ALL_SIGNING_PURPOSES.len(), "no two purposes share a name");
+            let mut discriminants: Vec<u8> = ALL_SIGNING_PURPOSES.iter().map(|p| *p as u8).collect();
+            discriminants.sort_unstable();
+            assert_eq!(discriminants, (0u8..8).collect::<Vec<_>>(), "the array is the whole enum: every discriminant present, none twice");
+            // The four the audit found, named individually.
+            for name in ["palw-attempt", "palw-fp-commitment", "palw-fp-spend", "palw-derived"] {
+                assert!(parse_purpose(name).is_ok(), "{name} must be deniable");
+            }
+            // The shipped aliases still work, and an unknown name still fails with the full list.
+            assert_eq!(parse_purpose("tx"), Ok(SigningPurpose::Transaction));
+            let e = parse_purpose("nonsense").expect_err("unknown purposes are refused");
+            assert!(e.contains("palw-fp-spend"), "the error lists what is available: {e}");
         }
     }
 
