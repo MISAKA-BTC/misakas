@@ -6310,3 +6310,17 @@ and no leaf hash and no state chunk; the seat replays and supplies its own leave
 hosts; the restart follows the same order as §10n (seat2 → .113 → ibm → verify; node0 may need SIGKILL after a stuck
 shutdown). What this closes on the public chain: v5 free-prompt claims can be licensed without moving their material. What
 it does not: the court's refutation walkers (U-08) and the annex's P2P wiring (ADR-0085 items 4–5, ADR-0086 D6's transport).
+
+### 10p. The free-prompt manifest was another lane's (2026-09-05, `0001f34c`)
+
+The operator's Studio measured the edge: a free-prompt run of 256 tokens is accepted and one of 257 is refused as "the
+retained-trace chunk count is not the executed shape's". The producer's `Base0ExecutionV1` carried the ATTEMPT lane's
+manifest — `attempt_trace_manifest_root_v1(trace_root, 1)` and a chunk count fixed at 1, which admission pins attempts to
+by equality — while the free-prompt verifier requires `chunk_count == ⌈events / 256⌉` and only checks the root for being
+non-zero; every free-prompt claim on this chain so far carried a root derived by the wrong lane's function, unnoticed
+because nothing recomputes it and every fixture was exactly one chunk. `0001f34c` gives the free-prompt lane its own
+derivation in `produce.rs` (events = the trace's selecting-row roots, the leaves `rows_root` is the Merkle root of;
+binding = the job id; `fp_trace_manifest_v3`) and routes the three backends' free-prompt outcomes through it. The Studio's
+256-token cap (their `02c5bb0`) can be lifted once the gateway host's `palw-a16-fp-worker` carries this build; the fleet's
+kaspad does not verify the root, so the fleet needs nothing for it. Devnet run 8 (`MAX_TOKENS=300`, two chunks and over
+the material cap) is the check.
