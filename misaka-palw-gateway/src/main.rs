@@ -640,11 +640,35 @@ struct HttpRequest {
     body: Vec<u8>,
 }
 
+/// **A request line and a header line are bounded** (mainnet audit, 2026-09-05).
+///
+/// `BufRead::read_line` grows its `String` until it meets a newline. The body below is capped and
+/// the header COUNT is capped, but each line was not: one unauthenticated connection sending bytes
+/// with no `\n` grew a `String` until the public entrance died, and the 30 s read timeout only
+/// bounds how long it has to do it in. 8 KiB is the same order as nginx's
+/// `large_client_header_buffers`, so no request a client legitimately sends is near it.
+const MAX_REQUEST_LINE_BYTES: u64 = 8 * 1024;
+
+/// Read one CRLF-terminated line, refusing rather than growing past the cap.
+///
+/// Generic over `BufRead` so both arms are reachable from a test; `read_http_request` is the only
+/// production caller and it passes the socket's `BufReader`.
+fn read_capped_line<R: BufRead>(reader: &mut R, what: &str) -> Result<String, String> {
+    let mut line = String::new();
+    let read = reader
+        .take(MAX_REQUEST_LINE_BYTES)
+        .read_line(&mut line)
+        .map_err(|e| format!("cannot read {what}: {e}"))?;
+    if read as u64 == MAX_REQUEST_LINE_BYTES && !line.ends_with('\n') {
+        return Err(format!("{what} exceeds the {MAX_REQUEST_LINE_BYTES}-byte cap"));
+    }
+    Ok(line)
+}
+
 fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
     stream.set_read_timeout(Some(std::time::Duration::from_secs(30))).ok();
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line).map_err(|e| format!("cannot read the request line: {e}"))?;
+    let request_line = read_capped_line(&mut reader, "the request line")?;
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("").to_uppercase();
     let path = parts.next().unwrap_or("").to_string();
@@ -652,8 +676,7 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
     let mut transfer_encoding_chunked = false;
     let mut headers_read = 0usize;
     loop {
-        let mut line = String::new();
-        reader.read_line(&mut line).map_err(|e| format!("cannot read a header: {e}"))?;
+        let line = read_capped_line(&mut reader, "a request header")?;
         let line = line.trim_end();
         if line.is_empty() {
             break;
@@ -1786,6 +1809,31 @@ mod tests {
         assert!(sampling_from_request(&chat(Some(MAX_TEMPERATURE + 1.0), None), &armed).is_err());
         assert!(sampling_from_request(&chat(Some(-0.1), None), &armed).is_err());
         assert!(sampling_from_request(&chat(Some(f64::NAN), None), &armed).is_err());
+    }
+
+    /// **An unterminated request line is refused, not grown** (mainnet audit, 2026-09-05).
+    ///
+    /// Both arms: an ordinary line still reads, and a line that never ends is refused at the cap
+    /// instead of being accumulated into a `String` until the public entrance dies.
+    #[test]
+    fn an_unterminated_request_line_is_refused_at_the_cap() {
+        use std::io::Cursor;
+
+        let mut ok = Cursor::new(b"GET /healthz HTTP/1.1\r\n".to_vec());
+        assert_eq!(read_capped_line(&mut ok, "the request line").unwrap().trim_end(), "GET /healthz HTTP/1.1");
+
+        let flood = vec![b'A'; (MAX_REQUEST_LINE_BYTES as usize) + 4096];
+        let mut endless = Cursor::new(flood);
+        let e = read_capped_line(&mut endless, "the request line").expect_err("a line with no newline must be refused");
+        assert!(e.contains("exceeds the"), "the refusal names the cap: {e}");
+
+        // A line that ends exactly at the cap is a legal line, not a flood.
+        let mut exact = Cursor::new({
+            let mut v = vec![b'B'; (MAX_REQUEST_LINE_BYTES as usize) - 1];
+            v.push(b'\n');
+            v
+        });
+        assert!(read_capped_line(&mut exact, "the request line").is_ok(), "the boundary itself is admissible");
     }
 
     /// **ADR-0079 S5.** The gateway holds the executor PUBLIC key only, and refuses to boot when a
