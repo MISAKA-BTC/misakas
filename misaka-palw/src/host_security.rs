@@ -848,6 +848,26 @@ pub const SIGNING_SECRET_ENV_NAMES: &[&str] = &[
 /// directory the gateway reads is the shape of the mistake this check exists to catch.
 pub const VALIDATOR_SEED_FILE_LEN: u64 = 32;
 
+/// **The length of the seed file this tree actually writes** (mainnet audit, 2026-09-05).
+///
+/// `misaka key gen` and `misaka key import` both go through `write_seed_and_derive`, which
+/// hex-encodes the seed — `VALIDATOR_SEED_LEN * 2` bytes — before `write_key_file_0600`. So every
+/// seed file the documented commands produce is 64 bytes, and a check that looked only for the
+/// raw 32-byte shape could not fire on the one deployment mistake it exists to catch. Both tests
+/// that covered it wrote a raw 32-byte file, which is a shape nothing in this tree produces: the
+/// guard passed on a fixture and would have missed the real thing.
+pub const VALIDATOR_SEED_HEX_FILE_LEN: u64 = 64;
+
+/// Is this a hex-encoded seed file — the form `write_seed_and_derive` writes, with or without a
+/// trailing newline an editor may have added? Only ever asked of files already known to be within
+/// two bytes of the hex length, so it never reads anything large.
+fn is_hex_seed_file(path: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else { return false };
+    let trimmed = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
+    let trimmed = trimmed.strip_suffix(b"\r").unwrap_or(trimmed);
+    trimmed.len() as u64 == VALIDATOR_SEED_HEX_FILE_LEN && trimmed.iter().all(u8::is_ascii_hexdigit)
+}
+
 /// A signing secret found in a process's own view, and where.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReachableSecret {
@@ -859,9 +879,12 @@ impl std::fmt::Display for ReachableSecret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ReachableSecret::Environment(name) => write!(f, "the environment variable {name} is set"),
-            ReachableSecret::SeedShapedFile(path) => {
-                write!(f, "{} is a {VALIDATOR_SEED_FILE_LEN}-byte file — the shape of a raw ML-DSA-87 keygen seed", path.display())
-            }
+            ReachableSecret::SeedShapedFile(path) => write!(
+                f,
+                "{} has the shape of an ML-DSA-87 keygen seed — {VALIDATOR_SEED_FILE_LEN} raw bytes, or the \
+                 {VALIDATOR_SEED_HEX_FILE_LEN} hex bytes `misaka key gen` writes",
+                path.display()
+            ),
         }
     }
 }
@@ -884,7 +907,15 @@ where
         let Ok(entries) = std::fs::read_dir(dir) else { continue };
         for entry in entries.flatten() {
             let Ok(meta) = entry.metadata() else { continue };
-            if meta.is_file() && meta.len() == VALIDATOR_SEED_FILE_LEN {
+            if !meta.is_file() {
+                continue;
+            }
+            let len = meta.len();
+            let seed_shaped = len == VALIDATOR_SEED_FILE_LEN
+                || (len >= VALIDATOR_SEED_HEX_FILE_LEN
+                    && len <= VALIDATOR_SEED_HEX_FILE_LEN + 2
+                    && is_hex_seed_file(&entry.path()));
+            if seed_shaped {
                 found.push(ReachableSecret::SeedShapedFile(entry.path()));
             }
         }
@@ -1051,6 +1082,16 @@ mod tests {
         let seed = dir.join("bond.seed");
         std::fs::write(&seed, [7u8; 32]).unwrap();
         std::fs::write(dir.join("identity.json"), b"{\"not\":\"a seed\"}").unwrap();
+        // **The shape the tree actually writes**: `write_seed_and_derive` hex-encodes, so this is
+        // what `misaka key gen` leaves on disk. The raw-32 fixture above is a shape nothing here
+        // produces, and while it was the only one checked the guard could not fire on the real
+        // mistake (mainnet audit, 2026-09-05).
+        let hex_seed = dir.join("validator.seed");
+        std::fs::write(&hex_seed, b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").unwrap();
+        let hex_seed_nl = dir.join("operator.seed");
+        std::fs::write(&hex_seed_nl, b"0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef\n").unwrap();
+        // …and a 64-byte file that is NOT hex stays unreported, so the check is still about seeds.
+        std::fs::write(dir.join("blob.bin"), [0xE7u8; 64]).unwrap();
 
         let found = reachable_signing_secrets(
             |name| if name == "MISAKA_BOND_KEY_SEED" { Some("/srv/bond.seed".into()) } else { None },
@@ -1058,7 +1099,9 @@ mod tests {
         );
         assert!(found.contains(&ReachableSecret::Environment("MISAKA_BOND_KEY_SEED".into())));
         assert!(found.contains(&ReachableSecret::SeedShapedFile(seed)));
-        assert_eq!(found.len(), 2, "the JSON beside it is not seed-shaped and must not be reported");
+        assert!(found.contains(&ReachableSecret::SeedShapedFile(hex_seed)), "the hex form `misaka key gen` writes");
+        assert!(found.contains(&ReachableSecret::SeedShapedFile(hex_seed_nl)), "…and the same with a trailing newline");
+        assert_eq!(found.len(), 4, "the JSON and the non-hex 64-byte blob are not seed-shaped and must not be reported");
 
         let clean = reachable_signing_secrets(|_| None, &[]);
         assert!(clean.is_empty());
