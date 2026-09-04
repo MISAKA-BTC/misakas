@@ -5806,3 +5806,15 @@ produced the compact one-line DSL. The difference is the derive script's `nofenc
 Do not use Markdown, code fences or backticks."), omitted from this request by hand. Job #2 re-sends the exact
 construction; the on-chain carriage goes to the job whose derivation succeeds, since every commitment reserves
 exposure and pays a fee. Not submitted to the chain.
+
+**Step 9, jobs #2 and #3 (01:14–01:20 UTC) — two more of the drill's documented traps, hit and named.** Job #2
+(with the `nofence` prefix) answered `{"v":1,"sketch":"box","extrude":{"z0":0,"z1":5}}}` and its derivation refused
+with its own reason — `grammar: json: trailing characters at line 1 column 49` — because the prompt was still 14
+tokens short of the derive script's: the sentence "You output only one JSON object in this exact DSL and nothing
+else." between the prefix and the example. And the gateway had been started **without `--class-leaves`**, which the
+gateway and the rail each default to the floor's 7,708 (the e2e drill's own comment: "a drill that omitted it
+priced a dense class's quanta as the floor's — in two places"); the class's canonical job is
+`PalwPwuRuleV2::canonical_leaves_v1()` = `pwu_per_inference` under `DerivedV1` = **6,630,544** for v5 (the facts'
+`pwu`), read from the source rather than from `kaspad --palw-dump-classes`, which is a full node start (DNS seed,
+P2P, a datadir) and was killed before it could become a seventh node. Jobs #1 and #2 stay local. The gateway was
+restarted with `--class-leaves 6630544`; job #3 carries the exact prompt at max_tokens 56.
