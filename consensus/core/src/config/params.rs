@@ -1533,6 +1533,34 @@ impl Params {
             return Ok(());
         };
         bundle.validate()?;
+        // **A V2 network's genesis is minted at the ambient target, because the class lottery is
+        // its throttle** (mainnet audit, 2026-09-05).
+        //
+        // ADR-0066 states the doctrine — "a V2 network runs at MAX because the class lottery, not
+        // the hash target, is its throttle" — and ADR-0083 makes the retarget answer
+        // `max_difficulty_target` for a window with no bits-priced row. Both PALW presets mint
+        // their genesis at that value (`PALW_RC_GENESIS`, `DEVNET_GENESIS`: `bits = 0x207fffff`).
+        // `MAINNET_GENESIS` carries `0x1f7fffff` — one compact exponent, 256x harder — inherited
+        // from the hash lineage, where a launch-hashrate ramp is the right thing to want.
+        //
+        // Carding mainnet is a re-mint (the bonds' collateral enters the premine, which moves the
+        // genesis), so its `bits` is a value the ceremony chooses and nothing told it to choose
+        // this one. Left at the hash lineage's, the chain is born needing 256x the inferences per
+        // block for the whole fixed-difficulty launch window `min_difficulty_window_size` buys
+        // (150 blocks, ~5 h) before a single retarget can answer — the same shape as the wedge
+        // ADR-0083 was written for, arrived at from the other side and on the one network where
+        // "wait for the DAA to fix it" costs real money.
+        //
+        // A rule rather than a runbook note, for the reason the fence checks below are: it is
+        // exactly the kind of constant a mint gets right by remembering.
+        {
+            let ambient = self.max_difficulty_target.compact_target_bits();
+            if self.genesis.bits != ambient {
+                return Err(PalwModeV2Error::Invalid(
+                    "a ConsensusV2 genesis is minted at a target other than this network's ambient maximum: a V2                      network is throttled by the class lottery, not by the hash target, so a harder genesis prices                      the attempt lanes off the chain for the whole fixed-difficulty launch window",
+                ));
+            }
+        }
         // **ADR-0082 Decision 3: an armed dissection court must be able to derive its arity from
         // the ruleset it judges under, and it is checked HERE, at assembly.** The derivation
         // (`palw_court_v2::palw_court_params_at_v2`) answers `None` when no legal arity fits the
@@ -11668,7 +11696,7 @@ mod consensus_params_id_tests {
         let money: Vec<(u32, [u8; 64])> =
             specs.iter().enumerate().map(|(i, spec)| (i as u32, *spec.payout_payload.as_byte_slice())).collect();
         let utxos = bonded_genesis_utxos(MAINNET_PARAMS.net, &money, std::iter::empty());
-        let params = palw_v2_params_from_artifacts_on_base_with_utxos(MAINNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
+        let params = palw_v2_params_from_artifacts_on_base_with_utxos(mainnet_v2_mint_base(), PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
             .expect("a mainnet-equivalent genesis assembles");
         let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("the mode is V2") };
 
@@ -11736,13 +11764,16 @@ mod consensus_params_id_tests {
         assert_eq!(total, MISAKA_PREMINE_CAP_SOMPI, "a bonded mainnet genesis still mints exactly 10B");
 
         // 3. The real assembly and the real genesis gate, on mainnet's base.
-        let params = palw_v2_params_from_artifacts_on_base_with_utxos(MAINNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
+        let params = palw_v2_params_from_artifacts_on_base_with_utxos(mainnet_v2_mint_base(), PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
             .expect("a mainnet-equivalent genesis assembles and passes verify_palw_genesis_v2");
 
         // 4. PALW is genuinely on, and it is still mainnet underneath.
         assert!(matches!(params.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)), "the mode is V2");
         assert_eq!(params.net, MAINNET_PARAMS.net, "…on mainnet's own identity");
-        assert_eq!(params.genesis.hash, MAINNET_PARAMS.genesis.hash, "…and mainnet's genesis block");
+        // NOT the shipped genesis HASH: carding is a re-mint (the seats' collateral enters the
+        // premine) and the mint is at the V2 ambient target, so the block moves. What must survive
+        // is the identity and the economics, which the assertions around this one hold.
+        assert_eq!(params.genesis.timestamp, MAINNET_PARAMS.genesis.timestamp, "…built from mainnet's own genesis");
         params.validate_palw_v2().expect("the startup gate a node runs accepts it");
         assert_eq!(
             params.palw_consensus_mode.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2),
@@ -11761,6 +11792,22 @@ mod consensus_params_id_tests {
         armed.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::new(1_000), window_daa: 1_000 });
 
         armed.validate_palw_v2().expect("a registry with spare seats may arm the maturity fence");
+    }
+
+    /// **Mainnet's base as a CARDING CEREMONY would mint it**: at the ambient target.
+    ///
+    /// Carding mainnet is a re-mint — the seats' collateral enters the premine, which moves the
+    /// genesis — so `bits` is a value that ceremony chooses. `MAINNET_GENESIS` carries the hash
+    /// lineage's `0x1f7fffff`, one compact exponent (256x) harder than the `0x207fffff` both PALW
+    /// presets mint at, because a hash chain wants a launch-hashrate ramp and a V2 chain is
+    /// throttled by the class lottery instead. `validate_palw_v2` now refuses the mismatch, so
+    /// these equivalents mint the way the ceremony must; before that gate they assembled at the
+    /// hash lineage's difficulty and nothing said a word.
+    #[cfg(test)]
+    fn mainnet_v2_mint_base() -> Params {
+        let mut base = MAINNET_PARAMS;
+        base.genesis.bits = base.max_difficulty_target.compact_target_bits();
+        base
     }
 
     /// Every V2 fence a preset can arm, as `(name, armed)` — ONE spelling, so a fence added
@@ -11825,7 +11872,7 @@ mod consensus_params_id_tests {
             specs.iter().enumerate().map(|(i, spec)| (i as u32, *spec.payout_payload.as_byte_slice())).collect();
         let utxos = bonded_genesis_utxos(MAINNET_PARAMS.net, &money, std::iter::empty());
         let assembled =
-            palw_v2_params_from_artifacts_on_base_with_utxos(MAINNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
+            palw_v2_params_from_artifacts_on_base_with_utxos(mainnet_v2_mint_base(), PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
                 .expect("a mainnet-equivalent genesis assembles");
         let carded = palw_rc_arm_phase1(assembled);
 
@@ -11882,7 +11929,7 @@ mod consensus_params_id_tests {
     fn the_mainnet_base_can_state_the_court_the_dense_tier_needs() {
         let dense = Some(PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT);
         let err = palw_v2_params_with_classes_on_base(
-            MAINNET_PARAMS,
+            mainnet_v2_mint_base(),
             PALW_RC_GENESIS_ARTIFACT_ROOT,
             PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
             dense,
@@ -11894,7 +11941,7 @@ mod consensus_params_id_tests {
             "the refusal names the fence the card has to state, not something downstream: {err:?}"
         );
 
-        let mut base = MAINNET_PARAMS;
+        let mut base = mainnet_v2_mint_base();
         base.palw_kary_court = Some(ForkActivation::always());
         let params = palw_v2_params_with_classes_on_base(
             base,
@@ -11943,7 +11990,7 @@ mod consensus_params_id_tests {
             specs.iter().enumerate().map(|(i, spec)| (i as u32, *spec.payout_payload.as_byte_slice())).collect();
         let utxos = bonded_genesis_utxos(MAINNET_PARAMS.net, &money, std::iter::empty());
         let m = palw_rc_arm_phase1(
-            palw_v2_params_from_artifacts_on_base_with_utxos(MAINNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
+            palw_v2_params_from_artifacts_on_base_with_utxos(mainnet_v2_mint_base(), PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
                 .expect("a mainnet-equivalent genesis assembles"),
         );
         let r = palw_rc_shipped_params();
@@ -11978,7 +12025,45 @@ mod consensus_params_id_tests {
         // overlay and its bond floor, EVM off) is deliberate and covered by the tests above.
         assert_eq!((m.max_block_level, r.max_block_level), (225, 250), "the one shape difference that is not the cadence's");
         assert_eq!(m.net, MAINNET_PARAMS.net, "…on mainnet's own identity");
-        assert_eq!(m.genesis.hash, MAINNET_PARAMS.genesis.hash, "…and mainnet's genesis block");
+        assert_eq!(m.genesis.timestamp, MAINNET_PARAMS.genesis.timestamp, "…built from mainnet's own genesis");
+        assert_eq!(
+            m.genesis.bits,
+            m.max_difficulty_target.compact_target_bits(),
+            "and minted at the ambient target, which is what `validate_palw_v2` now requires of a V2 genesis"
+        );
+    }
+
+    /// **A V2 genesis minted above the ambient target is refused** (mainnet audit, 2026-09-05).
+    ///
+    /// Both arms on one preset, because a gate that refused everything would also pass the refusal
+    /// half on its own: testnet-11 as shipped is the accepting arm, and the same ruleset with the
+    /// hash lineage's genesis `bits` is the refusing one.
+    #[test]
+    fn a_v2_genesis_minted_above_the_ambient_target_is_refused() {
+        let rc = palw_rc_shipped_params();
+        assert_eq!(
+            rc.genesis.bits,
+            rc.max_difficulty_target.compact_target_bits(),
+            "the shipped V2 presets already mint at the ambient target — this gate names what they do"
+        );
+        rc.validate_palw_v2().expect("…so the shipped ruleset passes it");
+
+        let mut harder = rc.clone();
+        harder.genesis.bits = MAINNET_PARAMS.genesis.bits;
+        assert_ne!(harder.genesis.bits, harder.max_difficulty_target.compact_target_bits(), "the premise: 0x1f7fffff is not the ambient target");
+        let e = harder.validate_palw_v2().expect_err("a V2 network minted at the hash lineage's difficulty is refused");
+        assert!(
+            format!("{e:?}").contains("ambient maximum"),
+            "the refusal names what is wrong with the mint, not something downstream: {e:?}"
+        );
+
+        // And the same gate is why `mainnet_v2_mint_base` exists: mainnet's shipped genesis is the
+        // one that fails it, which is the finding.
+        assert_ne!(
+            MAINNET_PARAMS.genesis.bits,
+            MAINNET_PARAMS.max_difficulty_target.compact_target_bits(),
+            "mainnet's shipped genesis is minted for the hash lineage, 256x above a V2 network's ambient target"
+        );
     }
 
     /// **Half a mainnet card is refused by name.** The ruleset reads the artifact root and the
