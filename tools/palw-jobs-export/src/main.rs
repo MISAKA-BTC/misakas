@@ -322,12 +322,18 @@ fn free_prompt_rows(dirs: &str, cache: &mut std::collections::BTreeMap<String, V
             let prompt_ids: Option<Vec<u32>> = if let Some(ids) = cache.get(&key) {
                 Some(ids.clone())
             } else {
-                let ids = std::fs::read(format!("{dir}/traces/{claim}.material")).ok().and_then(|bytes| {
-                    match misaka_palw_base0::produce::base0_material_decode_any_v1(&bytes) {
-                        Ok(misaka_palw_base0::produce::Base0RetentionV1::Folded(folded)) => Some(folded.prompt_token_ids),
-                        _ => None,
-                    }
-                });
+                // **The free-prompt lane's payload is not the attempt lane's, and four magic
+                // bytes say so.** A free-prompt claim's material is `FPM1` — the job and the
+                // prompt ids, which is all a seat needs because it RE-EXECUTES the job rather
+                // than re-hashing a run's rows — or `FPC1`/`FPA1`, the same material with the
+                // capture or the answer's ids attached. `base0_material_decode_any_v1` reads the
+                // attempt lane's retention and returns None on the first field of all three, so
+                // every free-prompt row on the public page printed an empty Input column while
+                // its Output sat right beside it, decoded, from the same job.
+                let ids = std::fs::read(format!("{dir}/traces/{claim}.material"))
+                    .ok()
+                    .and_then(|bytes| kaspa_consensus_core::palw_freeprompt_v3::palw_fp_job_material_decode_v1(&bytes))
+                    .map(|material| material.prompt_token_ids);
                 if let Some(ids) = ids.as_ref() {
                     cache.insert(key, ids.clone());
                 }
