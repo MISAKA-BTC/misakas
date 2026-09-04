@@ -162,7 +162,7 @@ run_gate() {
     fi
 
     gate_coverage "$id" "$log"
-    expected_reds "$log"
+    expected_reds "$rc" "$log"
     missing_tool_hint "$log"
 
     if [ "$rc" -eq 0 ]; then
@@ -190,15 +190,29 @@ run_gate() {
 # `palw_freeprompt_v3::tests::golden_vector_ids_are_frozen` is matched by its MODULE PATH: there is
 # a namesake `golden_vector_ids_are_frozen` in `palw_derived_v1.rs` that is NOT expected to fail,
 # and matching the bare name would excuse it.
+#
+# **Matched on a FAILING line, and only for a gate that failed** (mainnet audit, 2026-09-05).
+# `grep -q <name>` matches cargo-nextest's `PASS` line just as well as its `FAIL` line, and this
+# ran unconditionally -- before the `rc` check -- so a completely green run printed
+# "known red: shipped_presets_have_pinned_fingerprints" every time, and a red run could name a
+# test that had in fact passed. A reader who cannot tell a known red from a new one ends up
+# ignoring the colour, which is the exact failure this function's own comment names.
 expected_reds() {
-    local log="$1"
-    grep -q "shipped_presets_have_pinned_fingerprints" "$log" 2>/dev/null &&
+    local rc="$1" log="$2"
+    # A gate that passed has no reds to explain; saying otherwise trains the reader to skip the line.
+    [ "$rc" -eq 0 ] && return 0
+    # `FAIL`/`FAILED` on the SAME line as the name: nextest prints `FAIL [ 0.1s] <path>`, libtest
+    # prints `test <path> ... FAILED`, so either order is matched and a PASS line is not.
+    known_red() {
+        grep -qE "FAIL(ED)?.*$1|$1.*FAILED" "$log" 2>/dev/null
+    }
+    known_red "shipped_presets_have_pinned_fingerprints" &&
         printf '    known red: shipped_presets_have_pinned_fingerprints -- closes at the cut'"'"'s single re-pin (integrator)\n'
-    grep -q "palw_freeprompt_v3::tests::golden_vector_ids_are_frozen" "$log" 2>/dev/null &&
+    known_red "palw_freeprompt_v3::tests::golden_vector_ids_are_frozen" &&
         printf '    known red: palw_freeprompt_v3::tests::golden_vector_ids_are_frozen -- same re-pin. NOT the namesake in palw_derived_v1.rs\n'
-    grep -q "source_tree_sha256" "$log" 2>/dev/null && grep -q "MISMATCH" "$log" 2>/dev/null &&
+    grep -qE "source_tree_sha256.*MISMATCH|MISMATCH.*source_tree_sha256" "$log" 2>/dev/null &&
         printf '    known red: the transformer_id pins -- a87cc282 rustfmt-ed misaka-palw-derive/src/kinds/scene.rs, which moved all eight ids. Same re-pin.\n'
-    grep -q "the_transformer_ids_are_the_ones_this_build_was_pinned_with" "$log" 2>/dev/null &&
+    known_red "the_transformer_ids_are_the_ones_this_build_was_pinned_with" &&
         printf '    known red: transformer_id_pin::the_transformer_ids_are_the_ones_this_build_was_pinned_with -- the Rust half of the same re-pin.\n'
     return 0
 }
