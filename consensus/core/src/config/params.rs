@@ -8368,6 +8368,20 @@ pub fn palw_rc_params(
 /// score); this supplies the ruleset. A caller that passed a base whose PALW fences disagree with
 /// a V2 mode gets the refusal from `validate_palw_v2` at the bottom rather than a running node.
 #[allow(clippy::too_many_arguments)]
+/// **The difficulty window a V2 network runs, in ONE place.**
+///
+/// 264 samples at `difficulty_sample_rate = 1` and 120 s a block is ~8.8 h of difficulty memory —
+/// the number `TESTNET_PARAMS` states and gives its reasons for (a provisioned producer fleet
+/// rather than an open hashrate market, so 264 samples' +-6 % stability beats fast response), and
+/// the number devnet runs. It is a function of the cadence, so it belongs beside the cadence and
+/// not on each preset: mainnet's own 661 is sized in SECONDS at 10 bps and becomes 22 h under this
+/// cadence, which is how a carded mainnet acquired a difficulty memory nobody chose.
+pub const PALW_V2_DIFFICULTY_WINDOW_SIZE: usize = 264;
+
+/// The floor beneath [`PALW_V2_DIFFICULTY_WINDOW_SIZE`] — the fixed-difficulty launch window a
+/// fresh V2 chain runs before it has samples to retarget from (~5 h at this cadence).
+pub const PALW_V2_MIN_DIFFICULTY_WINDOW_SIZE: usize = MIN_DIFFICULTY_WINDOW_SIZE;
+
 pub fn palw_v2_params_on_base(
     base: Params,
     base_class_id: crate::Hash64,
@@ -8418,6 +8432,33 @@ pub fn palw_v2_params_on_base(
     // **One spelling of "this network runs at 120 s", because there turned out to be two
     // assembly paths and only one of them had it** (mainnet audit item 6). See the method.
     params = params.with_two_minute_cadence();
+    // **And the DAG shape that cadence implies, for the same reason and in the same place**
+    // (mainnet audit, 2026-09-05).
+    //
+    // `with_two_minute_cadence` moves `blockrate` and leaves two quantities that are FUNCTIONS of
+    // the cadence behind, so a V2 network assembled over a 10-bps base ran a shape nobody chose:
+    //
+    // * `difficulty_window_size`. Mainnet's 661 is `DIFFICULTY_WINDOW_DURATION / SAMPLE_INTERVAL`
+    //   = 2641 s / 4, sized as ~264 SECONDS of difficulty memory at 10 bps. The cadence change
+    //   sets `difficulty_sample_rate` to 1 and `target_time_per_block` to 120 s, at which the same
+    //   661 is 661 x 120 s ~= 22 HOURS — a 300x change in the thing the constant was sized to be,
+    //   arrived at by leaving it alone. testnet-11 and devnet both run 264 (~8.8 h), chosen for
+    //   this cadence and stated as such beside `TESTNET_PARAMS`.
+    // * `max_block_parents`. `with_two_minute_cadence` preserves a WIDENED parent count on purpose
+    //   — a caller that raised it meant to — but MAINNET_PARAMS' 16 is `Bps::<10>`'s default and
+    //   not a decision, so a carded mainnet ran 16 parents at `ghostdag_k = 1` where both networks
+    //   that have actually run V2 run 10.
+    //
+    // Imposed here rather than on the presets for the reason the cadence itself is: this is the
+    // one place a V2 ruleset is assembled, and a quantity restated per preset is a quantity that
+    // drifts on the preset nobody re-read. A no-op on testnet-11 and devnet, which already carry
+    // both values; the only ruleset it moves is a carded mainnet's, which has no chain to move.
+    {
+        let v2 = BlockrateParams::new_two_minute_bps();
+        params.blockrate.max_block_parents = v2.max_block_parents;
+        params.difficulty_window_size = PALW_V2_DIFFICULTY_WINDOW_SIZE;
+        params.min_difficulty_window_size = PALW_V2_MIN_DIFFICULTY_WINDOW_SIZE;
+    }
     // **The depths a V2 network needs, derived from its own bundle in ONE place.** Restated by
     // hand anywhere else, they drift — which is how a params set assembled outside this function
     // ended up failing the very lattice bound this derivation exists to satisfy.
@@ -11871,6 +11912,73 @@ mod consensus_params_id_tests {
             "…and the row it registers is the fused one the court exists for"
         );
         palw_rc_arm_phase1(params);
+    }
+
+    /// **A carded mainnet runs the DAG shape testnet-11 runs, and what still differs is named**
+    /// (mainnet audit, 2026-09-05).
+    ///
+    /// ADR-0042 Decision 11's promise is that the RC's ruleset IS mainnet's. Two quantities that
+    /// are functions of the 120 s cadence were not moved by `with_two_minute_cadence`, so a carded
+    /// mainnet ran a shape no V2 network has ever run: a 661-sample difficulty window (22 h of
+    /// memory, against the 8.8 h the constant was sized for) and 16 block parents at
+    /// `ghostdag_k = 1`, against 10. `palw_v2_params_on_base` now imposes both, in the same place
+    /// and for the same reason it imposes the cadence and re-derives the depths.
+    ///
+    /// The residue is asserted rather than described, so a future divergence has to come here to
+    /// be explained.
+    #[test]
+    fn a_carded_mainnet_runs_the_v2_dag_shape_and_names_what_still_differs() {
+        use crate::config::premine::{bonded_genesis_utxos, premine_outpoint};
+        use crate::palw_fp_devnet_v3::{palw_devnet_bond_registry_v1, palw_v2_maturity_armable_bonds_v1};
+
+        let specs: Vec<_> = palw_devnet_bond_registry_v1(palw_v2_maturity_armable_bonds_v1())
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut spec)| {
+                spec.bond = crate::palw_state_v2::PalwBondKeyV2(premine_outpoint(i as u32));
+                spec
+            })
+            .collect();
+        let money: Vec<(u32, [u8; 64])> =
+            specs.iter().enumerate().map(|(i, spec)| (i as u32, *spec.payout_payload.as_byte_slice())).collect();
+        let utxos = bonded_genesis_utxos(MAINNET_PARAMS.net, &money, std::iter::empty());
+        let m = palw_rc_arm_phase1(
+            palw_v2_params_from_artifacts_on_base_with_utxos(MAINNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
+                .expect("a mainnet-equivalent genesis assembles"),
+        );
+        let r = palw_rc_shipped_params();
+        let d = devnet_shipped_params();
+
+        let shape = |p: &Params| {
+            (
+                p.blockrate.target_time_per_block,
+                p.blockrate.ghostdag_k,
+                p.blockrate.max_block_parents,
+                p.blockrate.mergeset_size_limit,
+                p.blockrate.merge_depth,
+                p.blockrate.coinbase_maturity,
+                p.blockrate.past_median_time_sample_rate,
+                p.blockrate.difficulty_sample_rate,
+                p.difficulty_window_size,
+                p.min_difficulty_window_size,
+            )
+        };
+        assert_eq!(shape(&m), shape(&r), "a carded mainnet runs testnet-11's cadence-derived DAG shape");
+        assert_eq!(shape(&d), shape(&r), "…and so does the devnet the drills run, which is what makes it a rehearsal");
+        assert_eq!(
+            (m.difficulty_window_size, m.blockrate.max_block_parents),
+            (PALW_V2_DIFFICULTY_WINDOW_SIZE, BlockrateParams::new_two_minute_bps().max_block_parents),
+            "the two the audit found, named individually: 264 samples (~8.8 h at 120 s) and 10 parents"
+        );
+
+        // What is left, deliberately. `max_block_level` is a property of the hash lineage's block
+        // levels and its pruning proof, not a function of the cadence, so it is mainnet's own —
+        // named here so that the difference is a decision on the record rather than a discovery
+        // after the mint. The rest of mainnet's identity (net, genesis, seeders, the production DNS
+        // overlay and its bond floor, EVM off) is deliberate and covered by the tests above.
+        assert_eq!((m.max_block_level, r.max_block_level), (225, 250), "the one shape difference that is not the cadence's");
+        assert_eq!(m.net, MAINNET_PARAMS.net, "…on mainnet's own identity");
+        assert_eq!(m.genesis.hash, MAINNET_PARAMS.genesis.hash, "…and mainnet's genesis block");
     }
 
     /// **Half a mainnet card is refused by name.** The ruleset reads the artifact root and the
