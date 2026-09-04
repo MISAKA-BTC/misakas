@@ -5766,3 +5766,12 @@ next step, not claimed.
 commit → `6e01ba07`. https://github.com/MISAKA-BTC/misakas/commit/efbef639d9d2c5453c126e3e0f6002a930dea853 ·
 https://github.com/MISAKA-BTC/misakas/releases/tag/testnet-11-relaunch-5f. (A plain `git fetch` in this repo does
 not move `origin/main` — its fetch refspec is a single tag, the memory note's trap — hence `ls-remote`.)
+
+**7c — what the open lane holds (e1, 01:15 UTC):** the v5 512 row is the class wide enough for the grammar floors —
+cad/v1 38, music/v1 60, scene/v1 104 decode tokens after the 134-token prompt — which the n_ctx-16 graph-v2 row never
+was; that is why certifying this lane, not the older A16 row, is the practical-output capability. e1's devnet rig is
+stopped for good with its ledger stated: the static port matching impl, four floor-only drill runs (register →
+certify → serve → budget gate), the sentinel-guard fix `0f12727a`, and two shapes handed to the integrators (the
+`load_tip(...).ok()` silent swallow; a genesis state written under one ladder and read back under another fails
+silently). Its last hypothesis — that the 2^32/2^26 ladder divergence explained the v5 registration's Decision F
+mismatch — was refuted by test (`9c853d31`: numbers unmoved), leaving the mismatch on the engine's recording side.
