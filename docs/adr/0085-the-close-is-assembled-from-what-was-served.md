@@ -123,12 +123,30 @@ X4  The annex is served only for a leaf an open court session names; a request f
 4. Executor: the annex in `open_retained_interval` (chain read of open sessions), X4.
 5. Challenger: the terminal arm's opening path (Decision 3); Decision 4's seat-opened court.
 
-## 7. Implementation record
+## 7. Implementation record (2026-09-04, `palw-adr0084-served-answer`)
 
-Not started. Written on `palw-adr0084-served-answer` beside ADR-0084's implementation so the
-follow-up has its design before the fleet rebuild; §6 items 1–3 are pure base0 work with fixtures
-that exist (`every_qwen36_leaf_adjudicates_and_a_tampered_one_convicts` and the A16 sweep), items
-4–5 are node work.
+**Landed — §6 items 1–3, base0 and consensus-core only, no node wiring:**
+
+| item | where | what |
+|---|---|---|
+| 1 | `misaka-palw-base0/src/fp_interval.rs` | `Base0FpIntervalOpeningV3` = v2 + `Option<Base0FpCloseAnnexV1 { rows_root, disputed: Vec<Base0FpDisputedLeafV1 { leaf_index, tile, anchor }> }>`, magic `MSKFPIV3`; the any-decoder hands every seat the v2 view (X3); `base0_fp_interval_close_annex_v1` is the closer's read. The annex names, per disputed leaf, the checkpoint claim its step is anchored to — the leaf and its opening against the checkpoint leg root are the accused's leg's, and an interval opening's own anchor names only the interval's START |
+| 2 | `consensus/core/src/palw_step_leg.rs`; `fp_interval.rs` | `step_opening_from_range_v1` and `step_range_siblings_from_range_v1` (paths derived from a range opening, pinned byte-identical to the built ones over every leaf/sub-range of every leaf count ≤ 24/20); `base0_fp_replay_interval_tiles_v1` and `Base0FpIntervalKernelsV1::replay_interval_tiles` (the one required verb; the seat's hash check is provided over it); `base0_fp_challenger_replay_tiles_capped_v1` (the seat's derivation up to the replay, returning the v2 opening and the challenger's tiles) |
+| 3 | `misaka-palw-base0/src/legs.rs` | `base0_refutation_from_opening_capped_v1(profile, ctx, intervals: &[(opening, replay)], annex, target, prompt, pin, recomputed_chunks, cap)`; `LegError::CloseFromOpening(&str)`. **X1 holds on the floor fixture**: at every main-step leaf of every interval, the refutation equals the capture path's byte for byte, and a forged annex tile is refused by name |
+
+**Two things the implementation taught the design (recorded in the code):**
+
+* **A step at an interval's first call reads the call before it**, whose tiles sit in the PREVIOUS
+  interval's range — so the closer holds two served intervals, the disputed one first and its
+  predecessor, and the builder finds each input's holder among them (an input run that straddles two
+  ranges is refused by name; none occurred on the fixture).
+* **The annex's anchor IS the anchoring decision.** The capture path anchors when the executor's leg
+  holds a checkpoint covering the call before the disputed one and builds the long form otherwise;
+  the executor applies the same rule when it fills the annex, and the closer anchors exactly when an
+  anchor was served.
+
+**Not landed — §6 items 4–5:** the executor filling the annex from open court sessions
+(`open_retained_interval`, X4) and the panel's terminal arm taking the opening path before the pull
+(Decision 3), plus Decision 4's seat-opened court. Both are node work on `kaspad/src/palw_panel.rs`.
 
 ## 8. What is deliberately not decided
 

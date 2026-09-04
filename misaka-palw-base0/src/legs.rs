@@ -63,6 +63,9 @@ pub enum LegError {
     /// sparse capture's refusals name the call, the slot and the width they were given, and a
     /// producer that has just lost a job needs to read which one it was.
     Fold(crate::fp_capture::Base0SparseCaptureError),
+    /// ADR-0085 Decision 2: the close could not be assembled from what was served and what this
+    /// party replayed — named, so the closer waits or reopens the court's question, never guesses.
+    CloseFromOpening(&'static str),
 }
 
 /// One captured step row, tiled and placed at its canonical leaf index.
@@ -1722,6 +1725,158 @@ pub fn base0_refutation_from_capture_capped_v1(
         decode_tokens,
         kv_checkpoint,
     })
+}
+
+/// **ADR-0085 Decision 2: the court's refutation, assembled from served interval openings and
+/// this party's own replays — never from a capture.**
+///
+/// The object is [`base0_refutation_from_capture_capped_v1`]'s, byte for byte (the mirror test in
+/// `fp_interval` pins it), built from the two things only the accused could supply and everything
+/// else recomputed and CHECKED against the accused's commitments:
+///
+/// * `intervals` — the served opening and this party's replay of it
+///   ([`crate::fp_interval::base0_fp_challenger_replay_tiles_capped_v1`]) for the interval that
+///   holds the disputed leaf, FIRST, then any neighbour the step's inputs reach into: a step at an
+///   interval's first call reads the call before it, whose tiles sit in the previous interval's
+///   range. Each opening carries the accused's committed leaf hashes for its interval, the range
+///   siblings that bind them to the step leg root, and the binding;
+/// * `annex` — the accused's tile at the disputed leaf and the checkpoint its step is anchored to
+///   (ADR-0085 Decision 1); the tile must hash to the accused's own committed leaf hash, or it is
+///   not the accused's and the close is refused;
+/// * every replayed tile below the disputed leaf must hash to the accused's committed hash: the
+///   dissection stops at the FIRST disagreement, so a replay that disagrees earlier has found a
+///   different first fault, and this call refuses rather than assemble a close about the wrong leaf;
+/// * `decode_tokens` — the family's pin (`TiledV1 { rows_root: annex.rows_root, … }` on the tiled
+///   families), built by the caller because the family owns the scheme;
+/// * `recomputed_chunks` — the state behind the anchor leaf from this party's recompute; empty on
+///   a per-position class, exactly as the executor's own anchor carries none.
+///
+/// Paths are derived from the range openings (`step_opening_from_range_capped_v1`,
+/// `step_range_siblings_from_range_capped_v1`) rather than from a leaf list nobody holds; an input
+/// run that no served range contains whole is refused by name.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_refutation_from_opening_capped_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    intervals: &[(&crate::fp_interval::Base0FpIntervalOpeningV2, &Base0StepTilesV1)],
+    annex: &crate::fp_interval::Base0FpCloseAnnexV1,
+    target: PalwStepCoordinateV1,
+    prompt_token_ids: Vec<u32>,
+    decode_tokens: Option<kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1>,
+    recomputed_chunks: &[Vec<u8>],
+    step_ladder_cap: u64,
+) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, LegError> {
+    use kaspa_consensus_core::palw_step_leg::{step_opening_from_range_capped_v1, step_range_siblings_from_range_capped_v1};
+    use kaspa_consensus_core::palw_step_refute::{
+        PalwCheckpointKvOperandsV1, PalwExecutionStepRefutationV1, PalwStepInputRowV1, canonical_input_leaves_v1_anchored,
+    };
+    let (primary, _) = intervals.first().ok_or(LegError::CloseFromOpening("no served interval to assemble from"))?;
+    let binding = primary.binding.clone();
+    let leaf_count = binding.step_leaf_count;
+    if leaf_count == 0 || leaf_count > step_ladder_cap {
+        return Err(LegError::CloseFromOpening("the opening's binding names a leaf count outside the ruleset's ladder"));
+    }
+    if intervals.iter().any(|(o, _)| o.binding != binding) {
+        return Err(LegError::CloseFromOpening("the served intervals are not all of one binding"));
+    }
+    let target_index = canonical_step_leaf_index(profile, ctx, &target).ok_or(LegError::NotACanonicalCoordinate {
+        layer: 0,
+        slot: target.node_slot as u16,
+        tile: target.tile_index,
+    })?;
+    let bounds = |o: &crate::fp_interval::Base0FpIntervalOpeningV2| (o.range.first_leaf_index, o.range.first_leaf_index + o.range.leaf_hashes.len() as u64);
+    let (first, end) = bounds(primary);
+    if target_index < first || target_index >= end {
+        return Err(LegError::CloseFromOpening("the disputed leaf is outside the served interval"));
+    }
+    let ctx_hash = ctx.context_hash();
+    let profile_hash = profile.shape_profile_id();
+    let hash_of = |leaf: &PalwStepTileLeafV1| step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+    // The served range holding `index`, if any: the accused's committed hash and the opening to
+    // derive paths from.
+    let holder = |index: u64| intervals.iter().find(|(o, _)| { let (a, b) = bounds(o); index >= a && index < b });
+    let committed = |index: u64| -> Option<Hash64> { holder(index).map(|(o, _)| o.range.leaf_hashes[(index - o.range.first_leaf_index) as usize]) };
+    // An input is one of this party's replayed tiles, or one of the SEED rows an opening carries:
+    // the first `seed_row_tiles.len()` leaves of a range are the call before its interval's first
+    // call — the row its seed token was selected from — carried rather than replayed.
+    let leaf_of = |index: u64| -> Option<PalwStepTileLeafV1> {
+        intervals.iter().find_map(|(o, replay)| {
+            replay.tiles.iter().find(|(i, _)| *i == index).map(|(_, leaf)| leaf.clone()).or_else(|| {
+                index.checked_sub(o.range.first_leaf_index).and_then(|offset| o.seed_row_tiles.get(offset as usize)).cloned()
+            })
+        })
+    };
+    // This party's replays below the disputed leaf must be the accused's — otherwise the first
+    // fault is earlier and this close would be about the wrong leaf.
+    for (_, replay) in intervals {
+        for (index, leaf) in &replay.tiles {
+            if *index < target_index
+                && let Some(want) = committed(*index)
+                && hash_of(leaf) != want
+            {
+                return Err(LegError::CloseFromOpening(
+                    "this party's replay disagrees with the accused below the disputed leaf — the first fault is earlier",
+                ));
+            }
+        }
+    }
+    let disputed = annex
+        .disputed
+        .iter()
+        .find(|d| d.leaf_index == target_index)
+        .ok_or(LegError::CloseFromOpening("the annex carries no tile for the disputed leaf"))?;
+    if Some(hash_of(&disputed.tile)) != committed(target_index) {
+        return Err(LegError::CloseFromOpening("the annex's tile does not hash to the accused's committed leaf"));
+    }
+    let output_preimage = disputed.tile.clone();
+    let output_opening = step_opening_from_range_capped_v1(leaf_count, &primary.range, target_index, step_ladder_cap)
+        .map_err(|_| LegError::CloseFromOpening("the range opening does not open the disputed leaf"))?;
+    // Anchored exactly when the capture path anchors — which is when the executor's leg holds a
+    // checkpoint covering the call before this one (`base0_kv_anchor_for_call_v1` answers `None`
+    // otherwise, and the long form is built). The executor applies that rule when it fills the
+    // annex, so the annex's anchor IS the decision: the leaf and its opening are the accused's
+    // (served), the chunks are ours.
+    let kv_checkpoint = disputed.anchor.as_ref().map(|claim| PalwCheckpointKvOperandsV1 {
+        leaf: claim.leaf.clone(),
+        opening: claim.opening.clone(),
+        chunks: recomputed_chunks.to_vec(),
+    });
+    let required = canonical_input_leaves_v1_anchored(profile, ctx, &target, kv_checkpoint.is_some())
+        .ok_or(LegError::UnknownSlot { layer: 0, slot: target.node_slot as u16 })?;
+    let mut inputs = Vec::new();
+    for row in &required {
+        let mut preimages = Vec::with_capacity(row.len());
+        for (index, _) in row {
+            let leaf = leaf_of(*index).ok_or(LegError::CloseFromOpening("this party's replay holds no tile for an input the step reads"))?;
+            match committed(*index) {
+                Some(want) if want == hash_of(&leaf) => preimages.push(leaf),
+                Some(_) => return Err(LegError::CloseFromOpening("an input this party replayed is not the accused's committed tile")),
+                None => return Err(LegError::CloseFromOpening("an input the step reads lies outside every served interval")),
+            }
+        }
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for (i, (index, _)) in row.iter().enumerate() {
+            match runs.last_mut() {
+                Some((start, len)) if row[*start].0 + *len as u64 == *index => *len += 1,
+                _ => runs.push((i, 1)),
+            }
+        }
+        let mut run_siblings = Vec::with_capacity(runs.len());
+        for (start, len) in runs {
+            let run_first = row[start].0;
+            let (o, _) = holder(run_first).ok_or(LegError::CloseFromOpening("an input run starts outside every served interval"))?;
+            let (_, b) = bounds(o);
+            if run_first + len as u64 > b {
+                return Err(LegError::CloseFromOpening("an input run straddles two served intervals"));
+            }
+            run_siblings.push(
+                step_range_siblings_from_range_capped_v1(leaf_count, &o.range, run_first, len as u64, step_ladder_cap)
+                    .map_err(|_| LegError::CloseFromOpening("the range opening does not open an input run"))?,
+            );
+        }
+        inputs.push(PalwStepInputRowV1 { preimages, run_siblings });
+    }
+    Ok(PalwExecutionStepRefutationV1 { binding, output_opening, output_preimage, inputs, prompt_token_ids, decode_tokens, kv_checkpoint })
 }
 
 #[cfg(test)]

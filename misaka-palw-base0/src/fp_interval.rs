@@ -631,8 +631,21 @@ pub struct Base0FpCloseAnnexV1 {
     /// `tiled_logits_rows_root_v1` over every retained row — what `trace_root` commits beside the
     /// generated ids, and what `check_tiled_decode_pin` binds to the binding.
     pub rows_root: Hash64,
-    /// The accused's committed tiles at the leaves a court named, with their leaf indices.
-    pub disputed: Vec<(u64, PalwStepTileLeafV1)>,
+    /// The accused's committed tiles at the leaves a court named, each with the checkpoint its
+    /// step resumes from.
+    pub disputed: Vec<Base0FpDisputedLeafV1>,
+}
+
+/// One disputed leaf as the accused serves it: the committed tile (the one term a challenger's
+/// replay cannot reproduce when the accused lied), and the checkpoint leaf its step's cache read
+/// is anchored to — the leaf and its opening against the checkpoint leg root, which are the
+/// accused's leg's and not derivable from an interval opening whose anchor names only the
+/// interval's START. The chunks behind that leaf are the challenger's own recompute.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct Base0FpDisputedLeafV1 {
+    pub leaf_index: u64,
+    pub tile: PalwStepTileLeafV1,
+    pub anchor: Option<Base0FpCheckpointClaimV1>,
 }
 
 /// **One checkpoint interval, opened without the history, WITH the close annex** (ADR-0085
@@ -1531,6 +1544,98 @@ where
 /// `step_leaf_count`), then read evidence. An implementation that replayed first would be doing
 /// arithmetic for whoever asked, and a capture that answers ANOTHER claim's roots would look like
 /// an honest run of a job nobody commissioned.
+/// **The challenger's replay of a served interval, with its tiles** (ADR-0085 Decision 2's second
+/// input). The same derivation the seat's verify makes — the opening decoded (a v3's annex
+/// ignored), bound to the claim's roots, its range checked against the step leg root, the replay
+/// window and its start derived from the geometry and the opened seed row, the anchor's state
+/// taken from `state` (this party's recompute, ADR-0082 D9) or from the carried chunks — and then
+/// [`Base0FpIntervalKernelsV1::replay_interval_tiles`] instead of the hash check. Returns the v2
+/// view of the opening beside the tiles, which is what [`crate::legs::base0_refutation_from_opening_capped_v1`]
+/// takes. `Err` names why nothing could be replayed; it is never a verdict about anybody.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
+    opening_bytes: &[u8],
+    claim: PalwClaimRootsV1,
+    index: u32,
+    prompt_token_ids: &[u32],
+    work_leaves: u64,
+    family_checkpoint_interval: u32,
+    max_step_leaf_count: u64,
+    state: Option<&crate::fp_recompute::Base0FpSeatStateV1>,
+    kernels: &K,
+) -> Result<(Base0FpIntervalOpeningV2, crate::legs::Base0StepTilesV1), String> {
+    let any = base0_fp_interval_opening_decode_any_v1(opening_bytes).map_err(|e| format!("the opening does not decode: {e:?}"))?;
+    let carried = match &any {
+        Base0FpIntervalOpeningAnyV1::WithHistory(o) => Some(o.as_ref()),
+        Base0FpIntervalOpeningAnyV1::Recomputed(_) => None,
+    };
+    let opening = match &any {
+        Base0FpIntervalOpeningAnyV1::WithHistory(o) => Base0FpIntervalOpeningV2::from_chunked_v1(o),
+        Base0FpIntervalOpeningAnyV1::Recomputed(o) => o.as_ref().clone(),
+    };
+    let binding = &opening.binding;
+    if kaspa_consensus_core::palw_step_leg::verify_binding_v1(binding).is_err()
+        || binding.committed_execution_root != claim.execution_root
+        || binding.full_logits_trace_root != claim.trace_root
+        || (claim.anchor != Hash64::default() && binding.job_context.job_id != claim.anchor)
+        || binding.step_leaf_count != work_leaves
+        || opening.interval_index != index
+    {
+        return Err("the opening does not bind to the claim's roots".to_string());
+    }
+    let profile = &binding.shape_profile;
+    let ctx = &binding.job_context;
+    if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != ctx.prompt_token_ids_hash {
+        return Err("the prompt is not the one the opening's context commits to".to_string());
+    }
+    let step_leaf_count = base0_fp_binding_step_space_v1(binding, max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
+    let geometry =
+        Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
+    let leaves_geometry =
+        base0_fp_interval_leaves_v1(profile, ctx, &geometry, index, step_leaf_count).map_err(|e| format!("{e:?}"))?;
+    let (first_call, last_call) = geometry.calls_for(index).ok_or_else(|| "the interval names no calls".to_string())?;
+    if opening.range.first_leaf_index != leaves_geometry.range_first
+        || opening.range.leaf_hashes.len() as u64 != leaves_geometry.range_end - leaves_geometry.range_first
+    {
+        return Err("the opening's range is not this interval's".to_string());
+    }
+    match step_range_opening_root_v1(binding.step_leaf_count, &opening.range) {
+        Ok(root) if root == binding.step_merkle_root => {}
+        _ => return Err("the opening's range does not open the step leg root".to_string()),
+    }
+    let prompt_usize: Vec<usize> = prompt_token_ids.iter().map(|t| *t as usize).collect();
+    let start = match geometry.anchor_covered_call(index) {
+        None => Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt_usize },
+        Some(covered) => {
+            let seed_call = geometry.anchor_seed_call_v1(index).ok_or_else(|| "the interval names no seed call".to_string())?;
+            let seed_token =
+                seed_token_from_opened_row_v1(profile, ctx, &opening.seed_row_tiles, &opening.range, seed_call, leaves_geometry.range_first)
+                    .ok_or_else(|| "the opened seed row yields no token".to_string())?;
+            let claimed = opening.anchor.as_ref().ok_or_else(|| "the opening names no checkpoint".to_string())?;
+            if !checkpoint_claim_is_the_bindings_v1(binding, &claimed.leaf, &claimed.opening, covered) {
+                return Err("the opening's checkpoint is not the binding's".to_string());
+            }
+            match state {
+                Some(own) => {
+                    if own.covered_decode_call != covered || own.state_chunks_root != claimed.leaf.state_chunks_root {
+                        return Err("this party's recomputed state is not the checkpoint the opening names".to_string());
+                    }
+                    Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: &own.chunks, seed_token }
+                }
+                None => {
+                    let anchor = carried.and_then(|o| o.anchor.as_ref()).ok_or_else(|| "no state to resume from".to_string())?;
+                    if !checkpoint_anchor_is_the_bindings_v1(binding, anchor, covered) {
+                        return Err("the carried anchor is not the binding's".to_string());
+                    }
+                    Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: &anchor.chunks, seed_token }
+                }
+            }
+        }
+    };
+    let tiles = kernels.replay_interval_tiles(profile, ctx, &start, first_call, last_call, step_leaf_count)?;
+    Ok((opening, tiles))
+}
+
 pub fn base0_verify_fp_interval_opening_v1<K: Base0FpIntervalKernelsV1>(
     opening_bytes: &[u8],
     claim: PalwClaimRootsV1,
@@ -3136,6 +3241,137 @@ mod tests {
         }
         assert_eq!(checked, run.checkpoints.leaves.len() as u32, "every committed leaf was reached from some step");
     }
+
+    /// **ADR-0085 X1 — the close assembled from a served opening and this party's own replay is
+    /// the close assembled from the capture, byte for byte**, at every main-step leaf of every
+    /// interval of an honest floor run; and a tile that is not the accused's is refused by name.
+    #[test]
+    fn a_close_from_an_opening_is_the_close_from_the_capture() {
+        use kaspa_consensus_core::palw_step::{PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, canonical_step_coordinates};
+        use kaspa_consensus_core::palw_step_refute::{PalwBase0DecodeTokensV1, PalwDecodeTokenPinV1};
+        let (artifact, profile, ctx, prompt) = floor_job(3, 4);
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let claim = PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor: run.binding.job_context.job_id };
+        let material: Base0RetainedMaterialV1 = (
+            run.binding.clone(),
+            run.tiles.tiles.clone(),
+            run.logits_rows.clone(),
+            run.generated_token_ids.clone(),
+            run.checkpoints.chunks.clone(),
+        );
+        let interval = PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
+        let cap = kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES;
+        let leaf_count = run.binding.step_leaf_count;
+        let geometry = Base0FpIntervalGeometryV1::from_binding_v1(&run.binding, interval).expect("a geometry");
+        let pin = || {
+            PalwDecodeTokenPinV1::Base0V1(PalwBase0DecodeTokensV1 {
+                logits_rows: run.logits_rows.clone(),
+                generated_token_ids: run.generated_token_ids.clone(),
+            })
+        };
+        let reads_cache = |coord: &kaspa_consensus_core::palw_step::PalwStepCoordinateV1| {
+            profile
+                .resolve_node_slot(coord.node_slot)
+                .map(|(node, _)| node.input_refs.iter().any(|r| *r == PALW_STEP_INPUT_KV_K || *r == PALW_STEP_INPUT_KV_V))
+                .unwrap_or(false)
+        };
+        let mut compared = 0usize;
+        let mut anchored = 0usize;
+        let mut previous: Option<(Base0FpIntervalOpeningV2, crate::legs::Base0StepTilesV1)> = None;
+        for index in 0..geometry.interval_count {
+            let opening_bytes = base0_open_fp_interval_v1(&material, index, &ids, interval).expect("the interval opens");
+            let (opening, replay) = base0_fp_challenger_replay_tiles_capped_v1(
+                &opening_bytes,
+                claim,
+                index,
+                &ids,
+                leaf_count,
+                interval,
+                cap,
+                None,
+                &FloorKernels(&artifact),
+            )
+            .expect("the challenger replays the interval");
+            let first = opening.range.first_leaf_index;
+            let end = first + opening.range.leaf_hashes.len() as u64;
+            for leaf in first..end {
+                let Some(coord) = canonical_step_coordinates(&profile, &ctx, leaf) else { continue };
+                // The executor's anchor for this step, exactly as the capture path attaches it.
+                let kv = if reads_cache(&coord) && coord.call_index > 0 {
+                    crate::legs::base0_kv_anchor_for_call_v1(&run.checkpoints, coord.call_index)
+                } else {
+                    None
+                };
+                let from_capture = crate::legs::base0_refutation_from_capture_capped_v1(
+                    &profile,
+                    &ctx,
+                    &run.tiles,
+                    run.binding.clone(),
+                    coord,
+                    ids.clone(),
+                    Some(pin()),
+                    kv.clone(),
+                    cap,
+                )
+                .expect("the capture path assembles");
+                let tile = run.tiles.tiles.iter().find(|(i, _)| *i == leaf).map(|(_, t)| t.clone()).expect("the run holds the tile");
+                let annex = Base0FpCloseAnnexV1 {
+                    rows_root: Hash64::default(),
+                    disputed: vec![Base0FpDisputedLeafV1 {
+                        leaf_index: leaf,
+                        tile,
+                        anchor: kv.as_ref().map(|k| Base0FpCheckpointClaimV1 { leaf: k.leaf.clone(), opening: k.opening.clone() }),
+                    }],
+                };
+                let chunks: Vec<Vec<u8>> = kv.as_ref().map(|k| k.chunks.clone()).unwrap_or_default();
+                // The interval holding the leaf first, then the one before it: a step at an
+                // interval's first call reads the call before it.
+                let mut held: Vec<(&Base0FpIntervalOpeningV2, &crate::legs::Base0StepTilesV1)> = vec![(&opening, &replay)];
+                if let Some((o, r)) = previous.as_ref() {
+                    held.push((o, r));
+                }
+                let from_opening = crate::legs::base0_refutation_from_opening_capped_v1(
+                    &profile,
+                    &ctx,
+                    &held,
+                    &annex,
+                    coord,
+                    ids.clone(),
+                    Some(pin()),
+                    &chunks,
+                    cap,
+                )
+                .unwrap_or_else(|e| panic!("interval {index} leaf {leaf}: the opening path refuses: {e:?}"));
+                assert_eq!(from_opening, from_capture, "interval {index} leaf {leaf}: the two closes differ");
+                assert_eq!(
+                    borsh::to_vec(&from_opening).unwrap(),
+                    borsh::to_vec(&from_capture).unwrap(),
+                    "interval {index} leaf {leaf}: byte for byte"
+                );
+                compared += 1;
+                if kv.is_some() {
+                    anchored += 1;
+                }
+                // A tile that is not the accused's committed one is refused before anything opens.
+                let mut forged = annex.clone();
+                forged.disputed[0].tile.values_le[0] ^= 0x01;
+                assert!(
+                    matches!(
+                        crate::legs::base0_refutation_from_opening_capped_v1(
+                            &profile, &ctx, &held, &forged, coord, ids.clone(), Some(pin()), &chunks, cap
+                        ),
+                        Err(crate::legs::LegError::CloseFromOpening(_))
+                    ),
+                    "interval {index} leaf {leaf}: a forged annex tile must be refused by name"
+                );
+            }
+            previous = Some((opening, replay));
+        }
+        assert!(compared > 0, "the fixture yields main-step leaves");
+        assert!(anchored > 0, "the fixture exercises an anchored close (a cache-reading step past the prefill)");
+    }
+
 }
 
 // =================================================================================================
@@ -3337,7 +3573,10 @@ mod the_rulesets_ladder {
             value_count: 2,
             values_le: vec![1, 0, 0, 0, 2, 0, 0, 0],
         };
-        let annex = Base0FpCloseAnnexV1 { rows_root: Hash64::from_u64_word(9), disputed: vec![(41, tile)] };
+        let annex = Base0FpCloseAnnexV1 {
+            rows_root: Hash64::from_u64_word(9),
+            disputed: vec![Base0FpDisputedLeafV1 { leaf_index: 41, tile, anchor: None }],
+        };
         let with = Base0FpIntervalOpeningV3 { version: PALW_BASE0_FP_INTERVAL_VERSION_V3, opening: v2.clone(), close: Some(annex.clone()) }
             .encode_v1()
             .unwrap();
