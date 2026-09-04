@@ -5883,3 +5883,17 @@ carriers.
 the chain (the chain holds the derivation's ids; the STL is in `/root/fp-5f/outbox` and in the operator's hands).
 The same block bound the panel (`PanelBound`), so the claim's adjudication has begun on the seats. The MIDI claim
 `d575928f…` (derived id `2ad3940d…`, artifact hash `7a4f0eba…`) follows the same path in a second job.
+
+**Step 9 — the MIDI claim, closed (01:37:30 UTC).**
+
+    claim        d575928f8e0f220c7af2254d00e6a00e7e5c333a3673432cfea44af926692e8df2a9d8a75b3ed9a9714055932e22ad95621682c48aa02…
+    commitment   tx 197ea823085d154b…  fee 338,937 sompi auto-sized (8,914 B payload) · 38 quanta · pwu 31,495,084 · 32,128,904 work leaves
+    carried in   cc8ff79cb51ddbd6…  (01:33:24 UTC, "1× FreePromptCommitted")  daa 780
+    derived id   2ad3940d31120eef76435b7d…  carrier 0484005c08f5270e…  carried in fad34dc6a0dec2c0…  (01:37:30 UTC, "1× DerivedArtifactV1")  accepted_daa 787
+    artifact     music/smf/v1, 91 B, artifact_hash 7a4f0eba065508e098cfccd9…  dsl_hash 3f64e301dc5925e5…  (the stranger's own recomputation of 7a)  kind 6
+
+Both practical outputs the goal names — a 3D artifact and a MIDI file — are recorded on the public testnet-11 from
+free prompts to the dense tier's certified lane, each as a claim and a derivation whose ids anyone can recompute from
+the committed answer. The gateway (`fp-gateway-5f`) is stopped; ibm's memory returns to the two nodes. What remains
+post-cut is unchanged: the material transport (6k–6m) for the seats' verification and the dense tier's own attempt
+blocks, and ADR-0065 D4.

@@ -47,7 +47,8 @@ scheduled after this relaunch.
 **On the public chain itself** (2026-09-04, 01:25–01:29 UTC): a free prompt to the dense tier was committed as claim
 `b15ef21c…` (carried in block `8a1a6c53…`), and its derivation — the same 684-byte STL — was recorded beside it as
 derived id `e154bd36…` in block `f38a861c…`, which also bound the claim's panel. The artifact's bytes never touch the
-chain; the chain records the ids anyone can recompute from the committed answer.
+chain; the chain records the ids anyone can recompute from the committed answer. The MIDI followed at 01:33–01:37 UTC:
+claim `d575928f…` (block `cc8ff79c…`), derived id `2ad3940d…` (block `fad34dc6…`), the 91-byte MIDI's hash `7a4f0eba…`.
 
 ## Adding a model
 
