@@ -7928,8 +7928,45 @@ pub fn palw_rc_genesis_card_is_set() -> bool {
 /// part of the premine, which is why it moves the genesis. Everything between those constants and
 /// a running V2 mainnet is the code below, and it is exercised by
 /// `a_mainnet_equivalent_genesis_actually_enables_palw`.
+/// **The two halves of a mainnet genesis card have to arrive together** (mainnet audit,
+/// 2026-09-05).
+///
+/// [`PALW_MAINNET_GENESIS_ARTIFACT_ROOT`] decides whether mainnet gets a RULESET;
+/// [`PALW_MAINNET_GENESIS_BONDS`] decides whether its premine carves BOND COLLATERAL
+/// (`genesis_premine_utxos_for` branches on the registry alone). Nothing cross-checked them, so a
+/// half-filled card minted a genesis holding collateral and fee floats at outpoints that a
+/// `Disabled` mainnet never reads — 10B of cap spent on seats no rule seats — and the only thing
+/// that noticed was the genesis-hash assert at node start, whose remedy ("re-pin the genesis")
+/// turns the mistake into a hash-only mainnet with seat money inside it.
+///
+/// A predicate rather than an inline `assert!` so both arms are reachable from a test: the failing
+/// arm of a `const`-driven check is otherwise unexecutable until the day it fires for real.
+fn mainnet_card_coherence_v1(artifact_root_is_set: bool, bond_count: usize) -> Result<(), String> {
+    if !artifact_root_is_set && bond_count > 0 {
+        return Err(format!(
+            "the mainnet genesis card lists {bond_count} bond(s) while PALW_MAINNET_GENESIS_ARTIFACT_ROOT is unset: \
+             the premine would carve their collateral and fee floats out of the 10B cap for a network whose ruleset \
+             seats nobody, and no PALW rule would ever read those outpoints. A card is both constants or neither."
+        ));
+    }
+    Ok(())
+}
+
 pub fn mainnet_shipped_params() -> Params {
     if PALW_MAINNET_GENESIS_ARTIFACT_ROOT == crate::Hash64::from_bytes([0u8; 64]) {
+        // **A card is two constants and they are read by two different gates** (mainnet audit,
+        // 2026-09-05). The ruleset keys off the artifact root — this branch — while the PREMINE
+        // keys off the bond registry alone (`genesis_premine_utxos_for`, which returns
+        // `bonded_genesis_utxos` for mainnet the moment `PALW_MAINNET_GENESIS_BONDS` is non-empty).
+        // Half a card therefore mints a genesis that carves collateral and fee floats for seats,
+        // and then returns a `Disabled` mainnet that seats nobody: the money is minted, locked at
+        // outpoints no rule ever reads, and the only thing that notices is the genesis-hash assert
+        // in `set_genesis_utxo_commitment_from_config`, whose message tells the operator to re-pin
+        // the genesis — which converts the mistake into a hash-only mainnet with seat money in it.
+        // Refuse here instead, naming the constant that is missing.
+        if let Err(e) = mainnet_card_coherence_v1(false, PALW_MAINNET_GENESIS_BONDS.len()) {
+            panic!("{e}");
+        }
         return MAINNET_PARAMS;
     }
     let bonds: Vec<_> = PALW_MAINNET_GENESIS_BONDS
@@ -7953,17 +7990,32 @@ pub fn mainnet_shipped_params() -> Params {
     // takes only the FLOOR's artifact root — so a carded mainnet came out floor-only however the
     // comment above described it. The two paths differ in exactly one thing, which is whether the
     // model tiers exist, and that is the whole of ADR-0068 on this network.
+    // **ADR-0082 Decision 3, STATED on mainnet's base by the card that pins the row it tries**
+    // (mainnet audit, 2026-09-05). `palw_v2_params_with_classes_on_base` refuses a genesis set that
+    // registers a fused-attention (graph-v5) row while `palw_kary_court` is dormant, and
+    // `validate_palw_v2` refuses it again — so with `MAINNET_PARAMS`' `palw_kary_court: None` a
+    // carded mainnet that pinned the dense tier did not ship a court it could not run: it refused
+    // to BOOT, and the mainnet card had no way to say the word. It is stated here rather than
+    // derived from the assembled bundle for the reason `palw_rc_base_params` gives — a fence armed
+    // by derivation alone is an arming nobody decided — and the operator's statement is the act of
+    // pinning `PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT`, which is the dense slot the RC fills with
+    // ADR-0082's graph-v5@512 row. A card that instead pins a fused row through some other slot
+    // still meets the assembly's refusal, by name, which is the fail-closed direction.
+    let mut base = MAINNET_PARAMS;
+    if palw_mainnet_qwen25_a16_is_registered() {
+        base.palw_kary_court = Some(ForkActivation::always());
+    }
     let assembled = if palw_mainnet_qwen36_is_registered() {
         let dense = palw_mainnet_qwen25_a16_is_registered().then_some(PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT);
         palw_v2_params_with_classes_on_base(
-            MAINNET_PARAMS,
+            base,
             PALW_MAINNET_GENESIS_ARTIFACT_ROOT,
             PALW_MAINNET_QWEN36_ARTIFACT_ROOT,
             dense,
             bonds,
         )
     } else {
-        palw_v2_params_from_artifacts_on_base(MAINNET_PARAMS, PALW_MAINNET_GENESIS_ARTIFACT_ROOT, bonds)
+        palw_v2_params_from_artifacts_on_base(base, PALW_MAINNET_GENESIS_ARTIFACT_ROOT, bonds)
     };
     palw_rc_arm_phase1(assembled.unwrap_or_else(|e| panic!("the pinned mainnet PALW genesis card does not assemble: {e}")))
 }
@@ -8018,6 +8070,37 @@ fn palw_rc_arm_phase1(mut params: Params) -> Params {
     // chain whose identity a fence would have to preserve, so the honest form is the one that is
     // true from block one.
     params.palw_unavailable_abstains = Some(ForkActivation::always());
+    // **The rest of the set a shipped V2 network arms — spelled HERE because it was spelled
+    // nowhere a carded mainnet passes through** (mainnet audit, 2026-09-05).
+    //
+    // ADR-0069 Decision 7 and ADR-0083 Decision 1 were stated as literals on `palw_rc_base_params`
+    // and on `DEVNET_PARAMS`: two bases, neither of which mainnet uses. `mainnet_shipped_params`
+    // assembles over `MAINNET_PARAMS` — where every PALW fence is `None` — and then called this
+    // function, which armed three fences and stopped. `docs/adr/README.md` says a carded mainnet
+    // "assembles the RC's ruleset with the same fences armed from genesis"; it did not. It was born
+    //
+    //  * with the heartbeat lane armed (above) and `palw_difficulty_priced_rows` dormant, which is
+    //    exactly the state ADR-0083 exists to escape. Measured on testnet-11 Relaunch 5f: five
+    //    heartbeat emitters on the two-minute cadence tightened `bits` from p = 0.5 to p = 1.5e-3
+    //    in 826 blocks and no bonded lane could win again. Mainnet's `difficulty_window_size` is
+    //    661 against the RC's 264, so its integration is 2.5x slower and the wedge deeper;
+    //  * and with `palw_uncertified_weightless` dormant — which `validate_palw_v2` refuses to arm
+    //    above genesis ("it is genesis-only, or dormant"), so an uncertified class's pwu would
+    //    enter that chain's fork-choice weight PERMANENTLY, and the free-prompt retirement hole
+    //    whose end state is `load_tip -> CarriageInconsistent` would stay open for its whole life.
+    //
+    // Every write below is **only if the preset left it dormant**, which is what makes this
+    // function safe to route every shipped assembly through: it can add a fence a base forgot, and
+    // it can never move one a base decided. testnet-11 states `palw_difficulty_priced_rows` at DAA
+    // 1150 — it is a live chain and ADR-0083 had to reach it as a flag day rather than as a
+    // genesis — and keeps that value here. A fresh chain takes `always()`, which is free: its
+    // window holds no priced row at block 1 either way.
+    if params.palw_uncertified_weightless.is_none() {
+        params.palw_uncertified_weightless = Some(ForkActivation::always());
+    }
+    if params.palw_difficulty_priced_rows.is_none() {
+        params.palw_difficulty_priced_rows = Some(ForkActivation::always());
+    }
     if let Err(e) = params.validate_palw_v2() {
         panic!("the armed PALW-RC ruleset does not validate: {e}");
     }
@@ -11635,7 +11718,180 @@ mod consensus_params_id_tests {
         // 5. And D1 is armable here — the property the shipped six-bond registry refuses.
         let mut armed = params.clone();
         armed.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::new(1_000), window_daa: 1_000 });
+
         armed.validate_palw_v2().expect("a registry with spare seats may arm the maturity fence");
+    }
+
+    /// Every V2 fence a preset can arm, as `(name, armed)` — ONE spelling, so a fence added
+    /// tomorrow appears in every preset comparison that uses it instead of being silently absent
+    /// from the one nobody re-read.
+    #[cfg(test)]
+    fn palw_v2_fence_table(p: &Params) -> Vec<(&'static str, bool)> {
+        vec![
+            ("palw_bootstrap_activation", p.palw_bootstrap_activation.is_some()),
+            ("palw_unavailable_abstains", p.palw_unavailable_abstains.is_some()),
+            ("palw_bond_maturity", p.palw_bond_maturity.is_some()),
+            ("palw_frontier_provenance", p.palw_frontier_provenance.is_some()),
+            ("palw_heartbeat", p.palw_heartbeat.is_some()),
+            ("palw_attempt_work", p.palw_attempt_work.is_some()),
+            ("palw_attempt_activation", p.palw_attempt_activation.is_some()),
+            ("palw_inactivity_leak", p.palw_inactivity_leak.is_some()),
+            ("palw_beacon_fold", p.palw_beacon_fold.is_some()),
+            ("palw_capability_bound", p.palw_capability_bound.is_some()),
+            ("palw_context_ladder", p.palw_context_ladder.is_some()),
+            ("palw_panel_da", p.palw_panel_da.is_some()),
+            ("palw_certification_rent", p.palw_certification_rent.is_some()),
+            ("palw_uncertified_weightless", p.palw_uncertified_weightless.is_some()),
+            ("palw_da_court", p.palw_da_court.is_some()),
+            ("palw_chunk_cap_charge", p.palw_chunk_cap_charge.is_some()),
+            ("palw_prompt_ids_merkle", p.palw_prompt_ids_merkle.is_some()),
+            ("palw_kary_court", p.palw_kary_court.is_some()),
+            ("palw_fp_decode_rules", p.palw_fp_decode_rules.is_some()),
+            ("palw_difficulty_priced_rows", p.palw_difficulty_priced_rows.is_some()),
+        ]
+    }
+
+    /// **A carded mainnet arms what testnet-11 arms, and the one difference is a derivation**
+    /// (mainnet audit, 2026-09-05).
+    ///
+    /// `docs/adr/README.md` says a carded mainnet "assembles the RC's ruleset … with the same
+    /// fences armed from genesis". It did not, and the reason was a spelling: ADR-0069 D7,
+    /// ADR-0082 D3 and ADR-0083 D1 were literals on `palw_rc_base_params`, a base mainnet never
+    /// passes through, so a carded mainnet was born with the heartbeat lane armed and ADR-0083's
+    /// repair dormant — the measured 5f wedge, on a chain with value — and with
+    /// `palw_uncertified_weightless` dormant, which `validate_palw_v2` refuses to arm above
+    /// genesis, so that hole would have been the chain's for life.
+    ///
+    /// Asserted as a SET DIFFERENCE rather than field by field: a comparison that has to be
+    /// extended by hand when a fence is added is a comparison that stops covering the fence nobody
+    /// remembered — which is the defect itself, one level up.
+    #[test]
+    fn a_carded_mainnet_arms_every_fence_testnet_11_arms() {
+        use crate::config::premine::{bonded_genesis_utxos, premine_outpoint};
+        use crate::palw_fp_devnet_v3::{palw_devnet_bond_registry_v1, palw_v2_maturity_armable_bonds_v1};
+
+        // The mainnet-equivalent card of `a_mainnet_equivalent_genesis_actually_enables_palw`,
+        // then the SAME tail `mainnet_shipped_params` runs: assemble, then arm.
+        let specs: Vec<_> = palw_devnet_bond_registry_v1(palw_v2_maturity_armable_bonds_v1())
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut spec)| {
+                spec.bond = crate::palw_state_v2::PalwBondKeyV2(premine_outpoint(i as u32));
+                spec
+            })
+            .collect();
+        let money: Vec<(u32, [u8; 64])> =
+            specs.iter().enumerate().map(|(i, spec)| (i as u32, *spec.payout_payload.as_byte_slice())).collect();
+        let utxos = bonded_genesis_utxos(MAINNET_PARAMS.net, &money, std::iter::empty());
+        let assembled =
+            palw_v2_params_from_artifacts_on_base_with_utxos(MAINNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
+                .expect("a mainnet-equivalent genesis assembles");
+        let carded = palw_rc_arm_phase1(assembled);
+
+        let rc = palw_rc_shipped_params();
+        let rc_armed: Vec<&'static str> =
+            palw_v2_fence_table(&rc).into_iter().filter(|(_, on)| *on).map(|(n, _)| n).collect();
+        let mainnet_armed: std::collections::BTreeSet<&'static str> =
+            palw_v2_fence_table(&carded).into_iter().filter(|(_, on)| *on).map(|(n, _)| n).collect();
+        let missing: Vec<&'static str> = rc_armed.iter().copied().filter(|n| !mainnet_armed.contains(n)).collect();
+
+        // The one legitimate difference, and it is legitimate only because it is DERIVED from the
+        // class set rather than forgotten: `palw_kary_court` is the court for a fused-attention
+        // row, this equivalent registers only the floor, and `validate_palw_v2` refuses the fence
+        // on a ruleset whose frozen arity does not match one it can derive. A carded mainnet that
+        // pins the dense tier states it on the base — see the test below.
+        assert_eq!(
+            missing,
+            vec!["palw_kary_court"],
+            "a carded mainnet must arm every fence testnet-11 arms; the floor-only difference is the k-ary court alone \
+             (rc: {rc_armed:?}, mainnet: {mainnet_armed:?})"
+        );
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &carded.palw_consensus_mode else {
+            panic!("the equivalent is V2")
+        };
+        assert_eq!(
+            crate::palw_court_v2::palw_attn_widest_registered_site_v2(bundle).0,
+            0,
+            "…and it is the floor-only case: no fused row is registered, so no dissection court is owed"
+        );
+
+        // The two the audit found, named individually as well — a set assertion that later grows a
+        // permitted exception must not quietly take these with it.
+        assert!(
+            carded.palw_difficulty_priced_rows.is_some(),
+            "ADR-0083: the heartbeat lane is armed from genesis on mainnet, so the retarget must count only \
+             bits-priced rows or the clock prices the bonded lane off its own chain"
+        );
+        assert!(carded.palw_heartbeat.is_some(), "…and the lane that makes that necessary is indeed armed");
+        assert_eq!(
+            carded.palw_uncertified_weightless,
+            Some(ForkActivation::always()),
+            "ADR-0069 D7 is genesis-only: a mainnet minted without it can never acquire it"
+        );
+        carded.validate_palw_v2().expect("the startup gate a mainnet node runs accepts the armed card");
+    }
+
+    /// **A mainnet card that pins the dense tier can state the court that tries it.**
+    ///
+    /// Both arms, because the failing one is the shipped behaviour this fixes: with
+    /// `MAINNET_PARAMS`' `palw_kary_court: None`, a card pinning ADR-0082's graph-v5 row did not
+    /// ship a court it could not run — `mainnet_shipped_params` panicked at startup, and the card
+    /// had no field with which to say the word.
+    #[test]
+    fn the_mainnet_base_can_state_the_court_the_dense_tier_needs() {
+        let dense = Some(PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT);
+        let err = palw_v2_params_with_classes_on_base(
+            MAINNET_PARAMS,
+            PALW_RC_GENESIS_ARTIFACT_ROOT,
+            PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
+            dense,
+            vec![],
+        )
+        .expect_err("mainnet's base leaves palw_kary_court dormant, and a fused row may not be registered without it");
+        assert!(
+            format!("{err:?}").contains("palw_kary_court"),
+            "the refusal names the fence the card has to state, not something downstream: {err:?}"
+        );
+
+        let mut base = MAINNET_PARAMS;
+        base.palw_kary_court = Some(ForkActivation::always());
+        let params = palw_v2_params_with_classes_on_base(
+            base,
+            PALW_RC_GENESIS_ARTIFACT_ROOT,
+            PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
+            dense,
+            vec![],
+        )
+        .expect("with the court stated, the dense tier assembles on mainnet's own base");
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("V2")
+        };
+        assert!(
+            crate::palw_court_v2::palw_attn_widest_registered_site_v2(bundle).0 > 0,
+            "…and the row it registers is the fused one the court exists for"
+        );
+        palw_rc_arm_phase1(params);
+    }
+
+    /// **Half a mainnet card is refused by name.** The ruleset reads the artifact root and the
+    /// premine reads the bond registry; with only the second filled in, a genesis carves seat
+    /// collateral out of the 10B cap for a `Disabled` mainnet that seats nobody.
+    #[test]
+    fn a_half_filled_mainnet_card_is_refused_by_name() {
+        assert!(mainnet_card_coherence_v1(false, 0).is_ok(), "mainnet as it ships: neither half");
+        assert!(mainnet_card_coherence_v1(true, 0).is_ok(), "a zero-seat card is ADR-0061's, and legal");
+        assert!(mainnet_card_coherence_v1(true, 8).is_ok(), "a whole card");
+        let e = mainnet_card_coherence_v1(false, 8).expect_err("bonds without a ruleset is the incoherent half");
+        assert!(e.contains("PALW_MAINNET_GENESIS_ARTIFACT_ROOT"), "the message names the missing constant: {e}");
+        // And the shipped constants are coherent as they stand.
+        assert!(
+            mainnet_card_coherence_v1(
+                PALW_MAINNET_GENESIS_ARTIFACT_ROOT != crate::Hash64::from_bytes([0u8; 64]),
+                PALW_MAINNET_GENESIS_BONDS.len()
+            )
+            .is_ok(),
+            "the card in this binary is coherent"
+        );
     }
 
     /// **D1 may not be armed on a registry with no spare seat — and the shipped one now has them.**
