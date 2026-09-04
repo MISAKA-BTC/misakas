@@ -6271,3 +6271,12 @@ picked the FLOOR's backend (every base0 codec decodes a v5 tuple) and derived a 
 capture's own shape profile id must be the class row's) with interval-lane log lines on chain facts; the fleet binary is
 being rebuilt on ibm from it (the `d1ec6dcb…` staged earlier is superseded); the devnet run restarted on the fix at 22:05.
 
+**§10n, continued (22:50 JST):** run 3 answered the seats for every a16 claim with "the capture's leaves do not reproduce
+the step root" — and the material was fine (6,630,544 leaves, one root three ways). The opening assembler, the seat-side
+verifier, the challenger replay and the material verifier all reached for the UNCAPPED step-leg roots, bounded by the
+default ladder 2^22; the class's space is 6.6 M. Fixed in `1fcb209a` with two boundary tests (2^22+1 leaves under a 2^23
+cap), ibm rebuilding from it; `082b47f7…` (the 75bac7be build) is superseded and NOT deployed. Two consensus-side
+siblings (the court's refutation walkers) have the same bound and no ruleset in scope — U-08, needs an activation. Measured
+on the same material: interval 0 = prefill + call 1 = 424 MB of leaf hashes, a decode interval = 7.8 MB, the opening cap is
+4 MiB — no a16 opening can be served under ADR-0077 D8's format; Y1 is not reachable on this class without a design change
+(ADR-0084 §7.2 lists the two). The fleet is therefore NOT restarted and seat2's v5 production stays paused (§6m).

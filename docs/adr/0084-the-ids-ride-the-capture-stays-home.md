@@ -258,6 +258,61 @@ reached all three nodes (Y4); each seat pooled the other executor's envelope und
   `<claim>.answer` is a few kilobytes and is the better source now.
 * §8's list: the court's close over the cap (U-07c), ADR-0065 D4's activation, the cap itself.
 
+### 7.1 The devnet, run 3 (22:05–22:33 JST): the opener was right about the leaves and wrong about the ladder
+
+Every a16 claim on both producing nodes answered the asking seat with "the capture's leaves do not
+reproduce the step root the binding committed". A diagnostic that decodes the retained material
+(`inspect_devnet_material`, env-gated, ignored) said otherwise about claim `49b75d87…`: 6,630,544
+leaves, 6,630,544 tiles, no duplicate and no gap, and the flat root, the level-12 fold root and
+the committed root are one hash. What differed was the ladder: the opening assembler asked
+`step_range_opening_root_v1` — bounded by `PALW_STEP_LEG_MAX_LEAVES` (2^22 = 4,194,304) — and
+`.ok()` turned its `LeafCountOutOfRange` into a root mismatch. Three siblings on the same step
+space reached for the same uncapped functions and would have refused next: the seat-side opening
+verifier, the challenger replay (ADR-0085), and `base0_material_matches_claim_capped_v1`, which
+reports any pulled graph-v5 material as a mismatch. `1fcb209a` passes the ruleset's cap every
+one of them already held, makes the dense rebuild one spelling
+(`base0_dense_step_leaves_capped_v1`) for the verifier and the opener, and pins 2^22+1 leaves
+under a 2^23 cap with two tests that fail on the uncapped line.
+
+**Two consensus-side siblings are NOT changed here**, because they are validity rules:
+`check_execution_step_refutation_opened_v1` (palw_step_refute.rs) walks a refutation's range
+opening with `step_range_opening_root_v1`, and `check_step_refutation_v1`'s `open_against`
+(palw_step_leg.rs) walks a single-leaf opening with `step_opening_root_v1`; neither has a ruleset
+in scope. So a refutation over any class whose space exceeds 2^22 leaves — graph-v5 at n_ctx 512
+is 6.6 M — does not walk, and the court cannot refute such a claim today on any node. Loosening
+that is a fork without an activation; it is item U-08 for its own ADR, with a flag.
+
+### 7.2 What the same material says about the opening lane, measured
+
+The class's leaves per call, read off the retained attempt material: 103,008 per prefill position
+(122,024 at the position that selects a token), 6,508,520 for the 63-position prefill, 122,024 for
+one decode call. `Base0FpIntervalGeometryV1` puts call 0 (the whole prefill) and call 1 into
+interval 0, and one decode call into every later interval (checkpoint cadence 1). An opening
+carries `PalwStepRangeOpeningV1.leaf_hashes` — 64 bytes per leaf of its range — so on this class
+interval 0 opens at **≈424 MB** and a decode interval at **≈7.8 MB**, against
+`PALW_INTERVAL_OPENING_MAX_BYTES = 4 MiB` (ADR-0077 D8, W10) and a seat ceiling
+(`palw_fp_interval_opening_ceiling_v1`) that prices an opening as `positions × row_bytes`. No a16
+interval opening can be served under the format and the caps as they stand; the gossip cap's own
+rule — "a family whose widest registered row opens larger than this raises it HERE, before the
+class is registered" — was not applied when graph-v5 was registered, and no cap reaches 424 MB.
+Y1 therefore cannot be shown on this class by this branch; the root fix was necessary and is not
+sufficient. Two shapes of fix exist and this ADR decides neither:
+
+* **Siblings-only openings.** Drop the per-leaf hashes; the seat recomputes the interval and
+  checks the range root from the siblings; a fault is located from the seat's own leaves (the path
+  to one wrong leaf needs only the honest siblings). A decode interval falls from 7.8 MB to the
+  seed rows plus the state chunk; interval 0 stays the prefill replay, which the seat performs
+  anyway. A wire-format change (V4) with court consequences for ADR-0085's challenger, which
+  derives paths from the served leaf hashes.
+* **Per-position prefill intervals and caps sized in leaves.** Split interval 0 by position
+  (6.6 MB each), price the seat ceiling in leaves, raise the transport cap to the widest interval.
+  Keeps the format; every a16 opening is then 6.6–7.8 MB plus the state chunk.
+
+Run 3 also submitted a **4-token** graph-v5 free-prompt claim (`a7b0a4bc…`) whose FOLD material
+was 3,690,311 bytes — inside `PALW_MATERIAL_MAX_BYTES`, so the drill's own verdict line said Y1
+was not exercised; the ~750 MB claims on testnet-11 are the same material at 512 tokens. Run 4
+(`1fcb209a`, `MAX_TOKENS=16`) is recorded below when it finishes.
+
 ## 8. What is deliberately not decided
 
 * **A close assembled from an opening (U-07c).** §4 names the stall. The refutation of a step
