@@ -23,8 +23,9 @@ minute after the relaunch.
   and Qwen3.6 (`5bd9ae3d…`). The court certified the four families end-to-end (`court_e2e_root e649e7c0…`).
 - Qwen3.6's free-prompt lane is certified on chain — but its job shape holds **8 tokens in total**, which the chat
   template alone fills, so no practical prompt fits it today; practical free prompts go to the dense tier.
-  `[PENDING]` The dense tier's free-prompt lane binding (`ClassLaneCertified`) is built and is submitted as soon as
-  the first coinbase matures.
+  The dense tier's free-prompt lane is **certified on chain** as of 2026-09-04 01:03 UTC (family `FamilyCertified`
+  carried in block `f9af403c…`, class `ClassLaneCertified` in `5e265a6e…`): a free-prompt commitment on class
+  `4277d84f…` now enters the state.
 
 ## What runs
 

@@ -5749,3 +5749,15 @@ Left on its branch: `f1604dd3` (kaspad's default pay address — not what the fl
 dropped bind's change) were accepted, and block `f9af403c…` at 00:59:01 UTC logs "PALW lifecycle carried 1×
 FamilyCertified" with no drop line — the a16-v5 family is free-prompt-lane certified on the public chain. The bind
 was re-broadcast as carrier `bf3e37fc…` (funded from `e62e7cb0…:0`); the lane flips in the block that carries it.
+
+**7c — closed (01:03 UTC, 2026-09-04): the v5 free-prompt lane is CERTIFIED on the public chain.** Block `5e265a6e…`
+at 01:03:12 UTC (and `6e461441…` nine seconds later) log "PALW lifecycle carried 1× ClassLaneCertified"; `misaka palw
+certified 4277d84f…` reads *CERTIFIED — a commitment on this class enters the state*. Sequence on chain: fp-lane
+`FamilyCertified` for the a16-v5 family (`f9af403c…`, 00:59 UTC) → `ClassLaneCertified` (`5e265a6e…`). Three carriers
+from bond-0, fee-sized, chained from one matured coinbase; the key now holds two mature UTXOs (5,512 MSK) and is
+free for the operator's funding of the faucet and the pool slot. The announcement's pending line for the lane is
+resolved; the on-chain free-prompt claim itself (gateway identity for this chain + the rebuilt rail) remains the
+next step, not claimed.
+
+**Step 8 — pushed.** `palw-testnet-5f` → `origin/main` as a fast-forward from `dcbfe361`, with the tag
+`testnet-11-relaunch-5f` at the deployed cut `6e01ba07`; the sha below is main's head after the push.
