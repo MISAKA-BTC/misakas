@@ -672,9 +672,9 @@ except Exception: print("")' "$ARTIFACT_STEM.rail.json" 2>/dev/null)
     python3 -c '
 import json, sys
 r = json.load(open(sys.argv[1]))
-print(f"  retention dir: {r.get('retention_dir')} (source: {r.get('retention_dir_source')})")
-print(f"  material file: {r.get('material_file')}")
-print(f"  answer file:   {r.get('answer_file')}")' "$ARTIFACT_STEM.rail.json" >&2 || true
+print("  retention dir: %s (source: %s)" % (r.get("retention_dir"), r.get("retention_dir_source")))
+print("  material file: %s" % r.get("material_file"))
+print("  answer file:   %s" % r.get("answer_file"))' "$ARTIFACT_STEM.rail.json" >&2 || true
   else
     tail -20 "$WORK_DIR/rail-submit.log" >&2
     log "stage 5b — the rail exited 0 but its summary names no txid; stage 6 will not see FreePromptCommitted"
