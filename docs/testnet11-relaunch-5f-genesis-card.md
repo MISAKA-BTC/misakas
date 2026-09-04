@@ -5818,3 +5818,13 @@ priced a dense class's quanta as the floor's — in two places"); the class's ca
 `pwu`), read from the source rather than from `kaspad --palw-dump-classes`, which is a full node start (DNS seed,
 P2P, a datadir) and was killed before it could become a seventh node. Jobs #1 and #2 stay local. The gateway was
 restarted with `--class-leaves 6630544`; job #3 carries the exact prompt at max_tokens 56.
+
+**Step 9, job #3 (01:19:43–01:22:12 UTC) — answered, committed and derived under the public chain's identity.**
+The exact derive prompt at max_tokens 56 (prefill 147, decode 56/56, `finish: length` = the exact budget) on the
+gateway restarted with `--class-leaves 6630544`: the compact DSL
+`{"v":1,"frac_bits":0,"sketches":{"box":[[0,0],[2,0],[2,3],[0,3]]},"solid":{"op":"extrude","sketch":"box","z0":0,"z1":5}}`,
+job `a50b79d38e62db2e…`, claim `b15ef21cf1f55581…`, 21,872,512 work leaves, output root `a07775eafc72939b…`;
+derivation `cad/stl/v1` → the STL artifact, its DSL and a signed `derived-object.borsh` in `/root/fp-5f/outbox`.
+The chain sequence that follows: the rail's `--submit` of the commitment (funding `bf3e37fc…:0`, class leaves
+6,630,544, retention dir the gateway's traces), the FreePromptCommitted carriage, `submit-object` of the derived
+object, and the claim's on-chain record.
