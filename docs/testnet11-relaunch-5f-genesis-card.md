@@ -6070,3 +6070,14 @@ previous relaunch — and arming the gate on it is a chip for the operator (firs
 on a shipped preset; the module's own test forbids it today). The fleet's binary is built from
 `cef2ecdb`; main's tip is `16a2f277` = `cef2ecdb` + that pin. Functionally identical binaries; the
 provenance line in every seat's log names `cef2ecdb`.
+
+### 10g. The fork-id gate follow-up (chip), written — not in the flag-day binary (03:1xZ)
+
+ADR-0083's fence goes on `fork_id_gate_fences_v1` (branch tip after `16a2f277`): the first shipped
+preset whose fork-id gate is armed, by exactly [1150]. Below the height every verdict is a warning
+or `Agree` (old build, absent fork id, stranger); from it the old build is refused **on that fence**
+with a named reason, and the fresh syncing node / the node already past 1150 stay prefix peers in both
+directions (`the_gate_is_armed_only_where_a_shipped_preset_schedules_a_gate_fence`, 14/14 in the
+module). Deliberately NOT built into `cef2ecdb`: one change per deploy on a flag day. A gate build
+past 1150 agrees with a `cef2ecdb` node past 1150 and refuses only `14065c93…`, so it rolls out after
+the height at any pace. Gates for it are running as this is written.
