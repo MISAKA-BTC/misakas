@@ -1410,10 +1410,24 @@ impl Params {
             _ => None,
         };
         let out = self.with_two_minute_cadence();
-        match bundle {
+        let mut out = match bundle {
             Some(bundle) => out.with_palw_v2_depths(&bundle),
             None => out,
+        };
+        // **And the mint, because after the audit's genesis gate a V2 ruleset that is not minted at
+        // the ambient target cannot exist** (mainnet audit, 2026-09-05).
+        //
+        // This is the "make this params set V2-shaped" helper, and every caller is a V2 fixture
+        // that asserts its own bundle is "a ruleset a node would really boot on". Over the mainnet
+        // base — which is what those fixtures use — it was not: `MAINNET_GENESIS`' `bits` is the
+        // hash lineage's `0x1f7fffff`, 256x above a V2 network's ambient maximum, so 49 pipeline
+        // fixtures were rehearsing a network no carding ceremony could legally mint. Minting them
+        // correctly is the fix; loosening the gate to admit them would be shaping the rule to
+        // agree with the fixture.
+        if matches!(out.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+            out.genesis.bits = out.max_difficulty_target.compact_target_bits();
         }
+        out
     }
 
     /// **Every field that means "how fast this chain runs", set together.**
