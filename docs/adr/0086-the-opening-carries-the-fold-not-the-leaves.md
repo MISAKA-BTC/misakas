@@ -149,9 +149,37 @@ the next cut, not this one.
 4. Block-leaves annex forms and the challenger's assembly, X6.
 5. Ceiling restated; docs; devnet Y; fleet.
 
-## 7. Implementation record
+## 7. Implementation record (2026-09-05, `palw-adr0084-served-answer`)
 
-(filled as the work lands)
+* **Landed** (`3d56b57a`, `62fec794`): the V4 form and codec; `Base0FpFoldRangeOpeningV1` with
+  the whole-block rule (a tail block counts as whole when the range reaches the tree's end);
+  both openers serve V4 and the dense opener builds its tree at the ruleset's level; the V4 seat
+  verifier over the seat's own leaves with `FaultInRange`; the panel and the seat harness carry
+  the new verdict; the challenger's replay hands ADR-0085's builder a V2 view over its own leaves;
+  `Base0FpBlockLeavesV1` with `cut_v1`, `folds_to_v1`, `name_the_leaf_v1` and
+  `base0_fp_range_with_served_block_v1` (Decision 6's library half); the seat ceiling in the
+  form's units; the RC floor's recompute kernels lifted into a backend seam so the floor holds
+  its own state like every class. X1–X7 pass; the full base0 suite is 343 green.
+* **One deviation from Decision 1's letter.** The verifier accepts any `retain_level` in
+  `[PALW_BASE0_SPARSE_RETAIN_LEVEL_V1, PALW_BASE0_SPARSE_MAX_RETAIN_LEVEL_V1]` rather than the
+  ruleset's exact level: the digests' level is the producer's retention level, which the form
+  describes, and a seat handed a different ladder than the producer (the fixture at
+  `COURT_MAX_STEP_LEAVES` against a fold made at the default) must still walk the root, which is
+  level-independent. The floor at 12 keeps the digests to one per 4,096 leaves; the ceiling keeps
+  the size. Byte-identity between the dense and the fold route (X2) holds when both are built
+  under one cap, which is what production does.
+* **What the tests taught.** The V4 dispatch was first inserted inside the V3 branch of the
+  any-form decoder by a regex that swallowed a doc comment, so every V4 opening fell to the V1
+  decoder and came back `Unverifiable` — found by a probe that decoded a served opening directly.
+  The floor backend's verifier passed no seat state at all (it had relied on carried chunks), so
+  every anchored floor interval was `Unverifiable` under Decision 2 until it learned the seam the
+  other families use. A floor free-prompt run can stop at EOG before its budget, so its binding's
+  context is not the one `fp_job_context_v1` derives from the job; the memo is keyed by the
+  binding's, and the test memoizes under it.
+* **Not landed:** the P2P request and serve of `Base0FpBlockLeavesV1` (with ADR-0085's items 4
+  and 5); the seed row's replacement by the seat's own selection (§3, not taken); the fold
+  opener's edge-only replay.
+* **Devnet Y:** recorded below when run 7 (`MAX_TOKENS=40`, a fold material over the cap) ends.
 
 ## 8. What is deliberately not decided
 
