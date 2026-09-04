@@ -2800,6 +2800,64 @@ mod tests {
             Err(PalwStepLegError::LeafCountOutOfRange { got: LADDER, max: LADDER / 2 })
         );
     }
+
+    /// **The shipped ruleset admits a row that the refutation walkers cannot open** — ADR-0084
+    /// §7's U-08, pinned here as arithmetic rather than left as a sentence in an ADR (mainnet
+    /// audit, 2026-09-05).
+    ///
+    /// The two tests above prove the CAPPED entry points clear a deeper ladder and the uncapped
+    /// ones refuse it. This one proves the shipped network is on the wrong side of that line: the
+    /// RC ruleset freezes `max_step_leaf_count = 2^26`, its genesis registers ADR-0082's dense
+    /// graph-v5@512 row at 52,778,128 worst-case leaves, and the refutation path calls the
+    /// UNCAPPED names at six production sites, every one of which stops at `2^22`:
+    ///
+    /// * `palw_step_refute::check_execution_step_refutation_opened_v1` — `step_range_opening_root_v1(binding.step_leaf_count, …)`
+    /// * `palw_step_refute::check_tiled_decode_token_refutation_v2` — two `step_opening_root_v1` calls
+    /// * `palw_step_refute::verify_kv_anchor` — `step_opening_root_v1(binding.checkpoint_count, …)`
+    /// * `palw_step_leg::open_against` and `open_checkpoint` — the legs every arithmetic close walks
+    ///
+    /// So a dispute of that class ends `LeafCountOutOfRange` whatever the evidence says: a
+    /// producer that fakes execution on the widest class the chain registers cannot be convicted,
+    /// which is the one thing the court exists to prevent and the price weight is charged for
+    /// (ADR-0069). It is not a defect of the leg — the capped entry points are right there — but
+    /// of the WIRING: `adjudicate_close_proof_v2` already holds `court: &PalwCourtParamsV2` and
+    /// passes the constant instead of `court.max_step_leaf_count()`.
+    ///
+    /// Rewiring it changes which closes are valid, so it is an activation, not a patch —
+    /// `Params::palw_context_ladder` is the fence ADR-0077 Phase B reserved for exactly this and
+    /// today gates nothing. Until that lands, this test is the alarm: it fails the day either
+    /// number moves, so the gap cannot close or widen silently.
+    #[test]
+    fn the_shipped_court_admits_a_row_no_refutation_walker_can_open() {
+        use crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT;
+
+        assert!(
+            PALW_RC_COURT_MAX_STEP_LEAF_COUNT > PALW_STEP_LEG_MAX_LEAVES,
+            "the premise: the ruleset's ladder is above the walkers' constant"
+        );
+        let profile = crate::palw_context_ladder::palw_a16_context_row_profile_v1(512).expect("the registered dense row projects");
+        let worst = crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, PALW_RC_COURT_MAX_STEP_LEAF_COUNT)
+            .expect("inside the ruleset's ladder");
+        assert!(worst > PALW_STEP_LEG_MAX_LEAVES, "the registered row is past the walkers' constant ({worst} leaves)");
+        assert!(worst <= PALW_RC_COURT_MAX_STEP_LEAF_COUNT, "…and inside the ruleset that admitted it");
+
+        // And the refusal itself, at the leaf count that row commits: the walker stops before it
+        // looks at any evidence, so no opening of this class can ever reach a verdict.
+        let opening = PalwStepRangeOpeningV1 { first_leaf_index: 0, leaf_hashes: vec![h64(1)], siblings: vec![] };
+        assert_eq!(
+            step_range_opening_root_v1(worst, &opening),
+            Err(PalwStepLegError::LeafCountOutOfRange { got: worst, max: PALW_STEP_LEG_MAX_LEAVES }),
+            "the uncapped walker the court actually calls refuses the class the chain registered"
+        );
+        // The same call under the ruleset the class was admitted at gets as far as the evidence.
+        assert!(
+            !matches!(
+                step_range_opening_root_capped_v1(worst, &opening, PALW_RC_COURT_MAX_STEP_LEAF_COUNT),
+                Err(PalwStepLegError::LeafCountOutOfRange { .. })
+            ),
+            "the fix is a wiring change, not a new bound: the capped walker admits the same row"
+        );
+    }
 }
 
 // =============================================================================================
