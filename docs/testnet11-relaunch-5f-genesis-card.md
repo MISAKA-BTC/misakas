@@ -5797,3 +5797,12 @@ chain's registered pubkey for bond 0**, `operator_id` the chain's own (`0f00d433
 e1's seven traps (network-domain preimage with `testnet-11`, sibling dirs, hex seed files, the worker env allowlist,
 worker stderr, the rail's auto-sized fee, the manifest's shape id) were followed in order; none bit.
 First request: the cad exemplar prompt at max_tokens 56 with `derive: cad/stl/v1`, temperature 0.
+
+**Step 9, job #1 (01:11–01:13 UTC):** answered in 102 s (prefill 116, decode 56/56, 18,679,264 leaves, exec root
+`08e426e8…`), **committed** locally under the public chain's identity — job `259d032b…`, claim `6e5b3c91…`, output
+root `895061f8…`, trace root `3a6055a4…` — and its **derivation refused**: the answer came back as a fenced,
+pretty-printed JSON (` ```json\n{\n  "v": 1, …`) cut mid-object at the budget, whereas the derivable runs of 7a had
+produced the compact one-line DSL. The difference is the derive script's `nofence` prefix ("Output the raw JSON only.
+Do not use Markdown, code fences or backticks."), omitted from this request by hand. Job #2 re-sends the exact
+construction; the on-chain carriage goes to the job whose derivation succeeds, since every commitment reserves
+exposure and pays a fee. Not submitted to the chain.
