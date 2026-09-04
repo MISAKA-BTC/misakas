@@ -671,16 +671,27 @@ short="${CLAIM_ID:0:16}"
 # window_challenge more (2,400 DAA in all); at one DAA per ~2.5-minute block that is days, so a
 # drill session PROVES "carried" and "panel bound" and only WATCHES the rest.
 MISAKA_BIN="${MISAKA_BIN:-$REPO_ROOT/target/release/misaka}"
-claim_phase_on_node() {  # $1 = node index → prints the phase, or "absent"
+claim_phase_on_node() {  # $1 = node index → prints the phase, "absent", or "NO-FIELD:<keys>"
   local out
   out=$("$MISAKA_BIN" --network devnet --rpc "127.0.0.1:$((RPC_BASE + $1))" palw derived --json "$CLAIM_ID" 2>/dev/null) || { echo absent; return; }
+  # **The field is `claim_phase`** (misaka-cli/src/palw_derived.rs — the schema is
+  # `misaka.palw.chain-derived-artifacts.v1`, and the claim's own phase rides in it beside the
+  # derivations). Reading `phase` instead returned None on every node, which this loop then read as
+  # "has not reached provisional" — run 5 (2026-09-04) reported exactly that for a claim all three
+  # nodes had carried. A missing key now prints NO-FIELD and the loop stops by name rather than
+  # waiting out its budget on a question it is not asking.
   printf '%s' "$out" | python3 -c '
 import json,sys
 try:
     d = json.load(sys.stdin)
-    print(d.get("phase") or ("absent" if not d.get("found", True) else "unknown"))
 except Exception:
-    print("absent")'
+    print("absent"); raise SystemExit
+if not d.get("found", False):
+    print("absent")
+elif "claim_phase" in d:
+    print(d["claim_phase"] or "unknown")
+else:
+    print("NO-FIELD:" + ",".join(sorted(d)[:6]))'
 }
 all_nodes_reached() {  # $1 = phase name; $2 = wait factor. The walk is monotone, so "at or past" is the test.
   local want="$1" factor="${2:-1}" order="provisional panel_bound receipt_licensed final" i ok have
@@ -694,7 +705,10 @@ all_nodes_reached() {  # $1 = phase name; $2 = wait factor. The walk is monotone
         receipt_licensed) [ "$want" != final ] || ok=0 ;;
         panel_bound) case "$want" in receipt_licensed|final) ok=0 ;; esac ;;
         provisional) [ "$want" = provisional ] || ok=0 ;;
+        # ADR-0062 SA-1: alive, but stopped until the producer discloses. Named, never waited out.
+        default_disputed) log "  node-$i holds the claim as DEFAULT_DISPUTED (a data-availability accusation is open)"; return 1 ;;
         voided) log "  node-$i holds the claim as VOIDED"; return 1 ;;
+        NO-FIELD:*) log "  the claim read has no claim_phase field (${have#NO-FIELD:}) — the tool's output moved; fix the poll, do not wait"; return 1 ;;
         *) ok=0 ;;
       esac
     done
