@@ -456,7 +456,11 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// which is the one shape this lane's runs have — so an honest claim's ids recompute its root
     /// and a forged list never does. `None` when this family has no free-prompt path; a caller
     /// then holds no binding and files nothing on those ids.
-    fn fp_output_root_v1(&self, _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3, _output_token_ids: &[u32]) -> Option<crate::Hash64> {
+    fn fp_output_root_v1(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _output_token_ids: &[u32],
+    ) -> Option<crate::Hash64> {
         None
     }
 

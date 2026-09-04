@@ -2431,10 +2431,7 @@ pub fn palw_fp_answer_decode_v1(bytes: &[u8]) -> Option<PalwFpAnswerV1> {
 /// the family that wrote the capture (the seam, never a family decoder named by the caller).
 /// `None` for `FPM1`, for junk, and for a capture this family cannot read. What is returned is
 /// UNBOUND: the caller binds it to the claim's `output_root` before believing it.
-pub fn palw_fp_committed_output_ids_decode_v1(
-    bytes: &[u8],
-    ids_of_capture: impl Fn(&[u8]) -> Option<Vec<u32>>,
-) -> Option<Vec<u32>> {
+pub fn palw_fp_committed_output_ids_decode_v1(bytes: &[u8], ids_of_capture: impl Fn(&[u8]) -> Option<Vec<u32>>) -> Option<Vec<u32>> {
     if let Some(answer) = palw_fp_answer_decode_v1(bytes) {
         return Some(answer.output_token_ids);
     }

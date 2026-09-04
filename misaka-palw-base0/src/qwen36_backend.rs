@@ -1389,7 +1389,11 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     /// family's keyed hash of the ids. An honest claim's ids recompute its committed root; any
     /// other list does not, which is how a seat refuses a forged answer envelope before a forward
     /// pass.
-    fn fp_output_root_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, output_token_ids: &[u32]) -> Option<Hash64> {
+    fn fp_output_root_v1(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        output_token_ids: &[u32],
+    ) -> Option<Hash64> {
         let ctx = self.fp_job_context_v1(job)?;
         self.output_root_for_context_v1(&ctx, output_token_ids)
     }
@@ -1431,9 +1435,16 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             return Err("this backend serves no registered graph, so it recomputes no state".to_string());
         };
         let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan);
-        crate::fp_recompute::base0_fp_seat_state_memoized_v1(profile, context, prompt_token_ids, output_token_ids, covered, &mut kernels)
-            .map(|state| state.state_chunks_root)
-            .map_err(|e| e.to_string())
+        crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+            profile,
+            context,
+            prompt_token_ids,
+            output_token_ids,
+            covered,
+            &mut kernels,
+        )
+        .map(|state| state.state_chunks_root)
+        .map_err(|e| e.to_string())
     }
 
     /// The largest `covered` this class's leg carries for `context`, in the class's own cadence

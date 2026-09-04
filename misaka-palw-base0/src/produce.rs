@@ -2403,6 +2403,9 @@ mod tests {
         let leaves = base0_dense_step_leaves_capped_v1(&binding, &tiles, cap).expect("the leaves");
         assert_eq!(leaves.len() as u64, leaf_count);
         assert_eq!(kaspa_consensus_core::palw_step_leg::step_merkle_root_capped_v1(&leaves, cap).ok(), Some(root));
-        assert!(kaspa_consensus_core::palw_step_leg::step_merkle_root_v1(&leaves).is_err(), "the default ladder does not reach this space");
+        assert!(
+            kaspa_consensus_core::palw_step_leg::step_merkle_root_v1(&leaves).is_err(),
+            "the default ladder does not reach this space"
+        );
     }
 }

@@ -328,7 +328,8 @@ impl PalwProducerService {
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
             // The answer envelope (ADR-0084) is pruned on the material's horizon; nothing is
             // announced for either — a seat that needs the bytes asks for them.
-            let Some(stem) = name.strip_suffix(PALW_RETAINED_MATERIAL_SUFFIX).or_else(|| name.strip_suffix(PALW_RETAINED_ANSWER_SUFFIX))
+            let Some(stem) =
+                name.strip_suffix(PALW_RETAINED_MATERIAL_SUFFIX).or_else(|| name.strip_suffix(PALW_RETAINED_ANSWER_SUFFIX))
             else {
                 continue;
             };

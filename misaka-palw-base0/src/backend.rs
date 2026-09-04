@@ -542,7 +542,11 @@ impl PalwExecutionBackendV1 for Base0Backend {
     /// the one [`Self::execute_free_prompt`] runs under — the budget decoded exactly,
     /// `ExactBudgetReached`, the floor's default class facts — and the floor renders nothing, so
     /// its rendered hash is the hash of the empty rendering (the same call `produce` makes).
-    fn fp_output_root_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, output_token_ids: &[u32]) -> Option<Hash64> {
+    fn fp_output_root_v1(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        output_token_ids: &[u32],
+    ) -> Option<Hash64> {
         let ctx = self.fp_job_context_v1(job)?;
         self.output_root_for_context_v1(&ctx, output_token_ids)
     }

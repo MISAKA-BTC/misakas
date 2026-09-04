@@ -122,7 +122,9 @@ pub async fn submit(
                     // commitment's (its count is not `decode_tokens_executed`).
                     let ids = misaka_palw_base0::produce::base0_material_decode_any_v1(&capture_bytes)
                         .map(|retention| retention.generated_token_ids().to_vec())
-                        .map_err(|e| CliError::new(exit::GENERIC, format!("{}: the capture does not decode: {e:?}", capture_path.display())))?;
+                        .map_err(|e| {
+                            CliError::new(exit::GENERIC, format!("{}: the capture does not decode: {e:?}", capture_path.display()))
+                        })?;
                     if ids.len() != payload.commitment.decode_tokens_executed as usize {
                         return Err(CliError::new(
                             exit::GENERIC,

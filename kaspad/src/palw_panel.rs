@@ -1603,7 +1603,9 @@ impl PalwPanelService {
             // envelope when it does not — decided here, by the party holding the directory, so
             // the transport is never handed what it would refuse.
             let me = self.clone();
-            self.flow_context.palw_gossip().set_material_resolver(std::sync::Arc::new(move |claim| me.serve_material_or_answer(claim)));
+            self.flow_context
+                .palw_gossip()
+                .set_material_resolver(std::sync::Arc::new(move |claim| me.serve_material_or_answer(claim)));
             // The directory this node serves from, published to the wallet-facing RPC so a
             // submitter on this host stages where this panel reads (ADR-0084 Decision 5) — and
             // CREATED here, before it is named: a submitter refuses a directory that does not
@@ -3470,7 +3472,10 @@ impl PalwPanelService {
         let prompt_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         match backend.open_fp_interval(&bytes, interval_index, &prompt_ids) {
             Ok(opening) => {
-                info!("[{PALW_PANEL}] claim {claim}: opened interval {interval_index} of the retained capture ({} bytes served)", opening.len());
+                info!(
+                    "[{PALW_PANEL}] claim {claim}: opened interval {interval_index} of the retained capture ({} bytes served)",
+                    opening.len()
+                );
                 Some(opening)
             }
             Err(e) => {
@@ -3658,8 +3663,10 @@ impl PalwPanelService {
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         bytes: &[u8],
-    ) -> Option<(Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, kaspa_consensus_core::palw_backend::PalwCaptureShapeV1)>
-    {
+    ) -> Option<(
+        Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
+        kaspa_consensus_core::palw_backend::PalwCaptureShapeV1,
+    )> {
         session.palw_v2_class_table().into_iter().find_map(|row| {
             let facts = session.palw_producer_facts_v2(row.class_id, None)?;
             let backend = self.resolve_backend(session, row.class_id, facts.artifact_root).ok()?;
@@ -3818,13 +3825,10 @@ impl PalwPanelService {
         // Both counts are the context's own — a free-prompt job's, hash-bound to the claim through
         // `fp_job_id_v3`, or the anchor-derived job's — never read off a capture, which is the
         // executor's to shape.
-        let counts = PalwFpChainCountsV1 { prompt_tokens: ctx.declared_prefill_tokens, decode_tokens_executed: ctx.exact_decode_tokens };
+        let counts =
+            PalwFpChainCountsV1 { prompt_tokens: ctx.declared_prefill_tokens, decode_tokens_executed: ctx.exact_decode_tokens };
         let draw = crate::palw_fp_seat::palw_fp_seat_draw_v1(backend.as_ref(), network_domain, duty, counts)?;
-        let roots = PalwClaimRootsV1 {
-            execution_root: duty.execution_root,
-            trace_root: duty.trace_root,
-            anchor,
-        };
+        let roots = PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor };
         // **The bound is the CLASS's, in the class's own cadence unit** (audit B, C-2). A
         // checkpoint leaf's `covered_decode_call` counts decode calls on a per-call class and
         // cache POSITIONS on a per-position one, and the two differ by the prefill — so a panel
@@ -3934,7 +3938,10 @@ impl PalwPanelService {
         // an interval that never arrives ends in the two-sided quorum's `Unavailable` arm at the
         // half-window, exactly as capture withholding does today.
         let asked = self.request_fp_interval_openings(network_domain, duty.claim_id, &unanswered, current_daa).await;
-        info!("[{PALW_PANEL}] claim {}: asked the executor for interval(s) {:?} ({asked} signed request(s))", duty.claim_id, unanswered);
+        info!(
+            "[{PALW_PANEL}] claim {}: asked the executor for interval(s) {:?} ({asked} signed request(s))",
+            duty.claim_id, unanswered
+        );
         None
     }
 

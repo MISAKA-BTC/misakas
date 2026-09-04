@@ -220,32 +220,34 @@ fn main() {
                 .split(',')
                 .find_map(|dir| std::fs::read(format!("{dir}/{claim}.answer")).ok())
                 .and_then(|bytes| {
-                    kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(&bytes)
-                        .map(|a| a.output_token_ids)
-                        .or_else(|| kaspa_consensus_core::palw_attempt_v2::palw_attempt_answer_decode_v1(&bytes).map(|a| a.output_token_ids))
+                    kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(&bytes).map(|a| a.output_token_ids).or_else(
+                        || kaspa_consensus_core::palw_attempt_v2::palw_attempt_answer_decode_v1(&bytes).map(|a| a.output_token_ids),
+                    )
                 })
-                .or_else(|| retention.split(',').find_map(|dir| std::fs::read(format!("{dir}/{claim}.material")).ok()).and_then(|bytes| {
-                match misaka_palw_base0::produce::base0_material_decode_any_v1(&bytes) {
-                    Ok(misaka_palw_base0::produce::Base0RetentionV1::Folded(folded)) => Some(folded.generated_token_ids),
-                    // **The attempt lane's retention is the DENSE tuple, and its fourth element is
-                    // the answer** — `(binding, tiles, logits_rows, generated, checkpoints)`. A
-                    // 5f QWEN36 material is 253 MB of which 2,685,360 entries are tiles, and it
-                    // decodes in 0.15 s at 575 MB peak; measured on e78441c7…, generated
-                    // `[979, 7287]`. Reading this arm and then falling through to the flat
-                    // decoders — which is what this did for one revision — throws away the answer
-                    // it just decoded and prints an empty column.
-                    Ok(misaka_palw_base0::produce::Base0RetentionV1::Dense((_, _, _, generated, ..))) => Some(generated),
-                    // The flat layout the earlier producers wrote, kept so an archived material
-                    // still renders: the class decides which of the two readers understands it.
-                    Err(_) => {
-                        if class_hex == QWEN36_CLASS {
-                            qwen36_material_decode_v1(&bytes).map(|r| r.generated)
-                        } else {
-                            qwen25_a16_material_decode_v1(&bytes).map(|r| r.generated)
+                .or_else(|| {
+                    retention.split(',').find_map(|dir| std::fs::read(format!("{dir}/{claim}.material")).ok()).and_then(|bytes| {
+                        match misaka_palw_base0::produce::base0_material_decode_any_v1(&bytes) {
+                            Ok(misaka_palw_base0::produce::Base0RetentionV1::Folded(folded)) => Some(folded.generated_token_ids),
+                            // **The attempt lane's retention is the DENSE tuple, and its fourth element is
+                            // the answer** — `(binding, tiles, logits_rows, generated, checkpoints)`. A
+                            // 5f QWEN36 material is 253 MB of which 2,685,360 entries are tiles, and it
+                            // decodes in 0.15 s at 575 MB peak; measured on e78441c7…, generated
+                            // `[979, 7287]`. Reading this arm and then falling through to the flat
+                            // decoders — which is what this did for one revision — throws away the answer
+                            // it just decoded and prints an empty column.
+                            Ok(misaka_palw_base0::produce::Base0RetentionV1::Dense((_, _, _, generated, ..))) => Some(generated),
+                            // The flat layout the earlier producers wrote, kept so an archived material
+                            // still renders: the class decides which of the two readers understands it.
+                            Err(_) => {
+                                if class_hex == QWEN36_CLASS {
+                                    qwen36_material_decode_v1(&bytes).map(|r| r.generated)
+                                } else {
+                                    qwen25_a16_material_decode_v1(&bytes).map(|r| r.generated)
+                                }
+                            }
                         }
-                    }
-                }
-            }))
+                    })
+                })
         };
         if let Some(ids) = generated.as_ref() {
             cache.insert(claim.to_string(), ids.clone());

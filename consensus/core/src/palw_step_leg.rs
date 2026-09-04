@@ -612,7 +612,8 @@ pub fn step_range_siblings_from_range_capped_v1(
     if k == 0 || opening.first_leaf_index.checked_add(k).is_none_or(|end| end > leaf_count) {
         return Err(PalwStepLegError::LeafIndexOutOfRange { index: opening.first_leaf_index, count: leaf_count });
     }
-    let inner_end = inner_first.checked_add(inner_count).ok_or(PalwStepLegError::LeafIndexOutOfRange { index: inner_first, count: leaf_count })?;
+    let inner_end =
+        inner_first.checked_add(inner_count).ok_or(PalwStepLegError::LeafIndexOutOfRange { index: inner_first, count: leaf_count })?;
     if inner_count == 0 || inner_first < opening.first_leaf_index || inner_end > opening.first_leaf_index + k {
         return Err(PalwStepLegError::LeafIndexOutOfRange { index: inner_first, count: leaf_count });
     }
@@ -2940,7 +2941,8 @@ mod opening_from_range_tests {
                             let derived = step_range_siblings_from_range_v1(leaf_count, &range, inner_first, inner_count).unwrap();
                             let built = step_merkle_range_siblings_v1(&leaves, inner_first as usize, inner_count as usize).unwrap();
                             assert_eq!(
-                                derived, built,
+                                derived,
+                                built,
                                 "leaf_count {leaf_count} range [{first}, {}) inner [{inner_first}, {})",
                                 first + k,
                                 inner_first + inner_count

@@ -1784,7 +1784,9 @@ pub fn base0_refutation_from_opening_capped_v1(
         slot: target.node_slot as u16,
         tile: target.tile_index,
     })?;
-    let bounds = |o: &crate::fp_interval::Base0FpIntervalOpeningV2| (o.range.first_leaf_index, o.range.first_leaf_index + o.range.leaf_hashes.len() as u64);
+    let bounds = |o: &crate::fp_interval::Base0FpIntervalOpeningV2| {
+        (o.range.first_leaf_index, o.range.first_leaf_index + o.range.leaf_hashes.len() as u64)
+    };
     let (first, end) = bounds(primary);
     if target_index < first || target_index >= end {
         return Err(LegError::CloseFromOpening("the disputed leaf is outside the served interval"));
@@ -1794,8 +1796,15 @@ pub fn base0_refutation_from_opening_capped_v1(
     let hash_of = |leaf: &PalwStepTileLeafV1| step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
     // The served range holding `index`, if any: the accused's committed hash and the opening to
     // derive paths from.
-    let holder = |index: u64| intervals.iter().find(|(o, _)| { let (a, b) = bounds(o); index >= a && index < b });
-    let committed = |index: u64| -> Option<Hash64> { holder(index).map(|(o, _)| o.range.leaf_hashes[(index - o.range.first_leaf_index) as usize]) };
+    let holder = |index: u64| {
+        intervals.iter().find(|(o, _)| {
+            let (a, b) = bounds(o);
+            index >= a && index < b
+        })
+    };
+    let committed = |index: u64| -> Option<Hash64> {
+        holder(index).map(|(o, _)| o.range.leaf_hashes[(index - o.range.first_leaf_index) as usize])
+    };
     // An input is one of this party's replayed tiles, or one of the SEED rows an opening carries:
     // the first `seed_row_tiles.len()` leaves of a range are the call before its interval's first
     // call — the row its seed token was selected from — carried rather than replayed.
@@ -1847,7 +1856,8 @@ pub fn base0_refutation_from_opening_capped_v1(
     for row in &required {
         let mut preimages = Vec::with_capacity(row.len());
         for (index, _) in row {
-            let leaf = leaf_of(*index).ok_or(LegError::CloseFromOpening("this party's replay holds no tile for an input the step reads"))?;
+            let leaf =
+                leaf_of(*index).ok_or(LegError::CloseFromOpening("this party's replay holds no tile for an input the step reads"))?;
             match committed(*index) {
                 Some(want) if want == hash_of(&leaf) => preimages.push(leaf),
                 Some(_) => return Err(LegError::CloseFromOpening("an input this party replayed is not the accused's committed tile")),
@@ -1876,7 +1886,15 @@ pub fn base0_refutation_from_opening_capped_v1(
         }
         inputs.push(PalwStepInputRowV1 { preimages, run_siblings });
     }
-    Ok(PalwExecutionStepRefutationV1 { binding, output_opening, output_preimage, inputs, prompt_token_ids, decode_tokens, kv_checkpoint })
+    Ok(PalwExecutionStepRefutationV1 {
+        binding,
+        output_opening,
+        output_preimage,
+        inputs,
+        prompt_token_ids,
+        decode_tokens,
+        kv_checkpoint,
+    })
 }
 
 #[cfg(test)]

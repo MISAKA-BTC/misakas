@@ -437,7 +437,14 @@ pub fn plan_submission(tx: &Transaction, staging: &FpStaging<'_>, chain_daa: u64
             (None, None)
         }
     };
-    Ok(SubmissionPlan { claim_id, txid: tx.id().to_string(), material, answer, dsl, expires_at_daa: staging.expiry.map(|e| e.expires_at()) })
+    Ok(SubmissionPlan {
+        claim_id,
+        txid: tx.id().to_string(),
+        material,
+        answer,
+        dsl,
+        expires_at_daa: staging.expiry.map(|e| e.expires_at()),
+    })
 }
 
 /// What a completed submission produced.
@@ -975,10 +982,7 @@ mod tests {
         // The wrong answer is refused by name, before anything is written.
         let short: Vec<u32> = ids[..15].to_vec();
         let staging = FpStaging { retention_dir: Some(dir.as_path()), output_token_ids: Some(&short), ..Default::default() };
-        assert!(matches!(
-            plan_submission(&tx, &staging, 0),
-            Err(FpSubmitError::AnswerCountMismatch { got: 15, committed: 16 })
-        ));
+        assert!(matches!(plan_submission(&tx, &staging, 0), Err(FpSubmitError::AnswerCountMismatch { got: 15, committed: 16 })));
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "planning writes NOTHING");
 
         // The right answer is planned beside the material, and decodes as FPA1 with these ids.

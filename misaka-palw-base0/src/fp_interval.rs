@@ -1008,9 +1008,7 @@ fn base0_assemble_fp_interval_opening_v1(
     // bounded by `PALW_STEP_LEG_MAX_LEAVES`, and a class whose space is larger (the graph-v5
     // attempt lane is 6.6 M leaves) came back as "the capture is not the binding's" from a
     // capture that was.
-    if step_range_opening_root_capped_v1(binding.step_leaf_count, &range, max_step_leaf_count).ok()
-        != Some(binding.step_merkle_root)
-    {
+    if step_range_opening_root_capped_v1(binding.step_leaf_count, &range, max_step_leaf_count).ok() != Some(binding.step_merkle_root) {
         return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
     }
     // **The class's declaration decides which FORM is served, here, once** (ADR-0082 Decision 9;
@@ -1599,8 +1597,8 @@ pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
         return Err("the prompt is not the one the opening's context commits to".to_string());
     }
     let step_leaf_count = base0_fp_binding_step_space_v1(binding, max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
-    let geometry =
-        Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
+    let geometry = Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count)
+        .map_err(|e| format!("{e:?}"))?;
     let leaves_geometry =
         base0_fp_interval_leaves_v1(profile, ctx, &geometry, index, step_leaf_count).map_err(|e| format!("{e:?}"))?;
     let (first_call, last_call) = geometry.calls_for(index).ok_or_else(|| "the interval names no calls".to_string())?;
@@ -1618,9 +1616,15 @@ pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
         None => Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt_usize },
         Some(covered) => {
             let seed_call = geometry.anchor_seed_call_v1(index).ok_or_else(|| "the interval names no seed call".to_string())?;
-            let seed_token =
-                seed_token_from_opened_row_v1(profile, ctx, &opening.seed_row_tiles, &opening.range, seed_call, leaves_geometry.range_first)
-                    .ok_or_else(|| "the opened seed row yields no token".to_string())?;
+            let seed_token = seed_token_from_opened_row_v1(
+                profile,
+                ctx,
+                &opening.seed_row_tiles,
+                &opening.range,
+                seed_call,
+                leaves_geometry.range_first,
+            )
+            .ok_or_else(|| "the opened seed row yields no token".to_string())?;
             let claimed = opening.anchor.as_ref().ok_or_else(|| "the opening names no checkpoint".to_string())?;
             if !checkpoint_claim_is_the_bindings_v1(binding, &claimed.leaf, &claimed.opening, covered) {
                 return Err("the opening's checkpoint is not the binding's".to_string());
@@ -3262,7 +3266,11 @@ mod tests {
         let (artifact, profile, ctx, prompt) = floor_job(3, 4);
         let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
-        let claim = PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor: run.binding.job_context.job_id };
+        let claim = PalwClaimRootsV1 {
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            anchor: run.binding.job_context.job_id,
+        };
         let material: Base0RetainedMaterialV1 = (
             run.binding.clone(),
             run.tiles.tiles.clone(),
@@ -3369,7 +3377,15 @@ mod tests {
                 assert!(
                     matches!(
                         crate::legs::base0_refutation_from_opening_capped_v1(
-                            &profile, &ctx, &held, &forged, coord, ids.clone(), Some(pin()), &chunks, cap
+                            &profile,
+                            &ctx,
+                            &held,
+                            &forged,
+                            coord,
+                            ids.clone(),
+                            Some(pin()),
+                            &chunks,
+                            cap
                         ),
                         Err(crate::legs::LegError::CloseFromOpening(_))
                     ),
@@ -3381,7 +3397,6 @@ mod tests {
         assert!(compared > 0, "the fixture yields main-step leaves");
         assert!(anchored > 0, "the fixture exercises an anchored close (a cache-reading step past the prefill)");
     }
-
 
     /// **The ladder above the default one** (ADR-0084 §7 record). A class whose step space is
     /// larger than `PALW_STEP_LEG_MAX_LEAVES` — the graph-v5 attempt lane is 6.6 M leaves — is
@@ -3426,7 +3441,17 @@ mod tests {
         );
         assert!(
             matches!(
-                base0_assemble_fp_interval_opening_v1(&binding, &tree, &lg, 0, span_first, span, Vec::new(), None, PALW_STEP_LEG_MAX_LEAVES),
+                base0_assemble_fp_interval_opening_v1(
+                    &binding,
+                    &tree,
+                    &lg,
+                    0,
+                    span_first,
+                    span,
+                    Vec::new(),
+                    None,
+                    PALW_STEP_LEG_MAX_LEAVES
+                ),
                 Err(Base0FpIntervalError::CaptureIsNotTheBindings)
             ),
             "under a cap below the space the same opening is refused"
@@ -3637,9 +3662,10 @@ mod the_rulesets_ladder {
             rows_root: Hash64::from_u64_word(9),
             disputed: vec![Base0FpDisputedLeafV1 { leaf_index: 41, tile, anchor: None }],
         };
-        let with = Base0FpIntervalOpeningV3 { version: PALW_BASE0_FP_INTERVAL_VERSION_V3, opening: v2.clone(), close: Some(annex.clone()) }
-            .encode_v1()
-            .unwrap();
+        let with =
+            Base0FpIntervalOpeningV3 { version: PALW_BASE0_FP_INTERVAL_VERSION_V3, opening: v2.clone(), close: Some(annex.clone()) }
+                .encode_v1()
+                .unwrap();
         let without = Base0FpIntervalOpeningV3 { version: PALW_BASE0_FP_INTERVAL_VERSION_V3, opening: v2.clone(), close: None }
             .encode_v1()
             .unwrap();
@@ -3750,7 +3776,11 @@ mod inspect_material {
         let cap = binding.step_leaf_count;
         let n = super::base0_fp_binding_step_space_v1(&binding, cap).expect("step space");
         let geometry = super::Base0FpIntervalGeometryV1::from_binding_capped_v1(&binding, interval, cap).expect("geometry");
-        eprintln!("interval={interval} interval_count={} anchor_covered_call(0)={:?}", geometry.interval_count, geometry.anchor_covered_call(0));
+        eprintln!(
+            "interval={interval} interval_count={} anchor_covered_call(0)={:?}",
+            geometry.interval_count,
+            geometry.anchor_covered_call(0)
+        );
         let lg = super::base0_fp_interval_leaves_v1(profile, ctx, &geometry, 0, n).expect("leaves geometry");
         eprintln!("range_first={} range_end={} seed_row_leaves={}", lg.range_first, lg.range_end, lg.seed_row_leaves);
         let tree = crate::fp_capture::Base0SparseStepTreeV1::from_leaves_capped_v1(
@@ -3767,6 +3797,11 @@ mod inspect_material {
             .expect("range opening");
         let root = kaspa_consensus_core::palw_step_leg::step_range_opening_root_capped_v1(binding.step_leaf_count, &range, cap);
         eprintln!("range opening root={:?} (committed {})", root, binding.step_merkle_root);
-        eprintln!("range opening: first={} count={} siblings={}", range.first_leaf_index, range.leaf_hashes.len(), range.siblings.len());
+        eprintln!(
+            "range opening: first={} count={} siblings={}",
+            range.first_leaf_index,
+            range.leaf_hashes.len(),
+            range.siblings.len()
+        );
     }
 }
