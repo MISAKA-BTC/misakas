@@ -616,6 +616,66 @@ impl Base0FpIntervalOpeningV2 {
     }
 }
 
+/// Wire magic of the v3 opening: v2 with a close annex (ADR-0085 Decision 1).
+pub const PALW_BASE0_FP_INTERVAL_MAGIC_V3: [u8; 8] = *b"MSKFPIV3";
+pub const PALW_BASE0_FP_INTERVAL_VERSION_V3: u16 = 3;
+
+/// **The two terms of a court close that must be the ACCUSED's** (ADR-0085 §2): the disputed
+/// leaf's tile preimage and the rows root of the decode pin. Everything else in a refutation the
+/// challenger recomputes and checks against roots the accused committed; these two it cannot —
+/// the disputed tile differs from its own by definition, and the rows root is a function of every
+/// logits row. Served inside the interval opening that contains the disputed leaf, on the lane the
+/// seat already drives, only for a leaf an open court session names (ADR-0085 X4).
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct Base0FpCloseAnnexV1 {
+    /// `tiled_logits_rows_root_v1` over every retained row — what `trace_root` commits beside the
+    /// generated ids, and what `check_tiled_decode_pin` binds to the binding.
+    pub rows_root: Hash64,
+    /// The accused's committed tiles at the leaves a court named, with their leaf indices.
+    pub disputed: Vec<(u64, PalwStepTileLeafV1)>,
+}
+
+/// **One checkpoint interval, opened without the history, WITH the close annex** (ADR-0085
+/// Decision 1). Field for field [`Base0FpIntervalOpeningV2`] plus `close`; a v3 opening whose
+/// annex is `None` is a v2 opening to every reader, and [`base0_fp_interval_opening_decode_any_v1`]
+/// hands a seat exactly the v2 view (ADR-0085 X3), so the seat's replay never sees the annex and
+/// the annex never changes a verdict. [`base0_fp_interval_close_annex_v1`] is the closer's read.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct Base0FpIntervalOpeningV3 {
+    pub version: u16,
+    pub opening: Base0FpIntervalOpeningV2,
+    pub close: Option<Base0FpCloseAnnexV1>,
+}
+
+impl Base0FpIntervalOpeningV3 {
+    pub fn encode_v1(&self) -> Result<Vec<u8>, Base0FpIntervalError> {
+        let body = borsh::to_vec(self).map_err(|_| Base0FpIntervalError::NotThisFamilysBytes)?;
+        let mut out = Vec::with_capacity(body.len() + PALW_BASE0_FP_INTERVAL_MAGIC_V3.len());
+        out.extend_from_slice(&PALW_BASE0_FP_INTERVAL_MAGIC_V3);
+        out.extend_from_slice(&body);
+        Ok(out)
+    }
+
+    pub fn decode_v1(bytes: &[u8]) -> Result<Self, Base0FpIntervalError> {
+        let body = bytes.strip_prefix(&PALW_BASE0_FP_INTERVAL_MAGIC_V3).ok_or(Base0FpIntervalError::NotThisFamilysBytes)?;
+        let decoded: Self = borsh::from_slice(body).map_err(|_| Base0FpIntervalError::NotThisFamilysBytes)?;
+        if decoded.version != PALW_BASE0_FP_INTERVAL_VERSION_V3 || decoded.opening.version != PALW_BASE0_FP_INTERVAL_VERSION_V2 {
+            return Err(Base0FpIntervalError::NotThisFamilysBytes);
+        }
+        Ok(decoded)
+    }
+}
+
+/// **The close annex of an opening, if it carries one** (ADR-0085 Decision 2's first input).
+/// `None` for a v1 or v2 opening, for a v3 opening served without an annex, and for bytes that are
+/// not this family's — the closer then has nothing to assemble from and waits, by name.
+pub fn base0_fp_interval_close_annex_v1(bytes: &[u8]) -> Option<Base0FpCloseAnnexV1> {
+    if !bytes.starts_with(&PALW_BASE0_FP_INTERVAL_MAGIC_V3) {
+        return None;
+    }
+    Base0FpIntervalOpeningV3::decode_v1(bytes).ok()?.close
+}
+
 /// Either form, as a seat receives it. A seat on an old executor still reads v1; a graph-v5 class
 /// refuses it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -629,6 +689,11 @@ pub enum Base0FpIntervalOpeningAnyV1 {
 
 /// Decode whichever form arrived. The magic decides, so nothing is mis-parsed as the other.
 pub fn base0_fp_interval_opening_decode_any_v1(bytes: &[u8]) -> Result<Base0FpIntervalOpeningAnyV1, Base0FpIntervalError> {
+    // ADR-0085 X3: a v3 opening is its v2 opening to a seat; the annex is the closer's, read
+    // through `base0_fp_interval_close_annex_v1`, and never reaches a replay or a verdict.
+    if bytes.starts_with(&PALW_BASE0_FP_INTERVAL_MAGIC_V3) {
+        return Ok(Base0FpIntervalOpeningAnyV1::Recomputed(Box::new(Base0FpIntervalOpeningV3::decode_v1(bytes)?.opening)));
+    }
     if bytes.starts_with(&PALW_BASE0_FP_INTERVAL_MAGIC_V2) {
         return Ok(Base0FpIntervalOpeningAnyV1::Recomputed(Box::new(Base0FpIntervalOpeningV2::decode_v1(bytes)?)));
     }
@@ -3204,5 +3269,50 @@ mod the_rulesets_ladder {
             base0_open_fp_interval_sparse_capped_v1(&material, 0, &ids, interval, narrow, &kernels),
             Err(Base0FpIntervalError::LeafCountOutOfRange { got: leaves, max: narrow }),
         );
+    }
+
+    /// **ADR-0085 X3: a v3 opening is a v2 opening to every seat path, annex or not** — and the
+    /// annex is read only by the closer's own function. The binding is the genesis row's, so the
+    /// framing is exercised on a real class shape; nothing here replays an interval.
+    #[test]
+    fn a_v3_opening_reads_as_its_v2_opening_and_the_annex_is_the_closers_alone() {
+        let (binding, _) = v5_512_binding();
+        let v2 = Base0FpIntervalOpeningV2 {
+            version: PALW_BASE0_FP_INTERVAL_VERSION_V2,
+            interval_index: 7,
+            binding,
+            range: kaspa_consensus_core::palw_step_leg::PalwStepRangeOpeningV1 {
+                first_leaf_index: 40,
+                leaf_hashes: vec![Hash64::from_u64_word(1), Hash64::from_u64_word(2)],
+                siblings: vec![Hash64::from_u64_word(3)],
+            },
+            seed_row_leaf_count: 0,
+            seed_row_tiles: Vec::new(),
+            anchor: None,
+        };
+        let tile = PalwStepTileLeafV1 {
+            version: 1,
+            coord: kaspa_consensus_core::palw_step::PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: 0, tile_index: 0 },
+            value_count: 2,
+            values_le: vec![1, 0, 0, 0, 2, 0, 0, 0],
+        };
+        let annex = Base0FpCloseAnnexV1 { rows_root: Hash64::from_u64_word(9), disputed: vec![(41, tile)] };
+        let with = Base0FpIntervalOpeningV3 { version: PALW_BASE0_FP_INTERVAL_VERSION_V3, opening: v2.clone(), close: Some(annex.clone()) }
+            .encode_v1()
+            .unwrap();
+        let without = Base0FpIntervalOpeningV3 { version: PALW_BASE0_FP_INTERVAL_VERSION_V3, opening: v2.clone(), close: None }
+            .encode_v1()
+            .unwrap();
+        assert_eq!(&with[..8], &PALW_BASE0_FP_INTERVAL_MAGIC_V3);
+        for bytes in [&with, &without] {
+            match base0_fp_interval_opening_decode_any_v1(bytes).unwrap() {
+                Base0FpIntervalOpeningAnyV1::Recomputed(seen) => assert_eq!(*seen, v2, "the seat sees the v2 opening"),
+                other => panic!("a v3 opening must read as Recomputed, got {other:?}"),
+            }
+        }
+        assert_eq!(base0_fp_interval_close_annex_v1(&with), Some(annex));
+        assert_eq!(base0_fp_interval_close_annex_v1(&without), None);
+        assert_eq!(base0_fp_interval_close_annex_v1(&v2.encode_v1().unwrap()), None, "a v2 opening carries no annex");
+        assert!(Base0FpIntervalOpeningV3::decode_v1(&v2.encode_v1().unwrap()).is_err(), "and is not a v3");
     }
 }
