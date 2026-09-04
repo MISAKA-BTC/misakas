@@ -6032,3 +6032,31 @@ through the entire 5f history, and armed now it carries MAX from its first block
 Row order was the whole difference between "2–7 % off" and exact: the window is a heap by blue
 work with a byte-order hash tie-break, not the last 264 rows in mergeset order; on a heartbeat
 chain blue work grows by ε = 1 per block, so the tie-break decides membership at the margin.
+
+### 10f. The operator's decision and the flag day — ADR-0083 path (a), fence at DAA 1150 (2026-09-04 02:50Z →)
+
+**Decision (operator, 02:5xZ):** ADR-0083 ships as a scheduled fence on the live chain — no re-mint —
+and `f1604dd3` (kaspad derives its pay address from the producer key) goes to main and the release.
+
+| item | value |
+|---|---|
+| height H | **1150** — chosen at DAA 894 (02:50Z) at ~93 DAA/h: ~2.7 h of lead over a 15-minute build and a six-seat restart |
+| tree | branch `palw-daa-bits-priced-rows` tip **`cef2ecdb`** (rebased on main `3c41abc2`): 1edfc956 ADR-0083 rule (dormant) · b6edd936 producer holds visible + draw counter · a8729a94 lint · 3341ccfd = f1604dd3 · c6ad999d **arming** (`palw_rc_base_params`: `palw_difficulty_priced_rows = Some(ForkActivation::new(1150))`) · cef2ecdb chunk-rent test fix |
+| t11 fingerprint | `2222e054…` → **`71b35c25…`** (`consensus_params_id`, the fence's Some-only write); re-pinned in `shipped_presets_have_pinned_fingerprints` and NAMED in `scripts/check-repin-predictions.sh` before the paste; genesis `ad30b5cb…` unchanged; fence-normalised identity unchanged → a seat on `14065c93…` peers with the new build until 1150 |
+| build | ibm, worktree `/root/misakas-cef2ecdb` (so no peer's checkout moves), `nice -n 19 cargo build --release -j 4 -p kaspad` — the 5f recipe — staged as `/root/t11/kaspad.cef2ecdb`, never over the live binary |
+| seats to restart before 1150 | ibm node0 + node1; .113 node + seat4 + pool slots 01/02/03 (all on `/root/t11/kaspad`); seat2. ff's Studio node rebuilds from `cef2ecdb` on its own (told the hash and H) |
+| order | node0 first — it is the `--addpeer` for the others and the empirical check that old/new peer with a warning — then node1, seat2, .113 |
+| pre-push gate | core 1826 + the new fence test; consensus lib whole suite (now green: the one red was the chunk-rent test, fixed in `cef2ecdb` — the floor's evidence is 754,377 B and the test cut it into 188,595-B quarters over the 100,000-B carriage, `ChunkTooLarge`, not rent); kaspad builds; clippy clean |
+
+**What "peers until H" is and is not.** The handshake compares `consensus_identity_id`, which
+normalises every scheduled fence to "not yet" (M1-6), so old and new builds connect and log a
+schedule warning. At 1150 the new build computes `bits = MAX` for the first fenced block; the old
+build's heartbeat blocks carry legacy bits and are refused as `UnexpectedDifficulty` by every
+upgraded seat — the un-upgraded seat forks off. A seat that runs the OLD build past 1150 and is
+upgraded afterwards would keep its old-rule blocks in its DB, so every seat restarts BEFORE 1150,
+and if a restart is late the fallback is to stop that seat rather than let it cross the height.
+
+**Chunk-rent test (chip), closed in the same tree:** root cause the test's cut, not the rule (§10d's
+red). `4d572142` exonerated by ff's experiment (fails identically at 8). The underpay assertion had
+been passing vacuously — the rent check runs before the transition, so an opener that could never
+open was "dropped" at both prices; the fixed test asserts the parts ride the carriage by name.
