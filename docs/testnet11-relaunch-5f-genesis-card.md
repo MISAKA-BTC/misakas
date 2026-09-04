@@ -5694,3 +5694,25 @@ began after block #3 — three materials, three blocks, four hours into the four
 the two A16 artifacts only (9.9 → 11.2 → 13.0 GB in 55 min) — a deferred read compares anon against file-backed
 pages to tell growth from a settled mapping. Fleet daa 653: the first QWEN36 claim's receipt deadline (640) has
 passed — its redraw is readable in node0's next facts line; the first coinbase matures at 686 (~00:25 UTC).
+
+### 7c — the v5 lane binding: broadcast, carried, and dropped by the chain's grading (00:32–00:52 UTC, 2026-09-04)
+
+The first coinbase at bond-0's address matured at daa 686 (settlement window 600 over the coinbase at daa 86); the
+retry loop's dry run passed at 00:32:24 UTC and the `ClassLaneCertified` object was broadcast as carrier `bc6637d3…`,
+funded from `c41e45ea…:0`. The explorer shows the carrier accepted in block `478bbcbf…` (00:35 UTC). node0's log at
+that block:
+
+    a PALW lifecycle object was dropped, and the block stands: no family certified on this chain for the free-prompt
+    lane covers every kernel class 4277d84f…
+
+So the object was carried and refused by the grading it asked for: the genesis carries the a16-v5 family's *court*
+(attempt-lane) certification (`court_e2e_root e649e7c0…`), not a free-prompt-lane `FamilyCertified`; the drill's stage
+3 submits that family object before the bind (3e's minimal-cover V5 family, two carriers), and on the public chain it
+was never submitted. Order now: `palw-certify drill --family a16-v5 --lane fp` (the shipped court grades the family's
+vectors and writes the chunked object), `misaka palw submit-object` with its carriers, then the bind again; each is a
+spend from bond-0, so the key stays reserved. The lane reads uncertified at daa 717; bond-0 holds one mature UTXO
+(2,756 MSK change) and three immature.
+
+**ibm at 00:52 UTC:** used 15.4 GB / available 8.7 GB, swap 4.5 GB; node0 9.1 GB resident, still on its fourth job
+(three materials); node1 12.6 GB resident of which **12.5 GB anonymous** — a heap, not the A16 mappings — to be
+compared over time and restarted if the host's available memory falls under ~4 GB.
