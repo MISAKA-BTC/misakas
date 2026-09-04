@@ -6081,3 +6081,21 @@ directions (`the_gate_is_armed_only_where_a_shipped_preset_schedules_a_gate_fenc
 module). Deliberately NOT built into `cef2ecdb`: one change per deploy on a flag day. A gate build
 past 1150 agrees with a `cef2ecdb` node past 1150 and refuses only `14065c93…`, so it rolls out after
 the height at any pace. Gates for it are running as this is written.
+
+### 10h. The flag-day restart, executed (2026-09-04 03:10–03:36Z) — every seat on `cef2ecdb` before H
+
+| step | when (Z) | what happened |
+|---|---|---|
+| build | 02:56–03:10 | ibm, worktree `/root/misakas-cef2ecdb`, `cargo build --release -j 4 -p kaspad`: 13 m 36 s, 1.1 GB peak; `kaspad.cef2ecdb` sha256 `002cee6a…`, 53,938,328 B |
+| stage | 03:15 | copied via the Mac to .113 and seat2; sha equal on all three hosts before any install |
+| ibm | 03:18 node0 SIGINT; 03:22 node1 SIGINT | node1 respawned in 39 s on the new file, fingerprint `71b35c25…`. node0 logged "shutting down", stopped its servers in 1 s, `[palw-producer] stopping (3 blocks this run)` at +2.5 min — then sat at 128 % CPU with no further line for 14 min (the 34 GB mapping's unmap tail) |
+| seat2 | 03:24 SIGINT | same tail (11 GB RSS, 63 % CPU, still alive at +7.5 min) |
+| .113 | 03:27–03:34 | node respawned in 21 s; seat4 in the tail; pool slots 01/02/03 respawned in 21–27 s (their wrappers are the main pids; the child kaspads verified on the new file) |
+| kills | 03:35 | node0: no log line for 845 s → SIGKILL, respawned as pid 2701995, fingerprint `71b35c25…`, mapping QWEN36. seat2 and seat4: SIGKILLed on the same rule — **but their journals were empty because their wrappers log to files, so for those two the "no progress for 4 min" test read absence, not evidence**. Same outcome (both respawned cleanly on the new file, seat4 in 45 s), wrong basis; the rule to keep is the memory's — a check that returns nothing is not a measurement. |
+| verify | 03:37 | 8 kaspad processes, 0 `(deleted)`: ibm 2700312 (node1) + 2701995 (node0); .113 1113131 (node) + 1115457 (seat4) + 1114389/1114653/1114931 (slots); seat2 1742602. Fingerprint `71b35c25…` on node0, node1, .113 node, seat2 (the journal-logging seats); seat4/slots run the same file |
+| peering | 03:09–03:35 | both directions of "peers until H" seen live: ff's new-build node logged the FUTURE-fence warning against the fleet's old anchors at 03:09; .113's OLD node logged it against a new-build peer at 03:26 (`peer dbfc99dc… agrees on every rule in force now and schedules a FUTURE fence differently`). No refusals |
+
+The old-build stragglers refused nothing and were refused by nothing (the gate is not in this
+binary — §10g); the chain simply keeps ticking on the new-build heartbeats through the cycle.
+External nodes on pre-5f genesis kept knocking on node0 (`Genesis mismatch on network
+misaka-testnet-11`, three addresses) — the M-07 guard doing its job, unrelated to the flag day.
