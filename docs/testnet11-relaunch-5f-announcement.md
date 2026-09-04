@@ -72,3 +72,5 @@ cap sized to the largest class) is scheduled after this relaunch; until it lands
 produced and counted but not verified or finalized, and the dense tier's blocks do not yet reach the other nodes
 (the same transport path). The floor and heartbeat lanes are unaffected. The dense tier's first block is expected when its first
 512-context job completes; the floor's when its draw wins. Everything else on the chain so far is heartbeat blocks.
+
+> **Known state (2026-09-04 04:10Z):** no attempt-lane block has been produced since DAA 226. Cause identified and measured (card §10b): with five heartbeat emitters on the 2-minute cadence, the difficulty window reads the chain as ~3× too fast and has tightened `bits` by ×320; the heartbeat lane is priced by a constant and never notices, the bonded lanes cannot win, and the chain does not recover by itself. The fix is a consensus change (heartbeat rows out of the difficulty rate); how it ships is the operator's decision. Everything above that names a claim or a block is on the chain as stated.
