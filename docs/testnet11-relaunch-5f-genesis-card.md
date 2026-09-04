@@ -5687,3 +5687,10 @@ for node0's recovery (target: ~2 cores, a fourth material and block).
 and will finish as its working set pages back; node1 11.2 GB resident with the two A16 artifacts only, no swap,
 floor producer at 0 blocks. Fleet daa 592: the first coinbase matures near 00:15 UTC; the first QWEN36 claim's
 receipt deadline (daa 640) falls near 23:52 — its redraw is readable in node0's next facts line.
+
+**6n, continued (00:09 UTC, 2026-09-04):** host 13.6 GB used / 10.4 GB available, swap 4.05 GB and no longer draining
+(node0's 3.8 GB swapped pages are not being touched); node0 117 % of one core, 9.1 GB resident, still on the job it
+began after block #3 — three materials, three blocks, four hours into the fourth job; node1 **13.0 GB resident** with
+the two A16 artifacts only (9.9 → 11.2 → 13.0 GB in 55 min) — a deferred read compares anon against file-backed
+pages to tell growth from a settled mapping. Fleet daa 653: the first QWEN36 claim's receipt deadline (640) has
+passed — its redraw is readable in node0's next facts line; the first coinbase matures at 686 (~00:25 UTC).
