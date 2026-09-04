@@ -344,6 +344,18 @@ impl QwenTokenizer {
 
     /// Decode ignoring an incomplete trailing UTF-8 sequence — what a streaming decoder needs,
     /// since a multi-byte character can straddle two tokens.
+    ///
+    /// **Ignoring is not substituting**, and the difference is the whole point of this function.
+    /// `String::from_utf8_lossy` puts `U+FFFD` where the incomplete tail is, and a streaming caller
+    /// that emits the new suffix each step therefore SENT that replacement character before the
+    /// next token completed the kanji — so `申し訳` reached the user as `申し` + `<?>`, while the
+    /// same run's non-streaming answer was correct. It also made the decoded string non-monotonic
+    /// (three bytes appear, then vanish), which a caller slicing at a remembered byte offset can
+    /// only survive by luck: the next slice can land inside a character and panic.
+    ///
+    /// So a tail that is merely INCOMPLETE is held back, and only bytes that are genuinely INVALID
+    /// become `U+FFFD` — otherwise one corrupt token would stall the stream forever waiting for a
+    /// continuation that is never coming.
     pub fn decode_lossy_tail(&self, ids: &[u32]) -> String {
         let mut bytes = Vec::with_capacity(ids.len() * 4);
         for id in ids {
@@ -358,7 +370,30 @@ impl QwenTokenizer {
                 }
             }
         }
-        String::from_utf8_lossy(&bytes).into_owned()
+        let mut out = String::with_capacity(bytes.len());
+        let mut rest = &bytes[..];
+        loop {
+            match std::str::from_utf8(rest) {
+                Ok(valid) => {
+                    out.push_str(valid);
+                    break;
+                }
+                Err(e) => {
+                    let (valid, after) = rest.split_at(e.valid_up_to());
+                    out.push_str(std::str::from_utf8(valid).expect("valid_up_to bounds a valid prefix"));
+                    match e.error_len() {
+                        // Real garbage: mark it and move on, or the stream stops here forever.
+                        Some(bad) => {
+                            out.push(char::REPLACEMENT_CHARACTER);
+                            rest = &after[bad..];
+                        }
+                        // The rest of this character is in the token that has not been decoded yet.
+                        None => break,
+                    }
+                }
+            }
+        }
+        out
     }
 }
 
@@ -505,6 +540,60 @@ pub fn qwen_chat_prompt(system: Option<&str>, turns: &[(&str, &str)]) -> String 
 
 #[cfg(test)]
 mod tests {
+    /// **A kanji that straddles two tokens must not reach the user as a replacement character.**
+    ///
+    /// The streaming server decodes the whole run each step and emits the new suffix. When the run
+    /// ends mid-character, the tail has to be HELD, not substituted: substituting emits `U+FFFD`
+    /// that the next step then un-says, which the client has already been told. Measured against
+    /// the live engine on 2026-09-04: `申し訳ありません` arrived as `申し?ありません` over the
+    /// stream while the same run's non-streaming answer was correct.
+    ///
+    /// This test needs no vocabulary: it exercises the byte-to-string half directly, which is
+    /// where the decision lives.
+    #[test]
+    fn an_incomplete_trailing_character_is_held_back_and_real_garbage_is_not() {
+        fn decode_tail(bytes: &[u8]) -> String {
+            // The same walk `decode_lossy_tail` performs once the ids are bytes.
+            let mut out = String::with_capacity(bytes.len());
+            let mut rest = bytes;
+            loop {
+                match std::str::from_utf8(rest) {
+                    Ok(valid) => {
+                        out.push_str(valid);
+                        break;
+                    }
+                    Err(e) => {
+                        let (valid, after) = rest.split_at(e.valid_up_to());
+                        out.push_str(std::str::from_utf8(valid).expect("valid prefix"));
+                        match e.error_len() {
+                            Some(bad) => {
+                                out.push(char::REPLACEMENT_CHARACTER);
+                                rest = &after[bad..];
+                            }
+                            None => break,
+                        }
+                    }
+                }
+            }
+            out
+        }
+
+        let whole = "申し訳".as_bytes();
+        // Cut inside the last character: two of its three bytes have arrived.
+        let cut = &whole[..whole.len() - 1];
+        assert_eq!(decode_tail(cut), "申し", "the half-arrived kanji is held, not replaced");
+        assert_eq!(decode_tail(whole), "申し訳", "and completes when its last byte arrives");
+
+        // Monotonic, which is what makes emitting `&decoded[shown..]` safe: every step's output is
+        // a prefix of the next. The old lossy decode broke this — it grew by three bytes and then
+        // shrank again — so a caller slicing at a remembered offset could land mid-character.
+        assert!(decode_tail(whole).starts_with(&decode_tail(cut)));
+
+        // A byte that can never begin or continue a character is marked and stepped over, because
+        // a stream that waits for its continuation waits forever.
+        assert_eq!(decode_tail(&[0xE7, 0x94, 0xB3, 0xFF, 0x41]), "申\u{fffd}A");
+    }
+
     use super::*;
 
     /// The byte table is GPT-2's, and the property that matters is that it is a bijection: every
