@@ -934,7 +934,7 @@ struct A16IntervalKernels<'a> {
 }
 
 impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
-    fn replay_interval(
+    fn replay_interval_tiles(
         &self,
         profile: &PalwShapeProfileV3,
         ctx: &PalwJobContextV2,
@@ -942,7 +942,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
         first_call: u32,
         last_call: u32,
         step_leaf_count: u64,
-    ) -> Result<Vec<(u64, Hash64)>, String> {
+    ) -> Result<crate::legs::Base0StepTilesV1, String> {
         let engine = A16Engine::new(self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
         let layers = self.artifact.shape.n_layers;
         let row_elements = profile.attn_kv_heads as usize * profile.attn_head_dim as usize;
@@ -955,7 +955,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
             }
         };
         let vocab = self.artifact.shape.vocab;
-        crate::fp_interval::base0_fp_replay_interval_v1(
+        crate::fp_interval::base0_fp_replay_interval_tiles_v1(
             profile,
             ctx,
             start,

@@ -165,7 +165,7 @@ struct Base0IntervalKernels<'a> {
 }
 
 impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
-    fn replay_interval(
+    fn replay_interval_tiles(
         &self,
         profile: &PalwShapeProfileV3,
         ctx: &PalwJobContextV2,
@@ -173,7 +173,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
         first_call: u32,
         last_call: u32,
         step_leaf_count: u64,
-    ) -> Result<Vec<(u64, Hash64)>, String> {
+    ) -> Result<crate::legs::Base0StepTilesV1, String> {
         use crate::engine::{Base0Engine, KvCache};
         let engine = Base0Engine::new(self.artifact);
         // **ADR-0049 Decision F's obligation before the first token, on the SEAT's side too.** A
@@ -194,7 +194,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
             }
         };
         let vocab = self.artifact.shape.vocab;
-        crate::fp_interval::base0_fp_replay_interval_v1(
+        crate::fp_interval::base0_fp_replay_interval_tiles_v1(
             profile,
             ctx,
             start,

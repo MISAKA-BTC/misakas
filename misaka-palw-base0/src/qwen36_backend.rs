@@ -898,7 +898,7 @@ struct Qwen36IntervalKernels<'a> {
 }
 
 impl crate::fp_interval::Base0FpIntervalKernelsV1 for Qwen36IntervalKernels<'_> {
-    fn replay_interval(
+    fn replay_interval_tiles(
         &self,
         profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
         ctx: &PalwJobContextV2,
@@ -906,7 +906,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Qwen36IntervalKernels<'_> 
         first_call: u32,
         last_call: u32,
         step_leaf_count: u64,
-    ) -> Result<Vec<(u64, Hash64)>, String> {
+    ) -> Result<crate::legs::Base0StepTilesV1, String> {
         let crate::fp_interval::Base0FpIntervalStartV1::Genesis { .. } = start else {
             return Err(
                 "this class registers no state chunk map, so no committed checkpoint exists to resume from (ADR-0077 Decision 10)"
@@ -917,7 +917,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Qwen36IntervalKernels<'_> 
         let mut cache = Qwen36Cache::new(&self.artifact.shape);
         let vocab = self.artifact.shape.vocab;
         let max_position = self.artifact.shape.max_position;
-        crate::fp_interval::base0_fp_replay_interval_v1(
+        crate::fp_interval::base0_fp_replay_interval_tiles_v1(
             profile,
             ctx,
             start,

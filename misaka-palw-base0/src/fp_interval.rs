@@ -1385,6 +1385,20 @@ pub enum Base0FpIntervalStartV1<'a> {
 /// ([`base0_fp_binding_step_space_v1`]) before a byte is replayed. So a family implementing this
 /// needs no ruleset of its own: the number it is handed is the claim's, already priced.
 pub trait Base0FpIntervalKernelsV1 {
+    /// **The interval replayed with its tiles kept** (ADR-0085 Decision 2) — the family's engine
+    /// driving [`base0_fp_replay_interval_tiles_v1`]. The one required verb: a seat's hash check
+    /// is the provided [`Self::replay_interval`] over it, and a challenger's close reads the tiles.
+    fn replay_interval_tiles(
+        &self,
+        profile: &PalwShapeProfileV3,
+        ctx: &PalwJobContextV2,
+        start: &Base0FpIntervalStartV1<'_>,
+        first_call: u32,
+        last_call: u32,
+        step_leaf_count: u64,
+    ) -> Result<crate::legs::Base0StepTilesV1, String>;
+
+    /// The seat's view: the interval's leaf hashes, in leaf order, from the same replay.
     fn replay_interval(
         &self,
         profile: &PalwShapeProfileV3,
@@ -1393,7 +1407,12 @@ pub trait Base0FpIntervalKernelsV1 {
         first_call: u32,
         last_call: u32,
         step_leaf_count: u64,
-    ) -> Result<Vec<(u64, Hash64)>, String>;
+    ) -> Result<Vec<(u64, Hash64)>, String> {
+        let partial = self.replay_interval_tiles(profile, ctx, start, first_call, last_call, step_leaf_count)?;
+        let ctx_hash = ctx.context_hash();
+        let profile_hash = profile.shape_profile_id();
+        Ok(partial.tiles.iter().map(|(i, leaf)| (*i, step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf))).collect())
+    }
 }
 
 /// **The replay loop every family shares** — the capture's own walk, restricted to a window.
@@ -1412,8 +1431,33 @@ pub fn base0_fp_replay_interval_v1<F>(
     first_call: u32,
     last_call: u32,
     step_leaf_count: u64,
-    mut forward: F,
+    forward: F,
 ) -> Result<Vec<(u64, Hash64)>, String>
+where
+    F: FnMut(usize, usize) -> Result<(Vec<i32>, Vec<Base0CapturedRowV1>), String>,
+{
+    let partial = base0_fp_replay_interval_tiles_v1(profile, ctx, start, first_call, last_call, step_leaf_count, forward)?;
+    let ctx_hash = ctx.context_hash();
+    let profile_hash = profile.shape_profile_id();
+    Ok(partial.tiles.iter().map(|(i, leaf)| (*i, step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf))).collect())
+}
+
+/// **The same replay, keeping the TILES** (ADR-0085 Decision 2): the interval's committed rows as
+/// this party computed them, with their leaf hashes, in a partial [`crate::legs::Base0StepTilesV1`]
+/// whose other leaves are zero. A seat's check needs only the hashes ([`base0_fp_replay_interval_v1`]
+/// maps to them); a challenger assembling a court close needs the preimages — the activation
+/// inputs the disputed step reads — and checks each hash against the accused's committed one in
+/// the range opening before it opens anything.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_fp_replay_interval_tiles_v1<F>(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    start: &Base0FpIntervalStartV1<'_>,
+    first_call: u32,
+    last_call: u32,
+    step_leaf_count: u64,
+    mut forward: F,
+) -> Result<crate::legs::Base0StepTilesV1, String>
 where
     F: FnMut(usize, usize) -> Result<(Vec<i32>, Vec<Base0CapturedRowV1>), String>,
 {
@@ -1477,10 +1521,7 @@ where
     // `finish_partial` is correct HERE and nowhere else: a replay deliberately covers a window,
     // and the leaves it did not touch are not claims about zero — they are simply not this
     // replay's. Which is why only the touched ones come back.
-    let partial = capture.finish_partial();
-    let ctx_hash = ctx.context_hash();
-    let profile_hash = profile.shape_profile_id();
-    Ok(partial.tiles.iter().map(|(i, leaf)| (*i, step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf))).collect())
+    Ok(capture.finish_partial())
 }
 
 /// **Replay one opened interval and compare every row EXACTLY** (ADR-0077 Decision 8, seat half).
@@ -2065,7 +2106,7 @@ mod tests {
     struct FloorKernels<'a>(&'a crate::artifact::Base0ArtifactV1);
 
     impl Base0FpIntervalKernelsV1 for FloorKernels<'_> {
-        fn replay_interval(
+        fn replay_interval_tiles(
             &self,
             profile: &PalwShapeProfileV3,
             ctx: &PalwJobContextV2,
@@ -2073,7 +2114,7 @@ mod tests {
             first_call: u32,
             last_call: u32,
             step_leaf_count: u64,
-        ) -> Result<Vec<(u64, Hash64)>, String> {
+        ) -> Result<crate::legs::Base0StepTilesV1, String> {
             use crate::engine::{Base0Engine, KvCache};
             let engine = Base0Engine::new(self.0);
             let mut cache = match start {
@@ -2084,7 +2125,7 @@ mod tests {
                     KvCache::from_state_chunks(self.0, &geometry, chunks).map_err(|e| format!("{e:?}"))?
                 }
             };
-            base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, step_leaf_count, |token, position| {
+            base0_fp_replay_interval_tiles_v1(profile, ctx, start, first_call, last_call, step_leaf_count, |token, position| {
                 let (logits, probe) = engine.forward_token_probed(&mut cache, token, position).map_err(|e| format!("{e:?}"))?;
                 Ok((logits, crate::legs::base0_captured_rows_v1(&probe)))
             })
