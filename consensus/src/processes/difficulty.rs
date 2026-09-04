@@ -6,8 +6,9 @@ use crate::model::stores::{
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
     BlockHashSet, BlueWorkType, MAX_WORK_LEVEL,
-    config::params::MAX_DIFFICULTY_TARGET_AS_F64,
+    config::params::{ForkActivation, MAX_DIFFICULTY_TARGET_AS_F64},
     errors::difficulty::{DifficultyError, DifficultyResult},
+    pow_layer0::algo_id_is_priced_by_bits,
 };
 use kaspa_core::{info, log::CRESCENDO_KEYWORD};
 use kaspa_math::{Uint256, Uint320};
@@ -38,7 +39,25 @@ trait DifficultyManagerExtension {
             .iter()
             .map(|item| {
                 let data = self.headers_store().get_compact_header_data(item.0.hash).unwrap();
-                DifficultyBlock { timestamp: data.timestamp, bits: data.bits, sortable_block: item.0.clone() }
+                DifficultyBlock { timestamp: data.timestamp, bits: data.bits, sortable_block: item.0.clone(), priced: true }
+            })
+            .collect()
+    }
+
+    /// The same rows with their lane read — ADR-0083 Decision 1. The compact header data does not
+    /// carry `pow_algo_id`, so this reads the full header once per row; it runs only past the fence,
+    /// which keeps the legacy path's cost (and arithmetic) exactly what it was.
+    fn get_difficulty_blocks_with_lane(&self, window: &BlockWindowHeap) -> Vec<DifficultyBlock> {
+        window
+            .iter()
+            .map(|item| {
+                let header = self.headers_store().get_header(item.0.hash).unwrap();
+                DifficultyBlock {
+                    timestamp: header.timestamp,
+                    bits: header.bits,
+                    sortable_block: item.0.clone(),
+                    priced: algo_id_is_priced_by_bits(header.pow_algo_id),
+                }
             })
             .collect()
     }
@@ -154,9 +173,12 @@ pub struct SampledDifficultyManager<T: HeaderStoreReader, U: GhostdagStoreReader
     min_difficulty_window_size: usize,
     difficulty_sample_rate: u64,
     target_time_per_block: u64,
+    /// ADR-0083 Decision 1: past this fence the expected duration counts only bits-priced rows.
+    priced_rows_activation: ForkActivation,
 }
 
 impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         headers_store: Arc<T>,
         ghostdag_store: Arc<U>,
@@ -167,6 +189,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         min_difficulty_window_size: usize,
         difficulty_sample_rate: u64,
         target_time_per_block: u64,
+        priced_rows_activation: ForkActivation,
     ) -> Self {
         Self::check_min_difficulty_window_size(difficulty_window_size, min_difficulty_window_size);
         Self {
@@ -179,6 +202,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
             min_difficulty_window_size,
             difficulty_sample_rate,
             target_time_per_block,
+            priced_rows_activation,
         }
     }
 
@@ -213,8 +237,12 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         (self.internal_calc_daa_score(ghostdag_data, &mergeset_non_daa), mergeset_non_daa)
     }
 
-    pub fn calculate_difficulty_bits(&self, window: &BlockWindowHeap, ghostdag_data: &GhostdagData) -> u32 {
-        let mut difficulty_blocks = self.get_difficulty_blocks(window);
+    /// `daa_score` is the score of the block whose bits are being computed (the virtual's, for a
+    /// template): it decides whether ADR-0083 Decision 1's fence is in force for this window.
+    pub fn calculate_difficulty_bits(&self, window: &BlockWindowHeap, ghostdag_data: &GhostdagData, daa_score: u64) -> u32 {
+        let priced_rows_only = self.priced_rows_activation.is_active(daa_score);
+        let difficulty_blocks =
+            if priced_rows_only { self.get_difficulty_blocks_with_lane(window) } else { self.get_difficulty_blocks(window) };
 
         // Until there are enough blocks for a valid calculation the difficulty should remain constant.
         if difficulty_blocks.len() < self.min_difficulty_window_size {
@@ -227,24 +255,13 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
             return self.headers_store.get_bits(selected_parent).unwrap();
         }
 
-        let (min_ts_index, max_ts_index) = difficulty_blocks.iter().position_minmax().into_option().unwrap();
-
-        let min_ts = difficulty_blocks[min_ts_index].timestamp;
-        let max_ts = difficulty_blocks[max_ts_index].timestamp;
-
-        // We remove the minimal block because we want the average target for the internal window.
-        difficulty_blocks.swap_remove(min_ts_index);
-
-        // We need Uint320 to avoid overflow when summing and multiplying by the window size.
-        let difficulty_blocks_len = difficulty_blocks.len() as u64;
-        let targets_sum: Uint320 =
-            difficulty_blocks.into_iter().map(|diff_block| Uint320::from(Uint256::from_compact_target_bits(diff_block.bits))).sum();
-        let average_target = targets_sum / difficulty_blocks_len;
-        let measured_duration = max(max_ts - min_ts, 1);
-        let expected_duration = self.target_time_per_block * self.difficulty_sample_rate * difficulty_blocks_len; // This does differ from FullDifficultyManager version
-        let new_target = average_target * measured_duration / expected_duration;
-
-        Uint256::try_from(new_target.min(self.max_difficulty_target)).expect("max target < Uint256::MAX").compact_target_bits()
+        retarget_bits(
+            difficulty_blocks,
+            self.target_time_per_block,
+            self.difficulty_sample_rate,
+            self.max_difficulty_target,
+            priced_rows_only,
+        )
     }
 
     pub fn estimate_network_hashes_per_second(&self, window: &BlockWindowHeap) -> DifficultyResult<u64> {
@@ -256,6 +273,91 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> DifficultyManagerExtension fo
     fn headers_store(&self) -> &dyn HeaderStoreReader {
         self.headers_store.deref()
     }
+}
+
+/// **The retarget, as arithmetic on rows.** Legacy Kaspa when `priced_rows_only` is false; ADR-0083
+/// Decision 1 when it is true. The two differ in exactly one factor and one answer:
+///
+/// * the expected duration multiplies the number of rows the retarget must slow down — every row
+///   (legacy) or only the rows priced by `bits` (past the fence); heartbeat rows still carry the
+///   global bits into the average and still bound the span, since they are real elapsed time;
+/// * a window with no priced row answers `max_difficulty_target` — the V2 doctrine (the class
+///   lottery is the throttle), not the selected parent's bits, which would pin a chain whose
+///   attempt lanes died at the bits that killed them.
+///
+/// Rows are at least `min_difficulty_window_size` (the caller's check), so at least two. The min-ts
+/// row leaves the average exactly as it did in the legacy code, tie-broken by the same `Ord`, so a
+/// build past the fence and one before it compute byte-identical bits until the fence.
+fn retarget_bits(
+    mut difficulty_blocks: Vec<DifficultyBlock>,
+    target_time_per_block: u64,
+    difficulty_sample_rate: u64,
+    max_difficulty_target: Uint320,
+    priced_rows_only: bool,
+) -> u32 {
+    let (min_ts_index, max_ts_index) = difficulty_blocks.iter().position_minmax().into_option().unwrap();
+
+    let min_ts = difficulty_blocks[min_ts_index].timestamp;
+    let max_ts = difficulty_blocks[max_ts_index].timestamp;
+
+    // We remove the minimal block because we want the average target for the internal window.
+    difficulty_blocks.swap_remove(min_ts_index);
+
+    // We need Uint320 to avoid overflow when summing and multiplying by the window size.
+    let difficulty_blocks_len = difficulty_blocks.len() as u64;
+    let counted_rows = if priced_rows_only {
+        difficulty_blocks.iter().filter(|diff_block| diff_block.priced).count() as u64
+    } else {
+        difficulty_blocks_len
+    };
+    if counted_rows == 0 {
+        return Uint256::try_from(max_difficulty_target).expect("max target < Uint256::MAX").compact_target_bits();
+    }
+    let targets_sum: Uint320 =
+        difficulty_blocks.into_iter().map(|diff_block| Uint320::from(Uint256::from_compact_target_bits(diff_block.bits))).sum();
+    let average_target = targets_sum / difficulty_blocks_len;
+    let measured_duration = max(max_ts - min_ts, 1);
+    let expected_duration = target_time_per_block * difficulty_sample_rate * counted_rows; // This does differ from FullDifficultyManager version
+    let new_target = average_target * measured_duration / expected_duration;
+
+    Uint256::try_from(new_target.min(max_difficulty_target)).expect("max target < Uint256::MAX").compact_target_bits()
+}
+
+/// One row of a difficulty window as a node's own chain reports it (`getBlock`: hash, blue work,
+/// timestamp, bits, `pow_algo_id`), for replaying [`retarget_bits_from_rows`] over real history.
+#[derive(Clone, Debug)]
+pub struct DifficultyRow {
+    pub hash: BlockHash,
+    pub blue_work: BlueWorkType,
+    pub timestamp: u64,
+    pub bits: u32,
+    pub pow_algo_id: u8,
+}
+
+/// **The retarget over rows anyone can read off a node** — the same arithmetic the header
+/// processor runs, exposed so a chain's own history can be replayed through both rules (ADR-0083
+/// §4's check). Returns `None` when there are fewer than two rows, where the header processor
+/// would have held the previous bits instead.
+pub fn retarget_bits_from_rows(
+    rows: &[DifficultyRow],
+    target_time_per_block: u64,
+    difficulty_sample_rate: u64,
+    max_difficulty_target: Uint256,
+    priced_rows_only: bool,
+) -> Option<u32> {
+    if rows.len() < 2 {
+        return None;
+    }
+    let blocks = rows
+        .iter()
+        .map(|row| DifficultyBlock {
+            timestamp: row.timestamp,
+            bits: row.bits,
+            sortable_block: SortableBlock::new(row.hash, row.blue_work),
+            priced: algo_id_is_priced_by_bits(row.pow_algo_id),
+        })
+        .collect();
+    Some(retarget_bits(blocks, target_time_per_block, difficulty_sample_rate, max_difficulty_target.into(), priced_rows_only))
 }
 
 pub fn calc_work(bits: u32) -> BlueWorkType {
@@ -285,6 +387,8 @@ struct DifficultyBlock {
     timestamp: u64,
     bits: u32,
     sortable_block: SortableBlock,
+    /// ADR-0083 Decision 1: whether this row's lane is priced by `bits` (every row, on the legacy path).
+    priced: bool,
 }
 
 impl PartialEq for DifficultyBlock {
@@ -355,5 +459,103 @@ mod tests {
     fn test_base_level_work() {
         // Expect that at level 0, the level work is always 0
         assert_eq!(BlueWorkType::from(0), level_work(0, 255));
+    }
+
+    /// **ADR-0083 Decision 1, on the shape that killed testnet-11 5f.** 264 rows, 122 s slots,
+    /// ~3.2 rows per slot of which one is priced (the chain heartbeat and two sibling heartbeats per
+    /// slot, all algo 8, plus an attempt row every third slot), two-minute cadence. Legacy reads it
+    /// as a fast chain and tightens; the fence reads the priced rows' true rate and eases to MAX.
+    #[test]
+    fn heartbeat_rows_no_longer_tighten_the_bits_past_the_fence() {
+        use super::{DifficultyRow, retarget_bits_from_rows};
+        use kaspa_consensus_core::BlockHash;
+        use kaspa_consensus_core::config::params::MAX_DIFFICULTY_TARGET;
+        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_HEARTBEAT_V1, POW_ALGO_ID_PALW_COMMITTED_V2};
+
+        let bits_now = 0x1f65bd04u32; // testnet-11 at DAA 826
+        let cadence_ms = 120_000u64;
+        let mut rows = Vec::new();
+        let mut slot = 0u64;
+        while rows.len() < 264 {
+            let ts = 1_788_000_000_000 + slot * 122_000;
+            for sibling in 0..3u64 {
+                let attempt = sibling == 2 && slot % 3 == 0;
+                rows.push(DifficultyRow {
+                    hash: BlockHash::from_u64_word(slot * 8 + sibling + 1),
+                    blue_work: BlueWorkType::from_u64(slot * 8 + sibling + 1),
+                    timestamp: ts,
+                    bits: bits_now,
+                    pow_algo_id: if attempt { POW_ALGO_ID_PALW_COMMITTED_V2 } else { POW_ALGO_ID_HEARTBEAT_V1 },
+                });
+            }
+            slot += 1;
+        }
+        rows.truncate(264);
+        let legacy = retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, false).unwrap();
+        let fenced = retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true).unwrap();
+        let target = |bits: u32| Uint256::from_compact_target_bits(bits);
+        assert!(
+            target(legacy) < target(bits_now),
+            "legacy: three rows per two-minute slot read as a fast chain and tighten ({legacy:#010x})"
+        );
+        // The retarget is multiplicative in the window's AVERAGE: 30 priced rows over 87 slots of
+        // 122 s against 120 s each is a ratio of ~2.95, so a window whose rows are still tight
+        // eases by that factor per window rather than jumping — the opposite direction to legacy.
+        // (The live chain's window held NO priced row, which is the next case: MAX in one step.)
+        let ratio = target(fenced).as_f64() / target(bits_now).as_f64();
+        assert!(target(fenced) > target(bits_now), "past the fence the priced rate is one per six minutes: it eases ({fenced:#010x})");
+        assert!((2.5..3.5).contains(&ratio), "eases by the priced-rate ratio, ~2.95, got {ratio:.3}");
+
+        // No priced row at all: MAX, not the previous bits — the recovery ADR-0083 §3 needs.
+        for row in rows.iter_mut() {
+            row.pow_algo_id = POW_ALGO_ID_HEARTBEAT_V1;
+        }
+        assert_eq!(
+            retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true).unwrap(),
+            MAX_DIFFICULTY_TARGET.compact_target_bits()
+        );
+
+        // The steady state the fence reaches: every row at MAX, attempts every third slot — the
+        // priced rate is a third of the cadence, so the window stays at MAX.
+        for row in rows.iter_mut() {
+            row.bits = MAX_DIFFICULTY_TARGET.compact_target_bits();
+            let slot = (row.hash.as_bytes()[0] as u64).wrapping_sub(1) / 8;
+            row.pow_algo_id = if row.blue_work == BlueWorkType::from_u64(slot * 8 + 3) {
+                POW_ALGO_ID_PALW_COMMITTED_V2
+            } else {
+                POW_ALGO_ID_HEARTBEAT_V1
+            };
+        }
+        assert_eq!(
+            retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true).unwrap(),
+            MAX_DIFFICULTY_TARGET.compact_target_bits(),
+            "at MAX with sparse attempts the window stays at MAX"
+        );
+
+        // Every row priced (a hash network, or a V2 chain with the heartbeat silent): the fence is
+        // the legacy arithmetic, bit for bit.
+        for row in rows.iter_mut() {
+            row.pow_algo_id = POW_ALGO_ID_PALW_COMMITTED_V2;
+        }
+        assert_eq!(
+            retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true),
+            retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, false),
+            "with every row priced the two rules are one arithmetic"
+        );
+
+        // Priced rows denser than the cadence still tighten past the fence: the interval control
+        // ADR-0071 kept is intact — the fence removes the emitters from the count, not the meter.
+        let dense: Vec<DifficultyRow> = (0..264u64)
+            .map(|i| DifficultyRow {
+                hash: BlockHash::from_u64_word(i + 1),
+                blue_work: BlueWorkType::from_u64(i + 1),
+                timestamp: 1_788_000_000_000 + i * 30_000,
+                bits: MAX_DIFFICULTY_TARGET.compact_target_bits(),
+                pow_algo_id: POW_ALGO_ID_PALW_COMMITTED_V2,
+            })
+            .collect();
+        let tightened = retarget_bits_from_rows(&dense, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true).unwrap();
+        assert!(target(tightened) < MAX_DIFFICULTY_TARGET, "attempts every 30 s against a 120 s cadence tighten");
+        assert!(retarget_bits_from_rows(&dense[..1], cadence_ms, 1, MAX_DIFFICULTY_TARGET, true).is_none());
     }
 }

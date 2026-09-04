@@ -8,6 +8,7 @@ use crate::{
     processes::ghostdag::ordering::SortableBlock,
 };
 use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::{
     BlockHashSet, BlueWorkType, HashMapCustomHasher,
     blockhash::{BlockHashExtensions, ORIGIN},
@@ -105,6 +106,7 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
         difficulty_sample_rate: u64,
         past_median_time_window_size: usize,
         past_median_time_sample_rate: u64,
+        priced_rows_activation: ForkActivation,
     ) -> Self {
         let difficulty_manager = SampledDifficultyManager::new(
             headers_store.clone(),
@@ -116,6 +118,7 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
             min_difficulty_window_size,
             difficulty_sample_rate,
             target_time_per_block,
+            priced_rows_activation,
         );
         let past_median_time_manager = SampledPastMedianTimeManager::new(headers_store.clone(), genesis.timestamp);
         Self {
@@ -351,7 +354,7 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
     }
 
     fn calculate_difficulty_bits(&self, ghostdag_data: &GhostdagData, daa_window: &DaaWindow) -> u32 {
-        self.difficulty_manager.calculate_difficulty_bits(&daa_window.window, ghostdag_data)
+        self.difficulty_manager.calculate_difficulty_bits(&daa_window.window, ghostdag_data, daa_window.daa_score)
     }
 
     fn calc_past_median_time(&self, ghostdag_data: &GhostdagData) -> Result<(u64, Arc<BlockWindowHeap>), RuleError> {

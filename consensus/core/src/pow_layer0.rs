@@ -373,6 +373,29 @@ pub fn algo_id_derives_no_block_level(algo_id: u8) -> bool {
     algo_id_carries_no_chain_position(algo_id) || algo_id == POW_ALGO_ID_HEARTBEAT_V1
 }
 
+/// **Is a header of this algorithm priced by `header.bits`?** — the difficulty window's question
+/// (ADR-0083 Decision 1).
+///
+/// `bits` is the one field the global difficulty window retargets, and the retarget assumes every
+/// row it counts was produced against `bits`: that is what makes "rows per second" a measurement
+/// of the work the network is putting in. The heartbeat lane is the exception, by ADR-0066
+/// Decision 1: its target is the network constant `2⁻²⁴` (the `target_512` arm of
+/// `kaspa_pow::State::new`), so its rows cost the same whatever `bits` says. Counted as ordinary
+/// rows they measure the number of heartbeat EMITTERS, not work — five emitters on the two-minute
+/// cadence read as a chain running three times too fast, and the retarget tightened testnet-11's
+/// `bits` by ×320 in 826 blocks while the heartbeats never noticed (Relaunch 5f, 2026-09-04).
+/// That is ADR-0066's F1 re-entering through the row COUNT after Decision 1 took the lane's
+/// PRICE out of `bits`.
+///
+/// Every other lane compares a digest against `bits` — the attempt lanes (6, 9) through the
+/// Layer-0 finalizer, the hash lanes (1–3) directly, the receipt lane (7) through the same arm —
+/// so this is the exact complement of the constant-target arm, and must stay that way: a lane that
+/// gets a fixed target of its own must be added HERE the same day, or it inherits the defect.
+#[inline]
+pub fn algo_id_is_priced_by_bits(algo_id: u8) -> bool {
+    algo_id != POW_ALGO_ID_HEARTBEAT_V1
+}
+
 /// Output width of the `algo_id = 5` tag:
 /// `response_digest (64) ∥ prompt_eval_count (4, LE) ∥ eval_count (4, LE)` = 72 bytes.
 pub const POW_L1_PALW_OLLAMA_OUT_BYTES: usize = 72;

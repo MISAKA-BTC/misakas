@@ -1165,6 +1165,38 @@ pub struct Params {
     /// decode half and an engine implements `decode_token_select_v2`.
     pub palw_fp_decode_rules: Option<ForkActivation>,
 
+    /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
+    ///
+    /// Past this fence `calculate_difficulty_bits` sizes its expected duration by the rows in the
+    /// window whose lane compares a digest against `header.bits`
+    /// ([`crate::pow_layer0::algo_id_is_priced_by_bits`]); heartbeat rows (ADR-0066 Decision 1's
+    /// constant-target lane) still carry the global bits into the average and still bound the
+    /// window's span, but no longer count as blocks the retarget must slow down. A window with no
+    /// priced row answers `max_difficulty_target` — the V2 doctrine ADR-0066 states ("a V2 network
+    /// runs at MAX because the class lottery, not the hash target, is its throttle") — instead of
+    /// the selected parent's bits, which would leave a chain whose attempt lanes died pinned at the
+    /// bits that killed them.
+    ///
+    /// **Why.** On testnet-11 Relaunch 5f (2026-09-04) five heartbeat emitters on the two-minute
+    /// cadence put ~3.2 rows per 122 s slot into the 264-row window; the retarget read the chain as
+    /// three times too fast and tightened `bits` from `0x207fffff` (p = 0.5) to `0x1f65bd04`
+    /// (p = 1.5e-3) in 826 blocks, halving every ~50 slots, while the heartbeats — priced by the
+    /// constant 2²⁴ — never noticed. Only the bits-priced lanes paid: the floor's chance per draw
+    /// fell to 7.9e-5 × 1.5e-3, no attempt block exists after DAA 226, and the chain could not
+    /// recover, because `heartbeat_interval_ms` backs off only after a BONDED parent. That is
+    /// ADR-0066's F1 ("the lane prices the bonded lane off its own chain, permanently") re-entering
+    /// through the row COUNT after Decision 1 took the lane's PRICE out of `bits`.
+    ///
+    /// **TOP LEVEL for the reason on `palw_unavailable_abstains`**: this rule has to reach a LIVE
+    /// network — the one it was measured on — so old and new builds must peer until the height.
+    /// A bare fence with no companion value: the predicate is a constant of this binary.
+    ///
+    /// Before the fence the arithmetic is byte-for-byte the legacy retarget; the fence changes one
+    /// factor (the row count the expected duration multiplies) and one answer (MAX when that count
+    /// is zero). Arming it on a network whose `bits` already tightened restores MAX at the fence's
+    /// first block, because its window holds no priced row.
+    pub palw_difficulty_priced_rows: Option<ForkActivation>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -2179,6 +2211,10 @@ impl Params {
         if self.palw_fp_decode_rules == Some(ForkActivation::never()) {
             self.palw_fp_decode_rules = None;
         }
+        // ADR-0083 Decision 1, the same shape: a bare fence, `never()` is absence.
+        if self.palw_difficulty_priced_rows == Some(ForkActivation::never()) {
+            self.palw_difficulty_priced_rows = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -2524,6 +2560,12 @@ impl Params {
             h.write(b"palw_fp_decode_rules");
             h.write(decode.daa_score().to_le_bytes());
         }
+        // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
+        // past it must carry, so an operator reading the schedule must see it.
+        if let Some(priced) = self.palw_difficulty_priced_rows {
+            h.write(b"palw_difficulty_priced_rows");
+            h.write(priced.daa_score().to_le_bytes());
+        }
         h.finalize()
     }
 
@@ -2612,6 +2654,7 @@ impl Params {
             palw_prompt_ids_merkle,
             palw_kary_court,
             palw_fp_decode_rules,
+            palw_difficulty_priced_rows,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -2842,6 +2885,10 @@ impl Params {
         if let Some(activation) = palw_fp_decode_rules.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0083 Decision 1. Some-only, likewise.
+        if let Some(activation) = palw_difficulty_priced_rows.as_mut() {
+            fork(activation, visit);
+        }
 
         let Some(dns) = dns_params.as_mut() else {
             absent = u64::MAX;
@@ -3037,6 +3084,7 @@ impl Params {
             palw_prompt_ids_merkle,
             palw_kary_court,
             palw_fp_decode_rules,
+            palw_difficulty_priced_rows,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -3294,6 +3342,13 @@ impl Params {
         // fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_fp_decode_rules {
             h.write(b"palw_fp_decode_rules");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0083 Decision 1, Some-only for the same reason: arming it changes the `bits` every
+        // header past the fence must carry, so it belongs in the fingerprint — and every shipped
+        // preset leaves it `None` and fingerprints byte-identically to a build without the field.
+        if let Some(activation) = palw_difficulty_priced_rows {
+            h.write(b"palw_difficulty_priced_rows");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
@@ -3587,6 +3642,7 @@ impl Params {
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
             palw_kary_court: self.palw_kary_court,
             palw_fp_decode_rules: self.palw_fp_decode_rules,
+            palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -4513,6 +4569,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
     palw_fp_decode_rules: None,
+    palw_difficulty_priced_rows: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -4663,6 +4720,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
     palw_fp_decode_rules: None,
+    palw_difficulty_priced_rows: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -4795,6 +4853,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
     palw_fp_decode_rules: None,
+    palw_difficulty_priced_rows: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -8440,6 +8499,7 @@ pub const DEVNET_PARAMS: Params = Params {
     // `PalwClassStateV2`. A fence armed without a shipping thing to obey it is the ADR-0065 D1
     // mistake.
     palw_fp_decode_rules: None,
+    palw_difficulty_priced_rows: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -9821,6 +9881,62 @@ mod consensus_params_id_tests {
         both.palw_bootstrap_activation = Some(ForkActivation::always());
         both.palw_unavailable_abstains = Some(ForkActivation::always());
         assert_ne!(both.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
+    }
+
+    /// **ADR-0083 Decision 1's fence keeps the D4 discipline** — the only discipline that lets a rule
+    /// reach the LIVE network it was measured on: dormant on every shipped preset and therefore
+    /// absent from the fingerprint, visible in `consensus_params_id` the moment it is scheduled,
+    /// peers-with-a-warning at a future height, and a change of identity only in force at genesis.
+    #[test]
+    fn the_priced_rows_fence_separates_networks_only_when_it_is_in_force() {
+        for (name, shipped) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(shipped.palw_difficulty_priced_rows.is_none(), "{name} must leave ADR-0083's fence dormant");
+            // Byte-identical to a build without the field: adding the wiring is not a flag day.
+            let before = shipped.consensus_params_id();
+            let mut probe = shipped.clone();
+            probe.palw_difficulty_priced_rows = None;
+            assert_eq!(before, probe.consensus_params_id(), "{name}: the Some-only write ran on a None");
+            // …and absent from the schedule walk; arming adds exactly one height.
+            let walk = |mut p: Params| {
+                let mut seen = Vec::new();
+                p.for_each_fence(&mut |score| seen.push(*score));
+                seen
+            };
+            let mut armed = shipped.clone();
+            armed.palw_difficulty_priced_rows = Some(ForkActivation::new(9_000_000));
+            assert_eq!(walk(armed).len(), walk(shipped.clone()).len() + 1, "{name}: arming adds exactly its height to the walk");
+        }
+        let shipped = MAINNET_PARAMS;
+
+        let mut armed = MAINNET_PARAMS;
+        armed.palw_difficulty_priced_rows = Some(ForkActivation::new(9_000_000));
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            armed.consensus_identity_id(),
+            "scheduling the rule for a future height must keep old and new builds peers — the live network is where it has to arrive"
+        );
+        assert_ne!(shipped.consensus_params_id(), armed.consensus_params_id(), "…and still be a visible commitment");
+        assert_ne!(shipped.consensus_schedule_id(), armed.consensus_schedule_id(), "the operator log must name it");
+
+        let mut at_genesis = MAINNET_PARAMS;
+        at_genesis.palw_difficulty_priced_rows = Some(ForkActivation::always());
+        assert_ne!(
+            shipped.consensus_identity_id(),
+            at_genesis.consensus_identity_id(),
+            "in force from block 1 is a rule difference — every header's bits past genesis may differ"
+        );
+
+        let mut never_armed = MAINNET_PARAMS;
+        never_armed.palw_difficulty_priced_rows = Some(ForkActivation::never());
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            never_armed.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse ahead of the dns_params early return is gone"
+        );
+        // (`never()` still writes its sentinel into the raw params id — the collapse to absence is
+        // the identity's, exactly as for every fence beside it; the pins above are `None`.)
     }
 
     /// **ADR-0075 SA-1/SA-2's rent fence keeps the D4 discipline**, which is the only discipline

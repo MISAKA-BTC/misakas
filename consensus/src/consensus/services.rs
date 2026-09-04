@@ -16,6 +16,7 @@ use crate::{
         transaction_validator::TransactionValidator, traversal_manager::DagTraversalManager, window::SampledWindowManager,
     },
 };
+use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_txscript::caches::TxScriptCacheCounters;
 use std::sync::{Arc, atomic::AtomicBool};
@@ -102,6 +103,7 @@ impl ConsensusServices {
             params.difficulty_sample_rate,
             params.past_median_time_window_size,
             params.past_median_time_sample_rate,
+            params.palw_difficulty_priced_rows.unwrap_or(ForkActivation::never()),
         );
         let depth_manager = BlockDepthManager::new(
             params.merge_depth(),

@@ -295,3 +295,9 @@ specifies — including the hard cut-off rule that two `algo_id` values never co
 That rule is *why* ADR-0039 can say "no hash lane" without inventing a mixed-algo difficulty
 relation, and why the heartbeat lane needed its own `algo_id = 8` (ADR-0066) rather than a re-armed
 `algo_id = 3`.
+
+## Added after the 2026-09-02 pass
+
+| ADR | status |
+|---|---|
+| [0083](0083-the-difficulty-window-counts-only-rows-priced-by-bits.md) | PROPOSED 2026-09-04, implemented dormant on `palw-daa-bits-priced-rows`. Amends ADR-0066 D1 by one sentence: heartbeat rows carry the bits and bound the span but are not COUNTED by the retarget; an empty count answers MAX. Measured on 5f: five emitters tightened bits ×320 and no attempt lane could win. |
