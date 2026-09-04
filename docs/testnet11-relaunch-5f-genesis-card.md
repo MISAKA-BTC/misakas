@@ -5913,3 +5913,19 @@ before any peer is contacted. **Fourth newcomer wall**, beside the three the mem
 release carrying binaries, which is the operator's to cut. Nothing was spent; bond-0 untouched. The join readings
 (which seed names answer, whether the two anchors handshake, whether pruned-IBD or the registration meets a wall)
 come from the tagged build's run, with the bond outpoint.
+
+**Step 9 — a second reader (01:45 UTC).** e1 read `transformer_id_pin.rs` on main without looking at the reported
+value: the STL's on-chain `transformer_id 83e0f5088cd0f9b7…` is the pinned `cad/stl/v1` row under
+`SOURCE_TREE 637858db…`. Then, from `.113`'s node (borsh 26313) and its explorer — not node0 — the same records:
+
+    STL   claim b15ef21c…  phase panel_bound  accepted block 8e2a83f5… daa 768  artifact cad 684 B  derived e154bd36…  hash 482b2323…  transformer 83e0f508…  accepted_daa 774
+    MIDI  claim d575928f…  phase provisional  accepted block cc8ff79c… daa 780  artifact music 91 B  derived 2ad3940d…  hash 7a4f0eba…  transformer cb5f27b4… (= the pinned music/smf/v1 row)  accepted_daa 787
+    blocks 8a1a6c53… (daa 768, blue 457) · f38a861c… (774, 461) · cc8ff79c… (780, 465) · fad34dc6… (787, 469) — all present in .113's explorer
+    .113's own log: "PALW lifecycle carried 1× …" at 01:25:20, 01:26:12, 01:29:18, 01:33:24, 01:37:30 UTC — the same seconds as node0's
+
+Two nodes, one explorer and the pin table agree; the artifacts' transformers are the rows this repository pins.
+e1's devnet drill on impl's tree, in their words: stage 0 18/18, stage 0b PASS (ADR-0080 W1b in force), Decision F = 0,
+stage 1 FAIL by their own configuration (t11's calibrated floor target on three local nodes) — not offered as
+acceptance evidence; the public chain's is the evidence that counts. Their wrapper's exit 0 over the drill's
+`DRILL_EXIT=2` (a trailing `echo` ate the status) is the "green result that means nothing" family, noted for the
+runbook.
