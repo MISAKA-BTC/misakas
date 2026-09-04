@@ -44,8 +44,10 @@ The condition that comes with it: today a derivation succeeds when the answer fi
 (56 tokens for that STL, 97 for that MIDI). The amendment that lets a shorter answer derive (ADR-0078 EOG cut) is
 scheduled after this relaunch.
 
-`[PENDING]` A free-prompt job committed **on** the public chain and its artifact derived from the chain's own record —
-not claimed until it has been read from the chain.
+**On the public chain itself** (2026-09-04, 01:25–01:29 UTC): a free prompt to the dense tier was committed as claim
+`b15ef21c…` (carried in block `8a1a6c53…`), and its derivation — the same 684-byte STL — was recorded beside it as
+derived id `e154bd36…` in block `f38a861c…`, which also bound the claim's panel. The artifact's bytes never touch the
+chain; the chain records the ids anyone can recompute from the committed answer.
 
 ## Adding a model
 

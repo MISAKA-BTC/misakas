@@ -5869,3 +5869,17 @@ leaves, committed; derivation `music/smf/v1` → the 91-byte MIDI with `artifact
 ibm's offline gateway and the stranger all produced), derived id `2ad3940d31120eef…`, its signed object in the outbox.
 Its chain steps run in a second job funded from ff's untouched change `316edbd4…:1`, so nothing races the STL claim's
 carriers.
+
+## Step 9 — closed: the public chain records an artifact a free prompt produced (01:29:18 UTC, 2026-09-04)
+
+    claim        b15ef21cf1f55581363c2426ae8f0b256f1f6b2b150c94fdd6021a47d4f597ffa644707d686e80cd96452280ae03efec047ea42fb46915b7a1355fbf62f32e1c
+    carried in   8a1a6c5361624c73…  (01:25:20 UTC, "PALW lifecycle carried 1× FreePromptCommitted")   accepting chain block 8e2a83f53fb62501…  daa 768
+    derived id   e154bd36541ed808aa7cb17b1128e2b266785ef9783d8208748bfbd58d8531cc6cb8025842318e152b0f23fb7945a8bc2a55c4cc591fb0424de3074e1e1bfdd4
+    carried in   f38a861c6338b3cb…  (01:29:18 UTC, "PALW lifecycle carried 1× DerivedArtifactV1, 1× PanelBound")   accepted_daa 774
+    artifact     cad/stl/v1, 684 B, artifact_hash 482b23231a42dc5689bb398380b06c84627f0c7e3bcf95f0845dd4e758cd9cc8d1f410fecdfa2564c8207b242f8b541c5c1e24ac298fc0095c055b7c346b57f3
+                 dsl_hash 0f00e0f9b1be00dc…  grammar_id a4ec02b12c7cc3ff…  transformer_id 83e0f5088cd0f9b7… (the pinned cad transformer)
+
+`misaka palw derived b15ef21c… --json` on node0 lists the artifact under the claim; the artifact bytes never touched
+the chain (the chain holds the derivation's ids; the STL is in `/root/fp-5f/outbox` and in the operator's hands).
+The same block bound the panel (`PanelBound`), so the claim's adjudication has begun on the seats. The MIDI claim
+`d575928f…` (derived id `2ad3940d…`, artifact hash `7a4f0eba…`) follows the same path in a second job.
