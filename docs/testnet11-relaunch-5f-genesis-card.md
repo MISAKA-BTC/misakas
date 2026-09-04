@@ -5980,3 +5980,22 @@ borsh listener so `getPalwProducerFacts` cannot be asked of it. `0547677d` makes
 predicates visible; `--rpclisten-borsh` in the pool's `run-slot.sh` is the pool owner's change.
 ff stopped their node's producing run (the bond `ffbeb993…:0` stays registered) — nothing to win
 until the rule ships.
+
+### 10d. The sweep on `palw-daa-bits-priced-rows` (2026-09-04 02:29–02:38Z)
+
+| suite | result |
+|---|---|
+| `kaspa-consensus-core --lib` (all) | **1826 passed**, 0 failed, 9 ignored |
+| `kaspa-consensus --lib` (all) | **279 passed, 1 failed**: `pipeline::virtual_processor::tests::palw_v2_certification_and_chunk_carriage_pay_rent_past_the_fence` — "the same chunk, having paid the room, opens the group: left 0, right 1" (tests.rs:10392) |
+| the same test on the base commit `0870b7ee` (= main) | **fails identically** — pre-existing on the cut, not this branch's; twice on the branch, once on base, same message |
+| clippy (consensus, core, kaspad, all targets) | one warning, in the new test (`slot % 3 == 0` → `is_multiple_of`), fixed in `b2c12aa2` |
+| `cargo fmt --check` on the three crates | clean after `cargo fmt` (worktree is this session's alone) |
+
+The pre-existing failure is a chunk-group-rent assertion in the virtual processor; the last commit
+on the cut touching that carriage is `4d572142` (`PALW_OBJECT_CHUNK_MAX_COUNT` 8 → 16). It is not
+in ADR-0083's scope and is flagged separately; it does mean main's `kaspa-consensus` lib suite is
+not green as shipped, which the 5f verification pass (§8) did not run — §8 ran the fleet, not the
+suites. Recorded so the next reader does not count this branch's sweep as the first red.
+
+Branch head: `b2c12aa2` (three commits over `0870b7ee`: 55b13b77 consensus + ADR, 0547677d producer
+visibility, b2c12aa2 lint). Not pushed; not armed anywhere.
