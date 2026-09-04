@@ -5862,3 +5862,10 @@ impl-tip artifacts (`22bcafb5` sits on `4d572142`, before the cut); main carries
 one-line residue: a verifier whose regex cannot parse its own pin table passes unconditionally — true of impl's older
 copy, closed on main. e1's control run on impl's tip with the pins re-pinned locally: stage 0 18/18, stage 0b PASS,
 v5 producers committing legs with zero Decision-F lines — their rig's 24-vs-27 narrowing was its own divergence.
+
+**Step 9, job #4 — MIDI (01:25:07–01:28:29 UTC).** The exact music prompt at max_tokens 97 (prefill 198, decode 97/97,
+`finish: length`): the compact two-note DSL, job `93e130f5661e93dd…`, claim `d575928f8e0f220c…`, 32,128,904 work
+leaves, committed; derivation `music/smf/v1` → the 91-byte MIDI with `artifact_hash 7a4f0eba…` (the bytes the Mac,
+ibm's offline gateway and the stranger all produced), derived id `2ad3940d31120eef…`, its signed object in the outbox.
+Its chain steps run in a second job funded from ff's untouched change `316edbd4…:1`, so nothing races the STL claim's
+carriers.
