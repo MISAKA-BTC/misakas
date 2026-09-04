@@ -6147,3 +6147,23 @@ one block — ADR-0083 §4.3 as written, and the recovery path (a) was chosen fo
 `cef2ecdb` (§10h); no refusals, no forks among the eight; the old-build external node at
 113.155.23.105 is the only party expected to part here. The floor's chance per draw is back to
 7.9e-5 × 0.5; the first attempt-lane block after H, from any seat, is being watched for.
+
+**§10i, continued (05:50Z): root, inspect, preflight — ADMISSIBLE.** `qwen36-run --root-only` over the
+27,880,974,336-byte artifact (sha256 `5afbfbe2…`, 25.79 GiB of int8 in 25 m 15 s, 6.7 GB peak) computed
+root **`811af53e…f4d9`**; `palw-class inspect --network testnet-11` PAIRS the file with
+`Qwen/Qwen3.8-27B/graph-v3`; `palw-class preflight … --model-id Qwen/Qwen3.8-27B/graph-v3` →
+**ADMISSIBLE**, pwu/inference 9,000,776 — the chain's own admission gate, before any fee. The user node
+was then restarted on the row-aware `kaspad` (sha256 `3b0cf7a7…`, built on .113 from `d0d0822c`) with
+`--palw-class-artifact … --palw-register-class "Qwen/Qwen3.8-27B/graph-v3" --palw-producer-bond
+d9067d09…:0 --palw-fee-outpoint d9067d09…:1`, no `--palw-produce`; it maps the artifact (minutes) and then
+registers. Also observed: the floor's target eased ×4 at the epoch-1 boundary (`converge_idle_target_v1`),
+3.1586e-4 of u128::MAX = 1 in 3,166 — ff's node reads the same; their expected time to a floor block at
+3.25 draws/s is ~32 min.
+
+### 10k. The join path re-pinned and the release published (05:55Z)
+
+README, `docs/testnet11-join-mining.md`, `docs/testnet11-node-operator.md` now name genesis `ad30b5cb…`,
+fingerprint `71b35c25…`, floor `f1c5635c…`, the tag, the DAA-1150 parting rule, the optional pay address,
+and the withdrawn `.114` entry node is gone (main `03c90495`). GitHub release
+**`testnet-11-relaunch-5f-adr0083-h1150`** carries `kaspad-linux-x86_64` (53,938,328 B, sha256
+`002cee6a…`, built from `cef2ecdb`) with the identity, the flag-day facts and the parting rule in its notes.
