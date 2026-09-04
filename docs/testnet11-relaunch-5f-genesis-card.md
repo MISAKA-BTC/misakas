@@ -6280,3 +6280,11 @@ siblings (the court's refutation walkers) have the same bound and no ruleset in 
 on the same material: interval 0 = prefill + call 1 = 424 MB of leaf hashes, a decode interval = 7.8 MB, the opening cap is
 4 MiB — no a16 opening can be served under ADR-0077 D8's format; Y1 is not reachable on this class without a design change
 (ADR-0084 §7.2 lists the two). The fleet is therefore NOT restarted and seat2's v5 production stays paused (§6m).
+
+**§10n, continued (23:45 JST) — Decision 7, and why the fleet was NOT restarted onto `cad4dd6f…`:** a seat licenses an
+attempt claim only from a material it holds (pool / own retention / foreign file) and otherwise asks the opening lane; on
+5f the 784 MB v5 material reached every seat through the UNCAPPED push, and ADR-0084 D3 closes that push. Deployed as it
+stood, the branch would have stopped v5 attempt-lane licensing on this chain (the Studio's rewards). ADR-0084 Decision 7
+(`3c6ea28b`, `c24c3b9d`): a seat that holds nothing replays the anchor's job from the fold and licenses on the roots — run
+5 reproduced both roots exactly on the first try and was refused by a work comparison that does not apply to an unpriced
+attempt claim; fixed, run 6 pending. The fleet binary is rebuilt from `c24c3b9d`; the restart waits for run 6's licence.

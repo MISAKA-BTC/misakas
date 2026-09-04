@@ -327,6 +327,19 @@ was 3,690,311 bytes — inside `PALW_MATERIAL_MAX_BYTES`, so the drill's own ver
 was not exercised; the ~750 MB claims on testnet-11 are the same material at 512 tokens. Run 4
 (`1fcb209a`, `MAX_TOKENS=16`) is recorded below when it finishes.
 
+### 7.3 Decision 7 on the devnet (run 5, 23:22 JST, `3c6ea28b`)
+
+Run 3 also showed what the seats do with an attempt claim they hold no material for: nothing.
+The chain is pool → own retention → foreign file → the interval arm, and none of those produces a
+graph-v5 verdict once Decision 3 stops the push; 5f licensed these blocks only because its push
+had no cap. Decision 7 was added for that (§3) and run on the devnet: node-1 replayed both of
+node-0's a16 claims after the 2-DAA grace and reproduced the execution root and the trace root
+exactly, from the fold, in one execution each — and refused them over `work Some(6630544) vs
+priced 0`, because an attempt claim is built with `work_leaves == 0` (the state's spelling for the
+class's canonical job) and the rule compared the replay's count against it. `c24c3b9d` states the
+rule once (`replay_licenses_v1`: roots reproduce; work reproduces when the claim prices it) with
+tests for the unpriced, the priced and the mismatching cases. Run 6 records the licence.
+
 ## 8. What is deliberately not decided
 
 * **A close assembled from an opening (U-07c).** §4 names the stall. The refutation of a step
