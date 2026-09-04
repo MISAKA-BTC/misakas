@@ -5848,3 +5848,17 @@ PALW lifecycle carried 1× FreePromptCommitted`; tx `44227bdc…` out of the mem
 first free-prompt claim on the public testnet-11 is on chain**: claim `b15ef21cf1f55581…` in block `8a1a6c53…`, from
 a 147-token prompt answered in 56 tokens by the v5 512 class on the certified lane. The derived object's carriage
 (the third hash) is the running job's next step; a MIDI job (music/smf/v1, 97 tokens) runs on the gateway in parallel.
+
+**Step 9 — the claim's record and the derived object (01:25:45 UTC).** `misaka palw derived b15ef21c… --json`:
+`claim_phase provisional`, `claim_accepted_block 8a1a6c53…`, `claim_accepted_daa 768`, class `4277d84f…`, executor
+bond `misaka-premine:0`, `artifacts []`. `submit-object` of the gateway-signed `DerivedArtifactV1` (kind 3, cad):
+carrier `1c866e31d50411237ce87f710c0defaca7d0bd0f5744ce6e49ce37893c93dc644918a67c22d10e555cb38a5c4f053fd07c90e74b0b4349b639c042698e9140bc`,
+funded from the commitment tx's change; "the chain grades them when the carriers are accepted". Its carriage is the
+third hash.
+
+**e1's pin finding, withdrawn (01:26 UTC):** the red `transformer_id_pin` gate and the zero-pin stranger regex are
+impl-tip artifacts (`22bcafb5` sits on `4d572142`, before the cut); main carries the re-pin from `6e01ba07`
+(`SOURCE_TREE 637858db…`) and a stranger whose regex reads all eight pins. Recorded as withdrawn, not open. The
+one-line residue: a verifier whose regex cannot parse its own pin table passes unconditionally — true of impl's older
+copy, closed on main. e1's control run on impl's tip with the pins re-pinned locally: stage 0 18/18, stage 0b PASS,
+v5 producers committing legs with zero Decision-F lines — their rig's 24-vs-27 narrowing was its own divergence.
