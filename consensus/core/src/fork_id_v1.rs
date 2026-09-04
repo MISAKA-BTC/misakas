@@ -366,7 +366,15 @@ mod tests {
             vec![
                 ("mainnet", vec![110_165_000]),
                 ("testnet-10", vec![2_125_000]),
-                ("testnet-11", vec![2_125_000]),
+                // ADR-0083 Decision 1, scheduled at 1150 on the live chain (2026-09-04, the operator's
+                // path (a)). ON the schedule — every node advertises it as `next` until it fires and
+                // in its fired digest after — and OFF the gate: `fork_id_gate_fences_v1` still names
+                // only ADR-0072's fence, so this build refuses nobody at 1150; an un-upgraded seat
+                // parts from the chain at the block level (`UnexpectedDifficulty`), which is why every
+                // seat restarts before the height. Arming the gate on it is the follow-up this module
+                // doc asks for, and it is the FIRST arming of the gate on a shipped preset, so it
+                // gets its own test plan rather than a line here.
+                ("testnet-11", vec![1150, 2_125_000]),
                 ("devnet", vec![]),
                 ("simnet", vec![]),
             ],
