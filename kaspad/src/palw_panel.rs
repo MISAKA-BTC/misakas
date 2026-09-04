@@ -68,6 +68,24 @@ const PALW_PANEL: &str = "palw-panel";
 /// cap reaches every seat by push within seconds of the block; one over it never will (Decision
 /// 3), and the replay is minutes of CPU the seat should not spend on a push that is merely late.
 pub const PALW_ATTEMPT_REPLAY_GRACE_DAA: u64 = 2;
+
+/// **Whether a replay licenses the claim** (ADR-0084 Decision 7): both roots reproduce, and the
+/// work reproduces WHEN THE CLAIM PRICES IT. A free-prompt claim carries the leaves it was priced
+/// at (ADR-0083) and a replay of different work is not its material, as the free-prompt arm says;
+/// an attempt-lane claim carries `work_leaves == 0` — the state's spelling for "the class's
+/// canonical job, priced by the class" — and the replay's own count is the class's space, not a
+/// claim field. Run 5 on the devnet refused two claims whose roots reproduced exactly over
+/// `Some(6630544) vs priced 0`; this is that rule stated once.
+pub fn replay_licenses_v1(
+    roots: &kaspa_consensus_core::palw_backend::PalwReplayRootsV1,
+    claimed_execution_root: Hash64,
+    claimed_trace_root: Hash64,
+    priced_work_leaves: u64,
+) -> bool {
+    let roots_reproduce = roots.execution_root == claimed_execution_root && roots.trace_root == claimed_trace_root;
+    let work_reproduces = priced_work_leaves == 0 || roots.work_leaves.is_none_or(|w| w == priced_work_leaves);
+    roots_reproduce && work_reproduces
+}
 /// How many receipts one claim's pool holds. A panel has 5 seats; the rest is an attacker's spam,
 /// and the assembler drops garbage anyway — the cap only bounds memory.
 const RECEIPTS_PER_CLAIM: usize = 16;
@@ -2759,8 +2777,7 @@ impl PalwPanelService {
                             );
                             match offload(resolved, move |b| b.execute_for_verdict(&ctx_for_blocking, &prompt_for_blocking)).await {
                                 Ok((backend, Ok(roots))) => {
-                                    let work_matches = roots.work_leaves.is_none_or(|w| w == duty.work_leaves);
-                                    if roots.execution_root == duty.execution_root && roots.trace_root == duty.trace_root && work_matches {
+                                    if replay_licenses_v1(&roots, duty.execution_root, duty.trace_root, duty.work_leaves) {
                                         info!(
                                             "[{PALW_PANEL}] claim {}: licensed by replay — the anchor's job reproduces the claim's roots \
                                              ({} leaves, {:.0?}); no material moved (ADR-0084 D7)",
@@ -4319,5 +4336,38 @@ mod tests {
         // The change of that carrier is a DIFFERENT outpoint, which is why the panel is not left
         // with nothing: the money moves, it does not vanish.
         assert!(!spent.contains(&op(2)), "the change outpoint is free to spend next");
+    }
+}
+
+#[cfg(test)]
+mod replay_rule_tests {
+    use super::replay_licenses_v1;
+    use kaspa_consensus_core::palw_backend::PalwReplayRootsV1;
+    use kaspa_hashes::Hash64;
+
+    fn roots(work: Option<u64>) -> PalwReplayRootsV1 {
+        PalwReplayRootsV1 { execution_root: Hash64::from_u64_word(0xE), trace_root: Hash64::from_u64_word(0x7), work_leaves: work }
+    }
+
+    /// An attempt-lane claim prices no leaves; the replay's own count is the class's space.
+    #[test]
+    fn an_unpriced_claim_is_licensed_by_its_roots_alone() {
+        assert!(replay_licenses_v1(&roots(Some(6_630_544)), Hash64::from_u64_word(0xE), Hash64::from_u64_word(0x7), 0));
+        assert!(replay_licenses_v1(&roots(None), Hash64::from_u64_word(0xE), Hash64::from_u64_word(0x7), 0));
+    }
+
+    /// A priced claim must reproduce its work too — the roots match but the WORK does not is the
+    /// free-prompt arm's refusal, and this rule is the same one.
+    #[test]
+    fn a_priced_claim_must_reproduce_its_work() {
+        assert!(replay_licenses_v1(&roots(Some(30)), Hash64::from_u64_word(0xE), Hash64::from_u64_word(0x7), 30));
+        assert!(!replay_licenses_v1(&roots(Some(31)), Hash64::from_u64_word(0xE), Hash64::from_u64_word(0x7), 30));
+        assert!(replay_licenses_v1(&roots(None), Hash64::from_u64_word(0xE), Hash64::from_u64_word(0x7), 30), "a family that prices no leaves is judged on its roots");
+    }
+
+    #[test]
+    fn a_root_that_does_not_reproduce_is_never_licensed() {
+        assert!(!replay_licenses_v1(&roots(Some(30)), Hash64::from_u64_word(0xF), Hash64::from_u64_word(0x7), 0));
+        assert!(!replay_licenses_v1(&roots(Some(30)), Hash64::from_u64_word(0xE), Hash64::from_u64_word(0x8), 30));
     }
 }
