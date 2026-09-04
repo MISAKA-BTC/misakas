@@ -473,6 +473,112 @@ pub fn step_merkle_range_siblings_capped_v1(
     Ok(out)
 }
 
+/// **A single leaf's opening, derived from a RANGE opening that contains it** (ADR-0085
+/// Decision 2). A challenger holding an interval opening — the accused's committed leaf hashes for
+/// `[first, first + k)` and the range's siblings — needs, for the court's refutation, the ordinary
+/// membership proof of one leaf inside that range ([`PalwStepOpeningV1`]) against the same root.
+/// Every hash that proof needs is either a leaf of the range, a subtree the range's own leaves
+/// build, or one of the range's carried siblings, so it is derived here rather than fetched: the
+/// walk is [`step_range_opening_root_capped_v1`]'s, level by level, remembering where the target
+/// sits and taking its sibling from whichever of the three the level has — and skipping the
+/// level exactly when [`step_opening_capped_v1`] would (the promoted odd tail), so the two
+/// openings are byte-identical and verify under the one checker. Pinned by the mirror test below
+/// over every leaf of every range of every leaf count up to a small bound.
+pub fn step_opening_from_range_v1(
+    leaf_count: u64,
+    opening: &PalwStepRangeOpeningV1,
+    leaf_index: u64,
+) -> Result<PalwStepOpeningV1, PalwStepLegError> {
+    step_opening_from_range_capped_v1(leaf_count, opening, leaf_index, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`step_opening_from_range_v1`] against the ruleset's `max_step_leaf_count`.
+pub fn step_opening_from_range_capped_v1(
+    leaf_count: u64,
+    opening: &PalwStepRangeOpeningV1,
+    leaf_index: u64,
+    max_step_leaf_count: u64,
+) -> Result<PalwStepOpeningV1, PalwStepLegError> {
+    if leaf_count == 0 || leaf_count > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: leaf_count, max: max_step_leaf_count });
+    }
+    let k = opening.leaf_hashes.len() as u64;
+    if k == 0 || opening.first_leaf_index.checked_add(k).is_none_or(|end| end > leaf_count) {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: opening.first_leaf_index, count: leaf_count });
+    }
+    if leaf_index < opening.first_leaf_index || leaf_index >= opening.first_leaf_index + k {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: leaf_index, count: leaf_count });
+    }
+    let sibling_cap = 2 * step_leg_max_opening_siblings_v1(max_step_leaf_count);
+    if opening.siblings.len() > sibling_cap {
+        return Err(PalwStepLegError::OpeningTooDeep { got: opening.siblings.len(), max: sibling_cap });
+    }
+    let leaf_hash = opening.leaf_hashes[(leaf_index - opening.first_leaf_index) as usize];
+    let mut nodes: Vec<Hash64> =
+        opening.leaf_hashes.iter().enumerate().map(|(i, leaf)| step_merkle_leaf(opening.first_leaf_index + i as u64, leaf)).collect();
+    // The target's absolute index at the current level, and the level's bounds — the same three
+    // numbers the root walk keeps.
+    let (mut a, mut b) = (opening.first_leaf_index, opening.first_leaf_index + k);
+    let mut target = leaf_index;
+    let mut width = leaf_count;
+    let mut siblings = opening.siblings.iter();
+    let mut next = || siblings.next().copied().ok_or(PalwStepLegError::OpeningPathTooShort);
+    let mut out = Vec::new();
+    while width > 1 {
+        // The node the target occupies at this level, relative to the range's own nodes.
+        let rel = (target - a) as usize;
+        let promoted = !width.is_multiple_of(2) && target == width - 1;
+        // Its sibling: inside the range's nodes when the pair partner is inside, else the carried
+        // edge sibling — the left one only when the range starts odd, the right one only when it
+        // ends odd and is not the promoted tail.
+        let mut level = Vec::with_capacity(nodes.len() / 2 + 2);
+        let mut i = 0usize;
+        let mut left_sibling: Option<Hash64> = None;
+        if !a.is_multiple_of(2) {
+            let left = next()?;
+            left_sibling = Some(left);
+            level.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[left.as_byte_slice(), nodes[0].as_byte_slice()]));
+            i = 1;
+        }
+        while i + 1 < nodes.len() {
+            level.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[nodes[i].as_byte_slice(), nodes[i + 1].as_byte_slice()]));
+            i += 2;
+        }
+        let mut right_sibling: Option<Hash64> = None;
+        if i < nodes.len() {
+            let tail_promoted = !width.is_multiple_of(2) && b == width;
+            if tail_promoted {
+                level.push(nodes[i]);
+            } else {
+                let right = next()?;
+                right_sibling = Some(right);
+                level.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[nodes[i].as_byte_slice(), right.as_byte_slice()]));
+            }
+        }
+        if !promoted {
+            let partner = target ^ 1;
+            let sibling = if partner >= a && partner < b {
+                nodes[(partner - a) as usize]
+            } else if partner < a {
+                left_sibling.ok_or(PalwStepLegError::OpeningPathTooShort)?
+            } else {
+                right_sibling.ok_or(PalwStepLegError::OpeningPathTooShort)?
+            };
+            out.push(sibling);
+        }
+        debug_assert!(rel < nodes.len());
+        nodes = level;
+        a /= 2;
+        b = b.div_ceil(2);
+        target /= 2;
+        width = width.div_ceil(2);
+    }
+    if siblings.next().is_some() {
+        return Err(PalwStepLegError::OpeningPathTooLong { extra: 1 });
+    }
+    Ok(PalwStepOpeningV1 { leaf_index, leaf_hash, siblings: out })
+}
+
 /// The sibling COUNT the range form needs, computable without the tree — the cost bound's side
 /// of the one implementation (a bound that guessed would drift from the walk above).
 pub fn step_range_sibling_count_v1(leaf_count: u64, first: u64, k: u64) -> u64 {
@@ -2663,5 +2769,42 @@ mod state_chunk_opening_tests {
         // And the leaf is bound to BOTH the index and the chunk hash.
         assert_ne!(state_chunk_tree_leaf_v1(0, &h), state_chunk_tree_leaf_v1(1, &h));
         assert_ne!(state_chunk_tree_leaf_v1(0, &h), state_chunk_tree_leaf_v1(0, &Hash64::from_bytes([8; 64])));
+    }
+}
+
+#[cfg(test)]
+mod opening_from_range_tests {
+    use super::*;
+
+    /// **ADR-0085 Decision 2: an opening derived from a range opening is byte-identical to the
+    /// opening built from the whole leaf list**, for every leaf of every range of every leaf count
+    /// up to a bound that covers every odd-tail shape — and it verifies under the one checker.
+    #[test]
+    fn an_opening_derived_from_a_range_is_the_opening_built_from_the_leaves() {
+        for leaf_count in 1u64..=24 {
+            let leaves: Vec<Hash64> = (0..leaf_count).map(|i| Hash64::from_u64_word(0x1000 + i)).collect();
+            let root = step_merkle_root_v1(&leaves).unwrap();
+            for first in 0..leaf_count {
+                for k in 1..=(leaf_count - first) {
+                    let range = PalwStepRangeOpeningV1 {
+                        first_leaf_index: first,
+                        leaf_hashes: leaves[first as usize..(first + k) as usize].to_vec(),
+                        siblings: step_merkle_range_siblings_v1(&leaves, first as usize, k as usize).unwrap(),
+                    };
+                    assert_eq!(step_range_opening_root_v1(leaf_count, &range).unwrap(), root);
+                    for leaf in first..first + k {
+                        let derived = step_opening_from_range_v1(leaf_count, &range, leaf).unwrap();
+                        let built = step_opening_v1(&leaves, leaf).unwrap();
+                        assert_eq!(derived, built, "leaf_count {leaf_count} range [{first}, {}) leaf {leaf}", first + k);
+                        assert_eq!(step_opening_root_v1(leaf_count, &derived).unwrap(), root);
+                    }
+                    // A leaf outside the range is refused by name, never guessed.
+                    if first > 0 {
+                        assert!(step_opening_from_range_v1(leaf_count, &range, first - 1).is_err());
+                    }
+                    assert!(step_opening_from_range_v1(leaf_count, &range, first + k).is_err());
+                }
+            }
+        }
     }
 }
