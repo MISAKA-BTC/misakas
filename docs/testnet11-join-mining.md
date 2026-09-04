@@ -522,15 +522,26 @@ curl -s localhost:8790/v1/chat/completions -H 'content-type: application/json' \
   -d '{"messages":[{"role":"user","content":"the capital of France is"}],
        "max_tokens":3,"stream":true}'
 
-# 4. the one handoff: sign, submit, stage the capture
+# 4. the one handoff: sign, submit, stage the capture and its answer envelope
 ./target/release/misaka-palw-fp-rail \
   --artifact ~/.misaka/fp-outbox/fp-job-<id> \
   --bond-key-seed ~/.misaka/miner.seed \
   --funding-outpoint <txid>:1 --funding-amount <sompi> \
   --capture ~/.misaka/fp-outbox/traces/<id>/material.bin \
-  --retention-dir ~/.t11/palw-retention \
   --submit --rpc 127.0.0.1:27210
 ```
+
+**Where the files go (ADR-0084 Decision 5).** Without `--retention-dir` the rail asks the node
+for the directory its panel serves from (`getPalwProducerFacts` → `palwRetentionDir`, which is
+`<appdir>/<network>/palw-retention` — no kaspad flag names it) and stages `<claim>.material` and
+`<claim>.answer` there; it refuses to stage into a directory that is not on this host, and warns
+when the node names none (no `--palw-panel`, or a build before ADR-0084). Pass `--retention-dir`
+only to override that, and only with a directory the node's panel reads: the first two public
+free-prompt claims were staged into the gateway's own `traces` directory, where the node never
+looked, and no seat could obtain anything for them. `--capture` is what lets the node open the
+claim's checkpoint intervals for the seats; the answer envelope (the job, the prompt ids and the
+answer's ids — a few kilobytes) is written beside it from the result frame and is what a seat is
+served when the capture itself is over the 16 MiB transport cap, which every graph-v5 capture is.
 
 **`--worker` must be an absolute path.** The gateway confines the worker and pins its working
 directory to a scratch directory of its own (ADR-0079), so a relative path is resolved THERE, not

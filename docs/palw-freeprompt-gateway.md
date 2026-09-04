@@ -202,13 +202,18 @@ finishes the job — it hands the signed transaction to `misaka-palw-fp-submit`,
 ```bash
 ./target/release/misaka-palw-fp-rail --artifact ~/.misaka-palw-outbox/fp-job-<id> \
   --bond-key-seed bond.seed --funding-outpoint <txid>:<index> --funding-amount <sompi> \
-  --submit --rpc 127.0.0.1:17610 --retention-dir ~/.misaka/palw-retention
+  --capture ~/.misaka-palw-outbox/traces/<id>/material.bin \
+  --submit --rpc 127.0.0.1:17610
 ```
 
-In that one step: the anchor is checked against the node's DAA (SA-1b), `<claim>.material` is
-staged as a `.partial`, the transaction is broadcast, and the file takes its real name only after
-the node accepts. A refusal leaves nothing behind — no material for a claim that does not exist —
-and a mempool collision is reported as a wait rather than a fault.
+In that one step: the anchor is checked against the node's DAA (SA-1b), `<claim>.material` and
+`<claim>.answer` (ADR-0084: the job, the prompt ids and the answer's ids, what a seat is served
+when the capture is over the transport cap) are staged as `.partial`s in the directory the node
+names as its own (`getPalwProducerFacts` → `palwRetentionDir`; `--retention-dir` overrides it, and
+a directory the node's panel does not read serves nobody), the transaction is broadcast, and the
+files take their real names only after the node accepts. A refusal leaves nothing behind — no
+material for a claim that does not exist — and a mempool collision is reported as a wait rather
+than a fault.
 
 ## The worker protocol (ADR-0077 Decisions 1, 2 and 6)
 

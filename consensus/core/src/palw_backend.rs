@@ -460,6 +460,49 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         None
     }
 
+    /// **The context a free-prompt job runs under, as this family builds it** (ADR-0084
+    /// Decision 4). The one place the class facts, the exactly-decoded budget and the network id
+    /// meet: `execute_free_prompt` runs under it, the checkpoint recompute rebuilds it, and the
+    /// context-taking seams below take it — so a seat holds ONE context per claim, on either lane,
+    /// and the lane decides only where the context comes from (this, or `job_for_anchor`).
+    /// `None` when this family has no free-prompt path.
+    fn fp_job_context_v1(&self, _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3) -> Option<PalwJobContextV2> {
+        None
+    }
+
+    /// **ADR-0082 Decision 9, keyed on the CONTEXT** (ADR-0084 Decision 4): the job's prefix,
+    /// teacher-forced on this seat's own kernels, and the tiled root of the state it reaches — for
+    /// a free-prompt job's context ([`Self::fp_job_context_v1`]) and for an attempt claim's
+    /// ([`Self::job_for_anchor`]) alike, which is what lets the interval arm serve both lanes.
+    /// `covered` is the checkpoint leaf's own counter, in the class's cadence unit, as on the
+    /// free-prompt seam. Defaulted to a refusal: a family without this verb cannot seat a
+    /// checkpointed row, and `Incapable` is the honest verdict.
+    fn checkpoint_root_for_context_v1(
+        &self,
+        _context: &PalwJobContextV2,
+        _prompt_token_ids: &[u32],
+        _output_token_ids: &[u32],
+        _covered: u32,
+    ) -> Result<crate::Hash64, String> {
+        Err("this execution family cannot recompute a checkpoint root from a context".to_string())
+    }
+
+    /// [`Self::fp_checkpoint_covered_bound_v1`], keyed on the context: the largest `covered` a
+    /// checkpoint leaf of this context's leg can carry, in the class's own cadence unit. The
+    /// default is the per-call rule spelled out over the context's decode count.
+    fn checkpoint_covered_bound_for_context_v1(&self, context: &PalwJobContextV2) -> u32 {
+        context.exact_decode_tokens.saturating_sub(1)
+    }
+
+    /// **`output_root` from the answer's ids, under a context** (ADR-0084 Decisions 1 and 4;
+    /// ADR-0078 X6): `output_commitment_v2(context_hash, ids, rendered_hash_for_family(ids))`.
+    /// A seat binds a served answer envelope — `FPA1` under the job's context, `ATA1` under the
+    /// anchor's — to the claim's committed root with this, before any forward pass. `None` when
+    /// this family renders nothing it can name.
+    fn output_root_for_context_v1(&self, _context: &PalwJobContextV2, _output_token_ids: &[u32]) -> Option<crate::Hash64> {
+        None
+    }
+
     /// **A DRILL fault: run the job, corrupt one lane of one tile, and commit to the result.**
     ///
     /// A court that has never convicted on a live chain is a court nobody has evidence works, and

@@ -543,6 +543,14 @@ impl PalwExecutionBackendV1 for Base0Backend {
     /// `ExactBudgetReached`, the floor's default class facts — and the floor renders nothing, so
     /// its rendered hash is the hash of the empty rendering (the same call `produce` makes).
     fn fp_output_root_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, output_token_ids: &[u32]) -> Option<Hash64> {
+        let ctx = self.fp_job_context_v1(job)?;
+        self.output_root_for_context_v1(&ctx, output_token_ids)
+    }
+
+    /// The one context the floor runs a free-prompt job under (ADR-0084 Decision 4): the
+    /// integer family's default class facts, the budget decoded exactly, the RC network id —
+    /// the same value `execute_free_prompt` builds.
+    fn fp_job_context_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3) -> Option<PalwJobContextV2> {
         use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
         let class = PalwFpClassFactsV3 {
             model_profile_id: Hash64::default(),
@@ -560,9 +568,14 @@ impl PalwExecutionBackendV1 for Base0Backend {
             step_leg_root: Hash64::default(),
             step_leaf_count: 0,
         };
-        let ctx = palw_fp_job_context_v3(job, &class, &shape, RC_NETWORK_ID).ok()?;
+        palw_fp_job_context_v3(job, &class, &shape, RC_NETWORK_ID).ok()
+    }
+
+    /// `output_root` from the answer's ids under `context` (ADR-0078 X6; ADR-0084): the floor
+    /// renders nothing, so its rendered hash is the hash of the empty rendering.
+    fn output_root_for_context_v1(&self, context: &PalwJobContextV2, output_token_ids: &[u32]) -> Option<Hash64> {
         Some(kaspa_consensus_core::palw_v2::output_commitment_v2(
-            &ctx.context_hash(),
+            &context.context_hash(),
             output_token_ids,
             &kaspa_consensus_core::palw_v2::rendered_output_hash_v2(&[]),
         ))

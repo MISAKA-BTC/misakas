@@ -212,10 +212,40 @@ Y8   getPalwProducerFacts version 5 is read by a version-4 reader with the new f
 6. The card's §6m fleet decision is reversible on the day 1–4 are deployed on ibm, `.113`, node1
    and seat2: seat2's v5 production resumes; QWEN36 claims start reaching Final.
 
-## 7. Implementation record (2026-09-04, `palw-adr0084-served-answer`)
+## 7. Implementation record (2026-09-04, `palw-adr0084-served-answer`, from 5f head `b52502a6`)
 
-Filled in as the work lands; see the branch log. Sections 1–4 of §6 are this session's; §6 item 5
-is recorded here as landed or as the named remainder.
+**Landed — §6 items 1–5, all consensus-inert; `cargo check` and the crates' unit suites green
+on the branch (see the commits for the exact test names):**
+
+| decision | where | what |
+|---|---|---|
+| D1 `FPA1` | `consensus/core/src/palw_freeprompt_v3.rs` | `PalwFpAnswerV1`, encoder, decoder (prompt binding; no empty answer), `palw_fp_committed_output_ids_decode_v1` (`FPA1` direct, `FPC1` through the seam); `palw_fp_job_material_decode_v1` reads all three magics |
+| D1 binding | `palw_backend.rs`; `palw_producer_v2.rs` | `fp_output_root_v1` (ADR-0078 X6); `PalwSeatDutyV2.output_root` off the claim record |
+| D2 resolver | `kaspad/src/palw_panel.rs` `serve_material_or_answer` | the material when ≤ `PALW_MATERIAL_MAX_BYTES`, else `<claim>.answer`, else derived once from the capture (`FPC1` → `FPA1`, raw capture → `ATA1`) and cached |
+| D2 seat | `palw_panel.rs` `fp_committed_output_ids_v1` | ids off `FPA1` or `FPC1`-through-the-seam, bound to `output_root` by name before any forward pass; a bound envelope retained under `foreign/` |
+| D3 | `protocol/flows/src/flow_context.rs`; `kaspad/src/palw_producer.rs` | `broadcast_palw_material` refuses over the cap before the broadcast; the producer submits its block before it announces |
+| D4 `ATA1` | `consensus/core/src/palw_attempt_v2.rs` | `PalwAttemptAnswerV1 { anchor, prompt_token_ids, output_token_ids }`, encoder, decoder |
+| D4 seams | `palw_backend.rs`; base0 floor / A16 / Qwen3.6 backends | `fp_job_context_v1`, `checkpoint_root_for_context_v1`, `checkpoint_covered_bound_for_context_v1`, `output_root_for_context_v1`; the free-prompt seams delegate to them, so there is one context per claim on either lane |
+| D4 seat | `palw_panel.rs` `interval_seat_outcome_v1` (was `fp_interval_seat_outcome_v1`), `attempt_committed_output_ids_v1` | the interval arm keyed on the context; on the attempt lane it runs after the whole-capture arms and before the pull, with the job and prompt from the anchor and the ids from `ATA1` or a held capture, bound under the anchor-derived context |
+| D4 executor | `palw_producer.rs`; `palw_panel.rs` `open_retained_interval`, `backend_for_raw_capture_v1` | the producer stages `<attempt>.answer` beside its material; the resolver opens intervals of a raw capture with the prompt the anchor derives |
+| D5 | `rpc/core` v5 `palw_retention_dir`, `rpc/grpc` field 26, `rpc/service`, `flow_context::palw_declare_retention_dir`; `misaka-palw-fp-submit` `FpStaging.output_token_ids` / `<claim>.answer`; the rail; `misaka palw fp-submit --capture` | the node names its directory; the submitter stages the envelope under the material's ordering; the rail defaults to the node's directory and refuses one not on this host |
+| D6 | the three base0 backends | `fp_committed_output_ids` over `base0_material_decode_any_v1`; the panel names no family decoder |
+
+**Not landed here, by name:**
+
+* **W7-shaped end-to-end evidence.** No devnet drill in this record certifies a claim whose
+  capture exceeds the cap through the interval arm (Y1, Y6). The unit suites pin the payloads, the
+  bindings, the staging ordering and the RPC round trip; the loopback devnet (card §6a's three
+  kaspads and two v5 producers) is where Y1/Y6 are measured, and that run is the next step before
+  the fleet rebuild.
+* **The opening cost of a raw capture.** `open_retained_interval` on an attempt-lane capture
+  decodes the whole retention twice per request (`capture_shape`, then `open_fp_interval`) — the
+  free-prompt path already does — ~0.15 s and 575 MB peak for a 253 MB QWEN36 tuple (the exporter's
+  measurement), more for 748 MB. Bounded by the serve throttles; a class-tagged retention file
+  would remove the first decode.
+* **The exporter** (`tools/palw-jobs-export`) still reads the answer's ids off `<claim>.material`;
+  `<claim>.answer` is a few kilobytes and is the better source now.
+* §8's list: the court's close over the cap (U-07c), ADR-0065 D4's activation, the cap itself.
 
 ## 8. What is deliberately not decided
 

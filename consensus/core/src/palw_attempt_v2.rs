@@ -98,6 +98,55 @@ pub const PALW_ATTEMPT_V2_VERSION: u16 = 6;
 /// history requires that arm back, byte for byte, as §3 option (b) says.
 pub const PALW_ATTEMPT_V2_VERSION_PRE_ADR_0072: u16 = 5;
 
+/// Wire magic of the attempt lane's answer envelope (ADR-0084 Decision 4).
+pub const PALW_ATTEMPT_ANSWER_V1_MAGIC: [u8; 4] = *b"ATA1";
+
+/// **The attempt lane's answer envelope** (ADR-0084 Decision 4) — what a seat on the interval arm
+/// needs from the executor when the capture does not fit the transport: the answer's ids, beside
+/// the anchor the job was derived from and the prompt that derivation yields.
+///
+/// The free-prompt lane's envelope (`FPA1`) carries the JOB, because a free-prompt job is the
+/// caller's and derivable from no anchor. An attempt claim's job is derived from its block
+/// (`job_anchor_for_claim` → `job_for_anchor`), so the seat re-derives the anchor and the prompt
+/// itself and the envelope's copies are a cross-check, never a source: a served envelope whose
+/// anchor or prompt is not what the seat derived is not this claim's. The answer's ids are bound
+/// by the seat to the claim's committed `output_root` under the anchor-derived context
+/// (`PalwExecutionBackendV1::output_root_for_context_v1`, ADR-0078 X6's rule), before any forward
+/// pass is spent on them. Size: `4 × (prompt_tokens + decode_tokens)` bytes plus the anchor.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwAttemptAnswerV1 {
+    /// The job anchor (`base0_rc_job_anchor_v1` / `job_anchor_v1`): what the capture's own
+    /// `job_context.job_id` names, and what the seat derives from the block.
+    pub anchor: Hash64,
+    pub prompt_token_ids: Vec<u32>,
+    pub output_token_ids: Vec<u32>,
+}
+
+pub fn palw_attempt_answer_encode_v1(anchor: Hash64, prompt_token_ids: &[u32], output_token_ids: &[u32]) -> Vec<u8> {
+    let body = borsh::to_vec(&PalwAttemptAnswerV1 {
+        anchor,
+        prompt_token_ids: prompt_token_ids.to_vec(),
+        output_token_ids: output_token_ids.to_vec(),
+    })
+    .expect("an attempt answer serializes");
+    let mut out = Vec::with_capacity(4 + body.len());
+    out.extend_from_slice(&PALW_ATTEMPT_ANSWER_V1_MAGIC);
+    out.extend_from_slice(&body);
+    out
+}
+
+/// `None` for anything that is not an `ATA1` payload and for an empty answer. Nothing here is
+/// bound: the seat binds the anchor and the prompt to what it derived and the ids to the claim's
+/// `output_root`.
+pub fn palw_attempt_answer_decode_v1(bytes: &[u8]) -> Option<PalwAttemptAnswerV1> {
+    let body = bytes.strip_prefix(&PALW_ATTEMPT_ANSWER_V1_MAGIC)?;
+    let answer: PalwAttemptAnswerV1 = borsh::from_slice(body).ok()?;
+    if answer.output_token_ids.is_empty() {
+        return None;
+    }
+    Some(answer)
+}
+
 /// The anchor's domain key. Unchanged from where this function used to live
 /// (`misaka_palw_base0::produce`), name included: moving it must not move the value, or every
 /// producer on every V2 network starts running a different job than the chain expects.
@@ -1144,5 +1193,25 @@ mod tests {
             bytes.len(),
             crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES
         );
+    }
+}
+
+#[cfg(test)]
+mod attempt_answer_tests {
+    use super::*;
+
+    /// **`ATA1` round-trips and refuses an empty answer** (ADR-0084 Decision 4). It is not a
+    /// material: neither free-prompt decoder reads it, and the seat binds every field of it to
+    /// what the chain says.
+    #[test]
+    fn the_attempt_answer_envelope_round_trips_and_is_not_a_material() {
+        let anchor = Hash64::from_u64_word(0xA5);
+        let bytes = palw_attempt_answer_encode_v1(anchor, &[1, 2, 3], &[9, 8]);
+        assert_eq!(&bytes[..4], &PALW_ATTEMPT_ANSWER_V1_MAGIC);
+        let decoded = palw_attempt_answer_decode_v1(&bytes).expect("ATA1 decodes");
+        assert_eq!(decoded, PalwAttemptAnswerV1 { anchor, prompt_token_ids: vec![1, 2, 3], output_token_ids: vec![9, 8] });
+        assert!(palw_attempt_answer_decode_v1(&palw_attempt_answer_encode_v1(anchor, &[1], &[])).is_none(), "no answer, no envelope");
+        assert!(crate::palw_freeprompt_v3::palw_fp_job_material_decode_v1(&bytes).is_none(), "not a free-prompt payload");
+        assert!(bytes.len() < 256, "{} bytes: the anchor plus the ids", bytes.len());
     }
 }

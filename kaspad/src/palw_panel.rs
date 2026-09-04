@@ -2439,13 +2439,15 @@ impl PalwPanelService {
                             && let Ok(resolved) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
                             && let Some(prompt_ids) = Self::fp_prompt_for_job(resolved.as_ref(), &material)
                             && let Some(output_ids) = self.fp_committed_output_ids_v1(resolved.as_ref(), duty, &held)
+                            && let Some(ctx) = resolved.fp_job_context_v1(&material.job)
                             && let Some(verdict) = self
-                                .fp_interval_seat_outcome_v1(
+                                .interval_seat_outcome_v1(
                                     &session,
                                     duty,
                                     network_domain,
                                     current_daa,
-                                    &material.job,
+                                    &ctx,
+                                    kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(&material.job),
                                     &prompt_ids,
                                     &output_ids,
                                     &interval_openings,
@@ -2699,6 +2701,49 @@ impl PalwPanelService {
                                 bytes,
                             );
                             break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                        }
+                    }
+                    // **The interval arm on the attempt lane** (ADR-0084 Decision 4 — ADR-0077
+                    // Decision 8's "at which point the same arm serves both lanes"). Reached only
+                    // when no whole material verified: a class whose capture fits the transport
+                    // (the floor, the graph-v2 class) has concluded above. The job and the
+                    // prompt come from the ANCHOR, exactly as the whole-capture arm derives them;
+                    // the answer's ids from the served attempt envelope (`ATA1`) or a capture this
+                    // node holds, bound to the claim's `output_root` under the anchor-derived
+                    // context; the state is recomputed and `k` intervals replayed, as on the
+                    // free-prompt lane. `None` falls through to the pull and the half-window
+                    // exactly as before.
+                    if !duty.free_prompt
+                        && let Ok(resolved) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
+                        && let Some(anchor) = self.job_anchor_for_claim(
+                            &session,
+                            resolved.as_ref(),
+                            network_domain,
+                            duty.accepted_block,
+                            duty.class_id,
+                            &duty.executor_bond,
+                        )
+                        && let Ok((ctx, prompt)) = resolved.job_for_anchor(anchor)
+                    {
+                        let prompt_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+                        let held = materials.get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
+                        if let Some(output_ids) =
+                            self.attempt_committed_output_ids_v1(resolved.as_ref(), duty, &ctx, anchor, &prompt_ids, &held)
+                            && let Some(verdict) = self
+                                .interval_seat_outcome_v1(
+                                    &session,
+                                    duty,
+                                    network_domain,
+                                    current_daa,
+                                    &ctx,
+                                    anchor,
+                                    &prompt_ids,
+                                    &output_ids,
+                                    &interval_openings,
+                                )
+                                .await
+                        {
+                            break 'verdict Some(verdict);
                         }
                     }
                     // No verifying material yet. Ask the network before accusing: the producer may
@@ -3400,13 +3445,21 @@ impl PalwPanelService {
         let bytes = self
             .retained_capture(&claim)
             .or_else(|| std::fs::read(self.config.retention_dir.join("foreign").join(format!("{claim}.material"))).ok())?;
-        let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes)?;
         let session = self.consensus_manager.consensus().unguarded_session();
-        let facts = session.palw_producer_facts_v2(payload.material.job.class_id, None)?;
-        let backend = self.resolve_backend(&session, payload.material.job.class_id, facts.artifact_root).ok()?;
-        // The ids the interval consumed: the user's own, hash-bound to the job by
-        // `palw_fp_capture_decode_v1` before this line is reached. Never logged (SA-7).
-        backend.open_fp_interval(&payload.capture, interval_index, &payload.material.prompt_token_ids).ok()
+        if let Some(payload) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes) {
+            let facts = session.palw_producer_facts_v2(payload.material.job.class_id, None)?;
+            let backend = self.resolve_backend(&session, payload.material.job.class_id, facts.artifact_root).ok()?;
+            // The ids the interval consumed: the user's own, hash-bound to the job by
+            // `palw_fp_capture_decode_v1` before this line is reached. Never logged (SA-7).
+            return backend.open_fp_interval(&payload.capture, interval_index, &payload.material.prompt_token_ids).ok();
+        }
+        // A raw family capture — the attempt lane's retention (ADR-0084 Decision 4). The prompt is
+        // the anchor's derivation, which the asking seat re-derives on its own; an opening over
+        // any other prompt binds to nothing there.
+        let (backend, shape) = self.backend_for_raw_capture_v1(&session, &bytes)?;
+        let (_, prompt) = backend.job_for_anchor(shape.job_context.job_id).ok()?;
+        let prompt_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        backend.open_fp_interval(&bytes, interval_index, &prompt_ids).ok()
     }
 
     /// Register both halves of the serving side with the gossip center. Called once, from the
@@ -3526,6 +3579,76 @@ impl PalwPanelService {
         }
     }
 
+    /// **The attempt lane's answer ids, bound to the chain** (ADR-0084 Decision 4).
+    ///
+    /// Off a served `ATA1` envelope — whose anchor and prompt must be what THIS seat derived from
+    /// the block, a cross-check and never a source — or off a capture this node holds, through
+    /// the family seam. Either way the ids must recompute the claim's committed `output_root`
+    /// under the anchor-derived context (ADR-0078 X6) before a forward pass is spent on them; a
+    /// candidate that does not is refused by name and the next one is tried. A bound envelope is
+    /// retained under `foreign/` so this node can serve the next seat's pull.
+    fn attempt_committed_output_ids_v1(
+        &self,
+        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
+        ctx: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        anchor: Hash64,
+        prompt_ids: &[u32],
+        pooled: &[Vec<u8>],
+    ) -> Option<Vec<u32>> {
+        use kaspa_consensus_core::palw_attempt_v2::palw_attempt_answer_decode_v1;
+        let disk = self.fp_retained_payload_paths(&duty.claim_id).into_iter().filter_map(|path| std::fs::read(path).ok());
+        pooled.iter().cloned().chain(disk).find_map(|bytes| {
+            let envelope = palw_attempt_answer_decode_v1(&bytes);
+            let ids = match &envelope {
+                Some(answer) => {
+                    if answer.anchor != anchor || answer.prompt_token_ids != prompt_ids {
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: a served attempt answer names anchor {} and this seat derived {anchor} — not \
+                             this claim's answer (ADR-0084)",
+                            duty.claim_id, answer.anchor
+                        );
+                        return None;
+                    }
+                    answer.output_token_ids.clone()
+                }
+                None => backend.fp_committed_output_ids(&bytes)?,
+            };
+            let recomputed = backend.output_root_for_context_v1(ctx, &ids)?;
+            if recomputed != duty.output_root {
+                warn!(
+                    "[{PALW_PANEL}] claim {}: a served answer's ids recompute output root {recomputed} and the claim committed {} — \
+                     not this claim's answer, refused before any replay (ADR-0084)",
+                    duty.claim_id, duty.output_root
+                );
+                return None;
+            }
+            if envelope.is_some() {
+                self.persist_foreign_answer(&duty.claim_id, &bytes);
+            }
+            Some(ids)
+        })
+    }
+
+    /// **Which held class wrote a raw family capture** (ADR-0084 Decision 4): the first registered
+    /// class this node can resolve whose backend reads the bytes' shape. A raw capture names no
+    /// class in the clear — its binding names the job context, and the context's profile is the
+    /// class's — so the executor's own node, which retained the bytes, is the party that answers.
+    /// Bounded by the class table's length, which is a handful of rows.
+    fn backend_for_raw_capture_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        bytes: &[u8],
+    ) -> Option<(Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, kaspa_consensus_core::palw_backend::PalwCaptureShapeV1)>
+    {
+        session.palw_v2_class_table().into_iter().find_map(|row| {
+            let facts = session.palw_producer_facts_v2(row.class_id, None)?;
+            let backend = self.resolve_backend(session, row.class_id, facts.artifact_root).ok()?;
+            let shape = backend.capture_shape(bytes)?;
+            Some((backend, shape))
+        })
+    }
+
     /// **What a pull for `claim` is answered with** (ADR-0084 Decision 2).
     ///
     /// The retained material — this node's own capture or a foreign one it proved — when it is
@@ -3583,16 +3706,26 @@ impl PalwPanelService {
     /// `FPC1`, a class this node does not hold, or a capture the family cannot read — a raw
     /// attempt-lane capture is Decision 4's, not this function's.
     fn derive_answer_envelope_v1(&self, bytes: &[u8]) -> Option<Vec<u8>> {
-        let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(bytes)?;
         let session = self.consensus_manager.consensus().unguarded_session();
-        let facts = session.palw_producer_facts_v2(payload.material.job.class_id, None)?;
-        let backend = self.resolve_backend(&session, payload.material.job.class_id, facts.artifact_root).ok()?;
-        let ids = backend.fp_committed_output_ids(&payload.capture)?;
-        Some(kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_v1(
-            &payload.material.job,
-            &payload.material.prompt_token_ids,
-            &ids,
-        ))
+        if let Some(payload) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(bytes) {
+            let facts = session.palw_producer_facts_v2(payload.material.job.class_id, None)?;
+            let backend = self.resolve_backend(&session, payload.material.job.class_id, facts.artifact_root).ok()?;
+            let ids = backend.fp_committed_output_ids(&payload.capture)?;
+            return Some(kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_v1(
+                &payload.material.job,
+                &payload.material.prompt_token_ids,
+                &ids,
+            ));
+        }
+        // A raw family capture — the attempt lane's retention (ADR-0084 Decision 4): the anchor is
+        // the capture's own job id, the prompt is what the anchor derives, the ids are the
+        // family's to read.
+        let (backend, shape) = self.backend_for_raw_capture_v1(&session, bytes)?;
+        let anchor = shape.job_context.job_id;
+        let (_, prompt) = backend.job_for_anchor(anchor).ok()?;
+        let prompt_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let ids = backend.fp_committed_output_ids(bytes)?;
+        Some(kaspa_consensus_core::palw_attempt_v2::palw_attempt_answer_encode_v1(anchor, &prompt_ids, &ids))
     }
 
     /// **The seat's duty under ADR-0082 Decision 9: recompute the cache, fetch only the rows.**
@@ -3624,14 +3757,21 @@ impl PalwPanelService {
     /// **Logging** (ADR-0077 SA-5): claim ids, interval indices, checkpoint indices, leaf indices
     /// and roots are chain facts and are logged; no prompt id, no output id and no rendered byte
     /// ever is.
+    ///
+    /// **Keyed on the CONTEXT, so both lanes run it** (ADR-0084 Decision 4). A free-prompt claim's
+    /// context is the job's (`fp_job_context_v1`) and its anchor is the job id; an attempt claim's
+    /// context and prompt come from the block's anchor (`job_for_anchor`), as the whole-capture
+    /// arm derives them. Everything below — the draw's counts, the covered bound, the recompute,
+    /// the opening's binding — reads the context, so the lane decides only where it came from.
     #[allow(clippy::too_many_arguments)]
-    async fn fp_interval_seat_outcome_v1(
+    async fn interval_seat_outcome_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
         network_domain: Hash64,
         current_daa: u64,
-        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        ctx: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        anchor: Hash64,
         prompt_ids: &[u32],
         output_ids: &[u32],
         openings: &HashMap<(Hash64, u32), Vec<Vec<u8>>>,
@@ -3649,14 +3789,15 @@ impl PalwPanelService {
         // boundary is what makes that safe: the only state this claim's row check can find is the
         // one this claim's own recompute put there, seconds earlier and from this claim's ids.
         misaka_palw_base0::fp_recompute::base0_fp_seat_state_forget_v1();
-        // Both counts are the job's own, and the job is hash-bound to the claim through
-        // `fp_job_id_v3` — never read off a capture, which is the executor's to shape.
-        let counts = PalwFpChainCountsV1 { prompt_tokens: job.prompt_tokens, decode_tokens_executed: job.decode_token_limit };
+        // Both counts are the context's own — a free-prompt job's, hash-bound to the claim through
+        // `fp_job_id_v3`, or the anchor-derived job's — never read off a capture, which is the
+        // executor's to shape.
+        let counts = PalwFpChainCountsV1 { prompt_tokens: ctx.declared_prefill_tokens, decode_tokens_executed: ctx.exact_decode_tokens };
         let draw = crate::palw_fp_seat::palw_fp_seat_draw_v1(backend.as_ref(), network_domain, duty, counts)?;
         let roots = PalwClaimRootsV1 {
             execution_root: duty.execution_root,
             trace_root: duty.trace_root,
-            anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job),
+            anchor,
         };
         // **The bound is the CLASS's, in the class's own cadence unit** (audit B, C-2). A
         // checkpoint leaf's `covered_decode_call` counts decode calls on a per-call class and
@@ -3665,7 +3806,7 @@ impl PalwPanelService {
         // anchor before recomputing anything, and no quorum was reachable for the class. The
         // backend answers because the backend holds the profile; the real guard is still the
         // geometry re-derivation inside `verify_fp_interval_opening`.
-        let covered_bound = backend.fp_checkpoint_covered_bound_v1(job);
+        let covered_bound = backend.checkpoint_covered_bound_for_context_v1(ctx);
         let mut unanswered: Vec<u32> = Vec::new();
 
         for index in &draw.intervals {
@@ -3687,9 +3828,9 @@ impl PalwPanelService {
                         // replay does anyway.
                         continue;
                     }
-                    let (job_owned, prompt_owned, output_owned) = (job.clone(), prompt_ids.to_vec(), output_ids.to_vec());
+                    let (ctx_owned, prompt_owned, output_owned) = (ctx.clone(), prompt_ids.to_vec(), output_ids.to_vec());
                     let Ok((returned, recomputed)) =
-                        offload(backend, move |b| b.fp_recompute_checkpoint_root(&job_owned, &prompt_owned, &output_owned, covered))
+                        offload(backend, move |b| b.checkpoint_root_for_context_v1(&ctx_owned, &prompt_owned, &output_owned, covered))
                             .await
                     else {
                         return None;

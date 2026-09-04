@@ -698,9 +698,15 @@ impl PalwProducerService {
         // every other service on the runtime is short one worker.
         let (job_for_blocking, prompt_for_blocking) = (job.clone(), prompt.clone());
         let tamper = self.config.drill_tamper_leaf;
-        let run = tokio::task::spawn_blocking(move || match tamper {
-            None => backend.execute(&job_for_blocking, &prompt_for_blocking),
-            Some(leaf) => backend.execute_with_injected_fault(&job_for_blocking, &prompt_for_blocking, leaf),
+        let (run, answer_ids) = tokio::task::spawn_blocking(move || {
+            let run = match tamper {
+                None => backend.execute(&job_for_blocking, &prompt_for_blocking),
+                Some(leaf) => backend.execute_with_injected_fault(&job_for_blocking, &prompt_for_blocking, leaf),
+            }?;
+            // The answer's ids, read back off the capture by the family that wrote it — for the
+            // attempt-lane answer envelope (ADR-0084 Decision 4) staged beside the material.
+            let answer_ids = backend.fp_committed_output_ids(&run.material);
+            Ok::<_, String>((run, answer_ids))
         })
         .await
         .map_err(|e| format!("the execution task did not finish: {e}"))??;
@@ -794,6 +800,20 @@ impl PalwProducerService {
             .to_vec();
             // The promise, kept before it is made. See `retain_execution`.
             let material = self.retain_execution(message, &run.material)?;
+            // **And the answer envelope beside it** (ADR-0084 Decision 4): the anchor, the prompt
+            // the anchor derives, and the answer's ids — what a seat on the interval arm needs when
+            // this capture (748 MB on the graph-v5 class) does not fit the transport. Best-effort:
+            // a missing envelope costs the serving node one decode of the capture on the first
+            // pull, not the claim.
+            if let Some(ids) = answer_ids.as_deref() {
+                let prompt_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+                let answer = kaspa_consensus_core::palw_attempt_v2::palw_attempt_answer_encode_v1(anchor, &prompt_ids, ids);
+                let path = palw_retained_answer_path(&self.config.retention_dir, &message);
+                let tmp = path.with_extension("answer.partial");
+                if let Err(e) = std::fs::write(&tmp, &answer).and_then(|()| std::fs::rename(&tmp, &path)) {
+                    warn!("[{PALW_PRODUCER}] cannot retain the answer envelope for attempt {message}: {e}");
+                }
+            }
             template.block.header.nonce = nonce;
             template.block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature }.encode_wire();
             template.block.header.finalize();

@@ -1397,40 +1397,10 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         output_token_ids: &[u32],
         covered: u32,
     ) -> Result<Hash64, String> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
-        self.artifact_read_probe_v1()?;
-        if !self.court_capable {
-            return Err("the v1 class commits no checkpoint leg, so it has no state root to recompute".to_string());
-        }
-        let class = PalwFpClassFactsV3 {
-            model_profile_id: self.shape_id,
-            runtime_manifest_hash: Hash64::default(),
-            runtime_class_id: self.shape_id,
-            shape_profile_id: self.class_profile_id,
-            cu_ruleset_id: Hash64::default(),
-        };
-        let shape = PalwFpRunFactsV3 {
-            decode_tokens_executed: job.decode_token_limit,
-            stop_reason: kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached,
-            full_logits_trace_root: Hash64::default(),
-            activation_leg_root: Hash64::default(),
-            checkpoint_leg_root: Hash64::default(),
-            step_leg_root: Hash64::default(),
-            step_leaf_count: 0,
-        };
-        let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
-        let mut kernels =
-            crate::fp_recompute::A16RecomputeKernelsV1::new(&self.artifact, self.plan.as_ref()).map_err(|e| e.to_string())?;
-        crate::fp_recompute::base0_fp_seat_state_memoized_v1(
-            &self.profile,
-            &ctx,
-            prompt_token_ids,
-            output_token_ids,
-            covered,
-            &mut kernels,
-        )
-        .map(|state| state.state_chunks_root)
-        .map_err(|e| e.to_string())
+        // The free-prompt spelling of the context-keyed seam (ADR-0084 Decision 4): one context
+        // builder, one recompute.
+        let ctx = self.fp_job_context_v1(job).ok_or_else(|| "this job builds no context for this class".to_string())?;
+        self.checkpoint_root_for_context_v1(&ctx, prompt_token_ids, output_token_ids, covered)
     }
 
     /// **The largest `covered` this class's leg carries, in the class's own cadence unit**
@@ -1439,11 +1409,9 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     /// `palw_checkpoint_count_v1` derives for the leg, whose last leaf is
     /// `palw_checkpoint_covered_at_index_v1(count - 1)` and therefore that number.
     fn fp_checkpoint_covered_bound_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3) -> u32 {
-        use kaspa_consensus_core::palw_context_ladder::{PalwCheckpointCadenceV1, palw_checkpoint_cadence_v1};
-        let decode_calls = job.decode_token_limit.saturating_sub(1);
-        match palw_checkpoint_cadence_v1(&self.profile) {
-            PalwCheckpointCadenceV1::PerDecodeCall => decode_calls,
-            PalwCheckpointCadenceV1::PerPosition => job.prompt_tokens.saturating_add(decode_calls),
+        match self.fp_job_context_v1(job) {
+            Some(ctx) => self.checkpoint_covered_bound_for_context_v1(&ctx),
+            None => job.decode_token_limit.saturating_sub(1),
         }
     }
 
@@ -1463,6 +1431,16 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     /// other list does not, which is how a seat refuses a forged answer envelope before a forward
     /// pass.
     fn fp_output_root_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, output_token_ids: &[u32]) -> Option<Hash64> {
+        let ctx = self.fp_job_context_v1(job)?;
+        self.output_root_for_context_v1(&ctx, output_token_ids)
+    }
+
+    /// **The one context this family runs a free-prompt job under** (ADR-0084 Decision 4): the
+    /// class facts this backend holds, the budget decoded exactly with `ExactBudgetReached` (the
+    /// one shape this lane's runs have — `execute_free_prompt` builds the same value), and the
+    /// network id. `fp_recompute_checkpoint_root`, `fp_checkpoint_covered_bound_v1` and
+    /// `fp_output_root_v1` all go through here, so there is one spelling of "which job is this".
+    fn fp_job_context_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3) -> Option<PalwJobContextV2> {
         use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
         let class = PalwFpClassFactsV3 {
             model_profile_id: self.shape_id,
@@ -1480,8 +1458,57 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             step_leg_root: Hash64::default(),
             step_leaf_count: 0,
         };
-        let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).ok()?;
-        Some(output_commitment_v2(&ctx.context_hash(), output_token_ids, &rendered_output_hash_v1(output_token_ids)))
+        palw_fp_job_context_v3(job, &class, &shape, &self.network_id).ok()
+    }
+
+    /// **ADR-0082 Decision 9, keyed on the context** (ADR-0084 Decision 4): the prefix,
+    /// teacher-forced on this seat's own kernels, and the tiled root of the state it reaches —
+    /// never a byte of the executor's history. The context is the caller's: a free-prompt job's
+    /// through [`Self::fp_job_context_v1`], an attempt claim's through [`Self::job_for_anchor`],
+    /// and the memoised state is keyed on it, so the row check that follows finds exactly the
+    /// state this claim's own recompute put there.
+    fn checkpoint_root_for_context_v1(
+        &self,
+        context: &PalwJobContextV2,
+        prompt_token_ids: &[u32],
+        output_token_ids: &[u32],
+        covered: u32,
+    ) -> Result<Hash64, String> {
+        self.artifact_read_probe_v1()?;
+        if !self.court_capable {
+            return Err("the v1 class commits no checkpoint leg, so it has no state root to recompute".to_string());
+        }
+        let mut kernels =
+            crate::fp_recompute::A16RecomputeKernelsV1::new(&self.artifact, self.plan.as_ref()).map_err(|e| e.to_string())?;
+        crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+            &self.profile,
+            context,
+            prompt_token_ids,
+            output_token_ids,
+            covered,
+            &mut kernels,
+        )
+        .map(|state| state.state_chunks_root)
+        .map_err(|e| e.to_string())
+    }
+
+    /// The largest `covered` this class's leg carries for `context`, in the class's own cadence
+    /// unit (audit B, C-2): per decode call `decode_calls`; per position `prefill + decode_calls`.
+    fn checkpoint_covered_bound_for_context_v1(&self, context: &PalwJobContextV2) -> u32 {
+        use kaspa_consensus_core::palw_context_ladder::{PalwCheckpointCadenceV1, palw_checkpoint_cadence_v1};
+        let decode_calls = context.exact_decode_tokens.saturating_sub(1);
+        match palw_checkpoint_cadence_v1(&self.profile) {
+            PalwCheckpointCadenceV1::PerDecodeCall => decode_calls,
+            PalwCheckpointCadenceV1::PerPosition => context.declared_prefill_tokens.saturating_add(decode_calls),
+        }
+    }
+
+    /// `output_root` from the answer's ids under `context` (ADR-0078 X6; ADR-0084 Decisions 1
+    /// and 4): the family's rendered hash is a keyed hash of the ids, so the root is recomputable
+    /// by anyone holding the ids and the context — the seat binding a served envelope, on either
+    /// lane.
+    fn output_root_for_context_v1(&self, context: &PalwJobContextV2, output_token_ids: &[u32]) -> Option<Hash64> {
+        Some(output_commitment_v2(&context.context_hash(), output_token_ids, &rendered_output_hash_v1(output_token_ids)))
     }
 
     fn operand_openings_for(

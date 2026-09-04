@@ -6235,3 +6235,23 @@ it (rail `--submit`, funds split from the panel's fee chain, the same-key reserv
 action instead). And the blocker nobody's Studio can fix: a v5 free-prompt claim voids at the receipt
 deadline today because its ~750 MB material exceeds the 16 MiB serve cap (§6a) — a submitter makes the
 claim exist on chain; Final waits for the transport fix.
+
+### 10n. ADR-0084 — the material cap, closed at the seat and the resolver, not at the constant (2026-09-04, `palw-adr0084-served-answer`)
+
+§6l/§6m's post-cut item (a) is designed and implemented on `palw-adr0084-served-answer` (from this card's head
+`b52502a6`; ADR text `docs/adr/0084-the-ids-ride-the-capture-stays-home.md`). **Three findings the ADR records that
+§6l/§6m did not have:** (1) the free-prompt interval arm (ADR-0077 D8 / ADR-0082 D9) exists and fetches `O(k ×
+interval)` bytes, but its two inputs came off the whole-capture pull — the job+prompt off `FPM1`/`FPC1`, and the
+committed output ids off the `FPC1` CAPTURE through the DENSE decoder, which returns nothing for a graph-v5 FOLD; (2)
+the STL/MIDI claims (§7b step 9) were staged by a rail run WITHOUT `--capture` and with `--retention-dir` = the
+gateway's `traces` directory — a question-only `FPM1` in a directory the node never reads, so every pull was `NotHeld`,
+not `TooBig`; the "750 MB" reading for those two claims was wrong; (3) nothing on the shipped path names the node's
+retention directory (it is `<appdir>/<network>/palw-retention`, derived, no flag). **What the branch does,
+consensus-inert:** a served answer envelope (`FPA1`: job, prompt ids, answer ids; `ATA1` on the attempt lane: anchor,
+prompt ids, answer ids) bound by the seat to the claim's `output_root` by the ADR-0078 X6 recompute; the resolver
+serves it in place of any material over 16 MiB; nothing over the cap is pushed and the block goes before the
+announcement; the interval arm runs on the attempt lane too (QWEN36 / v5 blocks); the node reports its retention
+directory over `getPalwProducerFacts` (v5) and the rail/CLI stage `<claim>.answer` beside `<claim>.material` there by
+default. Unit suites green; the loopback-devnet run that measures Y1/Y6 (a v5 claim certified through the interval arm
+with no capture moved) is the next step, then the fleet rebuild — after which §6m's pause of seat2's v5 production is
+reversible and QWEN36 claims can reach Final.

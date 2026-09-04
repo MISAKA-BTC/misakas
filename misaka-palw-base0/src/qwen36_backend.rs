@@ -1358,32 +1358,9 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         output_token_ids: &[u32],
         covered: u32,
     ) -> Result<Hash64, String> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
-        self.artifact_read_probe_v1()?;
-        let (Some(profile), Some(plan)) = (self.profile.as_ref(), self.plan.as_ref()) else {
-            return Err("this backend serves no registered graph, so it recomputes no state".to_string());
-        };
-        let class = PalwFpClassFactsV3 {
-            model_profile_id: self.shape_id,
-            runtime_manifest_hash: Hash64::default(),
-            runtime_class_id: self.shape_id,
-            shape_profile_id: self.class_profile_id,
-            cu_ruleset_id: Hash64::default(),
-        };
-        let shape = PalwFpRunFactsV3 {
-            decode_tokens_executed: job.decode_token_limit,
-            stop_reason: kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached,
-            full_logits_trace_root: Hash64::default(),
-            activation_leg_root: Hash64::default(),
-            checkpoint_leg_root: Hash64::default(),
-            step_leg_root: Hash64::default(),
-            step_leaf_count: 0,
-        };
-        let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
-        let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan);
-        crate::fp_recompute::base0_fp_seat_state_memoized_v1(profile, &ctx, prompt_token_ids, output_token_ids, covered, &mut kernels)
-            .map(|state| state.state_chunks_root)
-            .map_err(|e| e.to_string())
+        // The free-prompt spelling of the context-keyed seam (ADR-0084 Decision 4).
+        let ctx = self.fp_job_context_v1(job).ok_or_else(|| "this job builds no context for this class".to_string())?;
+        self.checkpoint_root_for_context_v1(&ctx, prompt_token_ids, output_token_ids, covered)
     }
 
     /// **The largest `covered` this class's leg carries, in the class's own cadence unit**
@@ -1391,11 +1368,9 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     /// row's composed map registers): `prefill + decode_calls`, every row the cache ever holds.
     /// A backend with no registered graph has no cadence to read and answers the seam's default.
     fn fp_checkpoint_covered_bound_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3) -> u32 {
-        use kaspa_consensus_core::palw_context_ladder::{PalwCheckpointCadenceV1, palw_checkpoint_cadence_v1};
-        let decode_calls = job.decode_token_limit.saturating_sub(1);
-        match self.profile.as_ref().map(palw_checkpoint_cadence_v1) {
-            Some(PalwCheckpointCadenceV1::PerPosition) => job.prompt_tokens.saturating_add(decode_calls),
-            _ => decode_calls,
+        match self.fp_job_context_v1(job) {
+            Some(ctx) => self.checkpoint_covered_bound_for_context_v1(&ctx),
+            None => job.decode_token_limit.saturating_sub(1),
         }
     }
 
@@ -1415,6 +1390,13 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     /// other list does not, which is how a seat refuses a forged answer envelope before a forward
     /// pass.
     fn fp_output_root_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, output_token_ids: &[u32]) -> Option<Hash64> {
+        let ctx = self.fp_job_context_v1(job)?;
+        self.output_root_for_context_v1(&ctx, output_token_ids)
+    }
+
+    /// The one context this family runs a free-prompt job under (ADR-0084 Decision 4) — the
+    /// same value `execute_free_prompt` builds; see the A16 backend's for the rationale.
+    fn fp_job_context_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3) -> Option<PalwJobContextV2> {
         use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
         let class = PalwFpClassFactsV3 {
             model_profile_id: self.shape_id,
@@ -1432,8 +1414,42 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             step_leg_root: Hash64::default(),
             step_leaf_count: 0,
         };
-        let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).ok()?;
-        Some(output_commitment_v2(&ctx.context_hash(), output_token_ids, &rendered_output_hash_v1(output_token_ids)))
+        palw_fp_job_context_v3(job, &class, &shape, &self.network_id).ok()
+    }
+
+    /// ADR-0082 Decision 9 keyed on the context (ADR-0084 Decision 4): the prefix on this seat's
+    /// own kernels, and the tiled root of the state it reaches, for either lane's context.
+    fn checkpoint_root_for_context_v1(
+        &self,
+        context: &PalwJobContextV2,
+        prompt_token_ids: &[u32],
+        output_token_ids: &[u32],
+        covered: u32,
+    ) -> Result<Hash64, String> {
+        self.artifact_read_probe_v1()?;
+        let (Some(profile), Some(plan)) = (self.profile.as_ref(), self.plan.as_ref()) else {
+            return Err("this backend serves no registered graph, so it recomputes no state".to_string());
+        };
+        let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan);
+        crate::fp_recompute::base0_fp_seat_state_memoized_v1(profile, context, prompt_token_ids, output_token_ids, covered, &mut kernels)
+            .map(|state| state.state_chunks_root)
+            .map_err(|e| e.to_string())
+    }
+
+    /// The largest `covered` this class's leg carries for `context`, in the class's own cadence
+    /// unit (audit B, C-2); a backend with no registered graph answers the seam's default.
+    fn checkpoint_covered_bound_for_context_v1(&self, context: &PalwJobContextV2) -> u32 {
+        use kaspa_consensus_core::palw_context_ladder::{PalwCheckpointCadenceV1, palw_checkpoint_cadence_v1};
+        let decode_calls = context.exact_decode_tokens.saturating_sub(1);
+        match self.profile.as_ref().map(palw_checkpoint_cadence_v1) {
+            Some(PalwCheckpointCadenceV1::PerPosition) => context.declared_prefill_tokens.saturating_add(decode_calls),
+            _ => decode_calls,
+        }
+    }
+
+    /// `output_root` from the answer's ids under `context` (ADR-0078 X6; ADR-0084).
+    fn output_root_for_context_v1(&self, context: &PalwJobContextV2, output_token_ids: &[u32]) -> Option<Hash64> {
+        Some(output_commitment_v2(&context.context_hash(), output_token_ids, &rendered_output_hash_v1(output_token_ids)))
     }
 
     fn operand_openings_for(
