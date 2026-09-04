@@ -4371,7 +4371,10 @@ mod replay_rule_tests {
     fn a_priced_claim_must_reproduce_its_work() {
         assert!(replay_licenses_v1(&roots(Some(30)), Hash64::from_u64_word(0xE), Hash64::from_u64_word(0x7), 30));
         assert!(!replay_licenses_v1(&roots(Some(31)), Hash64::from_u64_word(0xE), Hash64::from_u64_word(0x7), 30));
-        assert!(replay_licenses_v1(&roots(None), Hash64::from_u64_word(0xE), Hash64::from_u64_word(0x7), 30), "a family that prices no leaves is judged on its roots");
+        assert!(
+            replay_licenses_v1(&roots(None), Hash64::from_u64_word(0xE), Hash64::from_u64_word(0x7), 30),
+            "a family that prices no leaves is judged on its roots"
+        );
     }
 
     #[test]

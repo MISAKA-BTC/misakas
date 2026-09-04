@@ -2234,5 +2234,4 @@ mod tests {
             assert_eq!(base0_fold_block_digest_v1(0, &[]), None);
         }
     }
-
 }

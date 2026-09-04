@@ -130,10 +130,15 @@ pub struct PalwFpRunV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwFpIntervalVerdictV1 {
     Valid,
-    Fault { leaf_index: u64 },
+    Fault {
+        leaf_index: u64,
+    },
     /// ADR-0086 Decision 3: the seat's own leaves do not reproduce the served fold, and this is
     /// the fault's address — a block of the fold clipped to the range, or the range's edge.
-    FaultInRange { first_leaf_index: u64, leaf_count: u64 },
+    FaultInRange {
+        first_leaf_index: u64,
+        leaf_count: u64,
+    },
     Mismatch,
     Unverifiable,
 }

@@ -497,6 +497,26 @@ impl PalwExecutionBackendV1 for Base0Backend {
         crate::fp_interval::base0_fp_interval_count_for_v1(prompt_tokens, decode_tokens_executed, self.checkpoint_interval())
     }
 
+    fn checkpoint_root_for_context_v1(
+        &self,
+        context: &PalwJobContextV2,
+        prompt_token_ids: &[u32],
+        output_token_ids: &[u32],
+        covered: u32,
+    ) -> Result<Hash64, String> {
+        // ADR-0086 Decision 2: the floor holds its own state for the named anchor, like every class.
+        let mut kernels = crate::fp_recompute::Base0RecomputeKernelsV1::new(&self.artifact);
+        crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+            &self.profile,
+            context,
+            prompt_token_ids,
+            output_token_ids,
+            covered,
+            &mut kernels,
+        )
+        .map(|state| state.state_chunks_root)
+        .map_err(|e| e.to_string())
+    }
     fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
         let material = base0_material_decode_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
         crate::fp_interval::base0_open_fp_interval_capped_v1(
@@ -517,7 +537,15 @@ impl PalwExecutionBackendV1 for Base0Backend {
         prompt_token_ids: &[u32],
         work_leaves: u64,
     ) -> kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1 {
-        crate::fp_interval::base0_verify_fp_interval_opening_capped_v1(
+        // ADR-0086 Decision 2: the anchor is named; the seat verifies from the state it recomputed
+        // for the checkpoint check (`checkpoint_root_for_context_v1`), as the other families do.
+        let state = crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+            opening,
+            prompt_token_ids,
+            self.checkpoint_interval(),
+            self.step_ladder_cap,
+        );
+        crate::fp_interval::base0_verify_fp_interval_opening_with_state_capped_v1(
             opening,
             claim,
             index,
@@ -525,8 +553,10 @@ impl PalwExecutionBackendV1 for Base0Backend {
             work_leaves,
             self.checkpoint_interval(),
             self.step_ladder_cap,
+            state.as_ref(),
             &Base0IntervalKernels { artifact: &self.artifact },
         )
+        .to_consensus_v1()
     }
 
     /// **The committed answer's ids, read by the family that wrote the capture** (ADR-0084
@@ -1256,9 +1286,34 @@ mod tests {
             from_chain,
         );
         assert!(!draw.is_empty());
+        let output_ids = backend.fp_committed_output_ids(&run.outcome.material).expect("the capture's ids");
         for index in draw {
             let opening =
                 backend.open_fp_interval(&run.outcome.material, index, &ids).unwrap_or_else(|e| panic!("interval {index} opens: {e}"));
+            // ADR-0086 Decision 2: the panel recomputes the checkpoint's state before it verifies,
+            // and the verifier finds it held.
+            crate::fp_recompute::base0_fp_seat_state_forget_v1();
+            if let Some((_, covered, committed)) = crate::fp_interval::base0_fp_interval_opening_anchor_v1(&opening) {
+                // The context the verifier will look the state up by is the binding's own — the
+                // floor may stop at EOG before its budget, unlike the exact-budget families.
+                let ctx = crate::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opening).expect("a V4 opening").binding.job_context;
+                let recomputed = backend
+                    .checkpoint_root_for_context_v1(&ctx, &ids, &output_ids, covered)
+                    .unwrap_or_else(|e| panic!("interval {index}: the floor recomputes its own state: {e}"));
+                assert_eq!(recomputed, committed, "interval {index}: the seat's state is the checkpoint the opening names");
+                let decoded = crate::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opening).expect("a V4 opening");
+                assert_eq!(&decoded.binding.shape_profile, backend.profile(), "interval {index}: one profile on both sides");
+                assert!(
+                    crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+                        &opening,
+                        &ids,
+                        backend.checkpoint_interval(),
+                        backend.step_ladder_cap()
+                    )
+                    .is_some(),
+                    "interval {index}: the memoized state must be findable under the opening's covered {covered}"
+                );
+            }
             assert!(
                 opening.len() < run.outcome.material.len(),
                 "a seat fetches the opening ({} bytes), never the capture ({} bytes)",

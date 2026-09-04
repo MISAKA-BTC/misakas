@@ -1050,7 +1050,11 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         use kaspa_consensus_core::palw_backend::PalwReplayRootsV1;
         if !self.court_capable {
             let outcome = self.execute(job, prompt)?;
-            return Ok(PalwReplayRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, work_leaves: None });
+            return Ok(PalwReplayRootsV1 {
+                execution_root: outcome.execution_root,
+                trace_root: outcome.trace_root,
+                work_leaves: None,
+            });
         }
         // The fold sink: one execution, the dense run's roots, none of its tiles (ADR-0084 D7).
         let run = a16_execute_free_prompt_streaming_v1(

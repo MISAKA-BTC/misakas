@@ -862,7 +862,12 @@ impl Base0FpBlockLeavesV1 {
     /// challenger's own leaves for it differ. `None` when they agree — then the served block is
     /// not what the served digest committed, and there is nothing to prosecute by a leaf.
     pub fn name_the_leaf_v1(&self, own: &dyn Fn(u64) -> Option<Hash64>) -> Option<u64> {
-        self.leaf_hashes.iter().enumerate().map(|(i, h)| (self.first_leaf_index + i as u64, h)).find(|(index, h)| own(*index).as_ref() != Some(*h)).map(|(index, _)| index)
+        self.leaf_hashes
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (self.first_leaf_index + i as u64, h))
+            .find(|(index, h)| own(*index).as_ref() != Some(*h))
+            .map(|(index, _)| index)
     }
 }
 
@@ -2227,10 +2232,10 @@ pub fn base0_verify_fp_interval_opening_v4_capped_v1<K: Base0FpIntervalKernelsV1
                 return V::Mismatch;
             }
             let Some(held) = state else {
-return V::Unverifiable;
+                return V::Unverifiable;
             };
             if held.covered_decode_call != covered {
-return V::Unverifiable;
+                return V::Unverifiable;
             }
             if held.state_chunks_root != claimed.leaf.state_chunks_root {
                 return V::CheckpointRootMismatch {
@@ -2247,25 +2252,25 @@ return V::Unverifiable;
         return V::Mismatch;
     }
     let Ok(recomputed) = kernels.replay_interval(profile, ctx, &start, first_call, last_call, step_leaf_count) else {
-return V::Unverifiable;
+        return V::Unverifiable;
     };
     // The interval's own leaves, in order, each exactly once.
     let interval_leaves = (leaves_geometry.range_end - leaves_geometry.interval_first) as usize;
     let mut filled: Vec<Option<Hash64>> = vec![None; interval_leaves];
     for (leaf_index, hash) in &recomputed {
         let Some(offset) = leaf_index.checked_sub(leaves_geometry.interval_first) else {
-return V::Unverifiable;
+            return V::Unverifiable;
         };
         let Some(slot) = filled.get_mut(offset as usize) else {
-return V::Unverifiable;
+            return V::Unverifiable;
         };
         if slot.replace(*hash).is_some() {
-return V::Unverifiable;
+            return V::Unverifiable;
         }
     }
     for slot in filled {
         let Some(hash) = slot else {
-return V::Unverifiable;
+            return V::Unverifiable;
         };
         own.push(hash);
     }
@@ -2273,7 +2278,7 @@ return V::Unverifiable;
         return V::FaultInRange { first_leaf_index, leaf_count };
     }
     let Some(range) = fold.with_leaves_v1(own) else {
-return V::Unverifiable;
+        return V::Unverifiable;
     };
     match step_range_opening_root_capped_v1(binding.step_leaf_count, &range, max_step_leaf_count) {
         Ok(root) if root == binding.step_merkle_root => V::Valid,
@@ -2650,7 +2655,8 @@ mod tests {
         let end = 7 * block + 9;
         let count = end - first;
         let (span_first, span_end) = tree.span_for_range(first, count).expect("the span");
-        let range = tree.range_opening_v1(span_first, &leaves[span_first as usize..span_end as usize], first, count).expect("the range");
+        let range =
+            tree.range_opening_v1(span_first, &leaves[span_first as usize..span_end as usize], first, count).expect("the range");
         let fold = Base0FpFoldRangeOpeningV1::from_range_v1(&range, &tree).expect("the fold form");
         assert_eq!(fold.whole_blocks_v1(leaf_count), (4, 7));
         assert_eq!(fold.block_roots, tree.retained_nodes()[4..7].to_vec(), "the digests are the retained nodes");
@@ -2669,13 +2675,11 @@ mod tests {
             Some((5 * block, block)),
             "the leaf the seat computes differently is addressed by its block"
         );
-        assert_ne!(
-            step_range_opening_root_capped_v1(leaf_count, &fold.with_leaves_v1(wrong).unwrap(), cap).ok(),
-            tree.root().ok()
-        );
+        assert_ne!(step_range_opening_root_capped_v1(leaf_count, &fold.with_leaves_v1(wrong).unwrap(), cap).ok(), tree.root().ok());
         // The edge: a range inside one block has no whole block, and its address is itself.
         let (span_first, span_end) = tree.span_for_range(block + 10, 20).expect("the span");
-        let edge = tree.range_opening_v1(span_first, &leaves[span_first as usize..span_end as usize], block + 10, 20).expect("the range");
+        let edge =
+            tree.range_opening_v1(span_first, &leaves[span_first as usize..span_end as usize], block + 10, 20).expect("the range");
         let edge_fold = Base0FpFoldRangeOpeningV1::from_range_v1(&edge, &tree).expect("the fold form");
         assert!(edge_fold.block_roots.is_empty());
         assert_eq!(fold_edge_v1(&edge_fold, leaf_count), (block + 10, 20));
@@ -2715,24 +2719,33 @@ mod tests {
         let (first, end) = (3 * block + 5, 7 * block + 9);
         let count = end - first;
         let (span_first, span_end) = tree.span_for_range(first, count).expect("the span");
-        let range = tree.range_opening_v1(span_first, &producer[span_first as usize..span_end as usize], first, count).expect("the range");
+        let range =
+            tree.range_opening_v1(span_first, &producer[span_first as usize..span_end as usize], first, count).expect("the range");
         let fold = Base0FpFoldRangeOpeningV1::from_range_v1(&range, &tree).expect("the fold form");
         let own: Vec<Hash64> = honest[first as usize..end as usize].to_vec();
         let (block_first, block_len) = fold.first_block_that_differs_v1(&own, leaf_count).expect("the seat names a block");
         assert_eq!((block_first, block_len), (5 * block, block));
         // The producer serves the block; the challenger checks it folds to the served digest.
-        let served = Base0FpBlockLeavesV1::cut_v1(0, &fold, leaf_count, 5, &|i| producer.get(i as usize).copied()).expect("the block is the range's");
+        let served = Base0FpBlockLeavesV1::cut_v1(0, &fold, leaf_count, 5, &|i| producer.get(i as usize).copied())
+            .expect("the block is the range's");
         assert_eq!(served.leaf_hashes.len() as u64, block);
         assert!(served.folds_to_v1(&fold.block_roots[1]), "the served block is the second whole block's digest");
         assert_eq!(Base0FpBlockLeavesV1::decode_v1(&served.encode_v1().unwrap()).unwrap(), served);
-        assert!(Base0FpBlockLeavesV1::cut_v1(0, &fold, leaf_count, 3, &|i| producer.get(i as usize).copied()).is_none(), "block 3 is not whole");
+        assert!(
+            Base0FpBlockLeavesV1::cut_v1(0, &fold, leaf_count, 3, &|i| producer.get(i as usize).copied()).is_none(),
+            "block 3 is not whole"
+        );
         // The leaf, and the court's path from the range with the served block substituted.
         assert_eq!(served.name_the_leaf_v1(&|i| honest.get(i as usize).copied()), Some(bad));
         assert_eq!(served.name_the_leaf_v1(&|i| producer.get(i as usize).copied()), None, "a block that agrees names nothing");
         let producers_range = base0_fp_range_with_served_block_v1(&fold, &own, &served).expect("the producer's range");
         assert_eq!(step_range_opening_root_capped_v1(leaf_count, &producers_range, cap).ok(), Some(root));
         let path = step_opening_from_range_capped_v1(leaf_count, &producers_range, bad, cap).expect("a path to the leaf");
-        assert_eq!(step_opening_root_capped_v1(leaf_count, &path, cap).ok(), Some(root), "the derived path walks to the committed root");
+        assert_eq!(
+            step_opening_root_capped_v1(leaf_count, &path, cap).ok(),
+            Some(root),
+            "the derived path walks to the committed root"
+        );
         // Without the served block the challenger's own range walks nowhere.
         let honest_range = fold.with_leaves_v1(own.clone()).unwrap();
         assert_ne!(step_range_opening_root_capped_v1(leaf_count, &honest_range, cap).ok(), Some(root));
@@ -2903,7 +2916,8 @@ mod tests {
             .expect("a geometry")
             .interval_count;
         assert!(count > 1, "the fixture must exercise both the genesis and the anchored arms");
-        let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("a geometry");
+        let geometry =
+            Base0FpIntervalGeometryV1::from_binding_v1(binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("a geometry");
         for index in 0..count {
             let opening = base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
                 .unwrap_or_else(|e| panic!("interval {index} opens: {e}"));
@@ -2945,8 +2959,17 @@ mod tests {
         let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, interval).expect("a geometry");
         let verify = |bytes: &[u8], index: u32| {
             let state = geometry.anchor_covered_call(index).map(|covered| seat_state(&material, &artifact, &ids, covered));
-            base0_verify_fp_interval_opening_with_state_v1(bytes, claim, index, &ids, leaves, interval, state.as_ref(), &FloorKernels(&artifact))
-                .to_consensus_v1()
+            base0_verify_fp_interval_opening_with_state_v1(
+                bytes,
+                claim,
+                index,
+                &ids,
+                leaves,
+                interval,
+                state.as_ref(),
+                &FloorKernels(&artifact),
+            )
+            .to_consensus_v1()
         };
 
         // (1) The last anchored interval, opened honestly, then one byte of a COMMITTED ROW moved.
@@ -2961,10 +2984,7 @@ mod tests {
         let mut bytes = decoded.range.siblings[last].as_byte_slice().to_vec();
         bytes[0] ^= 1;
         decoded.range.siblings[last] = Hash64::from_bytes(bytes.try_into().expect("64 bytes"));
-        assert!(matches!(
-            verify(&decoded.encode_v1().expect("re-encodes"), index),
-            PalwFpIntervalVerdictV1::FaultInRange { .. }
-        ));
+        assert!(matches!(verify(&decoded.encode_v1().expect("re-encodes"), index), PalwFpIntervalVerdictV1::FaultInRange { .. }));
         let mut short = Base0FpIntervalOpeningV4::decode_v1(&opening).expect("decodes");
         short.range.siblings.pop();
         assert!(matches!(verify(&short.encode_v1().expect("re-encodes"), index), PalwFpIntervalVerdictV1::FaultInRange { .. }));
@@ -3287,47 +3307,13 @@ mod tests {
     // ADR-0082 Decision 9 (invariant Z5, unit U-05): the seat recomputes, and never fetches the history
     // =============================================================================================
 
-    use crate::fp_recompute::{Base0FpRecomputeError, Base0FpRecomputeKernelsV1, base0_fp_recompute_state_v1};
+    use crate::fp_recompute::{Base0FpRecomputeError, base0_fp_recompute_state_v1};
 
     /// The floor's kernels for a RECOMPUTE — the same engine and cache its capture path uses, with
     /// nothing captured and no token selected. The dense and hybrid tiers ship theirs in
     /// `crate::fp_recompute`; this one exists because the floor's fixture is the class in this
     /// file's tests, and it drives exactly the same shared driver.
-    struct FloorRecompute<'a> {
-        engine: crate::engine::Base0Engine<'a>,
-        cache: crate::engine::KvCache,
-        artifact: &'a crate::artifact::Base0ArtifactV1,
-    }
-
-    impl<'a> FloorRecompute<'a> {
-        fn new(artifact: &'a crate::artifact::Base0ArtifactV1) -> Self {
-            Self { engine: crate::engine::Base0Engine::new(artifact), cache: crate::engine::KvCache::new(artifact), artifact }
-        }
-    }
-
-    impl Base0FpRecomputeKernelsV1 for FloorRecompute<'_> {
-        fn forward_no_capture(&mut self, token: usize, position: usize) -> Result<(), Base0FpRecomputeError> {
-            self.engine
-                .forward_token(&mut self.cache, token, position)
-                .map(|_| ())
-                .map_err(|e| Base0FpRecomputeError::Engine(format!("{e:?}")))
-        }
-
-        fn state_chunks(&self, profile: &PalwShapeProfileV3, positions: u32) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
-            let _ = self.artifact;
-            let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions)
-                .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")))?;
-            let mut chunks = Vec::with_capacity(geometry.chunk_count() as usize);
-            for index in 0..geometry.chunk_count() {
-                let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
-                    .ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
-                chunks.push(
-                    self.cache.state_chunk_bytes(&entry).ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?,
-                );
-            }
-            Ok(chunks)
-        }
-    }
+    use crate::fp_recompute::Base0RecomputeKernelsV1 as FloorRecompute;
 
     /// The seat's own state at one interval's start, computed the way Decision 9 says: the prompt
     /// it holds and the committed output ids, teacher-forced, with the family's own kernels.
@@ -3628,7 +3614,11 @@ mod tests {
             },
             seed_row_leaf_count: fold.seed_row_leaf_count,
             seed_row_tiles: fold.seed_row_tiles.clone(),
-            anchor: Some(PalwCheckpointKvOperandsV1 { leaf: claim_anchor.leaf, chunks: vec![vec![0u8]], opening: claim_anchor.opening }),
+            anchor: Some(PalwCheckpointKvOperandsV1 {
+                leaf: claim_anchor.leaf,
+                chunks: vec![vec![0u8]],
+                opening: claim_anchor.opening,
+            }),
         };
         decoded.binding.shape_profile.state_chunk_map_id =
             kaspa_consensus_core::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3();
@@ -4120,7 +4110,8 @@ mod tests {
         // ADR-0086 X4: the bytes are the fold's, not the range's — under 200 KB for a 2^22-leaf
         // space's last four leaves.
         assert!(bytes.len() < 200_000, "a fold opening over a 2^22+1-leaf space is {} bytes", bytes.len());
-        let range = fold.with_leaves_v1(leaves[lg.range_first as usize..lg.range_end as usize].to_vec()).expect("the seat's own leaves");
+        let range =
+            fold.with_leaves_v1(leaves[lg.range_first as usize..lg.range_end as usize].to_vec()).expect("the seat's own leaves");
         assert_eq!(step_range_opening_root_capped_v1(leaf_count, &range, cap).ok(), Some(binding.step_merkle_root));
         assert!(
             step_range_opening_root_v1(leaf_count, &range).is_err(),
@@ -4492,4 +4483,3 @@ mod inspect_material {
         );
     }
 }
-
