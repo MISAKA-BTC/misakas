@@ -3462,10 +3462,22 @@ impl PalwPanelService {
         // A raw family capture — the attempt lane's retention (ADR-0084 Decision 4). The prompt is
         // the anchor's derivation, which the asking seat re-derives on its own; an opening over
         // any other prompt binds to nothing there.
-        let (backend, shape) = self.backend_for_raw_capture_v1(&session, &bytes)?;
+        let Some((backend, shape)) = self.backend_for_raw_capture_v1(&session, &bytes) else {
+            info!("[{PALW_PANEL}] claim {claim}: no held class reads its retained capture — interval {interval_index} not opened");
+            return None;
+        };
         let (_, prompt) = backend.job_for_anchor(shape.job_context.job_id).ok()?;
         let prompt_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
-        backend.open_fp_interval(&bytes, interval_index, &prompt_ids).ok()
+        match backend.open_fp_interval(&bytes, interval_index, &prompt_ids) {
+            Ok(opening) => {
+                info!("[{PALW_PANEL}] claim {claim}: opened interval {interval_index} of the retained capture ({} bytes served)", opening.len());
+                Some(opening)
+            }
+            Err(e) => {
+                info!("[{PALW_PANEL}] claim {claim}: interval {interval_index} does not open: {e}");
+                None
+            }
+        }
     }
 
     /// Register both halves of the serving side with the gossip center. Called once, from the
@@ -3513,6 +3525,7 @@ impl PalwPanelService {
         if slot.len() >= PER_PAIR {
             return;
         }
+        info!("[{PALW_PANEL}] claim {claim}: holding a served opening of interval {interval_index} ({} bytes)", bytes.len());
         slot.push(bytes);
     }
 
@@ -3651,6 +3664,13 @@ impl PalwPanelService {
             let facts = session.palw_producer_facts_v2(row.class_id, None)?;
             let backend = self.resolve_backend(session, row.class_id, facts.artifact_root).ok()?;
             let shape = backend.capture_shape(bytes)?;
+            // **The bytes decode under every base0 family's codec, so decoding is not identity.**
+            // The floor's backend reads a graph-v5 tuple as happily as its own and then derives a
+            // floor prompt for it — an opening over the wrong class, refused by the asking seat as
+            // binding to nothing. The capture's own context names its class; the row must be it.
+            if shape.job_context.shape_profile_id != row.class_id {
+                return None;
+            }
             Some((backend, shape))
         })
     }
@@ -3814,6 +3834,11 @@ impl PalwPanelService {
         // geometry re-derivation inside `verify_fp_interval_opening`.
         let covered_bound = backend.checkpoint_covered_bound_for_context_v1(ctx);
         let mut unanswered: Vec<u32> = Vec::new();
+        let held: usize = draw.intervals.iter().filter(|i| openings.contains_key(&(duty.claim_id, **i))).count();
+        info!(
+            "[{PALW_PANEL}] claim {}: interval seat — drew {:?} of {} interval(s), {held} opening(s) held",
+            duty.claim_id, draw.intervals, draw.interval_count
+        );
 
         for index in &draw.intervals {
             let candidates = openings.get(&(duty.claim_id, *index)).cloned().unwrap_or_default();
@@ -3908,7 +3933,8 @@ impl PalwPanelService {
         // Ask for what is missing and conclude nothing this round. The caller's tail is unchanged:
         // an interval that never arrives ends in the two-sided quorum's `Unavailable` arm at the
         // half-window, exactly as capture withholding does today.
-        self.request_fp_interval_openings(network_domain, duty.claim_id, &unanswered, current_daa).await;
+        let asked = self.request_fp_interval_openings(network_domain, duty.claim_id, &unanswered, current_daa).await;
+        info!("[{PALW_PANEL}] claim {}: asked the executor for interval(s) {:?} ({asked} signed request(s))", duty.claim_id, unanswered);
         None
     }
 
