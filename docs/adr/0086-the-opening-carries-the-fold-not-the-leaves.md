@@ -193,6 +193,13 @@ the next cut, not this one.
   Decision 7's replay kept licensing (the line now reads "6630544 leaves replayed, priced 0, 7s").
   Nothing over the cap moved on either lane.
 
+* **Found alongside, not this ADR's:** the free-prompt lane's retained-trace manifest was the
+  attempt lane's (`attempt_trace_manifest_root_v1(trace_root, 1)`, chunk count 1), so every
+  free-prompt run past 256 tokens was refused by the verifier's chunk-count rule and every shorter
+  one carried a root of the wrong lane's function; `0001f34c` gives the lane its own derivation
+  (card §10p). It bears on this ADR only in that a 300-token claim is now the devnet's check for
+  both (run 8).
+
 ## 8. What is deliberately not decided
 
 * The seed row's replacement by the seat's own selection (above).
