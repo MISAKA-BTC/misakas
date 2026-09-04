@@ -6262,3 +6262,12 @@ reversible and QWEN36 claims can reach Final.
 `the_rc_ruleset_arms_the_unavailable_abstains_rule_from_genesis` pins it. §6m's "None on every shipped preset, pinned
 by a test" read the pin on the RAW preset (`MAINNET_PARAMS.palw_unavailable_abstains.is_none()` — the assembly's input).
 Item (b) therefore needs no activation; an Unavailable quorum already abstains here.
+
+**§10n, continued (22:05 JST):** the loopback devnet on the branch (three nodes, two v5 producers, this Mac) measured before
+the fix: v5 material **784,693,059 B** per attempt block with a 336-B `ATA1` beside it; the push guard refused every
+announcement and all three nodes still accepted every block (Y4); each seat pooled the other executor's envelope under
+`foreign/` (D2 on the attempt lane); node-2 (no artifact) filed Incapable. **No interval ever opened**: the raw-capture opener
+picked the FLOOR's backend (every base0 codec decodes a v5 tuple) and derived a floor prompt. Fixed in `75bac7be` (the
+capture's own shape profile id must be the class row's) with interval-lane log lines on chain facts; the fleet binary is
+being rebuilt on ibm from it (the `d1ec6dcb…` staged earlier is superseded); the devnet run restarted on the fix at 22:05.
+

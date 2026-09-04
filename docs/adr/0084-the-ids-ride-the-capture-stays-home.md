@@ -231,6 +231,17 @@ on the branch (see the commits for the exact test names):**
 | D5 | `rpc/core` v5 `palw_retention_dir`, `rpc/grpc` field 26, `rpc/service`, `flow_context::palw_declare_retention_dir`; `misaka-palw-fp-submit` `FpStaging.output_token_ids` / `<claim>.answer`; the rail; `misaka palw fp-submit --capture` | the node names its directory; the submitter stages the envelope under the material's ordering; the rail defaults to the node's directory and refuses one not on this host |
 | D6 | the three base0 backends | `fp_committed_output_ids` over `base0_material_decode_any_v1`; the panel names no family decoder |
 
+**Found by the loopback devnet run (2026-09-04, three nodes, two graph-v5 producers on this
+branch) and fixed in `75bac7be`:** the resolver that opens intervals of a RAW attempt-lane capture
+picked the first held class whose codec decoded the bytes — every base0 family's codec decodes a
+graph-v5 tuple, and with the floor first in the class table the floor's backend was chosen, derived
+a floor prompt, and no interval ever opened: the seats held the envelope for fifteen minutes and
+served nothing. The capture's job context names its shape profile, which is the class id, and the
+row must match it. Measured on the same run before the fix: 784,693,059-byte materials with a
+336-byte `ATA1` beside each; the push guard refused every announcement and the blocks still
+reached all three nodes (Y4); each seat pooled the other executor's envelope under `foreign/`
+(Decision 2 on the attempt lane); the artifact-less seat filed `Incapable`.
+
 **Not landed here, by name:**
 
 * **W7-shaped end-to-end evidence.** No devnet drill in this record certifies a claim whose
