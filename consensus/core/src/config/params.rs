@@ -5666,11 +5666,26 @@ pub fn palw_rc_qwen36_is_registered() -> bool {
 ///
 /// **It is a REGISTRY, not a bond, and that is the correction that matters.** The shipped card
 /// carried exactly one bond; `derive_panel_v2` excludes a claim's own executor by bond, by operator
-/// AND by key and seats one bond per operator, so a 5-seat panel needs SIX distinct operators — and
-/// `BondRegistered` may not ride a transaction, so a registry too small has no later repair. With
+/// AND by key and seats one bond per operator, so a 5-seat panel needs SIX distinct operators. With
 /// one bond no claim could ever be licensed: every one would void at `BindTimeout`, `safe_weight`
-/// would stay zero, and each block's escrowed worker carve would be burned. `verify_palw_genesis_v2`
-/// now refuses such a registry outright, which is why this is a list.
+/// would stay zero, and each block's escrowed worker carve would be burned.
+///
+/// **Two sentences that used to stand here are no longer true, and both were favourable**
+/// (mainnet audit, 2026-09-05). This said "`BondRegistered` may not ride a transaction, so a
+/// registry too small has no later repair" and "`verify_palw_genesis_v2` now refuses such a
+/// registry outright". A `BondRegistered` DOES ride a transaction now
+/// (`palw_lifecycle_objects_v2`), and Gate 2 was retired by ADR-0061 — `palw_genesis_v2.rs` says
+/// so in its own text: "a genesis may seat zero". So an under-seated card is not refused; it
+/// assembles, boots, and runs as a bootstrap phase in which blocks flow on the heartbeat lane,
+/// strangers register bonds as transactions, and licensing begins once `seat_count + 1` distinct
+/// operators exist.
+///
+/// That is a designed transitional state on a drill network and a **priced** one on a network with
+/// value: until it ends, every claim voids at `BindTimeout` and its escrowed worker reward is
+/// destroyed, one block at a time, announced per block by the runtime ("voided claims holding N
+/// sompi … destroyed, not paid"). Sizing this list at or above `palw_v2_min_genesis_bonds_v1()`
+/// before a mainnet mint is therefore an operator decision with a running cost, not a rule the
+/// code enforces.
 pub struct PalwRcGenesisBondCard {
     /// Which premine output backs this bond — its collateral outpoint, at `premine_outpoint`
     /// index `0..cards` (a collateral output carved from the main wallet since the 10B-cap
@@ -5689,7 +5704,9 @@ pub struct PalwRcGenesisBondCard {
 // outputs 0..=5 (carved from the main wallet since the 10B-cap re-genesis 2026-08-30), each
 // with a DISTINCT operator key: `derive_panel_v2` excludes a claim's own executor by
 // bond, by operator and by key and seats one bond per operator, so a 5-seat panel needs six.
-// `BondRegistered` may not ride a transaction, so a registry too small has no later repair.
+// (This used to add "`BondRegistered` may not ride a transaction, so a registry too small has no
+// later repair". It does ride one now — see the card struct's doc, mainnet audit 2026-09-05 — so
+// the repair exists and what a short registry costs is burned escrow until it arrives.)
 //
 // Every key was generated on the host that holds it (`kaspa-pq-validator keygen`, 0600) and only
 // the public row travelled; each payout is that bond key's own address, so a matured reward is
