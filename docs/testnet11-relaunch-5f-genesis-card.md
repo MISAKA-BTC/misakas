@@ -6199,3 +6199,16 @@ bonded 2, mature 0) while the chain's locked set (13 outpoints) does not contain
 submit through a node that does not reserve it (the fleet node on the same host). The right fix is
 either a named reason ("reserved by this node's panel as its fee outpoint") or letting the CLI chain on
 the panel's reservation the way `spendable_candidates_v1` already chains on the mempool.
+
+**§10i, continued (06:50Z): the chain's certified set does not cover the class — the tool's view did.**
+Both lane bindings were submitted through the fleet node (attempt tx `4efe3fbb…`, fp tx `20799b0a…`). The
+block at 06:40:51Z (`adaf6b71…`) carried the attempt binding and **dropped it**: *"no family certified on
+this chain for the attempt lane covers every kernel class 2705b8f6…"*. `palw-certify bind` had said the
+opposite ("covered by the PALW-QWEN36 RC family's attempt-lane drill") because it reads the BUILD's fixture
+families, while the chain reads genesis ∪ carried objects — and whatever the 5f genesis certified for the
+QWEN36 family does not reach every kernel the 27B graph reaches. So the documented family-first route
+applies (the one a16-v5's free-prompt lane took in §7): `palw-certify drill --family qwen36 --lane attempt`
+(the fixture drill, 15 s; family `c22beec9…`, 29 vectors, 914,168 B → 10 chunks) submitted as chained
+carriers through the fleet node, then the binding again. **Finding for the doc:** the bind tool's coverage
+sentence is a build fact, not a chain fact, and it should say so — or read the chain's certified set through
+the node it is pointed at.
