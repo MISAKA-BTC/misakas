@@ -72,18 +72,34 @@
 //! a build that predates the fork-id field — a peering change on a running network, shipped by a
 //! commit whose whole premise is that it changes nothing until an operator arms it.
 //!
-//! So the gate is armed by [`fork_id_gate_fences_v1`], which today names
-//! `Params::palw_attempt_activation` — ADR-0072's fence, the one this module was written to make
-//! survivable — and which crescendo is deliberately not in. That list does double duty: it is both
-//! "is the gate armed at all" and "which fences does a refusal rest on", and the second is what
-//! keeps a pre-existing fence from turning the gate on by being crossed. The fork id is still
-//! ADVERTISED by every node from the moment this lands, because an advertisement refuses nobody and
-//! a gate that has never been on the wire is a gate nobody has tested. What is fenced is only the
-//! refusal.
+//! So the gate is armed by [`fork_id_gate_fences_v1`], which names `Params::palw_attempt_activation`
+//! — ADR-0072's fence, the one this module was written to make survivable — and
+//! `Params::palw_difficulty_priced_rows` — ADR-0083's, the first fence an operator actually
+//! scheduled on a live chain (testnet-11, DAA 1150, 2026-09-04) — and which crescendo is
+//! deliberately not in. That list does double duty: it is both "is the gate armed at all" and
+//! "which fences does a refusal rest on", and the second is what keeps a pre-existing fence from
+//! turning the gate on by being crossed. The fork id is still ADVERTISED by every node from the
+//! moment this lands, because an advertisement refuses nobody and a gate that has never been on
+//! the wire is a gate nobody has tested. What is fenced is only the refusal.
+//!
+//! ## What "armed on a shipped preset" means, now that one is
+//!
+//! Until ADR-0083 no shipped preset scheduled a gate fence, and the test that said so was the claim
+//! that made the module safe to land on a running network. testnet-11 now schedules one, so the
+//! claim is restated as what it always meant: **an armed gate refuses nobody before its fence
+//! fires** — every verdict below the height is `Agree` or a warning, including for a build with no
+//! fork-id field at all — **and at the height it refuses exactly the peers that do not carry the
+//! fence**: the un-upgraded build (fired set the empty prefix, next fence `2_125_000` instead of
+//! `1150`) is `DisagreePastFence { fired_through: 1150 }` from DAA 1150 on, while a fresh node on
+//! the new build syncing pre-1150 history (empty prefix, next `1150`) and a node already past it
+//! (prefix `[1150]`, next `2_125_000`) are prefix peers and kept, in both directions. That is the
+//! block-level silent fork of a flag day turned into a named handshake refusal, which is the
+//! module's purpose. A connection accepted before the height is not re-judged when the height
+//! passes; the block rules separate that pair, and the next handshake refuses it.
 //!
 //! A later ADR arming a different fence must add it to that list, and the tests
-//! `the_gate_is_disarmed_on_every_shipped_preset` and `the_gate_refuses_only_on_the_fences_it_names`
-//! are what make forgetting visible.
+//! `the_gate_is_armed_only_where_a_shipped_preset_schedules_a_gate_fence` and
+//! `the_gate_refuses_only_on_the_fences_it_names` are what make forgetting visible.
 
 use crate::config::params::Params;
 use kaspa_hashes::{ConsensusParamsId, Hash, Hash64};
@@ -198,13 +214,22 @@ pub fn fork_id_gate_armed_v1(params: &Params) -> bool {
 /// A later ADR arming a different fence adds it HERE. `0` and `u64::MAX` are excluded for the same
 /// reasons [`Params::fence_schedule_v1`] excludes them: a fence active at genesis is
 /// `consensus_identity_id`'s business and never "crossed", and `never()` is not a height.
+///
+/// Today: ADR-0072's `palw_attempt_activation` and ADR-0083's `palw_difficulty_priced_rows` (the
+/// difficulty window counts only bits-priced rows; scheduled at DAA 1150 on testnet-11). A fence
+/// that is scheduled on a preset is that operator's opt-in — there is no second field to set,
+/// because the schedule entry already says everything the gate needs: the height, and that this
+/// build carries the rule. Sorted and deduplicated so the list reads as a schedule.
 pub fn fork_id_gate_fences_v1(params: &Params) -> Vec<u64> {
-    params
-        .palw_attempt_activation
+    let mut fences: Vec<u64> = [params.palw_attempt_activation, params.palw_difficulty_priced_rows]
+        .into_iter()
+        .flatten()
         .map(|fence| fence.daa_score())
         .filter(|&score| score != 0 && score != u64::MAX)
-        .into_iter()
-        .collect()
+        .collect();
+    fences.sort_unstable();
+    fences.dedup();
+    fences
 }
 
 /// The fence heights at or below `daa_score`, in order — what this node has crossed.
@@ -367,13 +392,9 @@ mod tests {
                 ("mainnet", vec![110_165_000]),
                 ("testnet-10", vec![2_125_000]),
                 // ADR-0083 Decision 1, scheduled at 1150 on the live chain (2026-09-04, the operator's
-                // path (a)). ON the schedule — every node advertises it as `next` until it fires and
-                // in its fired digest after — and OFF the gate: `fork_id_gate_fences_v1` still names
-                // only ADR-0072's fence, so this build refuses nobody at 1150; an un-upgraded seat
-                // parts from the chain at the block level (`UnexpectedDifficulty`), which is why every
-                // seat restarts before the height. Arming the gate on it is the follow-up this module
-                // doc asks for, and it is the FIRST arming of the gate on a shipped preset, so it
-                // gets its own test plan rather than a line here.
+                // path (a)). On the schedule AND on the gate — the first shipped preset whose gate is
+                // armed; see the module doc's "What armed on a shipped preset means" and
+                // `the_gate_is_armed_only_where_a_shipped_preset_schedules_a_gate_fence`.
                 ("testnet-11", vec![1150, 2_125_000]),
                 ("devnet", vec![]),
                 ("simnet", vec![]),
@@ -382,18 +403,30 @@ mod tests {
         );
     }
 
-    /// **The gate is disarmed on every shipped preset, so it cannot refuse anybody today.**
+    /// **The gate is armed on a shipped preset only where its operator scheduled a gate fence, and
+    /// an armed gate refuses nobody before that fence fires.**
     ///
-    /// This is the claim that makes the module safe to land on a running network: `evaluate` takes
-    /// the `Unfenced` arm before it compares anything, at every height, for every peer — including
-    /// the un-upgraded one it exists to refuse. Arming it is `palw_attempt_activation`, which is
-    /// `None` everywhere, and that is a coordinated flag day rather than a default.
+    /// Until ADR-0083 this test said "disarmed on every shipped preset", and that was the claim
+    /// that made the module safe to land on a running network. testnet-11 now schedules a gate
+    /// fence at 1150 (ADR-0083 Decision 1, the operator's flag day of 2026-09-04), so the claim is
+    /// restated as what it always meant. Four presets stay exactly as before: `Unfenced` at every
+    /// height for every peer, crescendo crossed or not. On testnet-11 the gate is armed by exactly
+    /// that one fence, and the whole rollout below it is warnings: the un-upgraded build, a build
+    /// with no fork-id field, a stranger. From 1150 the un-upgraded build is refused ON that fence,
+    /// and the two prefix peers a live rollout is made of — the fresh node syncing pre-1150 history
+    /// and the node already past the height — are kept, in both directions.
     #[test]
-    fn the_gate_is_disarmed_on_every_shipped_preset() {
+    fn the_gate_is_armed_only_where_a_shipped_preset_schedules_a_gate_fence() {
+        const ADR_0083: u64 = 1150;
+        const CRESCENDO_T11: u64 = 2_125_000;
         for (name, params) in shipped() {
-            assert!(!fork_id_gate_armed_v1(&params), "{name}: a shipped preset must not arm the fork-id gate");
-            // Past crescendo included: the whole point is that crossing a PRE-EXISTING fence must
-            // not turn the gate on.
+            if name == "testnet-11" {
+                assert_eq!(fork_id_gate_fences_v1(&params), vec![ADR_0083], "{name}: armed by ADR-0083's fence and nothing else");
+                assert!(fork_id_gate_armed_v1(&params));
+                continue;
+            }
+            assert!(!fork_id_gate_armed_v1(&params), "{name}: no operator scheduled a gate fence here");
+            // Past crescendo included: crossing a PRE-EXISTING fence must not turn the gate on.
             for daa in [0u64, 1, 2_125_000, 110_165_000, u64::MAX] {
                 for (peer_fired, peer_next) in [(&[][..], FORK_ID_NO_NEXT_FENCE), (&[0u8; 32][..], 7)] {
                     let verdict = evaluate_fork_id_v1(&params, daa, peer_fired, peer_next);
@@ -401,6 +434,71 @@ mod tests {
                     assert!(!verdict.refuses(), "{name} at {daa}");
                 }
             }
+        }
+
+        let t11 = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
+        assert_eq!(t11.fence_schedule_v1(), vec![ADR_0083, CRESCENDO_T11]);
+        let genesis = t11.genesis.hash;
+        // The un-upgraded build: same genesis, schedule [2_125_000] — it has crossed nothing and names
+        // crescendo as its next fence, which is exactly what its digest and next look like on the wire.
+        let stale_fired = fired_fences_digest_v1(genesis, &[]);
+        let stale_next = CRESCENDO_T11;
+        // The fresh node on THIS build, syncing pre-1150 history.
+        let fresh = fork_id_v1(&t11, 10);
+        assert_eq!(
+            (fresh.fired, fresh.next),
+            (stale_fired, ADR_0083),
+            "same empty prefix as the stale build; the next fence is what tells them apart"
+        );
+        // A node on this build past the height.
+        let past = fork_id_v1(&t11, 5_000);
+        assert_eq!(past.next, CRESCENDO_T11);
+        let stranger = &[0u8; 32][..];
+
+        // Below the fence: the whole rollout is warnings, never a refusal, whatever the peer is.
+        for local_daa in [0u64, 1, 1_149] {
+            assert_eq!(
+                evaluate_fork_id_v1(&t11, local_daa, stale_fired.as_bytes().as_slice(), stale_next),
+                ForkIdVerdict::DisagreeBeforeAnyFence(ForkIdMismatch::NextFenceDiffers { expected: ADR_0083, got: CRESCENDO_T11 }),
+                "at {local_daa}: the un-upgraded build is a warning until the fence fires"
+            );
+            assert!(!evaluate_fork_id_v1(&t11, local_daa, &[], FORK_ID_NO_NEXT_FENCE).refuses(), "absent, at {local_daa}");
+            assert!(!evaluate_fork_id_v1(&t11, local_daa, stranger, 7).refuses(), "stranger, at {local_daa}");
+            assert_eq!(evaluate_fork_id_v1(&t11, local_daa, fresh.fired.as_bytes().as_slice(), fresh.next), ForkIdVerdict::Agree);
+            assert_eq!(evaluate_fork_id_v1(&t11, local_daa, past.fired.as_bytes().as_slice(), past.next), ForkIdVerdict::Agree);
+        }
+
+        // From the fence: the un-upgraded build is refused, on that fence — the flag day's silent
+        // fork made a named refusal. A build with no fork-id field is the same case.
+        for local_daa in [ADR_0083, ADR_0083 + 1, 5_000, CRESCENDO_T11 + 1] {
+            let verdict = evaluate_fork_id_v1(&t11, local_daa, stale_fired.as_bytes().as_slice(), stale_next);
+            assert_eq!(
+                verdict,
+                ForkIdVerdict::DisagreePastFence {
+                    mismatch: ForkIdMismatch::NextFenceDiffers { expected: ADR_0083, got: CRESCENDO_T11 },
+                    fired_through: ADR_0083
+                },
+                "at {local_daa}"
+            );
+            assert!(verdict.refuses());
+            assert!(evaluate_fork_id_v1(&t11, local_daa, &[], FORK_ID_NO_NEXT_FENCE).refuses(), "absent, at {local_daa}");
+            // …and the prefix peers are kept, in both directions: the fresh node is this build seen
+            // from an earlier height, the past node is this build seen from a later one.
+            assert_eq!(
+                evaluate_fork_id_v1(&t11, local_daa, fresh.fired.as_bytes().as_slice(), fresh.next),
+                ForkIdVerdict::Agree,
+                "fresh, at {local_daa}"
+            );
+            assert_eq!(
+                evaluate_fork_id_v1(&t11, local_daa, past.fired.as_bytes().as_slice(), past.next),
+                ForkIdVerdict::Agree,
+                "past, at {local_daa}"
+            );
+            assert_eq!(
+                evaluate_fork_id_v1(&t11, 10, past.fired.as_bytes().as_slice(), past.next),
+                ForkIdVerdict::Agree,
+                "a fresh node keeps the node ahead of it"
+            );
         }
     }
 
@@ -566,6 +664,16 @@ mod tests {
         params.palw_attempt_activation = Some(ForkActivation::new(9_000_000));
         assert_eq!(fork_id_gate_fences_v1(&params), vec![9_000_000]);
         assert!(fork_id_gate_armed_v1(&params));
+        // ADR-0083's fence arms it too, and the list reads as a schedule: sorted, one entry per height.
+        params.palw_difficulty_priced_rows = Some(ForkActivation::new(8_000_000));
+        assert_eq!(fork_id_gate_fences_v1(&params), vec![8_000_000, 9_000_000], "two ADRs, two fences, in height order");
+        params.palw_difficulty_priced_rows = Some(ForkActivation::new(9_000_000));
+        assert_eq!(fork_id_gate_fences_v1(&params), vec![9_000_000], "one height, whichever rules share it");
+        params.palw_difficulty_priced_rows = Some(ForkActivation::never());
+        assert_eq!(fork_id_gate_fences_v1(&params), vec![9_000_000], "`never()` on the second fence is absence");
+        params.palw_difficulty_priced_rows = Some(ForkActivation::always());
+        assert_eq!(fork_id_gate_fences_v1(&params), vec![9_000_000], "a genesis-active second fence is not crossed");
+        params.palw_difficulty_priced_rows = None;
 
         // `never()` is not a height and a genesis-active fence is not crossed — the same two
         // exclusions `fence_schedule_v1` makes, for the same reasons. A fence at genesis separates

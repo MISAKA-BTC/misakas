@@ -1677,10 +1677,13 @@ impl ConnectionInitializer for FlowContext {
         // "behind on the same schedule" (every syncing node, kept) from "a different schedule"
         // (refused, but only once this node has actually crossed something).
         //
-        // Inert on every shipped preset: `fork_id_gate_armed_v1` reads `palw_attempt_activation`,
-        // which is `None` everywhere, so this returns `Unfenced` before it compares anything. Three
-        // presets DO schedule crescendo, which is why the gate is armed by that field rather than
-        // by "has this node crossed a fence" — see the module doc.
+        // Armed only where an operator scheduled a gate fence: `fork_id_gate_armed_v1` reads
+        // `palw_attempt_activation` (ADR-0072) and `palw_difficulty_priced_rows` (ADR-0083) —
+        // testnet-11 schedules the second at DAA 1150 (2026-09-04), every other shipped preset
+        // leaves both `None` and returns `Unfenced` before comparing anything. Three presets DO
+        // schedule crescendo, which is why the gate is armed by those fields rather than by "has
+        // this node crossed a fence" — see the module doc. Below its fence an armed gate only
+        // warns (the arm below); from the fence it refuses the build that does not carry it.
         match kaspa_consensus_core::fork_id_v1::evaluate_fork_id_v1(
             &self.config.params,
             local_daa_score,
