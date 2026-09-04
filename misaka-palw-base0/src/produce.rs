@@ -981,6 +981,41 @@ pub fn base0_material_matches_claim_v1(
 /// every honest dense capture of a class registered against a deeper ladder, which is the same
 /// sentence said about an honest producer. `Ok(false)` is a verdict, not an error, so nothing
 /// downstream could tell the two apart.
+/// **A dense material's step leaves, rebuilt from its tiles under the ruleset's ladder** — one
+/// spelling for the material verifier ([`base0_material_matches_claim_capped_v1`]) and the interval
+/// opener (`fp_interval`), which is how the two cannot bound the space differently again. `None`
+/// when the binding's space is empty or above the ladder, or when a tile lies outside the space
+/// it claims to fill.
+pub fn base0_dense_step_leaves_capped_v1(
+    binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    tiles: &[(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)],
+    max_step_leaf_count: u64,
+) -> Option<Vec<Hash64>> {
+    if binding.step_leaf_count == 0 || binding.step_leaf_count > max_step_leaf_count {
+        return None;
+    }
+    let ctx_hash = binding.job_context.context_hash();
+    let profile_hash = binding.shape_profile.shape_profile_id();
+    let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
+    for (index, leaf) in tiles {
+        let slot = leaves.get_mut(*index as usize)?;
+        *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+    }
+    Some(leaves)
+}
+
+/// The root of [`base0_dense_step_leaves_capped_v1`], under the same ladder. The ruleset's cap
+/// bounds it, not the default one — a graph-v5 capture (6.6 M leaves) verified as a mismatch
+/// under `step_merkle_root_v1`, which walks `PALW_STEP_LEG_MAX_LEAVES`.
+pub fn base0_dense_step_root_capped_v1(
+    binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    tiles: &[(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)],
+    max_step_leaf_count: u64,
+) -> Option<Hash64> {
+    let leaves = base0_dense_step_leaves_capped_v1(binding, tiles, max_step_leaf_count)?;
+    kaspa_consensus_core::palw_step_leg::step_merkle_root_capped_v1(&leaves, max_step_leaf_count).ok()
+}
+
 pub fn base0_material_matches_claim_capped_v1(
     material: &Base0RetainedMaterialV1,
     committed_execution_root: Hash64,
@@ -988,31 +1023,8 @@ pub fn base0_material_matches_claim_capped_v1(
     max_step_leaf_count: u64,
 ) -> Result<bool, ProduceError> {
     let (binding, tiles, logits_rows, generated, checkpoint_chunks) = material;
-    // **Bound the count BEFORE allocating from it.** `step_leaf_count` is a plain `u64` that
-    // arrived over gossip inside a borsh blob, and `step_merkle_root_v1` — the only thing that ever
-    // compares it to `PALW_STEP_LEG_MAX_LEAVES` — is called five lines below, after the vector of
-    // that many `Hash64` already exists. A `Hash64` is 64 bytes, so a few hundred bytes of material
-    // asking for 2^48 leaves is a 2^54-byte allocation: under `isize::MAX`, so it is
-    // `handle_alloc_error` and a process ABORT, not a catchable panic. Every seat that touched the
-    // blob would die, and `PalwGossipFlow` relays a blob before anything decodes it, so the blob
-    // arrives everywhere first.
-    //
-    // The check is the same one `step_merkle_root_v1` makes; the defect was never the rule, it was
-    // that the rule stood downstream of the memory it was supposed to protect.
-    if binding.step_leaf_count == 0 || binding.step_leaf_count > max_step_leaf_count {
-        return Ok(false);
-    }
-    let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
-    let ctx_hash = binding.job_context.context_hash();
-    let profile_hash = binding.shape_profile.shape_profile_id();
-    for (index, leaf) in tiles {
-        let Some(slot) = leaves.get_mut(*index as usize) else {
-            return Ok(false); // a tile outside the space it claims to fill
-        };
-        *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
-    }
-    let Ok(root) = kaspa_consensus_core::palw_step_leg::step_merkle_root_v1(&leaves) else {
-        return Ok(false);
+    let Some(root) = base0_dense_step_root_capped_v1(binding, tiles, max_step_leaf_count) else {
+        return Ok(false); // an empty space, one above the ladder, or a tile outside it
     };
     if root != binding.step_merkle_root {
         return Ok(false);
@@ -2355,5 +2367,42 @@ mod tests {
             base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &[prompt[0], prompt[1], 9_999]).err(),
             Some(ProduceError::TokenOutOfVocab { token: 9_999, vocab: artifact.shape.vocab })
         );
+    }
+
+    /// **The ladder above the default one.** A class whose step space is larger than
+    /// `PALW_STEP_LEG_MAX_LEAVES` — the graph-v5 attempt lane is 6.6 M leaves — roots under its
+    /// RULESET's cap, and not under the default: the cap is the bound. The verifier reached for
+    /// the uncapped root and reported a real graph-v5 capture as a mismatch (ADR-0084 §7 record).
+    #[test]
+    fn a_dense_material_above_the_default_ladder_roots_under_its_rulesets_cap() {
+        use kaspa_consensus_core::palw_step::PalwStepCoordinateV1;
+        use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_MAX_LEAVES, PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1};
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+        let mut binding = run.binding.clone();
+        let leaf_count = PALW_STEP_LEG_MAX_LEAVES + 1;
+        let cap = PALW_STEP_LEG_MAX_LEAVES * 2;
+        let tiles: Vec<(u64, PalwStepTileLeafV1)> = (0..leaf_count)
+            .map(|i| {
+                let leaf = PalwStepTileLeafV1 {
+                    version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                    coord: PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: 0, tile_index: i as u32 },
+                    value_count: 1,
+                    values_le: (i as i32).to_le_bytes().to_vec(),
+                };
+                (i, leaf)
+            })
+            .collect();
+        binding.step_leaf_count = leaf_count;
+        let root = base0_dense_step_root_capped_v1(&binding, &tiles, cap).expect("the space roots under its ruleset's cap");
+        assert_eq!(
+            base0_dense_step_root_capped_v1(&binding, &tiles, PALW_STEP_LEG_MAX_LEAVES),
+            None,
+            "and not under the default ladder — the cap is the bound, not the constant"
+        );
+        let leaves = base0_dense_step_leaves_capped_v1(&binding, &tiles, cap).expect("the leaves");
+        assert_eq!(leaves.len() as u64, leaf_count);
+        assert_eq!(kaspa_consensus_core::palw_step_leg::step_merkle_root_capped_v1(&leaves, cap).ok(), Some(root));
+        assert!(kaspa_consensus_core::palw_step_leg::step_merkle_root_v1(&leaves).is_err(), "the default ladder does not reach this space");
     }
 }

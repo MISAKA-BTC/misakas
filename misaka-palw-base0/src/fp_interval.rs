@@ -57,7 +57,7 @@ use crate::produce::Base0RetainedMaterialV1;
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwFpIntervalVerdictV1};
 use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepCoordinateV1, canonical_step_leaf_index, kv_aux_leaf_count};
 use kaspa_consensus_core::palw_step_leg::{
-    PALW_STEP_LEG_MAX_LEAVES, PalwStepBindingV2, PalwStepRangeOpeningV1, PalwStepTileLeafV1, step_range_opening_root_v1,
+    PALW_STEP_LEG_MAX_LEAVES, PalwStepBindingV2, PalwStepRangeOpeningV1, PalwStepTileLeafV1, step_range_opening_root_capped_v1,
     step_tile_leaf_hash_v1,
 };
 use kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1;
@@ -863,19 +863,11 @@ fn leaves_from_tiles_v1(
     tiles: &[(u64, PalwStepTileLeafV1)],
     max_step_leaf_count: u64,
 ) -> Result<Vec<Hash64>, Base0FpIntervalError> {
-    // The same bound, from the RULESET rather than from the executor's constant — the vector this
-    // sizes is `step_leaf_count` `Hash64`s and the number is a stranger's, so the check stays; it
-    // is the ceiling that moves. See [`base0_fp_binding_step_space_v1`].
     base0_fp_binding_step_space_v1(binding, max_step_leaf_count)?;
-    let ctx_hash = binding.job_context.context_hash();
-    let profile_hash = binding.shape_profile.shape_profile_id();
-    let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
-    for (index, leaf) in tiles {
-        if let Some(slot) = leaves.get_mut(*index as usize) {
-            *slot = step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
-        }
-    }
-    Ok(leaves)
+    // One spelling with the material verifier (`produce::base0_dense_step_leaves_capped_v1`): a
+    // tile outside the space is a capture that is not the binding's, here as there.
+    crate::produce::base0_dense_step_leaves_capped_v1(binding, tiles, max_step_leaf_count)
+        .ok_or(Base0FpIntervalError::CaptureIsNotTheBindings)
 }
 
 /// **Open interval `index` of a retained capture** (ADR-0077 Decision 8, executor half).
@@ -983,6 +975,7 @@ pub fn base0_open_fp_interval_capped_v1(
         &leaves[span_first as usize..span_end as usize],
         seed_row_tiles,
         anchor,
+        max_step_leaf_count,
     )
 }
 
@@ -1003,6 +996,7 @@ fn base0_assemble_fp_interval_opening_v1(
     span_leaves: &[Hash64],
     seed_row_tiles: Vec<PalwStepTileLeafV1>,
     anchor: Option<PalwCheckpointKvOperandsV1>,
+    max_step_leaf_count: u64,
 ) -> Result<Vec<u8>, Base0FpIntervalError> {
     let count = leaves_geometry.range_end - leaves_geometry.range_first;
     let range = tree.range_opening_v1(span_first, span_leaves, leaves_geometry.range_first, count)?;
@@ -1010,7 +1004,13 @@ fn base0_assemble_fp_interval_opening_v1(
     // route the leaves came out of the capture the tree was built from and this is an identity; on
     // the folded route they came out of a REPLAY, and an executor whose replay diverged from its
     // own commitment would otherwise learn it from a seat's `Fault` against itself.
-    if step_range_opening_root_v1(binding.step_leaf_count, &range).ok() != Some(binding.step_merkle_root) {
+    // The root walks under the RULESET's ladder, not the default one: the uncapped sibling is
+    // bounded by `PALW_STEP_LEG_MAX_LEAVES`, and a class whose space is larger (the graph-v5
+    // attempt lane is 6.6 M leaves) came back as "the capture is not the binding's" from a
+    // capture that was.
+    if step_range_opening_root_capped_v1(binding.step_leaf_count, &range, max_step_leaf_count).ok()
+        != Some(binding.step_merkle_root)
+    {
         return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
     }
     // **The class's declaration decides which FORM is served, here, once** (ADR-0082 Decision 9;
@@ -1259,7 +1259,17 @@ pub fn base0_open_fp_interval_sparse_capped_v1<K: Base0FpIntervalKernelsV1>(
             Some(base0_checkpoint_operands_v1(binding, &material.checkpoint_chunks, &material.checkpoint_leaves, covered)?)
         }
     };
-    base0_assemble_fp_interval_opening_v1(binding, tree, &leaves_geometry, index, span_first, &span_leaves, seed_row_tiles, anchor)
+    base0_assemble_fp_interval_opening_v1(
+        binding,
+        tree,
+        &leaves_geometry,
+        index,
+        span_first,
+        &span_leaves,
+        seed_row_tiles,
+        anchor,
+        max_step_leaf_count,
+    )
 }
 
 /// The anchor call's logits row, cut into the tiles the leg commits it as.
@@ -1599,7 +1609,7 @@ pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
     {
         return Err("the opening's range is not this interval's".to_string());
     }
-    match step_range_opening_root_v1(binding.step_leaf_count, &opening.range) {
+    match step_range_opening_root_capped_v1(binding.step_leaf_count, &opening.range, max_step_leaf_count) {
         Ok(root) if root == binding.step_merkle_root => {}
         _ => return Err("the opening's range does not open the step leg root".to_string()),
     }
@@ -1876,7 +1886,7 @@ pub fn base0_verify_fp_interval_opening_with_state_capped_v1<K: Base0FpIntervalK
         return Base0FpIntervalSeatVerdictV1::Mismatch;
     }
     // …and it must open against the step leg the binding committed.
-    match step_range_opening_root_v1(binding.step_leaf_count, &opening.range) {
+    match step_range_opening_root_capped_v1(binding.step_leaf_count, &opening.range, max_step_leaf_count) {
         Ok(root) if root == binding.step_merkle_root => {}
         _ => return Base0FpIntervalSeatVerdictV1::Mismatch,
     }
@@ -3372,6 +3382,56 @@ mod tests {
         assert!(anchored > 0, "the fixture exercises an anchored close (a cache-reading step past the prefill)");
     }
 
+
+    /// **The ladder above the default one** (ADR-0084 §7 record). A class whose step space is
+    /// larger than `PALW_STEP_LEG_MAX_LEAVES` — the graph-v5 attempt lane is 6.6 M leaves — is
+    /// served under its RULESET's cap. The uncapped root's ceiling is the default, and an opener
+    /// that reached for it reported a capture that was the binding's as one that was not; under a
+    /// cap below the space the same opening is refused, so the cap is the bound and not the constant.
+    #[test]
+    fn an_opening_above_the_default_ladder_assembles_under_its_rulesets_cap() {
+        use kaspa_consensus_core::palw_step_leg::{step_range_opening_root_capped_v1, step_range_opening_root_v1};
+        let (material, _claim, _ids, _artifact) = floor_material(1, 2);
+        let mut binding = material.0.clone();
+        let leaf_count = PALW_STEP_LEG_MAX_LEAVES + 1;
+        let cap = PALW_STEP_LEG_MAX_LEAVES * 2;
+        let leaves: Vec<Hash64> = (0..leaf_count).map(|i| Hash64::from_u64_word(i + 1)).collect();
+        let tree = crate::fp_capture::Base0SparseStepTreeV1::from_leaves_capped_v1(
+            &leaves,
+            crate::fp_capture::PALW_BASE0_SPARSE_RETAIN_LEVEL_V1,
+            cap,
+        )
+        .expect("a tree over the larger space");
+        binding.step_leaf_count = leaf_count;
+        binding.step_merkle_root = tree.root().expect("its root");
+        // A range that ends in the space's last, partial block — the shape an off-by-one hides in.
+        let lg = Base0FpIntervalLeavesV1 {
+            range_first: leaf_count - 4,
+            interval_first: leaf_count - 4,
+            range_end: leaf_count,
+            seed_row_leaves: 0,
+        };
+        let (span_first, span_end) = tree.span_for_range(lg.range_first, 4).expect("the span");
+        let span = &leaves[span_first as usize..span_end as usize];
+        let bytes = base0_assemble_fp_interval_opening_v1(&binding, &tree, &lg, 0, span_first, span, Vec::new(), None, cap)
+            .expect("assembles under the ruleset's cap");
+        let range = match Base0FpIntervalOpeningV1::decode_v1(&bytes) {
+            Ok(opening) => opening.range,
+            Err(_) => Base0FpIntervalOpeningV2::decode_v1(&bytes).expect("a chunked or a flat opening").range,
+        };
+        assert_eq!(step_range_opening_root_capped_v1(leaf_count, &range, cap).ok(), Some(binding.step_merkle_root));
+        assert!(
+            step_range_opening_root_v1(leaf_count, &range).is_err(),
+            "the default ladder does not reach this space — which is why no opener may reach for it"
+        );
+        assert!(
+            matches!(
+                base0_assemble_fp_interval_opening_v1(&binding, &tree, &lg, 0, span_first, span, Vec::new(), None, PALW_STEP_LEG_MAX_LEAVES),
+                Err(Base0FpIntervalError::CaptureIsNotTheBindings)
+            ),
+            "under a cap below the space the same opening is refused"
+        );
+    }
 }
 
 // =================================================================================================
@@ -3594,5 +3654,119 @@ mod the_rulesets_ladder {
         assert_eq!(base0_fp_interval_close_annex_v1(&without), None);
         assert_eq!(base0_fp_interval_close_annex_v1(&v2.encode_v1().unwrap()), None, "a v2 opening carries no annex");
         assert!(Base0FpIntervalOpeningV3::decode_v1(&v2.encode_v1().unwrap()).is_err(), "and is not a v3");
+    }
+}
+
+/// A diagnostic, never part of the suite: decode a retained dense material named by
+/// `MISAKA_INSPECT_MATERIAL` and say whether its tiles reproduce the root its binding committed.
+#[cfg(test)]
+mod inspect_material {
+    #[test]
+    #[ignore]
+    fn inspect_devnet_material() {
+        let Ok(path) = std::env::var("MISAKA_INSPECT_MATERIAL") else { return };
+        let bytes = std::fs::read(&path).expect("the material reads");
+        eprintln!("bytes={}", bytes.len());
+        let (binding, tiles, logits_rows, generated, chunks) =
+            crate::produce::base0_material_decode_v1(&bytes).expect("decodes as v1 dense material");
+        let ctx = &binding.job_context;
+        let profile = &binding.shape_profile;
+        eprintln!(
+            "step_leaf_count={} tiles={} logits_rows={} generated={} chunks={} checkpoint_count={}",
+            binding.step_leaf_count,
+            tiles.len(),
+            logits_rows.len(),
+            generated.len(),
+            chunks.len(),
+            binding.checkpoint_count
+        );
+        eprintln!("ctx.shape_profile_id={} profile.shape_profile_id()={}", ctx.shape_profile_id, profile.shape_profile_id());
+        eprintln!(
+            "ctx: prefill={} exact_decode={} job_id={} context_hash={}",
+            ctx.declared_prefill_tokens,
+            ctx.exact_decode_tokens,
+            ctx.job_id,
+            ctx.context_hash()
+        );
+        match kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, ctx, binding.step_leaf_count) {
+            Ok(n) => eprintln!("derived step_leaf_count={n}"),
+            Err(e) => eprintln!("derived step_leaf_count: ERR {e:?}"),
+        }
+        let mut distinct = std::collections::HashSet::new();
+        let (mut dup, mut out_of_range, mut max_index) = (0usize, 0usize, 0u64);
+        for (i, _) in &tiles {
+            if !distinct.insert(*i) {
+                dup += 1;
+            }
+            if *i >= binding.step_leaf_count {
+                out_of_range += 1;
+            }
+            max_index = max_index.max(*i);
+        }
+        eprintln!("distinct={} dup={dup} max_index={max_index} out_of_range={out_of_range}", distinct.len());
+        let mut per_call = std::collections::BTreeMap::new();
+        let mut per_pos0 = std::collections::BTreeMap::new();
+        for (_, leaf) in &tiles {
+            *per_call.entry(leaf.coord.call_index).or_insert(0u64) += 1;
+            if leaf.coord.call_index == 0 {
+                *per_pos0.entry(leaf.coord.position).or_insert(0u64) += 1;
+            }
+        }
+        eprintln!("tiles per call: {per_call:?}");
+        let first = per_pos0.iter().take(2).collect::<Vec<_>>();
+        let last = per_pos0.iter().rev().take(2).collect::<Vec<_>>();
+        eprintln!("call 0 tiles per position: first {first:?} last {last:?} ({} positions)", per_pos0.len());
+        for (i, leaf) in tiles.iter().take(3) {
+            eprintln!("tile[{i}] coord={:?} value_count={} bytes={}", leaf.coord, leaf.value_count, leaf.values_le.len());
+        }
+        if let Some((i, leaf)) = tiles.last() {
+            eprintln!("last tile[{i}] coord={:?} value_count={} bytes={}", leaf.coord, leaf.value_count, leaf.values_le.len());
+        }
+        let ctx_hash = ctx.context_hash();
+        let profile_hash = profile.shape_profile_id();
+        let mut leaves = vec![kaspa_hashes::Hash64::default(); binding.step_leaf_count as usize];
+        for (i, leaf) in &tiles {
+            if let Some(slot) = leaves.get_mut(*i as usize) {
+                *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+            }
+        }
+        let unfilled = leaves.iter().filter(|h| **h == kaspa_hashes::Hash64::default()).count();
+        eprintln!("unfilled leaves={unfilled}");
+        let flat = kaspa_consensus_core::palw_step_leg::step_merkle_root_capped_v1(&leaves, binding.step_leaf_count);
+        eprintln!("committed root={}", binding.step_merkle_root);
+        eprintln!("flat root     ={:?}", flat);
+        let fold = crate::fp_capture::Base0SparseStepTreeV1::from_leaves_capped_v1(
+            &leaves,
+            crate::fp_capture::PALW_BASE0_SPARSE_RETAIN_LEVEL_V1,
+            binding.step_leaf_count,
+        )
+        .and_then(|t| t.root());
+        eprintln!("fold root     ={:?}", fold);
+        // The opener past its prompt check, step by step, on the same inputs it would be handed.
+        let interval: u32 = std::env::var("MISAKA_INSPECT_INTERVAL")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
+        let cap = binding.step_leaf_count;
+        let n = super::base0_fp_binding_step_space_v1(&binding, cap).expect("step space");
+        let geometry = super::Base0FpIntervalGeometryV1::from_binding_capped_v1(&binding, interval, cap).expect("geometry");
+        eprintln!("interval={interval} interval_count={} anchor_covered_call(0)={:?}", geometry.interval_count, geometry.anchor_covered_call(0));
+        let lg = super::base0_fp_interval_leaves_v1(profile, ctx, &geometry, 0, n).expect("leaves geometry");
+        eprintln!("range_first={} range_end={} seed_row_leaves={}", lg.range_first, lg.range_end, lg.seed_row_leaves);
+        let tree = crate::fp_capture::Base0SparseStepTreeV1::from_leaves_capped_v1(
+            &leaves,
+            crate::fp_capture::PALW_BASE0_SPARSE_RETAIN_LEVEL_V1,
+            cap,
+        )
+        .expect("tree");
+        let count = lg.range_end - lg.range_first;
+        let (span_first, span_end) = tree.span_for_range(lg.range_first, count).expect("span");
+        eprintln!("span_first={span_first} span_end={span_end}");
+        let range = tree
+            .range_opening_v1(span_first, &leaves[span_first as usize..span_end as usize], lg.range_first, count)
+            .expect("range opening");
+        let root = kaspa_consensus_core::palw_step_leg::step_range_opening_root_capped_v1(binding.step_leaf_count, &range, cap);
+        eprintln!("range opening root={:?} (committed {})", root, binding.step_merkle_root);
+        eprintln!("range opening: first={} count={} siblings={}", range.first_leaf_index, range.leaf_hashes.len(), range.siblings.len());
     }
 }
