@@ -6132,3 +6132,18 @@ certifies end-to-end — the registration will not be weightless, and no new fam
 "certified" here is the two lane bindings, submitted once `ClassRegistered` is on the chain.
 `palw-class ledger --network testnet-11` lists the row beside the genesis ones. Bond change
 `d9067d09…:1` (11.913 tMSK) is the fee outpoint for registration and the objects' rent.
+
+### 10j. H — the fence fired (2026-09-04 05:44:54Z, virtual DAA 1150)
+
+| block | algo | bits | Layer-0 p |
+|---|---|---|---|
+| DAA 1114 | 8 | `0x1f0d2b4e` | 2.0e-4 |
+| DAA 1147 (last before the fence) | 8 | `0x1f0a96a7` | 1.6e-4 |
+| **DAA 1151 (first fenced)** | 8 | **`0x207fffff`** | **0.5** |
+
+Difficulty 1.00 on .113's node. The tightening had reached ×3,100 by the fence (p 0.5 → 1.6e-4 in
+1,147 blocks); the first fenced window held no priced row, so it answered `max_difficulty_target` in
+one block — ADR-0083 §4.3 as written, and the recovery path (a) was chosen for. Every seat was on
+`cef2ecdb` (§10h); no refusals, no forks among the eight; the old-build external node at
+113.155.23.105 is the only party expected to part here. The floor's chance per draw is back to
+7.9e-5 × 0.5; the first attempt-lane block after H, from any seat, is being watched for.
