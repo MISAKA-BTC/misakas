@@ -5828,3 +5828,17 @@ derivation `cad/stl/v1` → the STL artifact, its DSL and a signed `derived-obje
 The chain sequence that follows: the rail's `--submit` of the commitment (funding `bf3e37fc…:0`, class leaves
 6,630,544, retention dir the gateway's traces), the FreePromptCommitted carriage, `submit-object` of the derived
 object, and the claim's on-chain record.
+
+**Step 9 — the commitment is on the public chain's mempool (01:23:08 UTC).** `misaka-palw-fp-rail --artifact
+<stem> --bond-key-seed <hex> --funding-outpoint bf3e37fc…:0 --funding-amount 275587894580 --class-id 4277d84f…
+--class-leaves 6630544 --retention-dir /root/fp-5f/outbox/traces --submit --rpc 127.0.0.1:26313`, exit 0:
+
+    submitted tx  44227bdc9ade5c0f2b730dce3c0c0f386aac59806f473db71dd689b393798e982cf39a813af2bf5177859b1a6d782de1fd85fae9569e38031ff732f6f5e2fb67
+    subnetwork 0x4a (PALW_FP_COMMITMENT) · fee 336,387 sompi auto-sized from 8,710 B of payload (the b037cdc2 rail) · 26 quanta
+    pwu 21,549,268 · work leaves 21,872,512 · decode 56 · trace manifest root 4c0f6ca4… · trace retention daa 500,760
+    commit-by anchor daa 3,760 · material file under /root/fp-5f/outbox/traces · claim b15ef21cf1f55581…
+
+The derivation's ids, local for now: derived id `e154bd36541ed808…`, artifact hash `482b23231a42dc56…` (the same
+684-byte STL the Mac and ibm produced from this prompt all night), signed by the gateway's `--derive-seed`. Next in
+the running job: the block that carries `FreePromptCommitted`, then `submit-object` of the derived object, then
+`misaka palw derived b15ef21c… --json`.
