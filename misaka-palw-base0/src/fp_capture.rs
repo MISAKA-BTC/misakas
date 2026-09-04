@@ -219,6 +219,14 @@ impl std::error::Error for Base0SparseCaptureError {}
 /// The promote-odd fold of one level's nodes into one — the shape `step_merkle_root_v1` walks,
 /// applied to a block whose left edge is even at every level it folds through (which is what makes
 /// the local pairing the global pairing; see [`Base0SparseStepAccumulatorV1`]).
+/// **One block's digest from its leaves**, folded exactly as the accumulator folds it — the leaf
+/// domain over the GLOBAL leaf index, then the node domain, promote-odd — so a seat that holds
+/// only a range's leaves reproduces the retained node of any block the range covers whole
+/// (ADR-0086 Decision 3). `None` for an empty block.
+pub fn base0_fold_block_digest_v1(first_leaf_index: u64, leaf_hashes: &[Hash64]) -> Option<Hash64> {
+    fold_block_v1(leaf_hashes.iter().enumerate().map(|(i, h)| step_merkle_leaf_v1(first_leaf_index + i as u64, h)).collect())
+}
+
 fn fold_block_v1(mut level: Vec<Hash64>) -> Option<Hash64> {
     if level.is_empty() {
         return None;
@@ -2202,4 +2210,29 @@ mod tests {
         );
         eprintln!("U-01 step leaves: {leaves}, {} per position", leaves / positions.max(1));
     }
+    /// **A block's digest from its leaves is the retained node** (ADR-0086 Decision 3): a seat
+    /// that holds a range's leaves reproduces the fold's node for every block the range covers
+    /// whole, full blocks and the partial tail alike.
+    #[test]
+    fn a_blocks_digest_from_its_leaves_is_the_retained_node() {
+        let level = 3u32;
+        let block = 1u64 << level;
+        for leaf_count in [1u64, 7, 8, 9, 17, 24, 25, 100] {
+            let leaves: Vec<Hash64> = (0..leaf_count).map(|i| Hash64::from_u64_word(i * 31 + 5)).collect();
+            let tree = Base0SparseStepTreeV1::from_leaves_v1(&leaves, level).expect("a tree");
+            let retained = tree.retained_nodes();
+            assert_eq!(retained.len() as u64, leaf_count.div_ceil(block));
+            for (k, node) in retained.iter().enumerate() {
+                let first = k as u64 * block;
+                let end = (first + block).min(leaf_count);
+                assert_eq!(
+                    base0_fold_block_digest_v1(first, &leaves[first as usize..end as usize]),
+                    Some(*node),
+                    "leaf_count {leaf_count}, block {k}"
+                );
+            }
+            assert_eq!(base0_fold_block_digest_v1(0, &[]), None);
+        }
+    }
+
 }

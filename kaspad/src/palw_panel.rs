@@ -3998,6 +3998,14 @@ impl PalwPanelService {
                         );
                         return None;
                     }
+                    PalwFpIntervalVerdictV1::FaultInRange { first_leaf_index, leaf_count } => {
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: interval {index} does not replay in leaves [{first_leaf_index}, +{leaf_count}) — \
+                             filing nothing; a sampled verdict never slashes, and the block is the court's address (ADR-0086 D3)",
+                            duty.claim_id
+                        );
+                        return None;
+                    }
                     PalwFpIntervalVerdictV1::Mismatch | PalwFpIntervalVerdictV1::Unverifiable => continue,
                 }
             }

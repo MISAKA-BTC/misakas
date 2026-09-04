@@ -2201,7 +2201,22 @@ mod free_prompt_tests {
             .interval_count;
         assert!(count >= 2, "a one-interval job cannot show that a replayed anchor is the committed one");
         let claim = PalwClaimRootsV1 { execution_root: dense.execution_root, trace_root: dense.trace_root, anchor: ctx.job_id };
+        let geometry = crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&dense.binding, interval).expect("a geometry");
         for index in 0..count {
+            // ADR-0086 Decision 2: the anchor is named; the seat holds the state it recomputed.
+            crate::fp_recompute::base0_fp_seat_state_forget_v1();
+            if let Some(covered) = geometry.anchor_covered_call(index) {
+                let mut kernels = crate::fp_recompute::A16RecomputeKernelsV1::new(&artifact, None).expect("recompute kernels");
+                crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+                    &profile,
+                    &ctx,
+                    &ids,
+                    &dense.generated_token_ids,
+                    covered,
+                    &mut kernels,
+                )
+                .expect("this seat can recompute its own state");
+            }
             let from_tiles = crate::fp_interval::base0_open_fp_interval_v1(&dense_material, index, &ids, interval)
                 .unwrap_or_else(|e| panic!("interval {index} opens from the tiles: {e}"));
             let from_replay = crate::fp_interval::base0_open_fp_interval_sparse_v1(

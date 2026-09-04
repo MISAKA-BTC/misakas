@@ -5737,6 +5737,7 @@ mod palw_producer_facts_wire_tests {
             // "defaulted" — the field's own default is false and a lost field would pass silently.
             fp_decode_rules_armed: true,
             locked_bond_outpoints: vec![format!("{}:0", "aa".repeat(64)), format!("{}:7", "bb".repeat(64))],
+            palw_retention_dir: String::new(),
         }
     }
 
