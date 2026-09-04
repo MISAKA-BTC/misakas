@@ -479,7 +479,7 @@ mod tests {
         while rows.len() < 264 {
             let ts = 1_788_000_000_000 + slot * 122_000;
             for sibling in 0..3u64 {
-                let attempt = sibling == 2 && slot % 3 == 0;
+                let attempt = sibling == 2 && slot.is_multiple_of(3);
                 rows.push(DifficultyRow {
                     hash: BlockHash::from_u64_word(slot * 8 + sibling + 1),
                     blue_work: BlueWorkType::from_u64(slot * 8 + sibling + 1),
