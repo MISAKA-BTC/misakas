@@ -6351,6 +6351,35 @@ with tile capture — the offline probe on run 10's material measured interval 0
 state it recomputes without capture and memoizes, as the seat does; not in this tree yet, so free-prompt claims past ~20
 decode tokens on graph-v5 cannot be licensed by the interval lane — Studio's 256-token cap stands, for this reason now.
 
+### 10t. What testnet-11 added to the devnet's proof: four operator defects between an honest answer and a receipt (2026-09-05)
+
+The devnet licensed a 300-token claim ten minutes after the binding (§10s). Taking the same claim through testnet-11 found
+four things the devnet could not, because on the devnet one process is executor, seat and producer at once:
+
+1. **A bond sized for the canonical job cannot carry a long one.** Exposure is `pwu × slash 5`; a 300-token graph-v5 claim
+   is ~42 M leaves ≈ 211 M sompi, and a bond may hold half its collateral. slot-04 (265 M, sized from the class's 6.6 M-leaf
+   canonical job) had every long commitment dropped by the chain with `FreePromptExposureCeiling`. slot-05 was created at
+   600 M (`POST /pool/v1/slots {"mode":"fp","bond_collateral":…}`, new) and carries exactly one such claim at a time.
+2. **The pool's submitter staged the question, not the answer.** `fp-autosubmit.py` called the rail without `--capture`, so
+   the node retained a 3,372-byte `FPM1` beside a 183 MB capture in the gateway's traces — no seat could ever have been
+   served an interval. Fixed; the live claim's `FPC1` was assembled by hand (it is the `FPM1` body plus the capture as a
+   borsh `Vec<u8>`).
+3. **A free-prompt slot's node could not open what it retained.** `run-slot.sh` passed no `--palw-class-artifact`, so
+   `resolve_backend` failed and every interval request was answered "not held". Fixed for `mode=fp` slots.
+4. **Two artifacts of one class, and the seats resolved the wrong one.** `qwen25-1.5b-a16.palwart` and
+   `bound-candidate.palwart` differ only in the tokenizer commitment; the node's holding map keeps the FIRST file loaded for
+   the family, so every seat resolved the unbound one, recomputed a different job context, and refused the executor's honest
+   answer: "a served answer's ids recompute output root 91cfcdaa… and the claim committed 0658d893…". The probe
+   `probe_output_root` (new, ignored) recomputed `0658d893…` from the served envelope with the bound artifact and
+   `91cfcdaa…` with the unbound one, which named the defect in one run. The seats now list only the bound artifact, and the
+   first seat to do so drew `[212, 189, 130, 195]` of 299 and asked the executor.
+
+**And one bound that was simply too small.** An interval opening is computed, not fetched: on .113 (eight shared cores)
+interval 212 took 398 s where the devnet's quiet machine takes 17–90 s, so every answer arrived after the seat's 120 s
+solicited window and was dropped as unsolicited. `PULL_SOLICITED_TTL` is now 900 s (`85e44275`), and the fleet runs
+`c71613157fd396d6`. The first claim (`019efe78…`) still ran out its receipt window during the diagnosis and voids
+unanswered; the retry fires as soon as the bond's exposure is released.
+
 ### 10s. The 300-token free-prompt claim licenses again: the opener resumes from a recomputed anchor (2026-09-05, `594015b9`, fleet `56f77a3d`)
 
 Run 10 named the cause (§10q addendum): a fold holds no checkpoint state, so the executor's opener replayed every
