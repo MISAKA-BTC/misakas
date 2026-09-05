@@ -46,6 +46,10 @@ window.MISAKA_CONFIG = {
 `wallet_addEthereumChain`, so it must be an `https://` URL (or `http://localhost`) that the user's
 browser can reach; a relative path on an https site is fine.
 
+The live deployment (misakaoptions.com, 2026-09-05) reads both endpoints off the explorer host:
+`WRPC_URL: "wss://misakascan.com/kaspa"` and `EVM_RPC_URL: "https://misakascan.com/evm"`. The
+browser reaches them directly; the site's own host proxies neither.
+
 Known class ids on testnet-11 (from the tree, `tools/palw-jobs-export/src/main.rs`), usable as
 `CLASS_IDS` while the registry window is dormant:
 
@@ -81,7 +85,10 @@ server {
         proxy_read_timeout 3600s;
     }
 
-    # EVM JSON-RPC: the node's eth endpoint on port 8545
+    # EVM JSON-RPC: only if a node runs on THIS host. The deployment at misakaoptions.com has
+    # none, so `EVM_RPC_URL` names the explorer's endpoint (https://misakascan.com/evm) instead
+    # and this block is absent there. That endpoint is served by the testnet-11 node started with
+    # `--evm-rpc-listen=127.0.0.1:8545`, proxied CORS-open and rate-limited (10 r/s, burst 20).
     location /evm {
         proxy_pass http://127.0.0.1:8545/;
         proxy_http_version 1.1;

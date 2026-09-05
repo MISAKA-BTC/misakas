@@ -8,10 +8,11 @@ window.MISAKA_CONFIG = {
   // directly (a WebSocket is not subject to CORS). Set "" to derive "/kaspa" on this origin.
   WRPC_URL: "wss://misakascan.com/kaspa",
 
-  // EVM JSON-RPC endpoint (standard eth_* over HTTP POST). "/evm" is a same-origin
-  // path nginx proxies to a node's port 8545. This URL is also handed to the wallet
-  // by wallet_addEthereumChain, so it must be reachable from the user's browser.
-  EVM_RPC_URL: "/evm",
+  // EVM JSON-RPC endpoint (standard eth_* over HTTP POST). The explorer host's testnet-11
+  // node serves it at https://misakascan.com/evm (CORS-open, rate-limited); "/evm" would be a
+  // same-origin path for a node on this host instead. This URL is also handed to the wallet by
+  // wallet_addEthereumChain, so it must be https and reachable from the user's browser.
+  EVM_RPC_URL: "https://misakascan.com/evm",
 
   // The MISAKA EVM lane's chain id (0x4D534B spells "MSK"; frozen in ADR-0020).
   CHAIN_ID: "0x4D534B",
