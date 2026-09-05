@@ -614,6 +614,12 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// The data-availability court's half (ADR-0062 D3): claims this node produced that are under
+    /// an open accusation, with the event each must open.
+    fn palw_da_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwDaDutyV2> {
+        Vec::new()
+    }
+
     /// **Where a bond's rewards are paid — the payload, not a script.**
     ///
     /// A panel needs it to recognise its own money: every lifecycle carrier it builds pays change

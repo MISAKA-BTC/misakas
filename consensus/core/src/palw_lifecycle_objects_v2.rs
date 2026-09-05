@@ -254,12 +254,13 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::DefaultAccused { .. } => Err(
             "a data-availability accusation must carry the accuser's signature — a bond key is a public outpoint, so without one anyone could accuse under a stranger's identity",
         ),
-        PalwConsensusObjectV2::MaterialDisclosed { preimage, signature, .. } if !signature.is_empty() => {
-            // The ceiling a close is priced at, applied to the disclosure for the reason the ADR
-            // measures: a FLAT event preimage at a Qwen-class vocabulary is 607,744 bytes, 7.4× the
-            // whole budget, so an unbounded disclosure would be a block-sized object nobody priced.
-            // The class's OWN registered ceiling is checked at acceptance, where the bundle is.
-            if preimage.len() > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES as usize {
+        PalwConsensusObjectV2::MaterialDisclosed { disclosure, signature, .. } if !signature.is_empty() => {
+            // The ceiling a close is priced at, applied to the whole disclosure for the reason the
+            // ADR measures: a flat class's every row at a Qwen-class vocabulary is 607,744 bytes,
+            // 7.4× the whole budget, so an unbounded disclosure would be a block-sized object
+            // nobody priced. The ruleset's own ceiling is checked at acceptance, where the bundle is.
+            let bytes = borsh::to_vec(disclosure).map(|b| b.len()).unwrap_or(usize::MAX);
+            if bytes > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES as usize {
                 return Err("a data-availability disclosure is above the close-byte ceiling this ruleset prices");
             }
             Ok(())

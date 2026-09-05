@@ -447,6 +447,46 @@ impl PalwExecutionBackendV1 for Base0Backend {
         })
     }
 
+    /// **The data-availability responder's half** (ADR-0062 D3): open event `(row, tile)` of the
+    /// retained capture — dense tuple or folded — in the form the class's scheme names. Nothing is
+    /// recomputed: the rows and ids the producer kept at execution are what the claim committed,
+    /// and the checker walks the same trees `tiled_trace_event_disclosure_v1` builds.
+    fn disclose_trace_event(
+        &self,
+        material: &[u8],
+        row: u32,
+        tile: u8,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1, String> {
+        use kaspa_consensus_core::palw_step_refute::{
+            PALW_LOGITS_TILE_LANES, PalwBase0DecodeTokensV1, PalwTraceEventDisclosureV1 as D, flat_logits_scheme_id_v1,
+            tiled_logits_scheme_id_v1, tiled_trace_event_disclosure_v1,
+        };
+        let retention = crate::produce::base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        let binding = retention.binding().clone();
+        let rows = retention.logits_rows();
+        let ids = retention.generated_token_ids();
+        let decode = binding.job_context.exact_decode_tokens;
+        let scheme = binding.shape_profile.logits_scheme_id;
+        let vocab = binding.shape_profile.vocab_size as usize;
+        let boxed = Box::new(binding.clone());
+        if scheme == flat_logits_scheme_id_v1() {
+            if row >= decode || tile != 0 {
+                return Ok(D::OutOfRange { binding: boxed });
+            }
+            return Ok(D::Flat { binding: boxed, pin: PalwBase0DecodeTokensV1 { logits_rows: rows.to_vec(), generated_token_ids: ids.to_vec() } });
+        }
+        if scheme == tiled_logits_scheme_id_v1() {
+            let tiles = vocab.div_ceil(PALW_LOGITS_TILE_LANES) as u64;
+            if row >= decode || tile as u64 >= tiles {
+                return Ok(D::OutOfRange { binding: boxed });
+            }
+            let (row_root, row_opening, tile_lanes, tile_opening) = tiled_trace_event_disclosure_v1(&binding.job_context, rows, row, tile)
+                .ok_or_else(|| "the retained rows do not build the tiled trees".to_string())?;
+            return Ok(D::Tiled { binding: boxed, generated_token_ids: ids.to_vec(), row_root, row_opening, tile_lanes, tile_opening });
+        }
+        Err("this class commits under a scheme no disclosure form names".to_string())
+    }
+
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
         let (binding, tiles, _, _, _) = base0_material_decode_v1(material).ok()?;
         // **Bound the count BEFORE `leaves_by_position` allocates from it** — see

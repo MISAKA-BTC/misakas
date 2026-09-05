@@ -249,6 +249,20 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     ///
     /// `None` is the honest answer for material this backend cannot read. A silent party loses its
     /// rung, which is the correct outcome for a party that cannot substantiate its own execution.
+    /// **Open the accused event of a retained capture** (ADR-0062 D3 — the responder's half).
+    /// `(row, tile)` is the event the accusation names; the disclosure is built from the rows the
+    /// producer retained, in the form the class's scheme names, through the same tree functions the
+    /// checker walks. A family that retains no rows answers `Err`, which is "cannot answer" — and,
+    /// on a network that arms the data-availability court, a default.
+    fn disclose_trace_event(
+        &self,
+        _material: &[u8],
+        _row: u32,
+        _tile: u8,
+    ) -> Result<crate::palw_step_refute::PalwTraceEventDisclosureV1, String> {
+        Err("this family has no data-availability responder".to_string())
+    }
+
     fn bisect_prefix_state(&self, _material: &[u8], _index: u64) -> Option<Hash64> {
         None
     }

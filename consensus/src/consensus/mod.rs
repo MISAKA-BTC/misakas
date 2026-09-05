@@ -2201,6 +2201,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_court_duties_v2_impl(&mine)
     }
 
+    fn palw_da_duties_v2(
+        &self,
+        mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwDaDutyV2> {
+        self.virtual_processor.palw_da_duties_v2_impl(&mine)
+    }
+
     fn palw_bond_payout_payload_v2(
         &self,
         bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,

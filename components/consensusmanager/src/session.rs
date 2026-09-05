@@ -226,6 +226,13 @@ impl ConsensusSessionOwned {
         self.consensus.palw_court_duties_v2(mine)
     }
 
+    pub fn palw_da_duties_v2(
+        &self,
+        mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwDaDutyV2> {
+        self.consensus.palw_da_duties_v2(mine)
+    }
+
     /// Where a bond's rewards are paid, as the registered payload. See the trait's doc: a panel
     /// reads it to recognise its own unspent outputs when its remembered fee outpoints have died.
     pub fn palw_bond_payout_payload_v2(

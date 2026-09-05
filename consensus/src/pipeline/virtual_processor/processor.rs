@@ -4432,6 +4432,19 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_producer_v2::palw_court_duties_v2(&state, mine)
     }
 
+    /// **The data-availability duties this node holds** (ADR-0062 D3): every claim under an open
+    /// accusation whose producing bond is in `mine`, with the event it must open.
+    pub fn palw_da_duties_v2_impl(
+        &self,
+        mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
+    ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwDaDutyV2> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten() else {
+            return Vec::new();
+        };
+        kaspa_consensus_core::palw_producer_v2::palw_da_duties_v2(&state, state_params, mine)
+    }
+
     /// The payout payload the chain has registered for `bond`, if it is registered at all.
     pub fn palw_bond_payout_payload_v2_impl(
         &self,
@@ -6401,7 +6414,7 @@ impl VirtualStateProcessor {
                 // ceiling is applied here for the reason ADR-0049 Decision C's costs are (audit
                 // H-03): a bound checked only at class admission is a bound nothing enforces where
                 // it is actually spendable.
-                Obj::MaterialDisclosed { claim, event_index, preimage, opening, signature } => {
+                Obj::MaterialDisclosed { claim, event_index, disclosure, signature } => {
                     if !self.palw_da_court_at(point.daa_score) {
                         return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
                     }
@@ -6409,10 +6422,10 @@ impl VirtualStateProcessor {
                         .palw_court_params_v2
                         .as_ref()
                         .ok_or_else(|| "a data-availability disclosure on a network with no V2 court parameters".to_string())?;
-                    if preimage.len() as u64 > court.max_close_bytes() {
+                    let disclosure_bytes = borsh::to_vec(disclosure).map(|b| b.len() as u64).unwrap_or(u64::MAX);
+                    if disclosure_bytes > court.max_close_bytes() {
                         return Err(format!(
-                            "claim {claim}'s disclosure is {} bytes, above this ruleset's {}-byte close ceiling",
-                            preimage.len(),
+                            "claim {claim}'s disclosure is {disclosure_bytes} bytes, above this ruleset's {}-byte close ceiling",
                             court.max_close_bytes()
                         ));
                     }
@@ -6421,14 +6434,14 @@ impl VirtualStateProcessor {
                     let producer = state
                         .bond(&record.bond)
                         .ok_or_else(|| format!("claim {claim}'s producing bond is not in this chain's registry"))?;
-                    let message = kaspa_consensus_core::palw_state_v2::palw_da_disclosure_message_v2(
+                    let message = kaspa_consensus_core::palw_state_v2::palw_da_disclosure_message_v3(
                         kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
                             self.network_id_bytes.as_slice(),
                             Some(self.genesis.hash),
                         ),
                         claim,
                         *event_index,
-                        &opening.event_hash,
+                        &kaspa_consensus_core::palw_state_v2::palw_da_disclosure_digest_v1(disclosure),
                     );
                     if !Self::verify_mldsa87_with_context_bool(
                         &producer.pubkey,

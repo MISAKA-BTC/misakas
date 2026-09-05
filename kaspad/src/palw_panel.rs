@@ -2432,6 +2432,94 @@ impl PalwPanelService {
                 );
             }
 
+            // --- the data-availability court's half: open what an accusation says we withheld ---
+            //
+            // ADR-0062 Decision 3, the responder (mainnet audit, 2026-09-05). Nothing in this tree
+            // constructed a `MaterialDisclosed` — the fence's own doc says "DO NOT ARM THIS WITHOUT
+            // A DISCLOSURE RESPONDER IN THE FIELD", because a window that convicts on silence is
+            // only sound when the silent party could have spoken. This is that party. It opens the
+            // accused event out of the capture it already retains — the ids and rows it kept at
+            // execution — through the family's `disclose_trace_event`, signs the object's digest
+            // under the producing bond, and submits it as a lifecycle carrier through the court
+            // queue: a disclosure is clocked exactly as a rung is. Nothing is re-executed. It never
+            // accuses: a seat that received nothing cannot tell withholding from transport loss,
+            // and an accusation against an honest producer is a charge to the accuser.
+            let da_duties = session.palw_da_duties_v2(vec![bond_key]);
+            let da_armed = self.consensus_config.params.palw_da_court.is_some_and(|fence| fence.is_active(current_daa));
+            for duty in &da_duties {
+                if !da_armed || current_daa > duty.disclose_deadline_daa {
+                    continue;
+                }
+                let key = (duty.claim_id, duty.missing_event_index, true);
+                if let Some(sent_daa) = court_moved.get(&key)
+                    && current_daa < sent_daa.saturating_add(COURT_MOVE_REPLAN_DAA)
+                {
+                    continue;
+                }
+                if court_pending.iter().any(|(sid, round, responder, _)| *sid == key.0 && *round == key.1 && *responder == key.2) {
+                    continue;
+                }
+                let Some(bytes) = self
+                    .retained_capture(&duty.claim_id)
+                    .or_else(|| std::fs::read(self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id))).ok())
+                else {
+                    *court_stalls.entry("no retained capture to answer a data-availability accusation from").or_default() += 1;
+                    continue;
+                };
+                let (row, tile) = kaspa_consensus_core::palw_state_v2::palw_da_event_index_parts_v1(duty.missing_event_index);
+                // A free-prompt retention wraps the family capture with the job and its ids; the
+                // attempt lane retains the family capture bare (ADR-0084 Decision 4).
+                let disclosed = match kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes) {
+                    Some(payload) => self
+                        .resolve_backend(&session, duty.class_id, duty.artifact_root)
+                        .and_then(|backend| backend.disclose_trace_event(&payload.capture, row, tile)),
+                    None => match self.backend_for_raw_capture_v1(&session, &bytes) {
+                        Some((backend, _)) => backend.disclose_trace_event(&bytes, row, tile),
+                        None => Err("no held class reads the retained capture".to_string()),
+                    },
+                };
+                let disclosure = match disclosed {
+                    Ok(disclosure) => disclosure,
+                    Err(why) => {
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: cannot open accused event (row {row}, tile {tile}) from the retained capture: {why}",
+                            duty.claim_id
+                        );
+                        *court_stalls.entry("the family cannot open the accused event").or_default() += 1;
+                        continue;
+                    }
+                };
+                let digest = kaspa_consensus_core::palw_state_v2::palw_da_disclosure_digest_v1(&disclosure);
+                let message = kaspa_consensus_core::palw_state_v2::palw_da_disclosure_message_v3(
+                    network_domain,
+                    &duty.claim_id,
+                    duty.missing_event_index,
+                    &digest,
+                );
+                let Some(signature) =
+                    self.sign(message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_DA_DISCLOSURE_V2_MLDSA87_CONTEXT)
+                else {
+                    *court_stalls.entry("no signing key for a disclosure").or_default() += 1;
+                    continue;
+                };
+                info!(
+                    "[{PALW_PANEL}] claim {}: answering the data-availability accusation of event (row {row}, tile {tile}) from the \
+                     retained capture — deadline DAA {}",
+                    duty.claim_id, duty.disclose_deadline_daa
+                );
+                court_pending.push((
+                    key.0,
+                    key.1,
+                    key.2,
+                    PalwConsensusObjectV2::MaterialDisclosed {
+                        claim: duty.claim_id,
+                        event_index: duty.missing_event_index,
+                        disclosure,
+                        signature,
+                    },
+                ));
+            }
+
             // --- the seat's half: answer every duty exactly once ---
             let duties = session.palw_seat_duties_v2(vec![bond_key]);
             for duty in &duties {

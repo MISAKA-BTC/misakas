@@ -2150,6 +2150,8 @@ pub fn palw_bond_retirement_message_v2(network_domain: Hash64, bond: &PalwBondKe
 pub const PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/da-accusation-v2/mldsa87/v1";
 pub const PALW_DA_ACCUSATION_V2_DOMAIN: &[u8] = b"misaka-palw/da-accusation-v2/message/v1";
 pub const PALW_DA_DISCLOSURE_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/da-disclosure-v2/mldsa87/v1";
+/// The domain the disclosure object is digested under before it is signed.
+pub const PALW_DA_DISCLOSURE_V3_DIGEST_DOMAIN: &[u8] = b"misaka-palw/da-disclosure-v3/digest/v1";
 pub const PALW_DA_DISCLOSURE_V2_DOMAIN: &[u8] = b"misaka-palw/da-disclosure-v2/message/v1";
 
 /// What an accuser signs (SA-1): the network, the claim, the index and its own bond.
@@ -2171,19 +2173,49 @@ pub fn palw_da_accusation_message_v2(
     finish(state)
 }
 
-/// What a producer signs to disclose (SA-2): the network, the claim, the index and the EVENT HASH
-/// the opening carries.
+/// **What the accusation carries as its `missing_event_index`: an event `(row, tile)`, packed**
+/// (ADR-0062 D1 "an accusation must name what is missing"; mainnet audit 2026-09-05).
 ///
-/// The event hash rather than the preimage, for the reason `CourtDisclosed` signs its rung: the
-/// hash is what the opening binds and what the chain checks, so signing it binds the producer to
-/// exactly the material the arithmetic verifies, at a fixed signature cost whatever the class's
-/// disclosure format weighs.
-pub fn palw_da_disclosure_message_v2(network_domain: Hash64, claim: &Hash64, event_index: u32, event_hash: &Hash64) -> Hash64 {
+/// `row` is a decode position of the claim's committed logits trace and `tile` a tile of that
+/// row under the class's scheme (always 0 on the flat scheme). Packed as `row << 8 | tile`, so
+/// the object's field and every fold arm that reads it are unchanged.
+pub const PALW_DA_TILE_BITS: u32 = 8;
+
+pub fn palw_da_event_index_v1(row: u32, tile: u8) -> u32 {
+    (row << PALW_DA_TILE_BITS) | tile as u32
+}
+
+pub fn palw_da_event_index_parts_v1(index: u32) -> (u32, u8) {
+    (index >> PALW_DA_TILE_BITS, (index & 0xFF) as u8)
+}
+
+/// **The rows an accusation may name, from the chain fact the claim pins.** `trace_chunk_count`
+/// is `⌈rows / PALW_FP_TRACE_CHUNK_EVENTS_V3⌉` on the free-prompt lane and 1 on the attempt lane,
+/// so `count × 256` bounds the run's rows on every shipped claim. A row inside this bound and
+/// outside the run is answered with `OutOfRange` and refutes the accuser; a row outside it is
+/// refused at the accusation, before anyone is put under session for an event nobody could hold.
+pub fn palw_da_max_accusable_rows_v1(trace_chunk_count: u32) -> u32 {
+    trace_chunk_count.saturating_mul(crate::palw_freeprompt_v3::PALW_FP_TRACE_CHUNK_EVENTS_V3)
+}
+
+/// **The digest a disclosure is signed over**: the whole object, keyed under its own domain, so the
+/// producer's signature covers every byte the fold will read — the binding, the rows or the tile,
+/// and the openings — and not only an event hash a third party could reuse.
+pub fn palw_da_disclosure_digest_v1(disclosure: &crate::palw_step_refute::PalwTraceEventDisclosureV1) -> Hash64 {
+    let mut state = keyed(PALW_DA_DISCLOSURE_V3_DIGEST_DOMAIN);
+    state.update(&borsh::to_vec(disclosure).expect("a disclosure is borsh-serializable"));
+    finish(state)
+}
+
+/// What a producer signs to disclose (SA-2): the network, the claim, the index and the DIGEST of
+/// the disclosure — under the CLAIM's bond key, so a third party cannot bind the producer to
+/// material it never published, and so who carries the object is irrelevant (SA-3).
+pub fn palw_da_disclosure_message_v3(network_domain: Hash64, claim: &Hash64, event_index: u32, disclosure_digest: &Hash64) -> Hash64 {
     let mut state = keyed(PALW_DA_DISCLOSURE_V2_DOMAIN);
     state.update(network_domain.as_byte_slice());
     state.update(claim.as_byte_slice());
     state.update(&event_index.to_le_bytes());
-    state.update(event_hash.as_byte_slice());
+    state.update(disclosure_digest.as_byte_slice());
     finish(state)
 }
 
@@ -2308,24 +2340,6 @@ pub fn palw_da_paused_daa_v2(phase: &PalwClaimPhaseV2, now_daa: u64) -> u64 {
     }
 }
 
-/// **The one arithmetic statement a disclosure has to satisfy about its preimage** (SA-2).
-///
-/// `logits_event_hash_v2` is keyed BLAKE2b-512 under [`crate::palw_v2::PALW_V2_DOMAIN_LOGITS_EVENT`]
-/// over a canonical header followed by the logits bytes — one keyed hash over one byte string. So
-/// the DISCLOSED preimage is exactly that byte string, and checking it needs no knowledge of the
-/// structure inside: a validator re-keys the bytes and compares.
-///
-/// That is what makes SA-2's "checked by hash arithmetic, never by execution" true in both
-/// directions. It is also what makes the rule format-agnostic — a class on
-/// `tiled_logits_scheme_id_v1` hashes a tiled body and a flat class hashes a flat one, and this
-/// function cannot tell, which is correct: ADR-0062 introduces no second disclosure format, it
-/// carries whatever form the class's `logits_scheme_id` names, bounded by the same
-/// `max_close_bytes` a close is.
-pub fn palw_da_event_hash_v1(preimage: &[u8]) -> Hash64 {
-    let mut state = keyed(crate::palw_v2::PALW_V2_DOMAIN_LOGITS_EVENT);
-    state.update(preimage);
-    finish(state)
-}
 
 /// What a registrant signs: the class it is registering and the share it is taking.
 ///
@@ -2803,12 +2817,12 @@ pub enum PalwConsensusObjectV2 {
         /// Must equal the open accusation's `missing_event_index` — answering another index is not
         /// an answer.
         event_index: u32,
-        /// What `opening.event_hash` is the hash of. Carried so a prover cannot open a hash whose
-        /// preimage it never has to produce; the hash rule is the class's, and the acceptance layer
-        /// is where it is applied.
-        preimage: Vec<u8>,
-        opening: crate::palw_v2::PalwTraceEventOpeningV2,
-        /// The producer's ML-DSA-87 over [`palw_da_disclosure_message_v2`], under the CLAIM's bond
+        /// The event, in the form the class's `logits_scheme_id` names, with the claim's own
+        /// binding — see [`crate::palw_step_refute::PalwTraceEventDisclosureV1`]. Checked by
+        /// [`crate::palw_step_refute::check_trace_event_disclosure_v1`]: hash arithmetic against
+        /// the claim's pinned `trace_root` and `execution_root`, never an execution.
+        disclosure: crate::palw_step_refute::PalwTraceEventDisclosureV1,
+        /// The producer's ML-DSA-87 over [`palw_da_disclosure_message_v3`], under the CLAIM's bond
         /// key. Unsigned, a third party could bind the producer to material it never published.
         signature: Vec<u8>,
     },
@@ -4052,7 +4066,7 @@ pub enum PalwStateV2Error {
          a DefaultAccused or MaterialDisclosed here would fold state no other build computes"
     )]
     DaCourtDormant,
-    #[error("claim {claim} commits to {count} trace chunks; an accusation cannot name index {index}")]
+    #[error("claim {claim} bounds its accusable rows at {count}; an accusation cannot name event index {index}")]
     DaIndexOutOfRange { claim: Hash64, index: u32, count: u32 },
     #[error(
         "an accusation on claim {claim} at DAA {at} leaves less than the {window}-DAA disclose window \
@@ -4079,8 +4093,6 @@ pub enum PalwStateV2Error {
     DaDisclosureIndexMismatch { want: u32, got: u32 },
     #[error("the disclosure's opening does not reconstruct claim {claim}'s committed trace root: {why}")]
     DaOpeningRefused { claim: Hash64, why: String },
-    #[error("the disclosed preimage does not hash to the event the opening names (claim {0})")]
-    DaPreimageMismatch(Hash64),
     // There is deliberately NO size error here. A disclosure's ceiling is a wire bound, and it is
     // already applied on the only path into this fold: `palw_lifecycle_objects_from_accepted_txs_v2`
     // runs `palw_lifecycle_object_may_ride_v2` on every extracted object and SKIPS the ones that
@@ -9399,12 +9411,10 @@ fn apply_object(
             // **An accusation names ONE piece of the obligation, and the obligation's size is a
             // chain fact.** `trace_chunk_count` is pinned by ADR-0072 Decision 8, so the range this
             // refuses against cannot be restated by the producer OR the accuser.
-            if *missing_event_index >= claim.trace_chunk_count {
-                return Err(PalwStateV2Error::DaIndexOutOfRange {
-                    claim: *claim_id,
-                    index: *missing_event_index,
-                    count: claim.trace_chunk_count,
-                });
+            let (accused_row, _accused_tile) = palw_da_event_index_parts_v1(*missing_event_index);
+            let accusable_rows = palw_da_max_accusable_rows_v1(claim.trace_chunk_count);
+            if accused_row >= accusable_rows {
+                return Err(PalwStateV2Error::DaIndexOutOfRange { claim: *claim_id, index: *missing_event_index, count: accusable_rows });
             }
             // **The whole disclose window must fit inside the retention obligation** (SA-1, SA-6).
             // Accusing at the last DAA of retention would otherwise be a conviction dressed as a
@@ -9499,7 +9509,7 @@ fn apply_object(
             builder.arm_deadline(deadline_daa, *claim_id);
         }
         // **ADR-0062 SA-2: the refutation, and it is arithmetic.**
-        PalwConsensusObjectV2::MaterialDisclosed { claim: claim_id, event_index, preimage, opening, signature: _ } => {
+        PalwConsensusObjectV2::MaterialDisclosed { claim: claim_id, event_index, disclosure, signature: _ } => {
             if !builder.da_court {
                 return Err(PalwStateV2Error::DaCourtDormant);
             }
@@ -9509,25 +9519,25 @@ fn apply_object(
             else {
                 return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "MaterialDisclosed" });
             };
-            if *event_index != missing_event_index || opening.event_index != missing_event_index {
+            if *event_index != missing_event_index {
                 return Err(PalwStateV2Error::DaDisclosureIndexMismatch { want: missing_event_index, got: *event_index });
             }
-            // The preimage is the one the opening names — so a prover cannot open a hash it never
-            // has to produce.
-            if palw_da_event_hash_v1(preimage) != opening.event_hash {
-                return Err(PalwStateV2Error::DaPreimageMismatch(*claim_id));
-            }
-            // …and the event is the one this claim committed to, at that index. `trace_root` and
-            // `trace_chunk_count` are the claim's own pinned fields (ADR-0072 Decision 8), so the
-            // root this is compared against is a chain fact and not a restatement.
-            let derived = crate::palw_v2::trace_event_opening_root_v2(claim.trace_chunk_count, opening)
-                .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: *claim_id, why: e.to_string() })?;
-            if derived != claim.trace_root {
-                return Err(PalwStateV2Error::DaOpeningRefused {
-                    claim: *claim_id,
-                    why: format!("the opening reconstructs {derived}, not the claim's committed {}", claim.trace_root),
-                });
-            }
+            // **The event is the one this claim committed to, in the form its class's scheme
+            // names** (SA-2). `trace_root` and `execution_root` are the claim's own pinned fields
+            // (ADR-0072 Decision 8), so what the disclosure is compared against is a chain fact
+            // and not a restatement — and the check is the same arithmetic the court runs before
+            // it reads a close: the binding recomputes, and reaches both roots. The default-ladder
+            // cap is enough for every tree this opens (rows and tiles, both far below it).
+            let (accused_row, accused_tile) = palw_da_event_index_parts_v1(missing_event_index);
+            crate::palw_step_refute::check_trace_event_disclosure_v1(
+                claim.trace_root,
+                claim.execution_root,
+                accused_row,
+                accused_tile,
+                disclosure,
+                crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+            )
+            .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: *claim_id, why: e.to_string() })?;
             // **Only the accuser pays** (SA-4). Not the dissenting seats, not the `Unavailable`
             // ones: past ADR-0065 D4 an `Unavailable` vote is an abstention, and charging it
             // re-creates the transport-loss slashing D4 removed — a third of every remote seat's
@@ -18377,26 +18387,35 @@ pub(crate) mod tests {
             .expect_err("the object must be refused")
     }
 
-    /// Four trace events, their preimages, and the Merkle root over them — a REAL commitment, so
-    /// the disclosure's arithmetic is the shipped arithmetic and not a stub.
-    fn da_trace() -> (Vec<Vec<u8>>, Vec<Hash64>, Hash64) {
-        let preimages: Vec<Vec<u8>> = (0u8..4).map(|i| vec![i; 32 + i as usize]).collect();
-        let hashes: Vec<Hash64> = preimages.iter().map(|p| palw_da_event_hash_v1(p)).collect();
-        let root = crate::palw_v2::trace_event_merkle_root_v2(&hashes).expect("four leaves");
-        (preimages, hashes, root)
+    /// **A REAL commitment, so the disclosure's arithmetic is the shipped arithmetic and not a
+    /// stub**: the matmul fixture's execution, re-committed with an integer decode commitment —
+    /// two decode rows at vocabulary 40, the flat scheme every shipped floor commits under — and
+    /// the pin that opens it. Before the 2026-09-05 audit this fixture set `trace_root` to a Merkle
+    /// root over four synthetic event hashes that no shipped class commits, and the fold's own
+    /// check passed against it while it could not have accepted any real producer's answer.
+    #[derive(Clone)]
+    struct DaFixture {
+        binding: crate::palw_step_leg::PalwStepBindingV2,
+        pin: crate::palw_step_refute::PalwBase0DecodeTokensV1,
+    }
+
+    fn da_fixture() -> DaFixture {
+        let (binding, _, _, pin) = crate::palw_step_refute::tests::base0_honest_decode_commitment();
+        DaFixture { binding, pin }
     }
 
     /// The producer's bond is 1 and the accuser's is 2; the claim commits to the real trace above
     /// and owes retention until `retention`.
-    fn da_setup(p: &PalwStateParamsV2, retention: u64) -> (PalwChainStateV2, Hash64, Hash64, Vec<Vec<u8>>, Vec<Hash64>) {
+    fn da_setup(p: &PalwStateParamsV2, retention: u64) -> (PalwChainStateV2, Hash64, Hash64, DaFixture) {
         da_setup_pwu(p, retention, 40)
     }
 
     /// The same fixture with the claim's size as a knob. `reserved = pwu × slash_value_per_pwu`
     /// (the class registers 5), so `pwu` is what decides whether `⌈reserved / seats⌉` sits under
     /// the registry floor or above it — the two sides of the cap SA-4 puts on an accusation.
-    fn da_setup_pwu(p: &PalwStateParamsV2, retention: u64, pwu: u64) -> (PalwChainStateV2, Hash64, Hash64, Vec<Vec<u8>>, Vec<Hash64>) {
-        let (preimages, hashes, root) = da_trace();
+    fn da_setup_pwu(p: &PalwStateParamsV2, retention: u64, pwu: u64) -> (PalwChainStateV2, Hash64, Hash64, DaFixture) {
+        let fx = da_fixture();
+        let root = fx.binding.full_logits_trace_root;
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::BondRegistered {
             bond: bond_key(2),
@@ -18412,7 +18431,8 @@ pub(crate) mod tests {
 
         let mut env = attempt(pwu, 1);
         env.attempt.trace_root = root;
-        env.attempt.trace_chunk_count = 4;
+        env.attempt.execution_root = fx.binding.committed_execution_root;
+        env.attempt.trace_chunk_count = 1;
         env.attempt.trace_retention_daa = retention;
         let claim_id = attempt_id_v2(&env.attempt);
         let (s2, _) = apply_da(&s1, p, &ctx(2, 101, 2), &[], Some(&env));
@@ -18424,21 +18444,25 @@ pub(crate) mod tests {
         ];
         let (s3, _) =
             apply_da(&s2, p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
-        (s3, claim_id, root, preimages, hashes)
+        (s3, claim_id, root, fx)
     }
 
     fn da_accuse(claim: Hash64, index: u32) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::DefaultAccused { claim, missing_event_index: index, accuser: bond_key(2), signature: vec![9; 8] }
     }
 
-    fn da_disclose(claim: Hash64, index: u32, preimages: &[Vec<u8>], hashes: &[Hash64]) -> PalwConsensusObjectV2 {
-        PalwConsensusObjectV2::MaterialDisclosed {
-            claim,
-            event_index: index,
-            preimage: preimages[index as usize].clone(),
-            opening: crate::palw_v2::trace_event_opening_v2(hashes, index).expect("the index is in range"),
-            signature: vec![5; 8],
-        }
+    /// The producer's answer to an accusation of `index`: the flat pin for a row inside the run,
+    /// `OutOfRange` for an event the committed run does not have — both refute.
+    fn da_disclose(claim: Hash64, index: u32, fx: &DaFixture) -> PalwConsensusObjectV2 {
+        use crate::palw_step_refute::PalwTraceEventDisclosureV1 as D;
+        let (row, tile) = palw_da_event_index_parts_v1(index);
+        let binding = Box::new(fx.binding.clone());
+        let disclosure = if row < fx.binding.job_context.exact_decode_tokens && tile == 0 {
+            D::Flat { binding, pin: fx.pin.clone() }
+        } else {
+            D::OutOfRange { binding }
+        };
+        PalwConsensusObjectV2::MaterialDisclosed { claim, event_index: index, disclosure, signature: vec![5; 8] }
     }
 
     /// **DA-1: an accusation outside the claim's retention window is refused.**
@@ -18454,7 +18478,7 @@ pub(crate) mod tests {
         let disclose_window = palw_da_disclose_window_daa_v1(&p);
         // Retention ends at 130; the accusation at daa 111 needs the window (20) to fit, and it
         // does — 111 + 20 = 131 > 130 does not. So 110 is the last admissible DAA.
-        let (s3, claim_id, _, _, _) = da_setup(&p, 130);
+        let (s3, claim_id, _, _) = da_setup(&p, 130);
         assert_eq!(disclose_window, 20, "this fixture's windows are the ones the arithmetic below assumes");
 
         let too_late = apply_da_err(&s3, &p, &ctx(4, 111, 4), &[da_accuse(claim_id, 0)]);
@@ -18471,8 +18495,16 @@ pub(crate) mod tests {
 
         // …and an index outside the obligation is refused on the same footing: the accusation must
         // name a piece of something the producer actually owes.
-        let out_of_range = apply_da_err(&s3, &p, &ctx(4, 110, 4), &[da_accuse(claim_id, 4)]);
-        assert!(matches!(out_of_range, PalwStateV2Error::DaIndexOutOfRange { index: 4, count: 4, .. }), "got {out_of_range:?}");
+        // The bound is the chain fact `trace_chunk_count × 256` rows: one chunk here, so row 256
+        // is the first an accusation cannot name — a row inside the bound and outside the run is
+        // answered `OutOfRange` (and refutes), a row outside the bound is refused before anyone is
+        // put under session for an event nobody could hold.
+        let past = palw_da_event_index_v1(palw_da_max_accusable_rows_v1(1), 0);
+        let out_of_range = apply_da_err(&s3, &p, &ctx(4, 110, 4), &[da_accuse(claim_id, past)]);
+        assert!(
+            matches!(out_of_range, PalwStateV2Error::DaIndexOutOfRange { index, count: 256, .. } if index == past),
+            "got {out_of_range:?}"
+        );
     }
 
     /// **DA-2: a second open accusation on one claim is refused.**
@@ -18483,7 +18515,7 @@ pub(crate) mod tests {
     #[test]
     fn da2_a_second_open_accusation_on_one_claim_is_refused() {
         let p = params();
-        let (s3, claim_id, _, _, _) = da_setup(&p, 999_999);
+        let (s3, claim_id, _, _) = da_setup(&p, 999_999);
         let (s4, _) = apply_da(&s3, &p, &ctx(4, 103, 4), &[da_accuse(claim_id, 0)], None);
         let second = apply_da_err(&s4, &p, &ctx(5, 104, 5), &[da_accuse(claim_id, 1)]);
         assert!(matches!(second, PalwStateV2Error::DaAccusationAlreadyOpen(id) if id == claim_id), "got {second:?}");
@@ -18502,7 +18534,7 @@ pub(crate) mod tests {
     #[test]
     fn da3_a_valid_disclosure_charges_the_accuser_and_nobody_else() {
         let p = params();
-        let (s3, claim_id, _, preimages, hashes) = da_setup(&p, 999_999);
+        let (s3, claim_id, _, fx) = da_setup(&p, 999_999);
         let reserved = s3.claim(&claim_id).unwrap().reserved;
         let producer_before = s3.bond(&bond_key(1)).unwrap().collateral;
         let accuser_before = s3.bond(&bond_key(2)).unwrap().collateral;
@@ -18518,7 +18550,7 @@ pub(crate) mod tests {
         assert_eq!(s4.reserved_exposure(&bond_key(1)), reserved, "the producer still stands behind its own claim, unchanged");
         assert_eq!(s4.bond(&bond_key(2)).unwrap().collateral, accuser_before, "reserving is not charging");
 
-        let (s5, _) = apply_da(&s4, &p, &ctx(5, 104, 5), &[da_disclose(claim_id, 2, &preimages, &hashes)], None);
+        let (s5, _) = apply_da(&s4, &p, &ctx(5, 104, 5), &[da_disclose(claim_id, 2, &fx)], None);
         assert_eq!(
             s5.bond(&bond_key(2)).unwrap().collateral,
             accuser_before - exposure as u64,
@@ -18537,26 +18569,52 @@ pub(crate) mod tests {
         );
 
         // The three ways a disclosure can be wrong, each refused by arithmetic alone.
-        let wrong_index = apply_da_err(&s4, &p, &ctx(5, 104, 5), &[da_disclose(claim_id, 1, &preimages, &hashes)]);
+        let wrong_index = apply_da_err(&s4, &p, &ctx(5, 104, 5), &[da_disclose(claim_id, 1, &fx)]);
         assert!(matches!(wrong_index, PalwStateV2Error::DaDisclosureIndexMismatch { want: 2, got: 1 }), "got {wrong_index:?}");
 
-        let mut lying = da_disclose(claim_id, 2, &preimages, &hashes);
-        if let PalwConsensusObjectV2::MaterialDisclosed { preimage, .. } = &mut lying {
-            preimage.push(0xFF);
+        // Index 2 is row 2 of a two-row run, so the honest answer above was `OutOfRange`. A row
+        // INSIDE the run is answered by opening it: index 0.
+        let (s4b, _) = apply_da(&s3, &p, &ctx(4, 103, 4), &[da_accuse(claim_id, 0)], None);
+        let (opened, _) = apply_da(&s4b, &p, &ctx(5, 104, 5), &[da_disclose(claim_id, 0, &fx)], None);
+        assert!(
+            matches!(opened.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }),
+            "opening the accused row refutes the accusation"
+        );
+        // A bent row: the rows no longer re-key to the claim's own trace root, so this is not an
+        // opening of the claim's commitment — refused by arithmetic, never a verdict.
+        let mut lying = da_disclose(claim_id, 0, &fx);
+        if let PalwConsensusObjectV2::MaterialDisclosed {
+            disclosure: crate::palw_step_refute::PalwTraceEventDisclosureV1::Flat { pin, .. },
+            ..
+        } = &mut lying
+        {
+            pin.logits_rows[0][0] ^= 1;
         }
-        let bad_preimage = apply_da_err(&s4, &p, &ctx(5, 104, 5), &[lying]);
-        assert!(matches!(bad_preimage, PalwStateV2Error::DaPreimageMismatch(_)), "got {bad_preimage:?}");
-
-        // An opening from ANOTHER trace: the preimage still hashes to its own event, and the event
-        // still opens under its own root — but not under the root this claim committed to.
-        let other: Vec<Hash64> = (0u8..4).map(|i| palw_da_event_hash_v1(&[i, 0xEE])).collect();
-        let mut forged = da_disclose(claim_id, 2, &preimages, &hashes);
-        if let PalwConsensusObjectV2::MaterialDisclosed { preimage, opening, .. } = &mut forged {
-            *preimage = vec![2u8, 0xEE];
-            *opening = crate::palw_v2::trace_event_opening_v2(&other, 2).expect("in range");
-        }
-        let wrong_tree = apply_da_err(&s4, &p, &ctx(5, 104, 5), &[forged]);
-        assert!(matches!(wrong_tree, PalwStateV2Error::DaOpeningRefused { .. }), "got {wrong_tree:?}");
+        let bent = apply_da_err(&s4b, &p, &ctx(5, 104, 5), &[lying]);
+        assert!(matches!(bent, PalwStateV2Error::DaOpeningRefused { .. }), "got {bent:?}");
+        // A disclosure of ANOTHER execution: everything inside it verifies against itself, and
+        // nothing in it reaches the roots this claim committed to.
+        let (other_binding, _, _, other_pin) = crate::palw_step_refute::tests::base0_binding_with_decode_root(
+            fx.pin.logits_rows.iter().map(|r| r.iter().map(|v| v.wrapping_add(3)).collect()).collect(),
+            fx.pin.generated_token_ids.clone(),
+        );
+        let forged = PalwConsensusObjectV2::MaterialDisclosed {
+            claim: claim_id,
+            event_index: 0,
+            disclosure: crate::palw_step_refute::PalwTraceEventDisclosureV1::Flat { binding: Box::new(other_binding), pin: other_pin },
+            signature: vec![5; 8],
+        };
+        let wrong_execution = apply_da_err(&s4b, &p, &ctx(5, 104, 5), &[forged]);
+        assert!(matches!(wrong_execution, PalwStateV2Error::DaOpeningRefused { .. }), "got {wrong_execution:?}");
+        // And an `OutOfRange` answer for an event the run DOES have is not an answer.
+        let dodge = PalwConsensusObjectV2::MaterialDisclosed {
+            claim: claim_id,
+            event_index: 0,
+            disclosure: crate::palw_step_refute::PalwTraceEventDisclosureV1::OutOfRange { binding: Box::new(fx.binding.clone()) },
+            signature: vec![5; 8],
+        };
+        let dodged = apply_da_err(&s4b, &p, &ctx(5, 104, 5), &[dodge]);
+        assert!(matches!(dodged, PalwStateV2Error::DaOpeningRefused { .. }), "a producer may not declare absent an event it committed: {dodged:?}");
     }
 
     /// **DA-4: a disclosure carried by a block the producer did not mine is accepted.**
@@ -18568,11 +18626,11 @@ pub(crate) mod tests {
     #[test]
     fn da4_a_disclosure_carried_by_a_block_the_producer_did_not_mine_is_accepted() {
         let p = params();
-        let (s3, claim_id, _, preimages, hashes) = da_setup(&p, 999_999);
+        let (s3, claim_id, _, fx) = da_setup(&p, 999_999);
         let (s4, _) = apply_da(&s3, &p, &ctx(4, 103, 4), &[da_accuse(claim_id, 0)], None);
 
         let stranger = attempt_for_class(40, 7, h64(1), bond_key(2), vec![8; 4], op_id(22), h64(11));
-        let (s5, _) = apply_da(&s4, &p, &ctx(5, 104, 5), &[da_disclose(claim_id, 0, &preimages, &hashes)], Some(&stranger));
+        let (s5, _) = apply_da(&s4, &p, &ctx(5, 104, 5), &[da_disclose(claim_id, 0, &fx)], Some(&stranger));
         assert!(
             matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }),
             "a disclosure on somebody else's block refutes the accusation exactly as its own would"
@@ -18593,14 +18651,14 @@ pub(crate) mod tests {
     #[test]
     fn da5_two_nodes_that_saw_the_disclosure_at_different_times_reach_the_same_verdict() {
         let p = params();
-        let (s3, claim_id, _, preimages, hashes) = da_setup(&p, 999_999);
+        let (s3, claim_id, _, fx) = da_setup(&p, 999_999);
         let (accused, _) = apply_da(&s3, &p, &ctx(4, 103, 4), &[da_accuse(claim_id, 3)], None);
         let deadline = 103 + palw_da_disclose_window_daa_v1(&p);
 
         // Two nodes, two arrival times, one chain: the disclosure rides block 5 at daa 104 for one
         // and block 5 at daa 122 for the other. Same fold, same verdict, same state root.
-        let (early, _) = apply_da(&accused, &p, &ctx(5, 104, 5), &[da_disclose(claim_id, 3, &preimages, &hashes)], None);
-        let (late, _) = apply_da(&accused, &p, &ctx(5, deadline, 5), &[da_disclose(claim_id, 3, &preimages, &hashes)], None);
+        let (early, _) = apply_da(&accused, &p, &ctx(5, 104, 5), &[da_disclose(claim_id, 3, &fx)], None);
+        let (late, _) = apply_da(&accused, &p, &ctx(5, deadline, 5), &[da_disclose(claim_id, 3, &fx)], None);
         for (name, state) in [("early", &early), ("late", &late)] {
             assert!(
                 matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }),
@@ -18651,7 +18709,7 @@ pub(crate) mod tests {
     #[test]
     fn a_disputed_claim_that_ends_by_another_door_still_releases_the_accuser() {
         let p = params();
-        let (s3, claim_id, trace_root, _, _) = da_setup(&p, 999_999);
+        let (s3, claim_id, trace_root, _) = da_setup(&p, 999_999);
         let reserved = s3.claim(&claim_id).unwrap().reserved;
         let exposure = palw_da_accusation_exposure_v1(reserved, 2);
         let (accused, _) = apply_da(&s3, &p, &ctx(4, 103, 4), &[da_accuse(claim_id, 0)], None);
@@ -18718,7 +18776,7 @@ pub(crate) mod tests {
     #[test]
     fn a_disputed_claim_round_trips_through_the_snapshot_a_node_restarts_from() {
         let p = params();
-        let (s3, claim_id, _, _, _) = da_setup(&p, 999_999);
+        let (s3, claim_id, _, _) = da_setup(&p, 999_999);
         let (accused, _) = apply_da(&s3, &p, &ctx(4, 103, 4), &[da_accuse(claim_id, 2)], None);
         let root = accused.state_root();
 
@@ -18775,7 +18833,7 @@ pub(crate) mod tests {
     #[test]
     fn a_refuted_claim_finalizes_on_its_own_clock_and_not_a_restarted_one() {
         let p = params();
-        let (s3, claim_id, _, preimages, hashes) = da_setup(&p, 999_999);
+        let (s3, claim_id, _, fx) = da_setup(&p, 999_999);
         let challenge = p.window_challenge();
 
         let (licensed, _) = apply_da(
@@ -18796,7 +18854,7 @@ pub(crate) mod tests {
         );
 
         // …and the disclosure hands the original back, unmoved.
-        let (refuted, _) = apply_da(&accused, &p, &ctx(6, 110, 6), &[da_disclose(claim_id, 1, &preimages, &hashes)], None);
+        let (refuted, _) = apply_da(&accused, &p, &ctx(6, 110, 6), &[da_disclose(claim_id, 1, &fx)], None);
         assert_eq!(
             refuted.claim(&claim_id).unwrap().phase,
             PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 103 },
@@ -18822,9 +18880,9 @@ pub(crate) mod tests {
     #[test]
     fn the_da_court_fence_off_is_byte_identical() {
         let p = params();
-        let (s3, claim_id, _, preimages, hashes) = da_setup(&p, 999_999);
+        let (s3, claim_id, _, fx) = da_setup(&p, 999_999);
 
-        for object in [da_accuse(claim_id, 0), da_disclose(claim_id, 0, &preimages, &hashes)] {
+        for object in [da_accuse(claim_id, 0), da_disclose(claim_id, 0, &fx)] {
             let refused = apply_palw_transition_v2_with_policies(
                 &s3,
                 &p,
@@ -18861,7 +18919,7 @@ pub(crate) mod tests {
         let p = params();
         let disclose_window = palw_da_disclose_window_daa_v1(&p);
         for retention in [130u64, 200, 999_999] {
-            let (s3, claim_id, _, _, _) = da_setup(&p, retention);
+            let (s3, claim_id, _, _) = da_setup(&p, retention);
             let at = retention - disclose_window;
             let (accused, _) = apply_da(&s3, &p, &ctx(4, at, 4), &[da_accuse(claim_id, 0)], None);
             let PalwClaimPhaseV2::DefaultDisputed { accused_daa, .. } = accused.claim(&claim_id).unwrap().phase else {
@@ -18894,7 +18952,7 @@ pub(crate) mod tests {
     #[test]
     fn an_open_accusation_does_not_close_the_arithmetic_court() {
         let p = params();
-        let (s3, claim_id, trace_root, preimages, hashes) = da_setup(&p, 999_999);
+        let (s3, claim_id, trace_root, fx) = da_setup(&p, 999_999);
         let sid = crate::palw_court_v2::court_session_id_v2(
             &claim_id,
             &trace_root,
@@ -18950,7 +19008,7 @@ pub(crate) mod tests {
 
         // The disclosure ends the session; the claim goes back to waiting out the window it was
         // already serving, and the court it is under is untouched.
-        let (refuted, _) = apply_da(&both, &p, &ctx(7, da_deadline, 7), &[da_disclose(claim_id, 1, &preimages, &hashes)], None);
+        let (refuted, _) = apply_da(&both, &p, &ctx(7, da_deadline, 7), &[da_disclose(claim_id, 1, &fx)], None);
         assert_eq!(
             refuted.claim(&claim_id).unwrap().phase,
             PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 103 },
@@ -18978,7 +19036,7 @@ pub(crate) mod tests {
         let p = params();
         let window = palw_da_disclose_window_daa_v1(&p);
         assert!(window > p.window_receipt() && window > p.window_bind(), "the disclose window outruns both — that is the hazard");
-        let (s3, claim_id, _, preimages, hashes) = da_setup(&p, 999_999);
+        let (s3, claim_id, _, fx) = da_setup(&p, 999_999);
         assert!(
             matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { bound_daa: 102 }),
             "the claim is serving its receipt window"
@@ -18986,7 +19044,7 @@ pub(crate) mod tests {
 
         // Session one: accused at 103, answered on the LAST block of the disclose window.
         let (a1, _) = apply_da(&s3, &p, &ctx(4, 103, 4), &[da_accuse(claim_id, 0)], None);
-        let (r1, _) = apply_da(&a1, &p, &ctx(5, 103 + window, 5), &[da_disclose(claim_id, 0, &preimages, &hashes)], None);
+        let (r1, _) = apply_da(&a1, &p, &ctx(5, 103 + window, 5), &[da_disclose(claim_id, 0, &fx)], None);
         assert!(
             matches!(r1.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { bound_daa: 122 }),
             "the receipt window resumes with the time the session took, not without it: got {:?}",
@@ -18996,7 +19054,7 @@ pub(crate) mod tests {
         // Session two, immediately, on the same claim.
         let at2 = 104 + window;
         let (a2, _) = apply_da(&r1, &p, &ctx(6, at2, 6), &[da_accuse(claim_id, 1)], None);
-        let (r2, _) = apply_da(&a2, &p, &ctx(7, at2 + window, 7), &[da_disclose(claim_id, 1, &preimages, &hashes)], None);
+        let (r2, _) = apply_da(&a2, &p, &ctx(7, at2 + window, 7), &[da_disclose(claim_id, 1, &fx)], None);
         assert!(
             matches!(r2.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }),
             "and the claim is still alive and still bound: got {:?}",
@@ -19044,7 +19102,8 @@ pub(crate) mod tests {
     #[test]
     fn one_bond_at_the_floor_can_freeze_exactly_one_claim() {
         let p = params();
-        let (preimages, hashes, root) = da_trace();
+        let fx = da_fixture();
+        let root = fx.binding.full_logits_trace_root;
         let floor = p.min_collateral_sompi();
         let mut objects = register_class_and_bond();
         for (bond, pubkey, op, collateral) in
@@ -19069,7 +19128,8 @@ pub(crate) mod tests {
         for (nonce, daa, blue) in [(1u64, 101u64, 2u64), (2, 103, 4)] {
             let mut env = attempt(40, nonce);
             env.attempt.trace_root = root;
-            env.attempt.trace_chunk_count = 4;
+            env.attempt.execution_root = fx.binding.committed_execution_root;
+            env.attempt.trace_chunk_count = 1;
             env.attempt.trace_retention_daa = 999_999;
             let claim_id = attempt_id_v2(&env.attempt);
             let (next, _) = apply_da(&state, &p, &ctx(10 + nonce, daa, blue), &[], Some(&env));
@@ -19112,7 +19172,7 @@ pub(crate) mod tests {
         );
 
         // The refutation collects the whole reservation, so the bond is spent, not merely clamped.
-        let (paid, _) = apply_da(&one, &p, &ctx(33, 106, 7), &[da_disclose(claims[0], 0, &preimages, &hashes)], None);
+        let (paid, _) = apply_da(&one, &p, &ctx(33, 106, 7), &[da_disclose(claims[0], 0, &fx)], None);
         assert_eq!(paid.bond(&bond_key(3)).unwrap().collateral, 0, "the accuser paid the floor it reserved");
         assert_eq!(paid.bond(&bond_key(3)).unwrap().slashed, floor);
         let broke = apply_da_err(&paid, &p, &ctx(34, 107, 8), &[accuse(claims[1])]);
@@ -19140,7 +19200,8 @@ pub(crate) mod tests {
     #[test]
     fn one_exposure_ceiling_binds_both_arms_that_accuse() {
         let p = params();
-        let (preimages, hashes, root) = da_trace();
+        let fx = da_fixture();
+        let root = fx.binding.full_logits_trace_root;
         let mut objects = register_class_and_bond();
         // bond 2 is the second panel seat; bond 3 is the party that accuses, holding 350 sompi —
         // above the 100 floor, so it may accuse at all, and with a ceiling of 350 × 1000‰ = 350.
@@ -19167,7 +19228,8 @@ pub(crate) mod tests {
         for (nonce, daa, blue) in [(1u64, 101u64, 2u64), (2, 103, 4), (3, 105, 6)] {
             let mut env = attempt(40, nonce);
             env.attempt.trace_root = root;
-            env.attempt.trace_chunk_count = 4;
+            env.attempt.execution_root = fx.binding.committed_execution_root;
+            env.attempt.trace_chunk_count = 1;
             env.attempt.trace_retention_daa = 999_999;
             let claim_id = attempt_id_v2(&env.attempt);
             let (next, _) = apply_da(&state, &p, &ctx(10 + nonce, daa, blue), &[], Some(&env));
@@ -19238,7 +19300,7 @@ pub(crate) mod tests {
         // collateral (350), i.e. because `max_exposure_ratio_permille ≤ 1000` is enforced rather
         // than assumed; above 1000 the reservations would outrun the collateral and `slash_bond`'s
         // clamp would make the later refutations free, which is the hole this closes.
-        let (refuted, _) = apply_da(&accused, &p, &ctx(35, 113, 11), &[da_disclose(claims[1], 0, &preimages, &hashes)], None);
+        let (refuted, _) = apply_da(&accused, &p, &ctx(35, 113, 11), &[da_disclose(claims[1], 0, &fx)], None);
         assert_eq!(refuted.bond(&bond_key(3)).unwrap().slashed, 100, "the accusation's refutation collects what it reserved");
         let (closed, _) = apply_da(
             &refuted,
@@ -19273,7 +19335,7 @@ pub(crate) mod tests {
         let floor = p.min_collateral_sompi();
         // pwu 160 × the class's slash_value_per_pwu 5 = 800 reserved, so ⌈800/2⌉ = 400 — four times
         // the registry floor, which is the case v1 got wrong.
-        let (s3, claim_id, _, preimages, hashes) = da_setup_pwu(&p, 999_999, 160);
+        let (s3, claim_id, _, fx) = da_setup_pwu(&p, 999_999, 160);
         let reserved = s3.claim(&claim_id).unwrap().reserved;
         assert_eq!(reserved, 800);
         assert_eq!(palw_da_accusation_exposure_v1(reserved, 2), 400, "the raw fraction is above the floor");
@@ -19286,7 +19348,7 @@ pub(crate) mod tests {
             floor as u128,
             "the ledger holds the charge, not a fraction nobody will ever pay"
         );
-        let (paid, _) = apply_da(&accused, &p, &ctx(5, 104, 5), &[da_disclose(claim_id, 0, &preimages, &hashes)], None);
+        let (paid, _) = apply_da(&accused, &p, &ctx(5, 104, 5), &[da_disclose(claim_id, 0, &fx)], None);
         assert_eq!(paid.bond(&bond_key(2)).unwrap().collateral, before - floor, "and the charge is exactly what was reserved");
         assert_eq!(paid.reserved_exposure(&bond_key(2)), 0, "with nothing left over on either side");
     }

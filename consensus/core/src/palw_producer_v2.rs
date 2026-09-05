@@ -707,6 +707,53 @@ pub fn palw_court_duties_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) ->
     out
 }
 
+/// **A data-availability accusation this node must answer** (ADR-0062 D3; mainnet audit
+/// 2026-09-05): a claim it produced is under an open accusation, and the event named must be
+/// opened out of the capture it retains before `disclose_deadline_daa`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwDaDutyV2 {
+    pub claim_id: Hash64,
+    pub class_id: Hash64,
+    pub artifact_root: Hash64,
+    /// The bond the claim was produced under — the one that must sign the disclosure.
+    pub executor_bond: PalwBondKeyV2,
+    /// The packed `(row, tile)` the accusation names — `palw_da_event_index_parts_v1` unpacks it.
+    pub missing_event_index: u32,
+    pub accused_daa: u64,
+    /// `accused_daa + W_disclose`: silence past it confirms the default (SA-3/SA-5).
+    pub disclose_deadline_daa: u64,
+    pub trace_root: Hash64,
+    pub execution_root: Hash64,
+    pub free_prompt: bool,
+}
+
+/// The claims under accusation whose producing bond is in `mine`.
+pub fn palw_da_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParamsV2, mine: &[PalwBondKeyV2]) -> Vec<PalwDaDutyV2> {
+    let mut out = Vec::new();
+    for (claim_id, claim) in state.claims_iter() {
+        let crate::palw_state_v2::PalwClaimPhaseV2::DefaultDisputed { accused_daa, missing_event_index, .. } = claim.phase else {
+            continue;
+        };
+        if !mine.contains(&claim.bond) {
+            continue;
+        }
+        let Some(artifact_root) = state.class(&claim.class_id).map(|c| c.artifact_root) else { continue };
+        out.push(PalwDaDutyV2 {
+            claim_id: *claim_id,
+            class_id: claim.class_id,
+            artifact_root,
+            executor_bond: claim.bond,
+            missing_event_index,
+            accused_daa,
+            disclose_deadline_daa: accused_daa.saturating_add(crate::palw_state_v2::palw_da_disclose_window_daa_v1(state_params)),
+            trace_root: claim.trace_root,
+            execution_root: claim.execution_root,
+            free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
+        });
+    }
+    out
+}
+
 pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParamsV2, mine: &[PalwBondKeyV2]) -> Vec<PalwSeatDutyV2> {
     let mut out = Vec::new();
     for (claim_id, claim) in state.claims_iter() {

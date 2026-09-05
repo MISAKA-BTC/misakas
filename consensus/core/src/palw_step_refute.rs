@@ -2691,6 +2691,217 @@ pub struct PalwTiledDecodePinV1 {
     pub beat_lane: u32,
 }
 
+// -------------------------------------------------------------------------------------------
+// ADR-0062 Decision 3 / SA-2 — a trace EVENT, opened in the form the class's scheme names
+// -------------------------------------------------------------------------------------------
+
+/// **What a data-availability disclosure opens: one event of the claim's committed logits trace,
+/// in the form the class's `logits_scheme_id` names** (ADR-0062 D3, SA-2; mainnet audit
+/// 2026-09-05).
+///
+/// The court that ADR-0062 landed with opened a Merkle tree over "event hashes" that no shipped
+/// class commits: every claim's `trace_root` is [`base0_logits_trace_root_v1`] or
+/// [`tiled_logits_trace_root_v1`], and `trace_chunk_count` is 1, so the only opening that fold
+/// could have accepted was a one-leaf tree over a hash no producer holds. Armed, every accusation
+/// would have won by silence — with or without a responder. This is SA-2 as it is written:
+/// "the event's own bytes in whatever form the class's `logits_scheme_id` names".
+///
+/// Every variant carries the claim's own **binding**, pinned to the claim exactly as the arithmetic
+/// court pins a close: `verify_binding_v1`, `full_logits_trace_root == claim.trace_root`,
+/// `committed_execution_root == claim.execution_root`. Nothing here runs a model.
+///
+/// An event is `(row, tile)`: a decode position and a tile of that row's logits (see
+/// [`crate::palw_state_v2::palw_da_event_index_v1`] for the packing the accusation carries).
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwTraceEventDisclosureV1 {
+    /// The flat scheme ([`flat_logits_scheme_id_v1`]): one keyed hash over every row, so no row
+    /// opens alone — the disclosure is every row and every id, authenticated by
+    /// [`check_base0_decode_pin`]. Bounded because a flat class's whole decode-token close already
+    /// carries the same pin under the same ceiling.
+    Flat { binding: Box<PalwStepBindingV2>, pin: PalwBase0DecodeTokensV1 },
+    /// The tiled scheme ([`tiled_logits_scheme_id_v1`]): the generated ids (keyed into the outer
+    /// root), the accused row's root and its opening in the rows tree, and the accused tile's
+    /// lanes and its opening in the row's tile tree. One tile where a decode-token close carries
+    /// two, so it fits wherever that close fits.
+    Tiled {
+        binding: Box<PalwStepBindingV2>,
+        generated_token_ids: Vec<u32>,
+        row_root: Hash64,
+        row_opening: crate::palw_step_leg::PalwStepOpeningV1,
+        tile_lanes: Vec<i32>,
+        tile_opening: crate::palw_step_leg::PalwStepOpeningV1,
+    },
+    /// The accusation named a row past the committed run's decode count, or a tile past the row's
+    /// vocabulary. The binding alone proves it — the run's shape is inside the execution root —
+    /// and an accusation of an event that does not exist is refuted, not answered.
+    OutOfRange { binding: Box<PalwStepBindingV2> },
+}
+
+impl PalwTraceEventDisclosureV1 {
+    pub fn binding(&self) -> &PalwStepBindingV2 {
+        match self {
+            Self::Flat { binding, .. } | Self::Tiled { binding, .. } | Self::OutOfRange { binding } => binding,
+        }
+    }
+}
+
+/// **The tiled scheme's row authentication, on its own** — the half of
+/// [`check_tiled_decode_token_refutation_capped_v2`] that establishes the row before any lane is
+/// compared, restated for the disclosure. The two are held equal by
+/// `tests::the_disclosure_authenticates_exactly_what_the_decode_close_does` over the same rows,
+/// honest and bent, so a disclosure can never open what the court refuses nor be refused what the
+/// court opens. Returns `(ctx_hash, vocab, tiles)`.
+pub fn tiled_row_authenticate_v1(
+    binding: &PalwStepBindingV2,
+    generated_token_ids: &[u32],
+    position: u32,
+    row_root: &Hash64,
+    row_opening: &crate::palw_step_leg::PalwStepOpeningV1,
+    max_step_leaf_count: u64,
+) -> Result<(Hash64, usize, u64), PalwStepRefuteError> {
+    let bad = PalwStepRefuteError::InputSetNotCanonical;
+    if binding.shape_profile.logits_scheme_id != tiled_logits_scheme_id_v1() {
+        return Err(bad("this class does not commit tiled logits — the tiled form is not its scheme"));
+    }
+    let ctx = &binding.job_context;
+    let decode = ctx.exact_decode_tokens as usize;
+    let vocab = binding.shape_profile.vocab_size as usize;
+    if generated_token_ids.len() != decode {
+        return Err(bad("the id count is not the context's decode count"));
+    }
+    if position as usize >= decode {
+        return Err(bad("the row is past the decode count"));
+    }
+    let row_count = decode as u64;
+    let rows_root = crate::palw_step_leg::step_opening_root_capped_v1(row_count, row_opening, max_step_leaf_count)
+        .map_err(|_| bad("the row opening does not walk"))?;
+    if row_opening.leaf_index != position as u64 || row_opening.leaf_hash != *row_root {
+        return Err(bad("the row opening does not open the named row's root"));
+    }
+    if tiled_logits_outer_root_v1(ctx, row_count, &rows_root, generated_token_ids) != binding.full_logits_trace_root {
+        return Err(bad("the carried material does not reproduce the claim's own trace root"));
+    }
+    Ok((ctx.context_hash(), vocab, vocab.div_ceil(PALW_LOGITS_TILE_LANES) as u64))
+}
+
+/// **The tiled scheme's tile authentication, on its own**: `lanes` is tile `tile` of row
+/// `position`, at the width the vocabulary gives that tile (the last is ragged), and its opening
+/// reaches `row_root`. The same four checks the decode close's `open_tile` runs.
+pub fn tiled_tile_authenticate_v1(
+    ctx_hash: &Hash64,
+    position: u32,
+    vocab: usize,
+    tiles: u64,
+    row_root: &Hash64,
+    tile: u64,
+    lanes: &[i32],
+    opening: &crate::palw_step_leg::PalwStepOpeningV1,
+    max_step_leaf_count: u64,
+) -> Result<(), PalwStepRefuteError> {
+    let bad = PalwStepRefuteError::InputSetNotCanonical;
+    if tile >= tiles {
+        return Err(bad("the tile is past the row's vocabulary"));
+    }
+    let expected_len =
+        if tile + 1 == tiles && !vocab.is_multiple_of(PALW_LOGITS_TILE_LANES) { vocab % PALW_LOGITS_TILE_LANES } else { PALW_LOGITS_TILE_LANES };
+    if lanes.len() != expected_len {
+        return Err(bad("an opened tile is not the scheme's width"));
+    }
+    if opening.leaf_index != tile {
+        return Err(bad("an opening does not name its own tile"));
+    }
+    if opening.leaf_hash != tiled_logits_tile_leaf_v1(ctx_hash, position, tile as u32, lanes) {
+        return Err(bad("an opened tile's lanes do not hash to its leaf"));
+    }
+    let root = crate::palw_step_leg::step_opening_root_capped_v1(tiles, opening, max_step_leaf_count)
+        .map_err(|_| bad("a tile opening does not walk"))?;
+    if root != *row_root {
+        return Err(bad("a tile opening does not reach the named row's root"));
+    }
+    Ok(())
+}
+
+/// **Verify a data-availability disclosure against the claim it answers for — by hash arithmetic,
+/// never by execution** (ADR-0062 SA-2).
+///
+/// `claim_trace_root` and `claim_execution_root` are the claim record's own pinned fields (ADR-0072
+/// Decision 8); `row` and `tile` are the accused event, unpacked by the fold. `Ok(())` is a
+/// refutation of the accusation. An `Err` is a disclosure that is not an answer — never a verdict
+/// against the producer, which only the disclose window's silence is.
+pub fn check_trace_event_disclosure_v1(
+    claim_trace_root: Hash64,
+    claim_execution_root: Hash64,
+    row: u32,
+    tile: u8,
+    disclosure: &PalwTraceEventDisclosureV1,
+    max_step_leaf_count: u64,
+) -> Result<(), PalwStepRefuteError> {
+    let bad = PalwStepRefuteError::InputSetNotCanonical;
+    let binding = disclosure.binding();
+    crate::palw_step_leg::verify_binding_v1(binding).map_err(PalwStepRefuteError::Leg)?;
+    // The claim's own execution, and no other — the two comparisons the arithmetic court makes
+    // before it reads a byte of a close.
+    if binding.full_logits_trace_root != claim_trace_root {
+        return Err(bad("the disclosure binds to another trace root than the claim committed"));
+    }
+    if binding.committed_execution_root != claim_execution_root {
+        return Err(bad("the disclosure binds to another execution root than the claim committed"));
+    }
+    let decode = binding.job_context.exact_decode_tokens;
+    let scheme = binding.shape_profile.logits_scheme_id;
+    let vocab = binding.shape_profile.vocab_size as usize;
+    match disclosure {
+        PalwTraceEventDisclosureV1::Flat { pin, .. } => {
+            check_base0_decode_pin(binding, pin)?;
+            if tile != 0 {
+                return Err(bad("the flat scheme has one tile per row; an accused tile past it is answered by OutOfRange"));
+            }
+            if row >= decode {
+                return Err(bad("the accused row is past the committed run; it is answered by OutOfRange, not opened"));
+            }
+            Ok(())
+        }
+        PalwTraceEventDisclosureV1::Tiled { generated_token_ids, row_root, row_opening, tile_lanes, tile_opening, .. } => {
+            let (ctx_hash, vocab, tiles) =
+                tiled_row_authenticate_v1(binding, generated_token_ids, row, row_root, row_opening, max_step_leaf_count)?;
+            tiled_tile_authenticate_v1(&ctx_hash, row, vocab, tiles, row_root, tile as u64, tile_lanes, tile_opening, max_step_leaf_count)
+        }
+        PalwTraceEventDisclosureV1::OutOfRange { .. } => {
+            let out = if scheme == flat_logits_scheme_id_v1() {
+                row >= decode || tile != 0
+            } else if scheme == tiled_logits_scheme_id_v1() {
+                row >= decode || tile as u64 >= vocab.div_ceil(PALW_LOGITS_TILE_LANES) as u64
+            } else {
+                return Err(bad("this class commits under a scheme no disclosure form names"));
+            };
+            if out { Ok(()) } else { Err(bad("the accused event is inside the committed run; it must be opened, not declared absent")) }
+        }
+    }
+}
+
+/// **Build the tiled disclosure of event `(row, tile)` from the rows the producer retained** — the
+/// prover's half, through the same tree functions the committing and checking sides use, so a
+/// producer that holds its rows can always answer. `None` when the event is not in the run (the
+/// caller then answers `OutOfRange`) or the rows build no tree.
+pub fn tiled_trace_event_disclosure_v1(
+    ctx: &crate::palw_v2::PalwJobContextV2,
+    logits_rows: &[Vec<i32>],
+    row: u32,
+    tile: u8,
+) -> Option<(Hash64, crate::palw_step_leg::PalwStepOpeningV1, Vec<i32>, crate::palw_step_leg::PalwStepOpeningV1)> {
+    let ctx_hash = ctx.context_hash();
+    let lanes_row = logits_rows.get(row as usize)?;
+    let tiles: Vec<&[i32]> = lanes_row.chunks(PALW_LOGITS_TILE_LANES).collect();
+    let lanes = tiles.get(tile as usize)?;
+    let row_roots: Vec<Hash64> =
+        logits_rows.iter().enumerate().map(|(r, lanes)| tiled_logits_row_root_v1(&ctx_hash, r as u32, lanes)).collect::<Option<_>>()?;
+    let row_opening = crate::palw_step_leg::step_opening_v1(&row_roots, row as u64).ok()?;
+    let tile_leaves: Vec<Hash64> =
+        tiles.iter().enumerate().map(|(t, lanes)| tiled_logits_tile_leaf_v1(&ctx_hash, row, t as u32, lanes)).collect();
+    let tile_opening = crate::palw_step_leg::step_opening_v1(&tile_leaves, tile as u64).ok()?;
+    Some((row_roots[row as usize], row_opening, lanes.to_vec(), tile_opening))
+}
+
 /// **One ref's lane slice for a head-sliced GDN step** — the single derivation the leaf set, the
 /// executor and the cost bound all read (a second copy of this mapping is the "second
 /// name-to-bytes mapping" defect: it fails as a wrong conviction at the first real dispute).
@@ -3091,7 +3302,7 @@ fn check_tiled_decode_pin(binding: &PalwStepBindingV2, pin: &PalwTiledDecodeToke
     Ok(())
 }
 
-fn check_base0_decode_pin(binding: &PalwStepBindingV2, pin: &PalwBase0DecodeTokensV1) -> Result<(), PalwStepRefuteError> {
+pub(crate) fn check_base0_decode_pin(binding: &PalwStepBindingV2, pin: &PalwBase0DecodeTokensV1) -> Result<(), PalwStepRefuteError> {
     // **This arm speaks the FLAT scheme, and only for a class that registered it.** The scheme is
     // the class's (`shape_profile.logits_scheme_id`, inside the class id), so a flat pin against a
     // tiled class is malformed evidence whatever it authenticates: the court adjudicating it would
@@ -6335,6 +6546,88 @@ pub(crate) mod tests {
             },
             beat_lane,
         }
+    }
+
+    /// **A disclosure authenticates exactly what the decode close does** (ADR-0062 SA-2; mainnet
+    /// audit 2026-09-05). The tiled row and tile authenticators are the decode close's own checks
+    /// restated for one tile, and this holds the two spellings equal over the same rows: what the
+    /// close opens, the disclosure opens; every bend the close refuses, the disclosure refuses.
+    #[test]
+    fn the_disclosure_authenticates_exactly_what_the_decode_close_does() {
+        let (mut binding, _m, _r, _) = base0_honest_decode_commitment();
+        let vocab = 10_000usize;
+        let decode = binding.job_context.exact_decode_tokens as usize;
+        binding.shape_profile.vocab_size = vocab as u32;
+        binding.shape_profile.logits_scheme_id = tiled_logits_scheme_id_v1();
+        // The fold pins the binding (`verify_binding_v1`) before it reads a row, so the context
+        // must name the profile it was edited into — the decode close's own test skips that pin.
+        binding.job_context.shape_profile_id = binding.shape_profile.shape_profile_id();
+        let logits_rows: Vec<Vec<i32>> =
+            (0..decode).map(|c| (0..vocab).map(|i| ((c * 131 + i * 7919) % 65_536) as i32 - 32_768).collect()).collect();
+        let generated: Vec<u32> = logits_rows.iter().map(|r| base0_decode_token_select_v1(r) as u32).collect();
+        binding.full_logits_trace_root = tiled_logits_trace_root_v1(&binding.job_context, &logits_rows, &generated).expect("a tree");
+        rebind_committed_root(&mut binding);
+        let cap = crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES;
+        let tiles = vocab.div_ceil(PALW_LOGITS_TILE_LANES) as u64;
+        let roots = (binding.full_logits_trace_root, binding.committed_execution_root);
+
+        // Every (row, tile) the run has opens, and is accepted by the checker.
+        for row in 0..decode as u32 {
+            for tile in 0..tiles as u8 {
+                let (row_root, row_opening, lanes, tile_opening) =
+                    tiled_trace_event_disclosure_v1(&binding.job_context, &logits_rows, row, tile).expect("in the run");
+                let d = PalwTraceEventDisclosureV1::Tiled {
+                    binding: Box::new(binding.clone()),
+                    generated_token_ids: generated.clone(),
+                    row_root,
+                    row_opening,
+                    tile_lanes: lanes,
+                    tile_opening,
+                };
+                check_trace_event_disclosure_v1(roots.0, roots.1, row, tile, &d, cap).expect("an honest tile opens");
+                // The decode close's own pin over the same row agrees about the row.
+                let pin = tiled_pin(&binding.job_context, &logits_rows, &generated, row, 0);
+                assert_eq!(
+                    tiled_row_authenticate_v1(&binding, &pin.generated_token_ids, row, &pin.row_root, &pin.row_opening, cap).map(|(_, v, t)| (v, t)),
+                    Ok((vocab, tiles)),
+                    "the disclosure's row authentication is the close's"
+                );
+            }
+        }
+
+        // Past the run: `OutOfRange` is the answer, and an opening is not.
+        let out = PalwTraceEventDisclosureV1::OutOfRange { binding: Box::new(binding.clone()) };
+        check_trace_event_disclosure_v1(roots.0, roots.1, decode as u32, 0, &out, cap).expect("a row past the run is absent");
+        check_trace_event_disclosure_v1(roots.0, roots.1, 0, tiles as u8, &out, cap).expect("a tile past the row is absent");
+        assert!(check_trace_event_disclosure_v1(roots.0, roots.1, 0, 0, &out, cap).is_err(), "an event the run has may not be declared absent");
+        assert!(tiled_trace_event_disclosure_v1(&binding.job_context, &logits_rows, decode as u32, 0).is_none());
+
+        // The bends the close refuses, the disclosure refuses: a lane, an id, a path, the wrong
+        // tile under the accused index, and a binding of another execution.
+        let (row_root, row_opening, lanes, tile_opening) = tiled_trace_event_disclosure_v1(&binding.job_context, &logits_rows, 1, 1).unwrap();
+        let honest = PalwTraceEventDisclosureV1::Tiled {
+            binding: Box::new(binding.clone()),
+            generated_token_ids: generated.clone(),
+            row_root,
+            row_opening,
+            tile_lanes: lanes,
+            tile_opening,
+        };
+        let refused = |edit: &dyn Fn(&mut PalwTraceEventDisclosureV1), what: &str| {
+            let mut bent = honest.clone();
+            edit(&mut bent);
+            assert!(check_trace_event_disclosure_v1(roots.0, roots.1, 1, 1, &bent, cap).is_err(), "{what} must be refused");
+        };
+        refused(&|d| if let PalwTraceEventDisclosureV1::Tiled { tile_lanes, .. } = d { tile_lanes[3] ^= 1 }, "a bent lane");
+        refused(&|d| if let PalwTraceEventDisclosureV1::Tiled { generated_token_ids, .. } = d { generated_token_ids[0] ^= 1 }, "a bent id");
+        refused(&|d| if let PalwTraceEventDisclosureV1::Tiled { tile_opening, .. } = d { tile_opening.siblings.push(Hash64::from_u64_word(0x77)) }, "a longer path");
+        refused(&|d| if let PalwTraceEventDisclosureV1::Tiled { row_opening, .. } = d { row_opening.leaf_index ^= 1 }, "another row's opening");
+        assert!(check_trace_event_disclosure_v1(roots.0, roots.1, 1, 2, &honest, cap).is_err(), "tile 1 does not answer for tile 2");
+        assert!(check_trace_event_disclosure_v1(Hash64::from_u64_word(0xBAD), roots.1, 1, 1, &honest, cap).is_err(), "another claim's trace root");
+        assert!(check_trace_event_disclosure_v1(roots.0, Hash64::from_u64_word(0xBAD), 1, 1, &honest, cap).is_err(), "another claim's execution root");
+        // A disclosure carries one tile where the close carries two: it fits wherever that fits.
+        let bytes = borsh::to_vec(&honest).unwrap().len();
+        assert!(bytes < crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES as usize, "{bytes} bytes against the close ceiling");
     }
 
     /// **The tiled scheme convicts a lying token and clears an honest one, at a vocabulary the
