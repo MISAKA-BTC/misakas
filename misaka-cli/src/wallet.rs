@@ -233,6 +233,67 @@ fn parse_outpoint_str(s: &str) -> Option<TransactionOutpoint> {
     Some(TransactionOutpoint::new(tx.parse().ok()?, ix.parse().ok()?))
 }
 
+/// **The wallet's own outputs that are in a mempool and not yet in a block.**
+///
+/// `getUtxosByAddressPage` answers from the UTXO SET, so a wallet asked for a second transaction
+/// before a block sees only the inputs it already spent, selects them again, and rebuilds a
+/// transaction the node answers with "is already in the mempool". There is no way forward from
+/// there but to wait for a block — twenty to forty minutes on testnet-11 — which is why a caller
+/// that needs one funded carrier per job ends up chaining outpoints by hand, and why that chain
+/// breaks the moment a node restart clears the mempool it hung from (the child is then refused as
+/// "an orphan where orphan is disallowed").
+///
+/// Two things this must get right:
+///
+/// * **An output another pending transaction already spends is not offered.** A mempool holding
+///   both a parent and its spender would otherwise hand out the parent's output twice.
+/// * **A transaction with no verbose data is skipped, not guessed at.** The outpoint needs the
+///   transaction's id; deriving one from a partial reply would be inventing an input.
+///
+/// The entries are marked `mature` — a non-coinbase output has no maturity floor — and never
+/// `bonded`: a bond that consensus locks is registered, and a registration is not in the mempool.
+pub(crate) async fn pending_outputs(nv: &NodeView, address: &Address) -> Result<Vec<Funding>, CliError> {
+    let by_address = nv
+        .client
+        .get_mempool_entries_by_addresses(vec![address.clone()], true, false)
+        .await
+        .map_err(|e| CliError::new(exit::GENERIC, format!("getMempoolEntriesByAddresses: {e}")))?;
+    let spk = pay_to_address_script(address);
+
+    let mut spent: std::collections::HashSet<TransactionOutpoint> = std::collections::HashSet::new();
+    for entry in by_address.iter().flat_map(|a| a.sending.iter()) {
+        for input in &entry.transaction.inputs {
+            spent.insert(TransactionOutpoint::from(input.previous_outpoint));
+        }
+    }
+
+    let mut out = Vec::new();
+    for entry in by_address.iter().flat_map(|a| a.receiving.iter()) {
+        let Some(verbose) = entry.transaction.verbose_data.as_ref() else { continue };
+        for (index, output) in entry.transaction.outputs.iter().enumerate() {
+            if output.script_public_key != spk {
+                continue;
+            }
+            let outpoint = TransactionOutpoint::new(verbose.transaction_id, index as u32);
+            if spent.contains(&outpoint) {
+                continue;
+            }
+            out.push(Funding {
+                outpoint,
+                // `block_daa_score` is the score of the block that accepted the output, and there
+                // is none yet. It is zero rather than the virtual score because nothing here reads
+                // it: a non-coinbase entry has no maturity gate, and the signature covers the
+                // amount and the script, not the score.
+                entry: UtxoEntry { amount: output.value, script_public_key: spk.clone(), block_daa_score: 0, is_coinbase: false },
+                mature: true,
+                amount: output.value,
+                bonded: false,
+            });
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) async fn page_all(nv: &NodeView, address: &Address) -> Result<Vec<Funding>, CliError> {
     let bonds = locked_bond_outpoints(nv).await?;
     let mut out = Vec::new();
@@ -518,7 +579,17 @@ pub async fn consolidate(
 // wallet send — to an arbitrary recipient
 // ---------------------------------------------------------------------------
 
-pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_run: bool, yes: bool, coinbase_only: bool) -> CliResult {
+pub async fn send(
+    ctx: &Ctx,
+    ks: &KeySource,
+    to: &str,
+    amount_sompi: u64,
+    dry_run: bool,
+    yes: bool,
+    coinbase_only: bool,
+    funding_outpoint: Option<&str>,
+    spend_unconfirmed: bool,
+) -> CliResult {
     if amount_sompi == 0 {
         return Err(CliError::new(exit::GENERIC, "--amount must be > 0 (sompi)".to_string()));
     }
@@ -535,12 +606,56 @@ pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_ru
     // Largest-first greedy select over MATURE self-UTXOs, re-estimating the fee as inputs are added.
     // `!bonded`: the bond is usually the LARGEST output at a validator's address, and selection
     // below is largest-first, so without this the default `wallet send` reaches for it first (M1-3).
-    let mut mature: Vec<Funding> = page_all(&nv, &from_addr)
-        .await?
-        .into_iter()
-        .filter(|u| u.mature && !u.bonded && (!coinbase_only || u.entry.is_coinbase))
-        .collect();
+    let confirmed = page_all(&nv, &from_addr).await?;
+    let mut mature: Vec<Funding> =
+        confirmed.into_iter().filter(|u| u.mature && !u.bonded && (!coinbase_only || u.entry.is_coinbase)).collect();
+    // **The wallet's own unconfirmed change, when it is asked for.** Off by default: an input whose
+    // parent is still in a mempool is refused if that parent is ever evicted, and a wallet that
+    // reached for one without being told to would turn a rare failure into a surprising one. On by
+    // request it is what lets a caller fund a second carrier inside one block interval — with
+    // `--coinbase-only` it stays off, because a pending output is by definition not settled coinbase.
+    if spend_unconfirmed && !coinbase_only {
+        mature.extend(pending_outputs(&nv, &from_addr).await?);
+    }
     mature.sort_by(|a, b| b.amount.cmp(&a.amount));
+
+    // **A named outpoint replaces the selection, it does not steer it.** The caller that names one
+    // knows something this wallet cannot: which output it staged for this exact transaction. What
+    // it may not do is name an output consensus has locked — the bond guard below is the same one
+    // largest-first selection has, and naming is not a way around it.
+    if let Some(named) = funding_outpoint {
+        let (txid, index) = named
+            .split_once(':')
+            .ok_or_else(|| CliError::new(exit::GENERIC, format!("--funding-outpoint '{named}' is not '<txid>:<index>'")))?;
+        let txid = kaspa_consensus_core::tx::TransactionId::from_str(txid)
+            .map_err(|e| CliError::new(exit::GENERIC, format!("--funding-outpoint: bad transaction id: {e}")))?;
+        let index: u32 =
+            index.parse().map_err(|e| CliError::new(exit::GENERIC, format!("--funding-outpoint: bad output index: {e}")))?;
+        let wanted = TransactionOutpoint::new(txid, index);
+        // Looked for among everything this address owns — confirmed AND pending — because the
+        // whole point of naming one is that the wallet's own selection could not have found it.
+        let mut all = page_all(&nv, &from_addr).await?;
+        all.extend(pending_outputs(&nv, &from_addr).await?);
+        let found = all.into_iter().find(|u| u.outpoint == wanted).ok_or_else(|| {
+            CliError::new(
+                exit::GENERIC,
+                format!(
+                    "--funding-outpoint {named} is not an output this wallet holds at {from_addr}, confirmed or pending. \
+                     A parent that a node restart dropped from its mempool is gone with it; fund from the wallet instead."
+                ),
+            )
+        })?;
+        if found.bonded {
+            return Err(CliError::new(
+                exit::GENERIC,
+                format!(
+                    "--funding-outpoint {named} is bonded collateral this node reports as locked; spending it disqualifies the block that carries it"
+                ),
+            ));
+        }
+        mature = vec![found];
+    }
+
     let mut selected: Vec<&Funding> = Vec::new();
     let mut sum = 0u64;
     let mut fee = estimate_fee(&key, &nv.params, 1, false);

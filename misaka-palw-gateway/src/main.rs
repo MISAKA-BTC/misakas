@@ -213,13 +213,21 @@ struct Config {
 struct ExposurePrice {
     room_sompi: u64,
     claim_sompi: u64,
+    /// The bond's whole ceiling. The day's budget is a share of THIS, never of the room: the room
+    /// already has every open claim subtracted from it, so budgeting against it charges each claim
+    /// twice and a bond sized for four claims refuses the third.
+    ceiling_sompi: u64,
 }
 
 impl ExposurePrice {
     fn resolve(config: &Config, facts: &chain::ChainFacts) -> Self {
+        let room = if config.bond_exposure_room_sompi > 0 { config.bond_exposure_room_sompi } else { facts.exposure_room_sompi };
         Self {
-            room_sompi: if config.bond_exposure_room_sompi > 0 { config.bond_exposure_room_sompi } else { facts.exposure_room_sompi },
+            room_sompi: room,
             claim_sompi: if config.claim_exposure_sompi > 0 { config.claim_exposure_sompi } else { facts.claim_exposure_sompi },
+            // An operator who pins the room by hand has told us what this bond may hold; with no
+            // chain reading to correct it, the room is the only ceiling there is.
+            ceiling_sompi: if facts.bond_exposure_ceiling_sompi > 0 { facts.bond_exposure_ceiling_sompi } else { room },
         }
     }
 }
@@ -241,7 +249,13 @@ impl PublicJobBudget {
     }
 
     fn daily_budget(config: &Config, price: ExposurePrice) -> u64 {
-        price.room_sompi.saturating_mul(config.public_job_budget_permille) / 1_000
+        // The CEILING's share, not the room's. `room = ceiling − reserved`, and everything this
+        // counter has spent in the window is part of what is reserved — so budgeting against the
+        // room subtracts the same claims twice. Measured on a pool slot whose bond was sized for
+        // four concurrent claims: it refused the third, saying "the public-job budget for this
+        // window is spent (66,305,440 of 99,265,460)" while the chain reported the bond available
+        // with 33,383,960 of a 132,610,880 ceiling reserved.
+        price.ceiling_sompi.saturating_mul(config.public_job_budget_permille) / 1_000
     }
 
     /// May the next public job COMMIT? Answering is never refused on budget grounds — the user
@@ -1603,6 +1617,39 @@ mod tests {
         // context, and a call site that ignored it would not compile.
         let (hash, family, context) = derive::read_worker_manifest(std::path::Path::new("/nonexistent/traces/job"));
         assert_eq!((hash, family, context), (None, None, None), "no manifest is three absences, never a guess");
+    }
+
+    /// **A bond sized for four claims admits four.**
+    ///
+    /// The day's budget is a share of the bond's CEILING. Reading it off the room instead charged
+    /// every open claim twice — once as the chain's own reservation, which is already subtracted
+    /// from the room, and again in this counter — so `(2N+1)·claim <= ceiling` and a four-claim
+    /// bond stopped at two. Measured on a pool slot: refused with "the public-job budget for this
+    /// window is spent (66,305,440 of 99,265,460)" while the chain reported the bond available with
+    /// 33,383,960 reserved of a 132,610,880 ceiling.
+    ///
+    /// The room shrinks here exactly as the chain shrinks it, which is the half that made the old
+    /// arithmetic look plausible.
+    #[test]
+    fn the_days_budget_is_a_share_of_the_ceiling_not_of_what_is_left_of_it() {
+        let ceiling = 132_610_880u64;
+        let claim = 33_152_720u64;
+        let config = Config { public_job_budget_permille: 1_000, ..bounded_config() };
+        let mut budget = PublicJobBudget::new();
+        for already_open in 0..4u64 {
+            let price = ExposurePrice { room_sompi: ceiling - already_open * claim, claim_sompi: claim, ceiling_sompi: ceiling };
+            assert_eq!(PublicJobBudget::daily_budget(&config, price), ceiling, "the whole ceiling at 1000 permille");
+            budget
+                .may_commit(&config, price)
+                .unwrap_or_else(|e| panic!("claim {} of the four this bond is sized for was refused: {e}", already_open + 1));
+            budget.charge(price);
+        }
+        assert_eq!(budget.committed_jobs, 4);
+
+        // The fifth is over the ceiling. It is refused whichever guard sees it first — the room is
+        // empty by then — and what matters is that four were not.
+        let full = ExposurePrice { room_sompi: claim, claim_sompi: claim, ceiling_sompi: ceiling };
+        assert!(budget.may_commit(&config, full).is_err(), "a fifth claim is past the ceiling");
     }
 
     /// **ADR-0077 SA-1 / SA-8.** The binding limits are the single slot, the bounded queue and the

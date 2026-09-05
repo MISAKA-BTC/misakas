@@ -333,6 +333,21 @@ enum WalletCmd {
         /// foreign panel's float; this keeps the spend to mining rewards alone.
         #[arg(long)]
         coinbase_only: bool,
+        /// Spend exactly this output (`<txid>:<index>`) instead of selecting one. For a caller
+        /// that staged the output itself — a fee chain, a carrier's change — and knows which one
+        /// this transaction must consume. It may be confirmed or still in a mempool; what it may
+        /// not be is bonded collateral, which is refused here as it is in selection.
+        #[arg(long)]
+        funding_outpoint: Option<String>,
+        /// Also consider this wallet's OWN unconfirmed outputs when selecting.
+        ///
+        /// Off by default: an input whose parent is still in a mempool is refused if that parent is
+        /// ever evicted. On, it is what lets a second transaction be funded inside one block
+        /// interval — without it a wallet asked twice before a block rebuilds the same transaction
+        /// and the node answers "is already in the mempool". Ignored with --coinbase-only, where a
+        /// pending output is by definition not settled coinbase.
+        #[arg(long)]
+        spend_unconfirmed: bool,
         #[command(flatten)]
         key: KeyArgs,
     },
@@ -1043,10 +1058,25 @@ async fn main() -> std::process::ExitCode {
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::Consolidate { max_inputs, max_txs_per_run, sleep_ms, yes, key })) => {
             wallet::consolidate(&ctx, &key.source(), max_inputs, !yes, yes, max_txs_per_run, sleep_ms).await
         }
-        Command::Wallet(WalletCmd::Send { to, amount, yes, coinbase_only, key }) => match parse_msk_to_sompi(&amount) {
-            Ok(sompi) => wallet::send(&ctx, &key.source(), &to, sompi, !yes, yes, coinbase_only).await,
-            Err(e) => Err(e),
-        },
+        Command::Wallet(WalletCmd::Send { to, amount, yes, coinbase_only, funding_outpoint, spend_unconfirmed, key }) => {
+            match parse_msk_to_sompi(&amount) {
+                Ok(sompi) => {
+                    wallet::send(
+                        &ctx,
+                        &key.source(),
+                        &to,
+                        sompi,
+                        !yes,
+                        yes,
+                        coinbase_only,
+                        funding_outpoint.as_deref(),
+                        spend_unconfirmed,
+                    )
+                    .await
+                }
+                Err(e) => Err(e),
+            }
+        }
         Command::Key(KeyCmd::Gen { out }) => key_gen(&ctx, &out),
         Command::Key(KeyCmd::Address { key }) => key_address(&ctx, &key.source()),
         Command::Key(KeyCmd::Import { out, hex_stdin, hex_file }) => key_import(&ctx, &out, hex_stdin, hex_file.as_deref()),

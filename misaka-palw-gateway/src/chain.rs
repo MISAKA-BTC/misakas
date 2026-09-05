@@ -57,6 +57,14 @@ pub struct ChainFacts {
     pub bond_collateral: u64,
     /// Decision 3's `exposure_room`: `ceiling − reserved`, in sompi.
     pub exposure_room_sompi: u64,
+    /// The bond's whole exposure ceiling, before anything it already holds is taken out.
+    ///
+    /// Carried BESIDE the room because the two answer different questions and one of them was
+    /// being asked with the other's number: "may this claim fit right now" is the room's, and "how
+    /// much of this bond may public jobs use in a day" is the ceiling's. Budgeting the day against
+    /// the room charges every open claim twice — once when the chain reserved it, again in the
+    /// gateway's own counter — and a bond sized for four claims then stopped at two.
+    pub bond_exposure_ceiling_sompi: u64,
     /// What the chain says ONE claim of this class reserves. The gateway's own
     /// `--claim-exposure-sompi` overrides it; without one this is the price used, so an operator
     /// who configured a node correctly does not also have to configure a number the node knows.
@@ -283,6 +291,7 @@ impl RpcChainSource {
                 facts.bond_not_ready_reason = producer.not_ready_reason.clone();
                 facts.bond_collateral = producer.bond_collateral;
                 facts.exposure_room_sompi = exposure_room(&producer.bond_exposure_ceiling, &producer.bond_reserved_exposure);
+                facts.bond_exposure_ceiling_sompi = decimal_u128(&producer.bond_exposure_ceiling).min(u64::MAX as u128) as u64;
                 facts.claim_exposure_sompi = decimal_u128(&producer.bond_claim_exposure).min(u64::MAX as u128) as u64;
                 facts.fp_quanta_per_canonical_job = producer.fp_quanta_per_canonical_job;
                 facts.fp_max_quanta_per_receipt = producer.fp_max_quanta_per_receipt;
