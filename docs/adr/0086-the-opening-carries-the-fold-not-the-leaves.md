@@ -193,6 +193,27 @@ the next cut, not this one.
   (`anchor_delay` 20 DAA) at that hour's cadence of one block per ~3 minutes. Neither the run 8
   defect (openings never arriving) nor its absence was observed; the seat never drew. The attempt
   lane on the same run licensed every v5 claim by Decision 7's replay. Run 10 waits long enough.
+* **Devnet run 10 (2026-09-05 11:25–12:54 JST, 300 tokens, `d7c7ce06b11d6fa3`): the run 8 defect
+  reproduced and is understood.** Node-1 drew `[198, 110, 132, 72]` of 299 and asked node-0 every
+  ~100 s for 22 minutes; node-0 logged neither "opened" nor "does not open" for the claim; the
+  claim ended `Unavailable`. The cause is arithmetic, and run 7 already showed it: a fold
+  retention carries no checkpoint chunks (a per-call KV state of this class is ~34 MB, so 300 of
+  them cannot ride a 183 MB material — the bulk is the logits rows), so the executor's span
+  replay (`base0_replay_span_leaves_v1`) starts at GENESIS for every interval and captures tiles
+  as it goes; run 7 served interval 17 in 94 s, 10 in ~60 s, 4 and 0 in ~30 s — about 5 s per
+  decode call — and interval 198 costs ~18 minutes, interval 298 ~27, past the seat's 120 s
+  solicitation window many times over. An offline probe of run 10's material with the real
+  artifact was still opening its first late interval after 55 minutes at 4.4 GB RSS and was
+  stopped. Two things land here: refusals on the interval lane now log at the default level
+  (`[palw-interval] refused …: NoAllowance|Stale|NotBonded|NotHeld|Oversized`; a throttled re-ask
+  stays quiet), so the next run reads what node-0 answered. **The fix is the next cut, not this
+  commit:** the executor must open an interval from the anchor state it RECOMPUTES without tile
+  capture and memoizes — `base0_fp_seat_state_memoized_v1`, the seat's own machinery (Decision 2
+  for the executor's side) — and replay only the interval's call(s) with tiles; a plain forward
+  pass is ~0.15 s per call (the D7 replay licenses 64 positions in 7–10 s), so interval 198 opens
+  in ~30 s. Until then a free-prompt claim past ~20 decode tokens on a fold class cannot be
+  licensed by the interval lane, and Studio's 256-token cap is the honest limit for a different
+  reason than the manifest.
 * **Devnet Y, live (run 7, 2026-09-05 07:17–08:14 JST, `62fec794`, three nodes on this Mac).** A
   graph-v5 free-prompt claim of 40 tokens (`d9ad65d0…`) staged a **24,423,539-byte** fold
   capture — over `PALW_MATERIAL_MAX_BYTES`, the drill's own line: "ADR-0084 Y1 is live". The
