@@ -123,16 +123,29 @@ impl TransactionValidator {
             return Err(TxRuleError::CoinbaseNonZeroMassCommitment);
         }
 
-        // `ghostdag_k + 2` is the classic mergeset bound: one output per blue (at most `k + 1`)
+        // `ghostdag_k + 2` was the classic mergeset bound: one output per blue (at most `k + 1`)
         // plus one aggregate for the reds. It was never widened for ConsensusV2, which appends the
         // §D inclusion bounty, the §E validator payouts and the Decision 10 escrow releases — so on
         // testnet-11 the first claim to reach `Final` produced a 4-output coinbase against a limit
         // of 3, and the producer's own chain refused 112 consecutive blocks it had built itself.
         //
+        // **And `k` was still the wrong bound afterwards, for the same reason one level down**
+        // (mainnet audit, 2026-09-05). ADR-0058 pays every entitled in-window RED its own output
+        // (`outputs.push(...)` per red in `expected_coinbase_transaction`), and the reds are not
+        // bounded by `ghostdag_k` — they are bounded by the MERGESET, which is 180 on every V2
+        // preset against a limit of `1 + 2 + 25 = 28`. A mergeset carrying more than ~26 entitled
+        // reds therefore makes the coinbase this very node builds fail its own isolation check:
+        // the 112-block halt above, reachable again, and reachable on purpose by anyone willing to
+        // widen a mergeset. The flag is unfenced — `self.palw_state_params_v2.is_some()` — so it is
+        // on for testnet-11 today and for any carded mainnet.
+        //
         // Safe to widen because it is not the rule that decides coinbase correctness:
         // `validate_coinbase_transaction` compares against the coinbase this node computes, by
-        // exact hash. This is a cheap size guard ahead of that work.
-        let outputs_limit = self.ghostdag_k as u64 + 2 + kaspa_consensus_core::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS;
+        // exact hash. This is a cheap size guard ahead of that work, and widening it can only stop
+        // it rejecting coinbases that are in fact correct.
+        // One output per mergeset block (every blue, and every entitled red under ADR-0058), one
+        // aggregate for the reds that are not entitled, and the appended kinds.
+        let outputs_limit = self.mergeset_size_limit + 1 + kaspa_consensus_core::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS;
         if tx.outputs.len() as u64 > outputs_limit {
             return Err(TxRuleError::CoinbaseTooManyOutputs(tx.outputs.len(), outputs_limit));
         }
@@ -379,6 +392,7 @@ mod tests {
             params.coinbase_payload_script_public_key_max_len,
             params.coinbase_maturity(),
             params.ghostdag_k(),
+            params.mergeset_size_limit(),
             Default::default(),
         );
 
@@ -531,6 +545,7 @@ mod tests {
             params.coinbase_payload_script_public_key_max_len,
             params.coinbase_maturity(),
             params.ghostdag_k(),
+            params.mergeset_size_limit(),
             Default::default(),
         );
         let base = Transaction::new(
@@ -605,6 +620,7 @@ mod tests {
             params.coinbase_payload_script_public_key_max_len,
             params.coinbase_maturity(),
             params.ghostdag_k(),
+            params.mergeset_size_limit(),
             Default::default(),
         );
         let base = Transaction::new(
@@ -763,6 +779,7 @@ mod tests {
             params.coinbase_payload_script_public_key_max_len,
             params.coinbase_maturity(),
             params.ghostdag_k(),
+            params.mergeset_size_limit(),
             Default::default(),
         );
 
@@ -901,6 +918,7 @@ mod pq_output_class_enforcement_tests {
             p.coinbase_payload_script_public_key_max_len,
             p.coinbase_maturity,
             p.ghostdag_k(),
+            p.mergeset_size_limit(),
             Arc::new(TxScriptCacheCounters::default()),
         );
         // new_for_tests defaults to Disabled; set the mode under test.
@@ -1006,6 +1024,7 @@ mod pq_output_class_enforcement_tests {
             params.coinbase_payload_script_public_key_max_len,
             params.coinbase_maturity(),
             params.ghostdag_k(),
+            params.mergeset_size_limit(),
             Default::default(),
         );
 
@@ -1021,16 +1040,38 @@ mod pq_output_class_enforcement_tests {
             )
         };
 
-        // What the builder can emit at its worst: `k + 1` blues, one aggregate for the reds, the
-        // §D bounty, the §E validator payouts, and a full drain of the escrow queue.
-        let worst_case = params.ghostdag_k() as usize + 2 + 1 + PALW_V2_MAX_VALIDATOR_PAYOUTS as usize + PALW_V2_MAX_PAYOUTS_PER_BLOCK;
+        // **What the builder can emit at its worst — one output per MERGESET block, not per blue**
+        // (mainnet audit, 2026-09-05). This used to read `k + 1` blues plus "one aggregate for the
+        // reds", which was the pre-ADR-0058 shape: since ADR-0058 an entitled in-window red is paid
+        // to its OWN script (`expected_coinbase_transaction` pushes one output per such red), and
+        // reds are bounded by the mergeset — 180 on every V2 preset — not by `ghostdag_k`. The old
+        // arithmetic put the cap at 28 and the builder could emit ~180, so a wide mergeset made the
+        // producer's own block fail its own isolation check: the 112-block halt this function's
+        // comment records, reachable again and reachable on purpose.
+        let worst_case =
+            params.mergeset_size_limit() as usize + 1 + 1 + PALW_V2_MAX_VALIDATOR_PAYOUTS as usize + PALW_V2_MAX_PAYOUTS_PER_BLOCK;
         assert!(
             tv.check_coinbase_in_isolation(&coinbase_with(worst_case)).is_ok(),
-            "a coinbase paying the mergeset plus every appended kind must pass;              the builder can emit {worst_case} outputs"
+            "a coinbase paying every mergeset block plus every appended kind must pass; the builder can emit {worst_case} outputs"
         );
 
         // And the cap is still a cap.
         assert_match!(tv.check_coinbase_in_isolation(&coinbase_with(worst_case + 1)), Err(TxRuleError::CoinbaseTooManyOutputs(_, _)));
+
+        // The bound the old arithmetic gave, stated so the regression cannot come back quietly: a
+        // mergeset of 30 entitled reds is an ordinary DAG on a 180-block mergeset limit, and it is
+        // past every version of this cap that counted blues only.
+        let old_cap = params.ghostdag_k() as usize + 2 + PALW_V2_COINBASE_EXTRA_OUTPUTS as usize;
+        assert!(
+            old_cap < params.mergeset_size_limit() as usize,
+            "the premise: a cap counting blues only sits BELOW the mergeset bound ({old_cap} against {}), so a mergeset \
+             wide enough to pass it is an ordinary DAG rather than an attack",
+            params.mergeset_size_limit()
+        );
+        assert!(
+            tv.check_coinbase_in_isolation(&coinbase_with(old_cap + 1)).is_ok(),
+            "one output past the blues-only cap must be legal — that cap was the halt"
+        );
 
         // The two constants are one statement, so a change to either has to move both.
         assert_eq!(

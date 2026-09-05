@@ -151,6 +151,7 @@ impl ConsensusServices {
             params.coinbase_payload_script_public_key_max_len,
             params.coinbase_maturity(),
             params.ghostdag_k(),
+            params.mergeset_size_limit(),
             tx_script_cache_counters,
             mass_calculator.clone(),
             params.pq_enforcement,

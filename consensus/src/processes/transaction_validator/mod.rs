@@ -21,6 +21,11 @@ pub struct TransactionValidator {
     coinbase_payload_script_public_key_max_len: u8,
     coinbase_maturity: u64,
     ghostdag_k: KType,
+    /// **The mergeset's own bound, because the coinbase carries one output per entitled RED**
+    /// (ADR-0058; mainnet audit 2026-09-05). `ghostdag_k` bounds the blues; nothing bounds the
+    /// reds but this, and the isolation guard was sized as though the reds shared one aggregate
+    /// output — the shape they had before ADR-0058 paid each of them its own.
+    mergeset_size_limit: u64,
     sig_cache: Cache<SigCacheKey, bool>,
     pub(crate) mass_calculator: MassCalculator,
     /// kaspa-pq PQ-only enforcement mode for this network (ADR-0019).
@@ -39,6 +44,7 @@ impl TransactionValidator {
         coinbase_payload_script_public_key_max_len: u8,
         coinbase_maturity: u64,
         ghostdag_k: KType,
+        mergeset_size_limit: u64,
         counters: Arc<TxScriptCacheCounters>,
         mass_calculator: MassCalculator,
         pq_enforcement: PqEnforcementMode,
@@ -52,6 +58,7 @@ impl TransactionValidator {
             coinbase_payload_script_public_key_max_len,
             coinbase_maturity,
             ghostdag_k,
+            mergeset_size_limit,
             sig_cache: Cache::with_counters(10_000, counters),
             mass_calculator,
             pq_enforcement,
@@ -67,6 +74,7 @@ impl TransactionValidator {
         coinbase_payload_script_public_key_max_len: u8,
         coinbase_maturity: u64,
         ghostdag_k: KType,
+        mergeset_size_limit: u64,
         counters: Arc<TxScriptCacheCounters>,
     ) -> Self {
         Self {
@@ -77,6 +85,7 @@ impl TransactionValidator {
             coinbase_payload_script_public_key_max_len,
             coinbase_maturity,
             ghostdag_k,
+            mergeset_size_limit,
             sig_cache: Cache::with_counters(10_000, counters),
             mass_calculator: MassCalculator::new(0, 0, 0, 0),
             // Tests run upstream-compatible (no PQ restriction) unless a test

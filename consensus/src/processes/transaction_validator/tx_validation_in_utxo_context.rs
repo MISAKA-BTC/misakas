@@ -350,6 +350,7 @@ mod tests {
             params.coinbase_payload_script_public_key_max_len,
             params.coinbase_maturity(),
             params.ghostdag_k(),
+            params.mergeset_size_limit(),
             Default::default(),
         )
     }
@@ -628,6 +629,7 @@ mod tests {
             params.coinbase_payload_script_public_key_max_len,
             params.coinbase_maturity(),
             params.ghostdag_k(),
+            params.mergeset_size_limit(),
             Default::default(),
         );
 
@@ -691,6 +693,7 @@ mod tests {
             params.coinbase_payload_script_public_key_max_len,
             params.coinbase_maturity(),
             params.ghostdag_k(),
+            params.mergeset_size_limit(),
             Default::default(),
         );
 
@@ -786,6 +789,7 @@ mod conservation_tests {
             params.coinbase_payload_script_public_key_max_len,
             params.coinbase_maturity(),
             params.ghostdag_k(),
+            params.mergeset_size_limit(),
             Default::default(),
         )
     }
