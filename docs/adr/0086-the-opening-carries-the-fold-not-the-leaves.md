@@ -216,6 +216,34 @@ the next cut, not this one.
   in ~30 s. Until then a free-prompt claim past ~20 decode tokens on a fold class cannot be
   licensed by the interval lane, and Studio's 256-token cap is the honest limit for a different
   reason than the manifest.
+* **The cut landed (`594015b9`, 2026-09-05 13:30 JST).** `base0_open_fp_interval_sparse_anchored_capped_v1`
+  takes an anchor-state closure (`Base0FpAnchorStateForV1`); when the retention carries no
+  checkpoint chunks the span replay resumes from the recomputed state of the span's STARTING
+  interval's anchor (the span covers whole blocks and may start in the call before), else from the
+  prompt as before. The three backends build the closure over their recompute kernels and
+  `base0_fp_seat_state_memoized_v1` — a plain forward pass, no capture, memoized under the
+  binding's context. The same probe on run 10's material: interval 0 **17 s**, 1 **17 s**, 57
+  **19 s** (was 298), 187 **69 s** (was 1,991), 253 **90 s**, 298 **54 s** — every interval inside
+  the 120 s window, the interval's own tile replay (~17 s a call) now the floor. Pinned by
+  `an_interval_opened_from_the_recomputed_anchor_is_the_interval_opened_from_genesis` on a fold
+  fixture wide enough to straddle retained blocks: byte-identical to the genesis walk, the closure
+  consulted exactly where the span's starting interval has an anchor, a seat licenses it. The
+  interval lane also refuses a re-ask for a `(claim, interval)` whose opener is still in flight:
+  a seat re-asks every ~100 s and `served_recently` covered 10 s, so each re-ask had started
+  another minute-long opener for the same pair.
+* **Deployed to testnet-11 (2026-09-05 04:50–05:06Z):** kaspad `56f77a3d75f376de` on seat2, the
+  .113 node / seat4 / pool slots 01–04, ibm node1 and node0 (SIGINT, respawn, 21–150 s each); the
+  pool's `palw-a16-fp-worker` `69c0e194955cc41c` (the manifest fix) on .113 with `misaka-pool-fp@04`
+  restarted. **What testnet then showed is a wall this ADR does not own:** a 300-token free-prompt
+  claim on graph-v5 is ~41 M leaves, and exposure is `pwu × slash 5` ≈ 207 M sompi — a bond may
+  hold half its collateral, so one such claim needs ≥ 414 M sompi of collateral plus whatever is
+  already in flight. The pool's slot-04 bond was sized by the class's CANONICAL job (6.6 M leaves
+  → 265 M for four claims): its gateway answered a 300-token request in 229 s and queued no
+  commitment (`bond_active false`, room 32.7 M), and the two long jobs it had submitted earlier
+  that day (03:06Z, 03:11Z) never reached the chain for the same reason. The pool now accepts a
+  caller-sized bond (`POST /pool/v1/slots {"mode":"fp","bond_collateral":…}`) and slot-05 was
+  created at 600 M sompi and funded 8.5 MSK from the faucet wallet; the 300-token proof on testnet
+  rides that slot.
 * **Devnet Y, live (run 7, 2026-09-05 07:17–08:14 JST, `62fec794`, three nodes on this Mac).** A
   graph-v5 free-prompt claim of 40 tokens (`d9ad65d0…`) staged a **24,423,539-byte** fold
   capture — over `PALW_MATERIAL_MAX_BYTES`, the drill's own line: "ADR-0084 Y1 is live". The
