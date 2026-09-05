@@ -216,6 +216,26 @@ impl Base0Backend {
     /// The cadence this family checkpoints at — a class fact, read from the family's own
     /// registration and never off a capture. The seat's interval count is derived from it and two
     /// chain numbers ([`crate::fp_interval::base0_fp_interval_count_for_v1`]).
+    /// ADR-0086 Decision 2, the executor's side: the anchor state a fold interval resumes from,
+    /// recomputed with the floor's kernels and memoized as a seat's is.
+    fn fold_anchor_state_v1(
+        &self,
+        material: &crate::produce::Base0FpMaterialV2,
+        prompt_token_ids: &[u32],
+        covered: u32,
+    ) -> Option<crate::fp_recompute::Base0FpSeatStateV1> {
+        let mut kernels = crate::fp_recompute::Base0RecomputeKernelsV1::new(&self.artifact);
+        crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+            &material.binding.shape_profile,
+            &material.binding.job_context,
+            prompt_token_ids,
+            &material.generated_token_ids,
+            covered,
+            &mut kernels,
+        )
+        .ok()
+    }
+
     fn checkpoint_interval(&self) -> u32 {
         kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1
     }
@@ -596,6 +616,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
                 self.checkpoint_interval(),
                 self.step_ladder_cap,
                 &Base0IntervalKernels { artifact: &self.artifact },
+                &|covered| self.fold_anchor_state_v1(material, prompt_token_ids, covered),
             )
             .map_err(|e| format!("{e:?}"))?
             .tiles
@@ -633,6 +654,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
                 self.checkpoint_interval(),
                 self.step_ladder_cap,
                 &Base0IntervalKernels { artifact: &self.artifact },
+                &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
             ),
             crate::produce::Base0RetentionV1::Dense((_, tiles, ..)) => {
                 crate::fp_interval::base0_fp_block_leaves_from_tiles_v1(&opening, &tiles, block_index)

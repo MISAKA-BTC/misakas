@@ -1325,6 +1325,19 @@ fn interval_of_call_v1(geometry: &Base0FpIntervalGeometryV1, call: u32) -> u32 {
 /// The window is at most two checkpoint intervals: the span's left edge can reach back into the
 /// anchor call (whose logits row the opening carries as its seed), which the previous interval's
 /// checkpoint anchors, and its right edge can round up into the call after the interval's last.
+/// **The state a folded retention resumes an interval from when it carries no checkpoint chunks.**
+///
+/// A fold keeps no KV state (one checkpoint of graph-v5 is ~34 MB; three hundred of them do not
+/// ride a 183 MB material), so until 2026-09-05 every span replay started at GENESIS and captured
+/// tiles all the way — ~5–10 s per decode call: 21 s for interval 0 and 1,991 s for interval 187
+/// of a 300-token claim on the devnet, against a seat's 120 s solicitation window. The executor
+/// now asks this for the anchor state of the span's starting interval — the same
+/// `base0_fp_seat_state_memoized_v1` a seat recomputes for the checkpoint check, a plain forward
+/// pass without capture, memoized — and replays only the interval's own call(s) with tiles.
+/// `None` keeps the genesis walk, which is what a caller with no recompute kernels gets.
+pub type Base0FpAnchorStateForV1<'a> = &'a dyn Fn(u32) -> Option<crate::fp_recompute::Base0FpSeatStateV1>;
+
+#[allow(clippy::too_many_arguments)]
 fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
     kernels: &K,
     binding: &PalwStepBindingV2,
@@ -1334,6 +1347,7 @@ fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
     geometry: &Base0FpIntervalGeometryV1,
     span_first: u64,
     span_end: u64,
+    anchor_state_for: Base0FpAnchorStateForV1<'_>,
 ) -> Result<Vec<Hash64>, Base0FpIntervalError> {
     let profile = &binding.shape_profile;
     let ctx = &binding.job_context;
@@ -1356,13 +1370,21 @@ fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
     // prefix. The alternative — retaining a chunk per position — is the `Θ(n²)` term the
     // amendment exists to remove.
     let anchored = !chunks.is_empty();
-    let (operands, first_call) = match geometry.anchor_covered_call(interval).filter(|_| anchored) {
+    // The chunks the span resumes from: the retention's own checkpoint when it carries one, else
+    // the state recomputed for the starting interval's named anchor (`Base0FpAnchorStateForV1`),
+    // else the prompt — the walk this used to take for every interval, tiles and all.
+    let covered_call = geometry.anchor_covered_call(interval);
+    let (resume_chunks, first_call): (Option<Vec<Vec<u8>>>, u32) = match covered_call {
+        Some(covered) if anchored => (Some(base0_checkpoint_operands_v1(binding, chunks, &[], covered)?.chunks), first_call),
+        Some(covered) => match anchor_state_for(covered) {
+            Some(state) if state.covered_decode_call == covered => (Some(state.chunks), first_call),
+            _ => (None, 0),
+        },
         None => (None, 0),
-        Some(covered) => (Some(base0_checkpoint_operands_v1(binding, chunks, &[], covered)?), first_call),
     };
-    let start = match (&operands, geometry.anchor_covered_call(interval)) {
+    let start = match (&resume_chunks, covered_call) {
         (None, _) => Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt_usize },
-        (Some(anchor), Some(covered)) => {
+        (Some(resume), Some(covered)) => {
             // The id the anchored call consumes is the one the CHECKPOINT's own call produced, and
             // the executor is the party that produced it. A seat derives the same id from the
             // committed row instead of being told it (the module doc's rule); here the two are the
@@ -1374,7 +1396,7 @@ fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
             let seed_token = *generated
                 .get(seed_call as usize)
                 .ok_or_else(|| Base0FpIntervalError::Replay(format!("the retention has no id for call {seed_call}")))?;
-            Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: &anchor.chunks, seed_token }
+            Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: resume, seed_token }
         }
         (Some(_), None) => return Err(Base0FpIntervalError::NoCheckpointAt { covered: 0 }),
     };
@@ -1436,6 +1458,30 @@ pub fn base0_open_fp_interval_sparse_capped_v1<K: Base0FpIntervalKernelsV1>(
     max_step_leaf_count: u64,
     kernels: &K,
 ) -> Result<Vec<u8>, Base0FpIntervalError> {
+    base0_open_fp_interval_sparse_anchored_capped_v1(
+        material,
+        index,
+        prompt_token_ids,
+        family_checkpoint_interval,
+        max_step_leaf_count,
+        kernels,
+        &|_| None,
+    )
+}
+
+/// The fold opener with the executor's anchor state (see [`Base0FpAnchorStateForV1`]): the span
+/// replay resumes from the recomputed state of the starting interval's anchor instead of the
+/// prompt when the retention carries no checkpoint chunks.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_open_fp_interval_sparse_anchored_capped_v1<K: Base0FpIntervalKernelsV1>(
+    material: &crate::produce::Base0FpMaterialV2,
+    index: u32,
+    prompt_token_ids: &[u32],
+    family_checkpoint_interval: u32,
+    max_step_leaf_count: u64,
+    kernels: &K,
+    anchor_state_for: Base0FpAnchorStateForV1<'_>,
+) -> Result<Vec<u8>, Base0FpIntervalError> {
     let binding = &material.binding;
     let profile = &binding.shape_profile;
     let ctx = &binding.job_context;
@@ -1467,6 +1513,7 @@ pub fn base0_open_fp_interval_sparse_capped_v1<K: Base0FpIntervalKernelsV1>(
         &geometry,
         span_first,
         span_end,
+        anchor_state_for,
     )?;
 
     let seed_row_tiles = base0_seed_row_tiles_from_rows_v1(binding, &material.logits_rows, &leaves_geometry, &geometry, index)?;
@@ -2649,6 +2696,7 @@ pub fn base0_fp_interval_of_leaf_v1(
 /// prompt, for interval 0) through the interval's calls. The tiles are the interval's calls'
 /// only; a disputed leaf in the seed row (the anchor call's logits tiles) is served from the
 /// retained rows by the caller.
+#[allow(clippy::too_many_arguments)]
 pub fn base0_fp_interval_tiles_from_fold_capped_v1<K: Base0FpIntervalKernelsV1>(
     material: &crate::produce::Base0FpMaterialV2,
     index: u32,
@@ -2656,6 +2704,7 @@ pub fn base0_fp_interval_tiles_from_fold_capped_v1<K: Base0FpIntervalKernelsV1>(
     family_checkpoint_interval: u32,
     max_step_leaf_count: u64,
     kernels: &K,
+    anchor_state_for: Base0FpAnchorStateForV1<'_>,
 ) -> Result<crate::legs::Base0StepTilesV1, Base0FpIntervalError> {
     let binding = &material.binding;
     let profile = &binding.shape_profile;
@@ -2669,19 +2718,26 @@ pub fn base0_fp_interval_tiles_from_fold_capped_v1<K: Base0FpIntervalKernelsV1>(
         geometry.calls_for(index).ok_or(Base0FpIntervalError::IntervalOutOfRange { index, count: geometry.interval_count })?;
     let prompt_usize: Vec<usize> = prompt_token_ids.iter().map(|t| *t as usize).collect();
     let anchored = !material.checkpoint_chunks.is_empty();
-    let (operands, replay_first_call) = match geometry.anchor_covered_call(index).filter(|_| anchored) {
+    let covered_call = geometry.anchor_covered_call(index);
+    let (resume_chunks, replay_first_call): (Option<Vec<Vec<u8>>>, u32) = match covered_call {
+        Some(covered) if anchored => {
+            (Some(base0_checkpoint_operands_v1(binding, &material.checkpoint_chunks, &[], covered)?.chunks), first_call)
+        }
+        Some(covered) => match anchor_state_for(covered) {
+            Some(state) if state.covered_decode_call == covered => (Some(state.chunks), first_call),
+            _ => (None, 0),
+        },
         None => (None, 0),
-        Some(covered) => (Some(base0_checkpoint_operands_v1(binding, &material.checkpoint_chunks, &[], covered)?), first_call),
     };
-    let start = match (&operands, geometry.anchor_covered_call(index)) {
+    let start = match (&resume_chunks, covered_call) {
         (None, _) => Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt_usize },
-        (Some(anchor), Some(covered)) => {
+        (Some(resume), Some(covered)) => {
             let seed_call = geometry.anchor_seed_call_v1(index).ok_or(Base0FpIntervalError::NoCheckpointAt { covered })?;
             let seed_token = *material
                 .generated_token_ids
                 .get(seed_call as usize)
                 .ok_or_else(|| Base0FpIntervalError::Replay(format!("the retention has no id for call {seed_call}")))?;
-            Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: &anchor.chunks, seed_token }
+            Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: resume, seed_token }
         }
         (Some(_), None) => unreachable!("an anchor exists only where the geometry names a covered call"),
     };
@@ -2778,6 +2834,7 @@ pub fn base0_fp_interval_close_annex_any_v1(bytes: &[u8]) -> Option<Base0FpClose
 /// its `range` names the blocks wholly inside it — and the leaves come from the same span replay
 /// the opener ran to derive the edge siblings. The answer folds to the served digest by
 /// construction; a seat checks that before naming a leaf.
+#[allow(clippy::too_many_arguments)]
 pub fn base0_fp_block_leaves_from_fold_capped_v1<K: Base0FpIntervalKernelsV1>(
     material: &crate::produce::Base0FpMaterialV2,
     opening_bytes: &[u8],
@@ -2786,6 +2843,7 @@ pub fn base0_fp_block_leaves_from_fold_capped_v1<K: Base0FpIntervalKernelsV1>(
     family_checkpoint_interval: u32,
     max_step_leaf_count: u64,
     kernels: &K,
+    anchor_state_for: Base0FpAnchorStateForV1<'_>,
 ) -> Result<Vec<u8>, Base0FpIntervalError> {
     let v4 = Base0FpIntervalOpeningV4::decode_v1(opening_bytes)?;
     let binding = &material.binding;
@@ -2803,6 +2861,7 @@ pub fn base0_fp_block_leaves_from_fold_capped_v1<K: Base0FpIntervalKernelsV1>(
         &geometry,
         span_first,
         span_end,
+        anchor_state_for,
     )?;
     let leaf = |i: u64| -> Option<Hash64> { i.checked_sub(span_first).and_then(|o| span_leaves.get(o as usize).copied()) };
     let cut = Base0FpBlockLeavesV1::cut_v1(v4.interval_index, &v4.range, binding.step_leaf_count, block_index, &leaf)
@@ -4033,7 +4092,7 @@ mod tests {
     #[allow(clippy::type_complexity)]
     pub(super) fn dense_v5_run()
     -> (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1) {
-        use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v5};
+        use kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1;
         let geometry = PalwQwen25GeometryV1 {
             layer_count: 2,
             hidden_dim: 8,
@@ -4047,6 +4106,17 @@ mod tests {
             rms_eps_q: 1,
             tile_len: 4,
         };
+        dense_v5_run_with(geometry, 3, 4)
+    }
+
+    /// The graph-v5 fold fixture at a chosen geometry and job size, for a test that needs a tree
+    /// wider than one retained block.
+    pub(super) fn dense_v5_run_with(
+        geometry: kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1,
+        prefill: u32,
+        decode: u32,
+    ) -> (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1) {
+        use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v5;
         let profile = qwen25_a16_profile_v5(geometry).expect("a valid graph-v5 A16 profile");
         let shape = crate::artifact::Base0ShapeV1 {
             n_layers: geometry.layer_count as usize,
@@ -4063,8 +4133,13 @@ mod tests {
             .expect("a valid shape")
             .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
             .expect("the derived store is sorted and unique");
-        let (ctx, prompt) =
-            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x0000_82C1), geometry.vocab_size as usize, 3, 4);
+        let (ctx, prompt) = crate::produce::base0_rc_job_v1(
+            &profile,
+            Hash64::from_u64_word(0x0000_82C1),
+            geometry.vocab_size as usize,
+            prefill,
+            decode,
+        );
         let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
         let plan = engine.plan_from_profile(&profile).expect("the v5 declaration is this engine's program");
         let run = crate::qwen25_a16_backend::a16_execute_free_prompt_streaming_v1(
@@ -4859,6 +4934,108 @@ mod the_rulesets_ladder {
             Err(Base0FpIntervalError::LeafCountOutOfRange { got: u64::MAX, max: COURT_MAX_STEP_LEAVES }),
             "the ladder is checked before the count, so no allocation is sized from a stranger's u64"
         );
+    }
+
+    /// **ADR-0086 Decision 2 for the executor's side: an interval opened from a recomputed anchor
+    /// state is byte for byte the interval opened by the genesis walk.** The fold retains no
+    /// state, so the opener used to replay from the prompt with tiles captured for every interval
+    /// — 1,991 s for interval 187 of a 300-token claim on the devnet. With the family's recompute
+    /// kernels the executor resumes from the memoized state of the interval's named anchor and
+    /// replays only the interval's own calls; the opening it serves must be the same object, or a
+    /// seat would refuse an honest executor. Pinned on every interval past the first, and the
+    /// closure must actually have been consulted.
+    #[test]
+    fn an_interval_opened_from_the_recomputed_anchor_is_the_interval_opened_from_genesis() {
+        // Wide enough that the fold retains more than one block (4,096 leaves at the ruleset's
+        // level), so a span starts inside an earlier call and the anchored branch is walked.
+        let geometry = kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 32,
+            ffn_dim: 64,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 8,
+            vocab_size: 128,
+            n_ctx: 64,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let (artifact, profile, ctx, prompt, run) = super::tests::dense_v5_run_with(geometry, 3, 24);
+        eprintln!("the wide fixture prices {} leaves over {} checkpoints", run.binding.step_leaf_count, run.checkpoints.leaves.len());
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let bytes = crate::produce::base0_fp_material_encode_v2(&run, &ids).expect("the fold retains");
+        let material = crate::produce::base0_fp_material_decode_v2(&bytes).expect("its own retention decodes");
+        assert!(material.checkpoint_chunks.is_empty(), "the fixture is a fold with no state, the case that replayed from genesis");
+        let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
+        let plan = engine.plan_from_profile(&profile).expect("the plan");
+        let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
+        let interval = PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
+        let wide = COURT_MAX_STEP_LEAVES;
+        let geometry = Base0FpIntervalGeometryV1::from_binding_capped_v1(&material.binding, interval, wide).expect("a geometry");
+        assert!(geometry.interval_count >= 3, "the fixture has intervals past the first: {}", geometry.interval_count);
+        let claim = PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor: ctx.job_id };
+        let consulted = std::cell::Cell::new(0u32);
+        let anchor_state_for = |covered: u32| {
+            consulted.set(consulted.get() + 1);
+            let mut recompute = crate::fp_recompute::A16RecomputeKernelsV1::new(&artifact, Some(&plan)).expect("recompute kernels");
+            crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+                &material.binding.shape_profile,
+                &material.binding.job_context,
+                &ids,
+                &material.generated_token_ids,
+                covered,
+                &mut recompute,
+            )
+            .ok()
+        };
+        let leaf_count = material.binding.step_leaf_count;
+        let mut anchored_intervals = 0u32;
+        for index in 0..geometry.interval_count {
+            let from_genesis = base0_open_fp_interval_sparse_capped_v1(&material, index, &ids, interval, wide, &kernels)
+                .expect("the genesis walk opens");
+            let before = consulted.get();
+            let from_anchor =
+                base0_open_fp_interval_sparse_anchored_capped_v1(&material, index, &ids, interval, wide, &kernels, &anchor_state_for)
+                    .expect("the anchored walk opens");
+            assert_eq!(from_anchor, from_genesis, "interval {index}: the two walks must serve one object");
+            // The anchored branch is taken exactly when the span's STARTING interval has a named
+            // anchor — the span covers whole retained blocks, so it may start in an earlier call.
+            let leaves_geometry = base0_fp_interval_leaves_v1(&profile, &ctx, &geometry, index, leaf_count).expect("leaves");
+            let (span_first, _) = material
+                .step_tree
+                .span_for_range(leaves_geometry.range_first, leaves_geometry.range_end - leaves_geometry.range_first)
+                .expect("a span");
+            let start_call = kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &ctx, span_first)
+                .expect("a main step leaf")
+                .call_index;
+            let expects_anchor = geometry.anchor_covered_call(interval_of_call_v1(&geometry, start_call)).is_some();
+            assert_eq!(
+                consulted.get() > before,
+                expects_anchor,
+                "interval {index}: consulted={} expected={expects_anchor}",
+                consulted.get() > before
+            );
+            anchored_intervals += expects_anchor as u32;
+            assert_eq!(
+                base0_verify_fp_interval_opening_with_state_capped_v1(
+                    &from_anchor,
+                    claim,
+                    index,
+                    &ids,
+                    material.binding.step_leaf_count,
+                    interval,
+                    wide,
+                    geometry.anchor_covered_call(index).and_then(|c| anchor_state_for(c)).as_ref(),
+                    &kernels
+                ),
+                Base0FpIntervalSeatVerdictV1::Valid,
+                "interval {index}: a seat licenses the anchored opening"
+            );
+        }
+        assert!(anchored_intervals > 0, "the fixture must exercise the anchored branch at least once");
+        eprintln!("{anchored_intervals} of {} intervals resumed from a recomputed anchor", geometry.interval_count);
+        crate::fp_recompute::base0_fp_seat_state_forget_v1();
     }
 
     /// **A seat licenses an honest graph-v5 opening at the ladder it is HANDED, and refuses it by

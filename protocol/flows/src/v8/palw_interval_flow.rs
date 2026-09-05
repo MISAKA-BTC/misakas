@@ -84,10 +84,9 @@ impl PalwIntervalFlow {
                         // claim every 100 s for half an hour and node-0's log had nothing to say
                         // (devnet runs 8 and 10). A throttled re-ask is the seat's own cadence and
                         // stays quiet; every other refusal is the operator's to read.
-                        Err(PalwServeRefusalV1::Throttled) => debug!(
-                            "[palw-interval] throttled a re-ask for claim {claim} interval {}",
-                            inner.interval_index
-                        ),
+                        Err(PalwServeRefusalV1::Throttled) => {
+                            debug!("[palw-interval] throttled a re-ask for claim {claim} interval {}", inner.interval_index)
+                        }
                         Err(refusal) => info!(
                             "[palw-interval] refused an opening request for claim {claim} interval {}: {}",
                             inner.interval_index,

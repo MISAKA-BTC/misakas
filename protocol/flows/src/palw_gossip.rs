@@ -900,6 +900,13 @@ struct PalwOpeningLane {
     /// exist only for solicited pairs and are swept with them, so the map is bounded by
     /// [`OUTSTANDING_PULL_CAP`] by construction.
     slots: Mutex<HashMap<(Hash64, u32), OpeningSlots>>,
+    /// **One opener per `(claim, interval)` at a time.** An opening of a late interval of a
+    /// 300-token claim is a minute of work; a seat re-asks every ~100 s until it holds one, and
+    /// `served_recently` throttles only 10 s of re-asks — so without this every re-ask started
+    /// another opener for the same pair while the first was still running, and the executor
+    /// thrashed instead of answering (devnet runs 8 and 10). A re-ask while one is in flight is
+    /// refused as `Throttled`; the answer in flight is the answer.
+    in_flight: Mutex<std::collections::HashSet<(Hash64, u32)>>,
 }
 
 impl Default for PalwOpeningLane {
@@ -912,6 +919,7 @@ impl Default for PalwOpeningLane {
             peer_rate: Mutex::new(OpeningPeerRateWindow { started: std::time::Instant::now(), per_peer: HashMap::new() }),
             outstanding: Mutex::new(HashMap::new()),
             slots: Mutex::new(HashMap::new()),
+            in_flight: Mutex::new(std::collections::HashSet::new()),
         }
     }
 }
@@ -1087,7 +1095,12 @@ impl PalwGossipCenter {
             self.refund_serve_budget(peer, reservation);
             return Err(PalwServeRefusalV1::NotHeld);
         };
+        if !self.openings.in_flight.lock().unwrap().insert((claim, interval_index)) {
+            self.refund_serve_budget(peer, reservation);
+            return Err(PalwServeRefusalV1::Throttled);
+        }
         let opened = tokio::task::spawn_blocking(move || resolver(claim, interval_index)).await;
+        self.openings.in_flight.lock().unwrap().remove(&(claim, interval_index));
         let Some(bytes) = opened.ok().flatten() else {
             self.refund_serve_budget(peer, reservation);
             return Err(PalwServeRefusalV1::NotHeld);

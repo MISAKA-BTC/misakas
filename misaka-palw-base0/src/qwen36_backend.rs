@@ -785,6 +785,27 @@ impl Qwen36Backend {
     /// `base0_refutation_from_capture_capped_v1` needs the whole leaf vector, re-deriving exactly
     /// the leaves a refutation reads is ADR-0082 U-03's work, and until then the party that wants
     /// to prosecute pays for one re-execution of a job whose ids it holds.
+    /// ADR-0086 Decision 2, the executor's side: the anchor state a fold interval resumes from,
+    /// recomputed with this family's kernels and memoized as a seat's is.
+    fn fold_anchor_state_v1(
+        &self,
+        material: &crate::produce::Base0FpMaterialV2,
+        prompt_token_ids: &[u32],
+        covered: u32,
+    ) -> Option<crate::fp_recompute::Base0FpSeatStateV1> {
+        let plan = self.plan.as_ref()?;
+        let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan);
+        crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+            &material.binding.shape_profile,
+            &material.binding.job_context,
+            prompt_token_ids,
+            &material.generated_token_ids,
+            covered,
+            &mut kernels,
+        )
+        .ok()
+    }
+
     fn dense_capture_from_fold_v1(
         &self,
         material: &crate::produce::Base0FpMaterialV2,
@@ -1314,13 +1335,14 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
                 crate::produce::Base0RetentionV1::Folded(material) => {
                     let plan = self.plan.as_ref().ok_or_else(|| "this backend serves no registered graph".to_string())?;
-                    crate::fp_interval::base0_open_fp_interval_sparse_capped_v1(
+                    crate::fp_interval::base0_open_fp_interval_sparse_anchored_capped_v1(
                         &material,
                         index,
                         prompt_token_ids,
                         interval,
                         self.step_ladder_cap,
                         &Qwen36IntervalKernels { artifact: &self.artifact, plan },
+                        &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
                     )
                     .map_err(|e| e.to_string())?
                 }
@@ -1437,6 +1459,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                 interval,
                 self.step_ladder_cap,
                 &Qwen36IntervalKernels { artifact: &self.artifact, plan },
+                &|covered| self.fold_anchor_state_v1(material, prompt_token_ids, covered),
             )
             .map_err(|e| format!("{e:?}"))?
             .tiles
@@ -1477,6 +1500,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                 interval,
                 self.step_ladder_cap,
                 &Qwen36IntervalKernels { artifact: &self.artifact, plan },
+                &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
             ),
             crate::produce::Base0RetentionV1::Dense((_, tiles, ..)) => {
                 crate::fp_interval::base0_fp_block_leaves_from_tiles_v1(&opening, &tiles, block_index)

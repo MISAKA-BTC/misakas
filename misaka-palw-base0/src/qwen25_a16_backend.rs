@@ -805,6 +805,28 @@ impl Qwen25A16Backend {
 
     /// The dense tiles either retention can answer with: the ones it kept, or the ones a
     /// re-execution reproduces.
+    /// **ADR-0086 Decision 2, the executor's side.** The anchor state a fold interval resumes from,
+    /// recomputed with this family's recompute kernels (a plain forward pass, no capture) and
+    /// memoized under the binding's context — the same state a seat recomputes for the checkpoint
+    /// check. Before this the span replay started at genesis with tiles captured (5–10 s a call).
+    fn fold_anchor_state_v1(
+        &self,
+        material: &crate::produce::Base0FpMaterialV2,
+        prompt_token_ids: &[u32],
+        covered: u32,
+    ) -> Option<crate::fp_recompute::Base0FpSeatStateV1> {
+        let mut kernels = crate::fp_recompute::A16RecomputeKernelsV1::new(&self.artifact, self.plan.as_ref()).ok()?;
+        crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+            &material.binding.shape_profile,
+            &material.binding.job_context,
+            prompt_token_ids,
+            &material.generated_token_ids,
+            covered,
+            &mut kernels,
+        )
+        .ok()
+    }
+
     fn tiles_from_material_v1(&self, retention: &crate::produce::Base0RetentionV1) -> Result<crate::legs::Base0StepTilesV1, String> {
         match retention {
             crate::produce::Base0RetentionV1::Dense((binding, tiles, ..)) => {
@@ -1362,15 +1384,18 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // state), because the class's own declaration decides, not this executor's preference.
         let chunked =
             match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
-                crate::produce::Base0RetentionV1::Folded(material) => crate::fp_interval::base0_open_fp_interval_sparse_capped_v1(
-                    &material,
-                    index,
-                    prompt_token_ids,
-                    self.checkpoint_interval(),
-                    self.step_ladder_cap,
-                    &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
-                )
-                .map_err(|e| e.to_string())?,
+                crate::produce::Base0RetentionV1::Folded(material) => {
+                    crate::fp_interval::base0_open_fp_interval_sparse_anchored_capped_v1(
+                        &material,
+                        index,
+                        prompt_token_ids,
+                        self.checkpoint_interval(),
+                        self.step_ladder_cap,
+                        &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+                        &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
+                    )
+                    .map_err(|e| e.to_string())?
+                }
                 crate::produce::Base0RetentionV1::Dense(material) => crate::fp_interval::base0_open_fp_interval_capped_v1(
                     &material,
                     index,
@@ -1482,6 +1507,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 self.checkpoint_interval(),
                 self.step_ladder_cap,
                 &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+                &|covered| self.fold_anchor_state_v1(material, prompt_token_ids, covered),
             )
             .map_err(|e| format!("{e:?}"))?
             .tiles
@@ -1519,6 +1545,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 self.checkpoint_interval(),
                 self.step_ladder_cap,
                 &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+                &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
             ),
             crate::produce::Base0RetentionV1::Dense((_, tiles, ..)) => {
                 crate::fp_interval::base0_fp_block_leaves_from_tiles_v1(&opening, &tiles, block_index)
