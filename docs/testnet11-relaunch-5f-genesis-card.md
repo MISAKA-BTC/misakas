@@ -6417,3 +6417,31 @@ four CLI verbs read and move; 12 tests pin the ADR's invariants, and the design'
 corrected by them (the second buy releases 16,824 positions, not 12,846; a full sell returns the
 1,880 MSK reserve, not 3,014). Not done: the explorer page, the devnet buy/sell/retire/drain drill,
 and the activation height on testnet-11.
+
+### 10u. The first 300-token free-prompt receipt on the public chain — and the two defects between it and a quorum (2026-09-05)
+
+**`ibm-node0` filed a `Valid` receipt for claim `019efe78…` at 16:06:39+02:00**: four drawn intervals
+(187, 101, 62, 11 of 299) replayed against state the seat recomputed for itself, no history fetched.
+That is the devnet's proof repeated on the public chain — the fold opener of `594015b9` works where
+the 1,991 s genesis walk could not. Two things stood between that receipt and the panel's quorum of
+three, and both were found by reading the seats rather than the executor.
+
+**One class, two artifacts — the fifth instance, on the seat that never drew.** `seat2` warned every
+three minutes that "a served answer's ids recompute output root `91cfcdaa…` and the claim committed
+`0658d893…`", and refused the answer before any replay. Nothing was wrong with the answer: the seat
+loaded `/root/palw-class/qwen25-1.5b-a16.palwart` where every other seat loads
+`bound-candidate.palwart`, holdings deduplicate per family so the unbound file won, and the class
+facts that go into `palw_fp_job_context_v3` were a different model's. The two files are the same
+size and differ in sha256 (`a8c4e53e…` vs `3f8fc506…`) — a difference nothing on the host printed.
+Copied and swapped (`c-seat2.sh.pre-bound`), the seat drew intervals on its first tick.
+
+**Nothing bounded the number of intervals one executor opens at once.** The gossip lane refuses a
+second asker for a pair already being opened, but three seats × four drawn intervals are twelve
+DISTINCT pairs, and the executor ran six to eight fold replays concurrently. On a 24 GB host that is
+12 GB of swap: openings went from ~30 s to 137–398 s, the same interval was recomputed for each
+asker (187 twice, 101 twice, 11 three times), and twice the node stopped answering for forty minutes
+with no line in its log and would not take SIGINT — SIGKILL both times. `1d81feec` gives the panel a
+`served_openings` cache keyed by the request as served and an `opening_gate` that puts one opening
+at a time on a node; the same work then costs the same CPU and the first answer arrives in a
+fraction of the time. **Fleet load is a live variable, not a constant:** four hosted producer slots
+sharing the executor's box is what put it into swap in the first place.

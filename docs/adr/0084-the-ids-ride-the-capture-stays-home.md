@@ -399,6 +399,26 @@ refutation to exist at all. So on testnet-11 the fence stays `None` until (a) th
 assembled from an opening and (b) an operator schedules it; arming it earlier changes nothing a
 court can reach.
 
+### 7.6 The serving side has a load, and nothing bounded it (2026-09-05, testnet-11, `1d81feec`)
+
+Decision 8's lane was specified per request: a seat asks, the executor opens, the gossip lane
+refuses a SECOND asker for a pair already in flight. Nothing in the ADR says how many DISTINCT pairs
+one executor opens at once, and the live panel answers that question for it — three seats drawing
+four intervals each is twelve, and every one of them is a fold replay wanting gigabytes.
+
+Measured on claim `019efe78…`: six to eight concurrent openings on a 24 GB host put it 12 GB into
+swap, each opening went from ~30 s to 137–398 s, and twice the node stopped serving entirely for
+forty minutes with nothing in its log and no response to SIGINT. The same host also recomputed each
+interval per asker — 187 twice, 101 twice, 11 three times — because the served bytes were thrown
+away.
+
+Two panel-local additions, consensus-inert: a `served_openings` cache keyed by (claim, request
+index, disputed leaves — the last read off the chain, so it belongs in the key), and an
+`opening_gate` that serialises the heavy work on the blocking thread the resolver already runs on.
+Queued, the same twelve cost the same total CPU and the first answer arrives in a fraction of the
+time. **The lesson is the shape of the omission, not the constant:** a request-scoped rule with no
+node-scoped bound is a rule about one caller in a protocol that has many.
+
 ## 8. What is deliberately not decided
 
 * **A close assembled from an opening (U-07c).** §4 names the stall. The refutation of a step
