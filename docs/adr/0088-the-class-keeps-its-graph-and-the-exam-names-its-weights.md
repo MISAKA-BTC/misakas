@@ -74,7 +74,10 @@ chain of accepted improvements is an index the market reads.
   ADR-0074 Decision 2's law — "MUST NOT read … any value one party can set".
 * **The market of ADR-0087 is per class**, state v21, `palw_model_market: Option<ForkActivation>`,
   6 % of every MSK leg leaving the trade (5 % burned, 1 % to the class's registrant), the
-  arithmetic in `palw_model_market_v1.rs` and the fold not yet written.
+  arithmetic in `palw_model_market_v1.rs`. At `74c34476`, the tip this ADR is written on, the
+  fold is not yet committed; it is being written on the same branch the same day, and where
+  this ADR names ADR-0087's shape it names the implemented one: a market opens at its first
+  buy rather than at registration, and the state root does not bump for it.
 
 ## 2. The requirement, and why the exam is not the oracle ADR-0056 Decision 7 refuses
 
@@ -307,10 +310,15 @@ and batches at the reclamation; the returning re-registration founds again (Deci
 `palw_model_succession: Option<ForkActivation>` on the params, top level, bare; refused by
 `validate_palw_v2` unless `palw_model_market` is armed at or before it (an author with no leg to
 be paid from is a design that has not been armed). Below the fence the four objects are refused
-and the head is the founding root. The fingerprint moves only where the flag is set. State
-version: the head, history, index, window rows, batch rows, template pool and bounty reserve
-enter the state root — v22 if ADR-0087 lands first, one bump for both if they land together.
-The free-prompt job's root field is the version the fence arms (Decision 1).
+and the head is the founding root. The fingerprint moves only where the flag is set. **The
+state root does not bump.** The head, history, index, window rows, batch rows, template pool and
+bounty reserve are state-root collections that enter the root only when non-empty — the rule
+ADR-0087's implementation settled on the day this was drafted: the root rides in the header, so
+a chain on which the fence is `None`, or on which nothing has happened, keeps its root byte for
+byte, and the carriage gains a tagged tail only after the first object. A class whose head is
+its founding root and which holds no contest contributes nothing to the root.
+`PALW_STATE_V2_VERSION` stays where ADR-0087's landing leaves it. The free-prompt job's root
+field is the version the fence arms (Decision 1).
 
 **Decision 12 — What a participant reads.** RPC `getPalwClassHead(class_id)` (head root, author,
 since, grace, index, break, last record), `getPalwExamWindow(class_id, window)` (phase, seed,
@@ -415,7 +423,8 @@ is drilled like a kernel before the fence is armed (§7).
 * **S9 (silence).** A contested window in which the head answers nothing records
   `head_score = 0` and passes the best candidate that clears the bars; an uncontested window
   records nothing.
-* **S10 (the fence).** The fingerprint is unchanged where the flag is `None`; the objects are
+* **S10 (the fence).** The fingerprint is unchanged where the flag is `None`; the state root of
+  a chain with founding heads and no contest is unchanged byte for byte; the objects are
   refused below it; arming it without `palw_model_market` is refused at validation.
 * **S11 (the index).** `index = 1000 + Σ Δ` over successions since founding; a re-registration
   after `Dormant` sets the break and leaves the value.
