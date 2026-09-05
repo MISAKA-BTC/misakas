@@ -21007,8 +21007,8 @@ pub(crate) mod tests {
             let back: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
             assert_eq!(back, moved, "and round-trips");
             assert!(
-                borsh::from_slice::<PalwStateCarriageV2Legacy<'static>>(&bytes).is_err() || true,
-                "a legacy reader stops before the tail"
+                borsh::from_slice::<PalwStateCarriageV2Legacy<'static>>(&bytes).is_err(),
+                "a legacy reader refuses the tailed carriage rather than misreading it"
             );
             assert_ne!(s3.state_root(), s1.state_root());
         }
