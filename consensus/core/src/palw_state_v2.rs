@@ -12885,7 +12885,10 @@ pub(crate) mod tests {
             operand_openings: Vec::new(),
         };
         assert!(
-            matches!(adjudicate_court_close_v2(&s5, &sid, &proof, &court_params()), Err(PalwCourtV2Error::LadderNotTerminal)),
+            matches!(
+                adjudicate_court_close_v2(&s5, &sid, &proof, &court_params(), crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES),
+                Err(PalwCourtV2Error::LadderNotTerminal)
+            ),
             "a close before the ladder terminates must be refused"
         );
 
@@ -12907,7 +12910,7 @@ pub(crate) mod tests {
             _ => unreachable!(),
         };
         assert_ne!(opened, 4, "the fixture must open a leaf other than the narrowed one");
-        let outcome = adjudicate_court_close_v2(&s13, &sid, &proof, &court_params());
+        let outcome = adjudicate_court_close_v2(&s13, &sid, &proof, &court_params(), crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES);
         assert!(
             matches!(outcome, Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: o, narrowed: 4 }) if o == opened),
             "a close about another step must be refused, got {outcome:?}"
@@ -12923,7 +12926,7 @@ pub(crate) mod tests {
             pin: crate::palw_step_refute::PalwBase0DecodeTokensV1 { logits_rows: vec![vec![1, 2]], generated_token_ids: vec![0] },
             position: 7,
         };
-        let outcome = adjudicate_court_close_v2(&s13, &sid, &decode, &court_params());
+        let outcome = adjudicate_court_close_v2(&s13, &sid, &decode, &court_params(), crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES);
         assert!(
             matches!(outcome, Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: 7, narrowed: 4 })),
             "a decode-token close at a position the ladder did not narrow to must be refused, got {outcome:?}"
@@ -20070,7 +20073,13 @@ pub(crate) mod tests {
         ) -> Result<PalwCourtVerdictV2, crate::palw_court_v2::PalwCourtV2Error> {
             let bottom = if anchored { drill.bottom_anchored(sid, tile) } else { drill.bottom(sid, tile) };
             let court = crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 22, 20, 2).unwrap();
-            crate::palw_court_v2::adjudicate_court_close_v2(state, &sid, &dissection_close(drill, bottom), &court)
+            crate::palw_court_v2::adjudicate_court_close_v2(
+                state,
+                &sid,
+                &dissection_close(drill, bottom),
+                &court,
+                crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+            )
         }
 
         fn play_to_the_bottom(

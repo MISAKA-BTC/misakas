@@ -56,7 +56,7 @@ use crate::palw_bisect::{PalwBisectSpaceV1, bisect_session_id_v1};
 use crate::palw_state_v2::{
     PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwCourtVerdictV2, PalwStateParamsV2,
 };
-use crate::palw_step_refute::{PalwExecutionStepRefutationV1, PalwStepRefuteError, check_execution_step_refutation_v1};
+use crate::palw_step_refute::{PalwExecutionStepRefutationV1, PalwStepRefuteError, check_execution_step_refutation_capped_v1};
 use blake2b_simd::Params;
 
 pub const PALW_COURT_V2_DOMAIN_PARTY_ID: &[u8] = b"misaka-palw/court-v2/party-id/v1";
@@ -771,6 +771,11 @@ pub fn adjudicate_court_close_v2(
     // Checked FIRST, before a single path is walked, because the whole point of a cost bound is
     // that exceeding it costs nothing to detect.
     court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    // **ADR-0084 U-08: the step ladder this adjudication walks at.** `PALW_STEP_LEG_MAX_LEAVES`
+    // before `Params::palw_court_ladder`, the ruleset's `max_step_leaf_count()` past it — decided
+    // by the caller at the BLOCK's DAA (`palw_court_step_ladder_at`), never read here from a
+    // constant, so two nodes grading one close proof read one ladder.
+    step_ladder: u64,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     // The cost gate runs before ANY state is read, which is the cheapest-first ordering a cost
     // bound has to have: an oversized object must be refusable without a lookup, a decode or a
@@ -880,7 +885,7 @@ pub fn adjudicate_court_close_v2(
             });
         }
     }
-    adjudicate_close_proof_v2(state, claim, proof, court)
+    adjudicate_close_proof_v2(state, claim, proof, court, step_ladder)
 }
 
 /// The arithmetic half of a close: given the CLAIM the dispute is about, what verdict does this
@@ -895,6 +900,11 @@ pub fn adjudicate_close_proof_v2(
     claim: &crate::palw_state_v2::PalwClaimStateV2,
     proof: &PalwCourtVerdictProofV2,
     court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    // **ADR-0084 U-08: the step ladder this adjudication walks at.** `PALW_STEP_LEG_MAX_LEAVES`
+    // before `Params::palw_court_ladder`, the ruleset's `max_step_leaf_count()` past it — decided
+    // by the caller at the BLOCK's DAA (`palw_court_step_ladder_at`), never read here from a
+    // constant, so two nodes grading one close proof read one ladder.
+    step_ladder: u64,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     check_close_cost_v2(proof, court)?;
     // Before ANY arm reads geometry out of the binding. See the function's own docs: this is the
@@ -907,7 +917,7 @@ pub fn adjudicate_close_proof_v2(
             let class = state.class(&claim.class_id).ok_or(PalwCourtV2Error::MissingClass(claim.class_id))?;
             let operands = PalwProvenOperandsV1::from_openings_v1(operand_openings, class.artifact_root)
                 .map_err(|e| PalwCourtV2Error::OperandProofInvalid(e.to_string()))?;
-            map_refutation_outcome(check_execution_step_refutation_v1(refutation, &operands))
+            map_refutation_outcome(check_execution_step_refutation_capped_v1(refutation, &operands, step_ladder))
         }
         PalwCourtVerdictProofV2::DecodeToken { binding, pin, position } => {
             // The same two pins the arithmetic close runs, for the same reason: the dispute is
@@ -1510,6 +1520,8 @@ pub fn map_refutation_outcome(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// ADR-0084 U-08: every test that predates the fence adjudicates at the shipped ladder.
+    const LADDER: u64 = crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES;
     use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2, challenge_v2};
     use crate::palw_state_v2::{PalwConsensusObjectV2, PalwPanelSeatV2, PalwPwuRuleV2, apply_palw_transition_v2};
     use crate::palw_step_leg::PalwStepLegError;
@@ -2092,8 +2104,28 @@ mod tests {
         // The arithmetic half: what the evidence says about this claim. Whether the close is a
         // legal move in the session is `a_close_must_be_the_step_the_ladder_narrowed_to`.
         let claim_rec = in_court.claim(&claim_id).expect("the claim is in state");
-        let verdict = adjudicate_close_proof_v2(&in_court, claim_rec, &proof, &court()).expect("a recomputable step adjudicates");
+        let verdict =
+            adjudicate_close_proof_v2(&in_court, claim_rec, &proof, &court(), LADDER).expect("a recomputable step adjudicates");
         assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "a wrong MatMul is a conviction, not an Unadjudicable");
+
+        // ADR-0084 U-08: the ladder the court walks at is an ARGUMENT, and this refutation's own
+        // leaf count is its boundary — one short and the court does not adjudicate, by name and
+        // in neither direction; at it, the conviction above.
+        let leaves = match &proof {
+            PalwCourtVerdictProofV2::Arithmetic { refutation, .. } => refutation.binding.step_leaf_count,
+            _ => unreachable!("the proof built above is Arithmetic"),
+        };
+        assert!(
+            matches!(
+                adjudicate_close_proof_v2(&in_court, claim_rec, &proof, &court(), leaves - 1),
+                Err(PalwCourtV2Error::DoesNotAdjudicate(_))
+            ),
+            "a ladder one leaf short of the refutation's space refuses rather than acquits or convicts"
+        );
+        assert_eq!(
+            adjudicate_close_proof_v2(&in_court, claim_rec, &proof, &court(), leaves).expect("at its own space it adjudicates"),
+            PalwCourtVerdictV2::ExecutorGuilty
+        );
 
         // …and the chain acts on it: the claim is void as CourtFraud and the bond is debited.
         let (closed, _) = apply_palw_transition_v2(
@@ -2214,7 +2246,8 @@ mod tests {
             .unwrap();
             let proof = PalwCourtVerdictProofV2::DecodeToken { binding, pin, position: 1 };
             let claim_rec = in_court.claim(&claim_id).expect("the claim is in state");
-            let verdict = adjudicate_close_proof_v2(&in_court, claim_rec, &proof, &court()).expect("a carried pin adjudicates");
+            let verdict =
+                adjudicate_close_proof_v2(&in_court, claim_rec, &proof, &court(), LADDER).expect("a carried pin adjudicates");
             let (closed, _) = apply_palw_transition_v2(
                 &in_court,
                 &p,
@@ -2378,7 +2411,7 @@ mod tests {
         // check, which is a different and much weaker kind of safety.
         let proof = PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings: openings };
         let claim_rec = in_court.claim(&claim_id).expect("the claim is in state");
-        let verdict = adjudicate_close_proof_v2(&in_court, claim_rec, &proof, &court()).expect("an honest step adjudicates");
+        let verdict = adjudicate_close_proof_v2(&in_court, claim_rec, &proof, &court(), LADDER).expect("an honest step adjudicates");
         assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest producer wins on the merits");
 
         let (closed, _) = apply_palw_transition_v2(
@@ -2450,7 +2483,7 @@ mod tests {
         // procedure. The full close refuses this even earlier now — the ladder has not narrowed —
         // and that is asserted separately below.
         let claim_rec = in_court.claim(&claim_id).expect("the claim is in state");
-        let outcome = adjudicate_close_proof_v2(&in_court, claim_rec, &bogus, &court());
+        let outcome = adjudicate_close_proof_v2(&in_court, claim_rec, &bogus, &court(), LADDER);
         // **Refused, and now for a sharper reason than when this test was written.**
         //
         // It used to land on `TraceRootMismatch`: the skeleton's roots are not the claim's. The
@@ -2464,7 +2497,7 @@ mod tests {
             matches!(outcome, Err(PalwCourtV2Error::CloseProfileIsNotTheClass { .. }) | Err(PalwCourtV2Error::TraceRootMismatch)),
             "a proof about another execution must not produce a verdict at all, got {outcome:?}"
         );
-        let procedural = adjudicate_court_close_v2(&in_court, &sid, &bogus, &court());
+        let procedural = adjudicate_court_close_v2(&in_court, &sid, &bogus, &court(), LADDER);
         assert!(
             matches!(procedural, Err(PalwCourtV2Error::LadderNotTerminal)),
             "and the full close refuses it before the evidence, because no step was narrowed to, got {procedural:?}"
@@ -2477,7 +2510,7 @@ mod tests {
 
         // A close naming a session that does not exist never reaches arithmetic either.
         assert!(matches!(
-            adjudicate_court_close_v2(&in_court, &h64(0xDEAD), &bogus, &court()),
+            adjudicate_court_close_v2(&in_court, &h64(0xDEAD), &bogus, &court(), LADDER),
             Err(PalwCourtV2Error::MissingSession(_))
         ));
     }
@@ -2542,7 +2575,7 @@ mod tests {
         let many = proof(vec![opening(1, 0), opening(1, 0), opening(1, 0)]);
         assert!(
             matches!(
-                adjudicate_court_close_v2(&state, &sid, &many, &tight),
+                adjudicate_court_close_v2(&state, &sid, &many, &tight, LADDER),
                 Err(PalwCourtV2Error::TooManyOperands { got: 3, ceiling: 2 })
             ),
             "three openings against a ceiling of two"
@@ -2551,7 +2584,7 @@ mod tests {
         // Within the count and over the bytes — refused by size.
         let fat = proof(vec![opening(2_048, 0)]);
         assert!(
-            matches!(adjudicate_court_close_v2(&state, &sid, &fat, &tight), Err(PalwCourtV2Error::CloseTooLarge { .. })),
+            matches!(adjudicate_court_close_v2(&state, &sid, &fat, &tight, LADDER), Err(PalwCourtV2Error::CloseTooLarge { .. })),
             "2 KiB against a 1 KiB ceiling"
         );
 
@@ -2559,7 +2592,7 @@ mod tests {
         // walk every one. Sixteen path elements is 1 KiB on their own.
         let long_path = proof(vec![opening(1, 17)]);
         assert!(
-            matches!(adjudicate_court_close_v2(&state, &sid, &long_path, &tight), Err(PalwCourtV2Error::CloseTooLarge { .. })),
+            matches!(adjudicate_court_close_v2(&state, &sid, &long_path, &tight, LADDER), Err(PalwCourtV2Error::CloseTooLarge { .. })),
             "a long path is an opening someone still has to walk"
         );
 
@@ -2568,13 +2601,16 @@ mod tests {
         // of the way, and it never became the reason for anything else.
         let small = proof(vec![opening(4, 0)]);
         assert!(
-            matches!(adjudicate_court_close_v2(&state, &sid, &small, &tight), Err(PalwCourtV2Error::MissingSession(_))),
+            matches!(adjudicate_court_close_v2(&state, &sid, &small, &tight, LADDER), Err(PalwCourtV2Error::MissingSession(_))),
             "a proof inside the ceilings must reach the state questions"
         );
 
         // The gate is cheapest-first: an oversized object is refused without the session lookup
         // that would otherwise report first. `state` here holds no session at all.
-        assert!(matches!(adjudicate_court_close_v2(&state, &sid, &many, &tight), Err(PalwCourtV2Error::TooManyOperands { .. })));
+        assert!(matches!(
+            adjudicate_court_close_v2(&state, &sid, &many, &tight, LADDER),
+            Err(PalwCourtV2Error::TooManyOperands { .. })
+        ));
     }
     // =============================================================================================
     // ADR-0082 Decision 3 — the fence, and the arity at activation

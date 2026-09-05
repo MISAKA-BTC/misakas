@@ -474,6 +474,11 @@ pub struct VirtualStateProcessor {
     /// here so the `ClassRegistered` arm reads the form from the ONE place that decides it
     /// (`Params::palw_prompt_ids_form_at`) rather than spelling `Flat` at the application site.
     pub(super) palw_prompt_ids_merkle: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0084 U-08's fence, `None` on every shipped preset.** Past it a court close is walked
+    /// at the ruleset's step ladder (`PalwCourtParamsV2::max_step_leaf_count`); before it at
+    /// `PALW_STEP_LEG_MAX_LEAVES`. Resolved in exactly one place, `palw_court_step_ladder_at`,
+    /// at the BLOCK's own DAA — the same discipline as every fence above it.
+    pub(super) palw_court_ladder: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0077 Phase B's fence, `None` on every shipped preset.** Past it a class registration
     /// is judged against `palw_class_ladder_rules_*` — the ladder both leaf counts are enumerated
     /// against, the court the close is priced for and Decision 14's canonical floor — instead of
@@ -914,6 +919,7 @@ impl VirtualStateProcessor {
             palw_certification_rent: params.palw_certification_rent,
             palw_kary_court: params.palw_kary_court_fence(),
             palw_prompt_ids_merkle: params.palw_prompt_ids_merkle_fence(),
+            palw_court_ladder: params.palw_court_ladder_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_uncertified_weightless: params.palw_uncertified_weightless,
             palw_da_court: params.palw_da_court,
@@ -4412,7 +4418,10 @@ impl VirtualStateProcessor {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let court = self.palw_court_params_v2.as_ref()?;
         let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
-        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(&state, session_id, proof, court).ok()
+        // The tip's DAA: this is the verdict the close WOULD get if it rode the next block.
+        let daa_score = self.virtual_stores.read().state.get().ok()?.daa_score;
+        let step_ladder = self.palw_court_step_ladder_at(daa_score, court);
+        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(&state, session_id, proof, court, step_ladder).ok()
     }
 
     /// The court's half of [`Self::palw_seat_duties_v2_impl`]: the open sessions this node is a
@@ -5830,9 +5839,14 @@ impl VirtualStateProcessor {
                                 .palw_court_params_v2
                                 .as_ref()
                                 .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                            let derived =
-                                kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(state, session_id, proof, court)
-                                    .map_err(|e| e.to_string())?;
+                            let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(
+                                state,
+                                session_id,
+                                proof,
+                                court,
+                                self.palw_court_step_ladder_at(point.daa_score, court),
+                            )
+                            .map_err(|e| e.to_string())?;
                             if derived != *verdict {
                                 return Err(format!(
                                     "court {session_id}: the {} side declared {verdict:?} and the close it assembled adjudicates \
@@ -5888,8 +5902,14 @@ impl VirtualStateProcessor {
                         .palw_court_params_v2
                         .as_ref()
                         .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(state, session_id, proof, court)
-                        .map_err(|e| e.to_string())?;
+                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(
+                        state,
+                        session_id,
+                        proof,
+                        court,
+                        self.palw_court_step_ladder_at(point.daa_score, court),
+                    )
+                    .map_err(|e| e.to_string())?;
                     if derived != *verdict {
                         return Err(format!("court {session_id} declares {verdict:?}; its own proof adjudicates {derived:?}"));
                     }
@@ -6538,6 +6558,18 @@ impl VirtualStateProcessor {
     /// `PalwClassFactsViewV1` exists to close for the class target one line over.
     fn palw_uncertified_weightless_at(&self, daa_score: u64) -> bool {
         self.palw_uncertified_weightless.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0084 U-08, resolved in exactly one place, at the BLOCK's own DAA.** The step ladder
+    /// a court close is adjudicated at: the ruleset's past the fence, `2^22` before it. Read at
+    /// the block's acceptance DAA and not the tip's for the reason the weight fences above give —
+    /// two nodes grading one close proof must read one ladder.
+    fn palw_court_step_ladder_at(&self, daa_score: u64, court: &kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2) -> u64 {
+        if self.palw_court_ladder.is_some_and(|fence| fence.is_active(daa_score)) {
+            court.max_step_leaf_count()
+        } else {
+            kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES
+        }
     }
 
     /// **ADR-0062, resolved in exactly one place**, for the reason its neighbour above gives: the

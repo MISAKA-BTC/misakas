@@ -1535,6 +1535,21 @@ fn verify_binding(binding: &PalwStepBindingV2) -> Result<(Hash64, Hash64, Hash64
 /// `NoFaultFound` on every arm (the challenger-loses verdict); arithmetic recomputation
 /// (`ExecutionStepRefutationV1`) is the separate, catalog-bound increment.
 pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<PalwStepRefutationVerdictV1, PalwStepLegError> {
+    check_step_refutation_capped_v1(refutation, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// **The same adjudication at a NAMED step ladder** (ADR-0084 U-08).
+///
+/// `max_step_leaf_count` bounds only the two Merkle walks (`open_against`); the shape pass is
+/// already an equality at the accusation's own claim and needs no ladder. The uncapped name is
+/// this function at [`PALW_STEP_LEG_MAX_LEAVES`], which is what every caller outside the court
+/// wants; the court passes the ruleset's ladder past `Params::palw_court_ladder` and `2^22`
+/// before it, so a close proof against a graph-v5 class is refused by name
+/// (`LeafCountOutOfRange`) rather than acquitted or convicted, until the fence says otherwise.
+pub fn check_step_refutation_capped_v1(
+    refutation: &PalwStepRefutationV1,
+    max_step_leaf_count: u64,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepLegError> {
     let binding = &refutation.binding;
     let (context_hash, profile_hash, checkpoint_profile_hash) = verify_binding(binding)?;
     let committed = &binding.committed_execution_root;
@@ -1631,7 +1646,7 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
     match &refutation.evidence {
         PalwStepEvidenceV1::Shape => unreachable!("handled above"),
         PalwStepEvidenceV1::StepTile { opening, preimage } => {
-            open_against(binding.step_leaf_count, &binding.step_merkle_root, opening)?;
+            open_against(binding.step_leaf_count, &binding.step_merkle_root, opening, max_step_leaf_count)?;
             if step_tile_leaf_hash_v1(&context_hash, &profile_hash, preimage) != opening.leaf_hash {
                 return Err(PalwStepLegError::LeafPreimageMismatch { leaf: "step tile" });
             }
@@ -1644,7 +1659,7 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
             }
         }
         PalwStepEvidenceV1::KvChunk { opening, preimage } => {
-            open_against(binding.step_leaf_count, &binding.step_merkle_root, opening)?;
+            open_against(binding.step_leaf_count, &binding.step_merkle_root, opening, max_step_leaf_count)?;
             if kv_chunk_leaf_hash_v1(&context_hash, &profile_hash, preimage) != opening.leaf_hash {
                 return Err(PalwStepLegError::LeafPreimageMismatch { leaf: "kv chunk" });
             }
@@ -1684,8 +1699,13 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
     }
 }
 
-fn open_against(leaf_count: u64, committed_root: &Hash64, opening: &PalwStepOpeningV1) -> Result<(), PalwStepLegError> {
-    let implied = step_opening_root_v1(leaf_count, opening)?;
+fn open_against(
+    leaf_count: u64,
+    committed_root: &Hash64,
+    opening: &PalwStepOpeningV1,
+    max_step_leaf_count: u64,
+) -> Result<(), PalwStepLegError> {
+    let implied = step_opening_root_capped_v1(leaf_count, opening, max_step_leaf_count)?;
     if implied != *committed_root {
         return Err(PalwStepLegError::CommittedRootMismatch);
     }
