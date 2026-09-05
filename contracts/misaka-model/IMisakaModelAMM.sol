@@ -6,7 +6,9 @@ pragma solidity ^0.8.20;
 ///         ADR-0088 Decision 9), served natively at
 ///         `0x000000000000000000000000000000000000F011` (ADR-0089 Decisions 1–2).
 ///
-///         One curve per LINE: a constant-product curve over the MSK reserve plus a virtual
+///         One curve per LINE: a constant-product curve over the MSK reserve (ADR-0090: the
+///         reserve is the seed plus every net leg since; there is no virtual reserve, and the
+///         product `reserve × units` is taken from the row at each move) — formerly plus a virtual
 ///         reserve `V`, holding a fixed supply of position units and no MSK at opening. The
 ///         price at any moment is `(mskReserve + V) / positionUnits` and there is no other
 ///         price. The market OPENS AT ITS FIRST BUY; a line whose market never opened has
@@ -81,15 +83,16 @@ interface IMisakaModelAMM {
         view
         returns (uint64 mskOutSompi, uint64 burn, uint64 leg, uint64 net, uint64 priceAfter);
 
-    /// The curve's network constants (ADR-0087 v1: 100,000 positions × 10^6 units of supply,
+    /// The curve's network constants (ADR-0090: 500,000 whole positions of supply, one unit each,
     /// `V` = 1,000 MSK, 50 ‰ burn, 10 ‰ leg). Read them; do not hard-code them.
     ///   supplyUnits      units every market opens with
     ///   unitsPerPosition 10^6
-    ///   virtualSompi     the virtual reserve `V`, sompi
+    ///   seedMinSompi     ADR-0090: the least seed that opens a market, sompi (the third word
+    ///                    carried the virtual reserve before ADR-0090 retired it)
     ///   burnPermille     fee on every MSK leg, burned
     ///   legPermille      fee on every MSK leg, to the owner (shared with an adopted contributor)
     function constants()
         external
         view
-        returns (uint64 supplyUnits, uint64 unitsPerPosition, uint64 virtualSompi, uint16 burnPermille, uint16 legPermille);
+        returns (uint64 supplyUnits, uint64 unitsPerPosition, uint64 seedMinSompi, uint16 burnPermille, uint16 legPermille);
 }

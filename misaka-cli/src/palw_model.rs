@@ -13,8 +13,9 @@ use crate::node::Ctx;
 use crate::wallet::connect;
 use crate::{CliError, CliResult, OutputFormat, exit};
 use kaspa_consensus_core::palw_model_market_v1::{
-    PALW_MODEL_POSITION_UNITS_V1, PALW_MODEL_SELL_MLDSA87_CONTEXT, PalwModelMarketV1, palw_model_buy_quote_v1,
-    palw_model_holder_of_pubkey_v1, palw_model_sell_message_v1, palw_model_sell_quote_v1, palw_model_sink_spk_v1,
+    PALW_MODEL_POSITION_SUPPLY_V1, PALW_MODEL_POSITION_UNITS_V1, PALW_MODEL_SELL_MLDSA87_CONTEXT, PalwModelMarketV1,
+    palw_model_buy_quote_v1, palw_model_holder_of_pubkey_v1, palw_model_sell_message_v1, palw_model_sell_quote_v1,
+    palw_model_sink_spk_v1,
 };
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_consensus_core::tx::{TransactionOutput, UtxoEntry};
@@ -67,6 +68,8 @@ fn market_from_response(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwM
         registrant_paid_sompi: r.registrant_paid_sompi,
         closed_to_buys: r.closed_to_buys,
         contributor_paid_sompi: r.contributor_paid_sompi,
+        seed_sompi: r.seed_sompi,
+        seeded_by: r.seeded_by.parse().unwrap_or_default(),
     }
 }
 
@@ -84,6 +87,9 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
         "burned_sompi": r.burned_sompi,
         "registrant_paid_sompi": r.registrant_paid_sompi,
         "contributor_paid_sompi": r.contributor_paid_sompi,
+        "seed_sompi": r.seed_sompi,
+        "seeded_by": r.seeded_by,
+        "seed_min_sompi": r.seed_min_sompi,
         "closed_to_buys": r.closed_to_buys,
         "price_sompi_per_position": r.price_sompi_per_position,
         "supply_units": r.supply_units,
@@ -127,6 +133,11 @@ pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: boo
             if r.opened { format!("opened at DAA {}", r.opened_daa) } else { "not yet opened (the first buy opens it)".to_string() }
         );
         println!("  reserve        {}", msk(r.msk_reserve));
+        if r.opened {
+            println!("  seed (locked)  {} by {}", msk(r.seed_sompi), r.seeded_by);
+        } else {
+            println!("  seed           none yet — the market opens with `model-seed` (at least {})", msk(r.seed_min_sompi));
+        }
         println!("  in the curve   {} positions ({} units)", r.position_units / PALW_MODEL_POSITION_UNITS_V1, r.position_units);
         println!("  price          {} per position", msk(r.price_sompi_per_position));
         println!("  sold (gross)   {} positions", r.sold_units / PALW_MODEL_POSITION_UNITS_V1);
@@ -246,6 +257,64 @@ pub(crate) async fn submit_move(
         _ => println!("submitted {txid} — {what} (fee {fee} sompi); the fold applies it in the block that accepts the carrier"),
     }
     Ok(())
+}
+
+/// `misaka palw model-seed --line <id> --msk <amount> --key … [--yes]` — ADR-0090: open the
+/// line's market by locking the seed (at least the network's least seed) in its sink. The whole
+/// seed becomes the reserve; nothing ever pays it back to anyone.
+pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text: &str, yes: bool) -> CliResult {
+    let line = parse_line(line_id)?;
+    let msk_seed = parse_msk_amount(msk_text)?;
+    let key = ks.load_key()?;
+    let seeder = palw_model_holder_of_pubkey_v1(key.public_key());
+    let nv = connect(ctx).await?;
+    let r = nv
+        .client
+        .get_palw_model_market(line.to_string())
+        .await
+        .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwModelMarket: {e}")))?;
+    if !r.found {
+        return Err(CliError::new(exit::GENERIC, format!("this chain holds no line {line}")));
+    }
+    if r.opened {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!("line {line} is already seeded ({} locked by {})", msk(r.seed_sompi), r.seeded_by),
+        ));
+    }
+    if msk_seed < r.seed_min_sompi {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!("a seed of {} is under this network's least seed of {}", msk(msk_seed), msk(r.seed_min_sompi)),
+        ));
+    }
+    let object = PalwConsensusObjectV2::ModelSeed { line_id: line, seeder, msk_seed, sink_index: 1 };
+    let addr = key.funding_address(nv.params.prefix());
+    let candidates = crate::palw_fp::spendable_candidates_v1(&nv, &addr).await?;
+    let (outpoint, entry) = candidates
+        .into_iter()
+        .find(|(_, e)| e.amount > msk_seed.saturating_add(kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI))
+        .ok_or_else(|| {
+            CliError::new(exit::GENERIC, format!("no mature, unbonded UTXO at {addr} holds {} plus a fee", msk(msk_seed)))
+        })?;
+    let sink = TransactionOutput::new(msk_seed, palw_model_sink_spk_v1(&line));
+    let (tx, fee) = build_move_carrier(&key, &nv, &object, outpoint, &entry, vec![sink])?;
+    if ctx.output != OutputFormat::Json {
+        println!("seed {} into line {line}", msk(msk_seed));
+        println!("  seeder         {seeder} (for the record; the seeder holds no position)");
+        println!(
+            "  first price    {} per position ({} positions in the curve)",
+            msk(msk_seed / PALW_MODEL_POSITION_SUPPLY_V1),
+            PALW_MODEL_POSITION_SUPPLY_V1
+        );
+        println!(
+            "  LOCKED FOR GOOD: no object pays a seed out; only a holder's sell moves MSK out of the curve, and never below the seed."
+        );
+    }
+    let what = format!("ModelSeed {} into line {}", msk(msk_seed), line);
+    let out = submit_move(ctx, &nv, tx, fee, &what, yes).await;
+    let _ = nv.client.disconnect().await;
+    out
 }
 
 /// `misaka palw model-buy --line <id> --msk <amount> [--min-positions <n>] --key … [--yes]`.

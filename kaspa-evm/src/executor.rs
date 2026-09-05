@@ -36,6 +36,8 @@ use kaspa_consensus_core::evm::model_market::{
     MARKET_SETTLE_GAS, MISAKA_MODEL_WRITER, PalwEvmMarketActionV1, PalwEvmMarketFencesV1, PalwEvmSettlementOutcomeV1,
     PalwEvmSettlementV1, PalwEvmViewV1,
 };
+#[cfg(test)]
+use kaspa_consensus_core::evm::model_market::{PALW_EVM_ACTION_BUY, PALW_EVM_ACTION_SELL};
 use kaspa_consensus_core::evm::{
     DepositClaim, EVM_GENESIS_STATE_ROOT, EVM_NATIVE_SCALE, EvmAddress, EvmBloom, EvmExecutionHeader, EvmExecutionPayload,
     EvmExecutionResult, EvmLog, EvmReceipt, EvmSystemOp, EvmU256, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK, MAX_WITHDRAWALS_PER_EVM_BLOCK,
@@ -232,8 +234,8 @@ pub fn execute_block_evm(
                 let account = to_revm_address(&s.account);
                 let escrow_wei = U256::from(s.escrow_sompi as u128 * EVM_NATIVE_SCALE as u128);
                 match s.outcome {
-                    // A filled buy: the escrow leaves the EVM (consensus materialises the sink).
-                    PalwEvmSettlementOutcomeV1::Filled { .. } if s.is_buy => {
+                    // A filled buy OR seed: the escrow leaves the EVM (consensus materialises the sink).
+                    PalwEvmSettlementOutcomeV1::Filled { .. } if s.carries_escrow() => {
                         if !escrow_wei.is_zero() {
                             burn_balance(&mut state_db, writer, escrow_wei)?;
                             market_burned_wei = market_burned_wei.saturating_add(s.escrow_sompi as u128 * EVM_NATIVE_SCALE as u128);
@@ -250,7 +252,7 @@ pub fn execute_block_evm(
                     }
                     // A refused buy: the escrow goes back; a refused sell moved nothing.
                     PalwEvmSettlementOutcomeV1::Refused { .. } => {
-                        if s.is_buy && !escrow_wei.is_zero() {
+                        if s.carries_escrow() && !escrow_wei.is_zero() {
                             reroute_balance(&mut state_db, writer, account, escrow_wei)?;
                         }
                     }
@@ -1633,7 +1635,15 @@ mod tests {
             status: 0,
         };
         let mut view = PalwEvmViewV1 { chain_daa: 42, chain_id: EVM_CHAIN_ID, lines: vec![(line, row)], ..Default::default() };
-        view.markets.insert(line, kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1::open_v1(1));
+        // ADR-0090: a market exists only seeded; the least seed, from a payload that is nobody's.
+        view.markets.insert(
+            line,
+            kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1::seed_v1(
+                1,
+                kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1,
+                kaspa_consensus_core::Hash64::from_u64_word(9),
+            ),
+        );
         std::sync::Arc::new(view)
     }
 
@@ -1736,7 +1746,7 @@ mod tests {
                 seq: 0,
                 account: buyer,
                 line_id: line,
-                is_buy: true,
+                action: PALW_EVM_ACTION_BUY,
                 escrow_sompi: 7,
                 outcome: PalwEvmSettlementOutcomeV1::Filled { units: 3, gross_sompi: 7, net_sompi: 6, price_after_sompi: 100 },
             },
@@ -1744,7 +1754,7 @@ mod tests {
                 seq: 1,
                 account: buyer,
                 line_id: line,
-                is_buy: true,
+                action: PALW_EVM_ACTION_BUY,
                 escrow_sompi: 5,
                 outcome: PalwEvmSettlementOutcomeV1::Refused { reason: refusal::BELOW_FLOOR },
             },
@@ -1752,7 +1762,7 @@ mod tests {
                 seq: 2,
                 account: seller,
                 line_id: line,
-                is_buy: false,
+                action: PALW_EVM_ACTION_SELL,
                 escrow_sompi: 0,
                 outcome: PalwEvmSettlementOutcomeV1::Filled { units: 2, gross_sompi: 4, net_sompi: 3, price_after_sompi: 90 },
             },

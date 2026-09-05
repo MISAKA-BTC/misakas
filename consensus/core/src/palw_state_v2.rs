@@ -3006,6 +3006,17 @@ pub enum PalwConsensusObjectV2 {
         by: PalwBondKeyV2,
         signature: Vec<u8>,
     },
+    /// **ADR-0090 Decision 3: the seed that opens a line's market.** Its carrier pays `msk_seed`
+    /// (at least `PALW_MODEL_SEED_MIN_SOMPI_V1`) into the line's sink at `sink_index`; the whole of
+    /// it becomes the reserve, fee-free, and no object ever pays it out. `seeder` is a payout
+    /// payload kept for the record — the seeder holds no position. Unsigned like a buy: the sink
+    /// output is the proof (`palw_model_buy_binds_its_carrier_v1`).
+    ModelSeed {
+        line_id: Hash64,
+        seeder: Hash64,
+        msk_seed: u64,
+        sink_index: u32,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -4174,7 +4185,7 @@ pub enum PalwStateV2Error {
     ModelHolderUnset,
     #[error("class {0} is not Active, so its market takes no buys")]
     ModelClassNotActive(Hash64),
-    #[error("class {0} has no market to sell into")]
+    #[error("line {0} has no seeded market")]
     ModelMarketMissing(Hash64),
     #[error("the buy releases no units of class {0}")]
     ModelBuyReleasesNothing(Hash64),
@@ -4186,6 +4197,13 @@ pub enum PalwStateV2Error {
     ModelSellPaysNothing(Hash64),
     #[error("the sell would pay {got} sompi, under its floor of {want}")]
     ModelSellBelowFloor { want: u64, got: u64 },
+    // ADR-0090, the seed.
+    #[error("line {0} already has a seeded market")]
+    ModelMarketAlreadySeeded(Hash64),
+    #[error("the seed of {got} sompi is under the least seed of {want}")]
+    ModelSeedTooSmall { want: u64, got: u64 },
+    #[error("class {0} is frozen, so its line takes no seed")]
+    ModelClassClosed(Hash64),
     // ADR-0088, the model registry.
     #[error("the model registry is not in force on this chain")]
     ModelLinesNotArmed,
@@ -8930,6 +8948,9 @@ fn apply_object(
         PalwConsensusObjectV2::ModelSell { line_id, holder, units_in, min_msk_out, .. } => {
             model_sell_v1(builder, ctx, line_id, holder, *units_in, *min_msk_out, true)?;
         }
+        PalwConsensusObjectV2::ModelSeed { line_id, seeder, msk_seed, sink_index: _ } => {
+            model_seed_v1(builder, ctx, line_id, seeder, *msk_seed)?;
+        }
         // ---- ADR-0088: the model registry ---------------------------------------------------
         PalwConsensusObjectV2::ModelLineFounded { class_id, name, founder, root, signature: _ } => {
             apply_model_line_founded(builder, ctx, class_id, name, founder, root)?;
@@ -10775,6 +10796,44 @@ impl<'a> TransitionBuilder<'a> {
     }
 }
 
+/// **ADR-0090 Decision 2's seed, as one function** the carrier arm and the EVM path both call:
+/// the line must exist (a class's founding line IS the class) on a class that is not frozen —
+/// a class still waiting for its activation may be seeded, so the pair exists when approval
+/// lands; the market must not exist yet; the seed must reach the least seed. The whole seed
+/// becomes the reserve: no leg is taken, no position is minted to anyone, and the seeder holds
+/// nothing. The MSK arrived by a sink output (a carrier) or sits in the writer's escrow (the
+/// EVM); the fold's books are the same.
+fn model_seed_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    line_id: &Hash64,
+    seeder: &Hash64,
+    msk_seed: u64,
+) -> Result<crate::palw_model_market_v1::PalwModelMarketV1, PalwStateV2Error> {
+    use crate::palw_model_market_v1::{PALW_MODEL_SEED_MIN_SOMPI_V1, PalwModelMarketV1};
+    if *seeder == Hash64::default() {
+        return Err(PalwStateV2Error::ModelHolderUnset);
+    }
+    let line = builder.state.model_line_or_founding(line_id).ok_or(PalwStateV2Error::ModelLineMissing(*line_id))?;
+    let class = builder.state.classes.get(&line.class_id).ok_or(PalwStateV2Error::MissingClass(line.class_id))?.clone();
+    if matches!(class.status, PalwClassStatusV2::Frozen { .. }) {
+        return Err(PalwStateV2Error::ModelClassClosed(line.class_id));
+    }
+    if !line.is_active() {
+        return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
+    }
+    if builder.state.model_markets.contains_key(line_id) {
+        return Err(PalwStateV2Error::ModelMarketAlreadySeeded(*line_id));
+    }
+    if msk_seed < PALW_MODEL_SEED_MIN_SOMPI_V1 {
+        return Err(PalwStateV2Error::ModelSeedTooSmall { want: PALW_MODEL_SEED_MIN_SOMPI_V1, got: msk_seed });
+    }
+    let market = PalwModelMarketV1::seed_v1(ctx.daa_score, msk_seed, *seeder);
+    builder.write_model_market(*line_id, Some(market));
+    builder.model_moves += 1;
+    Ok(market)
+}
+
 /// **ADR-0087 Decision 3's buy, as one function** the carrier arm and the EVM path both call:
 /// the line (a class's founding line IS the class), the quote on the row as it stands, the floor,
 /// the legs (ADR-0088 Decision 8), the reserve and the holder's units. The MSK arrived by a sink
@@ -10787,7 +10846,7 @@ fn model_buy_v1(
     msk_in: u64,
     min_units_out: u64,
 ) -> Result<crate::palw_model_market_v1::PalwModelBuyQuoteV1, PalwStateV2Error> {
-    use crate::palw_model_market_v1::{PalwModelMarketV1, palw_model_buy_quote_v1};
+    use crate::palw_model_market_v1::palw_model_buy_quote_v1;
     if *holder == Hash64::default() {
         return Err(PalwStateV2Error::ModelHolderUnset);
     }
@@ -10799,7 +10858,8 @@ fn model_buy_v1(
     if !line.is_active() {
         return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
     }
-    let market = builder.state.model_markets.get(line_id).copied().unwrap_or_else(|| PalwModelMarketV1::open_v1(ctx.daa_score));
+    // ADR-0090 Decision 2: no market opens by a buy; it opens by a seed or not at all.
+    let market = *builder.state.model_markets.get(line_id).ok_or(PalwStateV2Error::ModelMarketMissing(*line_id))?;
     let quote = palw_model_buy_quote_v1(&market, msk_in).ok_or(PalwStateV2Error::ModelBuyReleasesNothing(*line_id))?;
     if quote.units_out < min_units_out {
         return Err(PalwStateV2Error::ModelBuyBelowFloor { want: min_units_out, got: quote.units_out });
@@ -10869,6 +10929,9 @@ fn evm_refusal_reason(error: &PalwStateV2Error) -> u8 {
         PalwStateV2Error::ModelMarketMissing(_) => MARKET_MISSING,
         PalwStateV2Error::ModelSellExceedsPosition { .. } => EXCEEDS_POSITION,
         PalwStateV2Error::ModelSellPaysNothing(_) => PAYS_NOTHING,
+        PalwStateV2Error::ModelMarketAlreadySeeded(_) => ALREADY_SEEDED,
+        PalwStateV2Error::ModelSeedTooSmall { .. } => SEED_TOO_SMALL,
+        PalwStateV2Error::ModelClassClosed(_) => CLASS_CLOSED,
         _ => OTHER,
     }
 }
@@ -10885,11 +10948,10 @@ fn apply_evm_market_actions(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlock
     let actions = builder.extras.evm_actions.clone();
     for action in actions {
         let holder = evm_holder_v1(crate::evm::EVM_CHAIN_ID, &action.account);
-        let (is_buy, escrow_sompi, outcome) = match action.kind {
+        let (escrow_sompi, outcome) = match action.kind {
             PalwEvmMarketActionKindV1::Buy { min_units_out } => {
                 match model_buy_v1(builder, ctx, &action.line_id, &holder, action.gross_sompi, min_units_out) {
                     Ok(quote) => (
-                        true,
                         action.gross_sompi,
                         PalwEvmSettlementOutcomeV1::Filled {
                             units: quote.units_out,
@@ -10898,13 +10960,12 @@ fn apply_evm_market_actions(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlock
                             price_after_sompi: quote.after.price_sompi_per_position_v1(),
                         },
                     ),
-                    Err(e) => (true, action.gross_sompi, PalwEvmSettlementOutcomeV1::Refused { reason: evm_refusal_reason(&e) }),
+                    Err(e) => (action.gross_sompi, PalwEvmSettlementOutcomeV1::Refused { reason: evm_refusal_reason(&e) }),
                 }
             }
             PalwEvmMarketActionKindV1::Sell { units_in, min_msk_out_sompi } => {
                 match model_sell_v1(builder, ctx, &action.line_id, &holder, units_in, min_msk_out_sompi, false) {
                     Ok(quote) => (
-                        false,
                         0,
                         PalwEvmSettlementOutcomeV1::Filled {
                             units: units_in,
@@ -10913,9 +10974,23 @@ fn apply_evm_market_actions(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlock
                             price_after_sompi: quote.after.price_sompi_per_position_v1(),
                         },
                     ),
-                    Err(e) => (false, 0, PalwEvmSettlementOutcomeV1::Refused { reason: evm_refusal_reason(&e) }),
+                    Err(e) => (0, PalwEvmSettlementOutcomeV1::Refused { reason: evm_refusal_reason(&e) }),
                 }
             }
+            // ADR-0090: the seed — the whole value becomes the reserve; a filled seed mints no
+            // position (units 0) and takes no leg (net = gross).
+            PalwEvmMarketActionKindV1::Seed => match model_seed_v1(builder, ctx, &action.line_id, &holder, action.gross_sompi) {
+                Ok(market) => (
+                    action.gross_sompi,
+                    PalwEvmSettlementOutcomeV1::Filled {
+                        units: 0,
+                        gross_sompi: action.gross_sompi,
+                        net_sompi: action.gross_sompi,
+                        price_after_sompi: market.price_sompi_per_position_v1(),
+                    },
+                ),
+                Err(e) => (action.gross_sompi, PalwEvmSettlementOutcomeV1::Refused { reason: evm_refusal_reason(&e) }),
+            },
         };
         builder.write_evm_settlement(
             action.seq,
@@ -10923,7 +10998,7 @@ fn apply_evm_market_actions(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlock
                 seq: action.seq,
                 account: action.account,
                 line_id: action.line_id,
-                is_buy,
+                action: action.kind.action_id(),
                 escrow_sompi,
                 outcome,
             }),
@@ -22213,8 +22288,16 @@ pub(crate) mod tests {
         };
 
         const MSK: u64 = 100_000_000;
+        /// ADR-0090: the least seed, which every market here opens with.
+        const SEED: u64 = crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1;
         fn holder(v: u64) -> Hash64 {
             Hash64::from_u64_word(0xB0_0000 + v)
+        }
+        fn seed(class: Hash64, who: Hash64, msk_seed: u64) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::ModelSeed { line_id: class, seeder: who, msk_seed, sink_index: 1 }
+        }
+        fn seeded_row(daa: u64) -> PalwModelMarketV1 {
+            PalwModelMarketV1::seed_v1(daa, SEED, holder(9))
         }
         fn buy(class: Hash64, who: Hash64, msk_in: u64, min_units_out: u64) -> PalwConsensusObjectV2 {
             PalwConsensusObjectV2::ModelBuy { line_id: class, holder: who, msk_in, min_units_out, sink_index: 1 }
@@ -22241,42 +22324,58 @@ pub(crate) mod tests {
                 PALW_MODEL_SUPPLY_UNITS_V1 as u128,
                 "M1: the curve's units plus every holder's are the supply"
             );
-            assert_eq!(paid_in, m.msk_reserve + paid(state) + m.burned_sompi, "M2: what went in is where the ADR says it is");
+            assert_eq!(
+                paid_in + m.seed_sompi,
+                m.msk_reserve + paid(state) + m.burned_sompi,
+                "M2: what went in (the seed included) is where the ADR says it is"
+            );
+            assert!(m.msk_reserve >= m.seed_sompi, "ADR-0090 P1: the reserve never falls under the seed");
         }
 
         /// The happy path: a class with no registrant (the genesis case), two buyers, a sell, the
         /// invariants at every stop, the curve's direction, and the fee legs where Decision 4 puts
         /// them.
         #[test]
-        fn a_buy_opens_the_market_and_a_sell_pays_from_the_curve_with_the_invariants_held() {
+        fn a_seed_opens_the_market_and_buys_and_sells_move_the_curve_with_the_invariants_held() {
             let p = params();
             let class = h64(1);
             let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
-            assert!(s1.model_market(&class).is_none(), "no market before the first move");
-            assert_eq!(s1.state_root(), {
-                // M7: an empty market collection is not in the root — the root is the one the
-                // fold computed before the field existed, which the carriage's legacy twin pins below.
-                s1.state_root()
-            });
-            let (s2, d2) = apply(&s1, &p, &ctx(2, 101, 2), &[buy(class, holder(1), 1_000 * MSK, 0)], None);
+            assert!(s1.model_market(&class).is_none(), "no market before the seed");
+            assert!(
+                matches!(
+                    apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[buy(class, holder(1), 1_000 * MSK, 0)], None),
+                    Err(PalwStateV2Error::ModelMarketMissing(_))
+                ),
+                "ADR-0090: a buy opens nothing"
+            );
+            let (s1b, d1b) = apply(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None);
+            let m1 = *s1b.model_market(&class).expect("the seed opened the market");
+            assert_eq!((m1.msk_reserve, m1.seed_sompi, m1.seeded_by), (SEED, SEED, holder(9)), "the whole seed is the reserve");
+            assert_eq!(m1.position_units, PALW_MODEL_SUPPLY_UNITS_V1, "five hundred thousand positions in the curve");
+            assert_eq!(s1b.model_position(&class, &holder(9)), 0, "the seeder holds nothing");
+            assert_eq!((paid(&s1b), m1.burned_sompi), (0, 0), "no leg on a seed");
+            assert!(d1b.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ModelMarket { .. })), "the delta carries the market");
+            invariants(&s1b, class, 0);
+
+            let (s2, d2) = apply(&s1b, &p, &ctx(3, 102, 3), &[buy(class, holder(1), 1_000 * MSK, 0)], None);
             let m2 = *s2.model_market(&class).unwrap();
-            let q = palw_model_buy_quote_v1(&PalwModelMarketV1::open_v1(101), 1_000 * MSK).unwrap();
+            let q = palw_model_buy_quote_v1(&seeded_row(101), 1_000 * MSK).unwrap();
             assert_eq!(s2.model_position(&class, &holder(1)), q.units_out, "the holder holds what the curve released");
-            assert_eq!(m2.msk_reserve, 940 * MSK, "the net leg is the reserve");
+            assert_eq!(q.units_out, 4_656, "whole positions");
+            assert_eq!(m2.msk_reserve, SEED + 940 * MSK, "the net leg joins the reserve");
             assert_eq!(m2.burned_sompi, 60 * MSK, "5 % burned, and the registrant's 1 % burned too — this class has none (M6)");
             assert_eq!(paid(&s2), 0, "nothing is paid on a buy of a registrant-less class");
             invariants(&s2, class, 1_000 * MSK);
-            assert!(d2.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ModelMarket { .. })), "the delta carries the market");
-            assert!(d2.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ModelPosition { .. })), "and the position");
+            assert!(d2.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ModelPosition { .. })), "the delta carries the position");
 
-            let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[buy(class, holder(2), 1_000 * MSK, 0)], None);
+            let (s3, _) = apply(&s2, &p, &ctx(4, 103, 4), &[buy(class, holder(2), 1_000 * MSK, 0)], None);
             let m3 = *s3.model_market(&class).unwrap();
             assert!(m3.price_sompi_per_position_v1() > m2.price_sompi_per_position_v1(), "M4: buying raises the price");
             assert!(s3.model_position(&class, &holder(2)) < s3.model_position(&class, &holder(1)), "the second buyer gets fewer");
             invariants(&s3, class, 2_000 * MSK);
 
             let held = s3.model_position(&class, &holder(1));
-            let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[sell(class, holder(1), held, 0)], None);
+            let (s4, _) = apply(&s3, &p, &ctx(5, 104, 5), &[sell(class, holder(1), held, 0)], None);
             let m4 = *s4.model_market(&class).unwrap();
             let sq = palw_model_sell_quote_v1(&m3, held).unwrap();
             assert_eq!(s4.model_position(&class, &holder(1)), 0, "sold out");
@@ -22287,37 +22386,74 @@ pub(crate) mod tests {
             invariants(&s4, class, 2_000 * MSK);
         }
 
+        /// ADR-0090: one seed a line, at least the floor, and never a leg; the seeder cannot get
+        /// it back — no object pays a reserve out but a holder's sell, and the seeder holds nothing.
+        #[test]
+        fn a_seed_is_once_at_least_the_floor_and_takes_no_leg() {
+            let p = params();
+            let class = h64(1);
+            let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            assert!(matches!(
+                apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED - 1)], None),
+                Err(PalwStateV2Error::ModelSeedTooSmall { got, .. }) if got == SEED - 1
+            ));
+            assert!(matches!(
+                apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[seed(h64(0xDEAD), holder(9), SEED)], None),
+                Err(PalwStateV2Error::ModelLineMissing(_))
+            ));
+            let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), 3 * SEED)], None);
+            assert_eq!(s2.model_market(&class).unwrap().msk_reserve, 3 * SEED, "a larger seed is a larger reserve, all of it");
+            assert_eq!(
+                s2.model_market(&class).unwrap().price_sompi_per_position_v1(),
+                3 * SEED / 500_000,
+                "…and a higher first price"
+            );
+            assert!(matches!(
+                apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[seed(class, holder(8), SEED)], None),
+                Err(PalwStateV2Error::ModelMarketAlreadySeeded(_))
+            ));
+            assert!(
+                matches!(
+                    apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(9), 1, 0)], None),
+                    Err(PalwStateV2Error::ModelSellExceedsPosition { held: 0, want: 1 })
+                ),
+                "the seeder holds no position to sell"
+            );
+            invariants(&s2, class, 0);
+        }
+
         /// M5: a floor refuses, never partially fills — the whole block's transition fails and the
         /// state is untouched; at the floor exactly, it fills.
         #[test]
         fn a_floor_refuses_rather_than_partially_filling() {
             let p = params();
             let class = h64(1);
-            let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
-            let q = palw_model_buy_quote_v1(&PalwModelMarketV1::open_v1(101), 10 * MSK).unwrap();
+            let (s0, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let (s1, _) = apply(&s0, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None);
+            let q = palw_model_buy_quote_v1(&seeded_row(101), 10 * MSK).unwrap();
             assert!(matches!(
-                apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[buy(class, holder(1), 10 * MSK, q.units_out + 1)], None),
+                apply_palw_transition_v2(&s1, &p, &ctx(3, 102, 3), &[buy(class, holder(1), 10 * MSK, q.units_out + 1)], None),
                 Err(PalwStateV2Error::ModelBuyBelowFloor { .. })
             ));
-            let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[buy(class, holder(1), 10 * MSK, q.units_out)], None);
+            let (s2, _) = apply(&s1, &p, &ctx(3, 102, 3), &[buy(class, holder(1), 10 * MSK, q.units_out)], None);
             let held = s2.model_position(&class, &holder(1));
             let sq = palw_model_sell_quote_v1(s2.model_market(&class).unwrap(), held).unwrap();
             assert!(matches!(
-                apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(1), held, sq.fees.net + 1)], None),
+                apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), held, sq.fees.net + 1)], None),
                 Err(PalwStateV2Error::ModelSellBelowFloor { .. })
             ));
             assert!(matches!(
-                apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(1), held + 1, 0)], None),
+                apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), held + 1, 0)], None),
                 Err(PalwStateV2Error::ModelSellExceedsPosition { .. })
             ));
             assert!(
                 matches!(
-                    apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(2), 1, 0)], None),
+                    apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(2), 1, 0)], None),
                     Err(PalwStateV2Error::ModelSellExceedsPosition { held: 0, want: 1 })
                 ),
                 "another holder cannot sell what it does not hold"
             );
-            let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(1), held, sq.fees.net)], None);
+            let (s3, _) = apply(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), held, sq.fees.net)], None);
             invariants(&s3, class, 10 * MSK);
         }
 
@@ -22327,11 +22463,12 @@ pub(crate) mod tests {
         fn no_move_changes_two_holders_in_one_class() {
             let p = params();
             let class = h64(1);
-            let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let (s0, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let (s1, _) = apply(&s0, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None);
             assert!(s1.model_positions_of(&holder(1)).is_empty() && s1.model_positions_of(&holder(2)).is_empty());
             let (s2, _) =
-                apply(&s1, &p, &ctx(2, 101, 2), &[buy(class, holder(1), 5 * MSK, 0), buy(class, holder(2), 5 * MSK, 0)], None);
-            let (s3, d3) = apply(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(1), 1, 0)], None);
+                apply(&s1, &p, &ctx(3, 102, 3), &[buy(class, holder(1), 5 * MSK, 0), buy(class, holder(2), 5 * MSK, 0)], None);
+            let (s3, d3) = apply(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), 1, 0)], None);
             let changed: BTreeSet<(Hash64, Hash64)> = d3
                 .entries
                 .iter()
@@ -22347,11 +22484,10 @@ pub(crate) mod tests {
         /// M6: a class that is not Active refuses buys and honours sells; a genesis class burns
         /// the registrant's leg (above); a registered class pays it to the registrant's payload.
         #[test]
-        fn an_inactive_class_refuses_buys_and_honours_sells_and_a_registrant_is_paid() {
+        fn a_registered_class_takes_its_seed_before_activation_but_no_buys_and_a_registrant_is_paid() {
             let p = economy_params();
             let class = h64(2);
             let mut objects = register_class_and_bond();
-            // A second class, registered by bond 1 under the class economy, activating later.
             let mut future = registration(class, 100, Some(bond_key(1)));
             if let PalwConsensusObjectV2::ClassRegistered { activation_daa, slash_value_per_pwu, .. } = &mut future {
                 *activation_daa = 200;
@@ -22359,15 +22495,20 @@ pub(crate) mod tests {
             }
             objects.push(future);
             let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+            // ADR-0090: the pair is made when the model is added, before approval — so a class still
+            // waiting for its activation takes its seed…
+            let (s1b, _) = apply(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None);
+            assert_eq!(s1b.model_market(&class).unwrap().msk_reserve, SEED);
+            // …and no buy until it is Active.
             assert!(
                 matches!(
-                    apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[buy(class, holder(1), MSK, 0)], None),
+                    apply_palw_transition_v2(&s1b, &p, &ctx(3, 102, 3), &[buy(class, holder(1), MSK, 0)], None),
                     Err(PalwStateV2Error::ModelClassNotActive(_))
                 ),
                 "not yet Active: no buys"
             );
-            let (s2, _) = apply(&s1, &p, &ctx(2, 250, 2), &[], None);
-            let (s3, _) = apply(&s2, &p, &ctx(3, 251, 3), &[buy(class, holder(1), 100 * MSK, 0)], None);
+            let (s2, _) = apply(&s1b, &p, &ctx(3, 250, 3), &[], None);
+            let (s3, _) = apply(&s2, &p, &ctx(4, 251, 4), &[buy(class, holder(1), 100 * MSK, 0)], None);
             let m3 = *s3.model_market(&class).unwrap();
             assert_eq!(m3.registrant_paid_sompi, MSK, "1 % to the registrant");
             assert_eq!(m3.burned_sompi, 5 * MSK, "5 % burned");
@@ -22389,8 +22530,8 @@ pub(crate) mod tests {
             let twin: PalwStateCarriageV2Legacy<'static> =
                 borsh::from_slice(&legacy_bytes).expect("a build without ADR-0087 decodes it");
             assert_eq!(twin.version, PALW_STATE_V2_VERSION);
-            let (s2, d2) = apply(&s1, &p, &ctx(2, 101, 2), &[buy(class, holder(1), 3 * MSK, 0)], None);
-            let (s3, d3) = apply(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(1), 1_000, 0)], None);
+            let (s2, d2) = apply(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED), buy(class, holder(1), 3 * MSK, 0)], None);
+            let (s3, d3) = apply(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(1), 1, 0)], None);
             let r1 = apply_delta_v2(&g, &d1, &p).unwrap();
             let r2 = apply_delta_v2(&r1, &d2, &p).unwrap();
             let r3 = apply_delta_v2(&r2, &d3, &p).unwrap();
@@ -22659,7 +22800,13 @@ pub(crate) mod tests {
                 min_units_out: 0,
                 sink_index: 1,
             };
-            let (s5, _) = apply_lines(&s4, &p, &ctx(5, 253, 5), &[buy], None);
+            let seed = PalwConsensusObjectV2::ModelSeed {
+                line_id: class,
+                seeder: h64(0xB0_0009),
+                msk_seed: crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1,
+                sink_index: 1,
+            };
+            let (s5, _) = apply_lines(&s4, &p, &ctx(5, 253, 5), &[seed, buy], None);
             let market = s5.model_market(&class).expect("a market on the line");
             assert_eq!(market.registrant_paid_sompi, 75 * MSK / 100, "L5: the owner's part of the leg");
             assert_eq!(market.contributor_paid_sompi, 25 * MSK / 100, "L5: the contributor's part");
@@ -22668,9 +22815,9 @@ pub(crate) mod tests {
             amounts.sort();
             assert_eq!(amounts, vec![25 * MSK / 100, 75 * MSK / 100]);
             assert_eq!(
-                100 * MSK,
+                100 * MSK + market.seed_sompi,
                 market.msk_reserve + market.burned_sompi + market.registrant_paid_sompi + market.contributor_paid_sompi,
-                "ADR-0087 M2 with the split"
+                "ADR-0087 M2 with the split (and ADR-0090's seed in the reserve)"
             );
         }
 
@@ -22833,7 +22980,21 @@ pub(crate) mod tests {
         }
 
         /// A chain with an Active class registered by bond 1 (class 2, the founding line).
-        fn chain() -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+        const SEED: u64 = crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1;
+
+        fn seed_action(seq: u32, who: u8, line: Hash64, sompi: u64) -> PalwEvmMarketActionV1 {
+            PalwEvmMarketActionV1 {
+                seq,
+                account: account(who),
+                line_id: line,
+                kind: PalwEvmMarketActionKindV1::Seed,
+                gross_sompi: sompi,
+            }
+        }
+
+        /// An Active class, its founding line's market seeded by a carrier in block 2 when `seeded`
+        /// (ADR-0090) and unopened otherwise.
+        fn chain_with(seeded: bool) -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
             let p = economy_params();
             let class = h64(2);
             let mut objects = register_class_and_bond();
@@ -22844,8 +23005,49 @@ pub(crate) mod tests {
             }
             objects.push(future);
             let (s1, _) = apply_evm(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, vec![]);
-            let (s2, _) = apply_evm(&s1, &p, &ctx(2, 250, 2), &[], vec![]);
+            let block2: Vec<PalwConsensusObjectV2> = if seeded {
+                vec![PalwConsensusObjectV2::ModelSeed { line_id: class, seeder: h64(0xB0_0009), msk_seed: SEED, sink_index: 1 }]
+            } else {
+                vec![]
+            };
+            let (s2, _) = apply_evm(&s1, &p, &ctx(2, 250, 2), &block2, vec![]);
             (p, s2, class)
+        }
+        fn chain_unseeded() -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+            chain_with(false)
+        }
+        fn chain() -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+            chain_with(true)
+        }
+
+        /// ADR-0090 from the EVM: a seed action of the least seed opens the market with the whole
+        /// value as the reserve and no position for anyone; a second seed and a small one are
+        /// refused as settlements whose escrow the child refunds.
+        #[test]
+        fn a_seed_from_the_evm_opens_the_market_and_is_once_and_at_least_the_floor() {
+            let (p, s, class) = chain_unseeded();
+            let (s3, _) = apply_evm(
+                &s,
+                &p,
+                &ctx(3, 251, 3),
+                &[],
+                vec![seed_action(0, 1, class, SEED - 1), seed_action(1, 1, class, SEED), seed_action(2, 2, class, SEED)],
+            );
+            let st = s3.evm_settlements();
+            assert_eq!(st.len(), 3);
+            assert!(matches!(st[0].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::SEED_TOO_SMALL }));
+            assert_eq!((st[0].action, st[0].escrow_sompi), (PALW_EVM_ACTION_SEED, SEED - 1), "the refund is the whole escrow");
+            let PalwEvmSettlementOutcomeV1::Filled { units, gross_sompi, net_sompi, price_after_sompi } = st[1].outcome else {
+                panic!("the seed filled")
+            };
+            assert_eq!((units, gross_sompi, net_sompi), (0, SEED, SEED), "a seed mints nothing and takes no leg");
+            assert_eq!(price_after_sompi, SEED / 500_000, "0.2 MSK a position");
+            assert!(matches!(st[2].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::ALREADY_SEEDED }));
+            let market = s3.model_market(&class).expect("opened");
+            assert_eq!((market.msk_reserve, market.seed_sompi), (SEED, SEED));
+            assert_eq!(market.seeded_by, evm_holder_v1(crate::evm::EVM_CHAIN_ID, &account(1)), "the seeder is the EVM account's id");
+            assert_eq!(s3.model_position(&class, &market.seeded_by), 0, "and holds nothing");
+            assert_eq!(s3.pending_payouts_iter().count(), 0, "no leg on a seed");
         }
 
         #[test]
@@ -22853,13 +23055,16 @@ pub(crate) mod tests {
             let (p, s, class) = chain();
             let holder = evm_holder_v1(crate::evm::EVM_CHAIN_ID, &account(1));
             let (s3, d3) = apply_evm(&s, &p, &ctx(3, 251, 3), &[], vec![buy(0, 1, class, 100 * MSK, 0)]);
-            let market = s3.model_market(&class).expect("the market opened");
-            assert_eq!(market.msk_reserve, 94 * MSK, "the net leg is the reserve, as for a carrier's buy");
+            let market = s3.model_market(&class).expect("the market is seeded");
+            assert_eq!(market.msk_reserve, SEED + 94 * MSK, "the net leg joins the reserve, as for a carrier's buy");
             assert!(s3.model_position(&class, &holder) > 0, "E7: the holder is the EVM account's id");
             let settlements = s3.evm_settlements();
             assert_eq!(settlements.len(), 1);
             let st = settlements[0];
-            assert_eq!((st.seq, st.account, st.line_id, st.is_buy, st.escrow_sompi), (0, account(1), class, true, 100 * MSK));
+            assert_eq!(
+                (st.seq, st.account, st.line_id, st.action, st.escrow_sompi),
+                (0, account(1), class, PALW_EVM_ACTION_BUY, 100 * MSK)
+            );
             match st.outcome {
                 PalwEvmSettlementOutcomeV1::Filled { units, gross_sompi, net_sompi, price_after_sompi } => {
                     assert_eq!(units, s3.model_position(&class, &holder));
@@ -22912,12 +23117,14 @@ pub(crate) mod tests {
                     sell(1, 2, class, 1, 0),              // nothing held
                     buy(2, 1, h64(0xDEAD), 10 * MSK, 0),  // no such line
                     buy(3, 1, class, 10 * MSK, 0),        // fills
+                    buy(4, 1, h64(1), 10 * MSK, 0),       // an Active class with no seeded market (ADR-0090)
                 ],
             );
             let st = s3.evm_settlements();
-            assert_eq!(st.len(), 4, "every action is answered, in sequence");
+            assert_eq!(st.len(), 5, "every action is answered, in sequence");
+            assert!(matches!(st[4].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::MARKET_MISSING }));
             assert!(matches!(st[0].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::BELOW_FLOOR }));
-            assert!(matches!(st[1].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::MARKET_MISSING }));
+            assert!(matches!(st[1].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::EXCEEDS_POSITION }));
             assert!(matches!(st[2].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::LINE_MISSING }));
             assert!(matches!(st[3].outcome, PalwEvmSettlementOutcomeV1::Filled { .. }));
             assert_eq!(st[0].escrow_sompi, 10 * MSK, "a refused buy's escrow is the refund the child pays");

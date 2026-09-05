@@ -966,6 +966,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             virtual_sompi: PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1,
             class_status: format!("{status:?}"),
             contributor_paid_sompi: market.contributor_paid_sompi,
+            seed_sompi: market.seed_sompi,
+            seeded_by: if opened { market.seeded_by.to_string() } else { String::new() },
+            seed_min_sompi: kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1,
         })
     }
 

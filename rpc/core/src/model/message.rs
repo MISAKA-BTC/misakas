@@ -3001,11 +3001,17 @@ pub struct GetPalwModelMarketResponse {
     pub class_status: String,
     /// ADR-0088 Decision 8: the part of the leg paid to an adopted contributor.
     pub contributor_paid_sompi: u64,
+    /// ADR-0090: the seed the market opened with — locked for good (0 while unseeded).
+    pub seed_sompi: u64,
+    /// ADR-0090: who seeded it, as a payout payload (128 hex; empty while unseeded).
+    pub seeded_by: String,
+    /// ADR-0090: the least seed this network takes, in sompi.
+    pub seed_min_sompi: u64,
 }
 
 impl Serializer for GetPalwModelMarketResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &2, writer)?;
+        store!(u16, &3, writer)?;
         store!(bool, &self.found, writer)?;
         store!(String, &self.line_id, writer)?;
         store!(bool, &self.opened, writer)?;
@@ -3021,6 +3027,10 @@ impl Serializer for GetPalwModelMarketResponse {
         store!(u64, &self.virtual_sompi, writer)?;
         store!(String, &self.class_status, writer)?;
         store!(u64, &self.contributor_paid_sompi, writer)?;
+        // Version 3 (ADR-0090): the seed, its payer and the network's least seed.
+        store!(u64, &self.seed_sompi, writer)?;
+        store!(String, &self.seeded_by, writer)?;
+        store!(u64, &self.seed_min_sompi, writer)?;
         Ok(())
     }
 }
@@ -3044,6 +3054,9 @@ impl Deserializer for GetPalwModelMarketResponse {
         let class_status = load!(String, reader)?;
         // Version 2 (ADR-0088) appended the contributor's leg; a version-1 peer sent none.
         let contributor_paid_sompi = if version >= 2 { load!(u64, reader)? } else { 0 };
+        // Version 3 (ADR-0090): the seed, its payer and the network's least seed.
+        let (seed_sompi, seeded_by, seed_min_sompi) =
+            if version >= 3 { (load!(u64, reader)?, load!(String, reader)?, load!(u64, reader)?) } else { (0, String::new(), 0) };
         Ok(Self {
             found,
             line_id,
@@ -3060,6 +3073,9 @@ impl Deserializer for GetPalwModelMarketResponse {
             virtual_sompi,
             class_status,
             contributor_paid_sompi,
+            seed_sompi,
+            seeded_by,
+            seed_min_sompi,
         })
     }
 }

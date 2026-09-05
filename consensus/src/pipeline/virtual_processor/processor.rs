@@ -5986,6 +5986,13 @@ impl VirtualStateProcessor {
                         return Err(format!("a model buy of line {line_id} on a chain where the model market is not in force"));
                     }
                 }
+                // ADR-0090: the seed is the market's third move, under the same fence; its sink
+                // binding is checked with the buy's (`palw_model_buy_binds_its_carrier_v1`).
+                Obj::ModelSeed { line_id, .. } => {
+                    if !self.palw_model_market_active_at(point.daa_score) {
+                        return Err(format!("a model seed of line {line_id} on a chain where the model market is not in force"));
+                    }
+                }
                 Obj::ModelSell { line_id, holder, units_in, min_msk_out, pubkey, signature } => {
                     if !self.palw_model_market_active_at(point.daa_score) {
                         return Err(format!("a model sell of line {line_id} on a chain where the model market is not in force"));
@@ -14030,6 +14037,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
     match object {
         O::BondRegistered { .. } => "BondRegistered",
         O::ModelBuy { .. } => "ModelBuy",
+        O::ModelSeed { .. } => "ModelSeed",
         O::ModelSell { .. } => "ModelSell",
         O::ModelLineFounded { .. } => "ModelLineFounded",
         O::ModelVersionPublished { .. } => "ModelVersionPublished",

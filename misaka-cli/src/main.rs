@@ -542,6 +542,44 @@ enum PalwCmd {
         #[arg(long)]
         address: String,
     },
+    /// **ADR-0090: seed a line's market** — lock at least the network's least seed (100,000 MSK)
+    /// in the line's sink; the whole of it becomes the curve's reserve and nothing ever pays it
+    /// back. Five hundred thousand whole positions open in the curve at `seed / 500,000` each.
+    ModelSeed {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id (a class id names the class's founding line)
+        #[arg(long)]
+        line: String,
+        /// MSK to lock (e.g. `100000`, or `10000000000000sompi`)
+        #[arg(long)]
+        msk: String,
+        /// Actually broadcast (otherwise a dry-run preview)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// ADR-0090 from the EVM: seed a line's market with the call's value (at least 100,000 MSK)
+    /// through the ModelWriter; settled in the next chain block. [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    ModelEvmSeed {
+        #[command(flatten)]
+        key: EvmKeyArgs,
+        #[arg(long)]
+        line: String,
+        /// MSK to lock, whole sompi (e.g. "100000")
+        #[arg(long)]
+        msk: String,
+        #[arg(long)]
+        gas_limit: Option<u64>,
+        #[arg(long)]
+        max_fee: Option<u128>,
+        #[arg(long)]
+        nonce: Option<u64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        wait: bool,
+    },
     /// **ADR-0087: buy positions of a line from its curve.** The carrier pays `--msk` into the
     /// line's sink; the fold credits 94 % to the curve (5 % burned, 1 % to the line's owner) and
     /// the curve's positions to the key's payout payload. Refused on chain when fewer than
@@ -1400,6 +1438,11 @@ async fn main() -> std::process::ExitCode {
             evm_send::model_evm_sell(&ctx, &key.source(), &line, positions, &min_msk, gas_limit, max_fee, nonce, yes, wait)
         }
         Command::Palw(PalwCmd::ModelEvmPosition { line, address }) => eth::model_evm_position(&ctx, &line, &address),
+        Command::Palw(PalwCmd::ModelSeed { key, line, msk, yes }) => palw_model::seed(&ctx, &key.source(), &line, &msk, yes).await,
+        #[cfg(feature = "evm-send")]
+        Command::Palw(PalwCmd::ModelEvmSeed { key, line, msk, gas_limit, max_fee, nonce, yes, wait }) => {
+            evm_send::model_evm_seed(&ctx, &key.source(), &line, &msk, gas_limit, max_fee, nonce, yes, wait)
+        }
         Command::Palw(PalwCmd::ModelBuy { key, line, msk, min_positions, yes }) => {
             palw_model::buy(&ctx, &key.source(), &line, &msk, min_positions, yes).await
         }

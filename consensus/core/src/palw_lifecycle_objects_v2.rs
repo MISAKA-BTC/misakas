@@ -144,6 +144,8 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // ADR-0087 Decision 3: a buy is bound to its carrier's sink output below; a sell must carry
         // the holder's signature, checked at acceptance against the payload it names.
         PalwConsensusObjectV2::ModelBuy { .. } => Ok(()),
+        // ADR-0090: a seed is bound to its carrier's sink output exactly as a buy is.
+        PalwConsensusObjectV2::ModelSeed { .. } => Ok(()),
         PalwConsensusObjectV2::ModelSell { signature, .. } if !signature.is_empty() => Ok(()),
         PalwConsensusObjectV2::ModelSell { .. } => Err("a model sell must carry the holder's signature — unsigned, anyone could drain a position"),
         // ADR-0088: every registry object is attributed to a bond and carries that bond's signature,
@@ -367,17 +369,32 @@ pub fn palw_bond_registration_binds_its_carrier_v2(tx: &Transaction, object: &Pa
 /// object names, or the object does not ride. The value is read off the carrier and never off
 /// the object alone, so the reserve the fold credits is MSK that left a spendable output.
 pub fn palw_model_buy_binds_its_carrier_v1(tx: &Transaction, object: &PalwConsensusObjectV2) -> Result<(), &'static str> {
-    let PalwConsensusObjectV2::ModelBuy { line_id: class_id, msk_in, sink_index, .. } = object else {
-        return Ok(());
+    // ADR-0090: a seed is bound the same way — the whole seed sits in the line's sink.
+    let (line_id, msk, sink_index, what) = match object {
+        PalwConsensusObjectV2::ModelBuy { line_id, msk_in, sink_index, .. } => (line_id, msk_in, sink_index, "buy"),
+        PalwConsensusObjectV2::ModelSeed { line_id, msk_seed, sink_index, .. } => (line_id, msk_seed, sink_index, "seed"),
+        _ => return Ok(()),
     };
     let Some(output) = tx.outputs.get(*sink_index as usize) else {
-        return Err("a model buy names a sink output its carrier does not have");
+        return Err(if what == "buy" {
+            "a model buy names a sink output its carrier does not have"
+        } else {
+            "a model seed names a sink output its carrier does not have"
+        });
     };
-    if output.value != *msk_in {
-        return Err("a model buy declares an MSK leg its sink output does not hold");
+    if output.value != *msk {
+        return Err(if what == "buy" {
+            "a model buy declares an MSK leg its sink output does not hold"
+        } else {
+            "a model seed declares an MSK seed its sink output does not hold"
+        });
     }
-    if crate::palw_model_market_v1::palw_model_sink_class_v1(&output.script_public_key) != Some(*class_id) {
-        return Err("a model buy's sink output must be the class's own sink script");
+    if crate::palw_model_market_v1::palw_model_sink_class_v1(&output.script_public_key) != Some(*line_id) {
+        return Err(if what == "buy" {
+            "a model buy's sink output must be the class's own sink script"
+        } else {
+            "a model seed's sink output must be the line's own sink script"
+        });
     }
     Ok(())
 }

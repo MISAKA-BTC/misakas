@@ -520,6 +520,9 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelMarketResponse>, protowire::G
         virtual_sompi: item.virtual_sompi,
         class_status: item.class_status.clone(),
         contributor_paid_sompi: item.contributor_paid_sompi,
+        seed_sompi: item.seed_sompi,
+        seeded_by: item.seeded_by.clone(),
+        seed_min_sompi: item.seed_min_sompi,
         error: None,
     }
 });
@@ -1461,6 +1464,9 @@ try_from!(item: &protowire::GetPalwModelMarketResponseMessage, RpcResult<kaspa_r
         virtual_sompi: item.virtual_sompi,
         class_status: item.class_status.clone(),
         contributor_paid_sompi: item.contributor_paid_sompi,
+        seed_sompi: item.seed_sompi,
+        seeded_by: item.seeded_by.clone(),
+        seed_min_sompi: item.seed_min_sompi,
     }
 });
 try_from!(item: &protowire::GetPalwModelPositionsRequestMessage, kaspa_rpc_core::GetPalwModelPositionsRequest, {

@@ -16,6 +16,8 @@ pragma solidity ^0.8.20;
 ///                       (`EVM_NATIVE_SCALE`; the F002 rule, so the fold's sompi leg is exact)
 ///           id 2  sell  abi = abi.encode(bytes32 lineA, bytes32 lineB, uint256 unitsIn,
 ///                                        uint256 minMskOutSompi)
+///           id 3  seed  abi = abi.encode(bytes32 lineA, bytes32 lineB)          (ADR-0090: `msg.value`
+///                       is the seed, at least SEED_MIN_SOMPI × 1e10 wei; nothing else)
 ///                       msg.value = 0
 ///           3–255       reserved — no action founds a line, publishes a version, sets a
 ///                       role, registers a class or certifies a family: those are ML-DSA-87
@@ -33,8 +35,8 @@ pragma solidity ^0.8.20;
 ///
 ///         WHAT ELSE REVERTS AT THE CALL (the "user-input fault ⇒ tx revert, block valid"
 ///         class): malformed data, an unknown version or action id, an unknown line, a
-///         `msg.value` that is zero or not a multiple of 1e10 on a buy, a nonzero `msg.value`
-///         on a sell, a sell of zero units, a buy on a line closed to buys, and the 129th action
+///         `msg.value` that is zero or not a multiple of 1e10 on a buy or a seed, a seed under
+///         SEED_MIN_SOMPI (`SeedTooSmall()`), a nonzero `msg.value` on a sell, a sell of zero units, a buy on a line closed to buys, and the 129th action
 ///         in one EVM block (`PALW_EVM_MARKET_ACTIONS_PER_BLOCK_V1` = 128). A reverted call
 ///         leaves no log and therefore no action.
 ///
@@ -62,12 +64,12 @@ pragma solidity ^0.8.20;
 ///         fence the address is an empty account and accepts nothing.
 interface IMisakaModelWriter {
     /// Queue one action. `data` = `[1] ‖ [action id, 3 bytes BE] ‖ abi` as laid out above;
-    /// `msg.value` = the gross leg in wei for a buy (nonzero, a multiple of 1e10), 0 for a
-    /// sell. Returns nothing; the outcome is the fold's and settles at `C`.
+    /// `msg.value` = the gross leg in wei for a buy or the whole seed for a seed (nonzero, a
+    /// multiple of 1e10, a seed at least SEED_MIN_SOMPI × 1e10), 0 for a sell. Returns nothing; the outcome is the fold's and settles at `C`.
     function sendAction(bytes calldata data) external payable;
 
     /// Emitted at the call, once per accepted action, from `0x…F013` only. `account` is the
-    /// signing account (`tx.origin`), `actionId` 1 buy / 2 sell, `data` the payload as sent.
+    /// signing account (`tx.origin`), `actionId` 1 buy / 2 sell / 3 seed, `data` the payload as sent.
     /// The block's action list is exactly these logs, in log order.
     event ActionQueued(address indexed account, uint8 actionId, bytes data);
 
@@ -76,4 +78,6 @@ interface IMisakaModelWriter {
     /// interface so that each file stands alone (do not inherit both interfaces into one
     /// contract; nothing real needs to).
     error NotAnAccount();
+    /// ADR-0090: the seed is under the network's least seed.
+    error SeedTooSmall();
 }

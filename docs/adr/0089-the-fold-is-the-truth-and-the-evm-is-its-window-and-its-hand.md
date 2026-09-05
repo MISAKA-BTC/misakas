@@ -1,5 +1,7 @@
 # ADR-0089 — the fold is the truth; the EVM is its window and its hand
 
+> **Amended (2026-09-05, implemented the same day).** [ADR-0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md) adds a third action to the writer (`3`, the seed — `msg.value` is the seed, at least 100,000 MSK), `seed()` and the `Seeded` event to the facade, `SeedTooSmall()`, the settlement's `action` in place of `is_buy`, and puts the least seed in `constants()` where the virtual reserve was; `decimals()` is 0. Decisions 3, 5 and 6 read with that in mind.
+
 **Status:** PROPOSED 2026-09-05, design only (no implementation yet). Requested by the operator
 on 2026-09-05, on top of ADR-0087 and ADR-0088: Model Positions are not to be "a mere copy of
 ERC-20" (ERC-20 の単なるコピーにせず); `ModelPosition`, `ModelRegistry` and `ModelAMM` are to be

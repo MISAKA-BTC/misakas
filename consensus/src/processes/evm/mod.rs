@@ -226,7 +226,7 @@ pub fn apply_evm_market_effects(
     use kaspa_consensus_core::muhash::MuHashExtensions;
     for s in settlements {
         let PalwEvmSettlementOutcomeV1::Filled { gross_sompi, .. } = s.outcome else { continue };
-        if !s.is_buy || gross_sompi == 0 {
+        if !s.carries_escrow() || gross_sompi == 0 {
             continue;
         }
         let txid = synthetic_market_sink_txid(decided_at, s.seq, &s.account, &s.line_id, gross_sompi);

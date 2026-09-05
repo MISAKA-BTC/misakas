@@ -1314,7 +1314,11 @@ impl ConsensusApi for Consensus {
                 Some((market, true, class.status.clone()))
             }
             None => {
-                let mut market = kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1::open_v1(daa);
+                let mut market = kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1::seed_v1(
+                    daa,
+                    0,
+                    kaspa_consensus_core::Hash64::default(),
+                );
                 market.closed_to_buys = closed_line;
                 Some((market, false, class.status.clone()))
             }

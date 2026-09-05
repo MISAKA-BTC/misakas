@@ -39,7 +39,7 @@ A reader that wants to know the window is open checks that `chainDaa()` returns 
 | `IMisakaModelRegistry.sol` | the registry window: `classCount/classAt/classRow/certified/rootsInForceCount/rootInForceAt`, `lineCount/lineAt/linesOfCount/lineOfClassAt/line`, `version/usage`, `evaluationCount/evaluation`, `proposalCount/proposal`, `facadeOf/lineOf`, `chainDaa` |
 | `IMisakaModelAMM.sol` | the curve window: `market`, `price`, `quoteBuy`, `quoteSell`, `constants` |
 | `IMisakaModelPosition.sol` | the position window: `balanceOf` (64-byte holder), `balanceOfAddress`, `totalSupply`, `sold`, `holderIdOf` |
-| `IMRC20.sol` | the per-line facade: `name/symbol/decimals/totalSupply/balanceOf`, `lineId/circulating/price/quoteBuy/quoteSell`, `buy/sell`, `supportsInterface`; events `Bought/Sold/Refused`; errors `NonTransferable/NotAnAccount/ClosedToBuys/BadValue` |
+| `IMRC20.sol` | the per-line facade: `name/symbol/decimals/totalSupply/balanceOf`, `lineId/circulating/price/quoteBuy/quoteSell`, `buy/sell/seed`, `supportsInterface`; events `Bought/Sold/Seeded/Refused`; errors `NonTransferable/NotAnAccount/ClosedToBuys/BadValue/SeedTooSmall` |
 | `IMisakaModelWriter.sol` | the hand: `sendAction(bytes) payable`, event `ActionQueued`, error `NotAnAccount`; the data layout and the settlement timing |
 
 Vocabulary (ADR-0088 §3): a **class** is a registered model family with a share and a budget;
@@ -60,8 +60,13 @@ Units: MSK amounts are in **sompi** (1 MSK = 1e8 sompi), the fold's unit, everyw
 views, the quotes and the settlement events. The one **wei** quantity is `msg.value` on a buy
 (`sendAction` action 1 or `IMRC20.buy`), which must be a **nonzero multiple of 1e10**
 (`EVM_NATIVE_SCALE`, the F002 rule) so the fold's sompi leg is exact. Position amounts are in
-**units**: `decimals() == 6`, one position is 10^6 units, and the whole supply of a line is
-`constants().supplyUnits`, fixed at the market's opening.
+**units (ADR-0090)**: `decimals() == 0` — a position is a whole number, one unit, no fraction; the
+whole supply of a line is 500,000 positions, fixed at the seed. **The seed (ADR-0090)**: a line's
+market exists only once someone locks at least 100,000 MSK into it (`seed()` on the facade, or
+`sendAction` id 3, or the carrier object `ModelSeed`); the whole seed is the reserve, the first price
+is `seed / 500,000`, the seeder receives no position, and no object ever pays the seed out — the
+curve's product never falls, so with every position back in the curve the reserve is the seed or
+more.
 
 Facade addresses are `0x4d50 ‖ blake2b_512("misaka-evm/model-position-facade/v1" ‖
 line_id)[..18]`. BLAKE2b is **not available in Solidity** on this lane, so a contract cannot

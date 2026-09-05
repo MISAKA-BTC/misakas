@@ -6,22 +6,31 @@
 //! here is a pure function of its arguments so the fold, the RPC, the CLI's quote and the tests
 //! read one arithmetic.
 //!
-//! Units: a position is `10^6` units; every class opens with `PALW_MODEL_POSITION_SUPPLY_V1`
-//! positions in the curve and no MSK. The price at any moment is `(msk_reserve + V) /
-//! position_units` and there is no other price (Decision 2).
+//! **Amended by ADR-0090 (2026-09-05).** A position is a whole number — one unit, no fraction —
+//! and a line's market opens only when a SEED of at least `PALW_MODEL_SEED_MIN_SOMPI_V1` is paid
+//! into its sink: the seed becomes the reserve, fee-free, and nothing ever pays it out. The
+//! curve is `msk_reserve × position_units = K` with `K` taken at each move from the row as it
+//! stands (the product never falls); there is no virtual reserve. Every line opens with
+//! `PALW_MODEL_POSITION_SUPPLY_V1` positions in the curve. The price at any moment is
+//! `msk_reserve / position_units` and there is no other price.
 
 use crate::Hash64;
 use crate::tx::ScriptPublicKey;
 
-/// One position, in units.
-pub const PALW_MODEL_POSITION_UNITS_V1: u64 = 1_000_000;
-/// Positions a class opens with, a network constant so no model is issued more room than another.
-pub const PALW_MODEL_POSITION_SUPPLY_V1: u64 = 100_000;
+/// ADR-0090 Decision 1: a position IS the unit — one, no fraction. The name survives so every
+/// reader that multiplies by it keeps reading; the value is one.
+pub const PALW_MODEL_POSITION_UNITS_V1: u64 = 1;
+/// ADR-0090 Decision 1: five hundred thousand whole positions a line, fixed at the seed — a
+/// network constant so no model is issued more room than another.
+pub const PALW_MODEL_POSITION_SUPPLY_V1: u64 = 500_000;
 /// The whole supply in units.
 pub const PALW_MODEL_SUPPLY_UNITS_V1: u64 = PALW_MODEL_POSITION_SUPPLY_V1 * PALW_MODEL_POSITION_UNITS_V1;
-/// The virtual reserve `V`, in sompi: 1,000 MSK. Sets the first position's price (`V / supply`
-/// = 0.01 MSK) and the curve's steepness; `K = V × supply units` is fixed at opening.
-pub const PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1: u64 = 1_000 * 100_000_000;
+/// ADR-0090 Decision 2 retired the virtual reserve; the constant is kept at zero so a reader
+/// that still adds it adds nothing. The first price is `seed / supply` now.
+pub const PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1: u64 = 0;
+/// ADR-0090 Decision 2: the least seed that opens a line's market — 100,000 MSK, every sompi of
+/// which enters the curve, none of which any object ever pays out.
+pub const PALW_MODEL_SEED_MIN_SOMPI_V1: u64 = 100_000 * 100_000_000;
 /// Fee on the MSK leg of every move, in permille: burned.
 pub const PALW_MODEL_BURN_PERMILLE_V1: u64 = 50;
 /// Fee on the MSK leg of every move, in permille: to the class's registrant (burned when the
@@ -54,33 +63,43 @@ pub struct PalwModelMarketV1 {
     /// ADR-0088 Decision 8: the part of the registrant leg paid to an adopted contributor.
     /// `registrant_paid_sompi` is the owner's total.
     pub contributor_paid_sompi: u64,
+    /// ADR-0090 Decision 2: the MSK the market opened with — the floor the reserve never falls
+    /// under (with every position back in the curve the product puts the reserve at the seed or
+    /// above), and the number the site shows as "locked".
+    pub seed_sompi: u64,
+    /// ADR-0090 Decision 3: who paid the seed — a payout payload kept for the record only; the
+    /// seeder holds nothing and can move nothing.
+    pub seeded_by: Hash64,
 }
 
 impl PalwModelMarketV1 {
-    pub fn open_v1(opened_daa: u64) -> Self {
+    /// ADR-0090 Decision 2: a market opens ONLY by a seed — the whole supply in the curve and the
+    /// seed as the reserve, fee-free. There is no other opening.
+    pub fn seed_v1(opened_daa: u64, seed_sompi: u64, seeded_by: Hash64) -> Self {
         Self {
             opened_daa,
-            msk_reserve: 0,
+            msk_reserve: seed_sompi,
             position_units: PALW_MODEL_SUPPLY_UNITS_V1,
             sold_units: 0,
             burned_sompi: 0,
             registrant_paid_sompi: 0,
             closed_to_buys: false,
             contributor_paid_sompi: 0,
+            seed_sompi,
+            seeded_by,
         }
     }
 
-    /// `K = V × supply units`, the constant the curve keeps.
-    pub fn k_v1() -> u128 {
-        PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1 as u128 * PALW_MODEL_SUPPLY_UNITS_V1 as u128
+    /// The product the next move must not fall under: the row's own `reserve × units`.
+    pub fn k(&self) -> u128 {
+        self.msk_reserve as u128 * self.position_units as u128
     }
 
-    /// The price of one position in sompi — `(reserve + V) / positions` — rounded down.
     pub fn price_sompi_per_position_v1(&self) -> u64 {
         if self.position_units == 0 {
             return u64::MAX;
         }
-        let numerator = (self.msk_reserve as u128 + PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1 as u128) * PALW_MODEL_POSITION_UNITS_V1 as u128;
+        let numerator = self.msk_reserve as u128 * PALW_MODEL_POSITION_UNITS_V1 as u128;
         (numerator / self.position_units as u128).min(u64::MAX as u128) as u64
     }
 }
@@ -112,12 +131,14 @@ pub struct PalwModelBuyQuoteV1 {
 }
 
 pub fn palw_model_buy_quote_v1(market: &PalwModelMarketV1, msk_in: u64) -> Option<PalwModelBuyQuoteV1> {
-    if market.closed_to_buys || msk_in == 0 || market.position_units == 0 {
+    // ADR-0090: a row with no reserve is not a market (the fold never writes one; a reader may
+    // synthesise one for a line that has no seed) — it quotes nothing rather than the whole curve.
+    if market.closed_to_buys || msk_in == 0 || market.position_units == 0 || market.msk_reserve == 0 {
         return None;
     }
     let fees = palw_model_fee_split_v1(msk_in);
-    let k = PalwModelMarketV1::k_v1();
-    let x_after = market.msk_reserve as u128 + PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1 as u128 + fees.net as u128;
+    let k = market.k();
+    let x_after = market.msk_reserve as u128 + fees.net as u128;
     let units_after = k.div_ceil(x_after);
     let units_out = (market.position_units as u128).checked_sub(units_after)?;
     if units_out == 0 {
@@ -148,12 +169,12 @@ pub fn palw_model_sell_quote_v1(market: &PalwModelMarketV1, units_in: u64) -> Op
     if units_in == 0 {
         return None;
     }
-    let k = PalwModelMarketV1::k_v1();
+    let k = market.k();
     let units_after = market.position_units as u128 + units_in as u128;
     if units_after > PALW_MODEL_SUPPLY_UNITS_V1 as u128 {
         return None;
     }
-    let x_now = market.msk_reserve as u128 + PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1 as u128;
+    let x_now = market.msk_reserve as u128;
     let x_after = k.div_ceil(units_after);
     let gross = x_now.checked_sub(x_after)?.min(market.msk_reserve as u128);
     if gross == 0 {
@@ -223,72 +244,95 @@ mod tests {
 
     const MSK: u64 = 100_000_000;
 
-    /// ADR-0087 §4's worked table, from an empty market: two buys of 1,000 MSK, then the sell of
-    /// everything bought. The golden numbers are the ADR's, rounded as the fold rounds.
+    fn seeded() -> PalwModelMarketV1 {
+        PalwModelMarketV1::seed_v1(7, PALW_MODEL_SEED_MIN_SOMPI_V1, Hash64::from_u64_word(9))
+    }
+
+    /// ADR-0090 §4's worked table, from a market seeded with the least seed (100,000 MSK): two
+    /// buys of 1,000 MSK, then the sell of everything bought. Whole positions, no virtual reserve,
+    /// the product taken from the row at every move.
     #[test]
     fn the_adr_table_is_the_curves_arithmetic() {
-        let m0 = PalwModelMarketV1::open_v1(7);
-        assert_eq!(m0.price_sompi_per_position_v1(), MSK / 100, "the first position costs V / supply = 0.01 MSK");
+        let m0 = seeded();
+        assert_eq!(m0.msk_reserve, 100_000 * MSK, "the seed is the reserve, fee-free");
+        assert_eq!(m0.position_units, 500_000, "five hundred thousand whole positions in the curve");
+        assert_eq!(m0.price_sompi_per_position_v1(), MSK / 5, "the first position costs seed / supply = 0.2 MSK");
         let b1 = palw_model_buy_quote_v1(&m0, 1_000 * MSK).expect("a buy");
         assert_eq!(b1.fees.burn, 50 * MSK);
         assert_eq!(b1.fees.registrant, 10 * MSK);
         assert_eq!(b1.fees.net, 940 * MSK);
-        assert_eq!(b1.units_out / PALW_MODEL_POSITION_UNITS_V1, 48_453, "≈48,454 positions less the ceiling's rounding");
-        assert_eq!(b1.after.msk_reserve, 940 * MSK);
+        assert_eq!(b1.units_out, 4_656, "940 MSK into a 100,000 MSK reserve releases 4,656 whole positions");
+        assert_eq!(b1.after.msk_reserve, 100_940 * MSK);
+        assert_eq!(b1.after.price_sompi_per_position_v1(), 20_377_757, "0.20377757 MSK a position");
         let b2 = palw_model_buy_quote_v1(&b1.after, 1_000 * MSK).expect("a second buy");
-        // The ADR's §4 table said 12,846 here and 3,014 MSK on the sell below; both were the
-        // author's arithmetic slips, corrected in §7: the curve is `(x + V) × u = K`, so the second
-        // 940 MSK moves x from 1,940 to 2,880 and releases 16,824 positions, and returning every
-        // unit moves x back to V — the sell's gross is the whole reserve, 1,880 MSK, never more
-        // than what came in.
-        assert_eq!(b2.units_out / PALW_MODEL_POSITION_UNITS_V1, 16_824);
-        assert_eq!(b2.after.msk_reserve, 1_880 * MSK);
+        assert_eq!(b2.units_out, 4_570, "the same MSK releases fewer positions at the higher price");
+        assert_eq!(b2.after.msk_reserve, 101_880 * MSK);
         assert!(b2.after.price_sompi_per_position_v1() > b1.after.price_sompi_per_position_v1(), "buying raises the price");
         let held = b1.units_out + b2.units_out;
         let s = palw_model_sell_quote_v1(&b2.after, held).expect("the sell");
-        assert_eq!(s.fees.gross, 1_880 * MSK, "the curve pays back exactly the reserve when every unit returns");
-        assert_eq!(s.fees.burn, s.fees.gross / 20);
-        assert_eq!(s.fees.registrant, s.fees.gross / 100);
+        assert_eq!(s.fees.gross, 187_988_976_000, "returning every position bought pays back 1,879.88976 MSK gross");
+        assert_eq!(s.fees.net, 176_709_637_440, "1,767.0963744 MSK net: 12 % of the legs, the curve's rounding kept");
         assert_eq!(s.fees.burn + s.fees.registrant + s.fees.net, s.fees.gross, "the split is exact");
         assert_eq!(s.after.position_units, PALW_MODEL_SUPPLY_UNITS_V1, "everything bought is back in the curve");
-        assert_eq!(s.after.msk_reserve, 0, "and the reserve is empty");
+        assert!(s.after.msk_reserve >= m0.seed_sompi, "and the reserve is at or above the seed: {}", s.after.msk_reserve);
         assert!(s.after.price_sompi_per_position_v1() < b2.after.price_sompi_per_position_v1(), "selling lowers the price");
         // M2 at the arithmetic layer: what went in is where the ADR says it is.
         let paid_in = 2_000 * MSK;
         let burned = s.after.burned_sompi;
         let registrant = b1.fees.registrant + b2.fees.registrant + s.fees.registrant;
-        assert_eq!(paid_in, s.after.msk_reserve + s.fees.net + burned + registrant, "nothing is minted, nothing vanishes");
         assert_eq!(
-            s.fees.net, 176_720_000_000,
-            "a round trip of 2,000 MSK returns 1,767.2 MSK: 12 % of the legs, no slippage loss when everything returns"
+            paid_in + m0.seed_sompi,
+            s.after.msk_reserve + s.fees.net + burned + registrant,
+            "nothing is minted, nothing vanishes"
         );
     }
 
-    /// The curve's product never falls below K on either move, at every size tried.
+    /// ADR-0090 P1: the reserve never falls under the seed — the product never falls, and with
+    /// every position in the curve the product is `seed × supply`. Tried at every size, both moves.
     #[test]
-    fn the_product_never_falls_below_k() {
-        let k = PalwModelMarketV1::k_v1();
-        let product =
-            |m: &PalwModelMarketV1| (m.msk_reserve as u128 + PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1 as u128) * m.position_units as u128;
-        let mut m = PalwModelMarketV1::open_v1(0);
+    fn the_product_never_falls_and_the_seed_never_leaves() {
+        let mut m = seeded();
+        let mut k = m.k();
         for msk_in in [1u64, 999, MSK, 37 * MSK, 1_000 * MSK, 123_456_789_012] {
             let Some(q) = palw_model_buy_quote_v1(&m, msk_in) else { continue };
-            assert!(product(&q.after) >= k, "buy {msk_in}: product {} < K {k}", product(&q.after));
+            assert!(q.after.k() >= k, "buy {msk_in}: product {} < {k}", q.after.k());
+            k = q.after.k();
             m = q.after;
         }
         let bought = PALW_MODEL_SUPPLY_UNITS_V1 - m.position_units;
         for units in [1u64, 12_345, bought / 3, bought / 2] {
             let Some(q) = palw_model_sell_quote_v1(&m, units) else { continue };
-            assert!(product(&q.after) >= k, "sell {units}: product {} < K", product(&q.after));
+            assert!(q.after.k() >= k, "sell {units}: product {} < {k}", q.after.k());
+            assert!(q.after.msk_reserve >= m.seed_sompi, "sell {units}: the reserve {} fell under the seed", q.after.msk_reserve);
+            k = q.after.k();
             m = q.after;
         }
+        // and the rest, so every position is back in the curve
+        let rest = PALW_MODEL_SUPPLY_UNITS_V1 - m.position_units;
+        let q = palw_model_sell_quote_v1(&m, rest).expect("the rest sells");
+        assert!(q.after.k() >= k);
+        m = q.after;
+        assert_eq!(m.position_units, PALW_MODEL_SUPPLY_UNITS_V1);
+        assert!(m.msk_reserve >= m.seed_sompi, "with every position back, the reserve is the seed or more: {}", m.msk_reserve);
+    }
+
+    /// ADR-0090 Decision 1: a position is whole. A buy that would release less than one position
+    /// releases nothing (refused at the fold), and the smallest buy that releases one releases
+    /// exactly one.
+    #[test]
+    fn a_position_is_whole_and_a_dust_buy_releases_nothing() {
+        let m0 = seeded();
+        assert!(palw_model_buy_quote_v1(&m0, MSK / 10).is_none(), "0.1 MSK buys no whole position at 0.2 MSK each");
+        let one = palw_model_buy_quote_v1(&m0, 22 * MSK / 100).expect("0.22 MSK buys one");
+        assert_eq!(one.units_out, 1);
+        assert_eq!(PALW_MODEL_POSITION_UNITS_V1, 1, "a position is the unit");
     }
 
     /// A buy and an immediate sell of what it bought returns 0.94² of the gross less slippage,
     /// and never more (M4).
     #[test]
     fn a_round_trip_pays_the_fees_twice_and_the_slippage_once() {
-        let m0 = PalwModelMarketV1::open_v1(0);
+        let m0 = seeded();
         let b = palw_model_buy_quote_v1(&m0, 100 * MSK).expect("a buy");
         let s = palw_model_sell_quote_v1(&b.after, b.units_out).expect("the sell");
         assert!(s.fees.net <= 94 * 94 * MSK / 100, "at most 0.94² of the gross came back: {}", s.fees.net);
@@ -299,7 +343,7 @@ mod tests {
     /// A closed market refuses buys and honours sells (M6, at this layer).
     #[test]
     fn a_closed_market_refuses_buys_and_honours_sells() {
-        let m0 = PalwModelMarketV1::open_v1(0);
+        let m0 = seeded();
         let b = palw_model_buy_quote_v1(&m0, 10 * MSK).expect("a buy");
         let closed = PalwModelMarketV1 { closed_to_buys: true, ..b.after };
         assert!(palw_model_buy_quote_v1(&closed, 10 * MSK).is_none());

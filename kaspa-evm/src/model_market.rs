@@ -36,13 +36,13 @@
 
 use kaspa_consensus_core::evm::model_market::{
     MAX_MARKET_ACTIONS_PER_EVM_BLOCK, MISAKA_MODEL_AMM_PRECOMPILE, MISAKA_MODEL_POSITION_PRECOMPILE, MISAKA_MODEL_REGISTRY_PRECOMPILE,
-    MISAKA_MODEL_WRITER, PALW_EVM_ACTION_BUY, PALW_EVM_ACTION_SELL, PALW_EVM_MARKET_ACTION_ENCODING_V1, PALW_EVM_WRITER_GAS_V1,
-    PalwEvmMarketActionKindV1, PalwEvmMarketActionV1, PalwEvmMarketFencesV1, PalwEvmSettlementOutcomeV1, PalwEvmSettlementV1,
-    PalwEvmViewV1, evm_holder_v1, facade_address_v1,
+    MISAKA_MODEL_WRITER, PALW_EVM_ACTION_BUY, PALW_EVM_ACTION_SEED, PALW_EVM_ACTION_SELL, PALW_EVM_MARKET_ACTION_ENCODING_V1,
+    PALW_EVM_WRITER_GAS_V1, PalwEvmMarketActionKindV1, PalwEvmMarketActionV1, PalwEvmMarketFencesV1, PalwEvmSettlementOutcomeV1,
+    PalwEvmSettlementV1, PalwEvmViewV1, evm_holder_v1, facade_address_v1,
 };
 use kaspa_consensus_core::evm::{EVM_NATIVE_SCALE, EvmAddress, EvmLog};
 use kaspa_consensus_core::palw_model_market_v1::{
-    PALW_MODEL_BURN_PERMILLE_V1, PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1, PALW_MODEL_POSITION_UNITS_V1, PALW_MODEL_REGISTRANT_PERMILLE_V1,
+    PALW_MODEL_BURN_PERMILLE_V1, PALW_MODEL_POSITION_UNITS_V1, PALW_MODEL_REGISTRANT_PERMILLE_V1, PALW_MODEL_SEED_MIN_SOMPI_V1,
     PALW_MODEL_SUPPLY_UNITS_V1, PalwModelMarketV1, palw_model_buy_quote_v1, palw_model_sell_quote_v1,
 };
 use kaspa_hashes::{EvmH256, Hash64};
@@ -136,6 +136,8 @@ struct Selectors {
     holder_id_of: [u8; 4],
     // ModelWriter (0x…F013)
     send_action: [u8; 4],
+    // ADR-0090: the facade's seed door
+    seed: [u8; 4],
     // IMRC20 (the facade family)
     name: [u8; 4],
     symbol: [u8; 4],
@@ -159,6 +161,7 @@ struct Selectors {
     bought: B256,
     sold_event: B256,
     refused: B256,
+    seeded: B256,
     // errors
     not_an_account: [u8; 4],
     bad_value: [u8; 4],
@@ -168,6 +171,7 @@ struct Selectors {
     unknown_line: [u8; 4],
     too_many_actions: [u8; 4],
     bad_input: [u8; 4],
+    seed_too_small: [u8; 4],
     // ERC-165
     imrc20_interface_id: [u8; 4],
 }
@@ -187,6 +191,7 @@ fn sel() -> &'static Selectors {
         let quote_sell = selector("quoteSell(uint256)");
         let buy = selector("buy(uint256)");
         let sell = selector("sell(uint256,uint256)");
+        let seed = selector("seed()");
         // ERC-165: the XOR of every IMRC20 function selector except supportsInterface itself.
         let mut imrc20 = [0u8; 4];
         for s in [name, symbol, decimals, total_supply, balance_of, line_id, circulating, price, quote_buy, quote_sell, buy, sell] {
@@ -226,6 +231,7 @@ fn sel() -> &'static Selectors {
             sold: selector("sold(bytes32,bytes32)"),
             holder_id_of: selector("holderIdOf(address)"),
             send_action: selector("sendAction(bytes)"),
+            seed,
             name,
             symbol,
             decimals,
@@ -247,6 +253,7 @@ fn sel() -> &'static Selectors {
             bought: keccak256(b"Bought(address,uint256,uint256,uint256)"),
             sold_event: keccak256(b"Sold(address,uint256,uint256,uint256)"),
             refused: keccak256(b"Refused(address,uint8,uint256,bytes32)"),
+            seeded: keccak256(b"Seeded(address,uint256,uint256)"),
             not_an_account: selector("NotAnAccount()"),
             bad_value: selector("BadValue()"),
             closed_to_buys: selector("ClosedToBuys()"),
@@ -255,6 +262,7 @@ fn sel() -> &'static Selectors {
             unknown_line: selector("UnknownLine()"),
             too_many_actions: selector("TooManyActions()"),
             bad_input: selector("BadInput()"),
+            seed_too_small: selector("SeedTooSmall()"),
             imrc20_interface_id: imrc20,
         }
     })
@@ -276,6 +284,9 @@ pub fn sold_topic() -> B256 {
 /// `keccak256("Refused(address,uint8,uint256,bytes32)")`.
 pub fn refused_topic() -> B256 {
     sel().refused
+}
+pub fn seeded_topic() -> B256 {
+    sel().seeded
 }
 /// ERC-165 id of `IMRC20`: the XOR of its twelve function selectors (`supportsInterface` excluded).
 pub fn imrc20_interface_id() -> [u8; 4] {
@@ -320,6 +331,9 @@ pub mod errors {
     /// `BadInput()`: malformed calldata (a read consumes the frame's gas with it).
     pub fn bad_input() -> [u8; 4] {
         super::sel().bad_input
+    }
+    pub fn seed_too_small() -> [u8; 4] {
+        super::sel().seed_too_small
     }
 }
 
@@ -494,8 +508,15 @@ enum Door {
 /// A decoded action, before the writer's checks.
 #[derive(Clone, Copy, Debug)]
 enum Action {
-    Buy { min_units_out: U256 },
-    Sell { units_in: U256, min_msk_out_sompi: U256 },
+    Buy {
+        min_units_out: U256,
+    },
+    Sell {
+        units_in: U256,
+        min_msk_out_sompi: U256,
+    },
+    /// ADR-0090: the seed — the call's value is the whole of it.
+    Seed,
 }
 
 /// What a facade call turned out to be.
@@ -561,13 +582,13 @@ impl MarketHandlers {
     }
 
     /// The market row a quote is taken against: the fold's row, or — for a line the fold knows
-    /// but has not opened — the row it WOULD open (ADR-0087: the market opens at its first buy).
+    /// but nobody has seeded — a zero row that quotes nothing (ADR-0090: a market opens by a seed).
     /// `None` for a line the fold does not know. The bool is `exists`.
     fn market_row(&self, line: &Hash64) -> Option<(PalwModelMarketV1, bool)> {
         if let Some(m) = self.view.markets.get(line) {
             Some((*m, true))
         } else if self.view.line(line).is_some() {
-            Some((PalwModelMarketV1::open_v1(self.view.chain_daa), false))
+            Some((PalwModelMarketV1::seed_v1(self.view.chain_daa, 0, Hash64::default()), false))
         } else {
             None
         }
@@ -824,7 +845,7 @@ impl MarketHandlers {
                 Out::default()
                     .u64(PALW_MODEL_SUPPLY_UNITS_V1)
                     .u64(PALW_MODEL_POSITION_UNITS_V1)
-                    .u64(PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1)
+                    .u64(PALW_MODEL_SEED_MIN_SOMPI_V1)
                     .u64(PALW_MODEL_BURN_PERMILLE_V1)
                     .u64(PALW_MODEL_REGISTRANT_PERMILLE_V1)
                     .finish()
@@ -886,7 +907,8 @@ impl MarketHandlers {
             }
             x if x == s.decimals => {
                 Args::parse(input, 0)?;
-                Out::default().u64(6).finish()
+                // ADR-0090 Decision 1: a position is whole.
+                Out::default().u64(0).finish()
             }
             x if x == s.total_supply => {
                 Args::parse(input, 0)?;
@@ -938,6 +960,10 @@ impl MarketHandlers {
             x if x == s.sell => {
                 let a = Args::parse(input, 2)?;
                 return Ok(FacadeCall::Write(Action::Sell { units_in: a.u256(0), min_msk_out_sompi: a.u256(1) }));
+            }
+            x if x == s.seed => {
+                Args::parse(input, 0)?;
+                return Ok(FacadeCall::Write(Action::Seed));
             }
             _ => return Err(Malformed),
         }))
@@ -996,6 +1022,12 @@ fn decode_action_bytes(data: &[u8]) -> Result<(Hash64, Action), Malformed> {
                 line,
                 Action::Sell { units_in: U256::from_be_slice(&abi[64..96]), min_msk_out_sompi: U256::from_be_slice(&abi[96..128]) },
             ))
+        }
+        PALW_EVM_ACTION_SEED => {
+            if abi.len() != 64 {
+                return Err(Malformed);
+            }
+            Ok((hash_from_words(&abi[..32], &abi[32..64]), Action::Seed))
         }
         _ => Err(Malformed),
     }
@@ -1088,6 +1120,12 @@ pub fn decode_action_log(log: &Log, seq: u32) -> Option<PalwEvmMarketActionV1> {
             }
             (PalwEvmMarketActionKindV1::Sell { units_in: w3, min_msk_out_sompi: w4 }, 0)
         }
+        PALW_EVM_ACTION_SEED => {
+            if w3 != 0 || w4 == 0 {
+                return None;
+            }
+            (PalwEvmMarketActionKindV1::Seed, w4)
+        }
         _ => return None,
     };
     Some(PalwEvmMarketActionV1 { seq, account, line_id, kind, gross_sompi })
@@ -1102,15 +1140,18 @@ pub fn decode_action_log(log: &Log, seq: u32) -> Option<PalwEvmMarketActionV1> {
 pub fn settlement_log(s: &PalwEvmSettlementV1) -> EvmLog {
     let holder = EvmH256::from_bytes(word_address(&to_address(&s.account)));
     let (topic, data) = match s.outcome {
-        PalwEvmSettlementOutcomeV1::Filled { units, net_sompi, price_after_sompi, .. } if s.is_buy => {
+        // ADR-0090: `Seeded(holder, mskIn, priceAfter)` — the whole escrow became the reserve.
+        PalwEvmSettlementOutcomeV1::Filled { price_after_sompi, .. } if s.is_seed() => {
+            (seeded_topic(), Out::default().u64(s.escrow_sompi).u64(price_after_sompi).finish())
+        }
+        PalwEvmSettlementOutcomeV1::Filled { units, price_after_sompi, .. } if s.is_buy() => {
             (bought_topic(), Out::default().u64(s.escrow_sompi).u64(units).u64(price_after_sompi).finish())
         }
         PalwEvmSettlementOutcomeV1::Filled { units, net_sompi, price_after_sompi, .. } => {
             (sold_topic(), Out::default().u64(units).u64(net_sompi).u64(price_after_sompi).finish())
         }
         PalwEvmSettlementOutcomeV1::Refused { reason } => {
-            let id = if s.is_buy { PALW_EVM_ACTION_BUY } else { PALW_EVM_ACTION_SELL };
-            (refused_topic(), Out::default().u64(id as u64).u64(s.escrow_sompi).u64(reason as u64).finish())
+            (refused_topic(), Out::default().u64(s.action as u64).u64(s.escrow_sompi).u64(reason as u64).finish())
         }
     };
     EvmLog { address: facade_address_v1(&s.line_id), topics: vec![EvmH256::from_bytes(topic.0), holder], data }
@@ -1270,6 +1311,20 @@ fn write_frame<EXT, DB: Database>(
             }
             (PALW_EVM_ACTION_SELL, units, min, 0)
         }
+        // ADR-0090: the seed is the value, whole sompi, at least the floor; refused here already
+        // so a too-small seed never even queues.
+        Action::Seed => {
+            if value.is_zero() || !(value % scale).is_zero() {
+                return Ok(revert(errors::bad_value(), gas, memory));
+            }
+            let Some(gross) = fits(value / scale) else {
+                return Ok(revert(errors::bad_value(), gas, memory));
+            };
+            if gross < PALW_MODEL_SEED_MIN_SOMPI_V1 {
+                return Ok(revert(errors::seed_too_small(), gas, memory));
+            }
+            (PALW_EVM_ACTION_SEED, 0, gross, gross)
+        }
     };
     if market.view.line(&line).is_none() {
         return Ok(revert(errors::unknown_line(), gas, memory));
@@ -1312,6 +1367,11 @@ pub fn send_action_buy_calldata(line: &Hash64, min_units_out: u64) -> Vec<u8> {
 /// Calldata for `sendAction(bytes)` carrying a sell (the core crate's spelling).
 pub fn send_action_sell_calldata(line: &Hash64, units_in: u64, min_msk_out_sompi: u64) -> Vec<u8> {
     kaspa_consensus_core::evm::model_market::send_action_sell_calldata(line, units_in, min_msk_out_sompi)
+}
+
+/// Calldata for `sendAction(bytes)` carrying a seed (ADR-0090; the core crate's spelling).
+pub fn send_action_seed_calldata(line: &Hash64) -> Vec<u8> {
+    kaspa_consensus_core::evm::model_market::send_action_seed_calldata(line)
 }
 
 /// `sendAction(bytes)` around raw action bytes (the core crate's spelling).
@@ -1462,7 +1522,7 @@ mod tests {
             seq: 0,
             account,
             line_id: line,
-            is_buy: true,
+            action: PALW_EVM_ACTION_BUY,
             escrow_sompi: 100,
             outcome: PalwEvmSettlementOutcomeV1::Filled { units: 40, gross_sompi: 100, net_sompi: 94, price_after_sompi: 7 },
         };
@@ -1473,7 +1533,7 @@ mod tests {
         assert_eq!(abi::read_u64(&log.data, 1), Some(40));
         assert_eq!(abi::read_u64(&log.data, 2), Some(7));
         let refused = PalwEvmSettlementV1 {
-            is_buy: false,
+            action: PALW_EVM_ACTION_SELL,
             escrow_sompi: 0,
             outcome: PalwEvmSettlementOutcomeV1::Refused { reason: 5 },
             ..filled

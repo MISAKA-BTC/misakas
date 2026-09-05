@@ -3485,6 +3485,8 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ModelProposalPosted { .. } => "ModelProposalPosted",
         PalwConsensusObjectV2::ModelProposalClosed { .. } => "ModelProposalClosed",
         PalwConsensusObjectV2::ModelEvaluationPosted { .. } => "ModelEvaluationPosted",
+        // ADR-0090 — the seed that opens a line's market.
+        PalwConsensusObjectV2::ModelSeed { .. } => "ModelSeed",
     }
 }
 

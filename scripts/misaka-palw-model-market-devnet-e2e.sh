@@ -8,8 +8,11 @@
 #   node-0 … node-(N-1)   each a producer under devnet public-seed bond n (floor class, fixture PoW),
 #                         every node serving wRPC Borsh (176xx) and the eth JSON-RPC (185xx).
 #   1. the founding line (ADR-0088 D1: its id is the base class id) reads through getPalwModelLine
+#   1b. ADR-0090: a buy before any seed is refused; an EVM account funded through EVM_DEPOSIT_LOCK +
+#      claim seeds the line with the least seed (100,000 MSK) through the writer — the market opens
+#      at 0.2 MSK a position with 500,000 whole positions in the curve; a second (carrier) seed is refused
 #   2. a CARRIER buy (ADR-0087): `misaka palw model-buy` from the premine key → every node folds it
-#   3. an EVM account is funded through an EVM_DEPOSIT_LOCK + claim (kaspa-pq-validator)
+#   3. (the EVM account was funded in 1b)
 #   4. an EVM buy (ADR-0089 D5/D6): `misaka palw model-evm-buy` → queued in B, settled in C, the
 #      position readable through the position window on every node
 #   5. a REFUSED EVM buy (min positions impossible) → the escrow comes back in C
@@ -240,12 +243,6 @@ log "founding line (= base class) $LINE_ID"
 if until_json "find(v,'exists') in (True, 'true') or find(v,'line') is not None" cli 0 palw line-show "$LINE_ID"; then check "1. the founding line reads through getPalwModelLine" 0; else check "1. the founding line reads through getPalwModelLine" 1; fi
 cp "$WORK_DIR/out/last.json" "$WORK_DIR/out/line-show.json" 2>/dev/null || true
 
-# ---- 2. the carrier buy (ADR-0087) -------------------------------------------------------------------
-log "carrier buy: 5 MSK from the premine key"
-cli 0 palw model-buy --key-file "$WORK_DIR/keys/main.seed" --line "$LINE_ID" --msk 5 --min-positions 1 --yes >"$WORK_DIR/out/carrier-buy.txt" 2>&1 || log "model-buy exited non-zero: $(tail -2 "$WORK_DIR/out/carrier-buy.txt")"
-if until_json "int(find(v,'sold_units') or 0) > 0" cli 0 palw model-show "$LINE_ID"; then check "2. the carrier buy folded (sold_units > 0)" 0; else check "2. the carrier buy folded (sold_units > 0)" 1; fi
-carrier_sold="$(jfind sold_units "$WORK_DIR/out/last.json")"; log "  sold_units after the carrier buy: ${carrier_sold:-?}"
-
 # ---- 3. an EVM account, funded through a deposit lock + claim ------------------------------------------
 cli 0 evm wallet create --out "$WORK_DIR/keys/evm.mnemonic" --output json > "$WORK_DIR/out/evm-wallet.json"
 EVM_ADDR="$(jfind address "$WORK_DIR/out/evm-wallet.json")"
@@ -253,10 +250,10 @@ EVM_ADDR="$(jfind address "$WORK_DIR/out/evm-wallet.json")"
 log "EVM account $EVM_ADDR"
 EVM_KEY=(--mnemonic-file "$WORK_DIR/keys/evm.mnemonic")
 "$PQV_BIN" deposit-lock --node-wrpc-borsh "127.0.0.1:$(rpc_of 0)" --network devnet --validator-key "$WORK_DIR/keys/main.seed" \
-  --evm-address "$EVM_ADDR" --amount 3000000000 --claim-tip 0 > "$WORK_DIR/out/deposit-lock.txt" 2>&1 || { cat "$WORK_DIR/out/deposit-lock.txt" >&2; die "deposit-lock failed"; }
+  --evm-address "$EVM_ADDR" --amount 10003000000000 --claim-tip 0 > "$WORK_DIR/out/deposit-lock.txt" 2>&1 || { cat "$WORK_DIR/out/deposit-lock.txt" >&2; die "deposit-lock failed"; }
 OUTPOINT="$( { grep -o -E "deposit_lock_outpoint: [0-9a-f]{128}:[0-9]+" "$WORK_DIR/out/deposit-lock.txt" || true; } | awk '{print $2}')"
 [ -n "$OUTPOINT" ] || { cat "$WORK_DIR/out/deposit-lock.txt" >&2; die "deposit-lock printed no outpoint"; }
-log "deposit lock $OUTPOINT (30 MSK); waiting for it to be mined, then claiming on node-0"
+log "deposit lock $OUTPOINT (100,030 MSK: the seed and change); waiting for it to be mined, then claiming on node-0"
 advance 2
 deadline=$((SECONDS + STEP_WAIT))
 until "$PQV_BIN" claim --node-wrpc-borsh "127.0.0.1:$(rpc_of 0)" --network devnet --outpoint "$OUTPOINT" > "$WORK_DIR/out/claim.txt" 2>&1; do
@@ -266,11 +263,35 @@ done
 if until_json "int(find(v,'balanceWei') or 0) > 0" cli 0 evm balance --address "$EVM_ADDR"; then check "3. the EVM account is funded through EVM_DEPOSIT_LOCK + claim" 0; else check "3. the EVM account is funded through EVM_DEPOSIT_LOCK + claim" 1; fi
 bal0="$(jfind balanceWei "$WORK_DIR/out/last.json")"; log "  balance $bal0 wei"
 
+# ---- 1b. ADR-0090: no market before a seed; the EVM seed opens it; a second seed is refused ------------
+cli 0 palw model-show "$LINE_ID" --output json > "$WORK_DIR/out/market-unseeded.json" 2>/dev/null || echo '{}' > "$WORK_DIR/out/market-unseeded.json"
+opened0="$(jfind opened "$WORK_DIR/out/market-unseeded.json")"
+if [ "$opened0" = "False" ] || [ "$opened0" = "false" ]; then check "1b. before any seed the line has no market" 0; else check "1b. before any seed the line has no market" 1; fi
+log "EVM seed: 100,000 MSK through the writer (locked for good)"
+cli 0 palw model-evm-seed "${EVM_KEY[@]}" --line "$LINE_ID" --msk 100000 --yes --wait > "$WORK_DIR/out/evm-seed.txt" 2>&1 || log "model-evm-seed exited non-zero: $(tail -3 "$WORK_DIR/out/evm-seed.txt")"
+if until_json "int(find(v,'seed_sompi') or 0) == 10000000000000 and int(find(v,'msk_reserve_sompi') or 0) == 10000000000000" cli 0 palw model-show "$LINE_ID"; then check "1c. the EVM seed opened the market with the whole 100,000 MSK as the reserve" 0; else check "1c. the EVM seed opened the market with the whole 100,000 MSK as the reserve" 1; fi
+price0="$(jfind price_sompi_per_position "$WORK_DIR/out/last.json")"; log "  first price ${price0:-?} sompi a position (0.2 MSK expected); positions in the curve: $(jfind position_units "$WORK_DIR/out/last.json")"
+[ "${price0:-0}" = "20000000" ] && check "1d. the first price is seed / 500,000 = 0.2 MSK" 0 || check "1d. the first price is seed / 500,000 = 0.2 MSK" 1
+cli 0 palw model-evm-position --line "$LINE_ID" --address "$EVM_ADDR" --output json > "$WORK_DIR/out/pos-seed.json" 2>/dev/null || echo '{}' > "$WORK_DIR/out/pos-seed.json"
+[ "$(jfind units "$WORK_DIR/out/pos-seed.json")" = "0" ] && check "1e. the seeder holds no position" 0 || check "1e. the seeder holds no position" 1
+cli 0 evm balance --address "$EVM_ADDR" --output json > "$WORK_DIR/out/bal-seed.json" 2>/dev/null || echo '{}' > "$WORK_DIR/out/bal-seed.json"
+bal_seed="$(jfind balanceWei "$WORK_DIR/out/bal-seed.json")"; log "  balance after the seed ${bal_seed:-?} wei"
+log "carrier seed on the seeded line: refused (a market is seeded once)"
+if cli 0 palw model-seed --key-file "$WORK_DIR/keys/main.seed" --line "$LINE_ID" --msk 100000 --yes > "$WORK_DIR/out/carrier-seed.txt" 2>&1; then check "1f. a second seed is refused" 1; else check "1f. a second seed is refused" 0; fi
+
+# ---- 2. the carrier buy (ADR-0087) -------------------------------------------------------------------
+log "carrier buy: 5 MSK from the premine key"
+cli 0 palw model-buy --key-file "$WORK_DIR/keys/main.seed" --line "$LINE_ID" --msk 5 --min-positions 1 --yes >"$WORK_DIR/out/carrier-buy.txt" 2>&1 || log "model-buy exited non-zero: $(tail -2 "$WORK_DIR/out/carrier-buy.txt")"
+if until_json "int(find(v,'sold_units') or 0) > 0" cli 0 palw model-show "$LINE_ID"; then check "2. the carrier buy folded (sold_units > 0)" 0; else check "2. the carrier buy folded (sold_units > 0)" 1; fi
+carrier_sold="$(jfind sold_units "$WORK_DIR/out/last.json")"; price1="$(jfind price_sompi_per_position "$WORK_DIR/out/last.json")"; log "  sold_units after the carrier buy: ${carrier_sold:-?} (whole positions); price ${price1:-?}"
+if [ "${price1:-0}" -gt "${price0:-0}" ]; then check "2b. buying raised the price (${price0:-?} → ${price1:-?})" 0; else check "2b. buying raised the price" 1; fi
+
+
 # ---- 4. the EVM buy (ADR-0089 Decisions 5 and 6) ------------------------------------------------------
-log "EVM buy: 3 MSK through the writer"
+log "EVM buy: 3 MSK through the writer (whole positions at ~0.2 MSK)"
 cli 0 palw model-evm-buy "${EVM_KEY[@]}" --line "$LINE_ID" --msk 3 --min-positions 1 --yes --wait > "$WORK_DIR/out/evm-buy.txt" 2>&1 || log "model-evm-buy exited non-zero: $(tail -3 "$WORK_DIR/out/evm-buy.txt")"
 if until_json "int(find(v,'units') or 0) > 0" cli 0 palw model-evm-position --line "$LINE_ID" --address "$EVM_ADDR"; then check "4. the EVM buy settled into a position the window shows" 0; else check "4. the EVM buy settled into a position the window shows" 1; fi
-pos1="$(jfind units "$WORK_DIR/out/last.json")"; log "  position $pos1 units"
+pos1="$(jfind units "$WORK_DIR/out/last.json")"; log "  position $pos1 (whole positions; 1 unit = 1 position under ADR-0090)"
 until_json "int(find(v,'sold_units') or 0) > int('${carrier_sold:-0}' or 0)" cli 0 palw model-show "$LINE_ID" || true
 cli 0 evm balance --address "$EVM_ADDR" --output json > "$WORK_DIR/out/bal1.json"; bal1="$(jfind balanceWei "$WORK_DIR/out/bal1.json")"; log "  balance $bal1 wei"
 
@@ -286,7 +307,7 @@ cli 0 palw model-evm-position --line "$LINE_ID" --address "$EVM_ADDR" --output j
 # ---- 6. an EVM sell: the net leg is credited ---------------------------------------------------------
 log "EVM sell: 1 position"
 cli 0 palw model-evm-sell "${EVM_KEY[@]}" --line "$LINE_ID" --positions 1 --min-msk 0 --yes --wait > "$WORK_DIR/out/evm-sell.txt" 2>&1 || log "model-evm-sell exited non-zero: $(tail -3 "$WORK_DIR/out/evm-sell.txt")"
-if until_json "int(find(v,'units') or 0) == int('${pos1:-0}' or 0) - 1000000" cli 0 palw model-evm-position --line "$LINE_ID" --address "$EVM_ADDR"; then check "6. the EVM sell debited one position" 0; else check "6. the EVM sell debited one position" 1; fi
+if until_json "int(find(v,'units') or 0) == int('${pos1:-0}' or 0) - 1" cli 0 palw model-evm-position --line "$LINE_ID" --address "$EVM_ADDR"; then check "6. the EVM sell debited exactly one whole position" 0; else check "6. the EVM sell debited exactly one whole position" 1; fi
 if until_json "int(find(v,'balanceWei') or 0) > int('${bal2:-0}' or 0)" cli 0 evm balance --address "$EVM_ADDR"; then check "6b. the sell's net leg was credited to the account" 0; else check "6b. the sell's net leg was credited to the account" 1; fi
 bal3="$(jfind balanceWei "$WORK_DIR/out/last.json")"; log "  balance $bal3 wei"
 

@@ -9,6 +9,8 @@ transfer between holders**, so that a position is never something one person han
 The operator's word is *position* (ポジション), not *share*: it is bought from the protocol's
 curve and sold back to it, and that is the whole of what it is.
 
+> **Amended again (2026-09-05, implemented the same day).** [ADR-0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md) retires the virtual reserve and the lazy opening: a market opens only by a **seed** of at least 100,000 MSK that becomes the reserve, fee-free and locked for good (the reserve never falls under it); a position is **whole** and there are **500,000** a line; a third move (`ModelSeed`) rides beside the buy and the sell. Decisions 1, 2, 3, 4 and 8 below read with that in mind.
+>
 > **Amended (design, 2026-09-05, revised the same day).** [ADR-0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md) keys this market by a
 > *line* — a class, an owner, a name — of which the class's own line is the first, with the class id
 > as its key, so every value here is unchanged for a class that has only its own; Decision 4's

@@ -74,6 +74,9 @@ pub const PALW_EVM_MARKET_ACTION_ENCODING_V1: u8 = 1;
 /// Action ids (Decision 5).
 pub const PALW_EVM_ACTION_BUY: u32 = 1;
 pub const PALW_EVM_ACTION_SELL: u32 = 2;
+/// ADR-0090 Decision 3: the seed that opens a line's market — the call's value, at least
+/// `PALW_MODEL_SEED_MIN_SOMPI_V1`, becomes the reserve.
+pub const PALW_EVM_ACTION_SEED: u32 = 3;
 
 /// The four bytes of `keccak256("sendAction(bytes)")` — the writer's one function (Decision 5).
 /// Spelled here, in the crate every client already links, so a wallet or a CLI can build the
@@ -113,6 +116,15 @@ pub fn send_action_buy_calldata(line: &Hash64, min_units_out: u64) -> Vec<u8> {
     data.extend_from_slice(&PALW_EVM_ACTION_BUY.to_be_bytes()[1..]);
     data.extend_from_slice(line.as_byte_slice());
     data.extend_from_slice(&abi_word_u64(min_units_out));
+    send_action_calldata(&data)
+}
+
+/// The action bytes of a seed (ADR-0090): `version ‖ id(3) ‖ line(64)`; the seed is the call's
+/// value (whole sompi × `EVM_NATIVE_SCALE`), at least `PALW_MODEL_SEED_MIN_SOMPI_V1`.
+pub fn send_action_seed_calldata(line: &Hash64) -> Vec<u8> {
+    let mut data = vec![PALW_EVM_MARKET_ACTION_ENCODING_V1];
+    data.extend_from_slice(&PALW_EVM_ACTION_SEED.to_be_bytes()[1..]);
+    data.extend_from_slice(line.as_byte_slice());
     send_action_calldata(&data)
 }
 
@@ -160,8 +172,25 @@ pub fn synthetic_market_sink_txid(decided_at: Hash64, seq: u32, account: &EvmAdd
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PalwEvmMarketActionKindV1 {
-    Buy { min_units_out: u64 },
-    Sell { units_in: u64, min_msk_out_sompi: u64 },
+    Buy {
+        min_units_out: u64,
+    },
+    Sell {
+        units_in: u64,
+        min_msk_out_sompi: u64,
+    },
+    /// ADR-0090: the whole `gross_sompi` is the seed.
+    Seed,
+}
+
+impl PalwEvmMarketActionKindV1 {
+    pub fn action_id(&self) -> u32 {
+        match self {
+            Self::Buy { .. } => PALW_EVM_ACTION_BUY,
+            Self::Sell { .. } => PALW_EVM_ACTION_SELL,
+            Self::Seed => PALW_EVM_ACTION_SEED,
+        }
+    }
 }
 
 /// What the writer queued in `EVM(B)`, scanned from its `ActionQueued` logs in log order.
@@ -189,6 +218,12 @@ pub mod refusal {
     pub const EXCEEDS_POSITION: u8 = 7;
     pub const PAYS_NOTHING: u8 = 8;
     pub const OTHER: u8 = 9;
+    /// ADR-0090: the line's market is already seeded.
+    pub const ALREADY_SEEDED: u8 = 10;
+    /// ADR-0090: the seed is under `PALW_MODEL_SEED_MIN_SOMPI_V1`.
+    pub const SEED_TOO_SMALL: u8 = 11;
+    /// ADR-0090: the line's class is frozen.
+    pub const CLASS_CLOSED: u8 = 12;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -215,13 +250,29 @@ pub struct PalwEvmSettlementV1 {
     pub seq: u32,
     pub account: EvmAddress,
     pub line_id: Hash64,
-    pub is_buy: bool,
+    /// Which move this settles (`PALW_EVM_ACTION_BUY` / `SELL` / `SEED`, ADR-0090). A buy and a
+    /// seed carry escrow; a sell carries none.
+    pub action: u32,
     /// The escrow a buy holds in the writer's account (sompi); zero for a sell.
     pub escrow_sompi: u64,
     pub outcome: PalwEvmSettlementOutcomeV1,
 }
 
 impl MemSizeEstimator for PalwEvmSettlementV1 {}
+
+impl PalwEvmSettlementV1 {
+    /// A buy's and a seed's value sits in the writer's escrow until the settlement burns or
+    /// refunds it; a sell moved nothing in.
+    pub fn carries_escrow(&self) -> bool {
+        self.action != PALW_EVM_ACTION_SELL
+    }
+    pub fn is_buy(&self) -> bool {
+        self.action == PALW_EVM_ACTION_BUY
+    }
+    pub fn is_seed(&self) -> bool {
+        self.action == PALW_EVM_ACTION_SEED
+    }
+}
 
 // ---- fences ------------------------------------------------------------------------------------
 

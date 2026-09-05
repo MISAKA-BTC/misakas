@@ -56,6 +56,13 @@ library MisakaModelAddresses {
     /// Action ids: `data[1..4]`, a big-endian u24. Ids 3–255 are reserved.
     uint24 internal constant ACTION_BUY = 1;
     uint24 internal constant ACTION_SELL = 2;
+    /// ADR-0090: the seed that opens a line's market — `msg.value` is the whole of it.
+    uint24 internal constant ACTION_SEED = 3;
+    /// ADR-0090: the least seed, in sompi (100,000 MSK); the writer reverts `SeedTooSmall()` under it.
+    uint64 internal constant SEED_MIN_SOMPI = 10_000_000_000_000;
+    /// ADR-0090: a line's whole supply — 500,000 positions, and a position is one unit (no fraction).
+    uint64 internal constant SUPPLY_POSITIONS = 500_000;
+    uint64 internal constant UNITS_PER_POSITION = 1;
 
     /// Actions accepted per EVM block (`PALW_EVM_MARKET_ACTIONS_PER_BLOCK_V1`); the 129th
     /// call in a block reverts.

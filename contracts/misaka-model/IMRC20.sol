@@ -58,6 +58,7 @@ interface IMRC20 {
     function symbol() external view returns (string memory);
 
     /// 6 — one position is 10^6 units (ADR-0087 Decision 1).
+    /// ADR-0090 Decision 1: 0 — a position is a whole number, one unit, no fraction.
     function decimals() external view returns (uint8);
 
     /// `PALW_MODEL_SUPPLY_UNITS_V1`, in units, fixed at the market's opening: the curve's
@@ -100,6 +101,13 @@ interface IMRC20 {
     /// call: `NotAnAccount()`, `BadValue()` (a sell of zero), or the block's 128-action cap.
     function sell(uint256 unitsIn, uint256 minMskOutSompi) external;
 
+    /// ADR-0090: open this line's market by locking `msg.value` (at least SEED_MIN_SOMPI × 1e10
+    /// wei, a multiple of 1e10) as the curve's reserve for good — 500,000 whole positions open in
+    /// the curve at `seed / 500,000` each. The seeder receives no position and nothing ever pays
+    /// the seed out. Refused at the fold (a `Refused` event, escrow refunded) when the line is
+    /// already seeded or its class is frozen; reverts `SeedTooSmall()` at the call under the floor.
+    function seed() external payable;
+
     /// ERC-165. True for `type(IMRC20).interfaceId`; FALSE for 0x36372b07 (ERC-20): this is a
     /// position, not a token.
     function supportsInterface(bytes4 interfaceId) external view returns (bool);
@@ -113,6 +121,8 @@ interface IMRC20 {
     /// A sell filled: `unitsIn` units debited, `mskOut` NET sompi credited to `holder` in the
     /// EVM (`mskOut × 1e10` wei, a credit with no lock and no tip), `priceAfter` as above.
     event Sold(address indexed holder, uint256 unitsIn, uint256 mskOut, uint256 priceAfter);
+    /// ADR-0090: the seed became the reserve; `priceAfter` is the first price, `mskIn` the seed (sompi).
+    event Seeded(address indexed holder, uint256 mskIn, uint256 priceAfter);
 
     /// An action refused by the fold: `actionId` 1 (buy: `amount` = the gross sompi, refunded
     /// to `holder` at `C`) or 2 (sell: `amount` = `unitsIn`, which never left `holder`).
@@ -139,4 +149,6 @@ interface IMRC20 {
     /// `buy` with a `msg.value` that is zero or not a multiple of 1e10 wei; `sell` of zero
     /// units.
     error BadValue();
+    /// ADR-0090: `seed()` with a value under the network's least seed.
+    error SeedTooSmall();
 }

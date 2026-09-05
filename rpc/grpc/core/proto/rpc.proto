@@ -1552,6 +1552,9 @@ message GetPalwModelMarketResponseMessage {
   uint64 virtualSompi = 13;
   string classStatus = 14;
   uint64 contributorPaidSompi = 15;
+  uint64 seedSompi = 16;
+  string seededBy = 17;
+  uint64 seedMinSompi = 18;
   RPCError error = 1000;
 }
 

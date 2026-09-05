@@ -604,3 +604,34 @@ pub fn model_evm_sell(
     }
     call(ctx, ks, &writer_address_hex(), data, 0, gas_limit.or(Some(120_000)), max_fee, nonce, yes, wait)
 }
+
+/// `misaka palw model-evm-seed`: the seed is the call's value — whole sompi, at least the
+/// network's least seed; the writer refuses less before it even queues (`SeedTooSmall`).
+#[allow(clippy::too_many_arguments)]
+pub fn model_evm_seed(
+    ctx: &Ctx,
+    ks: &EvmKeySource,
+    line: &str,
+    msk: &str,
+    gas_limit: Option<u64>,
+    max_fee: Option<u128>,
+    nonce: Option<u64>,
+    yes: bool,
+    wait: bool,
+) -> CliResult {
+    let line = parse_line_id(line)?;
+    let wei = parse_msk_to_wei(msk)?;
+    let scale = kaspa_consensus_core::evm::EVM_NATIVE_SCALE as u128;
+    if wei == 0 || wei % scale != 0 {
+        return Err(CliError::new(exit::GENERIC, format!("--msk {msk} is not a whole number of sompi; the writer refuses it")));
+    }
+    let least = kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1 as u128;
+    if wei / scale < least {
+        return Err(CliError::new(exit::GENERIC, format!("a seed of {} sompi is under the least seed of {least} sompi", wei / scale)));
+    }
+    let data = kaspa_consensus_core::evm::model_market::send_action_seed_calldata(&line);
+    if !ctx.quiet {
+        eprintln!("model-evm-seed: line {line} lock {} sompi for good → writer {}", wei / scale, writer_address_hex());
+    }
+    call(ctx, ks, &writer_address_hex(), data, wei, gas_limit.or(Some(120_000)), max_fee, nonce, yes, wait)
+}
