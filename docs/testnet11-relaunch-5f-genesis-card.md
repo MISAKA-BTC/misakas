@@ -6324,3 +6324,24 @@ binding = the job id; `fp_trace_manifest_v3`) and routes the three backends' fre
 256-token cap (their `02c5bb0`) can be lifted once the gateway host's `palw-a16-fp-worker` carries this build; the fleet's
 kaspad does not verify the root, so the fleet needs nothing for it. Devnet run 8 (`MAX_TOKENS=300`, two chunks and over
 the material cap) is the check.
+
+### 10q. The court reaches an over-cap class: the ruleset's ladder behind a fence, the close from served intervals, the block's leaf (2026-09-05, `palw-adr0084-served-answer`)
+
+Three pieces the 0084/0085/0086 lane had left as "not landed", now in the tree. **ADR-0084 U-08:** the court's two
+refutation walkers were pinned at `2^22` leaves by validity rules with no ruleset in scope, so no node could adjudicate a
+close against a graph-v5 class (6.6 M leaves). `Params::palw_court_ladder: Option<ForkActivation>` (the `palw_da_court`
+contract — `None` on every preset, absent is byte-identical, `never()` collapses, a scheduled height keeps old and new
+builds peers) is read in one place at the block's own DAA and threads `step_ladder` through `adjudicate_court_close_v2`
+to the leg; the tests pin the boundary at the refutation's own leaf count (one short refuses by name, at it `NoFaultFound`,
+at `2^22` the uncapped answer). Arming it on testnet-11 waits for the close path below to exist live and for an operator's
+height. **ADR-0085 §6 items 4–5:** the executor fills the close annex from the open court sessions on the claim (read off
+the chain under its own bond, never off the request) with the accused's own tiles — replayed for the interval from a fold —
+and the capture path's anchoring rule; the closer, holding no capture, asks for the interval owning the terminal leaf and
+the one before it, and assembles the close from the served openings and its own replay (`refutation_from_served_intervals`,
+byte-identical to the capture path's on the floor fixture under one pin). A seat's fault is remembered and the challenger's
+half prosecutes that claim without `--palw-challenge` challenging everything. **ADR-0086 Decision 6:** a block-leaves
+request rides the interval lane under a packed index (bit 31 | interval | block); the executor answers the block's 4,096
+leaf hashes from the same span replay; the seat checks they fold to the digest it holds and names the first leaf that
+differs from its own. Nothing here has been walked to a live verdict — that needs a producer that lies on a devnet.
+Devnet run 9 (300 tokens) ended at the drill's `WAIT` before the panel binding at that hour's ~3-minute cadence; run 10
+waits long enough.

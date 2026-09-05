@@ -176,9 +176,23 @@ the next cut, not this one.
   other families use. A floor free-prompt run can stop at EOG before its budget, so its binding's
   context is not the one `fp_job_context_v1` derives from the job; the memo is keyed by the
   binding's, and the test memoizes under it.
-* **Not landed:** the P2P request and serve of `Base0FpBlockLeavesV1` (with ADR-0085's items 4
-  and 5); the seed row's replacement by the seat's own selection (§3, not taken); the fold
-  opener's edge-only replay.
+* **Decision 6's transport landed (2026-09-05, with ADR-0085 items 4–5).** A block-leaves request
+  rides the interval lane under a packed index — bit 31, the interval in bits 30–16, the block in
+  bits 15–0 (`base0_fp_block_leaves_request_index_v1`; a plain interval index never has bit 31
+  set) — so the lane's solicitation, slots and byte cap apply unchanged and no message was added.
+  The executor's resolver decodes the address and answers `Base0FpBlockLeavesV1` from the same span
+  replay the opener runs (`open_fp_block_leaves`; a dense retention hashes its tiles). The seat, on
+  `FaultInRange`, asks for the block and — once held — names the leaf against its own replay
+  (`fp_name_the_leaf_v1`: the served block must fold to the digest the opening carries, else it is
+  refused by name; `None` says every served leaf is the seat's own, and the executor served a block
+  it did not commit), records the leaf for the challenger's half (ADR-0085 Decision 4) and files
+  nothing, as Decision 3 says. **Not landed:** the seed row's replacement by the seat's own
+  selection (§3, not taken); the fold opener's edge-only replay.
+* **Devnet run 9 (2026-09-05 10:15–11:02 JST, 300 tokens, the manifest fix on).** The commitment
+  landed at 10:52:10 and the drill's `WAIT` stopped the nodes at 11:02 — before the panel binding
+  (`anchor_delay` 20 DAA) at that hour's cadence of one block per ~3 minutes. Neither the run 8
+  defect (openings never arriving) nor its absence was observed; the seat never drew. The attempt
+  lane on the same run licensed every v5 claim by Decision 7's replay. Run 10 waits long enough.
 * **Devnet Y, live (run 7, 2026-09-05 07:17–08:14 JST, `62fec794`, three nodes on this Mac).** A
   graph-v5 free-prompt claim of 40 tokens (`d9ad65d0…`) staged a **24,423,539-byte** fold
   capture — over `PALW_MATERIAL_MAX_BYTES`, the drill's own line: "ADR-0084 Y1 is live". The
@@ -205,7 +219,8 @@ the next cut, not this one.
 * The seed row's replacement by the seat's own selection (above).
 * Edge-only replay in the fold opener.
 * Raising `PALW_INTERVAL_OPENING_MAX_BYTES`, which nothing here needs.
-* The court's refutation walkers' ladder bound (ADR-0084 U-08), a validity rule.
+* The court's refutation walkers' ladder bound (ADR-0084 U-08) — landed behind
+  `Params::palw_court_ladder` since (ADR-0084 §7.5).
 
 ## 9. Number hygiene
 
