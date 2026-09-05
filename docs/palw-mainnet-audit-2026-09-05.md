@@ -177,6 +177,29 @@ consensus rule on the live chain. Arming them there is one coordinated flag day 
 re-mint for all; the fork-id gate lists the scheduled heights so an un-upgraded peer is refused at
 the handshake rather than at consensus.
 
+## Follow-through (2026-09-06) — the private-prompt set, and one "should fix" closed on the way
+
+`01e034c4`, `f7363db9`; design record `docs/palw-private-prompts-design-2026-09-05.md`.
+
+* **The DA court could not accept any real disclosure** (not a finding above — found while
+  implementing the responder): the fold verified an event against a Merkle root over event
+  hashes that no shipped class commits, so an armed court would have convicted every accused
+  producer by silence. The disclosure is now the class's own scheme (flat pin / tiled row+tile /
+  out-of-range binding), pinned to the claim's roots; the panel answers accusations;
+  `misaka palw da-accuse` files them.
+* **Merkle prompt ids (audit D M-2's refused fence)** are wired end to end under one form argument,
+  genesis-only, with trace format 4 in the ruleset id and an appended `ArithmeticOpened` close.
+* **`PanelDa` is transported**: never announced, never relayed, served only to the claim's readers
+  on both lanes; the extraction walk's literal `false` is replaced by the fence at the block.
+* **`palw_mode_v2.rs:938` (should fix) — closed**: `validate_palw_v2` refuses a withdrawal delay
+  inside `liability + accuse + disclose` wherever `palw_da_court` is armed, and the assembly derives
+  the card's delay past it (`palw_v2_bond_outlasting_da_court`).
+* **Two more found on the way**: the gateway never mapped `fp_decode_rules_armed` off the RPC
+  (dormant everywhere, so unobserved); the RPC round-trip test did not compile (a version-5 field
+  missing from its literal).
+* **Armed only on a carded mainnet** (`mainnet_card_base_v1`): `palw_da_court`,
+  `palw_prompt_ids_merkle`, `palw_panel_da`. testnet-11 and devnet do not move.
+
 ## Open — blocks a mainnet card
 
 | # | What | Where |
@@ -214,7 +237,7 @@ object, with the one attacker-sizable table inside the clone) · `palw_panel.rs:
 authorizer runs a full uncached materialization per request, gated by a per-peer counter and
 reachable with a self-signed unbonded key) · `palw_mode_v2.rs:938` (the withdrawal-delay interlock
 omits the DA-court windows, so arming `palw_da_court` lets a bond withdraw before its fraud stops
-being provable) · `palw_e2e_adjudicability.rs:380` (the "family survives malformed material" half of
+being provable — **closed 2026-09-06**, see the follow-through above) · `palw_e2e_adjudicability.rs:380` (the "family survives malformed material" half of
 the covering set is a number the submitter writes) · `params.rs:4011` (on a carded mainnet a single
 attempt block satisfies `required_work_depth`, collapsing the DNS overlay's PoW dimension).
 

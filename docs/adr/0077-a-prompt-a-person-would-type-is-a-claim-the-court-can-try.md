@@ -519,3 +519,19 @@ page is a `JobFailed`, never a crash of the supervisor or the node.
 **SA-7 — Decision 14's exposure growth is refused at the gateway, not discovered at the
 transition:** when a claim's `claim_exposure` would exceed the bond's room, the gateway answers and
 does not submit (Decision 4's queue), and `/health` names it.
+
+## Implementation note, 2026-09-06 — Decision 16's transport (`f7363db9`)
+
+Decision 16 shipped every rule but the transport: the payload rule, the seat's admission, the
+withholding arm and the fences existed; a producer still announced a mode-2 material to every peer,
+a relay forwarded it, a serve answered any bonded requester, and the extraction walk passed a
+literal `false` for the fence. Now: the mode is read off a payload's prefix
+(`palw_fp_privacy_mode_peek_v1`); a mode-2 material is never announced, never relayed
+(`PalwGossipAdmit::Private` — a solicited copy reaches only the asking node's inbox), and served
+only to `PalwChainStateV2::claim_readers_v2` — the executor, the bound panel's seats and the
+challengers of open sessions — on both the capture lane and the interval-opening lane (a prefill
+interval's opening carries the prompt's embeddings). The gateway files mode-2 under
+`--privacy panel-da`, refused where `panel_da_armed` is false, with the disclosure sentence printed
+verbatim at boot; the commitment builder carries no ids on chain and the submitter stages the
+worker's beside the material. Armed on a carded mainnet from genesis; dormant on testnet-11 and
+devnet. Design record: `docs/palw-private-prompts-design-2026-09-05.md`.

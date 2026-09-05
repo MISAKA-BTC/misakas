@@ -512,3 +512,26 @@ the same service already submits. The two open questions are retention on the pr
 capture must still be on disk for the whole `trace_retention_daa`, which is a node-operations
 property nothing currently verifies) and the fee float the responder spends to answer. Neither is in
 this batch, and `PALW_STATE_V2_VERSION` must move in the same release that arms the fence.
+
+## Implementation, 2026-09-06 — the disclosure the shipped commitments allow, and a responder (`01e034c4`, `f7363db9`)
+
+The 2026-09-02 implementation verified a disclosed event against a Merkle root over event hashes.
+No shipped class commits such a root — every claim's `trace_root` is the flat
+`base0_logits_trace_root_v1` or the tiled `tiled_logits_trace_root_v1` — so, armed, every
+accusation would have won by silence: the precondition this ADR names ("a responder") had a second,
+unnamed half, the arithmetic. SA-2's own words are what is implemented now: the disclosure is
+"the event's own bytes in whatever form the class's `logits_scheme_id` names" —
+`PalwTraceEventDisclosureV1::{Flat, Tiled, OutOfRange}`, each pinned to the claim's `trace_root` and
+`execution_root` through the binding, bounded by the ruleset's close ceiling, signed over a keyed
+digest. The event index is `(row << 8) | tile`, bounded by `trace_chunk_count × 256`.
+
+The responder is the panel's `palw_da_duties_v2` → `PalwBackend::disclose_trace_event` (the floor
+and both model tiers), filed as a lifecycle carrier inside the disclose window. The accuser is an
+operator: `misaka palw da-accuse` builds and signs `DefaultAccused`; `palw submit-object` files it.
+No node accuses on its own — ADR-0065 D4 already answers "I never received it".
+
+Armed on a carded mainnet from block one (`mainnet_card_base_v1`), with the withdrawal delay derived
+past `liability + accuse + disclose` (`palw_v2_bond_outlasting_da_court`; `validate_palw_v2` refuses
+a delay inside that sum wherever the court is armed). testnet-11 and devnet stay dormant; arming
+them requires the state-version move this ADR asks for, and a test now says so. Design record:
+`docs/palw-private-prompts-design-2026-09-05.md`.

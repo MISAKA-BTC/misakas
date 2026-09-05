@@ -335,3 +335,18 @@ leaves would have earned unsegmented, and with the answer byte-identical to the 
 
 This is ADR-0081; ADR-0080 is the last on this branch. A concurrent claimant renumbers the later
 writer, per ADR-0036 Decision 5.
+
+## Implementation note, 2026-09-06 — Decision 3 wired (`f7363db9`)
+
+The tiled Merkle commitment had checkers and no writers, and `validate_palw_v2` refused the fence
+by name. Now the form is a network constant — `Params::palw_prompt_ids_form_v1()`, genesis-only,
+and named in the ruleset id by the bundle's `trace_format_version` (`4`,
+`PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS`; the fence and the format refuse each other's absence).
+One comparison, `prompt_token_ids_match_v1`, and every writer and reader takes the form as an
+argument: the worker runtime, the panel's canonical job, the raw lane's job, the three backends, the
+payload decoders and validators, the transaction door, the extraction walk, the gateway's result
+rebinding, the interval checkers. The court's `PalwCourtVerdictProofV2::ArithmeticOpened` (appended)
+carries the one tile the disputed gather read, verified against the job context's root before any
+id is read; `check_close_speaks_the_networks_prompt_form` admits exactly one spelling per network.
+Armed on a carded mainnet from genesis; testnet-11 keeps trace format 3. Design record:
+`docs/palw-private-prompts-design-2026-09-05.md`.
