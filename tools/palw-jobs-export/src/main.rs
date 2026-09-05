@@ -220,9 +220,23 @@ fn main() {
                 .split(',')
                 .find_map(|dir| std::fs::read(format!("{dir}/{claim}.answer")).ok())
                 .and_then(|bytes| {
-                    kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(&bytes).map(|a| a.output_token_ids).or_else(
-                        || kaspa_consensus_core::palw_attempt_v2::palw_attempt_answer_decode_v1(&bytes).map(|a| a.output_token_ids),
+                    // An export reads whatever form the network wrote (ADR-0081 Decision 3): the
+                    // decoder only checks the ids against the job's commitment, so trying the
+                    // flat form and then the Merkle form admits exactly the honest envelope.
+                    kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(
+                        &bytes,
+                        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                     )
+                    .or_else(|| {
+                        kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(
+                            &bytes,
+                            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+                        )
+                    })
+                    .map(|a| a.output_token_ids)
+                    .or_else(|| {
+                        kaspa_consensus_core::palw_attempt_v2::palw_attempt_answer_decode_v1(&bytes).map(|a| a.output_token_ids)
+                    })
                 })
                 .or_else(|| {
                     retention.split(',').find_map(|dir| std::fs::read(format!("{dir}/{claim}.material")).ok()).and_then(|bytes| {

@@ -87,6 +87,10 @@ pub enum FpSubmitError {
     /// one mistake a hand can make, pointing this at a staged material instead of at the run's own
     /// `material.bin`.
     NotACapture,
+    /// A `PanelDa` (mode-2) commitment carries no prompt ids on chain, and the staging offered
+    /// none: the material would be one no seat can verify, so nothing is staged and nothing is
+    /// broadcast.
+    PanelDaNeedsPromptIds,
     /// The answer's ids offered for the `FPA1` envelope are not the commitment's: their count is
     /// not `decode_tokens_executed` (ADR-0084 Decision 5). A result frame from another job.
     AnswerCountMismatch {
@@ -144,6 +148,11 @@ impl std::fmt::Display for FpSubmitError {
             }
             Self::UndecodablePayload(e) => write!(f, "this payload does not decode, so no material can be written: {e}"),
             Self::NotACapture => write!(f, "these bytes are not a family capture (expected the worker's material.bin)"),
+            Self::PanelDaNeedsPromptIds => write!(
+                f,
+                "a PanelDa (mode-2) commitment carries no prompt ids on chain; staging its material needs the worker's ids \
+                 (FpStaging::prompt_token_ids), or no seat could verify it"
+            ),
             Self::AnswerCountMismatch { got, committed } => write!(
                 f,
                 "the answer offered for the envelope has {got} ids and the commitment executed {committed} decode tokens — not this \
@@ -274,14 +283,29 @@ pub fn decode_commitment_payload(tx: &Transaction) -> Result<(PalwFpCommitmentTx
 /// capture is checked here rather than discovered by a seat: the one hand-mistake this catches is
 /// a caller pointing at an already-staged material instead of at the run's own `material.bin`,
 /// which encodes cleanly and verifies as nothing.
-pub fn encode_claim_material(payload: &PalwFpCommitmentTxPayloadV3, capture: Option<&[u8]>) -> Result<Vec<u8>, FpSubmitError> {
+pub fn encode_claim_material(
+    payload: &PalwFpCommitmentTxPayloadV3,
+    prompt_token_ids: &[u32],
+    capture: Option<&[u8]>,
+) -> Result<Vec<u8>, FpSubmitError> {
     match capture {
         Some(bytes) => {
             check_capture_shape(bytes)?;
-            Ok(palw_fp_capture_encode_v1(&payload.commitment.job, &payload.prompt_token_ids, bytes))
+            Ok(palw_fp_capture_encode_v1(&payload.commitment.job, prompt_token_ids, bytes))
         }
-        None => Ok(palw_fp_material_encode_v1(&payload.commitment.job, &payload.prompt_token_ids)),
+        None => Ok(palw_fp_material_encode_v1(&payload.commitment.job, prompt_token_ids)),
     }
+}
+
+/// **The ids a claim's staged material carries** (ADR-0077 Decision 16): the payload's own under
+/// `PublicDa`, the worker's under `PanelDa` — where the payload has none by rule, and a material
+/// staged without them would be one no seat can verify. One spelling for the material and the
+/// answer envelope, so the two cannot disagree about what the seats are shown.
+pub fn staged_prompt_ids<'a>(payload: &'a PalwFpCommitmentTxPayloadV3, staged: Option<&'a [u32]>) -> Result<&'a [u32], FpSubmitError> {
+    if payload.commitment.job.privacy_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA {
+        return staged.filter(|ids| !ids.is_empty()).ok_or(FpSubmitError::PanelDaNeedsPromptIds);
+    }
+    Ok(&payload.prompt_token_ids)
 }
 
 /// The file suffix of the answer envelope beside `<claim>.material` (ADR-0084 Decision 5) — the
@@ -293,16 +317,16 @@ pub const ANSWER_SUFFIX: &str = ".answer";
 /// `decode_tokens_executed`, the one fact about the answer the commitment states in the clear —
 /// so a rail handed the wrong result frame is stopped before a file exists. The chain-side
 /// binding (the ids recompute `output_root`) is the seat's, through the family seam.
-pub fn encode_claim_answer(payload: &PalwFpCommitmentTxPayloadV3, output_token_ids: &[u32]) -> Result<Vec<u8>, FpSubmitError> {
+pub fn encode_claim_answer(
+    payload: &PalwFpCommitmentTxPayloadV3,
+    prompt_token_ids: &[u32],
+    output_token_ids: &[u32],
+) -> Result<Vec<u8>, FpSubmitError> {
     let executed = payload.commitment.decode_tokens_executed as usize;
     if output_token_ids.is_empty() || output_token_ids.len() != executed {
         return Err(FpSubmitError::AnswerCountMismatch { got: output_token_ids.len(), committed: executed });
     }
-    Ok(kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_v1(
-        &payload.commitment.job,
-        &payload.prompt_token_ids,
-        output_token_ids,
-    ))
+    Ok(kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_v1(&payload.commitment.job, prompt_token_ids, output_token_ids))
 }
 
 /// The capture-shape check on its own, so a caller can refuse a bad path before it has a payload
@@ -371,6 +395,12 @@ pub struct FpStaging<'a> {
     /// into the data-availability obligation. Off by default, and "off" means no file for the
     /// node to serve.
     pub dsl_payload: Option<&'a [u8]>,
+    /// **The prompt ids to stage beside the material** (ADR-0077 Decision 16). A `PublicDa`
+    /// payload carries its own and this is ignored; a `PanelDa` (mode-2) payload carries NONE on
+    /// chain, so the ids the seats will pull must come from the worker's result through this
+    /// field — a mode-2 submission without them is refused rather than staged as a material no
+    /// seat could verify.
+    pub prompt_token_ids: Option<&'a [u32]>,
     /// ADR-0077 SA-1(b): the anchor freshness this commitment was drawn under. `None` is the
     /// operator saying "I have no anchor policy here", which is only ever right for the manual
     /// form re-submitting a claim it just built.
@@ -407,13 +437,14 @@ pub fn plan_submission(tx: &Transaction, staging: &FpStaging<'_>, chain_daa: u64
     if let Some(expiry) = staging.expiry {
         expiry.check(chain_daa)?;
     }
+    let prompt_ids = staged_prompt_ids(&payload, staging.prompt_token_ids)?;
     let answer = match (staging.retention_dir, staging.output_token_ids) {
-        (Some(_), Some(ids)) => Some((format!("{claim_id}{ANSWER_SUFFIX}"), encode_claim_answer(&payload, ids)?)),
+        (Some(_), Some(ids)) => Some((format!("{claim_id}{ANSWER_SUFFIX}"), encode_claim_answer(&payload, prompt_ids, ids)?)),
         _ => None,
     };
     let (material, dsl) = match staging.retention_dir {
         Some(_) => {
-            let bytes = encode_claim_material(&payload, staging.capture)?;
+            let bytes = encode_claim_material(&payload, prompt_ids, staging.capture)?;
             let dsl = match staging.dsl_payload {
                 Some(dsl_bytes) => {
                     let decoded = kaspa_consensus_core::palw_derived_v1::palw_fp_dsl_decode_v1(dsl_bytes)
@@ -991,7 +1022,8 @@ mod tests {
         let (name, encoded) = plan.answer.as_ref().expect("ids and a retention dir stage the envelope");
         assert_eq!(name, &format!("{claim}{ANSWER_SUFFIX}"));
         assert!(encoded.starts_with(&PALW_FP_ANSWER_V1_MAGIC));
-        let decoded = palw_fp_answer_decode_v1(encoded).expect("the staged envelope decodes");
+        let decoded = palw_fp_answer_decode_v1(encoded, kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+            .expect("the staged envelope decodes");
         assert_eq!(decoded.output_token_ids, ids);
         assert_eq!(decoded.material.job, payload.commitment.job);
 

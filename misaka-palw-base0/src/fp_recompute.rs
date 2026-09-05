@@ -806,8 +806,14 @@ mod tests {
             .expect("a valid shape")
             .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
             .expect("the derived store is sorted and unique");
-        let (ctx, prompt) =
-            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0xA16_5EA7), geometry.vocab_size as usize, 3, 4);
+        let (ctx, prompt) = crate::produce::base0_rc_job_v1(
+            &profile,
+            Hash64::from_u64_word(0xA16_5EA7),
+            geometry.vocab_size as usize,
+            3,
+            4,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
         let run = crate::qwen25_a16_backend::a16_execute_for_attempt_v1(&artifact, &profile, None, &ctx, &prompt)
             .expect("the dense fixture runs");
         assert!(!run.checkpoints.leaves.is_empty(), "the fixture must commit at least one checkpoint");
@@ -887,8 +893,14 @@ mod tests {
             .expect("the derived store is sorted and unique");
         let engine = crate::engine_a16::A16Engine::new(&artifact).expect("the fixture is an A16 artifact");
         let plan = engine.plan_from_profile(&profile).expect("the v5 declaration is this engine's program");
-        let (ctx, prompt) =
-            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0xA16_5EA7), geometry.vocab_size as usize, 3, 4);
+        let (ctx, prompt) = crate::produce::base0_rc_job_v1(
+            &profile,
+            Hash64::from_u64_word(0xA16_5EA7),
+            geometry.vocab_size as usize,
+            3,
+            4,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
         let run = crate::qwen25_a16_backend::a16_execute_for_attempt_v1(&artifact, &profile, Some(&plan), &ctx, &prompt)
             .expect("the dense v5 fixture runs");
 
@@ -1048,7 +1060,14 @@ mod tests {
 
         let geometry = kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY;
         let profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(geometry).expect("expressible");
-        let (ctx, prompt) = crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(7), geometry.vocab_size as usize, 3, 4);
+        let (ctx, prompt) = crate::produce::base0_rc_job_v1(
+            &profile,
+            Hash64::from_u64_word(7),
+            geometry.vocab_size as usize,
+            3,
+            4,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         let output = vec![1u32, 2, 3];
         let mut kernels = CountingKernels { forwards: std::cell::Cell::new(0), chunks: vec![vec![0u8; 8]] };
@@ -1101,8 +1120,14 @@ mod tests {
         .expect("the RC floor shape");
         let prefill = (geometry.n_ctx / 2).max(1);
         let decode = 4u32;
-        let (ctx, prompt) =
-            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x5EA7), geometry.vocab_size as usize, prefill, decode);
+        let (ctx, prompt) = crate::produce::base0_rc_job_v1(
+            &profile,
+            Hash64::from_u64_word(0x5EA7),
+            geometry.vocab_size as usize,
+            prefill,
+            decode,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
         let run = crate::produce::base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the floor runs");
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         let covered = ctx.exact_decode_tokens.saturating_sub(1);

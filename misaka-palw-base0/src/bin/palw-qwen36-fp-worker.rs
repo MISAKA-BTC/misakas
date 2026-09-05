@@ -129,6 +129,8 @@ fn load() -> FpWorkerRuntime<Qwen36Backend> {
     // this binary was pricing every job against `PALW_STEP_MAX_LEAVES` because that is what
     // `step_leaf_count` reaches for when nobody states one.
     let court = misaka_palw_base0::fp_worker::fp_worker_court_params_v1(&network_id).unwrap_or_else(|why| die(why));
+    // ADR-0081 Decision 3: the prompt-commitment form, from the same preset the court comes from.
+    let prompt_ids_form = misaka_palw_base0::fp_worker::fp_worker_prompt_ids_form_v1(&network_id).unwrap_or_else(|why| die(why));
     let net = network_id.into_bytes();
     let backend = Qwen36Backend::with_class_profile(
         std::sync::Arc::new(artifact),
@@ -137,7 +139,8 @@ fn load() -> FpWorkerRuntime<Qwen36Backend> {
         profile.clone(),
         net.clone(),
     )
-    .with_step_ladder_cap(court.max_step_leaf_count());
+    .with_step_ladder_cap(court.max_step_leaf_count())
+    .with_prompt_ids_form(prompt_ids_form);
     if !backend.supports_court() {
         die(format!("this build cannot serve {model_id}'s registered graph, so it cannot commit a step leg for it"));
     }
@@ -165,6 +168,7 @@ fn load() -> FpWorkerRuntime<Qwen36Backend> {
         },
         net,
         load_ms,
+        prompt_ids_form,
     )
     .unwrap_or_else(|e| die(e))
 }

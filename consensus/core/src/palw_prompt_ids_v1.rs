@@ -144,6 +144,26 @@ pub fn prompt_token_ids_commitment_v1(form: PalwPromptIdsFormV1, ids: &[u32]) ->
     }
 }
 
+/// **Do `ids` commit to `committed` under `form`?** — the ONE spelling of the comparison every
+/// reader of a `prompt_token_ids_hash` makes: the payload decoders, the seat's admission, the
+/// worker-result rebinding, the backends' carried-prompt checks. A form the commitment cannot be
+/// derived under (a prompt past the step tree) is a mismatch, never a pass: the reader that could
+/// not compute the commitment has not matched it.
+pub fn prompt_token_ids_match_v1(form: PalwPromptIdsFormV1, ids: &[u32], committed: &Hash64) -> bool {
+    prompt_token_ids_commitment_v1(form, ids).is_ok_and(|c| c == *committed)
+}
+
+/// The bytes one opening rides at — its tile ids, its path and the header — which is what the
+/// court's cost bound charges a close that carries it, in the same currency as the operand
+/// openings beside it (`prompt_ids_close_bytes_v1` is the same measure from the admission side,
+/// priced before any opening exists).
+pub fn prompt_ids_opening_bytes_v1(opening: &PalwPromptIdsOpeningV1) -> u64 {
+    (opening.tile_ids.len() as u64)
+        .saturating_mul(4)
+        .saturating_add((opening.opening.siblings.len() as u64).saturating_mul(64))
+        .saturating_add(PALW_PROMPT_IDS_OPENING_HEADER_BYTES)
+}
+
 // ---------------------------------------------------------------------------------------------
 // The commitment
 // ---------------------------------------------------------------------------------------------

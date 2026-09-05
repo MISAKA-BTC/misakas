@@ -620,6 +620,12 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **Who may be served a claim's private material** (ADR-0077 Decision 16's transport half):
+    /// the executor, the bound panel's seats and the open sessions' challengers, at the tip.
+    fn palw_claim_readers_v2(&self, _claim: crate::Hash64) -> Vec<crate::palw_state_v2::PalwBondKeyV2> {
+        Vec::new()
+    }
+
     /// **Where a bond's rewards are paid — the payload, not a script.**
     ///
     /// A panel needs it to recognise its own money: every lifecycle carrier it builds pays change

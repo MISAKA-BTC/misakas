@@ -2354,6 +2354,7 @@ mod candidate_probe {
             row.artifact_shape.vocab,
             prefill,
             decode,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         );
         let ladder = kaspa_consensus_core::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
         let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&row.profile, &ctx, ladder)

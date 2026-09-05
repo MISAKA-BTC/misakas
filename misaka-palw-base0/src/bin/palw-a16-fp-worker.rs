@@ -121,6 +121,8 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
     // binary ships is what the class catalog is walked against and what the capture prices
     // against, and they must be the same object or the worker serves rows its own chain refuses.
     let court = misaka_palw_base0::fp_worker::fp_worker_court_params_v1(&network_id).unwrap_or_else(|why| die(why));
+    // ADR-0081 Decision 3: the prompt-commitment form, from the same preset the court comes from.
+    let prompt_ids_form = misaka_palw_base0::fp_worker::fp_worker_prompt_ids_form_v1(&network_id).unwrap_or_else(|why| die(why));
     let entry =
         canonical_class_by_model_id_v1(&court, MODEL_ID).unwrap_or_else(|| die(format!("this build's catalog has no {MODEL_ID} row")));
 
@@ -204,7 +206,8 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
             entry.model_id
         ))
     })
-    .with_step_ladder_cap(court.max_step_leaf_count());
+    .with_step_ladder_cap(court.max_step_leaf_count())
+    .with_prompt_ids_form(prompt_ids_form);
     FpWorkerRuntime::new(
         backend,
         &entry.profile,
@@ -226,6 +229,7 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
         },
         net,
         load_ms,
+        prompt_ids_form,
     )
     .unwrap_or_else(|e| die(e))
 }

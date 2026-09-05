@@ -169,6 +169,7 @@ pub trait PalwModelLineageV1: Send + Sync {
     fn resolve(
         &self,
         court: &PalwCourtParamsV2,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
         class_id: Hash64,
         artifact_root: Hash64,
         holdings: &[PalwLoadedArtifactV1],

@@ -7,7 +7,7 @@ use kaspa_consensus_core::dns_finality::{
     validate_stake_unbond_payload,
 };
 use kaspa_consensus_core::palw_carriage::{palw_carriage_tx_kind, validate_palw_carriage_stage1_tx};
-use kaspa_consensus_core::palw_fp_objects_v3::validate_palw_fp_commitment_tx;
+use kaspa_consensus_core::palw_fp_objects_v3::validate_palw_fp_commitment_tx_under_v3;
 use kaspa_consensus_core::palw_lifecycle_objects_v2::validate_palw_lifecycle_tx;
 use kaspa_consensus_core::subnets::{
     SUBNETWORK_ID_PALW_FP_COMMITMENT, SUBNETWORK_ID_PALW_LIFECYCLE, SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER,
@@ -37,7 +37,7 @@ impl TransactionValidator {
         check_transaction_output_value_ranges(tx)?;
         check_duplicate_transaction_inputs(tx)?;
         check_gas(tx)?;
-        check_transaction_subnetwork(tx)?;
+        check_transaction_subnetwork(tx, self.palw_panel_da_admissible, self.palw_prompt_ids_form)?;
         check_transaction_version(tx)
     }
 
@@ -251,7 +251,11 @@ fn check_transaction_output_value_ranges(tx: &Transaction) -> TxResult<()> {
     Ok(())
 }
 
-fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
+fn check_transaction_subnetwork(
+    tx: &Transaction,
+    palw_panel_da_admissible: bool,
+    palw_prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> TxResult<()> {
     if tx.is_coinbase() || tx.subnetwork_id.is_native() {
         Ok(())
     } else if let Some(kind) = dns_tx_kind(&tx.subnetwork_id) {
@@ -347,7 +351,13 @@ fn check_transaction_subnetwork(tx: &Transaction) -> TxResult<()> {
         // either kind was refused at admission. A commitment could not be published, a claim could
         // not be licensed, a court could not be opened; every claim that did exist voided at
         // `BindTimeout` and PALW weight stayed permanently zero.
-        validate_palw_fp_commitment_tx(&tx.payload).map_err(TxRuleError::InvalidPalwFpPayload)?;
+        // **Both door facts come from the ruleset the validator was built with** (ADR-0077 D16,
+        // ADR-0081 D3): the mode-2 shape is admitted only where the fence is carried, and the
+        // carried prompt ids must hash to the job under the network's form — flat everywhere the
+        // fence is dormant, the tiled Merkle root on a genesis that armed it. A door that spelled
+        // `false, Flat` here would refuse every honest commitment on such a network.
+        validate_palw_fp_commitment_tx_under_v3(&tx.payload, palw_panel_da_admissible, palw_prompt_ids_form)
+            .map_err(TxRuleError::InvalidPalwFpPayload)?;
         Ok(())
     } else if tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE {
         // ADR-0042 Decisions 7/8 claim lifecycle (0x4b): the licensing, the producer default and

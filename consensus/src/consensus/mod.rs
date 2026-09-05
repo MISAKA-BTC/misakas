@@ -2208,6 +2208,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_da_duties_v2_impl(&mine)
     }
 
+    fn palw_claim_readers_v2(&self, claim: kaspa_consensus_core::Hash64) -> Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
+        self.virtual_processor.palw_claim_readers_v2_impl(claim)
+    }
+
     fn palw_bond_payout_payload_v2(
         &self,
         bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,

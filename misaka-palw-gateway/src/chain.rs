@@ -76,10 +76,20 @@ pub struct ChainFacts {
     /// sampling "on", every commitment the gateway files is refused by the transition
     /// (`SamplingNotArmed`), and the exposure has already been spent on the inference.
     ///
-    /// Today no node reports it — `GetPalwProducerFactsResponse` has no such field — so this stays
-    /// `false` on every read. That is the correct answer on every shipped preset; when the RPC
-    /// grows the field, the mapping in `RpcChainSource::read` is one line.
+    /// Read off `GetPalwProducerFactsResponse::fp_decode_rules_armed` (wire version 4) in
+    /// `RpcChainSource::read` — a mapping that was documented as "one line when the RPC grows the
+    /// field" and then not written when it did, so this stayed `false` on every read. `false` is
+    /// still the answer on every shipped preset, which is why nothing noticed.
     pub fp_decode_rules_armed: bool,
+    /// **ADR-0077 Decision 16's `PanelDa` fence** at the node's candidate. A `--privacy panel-da`
+    /// request is refused with the fence's name where this is `false` — before the inference, for
+    /// the same reason as `fp_decode_rules_armed`. Fail-closed: a node that reports nothing reads
+    /// as dormant.
+    pub panel_da_armed: bool,
+    /// **ADR-0081 Decision 3's prompt-commitment form**: `true` where the network hashes prompts
+    /// as a tiled Merkle root. The worker's result is re-bound under it (`prompt_ids_form`), so a
+    /// worker started for the wrong network is refused here rather than at the chain.
+    pub prompt_ids_merkle: bool,
     /// The freshness binding, from the node's sink (`--rpc`) or from `anchor.json`.
     pub anchor_block: Hash64,
     pub anchor_daa: u64,
@@ -89,6 +99,15 @@ pub struct ChainFacts {
 }
 
 impl ChainFacts {
+    /// The form every job on the network commits its prompt under (ADR-0081 Decision 3).
+    pub fn prompt_ids_form(&self) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
+        if self.prompt_ids_merkle {
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1
+        } else {
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+        }
+    }
+
     /// **The chain-side reasons a commitment does not leave the outbox** (Decision 3), by name and
     /// in the order an operator can act on them. `None` means the chain has no objection — it does
     /// NOT mean the job may commit, because SA-1's budget still gets a veto.
@@ -168,6 +187,8 @@ impl ChainFacts {
             "fp_quanta_per_canonical_job": self.fp_quanta_per_canonical_job,
             "fp_max_quanta_per_receipt": self.fp_max_quanta_per_receipt,
             "fp_decode_rules_armed": self.fp_decode_rules_armed,
+            "panel_da_armed": self.panel_da_armed,
+            "prompt_ids_merkle": self.prompt_ids_merkle,
             "anchor_daa": self.anchor_daa,
         })
     }
@@ -286,6 +307,9 @@ impl RpcChainSource {
                 facts.claim_exposure_sompi = decimal_u128(&producer.bond_claim_exposure).min(u64::MAX as u128) as u64;
                 facts.fp_quanta_per_canonical_job = producer.fp_quanta_per_canonical_job;
                 facts.fp_max_quanta_per_receipt = producer.fp_max_quanta_per_receipt;
+                facts.fp_decode_rules_armed = producer.fp_decode_rules_armed;
+                facts.panel_da_armed = producer.panel_da_armed;
+                facts.prompt_ids_merkle = producer.prompt_ids_merkle;
             }
             Err(e) => facts.read_error = Some(e),
         }

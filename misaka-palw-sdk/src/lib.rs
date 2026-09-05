@@ -64,7 +64,11 @@ mod tests {
     }
 
     fn sdk() -> PalwClassSdk {
-        PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec())
+        PalwClassSdk::builtin_v1(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        )
     }
 
     fn empty_terms() -> PalwRegistrationTermsV2 {
@@ -167,6 +171,7 @@ mod tests {
         fn resolve(
             &self,
             _court: &PalwCourtParamsV2,
+            _prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
             _class_id: Hash64,
             _artifact_root: Hash64,
             _holdings: &[PalwLoadedArtifactV1],
@@ -189,7 +194,12 @@ mod tests {
         let lineage =
             TestLineage { entry_model_id: "test/model", weight_key: Hash64::from_u64_word(7), root: Hash64::from_u64_word(9) };
         let class_id = lineage.classes(&court())[0].class_id();
-        let s = PalwClassSdk::with_lineages(vec![Arc::new(lineage)], court(), b"misaka-palw-rc".to_vec());
+        let s = PalwClassSdk::with_lineages(
+            vec![Arc::new(lineage)],
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        );
         let holding = test_holding();
 
         // Clean terms: the pairing stands, and it is the one candidate.
@@ -227,7 +237,12 @@ mod tests {
     fn two_lineages_may_not_share_an_id() {
         let a = TestLineage { entry_model_id: "a", weight_key: Hash64::default(), root: Hash64::default() };
         let b = TestLineage { entry_model_id: "b", weight_key: Hash64::default(), root: Hash64::default() };
-        let _ = PalwClassSdk::with_lineages(vec![Arc::new(a), Arc::new(b)], court(), Vec::new());
+        let _ = PalwClassSdk::with_lineages(
+            vec![Arc::new(a), Arc::new(b)],
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            Vec::new(),
+        );
     }
 
     /// **Preflight refuses before anything is signed or funded.** The floor's real profile passes
@@ -240,7 +255,11 @@ mod tests {
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
             panic!("testnet-11 ships a ConsensusV2 bundle");
         };
-        let s = PalwClassSdk::builtin_v1(bundle.court, params.net.to_string().into_bytes());
+        let s = PalwClassSdk::builtin_v1(
+            bundle.court,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            params.net.to_string().into_bytes(),
+        );
         let floor = s.ledger().into_iter().find(|e| e.model_id == "PALW-BASE-0/rc").expect("floor");
         let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("pinned");
         let shape = kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1(&params, bundle, &floor.profile, 0)
@@ -267,7 +286,11 @@ mod tests {
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
             panic!("devnet ships a ConsensusV2 bundle");
         };
-        let s = PalwClassSdk::builtin_v1(bundle.court, params.net.to_string().into_bytes());
+        let s = PalwClassSdk::builtin_v1(
+            bundle.court,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            params.net.to_string().into_bytes(),
+        );
         let row = s
             .ledger()
             .into_iter()
@@ -296,7 +319,11 @@ mod tests {
             panic!("testnet-11 ships a ConsensusV2 bundle");
         };
         assert!(params.palw_context_ladder.is_none(), "t11 leaves palw_context_ladder dormant (the 5f card §1)");
-        let s = PalwClassSdk::builtin_v1(bundle.court, params.net.to_string().into_bytes());
+        let s = PalwClassSdk::builtin_v1(
+            bundle.court,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            params.net.to_string().into_bytes(),
+        );
         let row = s
             .ledger()
             .into_iter()

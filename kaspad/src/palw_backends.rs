@@ -35,15 +35,25 @@ pub struct PalwBackendRegistry {
 }
 
 impl PalwBackendRegistry {
-    pub fn new(court: PalwCourtParamsV2, holdings: Vec<PalwLoadedArtifactV1>, network_id: Vec<u8>) -> Self {
-        Self { sdk: PalwClassSdk::builtin_v1(court, network_id), holdings }
+    pub fn new(
+        court: PalwCourtParamsV2,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        holdings: Vec<PalwLoadedArtifactV1>,
+        network_id: Vec<u8>,
+    ) -> Self {
+        Self { sdk: PalwClassSdk::builtin_v1(court, prompt_ids_form, network_id), holdings }
     }
 
     /// **ADR-0067: a registry whose chain-registered arm is armed.** The operator's deliberate
     /// flag (`--palw-chain-classes`) is the ONLY caller — the fence's SDK half refuses without
     /// this, and this constructor is the greppable node half.
-    pub fn new_with_chain_classes(court: PalwCourtParamsV2, holdings: Vec<PalwLoadedArtifactV1>, network_id: Vec<u8>) -> Self {
-        Self { sdk: PalwClassSdk::builtin_v1(court, network_id).with_chain_classes_v1(), holdings }
+    pub fn new_with_chain_classes(
+        court: PalwCourtParamsV2,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        holdings: Vec<PalwLoadedArtifactV1>,
+        network_id: Vec<u8>,
+    ) -> Self {
+        Self { sdk: PalwClassSdk::builtin_v1(court, prompt_ids_form, network_id).with_chain_classes_v1(), holdings }
     }
 
     /// The SDK this registry dispatches through — the panel's registration builder asks it for
@@ -454,7 +464,12 @@ mod tests {
     }
 
     fn registry() -> PalwBackendRegistry {
-        PalwBackendRegistry::new(court(), Vec::new(), b"misaka-palw-rc".to_vec())
+        PalwBackendRegistry::new(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            Vec::new(),
+            b"misaka-palw-rc".to_vec(),
+        )
     }
 
     /// **The PUBLIC network's own class set, resolved against a node's holdings.**
@@ -491,7 +506,12 @@ mod tests {
             + usize::from(kaspa_consensus_core::config::params::palw_rc_qwen25_a16_is_registered());
         assert_eq!(classes.len(), expected, "the shipped network registers exactly the classes its pins describe");
 
-        let bare = PalwBackendRegistry::new(bundle.court, Vec::new(), params.net.to_string().into_bytes());
+        let bare = PalwBackendRegistry::new(
+            bundle.court,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            Vec::new(),
+            params.net.to_string().into_bytes(),
+        );
         let (floor_id, floor_root) = classes[0];
         assert_eq!(floor_id, bundle.base_class_id, "the floor is registered first");
         let floor = bare.resolve(floor_id, floor_root).expect("the derived floor resolves on a node holding nothing");
@@ -547,6 +567,7 @@ mod tests {
             // root from the fixture's own bytes, and that root is not the registered class's.
             let alien = PalwBackendRegistry::new(
                 bundle.court,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                 vec![misaka_palw_sdk::lineages::qwen36::holding_from_artifact(
                     std::sync::Arc::new(misaka_palw_base0::qwen36::qwen36_dev_fixture(1, 8)),
                     None,
@@ -612,7 +633,11 @@ mod tests {
     }
 
     fn sdk() -> PalwClassSdk {
-        PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec())
+        PalwClassSdk::builtin_v1(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        )
     }
 
     fn qwen36_parts(holding: &PalwLoadedArtifactV1) -> (Hash64, std::sync::Arc<misaka_palw_base0::qwen36::Qwen36ArtifactV1>) {

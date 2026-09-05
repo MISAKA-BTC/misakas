@@ -30,6 +30,7 @@ mod key_roles;
 mod keys;
 mod node;
 mod palw_court;
+mod palw_da;
 mod palw_derived;
 mod palw_fp;
 #[cfg(feature = "evm-send")]
@@ -402,6 +403,28 @@ enum PalwCmd {
     /// `CourtCloseDeclared` until ADR-0080 W6 lands the declaration's signature check, so this
     /// command reports the whole carriage and then refuses rather than spending fees on carriers
     /// the chain would drop. A close that fits one carrier files normally.
+    /// Build and sign a data-availability accusation (ADR-0062): make a claim's executor open one
+    /// trace event on chain, at the price of your own charge if it answers. Writes a
+    /// `PalwConsensusObjectV2::DefaultAccused` for `palw submit-object` to file.
+    DaAccuse {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex claim id.
+        #[arg(long)]
+        claim: String,
+        /// The logits row (decode position) to demand.
+        #[arg(long)]
+        row: u32,
+        /// The tile inside that row (0 for a flat class; a tiled class's tile index).
+        #[arg(long, default_value_t = 0)]
+        tile: u8,
+        /// Your own bond outpoint, `txid:index` — a seat of the claim's panel or a bonded challenger.
+        #[arg(long)]
+        bond: String,
+        /// Where to write the signed object.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
     CourtClose {
         #[command(flatten)]
         key: KeyArgs,
@@ -1002,6 +1025,9 @@ async fn main() -> std::process::ExitCode {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
         Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await,
+        Command::Palw(PalwCmd::DaAccuse { key, claim, row, tile, bond, out }) => {
+            palw_da::accuse(&ctx, &key.source(), palw_da::DaAccuseArgs { claim: &claim, row, tile, bond: &bond, out: &out }).await
+        }
         Command::Palw(PalwCmd::CourtClose { key, close, class, side, deadline_at, state, restart, offline, yes }) => {
             palw_court::court_close(
                 &ctx,

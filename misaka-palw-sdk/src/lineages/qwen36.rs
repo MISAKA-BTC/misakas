@@ -124,6 +124,7 @@ impl PalwModelLineageV1 for Qwen36LineageV1 {
     fn resolve(
         &self,
         court: &PalwCourtParamsV2,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
         class_id: Hash64,
         artifact_root: Hash64,
         holdings: &[PalwLoadedArtifactV1],
@@ -140,7 +141,8 @@ impl PalwModelLineageV1 for Qwen36LineageV1 {
                     class_id,
                     network_id.to_vec(),
                 )
-                .with_step_ladder_cap(court.max_step_leaf_count()),
+                .with_step_ladder_cap(court.max_step_leaf_count())
+                .with_prompt_ids_form(prompt_ids_form),
             )));
         }
         Some(Err(format!(

@@ -156,6 +156,8 @@ impl ConsensusServices {
             mass_calculator.clone(),
             params.pq_enforcement,
             params.pq_activation_daa_score,
+            params.palw_panel_da_admissible(),
+            params.palw_prompt_ids_form_v1(),
         );
 
         let pruning_point_manager = PruningPointManager::new(

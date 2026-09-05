@@ -90,6 +90,13 @@ pub enum PalwGossipAdmit {
     /// unasked is a stale answer to an expired pull or a stranger filling a queue. Dropped, and
     /// never relayed — there is nobody to relay it to.
     Unsolicited,
+    /// **A `PanelDa` (mode-2) material** (ADR-0077 Decision 16; private-prompts design,
+    /// 2026-09-05). The prompt inside it is exactly what the commitment withheld from the chain,
+    /// so it is NEVER relayed: a copy this node asked for (a seat's own pull) is handed to the
+    /// inbox and stops here; an unasked one is dropped without a digest. The verdict is named
+    /// rather than folded into `Duplicate` so the flow's relay condition (`Fresh`) cannot be
+    /// widened by a later edit into forwarding it.
+    Private,
 }
 
 pub struct PalwGossipCenter {
@@ -398,6 +405,15 @@ impl PalwGossipCenter {
     /// runtime that also carries block relay, IBD and RPC — which is what audit M2-2 prescribed
     /// and did not land.
     pub async fn resolve_material_for_serve(&self, peer: PeerKey, claim: Hash64) -> Option<Vec<u8>> {
+        // **An unauthenticated pull is a stranger's** (ADR-0077 Decision 16): a private material
+        // is not served on it, whoever holds it. The bytes were read and the window charged, so
+        // this refusal is priced exactly like a served answer and cannot be probed for free.
+        self.resolve_material_bytes(peer, claim).await.filter(|bytes| !material_is_private(bytes))
+    }
+
+    /// The whole-capture read every serve lane shares — throttled, budgeted and bounded, with no
+    /// opinion about who is asking. The two public entries above and below decide that.
+    async fn resolve_material_bytes(&self, peer: PeerKey, claim: Hash64) -> Option<Vec<u8>> {
         {
             let served = self.served_recently.lock().unwrap();
             if let Some(at) = served.recorded_at(&claim)
@@ -667,6 +683,22 @@ impl PalwGossipCenter {
         if !solicited && !self.charge_material_budget(peer, bytes.len() as u64) {
             return PalwGossipAdmit::Duplicate;
         }
+        // **A private material stops at the node that asked for it** (ADR-0077 Decision 16). The
+        // budget above is charged either way — an unasked mode-2 payload is still a peer spending
+        // this node's window — but no digest is written for it and nothing is relayed: the next
+        // honest sighting must not read as a `Duplicate` of a copy this node refused to keep.
+        if material_is_private(bytes) {
+            if !solicited {
+                return PalwGossipAdmit::Private;
+            }
+            let digest = self.digest(1, Some(&claim), bytes);
+            if self.admit_digest(digest, Some((peer, claim)), true) == PalwGossipAdmit::Fresh
+                && let Some(permit) = permit
+            {
+                permit.send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() });
+            }
+            return PalwGossipAdmit::Private;
+        }
         let digest = self.digest(1, Some(&claim), bytes);
         let verdict = self.admit_digest(digest, Some((peer, claim)), solicited);
         // No permit means no consumer, which is most nodes: they relay and deduplicate for the
@@ -837,6 +869,11 @@ pub enum PalwServeRefusalV1 {
     /// What the opener produced is larger than the transport would carry, so emitting it would
     /// only spend this node's egress on bytes the far end drops.
     Oversized,
+    /// The requester is bonded and honest about it, and is still not one of the bonds this
+    /// claim's private material may be served to — not its executor, not a seat of its panel,
+    /// not the challenger of a session open on it (ADR-0077 Decision 16's transport half). Also
+    /// the answer to an UNSIGNED pull for such a material: a stranger cannot be a reader.
+    NotAReader,
 }
 
 impl PalwServeRefusalV1 {
@@ -855,6 +892,7 @@ impl PalwServeRefusalV1 {
             Self::NoAllowance => "no-allowance",
             Self::NotHeld => "not-held",
             Self::Oversized => "oversized",
+            Self::NotAReader => "not-a-reader",
         }
     }
 }
@@ -886,6 +924,14 @@ pub fn check_opening_request_shape(request: &PalwOpeningRequestV1<'_>) -> Result
 ///
 /// It returns the BOND, because that is the rate-limit key SA-2 names, and because a bond is the
 /// thing collateral was posted for — a pubkey is free to generate. `Err` names the refusal.
+/// **Is this payload a `PanelDa` (mode-2) material?** — read off the job in its prefix and
+/// nothing else (`palw_fp_privacy_mode_peek_v1`). Every transport gate in this module asks this
+/// before it announces, relays or serves bytes; what the bytes are worth is the seat's question.
+pub fn material_is_private(bytes: &[u8]) -> bool {
+    kaspa_consensus_core::palw_freeprompt_v3::palw_fp_privacy_mode_peek_v1(bytes)
+        == Some(kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA)
+}
+
 pub type PalwOpeningAuthorizer = std::sync::Arc<dyn Fn(&PalwOpeningRequestV1<'_>) -> Result<Hash64, PalwServeRefusalV1> + Send + Sync>;
 
 /// One solicited interval's admitted payloads — the material lane's per-claim and
@@ -1075,7 +1121,16 @@ impl PalwGossipCenter {
         if authenticated {
             self.authorize_serve(peer, request).await?;
         }
-        self.resolve_material_for_serve(peer, request.claim).await.ok_or(PalwServeRefusalV1::NotHeld)
+        let bytes = self.resolve_material_bytes(peer, request.claim).await.ok_or(PalwServeRefusalV1::NotHeld)?;
+        // **A private material is served only past an authorizer that has said this bond is one
+        // of the claim's readers** (ADR-0077 Decision 16). The authorizer is the node's own
+        // (`opening_authorizer` in the panel) and it answers `NotAReader` itself for a bond that
+        // is not; a node with NO authorizer installed cannot have asked, so it serves nothing
+        // private — the same fail-closed reading the unsigned lane has.
+        if !authenticated && material_is_private(&bytes) {
+            return Err(PalwServeRefusalV1::NotAReader);
+        }
+        Ok(bytes)
     }
 
     /// The opening of `interval_index` of `claim`'s retained capture, for a requester this node
@@ -1293,20 +1348,32 @@ mod tests {
         let body = vec![0u8; PALW_MATERIAL_MAX_BYTES];
         assert_eq!(PALW_MATERIAL_BYTES_PER_PEER_PER_WINDOW, 4 * PALW_MATERIAL_MAX_BYTES as u64);
         for i in 1..=4u64 {
-            assert_eq!(center.admit_material(peer(1), Hash64::from_u64_word(0x1000 + i), &body), PalwGossipAdmit::Fresh, "material {i} is inside the budget");
+            assert_eq!(
+                center.admit_material(peer(1), Hash64::from_u64_word(0x1000 + i), &body),
+                PalwGossipAdmit::Fresh,
+                "material {i} is inside the budget"
+            );
         }
         assert_eq!(
             center.admit_material(peer(1), Hash64::from_u64_word(0x1005), &body),
             PalwGossipAdmit::Duplicate,
             "the fifth maximal material from the same peer is over budget, fresh claim id or not"
         );
-        assert_eq!(center.admit_material(peer(1), Hash64::from_u64_word(0x1006), b"tiny"), PalwGossipAdmit::Duplicate, "…and so is anything else in the window");
+        assert_eq!(
+            center.admit_material(peer(1), Hash64::from_u64_word(0x1006), b"tiny"),
+            PalwGossipAdmit::Duplicate,
+            "…and so is anything else in the window"
+        );
         // Another peer has its own window.
         assert_eq!(center.admit_material(peer(2), Hash64::from_u64_word(0x1007), &body), PalwGossipAdmit::Fresh);
         // An answer this node asked for is exempt from the budget (still deduplicated and capped per claim).
         let asked = Hash64::from_u64_word(0x1008);
         center.note_pull_request(asked);
-        assert_eq!(center.admit_material(peer(1), asked, &body), PalwGossipAdmit::Fresh, "a solicited answer is not crowded out by the budget");
+        assert_eq!(
+            center.admit_material(peer(1), asked, &body),
+            PalwGossipAdmit::Fresh,
+            "a solicited answer is not crowded out by the budget"
+        );
     }
 
     #[test]
@@ -1328,6 +1395,116 @@ mod tests {
 
     fn h64(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
+    }
+
+    /// A free-prompt material declaring the privacy mode `mode`, with no ids (a `PanelDa`
+    /// commitment carries none) — junk to a seat, exactly the bytes the transport must judge.
+    fn material_in_mode(mode: u8) -> Vec<u8> {
+        use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3};
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(9),
+            class_id: Hash64::from_u64_word(7),
+            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint {
+                transaction_id: kaspa_consensus_core::tx::TransactionId::from_u64_word(1),
+                index: 0,
+            },
+            executor_pubkey: vec![7; 8],
+            operator_id: Hash64::from_u64_word(4),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 100,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: Hash64::from_u64_word(0x71),
+            prompt_tokens: 3,
+            decode_token_limit: 3,
+            max_context_tokens: 16,
+            privacy_mode: mode,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        };
+        kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(&job, &[])
+    }
+
+    /// **A `PanelDa` material is never relayed, and reaches only the node that asked for it**
+    /// (ADR-0077 Decision 16; private-prompts design, 2026-09-05).
+    ///
+    /// The prompt inside a mode-2 material is what the commitment withheld from the chain. Every
+    /// other material is relayed to the mesh on first sighting; this one must answer `Private`
+    /// whoever sends it, must leave no digest behind when it was not asked for (so the honest
+    /// pull's answer is not a `Duplicate` of a dropped stranger's copy), and must be handed to
+    /// the inbox only when this node solicited it. The public material beside it is untouched.
+    #[test]
+    fn a_panel_da_material_stops_at_the_node_that_asked_for_it() {
+        use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PRIVACY_PUBLIC_DA};
+        let center = PalwGossipCenter::default();
+        let mut rx = center.take_inbox().expect("the first taker gets it");
+        let claim = Hash64::from_u64_word(7);
+        let private = material_in_mode(PALW_FP_PRIVACY_PANEL_DA);
+        let public = material_in_mode(PALW_FP_PRIVACY_PUBLIC_DA);
+        assert!(material_is_private(&private));
+        assert!(!material_is_private(&public));
+        assert!(!material_is_private(b"not a material"));
+
+        // Unasked: refused, not relayed, not queued, and no digest written.
+        assert_eq!(center.admit_material(peer(1), claim, &private), PalwGossipAdmit::Private);
+        assert!(rx.try_recv().is_err(), "an unasked private material never reaches the consumer");
+
+        // Asked: kept for this node's own seat, still never relayed.
+        center.note_pull_request(claim);
+        assert_eq!(center.admit_material(peer(2), claim, &private), PalwGossipAdmit::Private, "solicited is still not Fresh");
+        match rx.try_recv() {
+            Ok(PalwGossipEvent::Material { claim: got, bytes }) => {
+                assert_eq!(got, claim);
+                assert_eq!(bytes, private);
+            }
+            other => panic!("the solicited private material must reach the inbox: {other:?}"),
+        }
+        assert_eq!(center.admit_material(peer(2), claim, &private), PalwGossipAdmit::Private, "a re-sighting is not relayed either");
+
+        // The public material beside it is the ordinary lane, unchanged.
+        assert_eq!(center.admit_material(peer(1), Hash64::from_u64_word(8), &public), PalwGossipAdmit::Fresh);
+    }
+
+    /// **An unsigned pull is a stranger's, and a private material is not served on it** — the
+    /// bytes are read and the window is charged exactly as for a served answer, so the refusal
+    /// cannot be probed for free; the same material on the signed lane without an authorizer
+    /// installed is `NotAReader`, because a node that cannot ask who is asking cannot say yes.
+    #[tokio::test]
+    async fn a_panel_da_material_is_not_served_to_a_stranger() {
+        use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PRIVACY_PUBLIC_DA};
+        let center = PalwGossipCenter::default();
+        let private = material_in_mode(PALW_FP_PRIVACY_PANEL_DA);
+        let public = material_in_mode(PALW_FP_PRIVACY_PUBLIC_DA);
+        let (private_claim, public_claim, other_private_claim) =
+            (Hash64::from_u64_word(1), Hash64::from_u64_word(2), Hash64::from_u64_word(3));
+        let served = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+        let counted = served.clone();
+        let (p, q) = (private.clone(), public.clone());
+        center.set_material_resolver(std::sync::Arc::new(move |claim| {
+            *counted.lock().unwrap() += 1;
+            if claim == public_claim { Some(q.clone()) } else { Some(p.clone()) }
+        }));
+        assert_eq!(center.resolve_material_for_serve(peer(1), private_claim).await, None, "unsigned: not served");
+        assert_eq!(*served.lock().unwrap(), 1, "…and the read was made, so the refusal was priced");
+        assert_eq!(center.resolve_material_for_serve(peer(1), public_claim).await, Some(public), "the public lane is unchanged");
+
+        // A claim this node has not just served: the per-claim serve throttle comes BEFORE the
+        // read, so a re-ask inside it is `NotHeld` whatever the material is — that is the
+        // throttle's own test; this one is about the reader rule.
+        let request = PalwOpeningRequestV1 {
+            claim: other_private_claim,
+            interval_index: None,
+            requested_daa: 0,
+            requester_pubkey: &[],
+            signature: &[],
+        };
+        assert_eq!(
+            center.resolve_material_for_serve_signed(peer(2), &request).await,
+            Err(PalwServeRefusalV1::NotAReader),
+            "no authorizer installed: nobody can be a reader"
+        );
     }
 
     /// Distinct requesting peers, so the per-peer bounds can be exercised.

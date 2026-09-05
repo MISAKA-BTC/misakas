@@ -31,6 +31,15 @@ pub struct TransactionValidator {
     pq_enforcement: PqEnforcementMode,
     /// DAA score at/after which `PqEnforcementMode::Consensus` takes effect.
     pq_activation_daa_score: u64,
+    /// **`Params::palw_panel_da_admissible()`** — whether this ruleset carries ADR-0077 Decision
+    /// 16's mode-2 commitment SHAPE at all. The isolation door is context-free by contract and
+    /// holds no DAA score, so it asks the height-free question; the extraction walk asks the
+    /// height-indexed one (`palw_panel_da_at`), which is strictly stronger.
+    palw_panel_da_admissible: bool,
+    /// **`Params::palw_prompt_ids_form_v1()`** — which commitment a commitment's carried prompt ids
+    /// must hash to (ADR-0081 Decision 3). Genesis-only by `validate_palw_v2`, so height-free here
+    /// is exact, not an approximation.
+    palw_prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 }
 
 impl TransactionValidator {
@@ -47,6 +56,8 @@ impl TransactionValidator {
         mass_calculator: MassCalculator,
         pq_enforcement: PqEnforcementMode,
         pq_activation_daa_score: u64,
+        palw_panel_da_admissible: bool,
+        palw_prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Self {
         Self {
             max_tx_inputs,
@@ -60,6 +71,8 @@ impl TransactionValidator {
             mass_calculator,
             pq_enforcement,
             pq_activation_daa_score,
+            palw_panel_da_admissible,
+            palw_prompt_ids_form,
         }
     }
 
@@ -87,6 +100,9 @@ impl TransactionValidator {
             // explicitly exercises PQ-only via the script engine directly.
             pq_enforcement: PqEnforcementMode::Disabled,
             pq_activation_daa_score: 0,
+            // Every shipped preset's door: no mode-2 shape, flat prompt digests.
+            palw_panel_da_admissible: false,
+            palw_prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         }
     }
 

@@ -1211,7 +1211,11 @@ mod attempt_answer_tests {
         let decoded = palw_attempt_answer_decode_v1(&bytes).expect("ATA1 decodes");
         assert_eq!(decoded, PalwAttemptAnswerV1 { anchor, prompt_token_ids: vec![1, 2, 3], output_token_ids: vec![9, 8] });
         assert!(palw_attempt_answer_decode_v1(&palw_attempt_answer_encode_v1(anchor, &[1], &[])).is_none(), "no answer, no envelope");
-        assert!(crate::palw_freeprompt_v3::palw_fp_job_material_decode_v1(&bytes).is_none(), "not a free-prompt payload");
+        assert!(
+            crate::palw_freeprompt_v3::palw_fp_job_material_decode_v1(&bytes, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .is_none(),
+            "not a free-prompt payload"
+        );
         assert!(bytes.len() < 256, "{} bytes: the anchor plus the ids", bytes.len());
     }
 }

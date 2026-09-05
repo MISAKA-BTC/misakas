@@ -1332,6 +1332,28 @@ pub fn palw_v2_da_court_lattice_daa(fence: Option<ForkActivation>, state: &crate
         .saturating_add(crate::palw_state_v2::palw_da_disclose_window_daa_v1(state))
 }
 
+/// **The bond parameters a ruleset needs once the DA court is armed** (ADR-0062; mainnet audit
+/// 2026-09-05, "should fix"): the bundle's own delay if it already outlasts
+/// `liability + accuse + disclose`, otherwise that sum plus the reorg margin — raised, never lowered,
+/// and derived from the windows rather than typed. A dormant fence returns the bundle's bond
+/// unchanged. The assembly applies this to a base that arms the court, and `validate_palw_v2`
+/// refuses a delay inside the sum, so the two cannot drift.
+pub fn palw_v2_bond_outlasting_da_court(
+    bundle: &crate::palw_mode_v2::PalwConsensusParamsV2,
+    fence: Option<ForkActivation>,
+) -> Result<crate::palw_mode_v2::PalwBondParamsV2, crate::palw_mode_v2::PalwModeV2Error> {
+    if !fence.is_some_and(|a| a != ForkActivation::never()) {
+        return Ok(bundle.bond);
+    }
+    let liability =
+        bundle.liability_daa().ok_or(crate::palw_mode_v2::PalwModeV2Error::Invalid("the liability period overflows the DAA score"))?;
+    let floor = liability.saturating_add(palw_v2_da_court_lattice_daa(fence, &bundle.state)).saturating_add(bundle.reorg_margin_daa);
+    if bundle.bond.withdrawal_delay_daa() > floor {
+        return Ok(bundle.bond);
+    }
+    crate::palw_mode_v2::PalwBondParamsV2::new(bundle.bond.min_collateral_sompi(), floor)
+}
+
 impl Params {
     /// Everything about this network's PALW fence that must be true before a node runs it.
     ///
@@ -1692,24 +1714,38 @@ impl Params {
                  that carries both",
             ));
         }
-        // **ADR-0081 Decision 3 / ADR-0082 Decision 5, the same shape** (audit D M-2).
+        // **ADR-0081 Decision 3 / ADR-0082 Decision 5: the prompt-commitment form is a property
+        // of the GENESIS, never of a height** (private-prompts design, 2026-09-05).
         //
-        // `palw_prompt_ids_form_at` has no production reader: `palw_fp_prompt_ids_admit_v1` — "the
-        // one check that comes before every other", run by the seat and by both payload decoders —
-        // re-derives the FLAT digest unconditionally, and every writer commits the flat hash. So
-        // arming this fence moves `consensus_identity_id` and nothing else, while the admission
-        // price it is supposed to buy (`prompt_ids_close_bytes_v1(MerkleV1, ..)`) drops the close
-        // by the `n_ctx x 4` term the close still carries. Under-counting a ceiling is the
-        // direction that admits a class whose disputes nobody can carry, so the fence is refused
-        // until the writers and the checkers move together.
+        // Every writer of a `prompt_token_ids_hash` — the worker, the panel's canonical job, the
+        // raw lane's `from_envelope`, the three backends — and every reader — the payload decoders,
+        // the seat's admission, the tx door, the extraction walk, the court's two arithmetic arms —
+        // takes the form from `palw_prompt_ids_form_v1`, which is `palw_prompt_ids_form_at(0)`. A
+        // fence that flipped mid-chain would make the form a function of each job's anchor height,
+        // which none of those readers holds (a decoder sees bytes, not a block), so the only
+        // coherent arming is from block one. The bundle's `trace_format_version` says the same
+        // thing inside `palw_ruleset_id_v2` (3 flat, 4 Merkle): two networks cannot share a ruleset
+        // id and hash their prompts differently, and a ruleset cannot claim one form while its
+        // fence says the other.
         if let Some(activation) = self.palw_prompt_ids_merkle
             && activation != ForkActivation::never()
         {
+            if activation != ForkActivation::always() {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_prompt_ids_merkle may only be armed at genesis: the prompt-commitment form is decided once per \
+                     network, never per height, because no reader of a prompt_token_ids_hash holds the job's anchor height",
+                ));
+            }
+            if bundle.trace_format_version != crate::palw_mode_v2::PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_prompt_ids_merkle is armed but the bundle's trace_format_version is not the Merkle-ids format (4): \
+                     the ruleset id would not say what every job on the network is called",
+                ));
+            }
+        } else if bundle.trace_format_version == crate::palw_mode_v2::PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS {
             return Err(PalwModeV2Error::Invalid(
-                "palw_prompt_ids_merkle is armed and no writer or checker on this build reads it: \
-                 palw_fp_prompt_ids_admit_v1 and every producer still commit the flat prompt-ids digest, so \
-                 arming it would price a close that is smaller than the one the network carries — the fence may \
-                 only be armed by a build in which the commitment moves with it",
+                "the bundle's trace_format_version is the Merkle-ids format (4) but palw_prompt_ids_merkle is dormant: the \
+                 ruleset id claims a prompt commitment the fence does not arm",
             ));
         }
         if self.palw_credit.is_some()
@@ -1888,6 +1924,20 @@ impl Params {
                 return Err(PalwModeV2Error::Invalid(
                     "the data-availability disclose window is narrower than twice the finality window — a reorg across \
                      the deadline could flip the verdict without a finality violation (ADR-0062 SA-3)",
+                ));
+            }
+            // **The withdrawal delay outlasts the DA court too** (mainnet audit 2026-09-05, "should
+            // fix"; closed here before the card arms the fence). The bundle's own interlock cannot
+            // see this fence: it proves the delay outlasts the arithmetic court's longest path, and
+            // a defaulted claim adds the accusation and disclosure windows on top of that path. A
+            // bond that could retire inside them would take its collateral back before its
+            // withholding stopped being provable.
+            let liability = bundle.liability_daa().ok_or(PalwModeV2Error::Invalid("the liability period overflows the DAA score"))?;
+            let lattice = palw_v2_da_court_lattice_daa(self.palw_da_court, &bundle.state);
+            if bundle.bond.withdrawal_delay_daa() <= liability.saturating_add(lattice) {
+                return Err(PalwModeV2Error::Invalid(
+                    "the withdrawal delay does not outlast the liability period plus the data-availability court's windows \
+                     (ADR-0062): a bond could retire before a defaulted claim's verdict lands",
                 ));
             }
         }
@@ -2441,6 +2491,16 @@ impl Params {
             Some(fence) if fence.is_active(daa_score) => crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
             _ => crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         }
+    }
+
+    /// **The network's prompt-commitment form, height-free** — the one every writer and reader of
+    /// a `prompt_token_ids_hash` takes (ADR-0081 Decision 3; private-prompts design, 2026-09-05).
+    /// `validate_palw_v2` refuses `palw_prompt_ids_merkle` at any height but genesis, so the
+    /// height-indexed [`Self::palw_prompt_ids_form_at`] answers the same at every height and this
+    /// is that answer, spelled once: a decoder holds bytes, a tx door holds no DAA score, and a
+    /// worker holds only the network it was started for, and all three must agree with the court.
+    pub fn palw_prompt_ids_form_v1(&self) -> crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
+        self.palw_prompt_ids_form_at(0)
     }
 
     /// ADR-0082 Decision 3's fence with the mode condition already folded in — `Some` only on a
@@ -8119,13 +8179,7 @@ pub fn mainnet_shipped_params() -> Params {
     let base = mainnet_card_base_v1(MAINNET_PARAMS, palw_mainnet_qwen25_a16_is_registered());
     let assembled = if palw_mainnet_qwen36_is_registered() {
         let dense = palw_mainnet_qwen25_a16_is_registered().then_some(PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT);
-        palw_v2_params_with_classes_on_base(
-            base,
-            PALW_MAINNET_GENESIS_ARTIFACT_ROOT,
-            PALW_MAINNET_QWEN36_ARTIFACT_ROOT,
-            dense,
-            bonds,
-        )
+        palw_v2_params_with_classes_on_base(base, PALW_MAINNET_GENESIS_ARTIFACT_ROOT, PALW_MAINNET_QWEN36_ARTIFACT_ROOT, dense, bonds)
     } else {
         palw_v2_params_from_artifacts_on_base(base, PALW_MAINNET_GENESIS_ARTIFACT_ROOT, bonds)
     };
@@ -8169,6 +8223,22 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     base.palw_receipt_rows_unpriced = Some(ForkActivation::always());
     base.palw_certification_rent = Some(ForkActivation::always());
     base.palw_chunk_cap_charge = Some(ForkActivation::always());
+    // **The private-prompt set, armed from block one** (private-prompts design, 2026-09-05):
+    //
+    // * `palw_prompt_ids_merkle` (ADR-0081 D3) — a job's `prompt_token_ids_hash` is a tiled Merkle
+    //   root, so the court can be shown ONE tile of a hidden prompt (`ArithmeticOpened`) instead of
+    //   the whole list. Genesis-only by `validate_palw_v2`; the assembly writes trace format 4.
+    // * `palw_panel_da` (ADR-0077 D16) — a commitment may carry no prompt at all (mode 2); the ids
+    //   reach the drawn seats over the authenticated pull and never a block, a relay or an
+    //   unauthenticated serve.
+    // * `palw_da_court` (ADR-0062) — the accusation/disclosure court, arm-able now that a seat
+    //   answers accusations (`palw_da_duties_v2`, `PalwBackend::disclose_trace_event`) and the
+    //   disclosure is verified against the roots a claim actually carries. A fresh card has no
+    //   history, so ADR-0062's "move `PALW_STATE_V2_VERSION` in the release that arms it" does
+    //   not apply; the coupling is pinned by test for presets that do.
+    base.palw_prompt_ids_merkle = Some(ForkActivation::always());
+    base.palw_panel_da = Some(ForkActivation::always());
+    base.palw_da_court = Some(ForkActivation::always());
     base
 }
 
@@ -8582,6 +8652,19 @@ pub fn palw_v2_params_on_base(
         genesis_bonds,
         windows,
     )?;
+    // **A base that arms the Merkle prompt commitment names it in its ruleset id** (ADR-0081
+    // Decision 3): `validate_palw_v2` at the bottom of this function refuses the fence without the
+    // format and the format without the fence, so the two are written from one fact here.
+    if base.palw_prompt_ids_merkle.is_some_and(|a| a != ForkActivation::never()) {
+        bundle.trace_format_version = crate::palw_mode_v2::PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS;
+    }
+    // **A base that arms the DA court derives a withdrawal delay that outlasts it** (ADR-0062;
+    // mainnet audit 2026-09-05, "should fix"). The RC windows freeze 7,500 against an arithmetic
+    // liability of 6,900; a defaulted claim adds the accusation and disclosure windows (6,600 on
+    // those windows), and `validate_palw_v2` refuses a delay inside that sum. Derived from the
+    // windows rather than typed — a card's operator changes windows, not this number — and only
+    // raised, never lowered: a base that already outlasts the court keeps its own delay.
+    bundle.bond = palw_v2_bond_outlasting_da_court(&bundle, base.palw_da_court)?;
     // **The free-prompt lane bears weight only on a certified class** (ADR-0074 Decision 6): a
     // shipped preset always carries the drilled set, so the gate is never absent on a network
     // that carries value. The test bundles stay ungated on purpose.
@@ -10592,23 +10675,21 @@ mod consensus_params_id_tests {
     /// Both announce a rule the code cannot reach. `palw_fp_decode_rules` arms a numerator the
     /// transition answers `FreePromptDecodeLeavesUnavailable` for and a sampler no engine has,
     /// while `ChainFacts::fp_decode_rules_armed` makes the gateway accept temperature jobs — a lane
-    /// that burns a full inference per refusal. `palw_prompt_ids_merkle` arms a commitment form no
-    /// writer and no checker in this tree reads, so it moves `consensus_identity_id` and nothing
-    /// else, while the admission price it buys is smaller than the close the network carries.
-    /// Refusing to ASSEMBLE is the `palw_uncertified_weightless` shape: a configuration that reads
-    /// as armed and behaves as broken must not start.
+    /// that burns a full inference per refusal. (`palw_prompt_ids_merkle` used to sit in this
+    /// table for the same reason; since the private-prompts design of 2026-09-05 every writer and
+    /// reader takes the form, and its own rule — genesis-only, named in the ruleset id — is tested
+    /// in `the_prompt_ids_merkle_fence_is_genesis_only_and_named_in_the_ruleset_id`.) Refusing to
+    /// ASSEMBLE is the `palw_uncertified_weightless` shape: a configuration that reads as armed and
+    /// behaves as broken must not start.
     #[test]
     fn a_fence_whose_rule_this_build_cannot_reach_is_refused_at_assembly() {
         let shipped = devnet_shipped_params();
         shipped.validate_palw_v2().expect("the shipped devnet assembles");
 
-        for (name, arm) in [
-            (
-                "palw_fp_decode_rules",
-                (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_rules = Some(a)) as fn(&mut Params, ForkActivation),
-            ),
-            ("palw_prompt_ids_merkle", |p: &mut Params, a: ForkActivation| p.palw_prompt_ids_merkle = Some(a)),
-        ] {
+        for (name, arm) in [(
+            "palw_fp_decode_rules",
+            (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_rules = Some(a)) as fn(&mut Params, ForkActivation),
+        )] {
             for activation in [ForkActivation::always(), ForkActivation::new(9_000_000)] {
                 let mut armed = shipped.clone();
                 arm(&mut armed, activation);
@@ -10620,6 +10701,140 @@ mod consensus_params_id_tests {
             arm(&mut never_armed, ForkActivation::never());
             never_armed.validate_palw_v2().unwrap_or_else(|e| panic!("{name}: Some(never()) is absence, not an arming: {e}"));
         }
+    }
+
+    /// **ADR-0062: arming the DA court on a network WITH HISTORY moves `PALW_STATE_V2_VERSION`**
+    /// — pinned as a floor rather than remembered (private-prompts design, 2026-09-05).
+    ///
+    /// The ADR's sentence is "DO NOT ARM THIS WITHOUT A DISCLOSURE RESPONDER, and move the state
+    /// version in the release that arms it": the transition grows two objects and a phase, and a
+    /// node folding old blocks under the new fold must be a different state version from one that
+    /// folded them before. A fresh card has no history and is exempt (`mainnet_card_base_v1` arms
+    /// it from block one at version 20); the two presets that DO carry history must not arm it at
+    /// this version. The floor is the version after the one every shipped chain runs today.
+    #[test]
+    fn arming_the_da_court_on_a_network_with_history_moves_the_state_version() {
+        const DA_COURT_ARMED_STATE_VERSION_FLOOR: u32 = 21;
+        for (name, shipped) in [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())] {
+            if shipped.palw_da_court.is_some_and(|a| a != ForkActivation::never()) {
+                assert!(
+                    u32::from(crate::palw_state_v2::PALW_STATE_V2_VERSION) >= DA_COURT_ARMED_STATE_VERSION_FLOOR,
+                    "{name} arms palw_da_court on a chain with history at state version {} — ADR-0062 requires the version \
+                     to move with the arming (floor {DA_COURT_ARMED_STATE_VERSION_FLOOR})",
+                    crate::palw_state_v2::PALW_STATE_V2_VERSION
+                );
+            }
+        }
+        // …and the coupling is real: the card, which has no history, arms it at the current version.
+        let card = mainnet_card_base_v1(mainnet_v2_mint_base(), false);
+        assert_eq!(card.palw_da_court, Some(ForkActivation::always()));
+    }
+
+    /// **A carded mainnet's withdrawal delay outlasts the data-availability court** (ADR-0062;
+    /// mainnet audit 2026-09-05, "should fix" `palw_mode_v2.rs:938`). The bundle's own interlock
+    /// proves the delay outlasts the arithmetic court's longest path; the DA court pauses a claim
+    /// for its accusation and disclosure windows on top of that path, and a bond that could retire
+    /// inside them would take its collateral back before its withholding stopped being provable.
+    /// Three facts: the RC delay is inside that sum (so the rule is not vacuous), the card's delay
+    /// is derived past it, and a hand-lowered delay is refused by name.
+    #[test]
+    fn a_carded_mainnets_withdrawal_delay_outlasts_the_data_availability_court() {
+        use crate::palw_fp_devnet_v3::{palw_devnet_bond_registry_v1, palw_v2_maturity_armable_bonds_v1};
+        let rc = palw_rc_shipped_params();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(rc_bundle) = &rc.palw_consensus_mode else { panic!("V2") };
+        let rc_liability = rc_bundle.liability_daa().unwrap();
+        let lattice = palw_v2_da_court_lattice_daa(Some(ForkActivation::always()), &rc_bundle.state);
+        assert!(lattice > 0, "the DA court has windows to outlast");
+        assert!(
+            rc_bundle.bond.withdrawal_delay_daa() <= rc_liability + lattice,
+            "the RC delay ({}) sits inside liability {rc_liability} + DA lattice {lattice}: the derivation is not vacuous",
+            rc_bundle.bond.withdrawal_delay_daa()
+        );
+
+        let specs: Vec<_> = palw_devnet_bond_registry_v1(palw_v2_maturity_armable_bonds_v1())
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut spec)| {
+                spec.bond = crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint(i as u32));
+                spec
+            })
+            .collect();
+        let money: Vec<(u32, [u8; 64])> =
+            specs.iter().enumerate().map(|(i, spec)| (i as u32, *spec.payout_payload.as_byte_slice())).collect();
+        let utxos = crate::config::premine::bonded_genesis_utxos(MAINNET_PARAMS.net, &money, std::iter::empty());
+        let carded = palw_v2_params_from_artifacts_on_base_with_utxos(
+            mainnet_card_base_v1(mainnet_v2_mint_base(), false),
+            PALW_RC_GENESIS_ARTIFACT_ROOT,
+            specs,
+            utxos,
+        )
+        .expect("a card that arms the DA court assembles");
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &carded.palw_consensus_mode else { panic!("V2") };
+        let liability = bundle.liability_daa().unwrap();
+        assert!(bundle.bond.withdrawal_delay_daa() > liability + lattice, "the card's delay is derived past the court");
+        assert_eq!(bundle.bond.withdrawal_delay_daa(), liability + lattice + bundle.reorg_margin_daa);
+
+        let mut lowered = carded.clone();
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &mut lowered.palw_consensus_mode {
+            b.bond = crate::palw_mode_v2::PalwBondParamsV2::new(b.bond.min_collateral_sompi(), liability + lattice).unwrap();
+        }
+        let err = lowered.validate_palw_v2().expect_err("a delay inside the DA court's windows is refused");
+        assert!(format!("{err}").contains("data-availability court"), "{err}");
+    }
+
+    /// **ADR-0081 Decision 3's fence is genesis-only, and the ruleset id says which form the
+    /// network hashes its prompts under** (private-prompts design, 2026-09-05).
+    ///
+    /// Three refusals and one acceptance, each the negation of the other's premise: a height
+    /// above genesis (no reader of a `prompt_token_ids_hash` holds a job's anchor height), the
+    /// fence without the format (a ruleset id that does not say what every job is called), the
+    /// format without the fence (a ruleset id that claims a commitment nothing arms) — and the
+    /// assembly on a base that arms it, which writes the format itself and validates.
+    #[test]
+    fn the_prompt_ids_merkle_fence_is_genesis_only_and_named_in_the_ruleset_id() {
+        use crate::palw_mode_v2::{PALW_V2_TRACE_FORMAT_VERSION, PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS};
+        let shipped = devnet_shipped_params();
+        shipped.validate_palw_v2().expect("the shipped devnet assembles");
+        assert_eq!(shipped.palw_prompt_ids_form_v1(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat);
+
+        let mut scheduled = shipped.clone();
+        scheduled.palw_prompt_ids_merkle = Some(ForkActivation::new(9_000_000));
+        let err = scheduled.validate_palw_v2().expect_err("a height above genesis is refused");
+        assert!(format!("{err}").contains("genesis"), "{err}");
+
+        let mut fence_without_format = shipped.clone();
+        fence_without_format.palw_prompt_ids_merkle = Some(ForkActivation::always());
+        let err = fence_without_format.validate_palw_v2().expect_err("the fence without trace format 4 is refused");
+        assert!(format!("{err}").contains("trace_format_version"), "{err}");
+
+        let mut format_without_fence = shipped.clone();
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut format_without_fence.palw_consensus_mode {
+            bundle.trace_format_version = PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS;
+        }
+        let err = format_without_fence.validate_palw_v2().expect_err("trace format 4 without the fence is refused");
+        assert!(format!("{err}").contains("dormant"), "{err}");
+
+        // `Some(never())` is absence and stays assemblable — the collapse every other fence has.
+        let mut never_armed = shipped.clone();
+        never_armed.palw_prompt_ids_merkle = Some(ForkActivation::never());
+        never_armed.validate_palw_v2().expect("Some(never()) is absence, not an arming");
+
+        // The assembly on a base that arms it: the format is written from the fence, in one place.
+        let mut base = DEVNET_PARAMS;
+        base.palw_prompt_ids_merkle = Some(ForkActivation::always());
+        let armed = palw_v2_params_from_artifacts_on_base(base, PALW_RC_GENESIS_ARTIFACT_ROOT, palw_devnet_genesis_bonds_v1())
+            .expect("a base that arms the Merkle commitment assembles");
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &armed.palw_consensus_mode else { panic!("V2") };
+        assert_eq!(bundle.trace_format_version, PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS);
+        assert_ne!(PALW_V2_TRACE_FORMAT_VERSION, PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS);
+        assert_eq!(armed.palw_prompt_ids_form_v1(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1);
+        assert_eq!(armed.palw_prompt_ids_form_at(u64::MAX), armed.palw_prompt_ids_form_v1(), "genesis-only means height-free");
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(flat) = &shipped.palw_consensus_mode else { panic!("V2") };
+        assert_ne!(
+            crate::palw_mode_v2::palw_ruleset_id_v2(bundle),
+            crate::palw_mode_v2::palw_ruleset_id_v2(flat),
+            "the form is inside the ruleset id"
+        );
     }
 
     /// **ADR-0082 Decisions 10/11's fence is dormant on every shipped preset and visible the
@@ -10864,6 +11079,12 @@ mod consensus_params_id_tests {
         armed.palw_da_court = Some(ForkActivation::always());
         // A preset whose depths were derived WITHOUT the DA term does not silently pass: arming is
         // a re-derivation, which is the honest statement that it is a re-mint and not a flag flip.
+        // The bond delay is part of that re-derivation (`palw_v2_bond_outlasting_da_court`): the RC
+        // delay sits inside `liability + accuse + disclose`, and `validate_palw_v2` refuses it there.
+        let fence = armed.palw_da_court;
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &mut armed.palw_consensus_mode {
+            b.bond = palw_v2_bond_outlasting_da_court(b, fence).expect("the RC windows derive a delay");
+        }
         let re_derived = armed.clone().with_palw_v2_depths(&bundle);
         assert!(
             re_derived.blockrate.pruning_depth >= shipped.blockrate.pruning_depth,
@@ -11842,8 +12063,9 @@ mod consensus_params_id_tests {
         let money: Vec<(u32, [u8; 64])> =
             specs.iter().enumerate().map(|(i, spec)| (i as u32, *spec.payout_payload.as_byte_slice())).collect();
         let utxos = bonded_genesis_utxos(MAINNET_PARAMS.net, &money, std::iter::empty());
-        let params = palw_v2_params_from_artifacts_on_base_with_utxos(mainnet_v2_mint_base(), PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
-            .expect("a mainnet-equivalent genesis assembles");
+        let params =
+            palw_v2_params_from_artifacts_on_base_with_utxos(mainnet_v2_mint_base(), PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
+                .expect("a mainnet-equivalent genesis assembles");
         let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("the mode is V2") };
 
         let certified = palw_rc_fp_certified_class_ids_v1();
@@ -11910,8 +12132,9 @@ mod consensus_params_id_tests {
         assert_eq!(total, MISAKA_PREMINE_CAP_SOMPI, "a bonded mainnet genesis still mints exactly 10B");
 
         // 3. The real assembly and the real genesis gate, on mainnet's base.
-        let params = palw_v2_params_from_artifacts_on_base_with_utxos(mainnet_v2_mint_base(), PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
-            .expect("a mainnet-equivalent genesis assembles and passes verify_palw_genesis_v2");
+        let params =
+            palw_v2_params_from_artifacts_on_base_with_utxos(mainnet_v2_mint_base(), PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
+                .expect("a mainnet-equivalent genesis assembles and passes verify_palw_genesis_v2");
 
         // 4. PALW is genuinely on, and it is still mainnet underneath.
         assert!(matches!(params.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)), "the mode is V2");
@@ -12027,21 +12250,23 @@ mod consensus_params_id_tests {
         .expect("a mainnet-equivalent genesis assembles");
         let carded = palw_rc_arm_phase1(mainnet_certify_registered_classes_v1(assembled));
 
-        // The five the card STATES on its base (`mainnet_card_base_v1`), individually: four armed
-        // from genesis on every card, the court only when the dense tier is pinned.
+        // The eight the card STATES on its base (`mainnet_card_base_v1`), individually: seven armed
+        // from genesis on every card, the k-ary court only when the dense tier is pinned.
         for (name, armed) in [
             ("palw_context_ladder", carded.palw_context_ladder),
             ("palw_receipt_rows_unpriced", carded.palw_receipt_rows_unpriced),
             ("palw_certification_rent", carded.palw_certification_rent),
             ("palw_chunk_cap_charge", carded.palw_chunk_cap_charge),
+            ("palw_prompt_ids_merkle", carded.palw_prompt_ids_merkle),
+            ("palw_panel_da", carded.palw_panel_da),
+            ("palw_da_court", carded.palw_da_court),
         ] {
             assert_eq!(armed, Some(ForkActivation::always()), "a card states {name} from genesis");
         }
         assert!(carded.palw_kary_court.is_none(), "…and the court only with the dense tier, which this floor-only card does not pin");
 
         let rc = palw_rc_shipped_params();
-        let rc_armed: Vec<&'static str> =
-            palw_v2_fence_table(&rc).into_iter().filter(|(_, on)| *on).map(|(n, _)| n).collect();
+        let rc_armed: Vec<&'static str> = palw_v2_fence_table(&rc).into_iter().filter(|(_, on)| *on).map(|(n, _)| n).collect();
         let mainnet_armed: std::collections::BTreeSet<&'static str> =
             palw_v2_fence_table(&carded).into_iter().filter(|(_, on)| *on).map(|(n, _)| n).collect();
         let missing: Vec<&'static str> = rc_armed.iter().copied().filter(|n| !mainnet_armed.contains(n)).collect();
@@ -12160,9 +12385,7 @@ mod consensus_params_id_tests {
             vec![],
         )
         .expect("with the court stated, the dense tier assembles on mainnet's own base");
-        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
-            panic!("V2")
-        };
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("V2") };
         assert!(
             crate::palw_court_v2::palw_attn_widest_registered_site_v2(bundle).0 > 0,
             "…and the row it registers is the fused one the court exists for"
@@ -12259,7 +12482,11 @@ mod consensus_params_id_tests {
 
         let mut harder = rc.clone();
         harder.genesis.bits = MAINNET_PARAMS.genesis.bits;
-        assert_ne!(harder.genesis.bits, harder.max_difficulty_target.compact_target_bits(), "the premise: 0x1f7fffff is not the ambient target");
+        assert_ne!(
+            harder.genesis.bits,
+            harder.max_difficulty_target.compact_target_bits(),
+            "the premise: 0x1f7fffff is not the ambient target"
+        );
         let e = harder.validate_palw_v2().expect_err("a V2 network minted at the hash lineage's difficulty is refused");
         assert!(
             format!("{e:?}").contains("ambient maximum"),
@@ -12346,7 +12573,10 @@ mod consensus_params_id_tests {
         let derived = palw_fp_certified_class_ids_of_registered_v1(rc_bundle);
         let registered = registered_ids(&rc);
         assert!(derived.is_subset(&registered), "the derived set is a subset of what is registered, by construction");
-        assert!(!pinned.is_subset(&registered), "the RC's pinned set names a class its card does not register — the defect, on the record");
+        assert!(
+            !pinned.is_subset(&registered),
+            "the RC's pinned set names a class its card does not register — the defect, on the record"
+        );
         assert_ne!(pinned, derived);
         assert_eq!(derived.len(), 3, "the floor, the hybrid and the registered dense row are all covered ({derived:?})");
         assert_eq!(registered.len(), 3, "…which is every class the card registers");
@@ -12365,10 +12595,13 @@ mod consensus_params_id_tests {
         let card_registered = registered_ids(&carded);
         let card_certified = certified(&carded);
         assert!(card_certified.is_subset(&card_registered), "a card certifies only classes it registers");
-        assert_eq!(card_certified, palw_fp_certified_class_ids_of_registered_v1(match &carded.palw_consensus_mode {
-            PalwConsensusMode::ConsensusV2(b) => b,
-            _ => unreachable!(),
-        }));
+        assert_eq!(
+            card_certified,
+            palw_fp_certified_class_ids_of_registered_v1(match &carded.palw_consensus_mode {
+                PalwConsensusMode::ConsensusV2(b) => b,
+                _ => unreachable!(),
+            })
+        );
         assert!(card_certified.len() >= derived.len(), "…and the dense row it registers is covered too ({card_certified:?})");
     }
 

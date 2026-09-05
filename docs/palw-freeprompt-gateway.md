@@ -119,6 +119,7 @@ worker is not"). `palw-class ledger --network testnet-11` prints it beside the m
 | `--claim-exposure-sompi <n>` | what one claim reserves. `0` = read it from the chain |
 | `--public-job-budget-permille <n>` | the share of the room strangers' jobs may spend per day (default 200) |
 | `--answer-never-commit` | SA-1(c): answer every prompt, commit none |
+| `--privacy public-da\|panel-da` | ADR-0077 D16: `panel-da` files commitments that carry no prompt on chain — the ids reach only the drawn seats over the authenticated pull. Refused per request where the chain has not armed `palw_panel_da` (`panel_da_armed` in the facts), before the inference. The gateway prints the disclosure sentence at boot: private from the public, not from the panel; a dispute publishes it |
 | `--per-source-jobs-per-window <n>` | SA-8's secondary per-IP quota |
 | `--derive-seed <file>` | ADR-0078: sign derivations here. **Must live outside `--identity`'s directory and outside `--outbox`** — the boot refusal scans exactly those two for reachable signing secrets and will refuse to start |
 | `MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1` | print the worker's stderr. Withheld by default (ADR-0079 SA-7): that stream is the model runtime's and can quote its input |

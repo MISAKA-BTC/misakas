@@ -151,6 +151,9 @@ fn main() {
             geometry.vocab_size as usize,
             PALW_RC_BASE0_CANONICAL.0,
             PALW_RC_BASE0_CANONICAL.1,
+            // A cost measurement: the form only decides what the prompt is CALLED, not what the
+            // inference costs, so the flat form is exact here on either kind of network.
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         );
         let artifact = misaka_palw_base0::rc::palw_rc_base0_artifact_v1().expect("the floor's artifact derives");
         // **The ladder is the RULESET's, and the report says which one it counted at.** This was

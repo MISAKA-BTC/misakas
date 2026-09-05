@@ -2802,8 +2802,11 @@ pub fn tiled_tile_authenticate_v1(
     if tile >= tiles {
         return Err(bad("the tile is past the row's vocabulary"));
     }
-    let expected_len =
-        if tile + 1 == tiles && !vocab.is_multiple_of(PALW_LOGITS_TILE_LANES) { vocab % PALW_LOGITS_TILE_LANES } else { PALW_LOGITS_TILE_LANES };
+    let expected_len = if tile + 1 == tiles && !vocab.is_multiple_of(PALW_LOGITS_TILE_LANES) {
+        vocab % PALW_LOGITS_TILE_LANES
+    } else {
+        PALW_LOGITS_TILE_LANES
+    };
     if lanes.len() != expected_len {
         return Err(bad("an opened tile is not the scheme's width"));
     }
@@ -2864,7 +2867,17 @@ pub fn check_trace_event_disclosure_v1(
         PalwTraceEventDisclosureV1::Tiled { generated_token_ids, row_root, row_opening, tile_lanes, tile_opening, .. } => {
             let (ctx_hash, vocab, tiles) =
                 tiled_row_authenticate_v1(binding, generated_token_ids, row, row_root, row_opening, max_step_leaf_count)?;
-            tiled_tile_authenticate_v1(&ctx_hash, row, vocab, tiles, row_root, tile as u64, tile_lanes, tile_opening, max_step_leaf_count)
+            tiled_tile_authenticate_v1(
+                &ctx_hash,
+                row,
+                vocab,
+                tiles,
+                row_root,
+                tile as u64,
+                tile_lanes,
+                tile_opening,
+                max_step_leaf_count,
+            )
         }
         PalwTraceEventDisclosureV1::OutOfRange { .. } => {
             let out = if scheme == flat_logits_scheme_id_v1() {
@@ -2874,7 +2887,11 @@ pub fn check_trace_event_disclosure_v1(
             } else {
                 return Err(bad("this class commits under a scheme no disclosure form names"));
             };
-            if out { Ok(()) } else { Err(bad("the accused event is inside the committed run; it must be opened, not declared absent")) }
+            if out {
+                Ok(())
+            } else {
+                Err(bad("the accused event is inside the committed run; it must be opened, not declared absent"))
+            }
         }
     }
 }
@@ -2893,8 +2910,11 @@ pub fn tiled_trace_event_disclosure_v1(
     let lanes_row = logits_rows.get(row as usize)?;
     let tiles: Vec<&[i32]> = lanes_row.chunks(PALW_LOGITS_TILE_LANES).collect();
     let lanes = tiles.get(tile as usize)?;
-    let row_roots: Vec<Hash64> =
-        logits_rows.iter().enumerate().map(|(r, lanes)| tiled_logits_row_root_v1(&ctx_hash, r as u32, lanes)).collect::<Option<_>>()?;
+    let row_roots: Vec<Hash64> = logits_rows
+        .iter()
+        .enumerate()
+        .map(|(r, lanes)| tiled_logits_row_root_v1(&ctx_hash, r as u32, lanes))
+        .collect::<Option<_>>()?;
     let row_opening = crate::palw_step_leg::step_opening_v1(&row_roots, row as u64).ok()?;
     let tile_leaves: Vec<Hash64> =
         tiles.iter().enumerate().map(|(t, lanes)| tiled_logits_tile_leaf_v1(&ctx_hash, row, t as u32, lanes)).collect();
@@ -4111,7 +4131,12 @@ pub fn check_execution_step_refutation_opened_v1(
     weights: &dyn PalwWeightOracleV1,
     prompt_ids_opening: Option<&crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
-    check_execution_step_refutation_opened_capped_v1(refutation, weights, prompt_ids_opening, crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES)
+    check_execution_step_refutation_opened_capped_v1(
+        refutation,
+        weights,
+        prompt_ids_opening,
+        crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+    )
 }
 
 /// [`check_execution_step_refutation_opened_v1`] with the ladder the ruleset froze.
@@ -4206,7 +4231,8 @@ pub fn check_execution_step_refutation_opened_capped_v1(
                 leaf_hashes: leaf_hashes[*start..*start + *len].to_vec(),
                 siblings: siblings.clone(),
             };
-            let implied = crate::palw_step_leg::step_range_opening_root_capped_v1(binding.step_leaf_count, &opening, max_step_leaf_count)?;
+            let implied =
+                crate::palw_step_leg::step_range_opening_root_capped_v1(binding.step_leaf_count, &opening, max_step_leaf_count)?;
             if implied != binding.step_merkle_root {
                 return Err(PalwStepRefuteError::Leg(crate::palw_step_leg::PalwStepLegError::CommittedRootMismatch));
             }
@@ -6088,6 +6114,20 @@ pub(crate) mod tests {
         );
     }
 
+    /// **An honest execution whose job context commits its prompt as a Merkle root**, with the
+    /// honest opening of that prompt's first tile — the court's fixture for its `ArithmeticOpened`
+    /// arm (`palw_court_v2::tests`). The step is the same one the flat fixtures refute; only what
+    /// the prompt is CALLED changed, which is exactly what the arm is about.
+    pub(crate) fn base0_merkle_prompt_honest() -> (PalwExecutionStepRefutationV1, crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1) {
+        let ids = vec![7u32, 8];
+        let merkle_root = crate::palw_prompt_ids_v1::prompt_token_ids_root_v1(&ids).expect("two ids commit");
+        let (binding, material, rows) = honest_execution_with_context(|c| c.prompt_token_ids_hash = merkle_root);
+        let coord = PalwStepCoordinateV1 { call_index: 1, node_slot: 1, position: 0, tile_index: 0 };
+        let refutation = build_refutation(&binding, &material, &rows, coord);
+        let opening = crate::palw_prompt_ids_v1::prompt_ids_opening_v1(&ids, 0).expect("position 0 opens");
+        (refutation, opening)
+    }
+
     /// **ADR-0081 Decision 3: an opening is bound to the job's own root before anything reads an
     /// id out of it** — the G5d discipline, carried over to the openable commitment.
     ///
@@ -6588,7 +6628,8 @@ pub(crate) mod tests {
                 // The decode close's own pin over the same row agrees about the row.
                 let pin = tiled_pin(&binding.job_context, &logits_rows, &generated, row, 0);
                 assert_eq!(
-                    tiled_row_authenticate_v1(&binding, &pin.generated_token_ids, row, &pin.row_root, &pin.row_opening, cap).map(|(_, v, t)| (v, t)),
+                    tiled_row_authenticate_v1(&binding, &pin.generated_token_ids, row, &pin.row_root, &pin.row_opening, cap)
+                        .map(|(_, v, t)| (v, t)),
                     Ok((vocab, tiles)),
                     "the disclosure's row authentication is the close's"
                 );
@@ -6599,12 +6640,16 @@ pub(crate) mod tests {
         let out = PalwTraceEventDisclosureV1::OutOfRange { binding: Box::new(binding.clone()) };
         check_trace_event_disclosure_v1(roots.0, roots.1, decode as u32, 0, &out, cap).expect("a row past the run is absent");
         check_trace_event_disclosure_v1(roots.0, roots.1, 0, tiles as u8, &out, cap).expect("a tile past the row is absent");
-        assert!(check_trace_event_disclosure_v1(roots.0, roots.1, 0, 0, &out, cap).is_err(), "an event the run has may not be declared absent");
+        assert!(
+            check_trace_event_disclosure_v1(roots.0, roots.1, 0, 0, &out, cap).is_err(),
+            "an event the run has may not be declared absent"
+        );
         assert!(tiled_trace_event_disclosure_v1(&binding.job_context, &logits_rows, decode as u32, 0).is_none());
 
         // The bends the close refuses, the disclosure refuses: a lane, an id, a path, the wrong
         // tile under the accused index, and a binding of another execution.
-        let (row_root, row_opening, lanes, tile_opening) = tiled_trace_event_disclosure_v1(&binding.job_context, &logits_rows, 1, 1).unwrap();
+        let (row_root, row_opening, lanes, tile_opening) =
+            tiled_trace_event_disclosure_v1(&binding.job_context, &logits_rows, 1, 1).unwrap();
         let honest = PalwTraceEventDisclosureV1::Tiled {
             binding: Box::new(binding.clone()),
             generated_token_ids: generated.clone(),
@@ -6618,13 +6663,47 @@ pub(crate) mod tests {
             edit(&mut bent);
             assert!(check_trace_event_disclosure_v1(roots.0, roots.1, 1, 1, &bent, cap).is_err(), "{what} must be refused");
         };
-        refused(&|d| if let PalwTraceEventDisclosureV1::Tiled { tile_lanes, .. } = d { tile_lanes[3] ^= 1 }, "a bent lane");
-        refused(&|d| if let PalwTraceEventDisclosureV1::Tiled { generated_token_ids, .. } = d { generated_token_ids[0] ^= 1 }, "a bent id");
-        refused(&|d| if let PalwTraceEventDisclosureV1::Tiled { tile_opening, .. } = d { tile_opening.siblings.push(Hash64::from_u64_word(0x77)) }, "a longer path");
-        refused(&|d| if let PalwTraceEventDisclosureV1::Tiled { row_opening, .. } = d { row_opening.leaf_index ^= 1 }, "another row's opening");
+        refused(
+            &|d| {
+                if let PalwTraceEventDisclosureV1::Tiled { tile_lanes, .. } = d {
+                    tile_lanes[3] ^= 1
+                }
+            },
+            "a bent lane",
+        );
+        refused(
+            &|d| {
+                if let PalwTraceEventDisclosureV1::Tiled { generated_token_ids, .. } = d {
+                    generated_token_ids[0] ^= 1
+                }
+            },
+            "a bent id",
+        );
+        refused(
+            &|d| {
+                if let PalwTraceEventDisclosureV1::Tiled { tile_opening, .. } = d {
+                    tile_opening.siblings.push(Hash64::from_u64_word(0x77))
+                }
+            },
+            "a longer path",
+        );
+        refused(
+            &|d| {
+                if let PalwTraceEventDisclosureV1::Tiled { row_opening, .. } = d {
+                    row_opening.leaf_index ^= 1
+                }
+            },
+            "another row's opening",
+        );
         assert!(check_trace_event_disclosure_v1(roots.0, roots.1, 1, 2, &honest, cap).is_err(), "tile 1 does not answer for tile 2");
-        assert!(check_trace_event_disclosure_v1(Hash64::from_u64_word(0xBAD), roots.1, 1, 1, &honest, cap).is_err(), "another claim's trace root");
-        assert!(check_trace_event_disclosure_v1(roots.0, Hash64::from_u64_word(0xBAD), 1, 1, &honest, cap).is_err(), "another claim's execution root");
+        assert!(
+            check_trace_event_disclosure_v1(Hash64::from_u64_word(0xBAD), roots.1, 1, 1, &honest, cap).is_err(),
+            "another claim's trace root"
+        );
+        assert!(
+            check_trace_event_disclosure_v1(roots.0, Hash64::from_u64_word(0xBAD), 1, 1, &honest, cap).is_err(),
+            "another claim's execution root"
+        );
         // A disclosure carries one tile where the close carries two: it fits wherever that fits.
         let bytes = borsh::to_vec(&honest).unwrap().len();
         assert!(bytes < crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES as usize, "{bytes} bytes against the close ceiling");

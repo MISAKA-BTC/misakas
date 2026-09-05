@@ -23,9 +23,7 @@
 use crate::qwen36::{Qwen36ArtifactV1, Qwen36Cache, Qwen36Engine, Qwen36ShapeV1};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES as LEG_MAX_LEAVES;
-use kaspa_consensus_core::palw_v2::{
-    PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, output_commitment_v2, prompt_token_ids_hash_v2,
-};
+use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, output_commitment_v2};
 use kaspa_hashes::Hash64;
 
 /// Domain separators. Distinct from BASE-0's so that a root computed for one class can never be
@@ -150,6 +148,8 @@ pub struct Qwen36Backend {
     /// constant (which is what every shipped preset froze). The dense tier already carried this;
     /// the hybrid one read the constant at five separate sites.
     step_ladder_cap: u64,
+    /// The network's prompt-commitment form (ADR-0081 Decision 3); see `Base0Backend::prompt_ids_form`.
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 }
 
 impl Qwen36Backend {
@@ -192,6 +192,7 @@ impl Qwen36Backend {
             plan,
             profile,
             step_ladder_cap: LEG_MAX_LEAVES,
+            prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         }
     }
 
@@ -201,6 +202,16 @@ impl Qwen36Backend {
     pub fn with_step_ladder_cap(mut self, max_step_leaf_count: u64) -> Self {
         self.step_ladder_cap = max_step_leaf_count;
         self
+    }
+
+    /// The network's prompt-commitment form (ADR-0081 Decision 3); see `Base0Backend::prompt_ids_form`.
+    pub fn with_prompt_ids_form(mut self, form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Self {
+        self.prompt_ids_form = form;
+        self
+    }
+
+    pub fn prompt_ids_form(&self) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
+        self.prompt_ids_form
     }
 
     /// The ladder top this instance prices a job against.
@@ -237,6 +248,7 @@ impl Qwen36Backend {
             plan,
             profile,
             step_ladder_cap: LEG_MAX_LEAVES,
+            prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         }
     }
 
@@ -278,6 +290,7 @@ impl Qwen36Backend {
             plan: Some(plan),
             profile: Some(profile),
             step_ladder_cap: LEG_MAX_LEAVES,
+            prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         })
     }
 
@@ -850,7 +863,11 @@ impl Qwen36Backend {
 
         let prompt_token_ids: Vec<u32> = match carried {
             Some(ids) => {
-                if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(ids) != binding.job_context.prompt_token_ids_hash {
+                if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+                    self.prompt_ids_form,
+                    ids,
+                    &binding.job_context.prompt_token_ids_hash,
+                ) {
                     return Err("the carried prompt is not the one this capture's job context commits to".to_string());
                 }
                 ids.to_vec()
@@ -862,7 +879,11 @@ impl Qwen36Backend {
                     binding.job_context.declared_prefill_tokens,
                 );
                 let derived_ids: Vec<u32> = derived.iter().map(|t| *t as u32).collect();
-                if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&derived_ids) == binding.job_context.prompt_token_ids_hash {
+                if kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+                    self.prompt_ids_form,
+                    &derived_ids,
+                    &binding.job_context.prompt_token_ids_hash,
+                ) {
                     derived_ids
                 } else {
                     Vec::new()
@@ -1007,7 +1028,11 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             trace_scheme_id: kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1(),
             cu_ruleset_id: Hash64::default(),
             tokenizer_id: Hash64::default(),
-            prompt_token_ids_hash: prompt_token_ids_hash_v2(&ids),
+            prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+                self.prompt_ids_form,
+                &ids,
+            )
+            .map_err(|e| e.to_string())?,
             declared_prefill_tokens: prefill,
             exact_decode_tokens: decode,
             max_context_tokens: shape.max_position as u32,
@@ -1023,10 +1048,15 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         use kaspa_consensus_core::palw_backend::PalwReplayRootsV1;
         let (Some(plan), Some(profile)) = (&self.plan, &self.profile) else {
             let outcome = self.execute(job, prompt)?;
-            return Ok(PalwReplayRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, work_leaves: None });
+            return Ok(PalwReplayRootsV1 {
+                execution_root: outcome.execution_root,
+                trace_root: outcome.trace_root,
+                work_leaves: None,
+            });
         };
         // The fold sink: one execution, the dense run's roots, none of its tiles (ADR-0084 D7).
-        let run = qwen36_execute_free_prompt_streaming_v1(&self.artifact, profile, plan, job, prompt, self.step_ladder_cap, &mut |_| {})?;
+        let run =
+            qwen36_execute_free_prompt_streaming_v1(&self.artifact, profile, plan, job, prompt, self.step_ladder_cap, &mut |_| {})?;
         Ok(PalwReplayRootsV1 {
             execution_root: run.execution_root,
             trace_root: run.trace_root,
@@ -1312,6 +1342,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                         interval,
                         self.step_ladder_cap,
                         &Qwen36IntervalKernels { artifact: &self.artifact, plan },
+                        self.prompt_ids_form,
                     )
                     .map_err(|e| e.to_string())?
                 }
@@ -1321,6 +1352,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                     prompt_token_ids,
                     interval,
                     self.step_ladder_cap,
+                    self.prompt_ids_form,
                 )
                 .map_err(|e| e.to_string())?,
             };
@@ -1357,6 +1389,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             self.step_ladder_cap,
             state.as_ref(),
             &Qwen36IntervalKernels { artifact: &self.artifact, plan },
+            self.prompt_ids_form,
         )
         .to_consensus_v1()
     }
@@ -2043,7 +2076,14 @@ mod tests {
 
         let engine = Qwen36Engine::new(&artifact);
         let plan = engine.plan_from_profile(&profile).expect("the fixture's declaration is its program");
-        let (ctx, prompt) = crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x0000_82C3), artifact.shape.vocab, 3, 4);
+        let (ctx, prompt) = crate::produce::base0_rc_job_v1(
+            &profile,
+            Hash64::from_u64_word(0x0000_82C3),
+            artifact.shape.vocab,
+            3,
+            4,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
         let positions_total = ctx.declared_prefill_tokens + ctx.exact_decode_tokens.saturating_sub(1);
         assert!(
             positions_total < palw_anchored_interval_for_profile_v1(&profile),

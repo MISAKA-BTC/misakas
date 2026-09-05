@@ -1038,6 +1038,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             epoch_produced_blocks: facts.epoch_produced_blocks,
             locked_bond_outpoints,
             palw_retention_dir,
+            // Both fences at the CANDIDATE's score, for the reason `fp_decode_rules_armed` is; the
+            // form is genesis-only so the height cannot matter, and it is read the same way anyway.
+            panel_da_armed: self.config.params.palw_panel_da_at(facts.daa_score),
+            prompt_ids_merkle: self.config.params.palw_prompt_ids_form_at(facts.daa_score)
+                == kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
             ..Default::default()
         };
         if let Some(bond_facts) = facts.bond.as_ref() {

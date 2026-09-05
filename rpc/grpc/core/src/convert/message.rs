@@ -410,6 +410,8 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwProducerFactsResponse>, protowire:
         fp_max_quanta_per_receipt: item.fp_max_quanta_per_receipt,
         fp_decode_rules_armed: item.fp_decode_rules_armed,
         palw_retention_dir: item.palw_retention_dir.clone(),
+        panel_da_armed: item.panel_da_armed,
+        prompt_ids_merkle: item.prompt_ids_merkle,
         error: None,
     }
 });
@@ -1206,6 +1208,8 @@ try_from!(item: &protowire::GetPalwProducerFactsResponseMessage, RpcResult<kaspa
         fp_max_quanta_per_receipt: item.fp_max_quanta_per_receipt,
         fp_decode_rules_armed: item.fp_decode_rules_armed,
         palw_retention_dir: item.palw_retention_dir.clone(),
+        panel_da_armed: item.panel_da_armed,
+        prompt_ids_merkle: item.prompt_ids_merkle,
     }
 });
 try_from!(item: &protowire::GetPalwDerivedArtifactsRequestMessage, kaspa_rpc_core::GetPalwDerivedArtifactsRequest, {
@@ -1682,6 +1686,8 @@ mod palw_producer_facts_tests {
             not_ready_reason: "the bond's exposure ceiling leaves no room for another claim".to_string(),
             // audit3 H3: the set a wallet must have before it selects inputs.
             locked_bond_outpoints: vec![format!("{}:0", "aa".repeat(64)), format!("{}:7", "bb".repeat(64))],
+            panel_da_armed: true,
+            prompt_ids_merkle: true,
             // ADR-0077 Decision 3: what a gateway reads before it commits.
             fp_certified: true,
             fp_quanta_per_canonical_job: 8,

@@ -167,6 +167,7 @@ pub fn base0_rc_job_v1(
     vocab: usize,
     prefill: u32,
     decode: u32,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> (PalwJobContextV2, Vec<usize>) {
     let mut prompt = Vec::with_capacity(prefill as usize);
     let mut counter = 0u64;
@@ -187,8 +188,12 @@ pub fn base0_rc_job_v1(
     let mut ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, prefill, decode);
     ctx.job_id = anchor;
     ctx.execution_seed = anchor.as_byte_slice()[..32].try_into().expect("a 64-byte hash has 32 bytes");
-    ctx.prompt_token_ids_hash =
-        kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&prompt.iter().map(|t| *t as u32).collect::<Vec<_>>());
+    // Under the network's form (ADR-0081 Decision 3). A canonical prompt is at most `n_ctx` ids —
+    // inside the prompt-id tree by orders of magnitude — so the Merkle form cannot fail to derive
+    // here, and the flat form never can.
+    let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+    ctx.prompt_token_ids_hash = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(prompt_ids_form, &ids)
+        .expect("a canonical prompt fits the prompt-id tree");
     (ctx, prompt)
 }
 
@@ -1176,7 +1181,14 @@ mod tests {
         )
         .expect("the fixture shape is valid");
         let profile = base0_profile_v1(geometry).expect("expressible");
-        let (ctx, prompt) = base0_rc_job_v1(&profile, Hash64::from_u64_word(0xA9C40), geometry.vocab_size as usize, 3, 3);
+        let (ctx, prompt) = base0_rc_job_v1(
+            &profile,
+            Hash64::from_u64_word(0xA9C40),
+            geometry.vocab_size as usize,
+            3,
+            3,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
         (artifact, profile, ctx, prompt)
     }
 
@@ -1342,7 +1354,14 @@ mod tests {
         let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
         let (prefill, decode) = PALW_RC_BASE0_WORST_CASE;
         let anchor_id = Hash64::from_u64_word(0xC057);
-        let (ctx, prompt) = base0_rc_job_v1(&profile, anchor_id, artifact.shape.vocab, prefill, decode);
+        let (ctx, prompt) = base0_rc_job_v1(
+            &profile,
+            anchor_id,
+            artifact.shape.vocab,
+            prefill,
+            decode,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
         let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the longest job runs");
         let binding = crate::legs::base0_binding_from_capture_v1(
             &profile,
@@ -1977,6 +1996,7 @@ mod tests {
             rc_artifact.shape.vocab,
             kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL.0,
             kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL.1,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         );
         let rc_run = base0_execute_for_attempt_v1(&rc_artifact, &rc_profile, &rc_job, &rc_prompt).expect("the floor runs");
         let rc_bytes = base0_material_encode_v1(&rc_run).unwrap();

@@ -818,6 +818,7 @@ impl ValidatorKey {
     pub fn build_fp_commitment_tx(
         &self,
         network_domain: Hash64,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
         commitment: PalwFreePromptCommitmentV3,
         prompt_token_ids: Vec<u32>,
         freeprompt: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3,
@@ -830,9 +831,22 @@ impl ValidatorKey {
         // stateless check will re-derive.
         let signature =
             self.sign_with_context(fp_claim_id_v3(&commitment).as_bytes().as_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT).to_vec();
+        // **Under `PanelDa` the ids never ride the chain** (ADR-0077 Decision 16): the payload
+        // carries the job's commitment to them and nothing else, and the caller stages the ids
+        // beside the material for the executor's node to serve to the claim's readers. A payload
+        // that carried them would be refused by `validate_stateless_v3` as
+        // `PanelDaPayloadCarriesPrompt`; dropping them here is what makes the honest caller's
+        // path and the validator's rule one spelling.
+        let prompt_token_ids = if commitment.job.privacy_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA {
+            Vec::new()
+        } else {
+            prompt_token_ids
+        };
         let payload = PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids, signature };
         // The same stateless rules a peer will apply, applied before spending a fee on them.
-        payload.validate_stateless_v3(network_domain).map_err(|e| format!("free-prompt commitment is not admissible: {e}"))?;
+        payload
+            .validate_stateless_v3(network_domain, prompt_ids_form)
+            .map_err(|e| format!("free-prompt commitment is not admissible: {e}"))?;
         let (quanta, pwu) = freeprompt.derive_quanta_and_pwu(payload.commitment.work_leaves, class_canonical_leaves).ok_or_else(|| {
             format!(
                 "free-prompt job earns no quanta at {} leaves against a {class_canonical_leaves}-leaf canonical job — it certifies \
@@ -2092,6 +2106,7 @@ mod tests {
         let tx = key
             .build_fp_commitment_tx(
                 network_domain,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                 commitment,
                 ids.clone(),
                 &bundle.freeprompt,
@@ -2106,7 +2121,9 @@ mod tests {
         let decoded: PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&tx.payload).expect("the payload decodes");
         assert_eq!(decoded.claim_id(), expected_claim, "the on-chain claim id is the one the builder signed");
         assert_eq!(decoded.prompt_token_ids, ids, "PublicDA carries the prompt the panel replays from");
-        decoded.validate_stateless_v3(network_domain).expect("a peer accepts what we built");
+        decoded
+            .validate_stateless_v3(network_domain, kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+            .expect("a peer accepts what we built");
 
         // The signature verifies over the claim id under the bond key, in the commitment context…
         assert!(
@@ -2141,6 +2158,7 @@ mod tests {
         let err = key
             .build_fp_commitment_tx(
                 network_domain,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                 commitment.clone(),
                 wrong_ids,
                 &bundle.freeprompt,
@@ -2178,6 +2196,7 @@ mod tests {
         let err = key
             .build_fp_commitment_tx(
                 network_domain,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                 tiny,
                 tiny_ids,
                 &bundle.freeprompt,

@@ -77,7 +77,7 @@ fn main() {
     let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
         die(format!("{network_id} has no PALW V2 bundle, so it has no classes to replay"));
     };
-    let sdk = PalwClassSdk::builtin_v1(bundle.court, network_id.to_string().into_bytes());
+    let sdk = PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), network_id.to_string().into_bytes());
 
     let artifact_bytes = std::fs::read(&artifact_path).unwrap_or_else(|e| die(format!("{artifact_path}: {e}")));
     let artifact_sha256 = sha256_hex(&artifact_bytes);

@@ -1369,6 +1369,9 @@ message GetPalwProducerFactsResponseMessage {
   // submitter on this host stages a claim's material and answer envelope where the panel reads.
   // Empty on a node running no panel.
   string palwRetentionDir = 26;
+  // Version 6: ADR-0077 D16 `PanelDa` at the candidate, and ADR-0081 D3's prompt-commitment form.
+  bool panelDaArmed = 27;
+  bool promptIdsMerkle = 28;
   RPCError error = 1000;
 }
 

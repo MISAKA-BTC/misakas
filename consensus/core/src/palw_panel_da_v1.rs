@@ -97,7 +97,7 @@ pub fn palw_fp_privacy_keeps_prompt_off_chain_v1(privacy_mode: u8) -> bool {
 mod tests {
     use super::*;
     use crate::config::params::{DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, Params, SIMNET_PARAMS, TESTNET_PARAMS};
-    use crate::palw_fp_objects_v3::{validate_palw_fp_commitment_tx, validate_palw_fp_commitment_tx_under_v3};
+    use crate::palw_fp_objects_v3::validate_palw_fp_commitment_tx_under_v3;
     use crate::palw_freeprompt_v3::{
         PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwFpCommitmentTxPayloadV3, PalwFpStopReasonV3, PalwFpV3Error,
         PalwFreePromptCommitmentV3, PalwFreePromptJobV3, fp_trace_manifest_v3, palw_fp_capture_decode_v1, palw_fp_capture_encode_v1,
@@ -251,11 +251,14 @@ mod tests {
             "and the job still binds exactly one prompt"
         );
         assert_eq!(p.commitment.job.prompt_tokens as usize, prompt().len(), "including its length");
-        p.validate_stateless_under_v3(net(), true).expect("armed, this is an admissible payload");
+        p.validate_stateless_under_v3(net(), true, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+            .expect("armed, this is an admissible payload");
 
         // The same claim under PublicDa is the mode that publishes: the ids ride the transaction.
         let public = payload(PALW_FP_PRIVACY_PUBLIC_DA, prompt());
-        public.validate_stateless_v3(net()).expect("PublicDa is admissible with no arming at all");
+        public
+            .validate_stateless_v3(net(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+            .expect("PublicDa is admissible with no arming at all");
         assert!(palw_fp_privacy_keeps_prompt_off_chain_v1(PALW_FP_PRIVACY_PANEL_DA));
         assert!(!palw_fp_privacy_keeps_prompt_off_chain_v1(PALW_FP_PRIVACY_PUBLIC_DA));
     }
@@ -266,12 +269,21 @@ mod tests {
     #[test]
     fn an_unarmed_network_refuses_panel_da_by_its_own_name() {
         let p = payload(PALW_FP_PRIVACY_PANEL_DA, Vec::new());
-        assert_eq!(p.validate_stateless_v3(net()), Err(PalwFpV3Error::PanelDaNotArmed));
-        assert_eq!(p.validate_shape_v3(), Err(PalwFpV3Error::PanelDaNotArmed));
-        assert_eq!(p.validate_stateless_under_v3(net(), false), Err(PalwFpV3Error::PanelDaNotArmed));
+        assert_eq!(
+            p.validate_stateless_v3(net(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Err(PalwFpV3Error::PanelDaNotArmed)
+        );
+        assert_eq!(p.validate_shape_v3(crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat), Err(PalwFpV3Error::PanelDaNotArmed));
+        assert_eq!(
+            p.validate_stateless_under_v3(net(), false, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Err(PalwFpV3Error::PanelDaNotArmed)
+        );
         // …and a mode nothing implements still says so.
         let alien = payload(3, Vec::new());
-        assert_eq!(alien.validate_stateless_under_v3(net(), true), Err(PalwFpV3Error::UnsupportedPrivacyMode(3)));
+        assert_eq!(
+            alien.validate_stateless_under_v3(net(), true, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Err(PalwFpV3Error::UnsupportedPrivacyMode(3))
+        );
     }
 
     /// **A mode-2 payload that publishes the prompt anyway is refused, not trimmed.** An executor
@@ -280,14 +292,21 @@ mod tests {
     #[test]
     fn a_panel_da_payload_that_carries_the_prompt_is_refused_by_name() {
         let p = payload(PALW_FP_PRIVACY_PANEL_DA, prompt());
-        assert_eq!(p.validate_stateless_under_v3(net(), true), Err(PalwFpV3Error::PanelDaPayloadCarriesPrompt(4)));
+        assert_eq!(
+            p.validate_stateless_under_v3(net(), true, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Err(PalwFpV3Error::PanelDaPayloadCarriesPrompt(4))
+        );
         // Refused even where the arming is absent — the shape rule needs no ruleset, so a network
         // that has not armed the mode still refuses this in the ONE way it can act on.
-        assert_eq!(p.validate_stateless_v3(net()), Err(PalwFpV3Error::PanelDaNotArmed), "arming is asked first");
+        assert_eq!(
+            p.validate_stateless_v3(net(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Err(PalwFpV3Error::PanelDaNotArmed),
+            "arming is asked first"
+        );
         // And the door refuses it on an ARMED build, where the arming question passes.
         let bytes = borsh::to_vec(&p).unwrap();
         assert_eq!(
-            validate_palw_fp_commitment_tx_under_v3(&bytes, true),
+            validate_palw_fp_commitment_tx_under_v3(&bytes, true, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
             Err(PalwFpV3Error::PanelDaPayloadCarriesPrompt(4)),
             "the door checks the shape rule under the arming it was given"
         );
@@ -299,20 +318,32 @@ mod tests {
     fn with_the_fence_off_the_door_answers_exactly_as_it_did_before_the_mode_existed() {
         let mode_two = borsh::to_vec(&payload(PALW_FP_PRIVACY_PANEL_DA, Vec::new())).unwrap();
         assert_eq!(
-            validate_palw_fp_commitment_tx(&mode_two),
+            validate_palw_fp_commitment_tx_under_v3(&mode_two, false, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
             Err(PalwFpV3Error::PanelDaNotArmed),
             "a mode-2 carrier is refused at admission on every shipped preset, as it always was"
         );
-        assert_eq!(validate_palw_fp_commitment_tx_under_v3(&mode_two, false), validate_palw_fp_commitment_tx(&mode_two));
+        assert_eq!(
+            validate_palw_fp_commitment_tx_under_v3(&mode_two, false, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            validate_palw_fp_commitment_tx_under_v3(&mode_two, false, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+        );
         // On a build whose ruleset carries the rule, the SHAPE is admitted — the coordinated
         // release, with the height still governing the effect.
-        assert_eq!(validate_palw_fp_commitment_tx_under_v3(&mode_two, true), Ok(()));
+        assert_eq!(
+            validate_palw_fp_commitment_tx_under_v3(&mode_two, true, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Ok(())
+        );
 
         // A PublicDa carrier is untouched in every position, which is what "byte-identical" means
         // for the traffic that actually exists today.
         let public = borsh::to_vec(&payload(PALW_FP_PRIVACY_PUBLIC_DA, prompt())).unwrap();
-        assert_eq!(validate_palw_fp_commitment_tx(&public), Ok(()));
-        assert_eq!(validate_palw_fp_commitment_tx_under_v3(&public, true), Ok(()));
+        assert_eq!(
+            validate_palw_fp_commitment_tx_under_v3(&public, false, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Ok(())
+        );
+        assert_eq!(
+            validate_palw_fp_commitment_tx_under_v3(&public, true, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Ok(())
+        );
     }
 
     // ------------------------------------------------------- W8, the seat's side
@@ -324,8 +355,12 @@ mod tests {
     #[test]
     fn a_seat_that_holds_no_ids_is_refused_before_it_can_file_valid() {
         let job = job(PALW_FP_PRIVACY_PANEL_DA);
-        assert_eq!(palw_fp_seat_prompt_admit_v1(&job, None), Err(PalwFpV3Error::PromptIdsUnavailable));
-        palw_fp_seat_prompt_admit_v1(&job, Some(&prompt())).expect("the served prompt is this claim's");
+        assert_eq!(
+            palw_fp_seat_prompt_admit_v1(&job, None, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Err(PalwFpV3Error::PromptIdsUnavailable)
+        );
+        palw_fp_seat_prompt_admit_v1(&job, Some(&prompt()), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+            .expect("the served prompt is this claim's");
     }
 
     /// **W8 clause 2: a hash mismatch is refused by name**, and so is a length mismatch — two
@@ -336,12 +371,18 @@ mod tests {
         let job = job(PALW_FP_PRIVACY_PANEL_DA);
         let mut wrong = prompt();
         wrong[0] ^= 1;
-        assert_eq!(palw_fp_prompt_ids_admit_v1(&job, &wrong), Err(PalwFpV3Error::PromptIdsHashMismatch));
         assert_eq!(
-            palw_fp_prompt_ids_admit_v1(&job, &prompt()[..3]),
+            palw_fp_prompt_ids_admit_v1(&job, &wrong, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Err(PalwFpV3Error::PromptIdsHashMismatch)
+        );
+        assert_eq!(
+            palw_fp_prompt_ids_admit_v1(&job, &prompt()[..3], crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
             Err(PalwFpV3Error::PromptIdsCountMismatch { got: 3, declared: 4 })
         );
-        assert_eq!(palw_fp_seat_prompt_admit_v1(&job, Some(&wrong)), Err(PalwFpV3Error::PromptIdsHashMismatch));
+        assert_eq!(
+            palw_fp_seat_prompt_admit_v1(&job, Some(&wrong), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Err(PalwFpV3Error::PromptIdsHashMismatch)
+        );
     }
 
     /// **One spelling, and the decoders use it.** The seat and the material/capture decoders must
@@ -351,19 +392,32 @@ mod tests {
     fn the_material_and_capture_decoders_bind_the_ids_through_the_same_predicate() {
         let job = job(PALW_FP_PRIVACY_PANEL_DA);
         let good = palw_fp_material_encode_v1(&job, &prompt());
-        assert!(palw_fp_material_decode_v1(&good).is_some(), "the honest material decodes");
+        assert!(
+            palw_fp_material_decode_v1(&good, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_some(),
+            "the honest material decodes"
+        );
         let mut wrong = prompt();
         wrong[1] ^= 0xFF;
         let bad = palw_fp_material_encode_v1(&job, &wrong);
-        assert!(palw_fp_material_decode_v1(&bad).is_none(), "material whose ids are not the claim's is not material");
+        assert!(
+            palw_fp_material_decode_v1(&bad, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_none(),
+            "material whose ids are not the claim's is not material"
+        );
 
         let capture = palw_fp_capture_encode_v1(&job, &prompt(), &[1, 2, 3]);
-        let decoded = palw_fp_capture_decode_v1(&capture).expect("the honest capture decodes");
+        let decoded = palw_fp_capture_decode_v1(&capture, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+            .expect("the honest capture decodes");
         assert_eq!(decoded.material.prompt_token_ids, prompt());
         // The ids are checked BEFORE the capture is looked at, which is the order Decision 16
         // makes load-bearing: a capture read first would be a replay of a prompt nobody has shown
         // is this claim's.
-        assert!(palw_fp_capture_decode_v1(&palw_fp_capture_encode_v1(&job, &wrong, &[1, 2, 3])).is_none());
+        assert!(
+            palw_fp_capture_decode_v1(
+                &palw_fp_capture_encode_v1(&job, &wrong, &[1, 2, 3]),
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            )
+            .is_none()
+        );
     }
 
     /// **Nothing in this lane's refusals carries a prompt id or a prompt's text** (ADR-0077 SA-5,
@@ -377,11 +431,19 @@ mod tests {
         let mut wrong = prompt();
         wrong[0] = 0xDEAD_BEEF;
         let rendered = [
-            palw_fp_seat_prompt_admit_v1(&job, None).unwrap_err().to_string(),
-            palw_fp_prompt_ids_admit_v1(&job, &wrong).unwrap_err().to_string(),
-            palw_fp_prompt_ids_admit_v1(&job, &prompt()[..2]).unwrap_err().to_string(),
-            payload(PALW_FP_PRIVACY_PANEL_DA, prompt()).validate_stateless_under_v3(net(), true).unwrap_err().to_string(),
-            payload(PALW_FP_PRIVACY_PANEL_DA, Vec::new()).validate_stateless_v3(net()).unwrap_err().to_string(),
+            palw_fp_seat_prompt_admit_v1(&job, None, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).unwrap_err().to_string(),
+            palw_fp_prompt_ids_admit_v1(&job, &wrong, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).unwrap_err().to_string(),
+            palw_fp_prompt_ids_admit_v1(&job, &prompt()[..2], crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .unwrap_err()
+                .to_string(),
+            payload(PALW_FP_PRIVACY_PANEL_DA, prompt())
+                .validate_stateless_under_v3(net(), true, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .unwrap_err()
+                .to_string(),
+            payload(PALW_FP_PRIVACY_PANEL_DA, Vec::new())
+                .validate_stateless_v3(net(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .unwrap_err()
+                .to_string(),
         ];
         for line in rendered {
             for id in prompt().iter().chain(std::iter::once(&0xDEAD_BEEFu32)) {
@@ -583,14 +645,20 @@ mod tests {
         let panel_da = palw_fp_material_encode_v1(&job(PALW_FP_PRIVACY_PANEL_DA), &prompt());
         let public = palw_fp_material_encode_v1(&job(PALW_FP_PRIVACY_PUBLIC_DA), &prompt());
         assert_eq!(
-            palw_fp_material_decode_v1(&panel_da).expect("decodes").prompt_token_ids,
+            palw_fp_material_decode_v1(&panel_da, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .expect("decodes")
+                .prompt_token_ids,
             prompt(),
             "the ids a dispute publishes are the ids the executor ran"
         );
         assert_ne!(panel_da, public, "the two modes are different jobs — the mode is inside the job id");
         assert_eq!(
-            palw_fp_material_decode_v1(&panel_da).expect("decodes").prompt_token_ids,
-            palw_fp_material_decode_v1(&public).expect("decodes").prompt_token_ids,
+            palw_fp_material_decode_v1(&panel_da, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .expect("decodes")
+                .prompt_token_ids,
+            palw_fp_material_decode_v1(&public, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .expect("decodes")
+                .prompt_token_ids,
             "but what a close carries is the same in both"
         );
     }

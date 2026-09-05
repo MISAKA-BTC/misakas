@@ -2339,6 +2339,16 @@ pub struct GetPalwProducerFactsResponse {
     /// to stage a claim's material and answer envelope from the node itself. Empty on a node
     /// running no panel, and on a version-4 peer. Node-local, like `locked_bond_outpoints`.
     pub palw_retention_dir: String,
+    /// **ADR-0077 Decision 16's `PanelDa` fence, at the candidate's DAA** (version 6). A gateway
+    /// may file a mode-2 (prompt-withheld) commitment only where this is `true`; `false` — every
+    /// shipped preset, and every node that does not report it — refuses the request with the
+    /// fence's name rather than spending an inference on a commitment the chain will not extract.
+    pub panel_da_armed: bool,
+    /// **ADR-0081 Decision 3's prompt-commitment form** (version 6): `true` where the network
+    /// hashes prompts as a tiled Merkle root, `false` for the flat digest. The gateway re-binds
+    /// the worker's result under it; a node that does not report it reads as flat, which on a
+    /// Merkle network refuses the result rather than filing a job the chain calls something else.
+    pub prompt_ids_merkle: bool,
     /// **Every outpoint a wallet must not spend**, `txid:index` with a 128-hex transaction id.
     ///
     /// Two sources, deliberately in ONE list so a wallet cannot read half of it (audit3 H3, H12):
@@ -2358,13 +2368,14 @@ pub struct GetPalwProducerFactsResponse {
 
 impl Serializer for GetPalwProducerFactsResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        // Version 5: `palw_retention_dir` (ADR-0084 Decision 5). Version 4 added
+        // Version 6: `panel_da_armed` and `prompt_ids_merkle` (ADR-0077 D16 / ADR-0081 D3, the
+        // private-prompts design of 2026-09-05). Version 5: `palw_retention_dir` (ADR-0084 Decision 5). Version 4 added
         // `fp_decode_rules_armed` (ADR-0082 Decisions 10/11's fence). Version 3 added
         // `fp_certified` and the free-prompt price (ADR-0077 Decision 3). Version 2 added
         // `locked_bond_outpoints` (audit3 H3). Every version is a strict suffix, so an older
         // reader stops where its version ended and this reader tolerates an older writer by
         // leaving the later fields at their defaults — additive, never re-ordered.
-        store!(u16, &5, writer)?;
+        store!(u16, &6, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.chain_point, writer)?;
         store!(u64, &self.daa_score, writer)?;
@@ -2391,6 +2402,8 @@ impl Serializer for GetPalwProducerFactsResponse {
         store!(u32, &self.fp_max_quanta_per_receipt, writer)?;
         store!(bool, &self.fp_decode_rules_armed, writer)?;
         store!(String, &self.palw_retention_dir, writer)?;
+        store!(bool, &self.panel_da_armed, writer)?;
+        store!(bool, &self.prompt_ids_merkle, writer)?;
         Ok(())
     }
 }
@@ -2433,6 +2446,10 @@ impl Deserializer for GetPalwProducerFactsResponse {
         // Version 5 (ADR-0084 Decision 5): an older writer names no directory, which reads as "this
         // node told us nothing" — a submitter then refuses to stage anywhere it was not told to.
         let palw_retention_dir = if version >= 5 { load!(String, reader)? } else { String::new() };
+        // Version 6: both fail closed — an older node cannot be asserting either fence is in
+        // force, so a gateway reads "unknown" as "not armed" / "flat" and refuses rather than files.
+        let (panel_da_armed, prompt_ids_merkle) =
+            if version >= 6 { (load!(bool, reader)?, load!(bool, reader)?) } else { (false, false) };
         Ok(Self {
             available,
             chain_point,
@@ -2460,6 +2477,8 @@ impl Deserializer for GetPalwProducerFactsResponse {
             fp_max_quanta_per_receipt,
             fp_decode_rules_armed,
             palw_retention_dir,
+            panel_da_armed,
+            prompt_ids_merkle,
         })
     }
 }
@@ -5737,6 +5756,10 @@ mod palw_producer_facts_wire_tests {
             // "defaulted" — the field's own default is false and a lost field would pass silently.
             fp_decode_rules_armed: true,
             locked_bond_outpoints: vec![format!("{}:0", "aa".repeat(64)), format!("{}:7", "bb".repeat(64))],
+            // Version 5 and 6 fields, non-default so a lost field cannot pass as a carried one.
+            palw_retention_dir: "/var/lib/misaka/palw".to_string(),
+            panel_da_armed: true,
+            prompt_ids_merkle: true,
         }
     }
 

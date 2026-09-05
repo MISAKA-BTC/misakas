@@ -474,6 +474,12 @@ pub struct VirtualStateProcessor {
     /// here so the `ClassRegistered` arm reads the form from the ONE place that decides it
     /// (`Params::palw_prompt_ids_form_at`) rather than spelling `Flat` at the application site.
     pub(super) palw_prompt_ids_merkle: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0077 Decision 16's `PanelDa` fence** (`Params::palw_panel_da_fence`, mode folded in),
+    /// `None` on every shipped preset. The extraction walk reads it at the accepting block's DAA:
+    /// a mode-2 commitment becomes a claim only past it. Held here because the walk used to pass a
+    /// literal `false` — which on a genesis that arms the fence would have refused every private
+    /// commitment the door had admitted.
+    pub(super) palw_panel_da: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0077 Phase B's fence, `None` on every shipped preset.** Past it a class registration
     /// is judged against `palw_class_ladder_rules_*` — the ladder both leaf counts are enumerated
     /// against, the court the close is priced for and Decision 14's canonical floor — instead of
@@ -914,6 +920,7 @@ impl VirtualStateProcessor {
             palw_certification_rent: params.palw_certification_rent,
             palw_kary_court: params.palw_kary_court_fence(),
             palw_prompt_ids_merkle: params.palw_prompt_ids_merkle_fence(),
+            palw_panel_da: params.palw_panel_da_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_uncertified_weightless: params.palw_uncertified_weightless,
             palw_da_court: params.palw_da_court,
@@ -4414,8 +4421,10 @@ impl VirtualStateProcessor {
         let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
         // Resolved at VIRTUAL's DAA — where the close that asks this question would be accepted —
         // for the reason `palw_v2_receipt_quorum_assemble_impl` gives.
-        let cap = self.palw_refutation_leaf_cap_at(self.lkg_virtual_state.load().daa_score);
-        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_capped_v2(&state, session_id, proof, court, cap).ok()
+        let daa_score = self.lkg_virtual_state.load().daa_score;
+        let cap = self.palw_refutation_leaf_cap_at(daa_score);
+        let form = self.palw_prompt_ids_form_at(daa_score);
+        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_capped_v2(&state, session_id, proof, court, cap, form).ok()
     }
 
     /// The court's half of [`Self::palw_seat_duties_v2_impl`]: the open sessions this node is a
@@ -4443,6 +4452,19 @@ impl VirtualStateProcessor {
             return Vec::new();
         };
         kaspa_consensus_core::palw_producer_v2::palw_da_duties_v2(&state, state_params, mine)
+    }
+
+    /// **Who may be served a claim's private material**, at the tip (ADR-0077 Decision 16's
+    /// transport half) — see `PalwChainStateV2::claim_readers_v2`.
+    pub fn palw_claim_readers_v2_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten() else {
+            return Vec::new();
+        };
+        state.claim_readers_v2(&claim)
     }
 
     /// The payout payload the chain has registered for `bond`, if it is registered at all.
@@ -5846,9 +5868,15 @@ impl VirtualStateProcessor {
                                 .palw_court_params_v2
                                 .as_ref()
                                 .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                            let derived =
-                                kaspa_consensus_core::palw_court_v2::adjudicate_court_close_capped_v2(state, session_id, proof, court, self.palw_refutation_leaf_cap_at(point.daa_score))
-                                    .map_err(|e| e.to_string())?;
+                            let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_capped_v2(
+                                state,
+                                session_id,
+                                proof,
+                                court,
+                                self.palw_refutation_leaf_cap_at(point.daa_score),
+                                self.palw_prompt_ids_form_at(point.daa_score),
+                            )
+                            .map_err(|e| e.to_string())?;
                             if derived != *verdict {
                                 return Err(format!(
                                     "court {session_id}: the {} side declared {verdict:?} and the close it assembled adjudicates \
@@ -5904,8 +5932,15 @@ impl VirtualStateProcessor {
                         .palw_court_params_v2
                         .as_ref()
                         .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_capped_v2(state, session_id, proof, court, self.palw_refutation_leaf_cap_at(point.daa_score))
-                        .map_err(|e| e.to_string())?;
+                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_capped_v2(
+                        state,
+                        session_id,
+                        proof,
+                        court,
+                        self.palw_refutation_leaf_cap_at(point.daa_score),
+                        self.palw_prompt_ids_form_at(point.daa_score),
+                    )
+                    .map_err(|e| e.to_string())?;
                     if derived != *verdict {
                         return Err(format!("court {session_id} declares {verdict:?}; its own proof adjudicates {derived:?}"));
                     }
@@ -6668,8 +6703,16 @@ impl VirtualStateProcessor {
         self.palw_kary_court.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// **ADR-0077 Decision 16's `PanelDa` at this block, resolved in exactly one place.** `false` on
+    /// every shipped preset; `true` from block one on a genesis that arms it.
+    pub(super) fn palw_panel_da_at(&self, daa_score: u64) -> bool {
+        self.palw_panel_da.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     /// **ADR-0081 Decision 3's form at this block, resolved in exactly one place.** `Flat` on every
-    /// shipped preset and on every configuration this build can be started with.
+    /// shipped preset; the tiled Merkle root from block one on a genesis that arms it
+    /// (`validate_palw_v2` refuses any other height, so this never differs from
+    /// `Params::palw_prompt_ids_form_v1`).
     pub(super) fn palw_prompt_ids_form_at(&self, daa_score: u64) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
         match self.palw_prompt_ids_merkle {
             Some(fence) if fence.is_active(daa_score) => kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
@@ -6695,7 +6738,9 @@ impl VirtualStateProcessor {
     /// already resolved `palw_court_params_v2`), and answers the constant anyway.
     pub(super) fn palw_refutation_leaf_cap_at(&self, daa_score: u64) -> u64 {
         match self.palw_court_params_v2.as_ref() {
-            Some(court) => kaspa_consensus_core::palw_court_v2::palw_refutation_leaf_cap_v2(court, self.palw_context_ladder_at(daa_score)),
+            Some(court) => {
+                kaspa_consensus_core::palw_court_v2::palw_refutation_leaf_cap_v2(court, self.palw_context_ladder_at(daa_score))
+            }
             None => kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
         }
     }
@@ -7262,10 +7307,14 @@ impl VirtualStateProcessor {
             network_domain,
             freeprompt,
             kaspa_consensus_core::BlockHash::default(),
-            // `false`: this call site has never resolved the `PanelDa` arming and this change does
-            // not start — the ladder and the privacy mode are separate fences.
-            false,
+            // ADR-0077 Decision 16 at the ACCEPTING block's DAA — candidate-scoped, like every
+            // rule on this lane — and ADR-0081 Decision 3's form, which `validate_palw_v2` keeps
+            // genesis-only, so the height it is read at cannot matter. This used to pass a literal
+            // `false`, which on a genesis that arms `PanelDa` would have skipped every private
+            // commitment the door had admitted.
+            self.palw_panel_da_at(block_daa),
             ladder,
+            self.palw_prompt_ids_form_at(block_daa),
             // Who authored the commitment. Unverified, a 0x4a transaction from any stranger created
             // a claim bound to any bond outpoint it named — the genesis premine bond among them.
             Self::verify_mldsa87_with_context_bool,

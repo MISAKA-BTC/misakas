@@ -316,9 +316,27 @@ fn main() {
     )
     .unwrap_or_else(|e| die(format!("cannot construct the devnet bundle: {e}")));
 
+    // **The prompt-commitment form, derived from the result rather than declared** (ADR-0081
+    // Decision 3). The worker committed the job under its network's form; the ids match the job's
+    // `prompt_token_ids_hash` under exactly one of the two, and the builder re-checks the same
+    // match, so a result that fits neither is refused here by name instead of after the fee.
+    let prompt_ids_form = [
+        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+    ]
+    .into_iter()
+    .find(|form| {
+        kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+            *form,
+            &result.prompt_token_ids,
+            &commitment.job.prompt_token_ids_hash,
+        )
+    })
+    .unwrap_or_else(|| die("the worker result's prompt ids do not commit to the job under either prompt-id form".into()));
     let build = |fee: u64| {
         key.build_fp_commitment_tx(
             commitment.job.network_domain,
+            prompt_ids_form,
             commitment.clone(),
             result.prompt_token_ids.clone(),
             &bundle.freeprompt,
@@ -373,6 +391,9 @@ fn main() {
             // ADR-0084 Decision 5: the answer's ids ride beside the material as the `FPA1`
             // envelope, from the same result frame the commitment was checked against.
             &result.output_token_ids,
+            // ADR-0077 Decision 16: under `PanelDa` the payload carries no ids, and these are the
+            // only copy the seats will ever be shown.
+            &result.prompt_token_ids,
             dsl.as_deref(),
             misaka_palw_fp_submit::AnchorExpiry::new(commitment.job.anchor_daa, anchor_ttl_daa),
         ))
@@ -434,6 +455,7 @@ fn submit_through_the_one_path(
     retention_dir: Option<&Path>,
     capture: Option<&[u8]>,
     output_token_ids: &[u32],
+    prompt_token_ids: &[u32],
     dsl: Option<&[u8]>,
     expiry: misaka_palw_fp_submit::AnchorExpiry,
 ) -> RailSubmitted {
@@ -496,6 +518,8 @@ fn submit_through_the_one_path(
             output_token_ids: Some(output_token_ids),
             dsl_payload: dsl,
             expiry: Some(expiry),
+            // ADR-0077 Decision 16: under `PanelDa` these are the only copy the seats will see.
+            prompt_token_ids: Some(prompt_token_ids),
         };
         let done = misaka_palw_fp_submit::submit_fp_commitment(&client, tx, staging)
             .await

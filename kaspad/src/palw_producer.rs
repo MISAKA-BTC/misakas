@@ -98,6 +98,9 @@ pub struct PalwProducerConfig {
     /// a class is registered at, and therefore its class id — so resolution cannot be done without
     /// it, and it must be the CHAIN's court rather than a default reconstructed here.
     pub court: kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2,
+    /// **The network's prompt-commitment form** (ADR-0081 Decision 3) — `Params::palw_prompt_ids_form_v1()`,
+    /// handed to every backend this service resolves and to every payload it decodes.
+    pub prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     /// **Artifact files this node holds, for classes whose weights are not derivable.**
     ///
     /// The floor's artifact is minted from a pinned seed by every node, so it needs no file and
@@ -226,7 +229,8 @@ impl PalwProducerService {
         // `--palw-class-artifact` meant this node to produce for that class, and a node that
         // silently fell back to the floor would look like a working producer that never touches
         // the class they deployed 1.7 GiB for.
-        let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(config.court, config.network_id.as_bytes().to_vec());
+        let sdk =
+            misaka_palw_sdk::PalwClassSdk::builtin_v1(config.court, config.prompt_ids_form, config.network_id.as_bytes().to_vec());
         let class_holdings =
             crate::palw_backends::load_class_holdings_v1(PALW_PRODUCER, &sdk, &config.class_artifacts, config.class_cache_bytes);
         Self {
@@ -291,9 +295,19 @@ impl PalwProducerService {
         // agreement is this constructor.
         let net = self.config.network_id.as_bytes().to_vec();
         if self.config.chain_classes {
-            crate::palw_backends::PalwBackendRegistry::new_with_chain_classes(self.config.court, self.class_holdings.clone(), net)
+            crate::palw_backends::PalwBackendRegistry::new_with_chain_classes(
+                self.config.court,
+                self.config.prompt_ids_form,
+                self.class_holdings.clone(),
+                net,
+            )
         } else {
-            crate::palw_backends::PalwBackendRegistry::new(self.config.court, self.class_holdings.clone(), net)
+            crate::palw_backends::PalwBackendRegistry::new(
+                self.config.court,
+                self.config.prompt_ids_form,
+                self.class_holdings.clone(),
+                net,
+            )
         }
     }
 

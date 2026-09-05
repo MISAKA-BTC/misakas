@@ -756,14 +756,31 @@ mod tests {
         };
 
         // Nothing served: the producer's default arm, and never `Valid`.
-        assert_eq!(palw_fp_seat_prompt_admit_v1(&job, None), Err(PalwFpV3Error::PromptIdsUnavailable));
-        // Served, but not this claim's: a different accusation with a different name.
-        assert_eq!(palw_fp_seat_prompt_admit_v1(&job, Some(&[7u32, 8, 10])), Err(PalwFpV3Error::PromptIdsHashMismatch));
         assert_eq!(
-            palw_fp_seat_prompt_admit_v1(&job, Some(&[7u32, 8])),
+            palw_fp_seat_prompt_admit_v1(&job, None, kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Err(PalwFpV3Error::PromptIdsUnavailable)
+        );
+        // Served, but not this claim's: a different accusation with a different name.
+        assert_eq!(
+            palw_fp_seat_prompt_admit_v1(
+                &job,
+                Some(&[7u32, 8, 10]),
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            ),
+            Err(PalwFpV3Error::PromptIdsHashMismatch)
+        );
+        assert_eq!(
+            palw_fp_seat_prompt_admit_v1(&job, Some(&[7u32, 8]), kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
             Err(PalwFpV3Error::PromptIdsCountMismatch { got: 2, declared: 3 })
         );
-        assert_eq!(palw_fp_seat_prompt_admit_v1(&job, Some(&[7u32, 8, 9])), Ok(()));
+        assert_eq!(
+            palw_fp_seat_prompt_admit_v1(
+                &job,
+                Some(&[7u32, 8, 9]),
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            ),
+            Ok(())
+        );
 
         // The mode gate, and the fence it rides: `PublicDa` always, `PanelDa` only where the
         // network carries the rule. The old hard-coded gate is the `false` column.

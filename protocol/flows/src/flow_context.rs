@@ -711,6 +711,15 @@ impl FlowContext {
             );
             return;
         }
+        // **A private material is never announced** (ADR-0077 Decision 16; private-prompts
+        // design, 2026-09-05). Under `PanelDa` the prompt rides only the authenticated pull, to
+        // the bonds `PalwChainStateV2::claim_readers_v2` names; a broadcast would hand it to every
+        // peer. Retained and served, not gossiped — and said so once per claim, at the one place
+        // both the producer and the panel announce from.
+        if crate::palw_gossip::material_is_private(&bytes) {
+            info!("PALW material for claim {claim} is a PanelDa (mode-2) material — retained for its readers, not announced");
+            return;
+        }
         self.palw_gossip.mark_own_material(claim, &bytes);
         let msg = kaspa_p2p_lib::make_message!(
             kaspa_p2p_lib::pb::kaspad_message::Payload::PalwTraceMaterialBroadcast,

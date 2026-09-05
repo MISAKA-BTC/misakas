@@ -172,6 +172,7 @@ impl PalwModelLineageV1 for DenseLineageV1 {
     fn resolve(
         &self,
         court: &PalwCourtParamsV2,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
         class_id: Hash64,
         artifact_root: Hash64,
         holdings: &[PalwLoadedArtifactV1],
@@ -189,7 +190,9 @@ impl PalwModelLineageV1 for DenseLineageV1 {
             // `max_step_leaf_count` at `PALW_STEP_MAX_LEAVES`, so this changes nothing until a
             // preset says otherwise — which is the point.
             return Some(Ok(Box::new(
-                misaka_palw_base0::backend::Base0Backend::new(resolved).with_step_ladder_cap(court.max_step_leaf_count()),
+                misaka_palw_base0::backend::Base0Backend::new(resolved)
+                    .with_step_ladder_cap(court.max_step_leaf_count())
+                    .with_prompt_ids_form(prompt_ids_form),
             )));
         }
         // **The A16 dense class.** Its artifact rides the same container as the floor's, so it is
@@ -222,7 +225,7 @@ impl PalwModelLineageV1 for DenseLineageV1 {
                         entry.canonical_job,
                     )
                     .map(|backend| -> Box<dyn PalwExecutionBackendV1> {
-                        Box::new(backend.with_step_ladder_cap(court.max_step_leaf_count()))
+                        Box::new(backend.with_step_ladder_cap(court.max_step_leaf_count()).with_prompt_ids_form(prompt_ids_form))
                     }),
                 );
             }

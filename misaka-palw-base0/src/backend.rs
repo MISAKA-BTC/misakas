@@ -49,6 +49,13 @@ pub struct Base0Backend {
     /// both of its own entry points. This backend's two — `bisect_prefix_state` and
     /// `refutation_with_prompt` — did not, and they are reached from the same relayed blob.
     step_ladder_cap: u64,
+    /// **The network's prompt-commitment form** (ADR-0081 Decision 3) — `Params::palw_prompt_ids_form_v1()`,
+    /// set by the caller that holds `Params` through [`Base0Backend::with_prompt_ids_form`]. Every
+    /// `prompt_token_ids_hash` this backend writes into a job context and every carried-prompt
+    /// check it makes goes through it; `Flat` is what every preset that ships the fence dormant
+    /// runs, and a Merkle network that forgot to set it would see its own commitments refused at
+    /// the door rather than accepted under the wrong form.
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 }
 
 impl Base0Backend {
@@ -60,6 +67,7 @@ impl Base0Backend {
             canonical_job: resolved.canonical_job,
             inventory_geometry: resolved.inventory_geometry,
             step_ladder_cap: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+            prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         }
     }
 
@@ -69,6 +77,16 @@ impl Base0Backend {
     pub fn with_step_ladder_cap(mut self, max_step_leaf_count: u64) -> Self {
         self.step_ladder_cap = max_step_leaf_count;
         self
+    }
+
+    /// The network's prompt-commitment form (ADR-0081 Decision 3) — see the field.
+    pub fn with_prompt_ids_form(mut self, form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Self {
+        self.prompt_ids_form = form;
+        self
+    }
+
+    pub fn prompt_ids_form(&self) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
+        self.prompt_ids_form
     }
 
     /// The ladder top this instance refuses a served capture above.
@@ -122,7 +140,11 @@ impl Base0Backend {
         // verdict, which is the shape every free-prompt close on this floor used to take.
         let prompt_token_ids: Vec<u32> = match carried {
             Some(ids) => {
-                if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(ids) != binding.job_context.prompt_token_ids_hash {
+                if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+                    self.prompt_ids_form,
+                    ids,
+                    &binding.job_context.prompt_token_ids_hash,
+                ) {
                     return Err("the carried prompt is not the one this capture's job context commits to".to_string());
                 }
                 ids.to_vec()
@@ -134,6 +156,7 @@ impl Base0Backend {
                     self.artifact.shape.vocab,
                     binding.job_context.declared_prefill_tokens,
                     binding.job_context.exact_decode_tokens,
+                    self.prompt_ids_form,
                 );
                 prompt.iter().map(|t| *t as u32).collect()
             }
@@ -234,7 +257,14 @@ impl PalwExecutionBackendV1 for Base0Backend {
     }
 
     fn job_for_anchor(&self, anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String> {
-        Ok(base0_rc_job_v1(&self.profile, anchor, self.artifact.shape.vocab, self.canonical_job.0, self.canonical_job.1))
+        Ok(base0_rc_job_v1(
+            &self.profile,
+            anchor,
+            self.artifact.shape.vocab,
+            self.canonical_job.0,
+            self.canonical_job.1,
+            self.prompt_ids_form,
+        ))
     }
 
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
@@ -461,7 +491,8 @@ impl PalwExecutionBackendV1 for Base0Backend {
             PALW_LOGITS_TILE_LANES, PalwBase0DecodeTokensV1, PalwTraceEventDisclosureV1 as D, flat_logits_scheme_id_v1,
             tiled_logits_scheme_id_v1, tiled_trace_event_disclosure_v1,
         };
-        let retention = crate::produce::base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        let retention =
+            crate::produce::base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
         let binding = retention.binding().clone();
         let rows = retention.logits_rows();
         let ids = retention.generated_token_ids();
@@ -473,16 +504,27 @@ impl PalwExecutionBackendV1 for Base0Backend {
             if row >= decode || tile != 0 {
                 return Ok(D::OutOfRange { binding: boxed });
             }
-            return Ok(D::Flat { binding: boxed, pin: PalwBase0DecodeTokensV1 { logits_rows: rows.to_vec(), generated_token_ids: ids.to_vec() } });
+            return Ok(D::Flat {
+                binding: boxed,
+                pin: PalwBase0DecodeTokensV1 { logits_rows: rows.to_vec(), generated_token_ids: ids.to_vec() },
+            });
         }
         if scheme == tiled_logits_scheme_id_v1() {
             let tiles = vocab.div_ceil(PALW_LOGITS_TILE_LANES) as u64;
             if row >= decode || tile as u64 >= tiles {
                 return Ok(D::OutOfRange { binding: boxed });
             }
-            let (row_root, row_opening, tile_lanes, tile_opening) = tiled_trace_event_disclosure_v1(&binding.job_context, rows, row, tile)
-                .ok_or_else(|| "the retained rows do not build the tiled trees".to_string())?;
-            return Ok(D::Tiled { binding: boxed, generated_token_ids: ids.to_vec(), row_root, row_opening, tile_lanes, tile_opening });
+            let (row_root, row_opening, tile_lanes, tile_opening) =
+                tiled_trace_event_disclosure_v1(&binding.job_context, rows, row, tile)
+                    .ok_or_else(|| "the retained rows do not build the tiled trees".to_string())?;
+            return Ok(D::Tiled {
+                binding: boxed,
+                generated_token_ids: ids.to_vec(),
+                row_root,
+                row_opening,
+                tile_lanes,
+                tile_opening,
+            });
         }
         Err("this class commits under a scheme no disclosure form names".to_string())
     }
@@ -545,6 +587,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             prompt_token_ids,
             self.checkpoint_interval(),
             self.step_ladder_cap,
+            self.prompt_ids_form,
         )
         .map_err(|e| e.to_string())
     }
@@ -566,6 +609,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             self.checkpoint_interval(),
             self.step_ladder_cap,
             &Base0IntervalKernels { artifact: &self.artifact },
+            self.prompt_ids_form,
         )
     }
 

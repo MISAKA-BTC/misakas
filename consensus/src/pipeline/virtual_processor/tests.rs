@@ -2376,8 +2376,14 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     for bucket in 0u64..4096 {
         let nonce = bucket << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
         let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, facts.class_id, &bond_key.0, bucket);
-        let (job, prompt) =
-            base0_rc_job_v1(&profile, anchor, artifact.shape.vocab, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
+        let (job, prompt) = base0_rc_job_v1(
+            &profile,
+            anchor,
+            artifact.shape.vocab,
+            PALW_RC_BASE0_CANONICAL.0,
+            PALW_RC_BASE0_CANONICAL.1,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
         let run = base0_execute_for_attempt_v1(&artifact, &profile, &job, &prompt).expect("the floor runs its own job");
         let attempt = PalwAttemptUnsignedV2 {
             version: PALW_ATTEMPT_V2_VERSION,
@@ -9068,8 +9074,14 @@ async fn palw_rc_qwen36_per_epoch_expected_observed_target() {
         &kaspa_consensus_core::config::premine::premine_outpoint(0),
         0,
     );
-    let (base_job, base_prompt) =
-        base0_rc_job_v1(&base_profile, seed_anchor, base_artifact.shape.vocab, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
+    let (base_job, base_prompt) = base0_rc_job_v1(
+        &base_profile,
+        seed_anchor,
+        base_artifact.shape.vocab,
+        PALW_RC_BASE0_CANONICAL.0,
+        PALW_RC_BASE0_CANONICAL.1,
+        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+    );
     let base_run = base0_execute_for_attempt_v1(&base_artifact, &base_profile, &base_job, &base_prompt).expect("the floor runs");
     let qwen_backend = Qwen36Backend::new(
         std::sync::Arc::new(qwen_artifact),
@@ -9308,8 +9320,14 @@ async fn palw_rc_qwen36_earns_share_through_real_blocks() {
         &kaspa_consensus_core::config::premine::premine_outpoint(0),
         0,
     );
-    let (base_job, base_prompt) =
-        base0_rc_job_v1(&base_profile, seed, base_artifact.shape.vocab, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
+    let (base_job, base_prompt) = base0_rc_job_v1(
+        &base_profile,
+        seed,
+        base_artifact.shape.vocab,
+        PALW_RC_BASE0_CANONICAL.0,
+        PALW_RC_BASE0_CANONICAL.1,
+        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+    );
     let base_run = base0_execute_for_attempt_v1(&base_artifact, &base_profile, &base_job, &base_prompt).expect("the floor runs");
     let backend = Qwen36Backend::new(
         std::sync::Arc::new(qwen_artifact),
@@ -9503,8 +9521,14 @@ async fn palw_rc_qwen36_counts_merged_work() {
         &kaspa_consensus_core::config::premine::premine_outpoint(0),
         0,
     );
-    let (base_job, base_prompt) =
-        base0_rc_job_v1(&base_profile, seed, base_artifact.shape.vocab, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
+    let (base_job, base_prompt) = base0_rc_job_v1(
+        &base_profile,
+        seed,
+        base_artifact.shape.vocab,
+        PALW_RC_BASE0_CANONICAL.0,
+        PALW_RC_BASE0_CANONICAL.1,
+        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+    );
     let base_run = base0_execute_for_attempt_v1(&base_artifact, &base_profile, &base_job, &base_prompt).expect("the floor runs");
     let backend = Qwen36Backend::new(
         std::sync::Arc::new(qwen_artifact),
@@ -9831,6 +9855,7 @@ async fn a_callers_prompt_on_a_registered_class_opens_a_claim_at_the_shipped_qua
         job.network_domain,
         &bundle.freeprompt,
         kaspa_consensus_core::BlockHash::default(),
+        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         |pubkey: &[u8], message: &[u8], context: &[u8], signature: &[u8]| {
             kaspa_txscript::verify_mldsa87_with_context(pubkey, message, context, signature).unwrap_or(false)
         },
@@ -10131,6 +10156,7 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
         network_domain,
         &bundle.freeprompt,
         kaspa_consensus_core::BlockHash::default(),
+        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         |pubkey: &[u8], message: &[u8], context: &[u8], signature: &[u8]| {
             kaspa_txscript::verify_mldsa87_with_context(pubkey, message, context, signature).unwrap_or(false)
         },

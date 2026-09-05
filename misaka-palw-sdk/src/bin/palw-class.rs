@@ -74,7 +74,7 @@ fn network_view(raw: &str) -> Result<NetworkView, String> {
 }
 
 fn sdk_for(view: &NetworkView) -> PalwClassSdk {
-    PalwClassSdk::builtin_v1(view.bundle.court, view.network_id.to_string().into_bytes())
+    PalwClassSdk::builtin_v1(view.bundle.court, view.params.palw_prompt_ids_form_v1(), view.network_id.to_string().into_bytes())
 }
 
 /// Pull `--flag value` out of the argument list, leaving positionals in place.

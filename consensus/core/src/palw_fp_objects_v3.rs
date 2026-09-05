@@ -65,6 +65,9 @@ pub fn palw_fp_objects_from_accepted_txs_v3<V>(
     // price it used to derive from these params is the transition's now (ADR-0074 Decision 5).
     freeprompt: &PalwFreePromptParamsV3,
     accepted_block: BlockHash,
+    // ADR-0081 Decision 3's form, `Params::palw_prompt_ids_form_v1()` — genesis-only, so this
+    // height-free entry can carry it exactly.
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     // **The ML-DSA-87 verifier, and it is not optional.** Without it this walk turned any
     // stranger's 0x4a transaction into a claim bound to any bond outpoint it named — including the
     // genesis premine bond, a published constant — because the commitment's signature was checked
@@ -79,7 +82,7 @@ where
     // `false`: this entry cannot resolve a height, so it answers the ADR-0077 Decision 16 arming
     // the way every build answered it before the fence existed. A caller that holds the block's
     // DAA score calls [`palw_fp_objects_from_accepted_txs_under_v3`] instead.
-    palw_fp_objects_from_accepted_txs_under_v3(txs, network_domain, freeprompt, accepted_block, false, verify_mldsa87)
+    palw_fp_objects_from_accepted_txs_under_v3(txs, network_domain, freeprompt, accepted_block, false, prompt_ids_form, verify_mldsa87)
 }
 
 /// The same walk **under this block's `PanelDa` arming** (ADR-0077 Decision 16).
@@ -97,6 +100,7 @@ pub fn palw_fp_objects_from_accepted_txs_under_v3<V>(
     freeprompt: &PalwFreePromptParamsV3,
     accepted_block: BlockHash,
     panel_da_armed: bool,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     verify_mldsa87: V,
 ) -> PalwFpExtractionV3
 where
@@ -111,6 +115,7 @@ where
         accepted_block,
         panel_da_armed,
         crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+        prompt_ids_form,
         verify_mldsa87,
     )
 }
@@ -134,6 +139,7 @@ pub fn palw_fp_objects_from_accepted_txs_under_ruleset_v3<V>(
     _accepted_block: BlockHash,
     panel_da_armed: bool,
     max_step_leaf_count: u64,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     verify_mldsa87: V,
 ) -> PalwFpExtractionV3
 where
@@ -154,7 +160,7 @@ where
         };
         // The same stateless rules a peer applies — re-run here rather than assumed, because this
         // walk must be total over whatever was accepted.
-        if payload.validate_stateless_under_ruleset_v3(network_domain, panel_da_armed, max_step_leaf_count).is_err() {
+        if payload.validate_stateless_under_ruleset_v3(network_domain, panel_da_armed, max_step_leaf_count, prompt_ids_form).is_err() {
             out.skipped.push((id, "payload is not stateless-admissible"));
             continue;
         }
@@ -193,50 +199,14 @@ where
     out
 }
 
-/// **Transaction-level admission for [`SUBNETWORK_ID_PALW_FP_COMMITMENT`] (0x4a).**
-///
-/// Until this existed the id was DEFINED but not ROUTED: `check_transaction_subnetwork` fell
-/// through to the blanket `SubnetworksDisabled`, so no block could carry a free-prompt
-/// commitment, no claim of that source could ever be created, and the whole receipt lane was
-/// unreachable on a live network — the extraction walk beside it was a total function over a set
-/// that was always empty.
-///
-/// Context-free by construction, because isolation validation is: the payload must decode, and it
-/// must pass the shape half of its own stateless rules. The two checks it does NOT run here — the
-/// network domain and the derived CU price — need the network's bundle, which isolation has no
-/// access to, and both are re-run by [`palw_fp_objects_from_accepted_txs_v3`] where a failure
-/// SKIPS the carrier instead of rejecting the block. That asymmetry is the safe direction: this
-/// gate is strictly weaker than the walk, so it can never reject something the walk would have
-/// accepted, and it cannot admit anything the walk will silently credit.
-pub fn validate_palw_fp_commitment_tx(payload: &[u8]) -> Result<(), crate::palw_freeprompt_v3::PalwFpV3Error> {
-    // `false`: on every shipped preset `PanelDa` is dormant, so this door answers exactly as it
-    // did before ADR-0077 Decision 16 existed and no block becomes acceptable to this build that
-    // was not acceptable to the last one.
-    validate_palw_fp_commitment_tx_under_v3(payload, false)
-}
-
-/// The same door **on a network whose ruleset carries `PanelDa`** (ADR-0077 Decision 16).
-///
-/// `panel_da_admissible` is `Params::palw_panel_da_admissible` — `is_some()` on the fence, not
-/// `is_active(daa)`, because isolation validation holds no DAA score and its own contract is that
-/// it never will. Reading the fence's PRESENCE rather than its height is what keeps this gate
-/// weaker than the walk at every height: `palw_panel_da_at(h) ⇒ palw_panel_da_admissible` for all
-/// `h`, so the door can never reject a carrier the walk would have credited, while a mode-2
-/// carrier that the walk will refuse (before the height) is admitted and then skipped — the same
-/// direction of failure this whole gate is built around.
-///
-/// The consequence, stated rather than buried: a network that SCHEDULES the fence starts
-/// admitting mode-2 shape into blocks the moment it ships that preset, which is a coordinated
-/// release exactly like the 0x30/0x31 token band's ("admitting the ids is part of the coordinated
-/// release... what the DAA fence governs is the *effect*"). A network that has not scheduled it
-/// — every shipped preset — refuses the shape here, as it always did.
 pub fn validate_palw_fp_commitment_tx_under_v3(
     payload: &[u8],
     panel_da_admissible: bool,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<(), crate::palw_freeprompt_v3::PalwFpV3Error> {
     let payload: PalwFpCommitmentTxPayloadV3 =
         borsh::from_slice(payload).map_err(|_| crate::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)?;
-    payload.validate_shape_under_v3(panel_da_admissible)
+    payload.validate_shape_under_v3(panel_da_admissible, prompt_ids_form)
 }
 
 #[cfg(test)]
@@ -330,14 +300,33 @@ mod tests {
         let carrier = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap());
 
         // A verifier that answers honestly — this fixture carries no real signature.
-        let refused = palw_fp_objects_from_accepted_txs_v3(std::slice::from_ref(&carrier), net(), &fp, h64(1), |_, _, _, _| false);
+        let refused = palw_fp_objects_from_accepted_txs_v3(
+            std::slice::from_ref(&carrier),
+            net(),
+            &fp,
+            h64(1),
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            |_, _, _, _| false,
+        );
         assert!(refused.objects.is_empty(), "an unsigned commitment must not become a claim");
         assert_eq!(refused.skipped.len(), 1, "and it is SKIPPED with a reason, not silently dropped");
         assert!(refused.skipped[0].1.contains("signature"), "got {}", refused.skipped[0].1);
 
         // The same carrier with a verifier that accepts still becomes exactly one object, so the
         // refusal above is the signature and nothing else.
-        assert_eq!(palw_fp_objects_from_accepted_txs_v3(&[carrier], net(), &fp, h64(1), |_, _, _, _| true).objects.len(), 1);
+        assert_eq!(
+            palw_fp_objects_from_accepted_txs_v3(
+                &[carrier],
+                net(),
+                &fp,
+                h64(1),
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                |_, _, _, _| true
+            )
+            .objects
+            .len(),
+            1
+        );
     }
 
     /// The signed message is the claim id under the commitment's own context, and the key it is
@@ -353,6 +342,7 @@ mod tests {
             net(),
             &fp,
             h64(1),
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             |key, message, _sig, context| {
                 seen.borrow_mut().push((key.to_vec(), message.to_vec(), context.to_vec()));
                 true
@@ -378,6 +368,7 @@ mod tests {
             net(),
             &fp,
             h64(1),
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             |_, _, _, _| true,
         );
         assert_eq!(extracted.objects.len(), 1);
@@ -422,6 +413,7 @@ mod tests {
             net(),
             &fp,
             h64(1),
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             |_, _, _, _| true,
         );
         assert!(extracted.objects.is_empty());
@@ -439,11 +431,25 @@ mod tests {
         let fp = freeprompt();
 
         let junk = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, vec![0xFF; 32]);
-        let out = palw_fp_objects_from_accepted_txs_v3(std::slice::from_ref(&junk), net(), &fp, h64(1), |_, _, _, _| true);
+        let out = palw_fp_objects_from_accepted_txs_v3(
+            std::slice::from_ref(&junk),
+            net(),
+            &fp,
+            h64(1),
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            |_, _, _, _| true,
+        );
         assert_eq!(out.skipped, vec![(junk.id(), "payload does not decode")]);
 
         let foreign = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&payload(96, 256)).unwrap());
-        let out = palw_fp_objects_from_accepted_txs_v3(std::slice::from_ref(&foreign), h64(0x99), &fp, h64(1), |_, _, _, _| true);
+        let out = palw_fp_objects_from_accepted_txs_v3(
+            std::slice::from_ref(&foreign),
+            h64(0x99),
+            &fp,
+            h64(1),
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            |_, _, _, _| true,
+        );
         assert_eq!(out.skipped, vec![(foreign.id(), "payload is not stateless-admissible")], "a foreign network's payload");
     }
 
@@ -462,7 +468,14 @@ mod tests {
             tx(SUBNETWORK_ID_PALW_COMMITMENT, borsh::to_vec(&first).unwrap()),
             tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&second).unwrap()),
         ];
-        let out = palw_fp_objects_from_accepted_txs_v3(&txs, net(), &fp, h64(1), |_, _, _, _| true);
+        let out = palw_fp_objects_from_accepted_txs_v3(
+            &txs,
+            net(),
+            &fp,
+            h64(1),
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            |_, _, _, _| true,
+        );
         assert_eq!(out.objects.len(), 2, "two free-prompt carriers, and only those");
         assert!(out.skipped.is_empty());
         let claims: Vec<Hash64> = out
@@ -488,35 +501,56 @@ mod tests {
 
         // A payload the walk credits is admitted.
         let good = borsh::to_vec(&payload(96, 256)).unwrap();
-        assert!(validate_palw_fp_commitment_tx(&good).is_ok());
+        assert!(validate_palw_fp_commitment_tx_under_v3(&good, false, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_ok());
         assert_eq!(
-            palw_fp_objects_from_accepted_txs_v3(&[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, good)], net(), &fp, h64(1), |_, _, _, _| true)
-                .objects
-                .len(),
+            palw_fp_objects_from_accepted_txs_v3(
+                &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, good)],
+                net(),
+                &fp,
+                h64(1),
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                |_, _, _, _| true
+            )
+            .objects
+            .len(),
             1
         );
 
         // Undecodable bytes are refused at the door — the one shape failure that needs no
         // parameters at all.
-        assert_eq!(validate_palw_fp_commitment_tx(&[0xFF; 32]), Err(crate::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable));
+        assert_eq!(
+            validate_palw_fp_commitment_tx_under_v3(&[0xFF; 32], false, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Err(crate::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)
+        );
 
         // A shape failure the walk would skip is refused at the door instead, which is the same
         // answer reached earlier.
         let mut zero_decode = payload(96, 256);
         zero_decode.commitment.decode_tokens_executed = 0;
-        assert!(validate_palw_fp_commitment_tx(&borsh::to_vec(&zero_decode).unwrap()).is_err());
+        assert!(
+            validate_palw_fp_commitment_tx_under_v3(
+                &borsh::to_vec(&zero_decode).unwrap(),
+                false,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            )
+            .is_err()
+        );
 
         // The two checks the door CANNOT run: a foreign network domain and an inflated price.
         // Both are admitted here — this node has no bundle in isolation — and both are skipped by
         // the walk, never credited. That is the deliberate asymmetry, pinned so a later "tighten
         // the door" edit has to argue with it.
         let foreign = borsh::to_vec(&payload(96, 256)).unwrap();
-        assert!(validate_palw_fp_commitment_tx(&foreign).is_ok(), "the door cannot know whose network this is");
+        assert!(
+            validate_palw_fp_commitment_tx_under_v3(&foreign, false, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_ok(),
+            "the door cannot know whose network this is"
+        );
         let out = palw_fp_objects_from_accepted_txs_v3(
             &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, foreign)],
             h64(0x99),
             &fp,
             h64(1),
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             |_, _, _, _| true,
         );
         assert!(out.objects.is_empty(), "but the walk knows, and credits nothing");
@@ -528,18 +562,30 @@ mod tests {
         let mut inflated = payload(96, 256);
         inflated.commitment.work_leaves *= 10;
         let inflated = borsh::to_vec(&inflated).unwrap();
-        assert!(validate_palw_fp_commitment_tx(&inflated).is_ok(), "the door cannot price without the capture");
+        assert!(
+            validate_palw_fp_commitment_tx_under_v3(&inflated, false, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_ok(),
+            "the door cannot price without the capture"
+        );
         let out = palw_fp_objects_from_accepted_txs_v3(
             &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, inflated)],
             net(),
             &fp,
             h64(1),
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             |_, _, _, _| true,
         );
         assert_eq!(out.objects.len(), 1, "and the walk carries the leaves for the seats to judge");
         let mut above = payload(96, 256);
         above.commitment.work_leaves = crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP + 1;
-        assert!(validate_palw_fp_commitment_tx(&borsh::to_vec(&above).unwrap()).is_err(), "the cap the door does know");
+        assert!(
+            validate_palw_fp_commitment_tx_under_v3(
+                &borsh::to_vec(&above).unwrap(),
+                false,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            )
+            .is_err(),
+            "the cap the door does know"
+        );
     }
 
     /// **The ladder the network froze is the walk's, and the door is never stricter than it**
@@ -557,7 +603,7 @@ mod tests {
         wide.commitment.work_leaves = crate::palw_step::PALW_STEP_MAX_LEAVES + 1;
         let bytes = borsh::to_vec(&wide).unwrap();
         assert!(
-            validate_palw_fp_commitment_tx(&bytes).is_ok(),
+            validate_palw_fp_commitment_tx_under_v3(&bytes, false, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_ok(),
             "isolation must not refuse a carrier the 2^26 walk would credit — that is the one direction the door may not fail in"
         );
         let carrier = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, bytes);
@@ -568,6 +614,7 @@ mod tests {
             h64(1),
             false,
             crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             |_, _, _, _| true,
         );
         assert_eq!(at_rc.objects.len(), 1, "the shipped ruleset's 2^26 ladder admits it: {:?}", at_rc.skipped);
@@ -578,6 +625,7 @@ mod tests {
             h64(1),
             false,
             crate::palw_step::PALW_STEP_MAX_LEAVES,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             |_, _, _, _| true,
         );
         assert!(at_executor_constant.objects.is_empty(), "a ruleset that froze 2^22 refuses it");

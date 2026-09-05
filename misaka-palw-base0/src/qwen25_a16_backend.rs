@@ -22,9 +22,7 @@ use crate::classes::ArtifactSourceV1;
 use crate::engine_a16::{A16Cache, A16Engine, A16PlanErrorV1};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_step::{PALW_STEP_MAX_LEAVES, PalwShapeProfileV3};
-use kaspa_consensus_core::palw_v2::{
-    PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, output_commitment_v2, prompt_token_ids_hash_v2,
-};
+use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, output_commitment_v2};
 use kaspa_hashes::Hash64;
 
 pub const QWEN25_A16_DOMAIN_EXECUTION: &[u8] = b"misaka-palw/qwen25-a16/execution/v1";
@@ -511,6 +509,8 @@ pub struct Qwen25A16Backend {
     /// had — and [`Qwen25A16Backend::with_step_ladder_cap`] is how a caller that HOLDS the ruleset
     /// states the real one.
     step_ladder_cap: u64,
+    /// The network's prompt-commitment form (ADR-0081 Decision 3); see `Base0Backend::prompt_ids_form`.
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 }
 
 /// **Can a class with this graph carry a capture at all — the ONE spelling of the predicate.**
@@ -592,6 +592,7 @@ impl Qwen25A16Backend {
             plan: Some(plan),
             court_capable,
             step_ladder_cap: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+            prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         })
     }
 
@@ -601,6 +602,16 @@ impl Qwen25A16Backend {
     pub fn with_step_ladder_cap(mut self, max_step_leaf_count: u64) -> Self {
         self.step_ladder_cap = max_step_leaf_count;
         self
+    }
+
+    /// The network's prompt-commitment form (ADR-0081 Decision 3); see `Base0Backend::prompt_ids_form`.
+    pub fn with_prompt_ids_form(mut self, form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Self {
+        self.prompt_ids_form = form;
+        self
+    }
+
+    pub fn prompt_ids_form(&self) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
+        self.prompt_ids_form
     }
 
     /// The ladder top this instance refuses a capture above.
@@ -721,6 +732,7 @@ impl Qwen25A16Backend {
             plan: Some(plan),
             court_capable,
             step_ladder_cap: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+            prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         })
     }
 
@@ -851,7 +863,11 @@ impl Qwen25A16Backend {
         // own is refused here rather than read by the court as no verdict.
         let prompt_token_ids: Vec<u32> = match carried {
             Some(ids) => {
-                if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(ids) != binding.job_context.prompt_token_ids_hash {
+                if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+                    self.prompt_ids_form,
+                    ids,
+                    &binding.job_context.prompt_token_ids_hash,
+                ) {
                     return Err("the carried prompt is not the one this capture's job context commits to".to_string());
                 }
                 ids.to_vec()
@@ -863,7 +879,11 @@ impl Qwen25A16Backend {
                     binding.job_context.declared_prefill_tokens,
                 );
                 let derived_ids: Vec<u32> = derived.iter().map(|t| *t as u32).collect();
-                if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&derived_ids) == binding.job_context.prompt_token_ids_hash {
+                if kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+                    self.prompt_ids_form,
+                    &derived_ids,
+                    &binding.job_context.prompt_token_ids_hash,
+                ) {
                     derived_ids
                 } else {
                     Vec::new()
@@ -1034,7 +1054,11 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             // identity the class does not have. `check_tokenizer_declared_v1` is what stops a
             // chain-registered class from getting here with zeros at all.
             tokenizer_id: self.artifact.tokenizer_commitment,
-            prompt_token_ids_hash: prompt_token_ids_hash_v2(&ids),
+            prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+                self.prompt_ids_form,
+                &ids,
+            )
+            .map_err(|e| e.to_string())?,
             declared_prefill_tokens: prefill,
             exact_decode_tokens: decode,
             max_context_tokens: shape.max_position as u32,
@@ -1050,7 +1074,11 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         use kaspa_consensus_core::palw_backend::PalwReplayRootsV1;
         if !self.court_capable {
             let outcome = self.execute(job, prompt)?;
-            return Ok(PalwReplayRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, work_leaves: None });
+            return Ok(PalwReplayRootsV1 {
+                execution_root: outcome.execution_root,
+                trace_root: outcome.trace_root,
+                work_leaves: None,
+            });
         }
         // The fold sink: one execution, the dense run's roots, none of its tiles (ADR-0084 D7).
         let run = a16_execute_free_prompt_streaming_v1(
@@ -1361,6 +1389,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                     self.checkpoint_interval(),
                     self.step_ladder_cap,
                     &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+                    self.prompt_ids_form,
                 )
                 .map_err(|e| e.to_string())?,
                 crate::produce::Base0RetentionV1::Dense(material) => crate::fp_interval::base0_open_fp_interval_capped_v1(
@@ -1369,6 +1398,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                     prompt_token_ids,
                     self.checkpoint_interval(),
                     self.step_ladder_cap,
+                    self.prompt_ids_form,
                 )
                 .map_err(|e| e.to_string())?,
             };
@@ -1405,6 +1435,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             self.step_ladder_cap,
             state.as_ref(),
             &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+            self.prompt_ids_form,
         )
         .to_consensus_v1()
     }
@@ -2202,14 +2233,21 @@ mod free_prompt_tests {
         assert!(count >= 2, "a one-interval job cannot show that a replayed anchor is the committed one");
         let claim = PalwClaimRootsV1 { execution_root: dense.execution_root, trace_root: dense.trace_root, anchor: ctx.job_id };
         for index in 0..count {
-            let from_tiles = crate::fp_interval::base0_open_fp_interval_v1(&dense_material, index, &ids, interval)
-                .unwrap_or_else(|e| panic!("interval {index} opens from the tiles: {e}"));
+            let from_tiles = crate::fp_interval::base0_open_fp_interval_v1(
+                &dense_material,
+                index,
+                &ids,
+                interval,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .unwrap_or_else(|e| panic!("interval {index} opens from the tiles: {e}"));
             let from_replay = crate::fp_interval::base0_open_fp_interval_sparse_v1(
                 &folded_material,
                 index,
                 &ids,
                 interval,
                 &A16IntervalKernels { artifact: &artifact, plan: None },
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             )
             .unwrap_or_else(|e| panic!("interval {index} opens from the fold: {e}"));
             assert_eq!(from_replay, from_tiles, "interval {index}: the replayed opening is not the retained one");
@@ -2627,8 +2665,14 @@ mod free_prompt_tests {
         let geometry = v5_geometry();
         let artifact = v5_artifact(geometry);
         let profile = qwen25_a16_artifact_row_profile_v5(geometry).expect("the v5 projection is a valid profile");
-        let (ctx, prompt) =
-            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x0000_8200), geometry.vocab_size as usize, 3, 2);
+        let (ctx, prompt) = crate::produce::base0_rc_job_v1(
+            &profile,
+            Hash64::from_u64_word(0x0000_8200),
+            geometry.vocab_size as usize,
+            3,
+            2,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
 
         let message = a16_execute_for_attempt_v1(&artifact, &profile, None, &ctx, &prompt)
             .err()

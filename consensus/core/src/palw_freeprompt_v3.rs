@@ -1320,7 +1320,12 @@ impl PalwFpWorkerResultV3 {
     /// The caller-side re-binding (the `agent_client` discipline): everything the result claims
     /// is re-verified from the CALLER's own request — the worker is never trusted about what it
     /// was asked.
-    pub fn validate_against_request(&self, request: &PalwFpWorkerRequestV3, request_hash: Hash64) -> Result<(), PalwFpV3Error> {
+    pub fn validate_against_request(
+        &self,
+        request: &PalwFpWorkerRequestV3,
+        request_hash: Hash64,
+        prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> Result<(), PalwFpV3Error> {
         if self.version != PALW_FP_V3_VERSION || self.job.version != PALW_FP_V3_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
         }
@@ -1343,7 +1348,7 @@ impl PalwFpWorkerResultV3 {
             return Err(PalwFpV3Error::WorkerResultMismatch("the returned job's fields are not the request's"));
         }
         if j.prompt_tokens as usize != self.prompt_token_ids.len()
-            || j.prompt_token_ids_hash != crate::palw_v2::prompt_token_ids_hash_v2(&self.prompt_token_ids)
+            || !crate::palw_prompt_ids_v1::prompt_token_ids_match_v1(prompt_ids_form, &self.prompt_token_ids, &j.prompt_token_ids_hash)
         {
             return Err(PalwFpV3Error::WorkerResultMismatch("the returned job does not bind the returned token ids"));
         }
@@ -1513,15 +1518,24 @@ impl PalwFpCommitmentTxPayloadV3 {
     ///
     /// The signature is verified by the caller (this crate holds no ML-DSA implementation);
     /// [`Self::signed_message`] is what it must verify over.
-    pub fn validate_stateless_v3(&self, network_domain: Hash64) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
+    pub fn validate_stateless_v3(
+        &self,
+        network_domain: Hash64,
+        prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(Some(network_domain), false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, prompt_ids_form)
     }
 
     /// The same, **under this network's arming** — the entry the extraction walk uses, and the
     /// only one that can admit a `PanelDa` payload (ADR-0077 Decision 16). `panel_da_armed` is
     /// `Params::palw_panel_da_at` at the accepting block's DAA score.
-    pub fn validate_stateless_under_v3(&self, network_domain: Hash64, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
+    pub fn validate_stateless_under_v3(
+        &self,
+        network_domain: Hash64,
+        panel_da_armed: bool,
+        prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(Some(network_domain), panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, prompt_ids_form)
     }
 
     /// The same **under the ruleset's ladder as well as its arming** — what the extraction walk
@@ -1532,25 +1546,35 @@ impl PalwFpCommitmentTxPayloadV3 {
         network_domain: Hash64,
         panel_da_armed: bool,
         max_step_leaf_count: u64,
+        prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false, max_step_leaf_count)
+        self.validate_v3(Some(network_domain), panel_da_armed, false, max_step_leaf_count, prompt_ids_form)
     }
 
     /// The context-free half — see [`PalwFreePromptCommitmentEnvelopeV3::validate_shape_v3`] for
     /// why the transaction validator can only run this one, and why the arming it asks is the
     /// height-free one.
-    pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
+    pub fn validate_shape_v3(&self, prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(None, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, prompt_ids_form)
     }
 
     /// The shape half under a known arming — `Params::palw_panel_da_admissible` at the door.
-    pub fn validate_shape_under_v3(&self, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
+    pub fn validate_shape_under_v3(
+        &self,
+        panel_da_armed: bool,
+        prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(None, panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, prompt_ids_form)
     }
 
     /// The shape half under a ruleset's ladder — for a builder holding the bundle.
-    pub fn validate_shape_under_ruleset_v3(&self, panel_da_armed: bool, max_step_leaf_count: u64) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false, max_step_leaf_count)
+    pub fn validate_shape_under_ruleset_v3(
+        &self,
+        panel_da_armed: bool,
+        max_step_leaf_count: u64,
+        prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(None, panel_da_armed, false, max_step_leaf_count, prompt_ids_form)
     }
 
     /// **The signature, on the payload that actually rides a transaction.**
@@ -1576,6 +1600,7 @@ impl PalwFpCommitmentTxPayloadV3 {
         panel_da_armed: bool,
         decode_rules_armed: bool,
         max_step_leaf_count: u64,
+        prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
         if self.version != PALW_FP_V3_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
@@ -1606,7 +1631,11 @@ impl PalwFpCommitmentTxPayloadV3 {
         if self.prompt_token_ids.len() != self.commitment.job.prompt_tokens as usize {
             return Err(PalwFpV3Error::WorkerResultMismatch("the carried prompt length is not the committed prompt length"));
         }
-        if crate::palw_v2::prompt_token_ids_hash_v2(&self.prompt_token_ids) != self.commitment.job.prompt_token_ids_hash {
+        if !crate::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+            prompt_ids_form,
+            &self.prompt_token_ids,
+            &self.commitment.job.prompt_token_ids_hash,
+        ) {
             return Err(PalwFpV3Error::WorkerResultMismatch("the carried prompt ids are not the ones the commitment binds"));
         }
         Ok(())
@@ -2080,7 +2109,9 @@ mod tests {
             model_load_ms: 1,
             execute_ms: 2,
         };
-        result.validate_against_request(&request, request_hash).expect("the honest result binds");
+        result
+            .validate_against_request(&request, request_hash, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+            .expect("the honest result binds");
 
         let commitment = result.to_commitment(999_999);
         assert_eq!(commitment.work_leaves, result.step_leaf_count, "the price is the capture's leaf count the worker read");
@@ -2095,35 +2126,70 @@ mod tests {
         // does not bind; an ids-arm echo mismatch; an overrun; a non-canonical stop; a trace
         // count that is not the executed count; an answer of the wrong length.
         let wrong_echo = result.clone();
-        assert!(wrong_echo.validate_against_request(&request, Hash64::from_u64_word(0xEE)).is_err());
+        assert!(
+            wrong_echo
+                .validate_against_request(&request, Hash64::from_u64_word(0xEE), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .is_err()
+        );
         let mut swapped = result.clone();
         swapped.job.job_nonce[0] ^= 1;
-        assert!(swapped.validate_against_request(&request, request_hash).is_err());
+        assert!(
+            swapped.validate_against_request(&request, request_hash, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_err()
+        );
         let mut unbound = result.clone();
         unbound.prompt_token_ids.push(1);
-        assert!(unbound.validate_against_request(&request, request_hash).is_err());
+        assert!(
+            unbound.validate_against_request(&request, request_hash, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_err()
+        );
         let mut foreign_ids = result.clone();
         foreign_ids.prompt_token_ids = (1..=base_job.prompt_tokens).collect();
         foreign_ids.job.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&foreign_ids.prompt_token_ids);
-        assert!(foreign_ids.validate_against_request(&request, request_hash).is_err(), "the ids arm must echo its input");
+        assert!(
+            foreign_ids
+                .validate_against_request(&request, request_hash, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .is_err(),
+            "the ids arm must echo its input"
+        );
         let mut overrun = result.clone();
         overrun.decode_tokens_executed = j.decode_token_limit + 1;
-        assert!(overrun.validate_against_request(&request, request_hash).is_err());
+        assert!(
+            overrun.validate_against_request(&request, request_hash, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_err()
+        );
         let mut wrong_stop = result.clone();
         wrong_stop.stop_reason = PalwFpStopReasonV3::ExactBudgetReached;
-        assert!(wrong_stop.validate_against_request(&request, request_hash).is_err());
+        assert!(
+            wrong_stop.validate_against_request(&request, request_hash, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_err()
+        );
         let mut ragged_trace = result.clone();
         ragged_trace.trace_event_count += 1;
-        assert!(ragged_trace.validate_against_request(&request, request_hash).is_err());
+        assert!(
+            ragged_trace
+                .validate_against_request(&request, request_hash, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .is_err()
+        );
         let mut short_answer = result.clone();
         short_answer.output_token_ids.pop();
-        assert!(short_answer.validate_against_request(&request, request_hash).is_err());
+        assert!(
+            short_answer
+                .validate_against_request(&request, request_hash, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .is_err()
+        );
         let mut under_retained = result.clone();
         under_retained.trace_chunk_count = 0;
-        assert!(under_retained.validate_against_request(&request, request_hash).is_err(), "a chunk count off the executed shape");
+        assert!(
+            under_retained
+                .validate_against_request(&request, request_hash, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .is_err(),
+            "a chunk count off the executed shape"
+        );
         let mut hollow_manifest = result;
         hollow_manifest.trace_manifest_root = Hash64::default();
-        assert!(hollow_manifest.validate_against_request(&request, request_hash).is_err(), "a zero manifest retains nothing");
+        assert!(
+            hollow_manifest
+                .validate_against_request(&request, request_hash, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .is_err(),
+            "a zero manifest retains nothing"
+        );
     }
 
     /// The on-chain payload: an honest one validates, and the two lies only the payload can tell
@@ -2141,21 +2207,32 @@ mod tests {
             prompt_token_ids: ids.clone(),
             signature: sig(),
         };
-        payload.validate_stateless_v3(net()).expect("the honest payload validates");
+        payload
+            .validate_stateless_v3(net(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+            .expect("the honest payload validates");
         assert_eq!(payload.claim_id(), fp_claim_id_v3(&payload.commitment));
         assert_eq!(payload.signed_message(), payload.claim_id(), "the signature covers the identity, which is total");
 
         let mut short = payload.clone();
         short.prompt_token_ids.pop();
-        assert!(short.validate_stateless_v3(net()).is_err(), "a prompt of the wrong length");
+        assert!(
+            short.validate_stateless_v3(net(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_err(),
+            "a prompt of the wrong length"
+        );
 
         let mut swapped = payload.clone();
         swapped.prompt_token_ids = (1..=96u32).collect();
-        assert!(swapped.validate_stateless_v3(net()).is_err(), "a prompt the commitment does not bind");
+        assert!(
+            swapped.validate_stateless_v3(net(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_err(),
+            "a prompt the commitment does not bind"
+        );
 
         let mut wrong_version = payload;
         wrong_version.version = 2;
-        assert!(matches!(wrong_version.validate_stateless_v3(net()), Err(PalwFpV3Error::UnsupportedVersion { got: 2, .. })));
+        assert!(matches!(
+            wrong_version.validate_stateless_v3(net(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Err(PalwFpV3Error::UnsupportedVersion { got: 2, .. })
+        ));
     }
 
     /// The retained-trace manifest: chunking is exact at the boundary, digests bind binding and
@@ -2243,9 +2320,9 @@ pub const PALW_FP_MATERIAL_V1_MAGIC: [u8; 4] = *b"FPM1";
 ///   response*, which is precisely the failure Decision 16's disclosure rule exists to prevent.
 ///
 /// So the encoding below is deliberately NOT optimised, and [`palw_fp_prompt_ids_admit_v1`] keeps
-/// re-deriving the commitment over the whole list — the FLAT digest, on every height and under
-/// every fence this build can be started with (audit D M-2: `Params::palw_prompt_ids_merkle`
-/// cannot be armed, because no writer or checker here reads it). Should the form ever move, the
+/// re-deriving the commitment over the whole list — under the form the ruleset names
+/// (`Params::palw_prompt_ids_form_v1`: flat on every preset that ships the fence dormant, the
+/// tiled Merkle root where a genesis armed it). Should the form ever move again, the
 /// LIST is what is carried either way.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwFpMaterialV1 {
@@ -2267,18 +2344,24 @@ pub struct PalwFpMaterialV1 {
 /// refusal rather than a bool for the same reason: a seat that files nothing must be able to say
 /// which of "nothing was served" and "what was served is not this claim's" happened, because the
 /// first is the producer's default arm and the second is a producer serving somebody else's work.
-/// **The commitment is FLAT, here and in every writer** (audit D M-2). ADR-0081 Decision 3 /
-/// ADR-0082 Decision 5 would re-form it as a Merkle root over the ids, and
-/// `Params::palw_prompt_ids_merkle` is the fence for that move — but nothing in this tree reads
-/// the fence: this function, the seat and both payload decoders re-derive
-/// `crate::palw_v2::prompt_token_ids_hash_v2` unconditionally, and so does every producer.
-/// `Params::validate_palw_v2` therefore REFUSES a ruleset that arms it, rather than letting a
-/// network believe its close is Merkle-shaped while every id list on it is still hashed flat.
-pub fn palw_fp_prompt_ids_admit_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[u32]) -> Result<(), PalwFpV3Error> {
+/// **The commitment's FORM is the network's, and every caller passes it in** (ADR-0081 Decision
+/// 3 / ADR-0082 Decision 5; private-prompts design, 2026-09-05). `form` is
+/// `Params::palw_prompt_ids_form_v1()` — the flat digest on every preset that ships the fence
+/// dormant, the tiled Merkle root on a genesis that arms `palw_prompt_ids_merkle` — and the
+/// comparison is `prompt_token_ids_match_v1`, the one spelling every writer's reader shares: the
+/// seat, the three payload decoders, the worker-result rebinding and the backends' carried-prompt
+/// checks. A reader that spelled the flat hash here would admit nothing on a Merkle network and
+/// could not say why; a network whose writers and readers disagreed about the form would refuse
+/// every honest commitment, which is why the fence is genesis-only and inside the ruleset id.
+pub fn palw_fp_prompt_ids_admit_v1(
+    job: &PalwFreePromptJobV3,
+    prompt_token_ids: &[u32],
+    form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<(), PalwFpV3Error> {
     if prompt_token_ids.len() != job.prompt_tokens as usize {
         return Err(PalwFpV3Error::PromptIdsCountMismatch { got: prompt_token_ids.len(), declared: job.prompt_tokens });
     }
-    if crate::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != job.prompt_token_ids_hash {
+    if !crate::palw_prompt_ids_v1::prompt_token_ids_match_v1(form, prompt_token_ids, &job.prompt_token_ids_hash) {
         return Err(PalwFpV3Error::PromptIdsHashMismatch);
     }
     Ok(())
@@ -2295,11 +2378,15 @@ pub fn palw_fp_prompt_ids_admit_v1(job: &PalwFreePromptJobV3, prompt_token_ids: 
 /// answers it, and past ADR-0065 D4 the answer is an abstention that slashes nobody (ADR-0077
 /// SA-5). Filing `Valid` here would certify a run the seat never checked, which is the one thing
 /// this predicate exists to make unrepresentable.
-pub fn palw_fp_seat_prompt_admit_v1(job: &PalwFreePromptJobV3, held: Option<&[u32]>) -> Result<(), PalwFpV3Error> {
+pub fn palw_fp_seat_prompt_admit_v1(
+    job: &PalwFreePromptJobV3,
+    held: Option<&[u32]>,
+    form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<(), PalwFpV3Error> {
     let Some(ids) = held else {
         return Err(PalwFpV3Error::PromptIdsUnavailable);
     };
-    palw_fp_prompt_ids_admit_v1(job, ids)
+    palw_fp_prompt_ids_admit_v1(job, ids, form)
 }
 
 /// Encode with the magic prefix. The inverse of [`palw_fp_material_decode_v1`].
@@ -2316,12 +2403,12 @@ pub fn palw_fp_material_encode_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &
 /// `prompt_token_ids_hash`. Everything else (the roots) is the caller's to establish by
 /// re-executing — a decoder that "validated" more would be trusting the bytes about facts only
 /// an execution can witness. `None` for foreign magic, junk, or an ids/hash mismatch.
-pub fn palw_fp_material_decode_v1(bytes: &[u8]) -> Option<PalwFpMaterialV1> {
+pub fn palw_fp_material_decode_v1(bytes: &[u8], form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Option<PalwFpMaterialV1> {
     let body = bytes.strip_prefix(&PALW_FP_MATERIAL_V1_MAGIC)?;
     let material: PalwFpMaterialV1 = borsh::from_slice(body).ok()?;
     // Through the shared predicate, not a second copy of it: the seat runs the same call on the
     // same bytes (ADR-0077 Decision 16), and one spelling is what keeps the two answers equal.
-    palw_fp_prompt_ids_admit_v1(&material.job, &material.prompt_token_ids).ok()?;
+    palw_fp_prompt_ids_admit_v1(&material.job, &material.prompt_token_ids, form).ok()?;
     Some(material)
 }
 
@@ -2357,14 +2444,14 @@ pub fn palw_fp_capture_encode_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[
 /// `None` for anything that is not an `FPC1` payload, for a job material that fails
 /// [`palw_fp_material_decode_v1`]'s own checks (the prompt must hash to the job's and count to
 /// its length), and for an empty capture — a question with no answer is `FPM1`, not this.
-pub fn palw_fp_capture_decode_v1(bytes: &[u8]) -> Option<PalwFpCaptureV1> {
+pub fn palw_fp_capture_decode_v1(bytes: &[u8], form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Option<PalwFpCaptureV1> {
     let body = bytes.strip_prefix(&PALW_FP_CAPTURE_V1_MAGIC)?;
     let payload: PalwFpCaptureV1 = borsh::from_slice(body).ok()?;
     // The ids bind BEFORE the capture is looked at, which is the order ADR-0077 Decision 16 makes
     // load-bearing under `PanelDa`: the served ids are the only tie between these bytes and the
     // claim, so a capture read first would be a replay of a prompt nobody has shown is this
     // claim's. Same predicate the seat calls.
-    palw_fp_prompt_ids_admit_v1(&payload.material.job, &payload.material.prompt_token_ids).ok()?;
+    palw_fp_prompt_ids_admit_v1(&payload.material.job, &payload.material.prompt_token_ids, form).ok()?;
     if payload.capture.is_empty() {
         return None;
     }
@@ -2417,10 +2504,10 @@ pub fn palw_fp_answer_encode_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[u
 /// [`palw_fp_material_decode_v1`]'s own checks, and for an empty answer — a question with no answer
 /// is `FPM1`, not this. The answer's ids are NOT bound here (see the type's doc): a reader that
 /// files anything on them binds them to the claim's `output_root` first.
-pub fn palw_fp_answer_decode_v1(bytes: &[u8]) -> Option<PalwFpAnswerV1> {
+pub fn palw_fp_answer_decode_v1(bytes: &[u8], form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Option<PalwFpAnswerV1> {
     let body = bytes.strip_prefix(&PALW_FP_ANSWER_V1_MAGIC)?;
     let payload: PalwFpAnswerV1 = borsh::from_slice(body).ok()?;
-    palw_fp_prompt_ids_admit_v1(&payload.material.job, &payload.material.prompt_token_ids).ok()?;
+    palw_fp_prompt_ids_admit_v1(&payload.material.job, &payload.material.prompt_token_ids, form).ok()?;
     if payload.output_token_ids.is_empty() {
         return None;
     }
@@ -2431,22 +2518,46 @@ pub fn palw_fp_answer_decode_v1(bytes: &[u8]) -> Option<PalwFpAnswerV1> {
 /// the family that wrote the capture (the seam, never a family decoder named by the caller).
 /// `None` for `FPM1`, for junk, and for a capture this family cannot read. What is returned is
 /// UNBOUND: the caller binds it to the claim's `output_root` before believing it.
-pub fn palw_fp_committed_output_ids_decode_v1(bytes: &[u8], ids_of_capture: impl Fn(&[u8]) -> Option<Vec<u32>>) -> Option<Vec<u32>> {
-    if let Some(answer) = palw_fp_answer_decode_v1(bytes) {
+pub fn palw_fp_committed_output_ids_decode_v1(
+    bytes: &[u8],
+    ids_of_capture: impl Fn(&[u8]) -> Option<Vec<u32>>,
+    form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Option<Vec<u32>> {
+    if let Some(answer) = palw_fp_answer_decode_v1(bytes, form) {
         return Some(answer.output_token_ids);
     }
-    let payload = palw_fp_capture_decode_v1(bytes)?;
+    let payload = palw_fp_capture_decode_v1(bytes, form)?;
     ids_of_capture(&payload.capture).filter(|ids| !ids.is_empty())
+}
+
+/// **The privacy mode a free-prompt payload declares, read off its prefix and NOTHING else**
+/// (ADR-0077 Decision 16's transport half; private-prompts design, 2026-09-05).
+///
+/// `FPM1`, `FPC1` and `FPA1` all begin with the job, so the mode is inside the first few hundred
+/// bytes of any of them and needs no prompt-id form to read — which is the point: the transport
+/// decides whether bytes may be announced, relayed or served to a stranger BEFORE it can know
+/// whether they are honest, and a peek that had to authenticate the ids first would have to be
+/// given the network's form by every relay in the mesh. Nothing here is believed for any other
+/// purpose: a payload that claims mode 2 and is junk is dropped either way, and the decoders that
+/// admit a payload still run the whole check. `None` for foreign bytes.
+pub fn palw_fp_privacy_mode_peek_v1(bytes: &[u8]) -> Option<u8> {
+    let body = bytes
+        .strip_prefix(&PALW_FP_MATERIAL_V1_MAGIC)
+        .or_else(|| bytes.strip_prefix(&PALW_FP_CAPTURE_V1_MAGIC))
+        .or_else(|| bytes.strip_prefix(&PALW_FP_ANSWER_V1_MAGIC))?;
+    let mut cursor = body;
+    let job = <PalwFreePromptJobV3 as borsh::BorshDeserialize>::deserialize(&mut cursor).ok()?;
+    Some(job.privacy_mode)
 }
 
 /// The job material of ANY free-prompt payload — `FPC1` (question and capture), `FPA1` (question
 /// and the answer's ids, ADR-0084) or `FPM1` (question alone). Readers that need only the job and
 /// the user's prompt take this.
-pub fn palw_fp_job_material_decode_v1(bytes: &[u8]) -> Option<PalwFpMaterialV1> {
-    palw_fp_capture_decode_v1(bytes)
+pub fn palw_fp_job_material_decode_v1(bytes: &[u8], form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Option<PalwFpMaterialV1> {
+    palw_fp_capture_decode_v1(bytes, form)
         .map(|payload| payload.material)
-        .or_else(|| palw_fp_answer_decode_v1(bytes).map(|answer| answer.material))
-        .or_else(|| palw_fp_material_decode_v1(bytes))
+        .or_else(|| palw_fp_answer_decode_v1(bytes, form).map(|answer| answer.material))
+        .or_else(|| palw_fp_material_decode_v1(bytes, form))
 }
 
 #[cfg(test)]
@@ -2486,31 +2597,62 @@ mod fp_material_tests {
         let capture = vec![0xC4u8; 64];
         let bytes = palw_fp_capture_encode_v1(&job, &ids, &capture);
         assert_eq!(&bytes[..4], &PALW_FP_CAPTURE_V1_MAGIC);
-        let decoded = palw_fp_capture_decode_v1(&bytes).expect("a capture payload decodes");
+        let decoded = palw_fp_capture_decode_v1(&bytes, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+            .expect("a capture payload decodes");
         assert_eq!(decoded.material.job, job);
         assert_eq!(decoded.material.prompt_token_ids, ids);
         assert_eq!(decoded.capture, capture);
 
         // The job material comes out of either spelling.
-        assert_eq!(palw_fp_job_material_decode_v1(&bytes).expect("FPC1 yields its material").job, job);
+        assert_eq!(
+            palw_fp_job_material_decode_v1(&bytes, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .expect("FPC1 yields its material")
+                .job,
+            job
+        );
         let question_only = palw_fp_material_encode_v1(&job, &ids);
-        assert_eq!(palw_fp_job_material_decode_v1(&question_only).expect("FPM1 yields its material").job, job);
+        assert_eq!(
+            palw_fp_job_material_decode_v1(&question_only, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .expect("FPM1 yields its material")
+                .job,
+            job
+        );
         // …and neither decoder reads the other's magic.
-        assert!(palw_fp_capture_decode_v1(&question_only).is_none(), "FPM1 is not a capture payload");
-        assert!(palw_fp_material_decode_v1(&bytes).is_none(), "FPC1 is not a bare material");
+        assert!(
+            palw_fp_capture_decode_v1(&question_only, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_none(),
+            "FPM1 is not a capture payload"
+        );
+        assert!(
+            palw_fp_material_decode_v1(&bytes, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_none(),
+            "FPC1 is not a bare material"
+        );
 
         // The question's checks still apply, and an empty answer is refused.
         let mut wrong = job.clone();
         wrong.prompt_token_ids_hash = Hash64::from_u64_word(0xBAD);
-        assert!(palw_fp_capture_decode_v1(&palw_fp_capture_encode_v1(&wrong, &ids, &capture)).is_none(), "ids must hash to the job");
-        assert!(palw_fp_capture_decode_v1(&palw_fp_capture_encode_v1(&job, &ids, &[])).is_none(), "no capture, no payload");
+        assert!(
+            palw_fp_capture_decode_v1(
+                &palw_fp_capture_encode_v1(&wrong, &ids, &capture),
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            )
+            .is_none(),
+            "ids must hash to the job"
+        );
+        assert!(
+            palw_fp_capture_decode_v1(
+                &palw_fp_capture_encode_v1(&job, &ids, &[]),
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            )
+            .is_none(),
+            "no capture, no payload"
+        );
     }
 
     #[test]
     fn a_material_round_trips_and_binds_its_ids() {
         let ids = [3u32, 9, 17];
         let bytes = palw_fp_material_encode_v1(&job(&ids), &ids);
-        let back = palw_fp_material_decode_v1(&bytes).expect("round trip");
+        let back = palw_fp_material_decode_v1(&bytes, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).expect("round trip");
         assert_eq!(back.prompt_token_ids, ids);
         assert_eq!(back.job, job(&ids));
     }
@@ -2586,7 +2728,10 @@ mod fp_material_tests {
         // Linear, not logarithmic: exactly four bytes per additional id and nothing else moved.
         assert_eq!(b.len() - a.len(), (long.len() - short.len()) * 4, "the payload is O(prompt) by design");
         // Every id round-trips — what a replaying seat needs and what one opened tile cannot give.
-        assert_eq!(palw_fp_material_decode_v1(&b).expect("round trip").prompt_token_ids, long);
+        assert_eq!(
+            palw_fp_material_decode_v1(&b, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).expect("round trip").prompt_token_ids,
+            long
+        );
         // …and the COURT's term at the same context is what Decision 3 actually shrank. The two
         // paths are priced differently on purpose; asserting the gap keeps that stated.
         let close = crate::palw_prompt_ids_v1::prompt_ids_close_bytes_v1(
@@ -2604,16 +2749,25 @@ mod fp_material_tests {
     fn the_decoder_refuses_what_it_can_check() {
         let ids = [3u32, 9, 17];
         let mut swapped = palw_fp_material_encode_v1(&job(&ids), &[3, 17, 9]);
-        assert!(palw_fp_material_decode_v1(&swapped).is_none(), "ids that do not hash to the job's binding");
+        assert!(
+            palw_fp_material_decode_v1(&swapped, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_none(),
+            "ids that do not hash to the job's binding"
+        );
         swapped.clear();
-        assert!(palw_fp_material_decode_v1(&swapped).is_none(), "empty");
-        assert!(palw_fp_material_decode_v1(b"not a material").is_none(), "foreign bytes");
+        assert!(palw_fp_material_decode_v1(&swapped, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_none(), "empty");
+        assert!(
+            palw_fp_material_decode_v1(b"not a material", crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_none(),
+            "foreign bytes"
+        );
         let mut wrong_count = job(&ids);
         wrong_count.prompt_tokens = 2;
         let body = borsh::to_vec(&PalwFpMaterialV1 { job: wrong_count, prompt_token_ids: ids.to_vec() }).unwrap();
         let mut bytes = PALW_FP_MATERIAL_V1_MAGIC.to_vec();
         bytes.extend_from_slice(&body);
-        assert!(palw_fp_material_decode_v1(&bytes).is_none(), "a count the ids contradict");
+        assert!(
+            palw_fp_material_decode_v1(&bytes, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_none(),
+            "a count the ids contradict"
+        );
     }
 }
 
@@ -2654,17 +2808,40 @@ mod fp_answer_tests {
         let answer = [11u32, 12, 13];
         let bytes = palw_fp_answer_encode_v1(&job, &prompt, &answer);
         assert_eq!(&bytes[..4], &PALW_FP_ANSWER_V1_MAGIC);
-        let decoded = palw_fp_answer_decode_v1(&bytes).expect("FPA1 decodes");
+        let decoded = palw_fp_answer_decode_v1(&bytes, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).expect("FPA1 decodes");
         assert_eq!(decoded.material.job, job);
         assert_eq!(decoded.material.prompt_token_ids, prompt);
         assert_eq!(decoded.output_token_ids, answer);
-        assert_eq!(palw_fp_job_material_decode_v1(&bytes).expect("FPA1 yields its material").job, job);
-        assert!(palw_fp_capture_decode_v1(&bytes).is_none(), "FPA1 is not a capture payload");
-        assert!(palw_fp_material_decode_v1(&bytes).is_none(), "FPA1 is not a bare material");
+        assert_eq!(
+            palw_fp_job_material_decode_v1(&bytes, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+                .expect("FPA1 yields its material")
+                .job,
+            job
+        );
+        assert!(
+            palw_fp_capture_decode_v1(&bytes, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_none(),
+            "FPA1 is not a capture payload"
+        );
+        assert!(
+            palw_fp_material_decode_v1(&bytes, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).is_none(),
+            "FPA1 is not a bare material"
+        );
         // The prompt binding, through the shared predicate.
-        assert!(palw_fp_answer_decode_v1(&palw_fp_answer_encode_v1(&job, &[5, 6, 8], &answer)).is_none());
+        assert!(
+            palw_fp_answer_decode_v1(
+                &palw_fp_answer_encode_v1(&job, &[5, 6, 8], &answer),
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            )
+            .is_none()
+        );
         // A question with no answer is FPM1, not this.
-        assert!(palw_fp_answer_decode_v1(&palw_fp_answer_encode_v1(&job, &prompt, &[])).is_none());
+        assert!(
+            palw_fp_answer_decode_v1(
+                &palw_fp_answer_encode_v1(&job, &prompt, &[]),
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            )
+            .is_none()
+        );
         // Size: the job plus 4 x (prompt + answer) bytes plus borsh lengths — a few hundred bytes,
         // not a capture (ADR-0084 Y1's shape at this width).
         assert!(bytes.len() < 1_024, "{} bytes", bytes.len());
@@ -2681,10 +2858,20 @@ mod fp_answer_tests {
         let fpc = palw_fp_capture_encode_v1(&job, &prompt, b"family-capture");
         let fpm = palw_fp_material_encode_v1(&job, &prompt);
         let seam = |capture: &[u8]| (capture == b"family-capture").then(|| answer.clone());
-        assert_eq!(palw_fp_committed_output_ids_decode_v1(&fpa, seam), Some(answer.clone()));
-        assert_eq!(palw_fp_committed_output_ids_decode_v1(&fpc, seam), Some(answer.clone()));
-        assert_eq!(palw_fp_committed_output_ids_decode_v1(&fpm, seam), None);
-        assert_eq!(palw_fp_committed_output_ids_decode_v1(&fpc, |_| Some(Vec::new())), None, "an empty seam answer is no answer");
-        assert_eq!(palw_fp_committed_output_ids_decode_v1(&fpc, |_| None), None);
+        assert_eq!(
+            palw_fp_committed_output_ids_decode_v1(&fpa, seam, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Some(answer.clone())
+        );
+        assert_eq!(
+            palw_fp_committed_output_ids_decode_v1(&fpc, seam, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            Some(answer.clone())
+        );
+        assert_eq!(palw_fp_committed_output_ids_decode_v1(&fpm, seam, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat), None);
+        assert_eq!(
+            palw_fp_committed_output_ids_decode_v1(&fpc, |_| Some(Vec::new()), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            None,
+            "an empty seam answer is no answer"
+        );
+        assert_eq!(palw_fp_committed_output_ids_decode_v1(&fpc, |_| None, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat), None);
     }
 }

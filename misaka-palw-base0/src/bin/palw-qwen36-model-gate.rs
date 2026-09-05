@@ -361,6 +361,8 @@ fn main() {
     //    against this build's kernels — a width this build cannot serve is refused here.
     // -------------------------------------------------------------------------------------
     let net = network_id.clone().into_bytes();
+    // ADR-0081 Decision 3: the prompt-commitment form of the network the gate is run for.
+    let prompt_ids_form = misaka_palw_base0::fp_worker::fp_worker_prompt_ids_form_v1(&network_id).unwrap_or_else(|why| die(why));
     let net_bytes = net.clone();
     let arc = std::sync::Arc::new(artifact);
     match Qwen36Backend::from_registered_profile(arc.clone(), net.clone(), profile.clone(), row.canonical_job) {
@@ -409,6 +411,7 @@ fn main() {
         },
         net,
         load_ms,
+        prompt_ids_form,
     )
     .unwrap_or_else(|e| die(e));
     eprintln!(

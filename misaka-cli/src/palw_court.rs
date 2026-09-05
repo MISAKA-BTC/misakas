@@ -1183,6 +1183,8 @@ fn proof_kind_v1(proof: &PalwCourtVerdictProofV2) -> &'static str {
         // the kind is that an operator can see WHICH close it is about to spend carriers on, and a
         // catch-all would have printed "other" for the widest proof this ruleset admits.
         PalwCourtVerdictProofV2::AttnDissection { .. } => "AttnDissection",
+        // ADR-0081 Decision 3: the arithmetic close with the prompt tile opened rather than carried.
+        PalwCourtVerdictProofV2::ArithmeticOpened { .. } => "ArithmeticOpened",
     }
 }
 

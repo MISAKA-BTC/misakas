@@ -78,6 +78,9 @@ pub fn builtin_lineages_v1() -> Vec<Arc<dyn PalwModelLineageV1>> {
 pub struct PalwClassSdk {
     lineages: Vec<Arc<dyn PalwModelLineageV1>>,
     court: PalwCourtParamsV2,
+    /// **The network's prompt-commitment form** (ADR-0081 Decision 3), `Params::palw_prompt_ids_form_v1()`,
+    /// handed to every backend this SDK resolves — the same way the court's ladder is.
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     network_id: Vec<u8>,
     /// **ADR-0067 Decision 5's fence.** `false` (the default) keeps the chain-registered-class
     /// arm sealed: [`Self::resolve_chain_registered`] refuses with the fence named, and nothing
@@ -101,7 +104,11 @@ fn base_model_id(model_id: &str) -> &str {
 
 impl PalwClassSdk {
     /// The SDK over [`builtin_lineages_v1`] — what node code uses.
-    pub fn builtin_v1(court: PalwCourtParamsV2, network_id: Vec<u8>) -> Self {
+    pub fn builtin_v1(
+        court: PalwCourtParamsV2,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        network_id: Vec<u8>,
+    ) -> Self {
         // **The certification drill runs here, once, for whoever builds an SDK** (ADR-0069).
         //
         // The weight gate reads this build's certified family set and refuses one that does not
@@ -115,20 +122,25 @@ impl PalwClassSdk {
         // The node also calls the registration explicitly at startup — that call is where the
         // operator-facing log and the pin check live, and both are idempotent.
         misaka_palw_base0::e2e_drill::register_builtin_certified_families_v1();
-        Self::with_lineages(builtin_lineages_v1(), court, network_id)
+        Self::with_lineages(builtin_lineages_v1(), court, prompt_ids_form, network_id)
     }
 
     /// The SDK over a caller-composed lineage set. Panics on an incoherent set, because every
     /// caller is a constructor-time path and a lineage list that two lineages both claim is a
     /// build defect, not an input.
-    pub fn with_lineages(lineages: Vec<Arc<dyn PalwModelLineageV1>>, court: PalwCourtParamsV2, network_id: Vec<u8>) -> Self {
+    pub fn with_lineages(
+        lineages: Vec<Arc<dyn PalwModelLineageV1>>,
+        court: PalwCourtParamsV2,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        network_id: Vec<u8>,
+    ) -> Self {
         let mut ids: Vec<&'static str> = lineages.iter().map(|l| l.lineage_id()).collect();
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), lineages.len(), "two lineages share a lineage id");
         let fallbacks = lineages.iter().filter(|l| l.is_container_fallback()).count();
         assert!(fallbacks <= 1, "{fallbacks} lineages claim the container-fallback slot, and files can only fall back to one");
-        Self { lineages, court, network_id, chain_classes: false }
+        Self { lineages, court, prompt_ids_form, network_id, chain_classes: false }
     }
 
     /// Add one lineage to an already-built SDK — the composition point for a lineage that lives
@@ -136,7 +148,11 @@ impl PalwClassSdk {
     pub fn with_lineage(mut self, lineage: Arc<dyn PalwModelLineageV1>) -> Self {
         let mut lineages = std::mem::take(&mut self.lineages);
         lineages.push(lineage);
-        Self::with_lineages(lineages, self.court, std::mem::take(&mut self.network_id))
+        Self::with_lineages(lineages, self.court, self.prompt_ids_form, std::mem::take(&mut self.network_id))
+    }
+
+    pub fn prompt_ids_form(&self) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
+        self.prompt_ids_form
     }
 
     pub fn court(&self) -> &PalwCourtParamsV2 {
@@ -312,7 +328,9 @@ impl PalwClassSdk {
         holdings: &[PalwLoadedArtifactV1],
     ) -> Result<Box<dyn PalwExecutionBackendV1>, String> {
         for lineage in &self.lineages {
-            if let Some(outcome) = lineage.resolve(&self.court, class_id, artifact_root, holdings, &self.network_id) {
+            if let Some(outcome) =
+                lineage.resolve(&self.court, self.prompt_ids_form, class_id, artifact_root, holdings, &self.network_id)
+            {
                 return outcome;
             }
         }
@@ -462,7 +480,7 @@ impl PalwClassSdk {
                 (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
                 misaka_palw_base0::classes::ArtifactSourceV1::ConvertedA16,
             )?;
-            return Ok(Box::new(backend));
+            return Ok(Box::new(backend.with_prompt_ids_form(self.prompt_ids_form)));
         }
         if let Some(artifact) = crate::lineages::qwen36::qwen36_artifact_by_root(holdings, artifact_root) {
             let backend = misaka_palw_base0::qwen36_backend::Qwen36Backend::from_registered_profile(
@@ -471,7 +489,7 @@ impl PalwClassSdk {
                 profile.clone(),
                 (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
             )?;
-            return Ok(Box::new(backend));
+            return Ok(Box::new(backend.with_prompt_ids_form(self.prompt_ids_form)));
         }
         Err(format!(
             "this node holds no artifact whose digest is the registered root {artifact_root} — fetch the class's \
@@ -755,11 +773,20 @@ mod chain_arm_tests {
         let canonical = rc_job_context(&profile, 4, 2);
         let holdings = vec![holding(artifact)];
 
-        let sealed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec());
+        let sealed = PalwClassSdk::builtin_v1(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        );
         let err = sealed.resolve_chain_registered(class_id, root, &holdings, &profile, &canonical).map(drop).unwrap_err();
         assert!(err.contains("fenced off"), "the refusal names the fence: {err}");
 
-        let armed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec()).with_chain_classes_v1();
+        let armed = PalwClassSdk::builtin_v1(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        )
+        .with_chain_classes_v1();
         let backend = armed
             .resolve_chain_registered(class_id, root, &holdings, &profile, &canonical)
             .expect("a servable chain-registered class resolves");
@@ -787,8 +814,17 @@ mod chain_arm_tests {
         let holdings = vec![holding(artifact.clone())];
         // Every ordinary construction path, including the composed one, starts sealed.
         for sdk in [
-            PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec()),
-            PalwClassSdk::with_lineages(builtin_lineages_v1(), court(), b"misaka-palw-rc".to_vec()),
+            PalwClassSdk::builtin_v1(
+                court(),
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                b"misaka-palw-rc".to_vec(),
+            ),
+            PalwClassSdk::with_lineages(
+                builtin_lineages_v1(),
+                court(),
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                b"misaka-palw-rc".to_vec(),
+            ),
         ] {
             let err = sdk
                 .resolve_chain_registered(profile.shape_profile_id(), artifact.artifact_digest(), &holdings, &profile, &canonical)
@@ -810,7 +846,12 @@ mod chain_arm_tests {
         let canonical = rc_job_context(&profile, 4, 2);
         let holdings = vec![holding(artifact.clone())];
 
-        let armed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec()).with_chain_classes_v1();
+        let armed = PalwClassSdk::builtin_v1(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        )
+        .with_chain_classes_v1();
         let interpreted = armed.resolve_chain_registered(class_id, root, &holdings, &profile, &canonical).expect("resolves");
         let compiled = misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
             artifact,
@@ -840,7 +881,12 @@ mod chain_arm_tests {
         let root = artifact.artifact_digest();
         let canonical = rc_job_context(&profile, 4, 2);
         let holdings = vec![holding(artifact)];
-        let armed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec()).with_chain_classes_v1();
+        let armed = PalwClassSdk::builtin_v1(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        )
+        .with_chain_classes_v1();
 
         let missing = armed
             .resolve_chain_registered(class_id, Hash64::from_u64_word(0xBAD), &holdings, &profile, &canonical)
@@ -913,11 +959,20 @@ mod mmap_chain_arm_tests {
         let canonical = rc_job_context(&profile, 4, 2);
         let holdings = vec![crate::lineages::qwen36::holding_from_artifact(artifact.clone(), None)];
 
-        let sealed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec());
+        let sealed = PalwClassSdk::builtin_v1(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        );
         let err = sealed.resolve_chain_registered(class_id, root, &holdings, &profile, &canonical).map(drop).unwrap_err();
         assert!(err.contains("fenced off"), "the mmap arm sits behind the same fence: {err}");
 
-        let armed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec()).with_chain_classes_v1();
+        let armed = PalwClassSdk::builtin_v1(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        )
+        .with_chain_classes_v1();
         let interpreted =
             armed.resolve_chain_registered(class_id, root, &holdings, &profile, &canonical).expect("a held mapping serves");
         assert_eq!(interpreted.model_id(), "PALW-QWEN36/chain-registered");
@@ -960,7 +1015,12 @@ mod mmap_chain_arm_tests {
         let root = artifact.artifact_root();
         let canonical = rc_job_context(&profile, 4, 2);
         let holdings = vec![crate::lineages::qwen36::holding_from_artifact(artifact, None)];
-        let armed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec()).with_chain_classes_v1();
+        let armed = PalwClassSdk::builtin_v1(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        )
+        .with_chain_classes_v1();
         let err = armed.resolve_chain_registered(class_id, root, &holdings, &profile, &canonical).map(drop).unwrap_err();
         assert!(err.contains("cannot serve the registered graph"), "the kernel boundary speaks: {err}");
     }
@@ -976,7 +1036,12 @@ mod mmap_chain_arm_tests {
         let root = artifact.artifact_root();
         let canonical = rc_job_context(&dense_profile, 4, 2);
         let holdings = vec![crate::lineages::qwen36::holding_from_artifact(artifact, None)];
-        let armed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec()).with_chain_classes_v1();
+        let armed = PalwClassSdk::builtin_v1(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        )
+        .with_chain_classes_v1();
         let err = armed.resolve_chain_registered(class_id, root, &holdings, &dense_profile, &canonical).map(drop).unwrap_err();
         assert!(err.contains("cannot serve the registered graph"), "the geometry gate speaks: {err}");
     }
@@ -1076,7 +1141,9 @@ mod chain_only_lattice_tests {
         assert!(s2.class(&class_id).is_some(), "the chain now holds the stranger's class");
 
         // ---- execution, through the FENCED ARM — no table row exists to fall back to ------
-        let armed = PalwClassSdk::builtin_v1(court(), NETWORK.to_vec()).with_chain_classes_v1();
+        let armed =
+            PalwClassSdk::builtin_v1(court(), kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat, NETWORK.to_vec())
+                .with_chain_classes_v1();
         let backend = armed
             .resolve_chain_registered(class_id, root, &holdings, &profile, &canonical)
             .expect("the armed arm serves the chain-only class");
@@ -1273,6 +1340,7 @@ mod revision_row_tests {
         fn resolve(
             &self,
             _court: &PalwCourtParamsV2,
+            _prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
             _class_id: Hash64,
             _artifact_root: Hash64,
             _holdings: &[PalwLoadedArtifactV1],
@@ -1283,7 +1351,12 @@ mod revision_row_tests {
     }
 
     fn sdk() -> PalwClassSdk {
-        PalwClassSdk::with_lineages(vec![Arc::new(MockLineage)], super::chain_arm_tests::court(), b"mock-net".to_vec())
+        PalwClassSdk::with_lineages(
+            vec![Arc::new(MockLineage)],
+            super::chain_arm_tests::court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"mock-net".to_vec(),
+        )
     }
 
     fn holding() -> PalwLoadedArtifactV1 {

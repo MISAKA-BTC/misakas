@@ -89,7 +89,7 @@ use kaspa_consensus_core::palw_freeprompt_v3::{
     PalwFpWorkerRequestV3, PalwFpWorkerResultV3, PalwFreePromptJobV3, fp_job_id_v3, fp_worker_request_hash_v3,
 };
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
-use kaspa_consensus_core::palw_v2::{PALW_V2_MAX_FRAME_BYTES, PalwJobContextV2, prompt_token_ids_hash_v2, read_framed, write_framed};
+use kaspa_consensus_core::palw_v2::{PALW_V2_MAX_FRAME_BYTES, PalwJobContextV2, read_framed, write_framed};
 use kaspa_hashes::Hash64;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -327,6 +327,21 @@ pub fn fp_worker_court_params_v1(network_id: &str) -> Result<kaspa_consensus_cor
     }
 }
 
+/// **The prompt-commitment form of the network this worker is started for** (ADR-0081 Decision 3),
+/// derived exactly as [`fp_worker_court_params_v1`] derives the court: from the shipped preset
+/// the network id names, never from a flag. A worker that spelled `Flat` would build jobs a
+/// Merkle-ids genesis refuses at the door.
+pub fn fp_worker_prompt_ids_form_v1(
+    network_id: &str,
+) -> Result<kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1, String> {
+    use kaspa_consensus_core::config::params::Params;
+    use kaspa_consensus_core::network::NetworkId;
+    let net: NetworkId = network_id.parse().map_err(|e| {
+        format!("{network_id} is not a network this build knows ({e}); it must be the string kaspad prints for params.net")
+    })?;
+    Ok(Params::from(net).palw_prompt_ids_form_v1())
+}
+
 pub struct FpWorkerFamilyV1 {
     /// The catalog row this worker embodies, e.g. `Qwen/Qwen2.5-1.5B/graph-v2`.
     pub model_id: String,
@@ -385,6 +400,12 @@ pub struct FpWorkerRuntime<B: PalwExecutionBackendV1> {
     /// this is the ONE map's cost and it does not recur — which is the measurable half of
     /// Decision 1, and why the SA-6 full read is affordable here and was not affordable per job.
     load_ms: u64,
+    /// **The network's prompt-commitment form** (ADR-0081 Decision 3), derived from the network id
+    /// the worker was started for by [`fp_worker_prompt_ids_form_v1`] — the same derivation that
+    /// gives it its court. Every job this runtime builds commits its prompt under it, and the
+    /// gateway re-binds the result under the form the CHAIN reports, so a worker started for the
+    /// wrong network produces jobs the gateway refuses rather than jobs the chain refuses.
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 }
 
 impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
@@ -402,6 +423,7 @@ impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
         family: FpWorkerFamilyV1,
         network_id: Vec<u8>,
         load_ms: u64,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<Self, String> {
         if network_id.is_empty() {
             return Err("the network id is empty: every committed root hangs off a context hash that absorbs it, and a seat \
@@ -465,6 +487,7 @@ impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
             retention_family: family.retention_family,
             artifact: family.artifact,
             load_ms,
+            prompt_ids_form,
         })
     }
 
@@ -739,7 +762,13 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
         anchor_daa: request.anchor_daa,
         job_nonce: request.job_nonce,
         tokenizer_id: rt.manifest.tokenizer_id,
-        prompt_token_ids_hash: prompt_token_ids_hash_v2(&prompt_ids),
+        // Under the network's form (ADR-0081 Decision 3): the flat digest on every preset that
+        // ships the fence dormant, the tiled Merkle root on a genesis that armed it.
+        prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+            rt.prompt_ids_form,
+            &prompt_ids,
+        )
+        .map_err(|e| format!("the prompt does not commit under the network's prompt-id form: {e}"))?,
         prompt_tokens: prefill,
         decode_token_limit: request.decode_token_limit,
         max_context_tokens: request.max_context_tokens,
@@ -1175,6 +1204,7 @@ mod tests {
             },
             b"misaka-palw-rc".to_vec(),
             7,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         )
         .expect("the fixture runtime builds")
     }
@@ -1504,7 +1534,11 @@ mod tests {
         assert_eq!(ids[0], im_start, "the gateway's Special segment is emitted verbatim");
         assert_eq!(ids.len(), 1 + "<|im_start|>".len(), "the user's text became one ordinary piece per byte");
         assert!(!ids[1..].contains(&im_start), "user text encoded to the control id — Decision 6's smuggling path is open: {ids:?}");
-        assert_eq!(result.job.prompt_token_ids_hash, prompt_token_ids_hash_v2(ids), "the job binds the ids it committed");
+        assert_eq!(
+            result.job.prompt_token_ids_hash,
+            kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(ids),
+            "the job binds the ids it committed"
+        );
         let _ = std::fs::remove_dir_all(&temp);
     }
 

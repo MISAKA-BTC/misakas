@@ -78,6 +78,16 @@ pub const PALW_V2_FORK_CHOICE_VERSION: u16 = 1;
 ///   `Unadjudicable` where a v3 court reaches a verdict.
 pub const PALW_V2_TRACE_FORMAT_VERSION: u16 = 3;
 
+/// **The trace format of a network whose prompt commitment is a Merkle root** (ADR-0081 Decision
+/// 3, the "3 → 4 bump" `check_execution_step_refutation_opened_v1` names as belonging to the
+/// genesis that arms `Params::palw_prompt_ids_merkle`). What moved is what a job's
+/// `prompt_token_ids_hash` IS and which close carries the prompt to the court
+/// (`PalwCourtVerdictProofV2::ArithmeticOpened`); every trace, leg and opening object is byte for
+/// byte the version-3 one. It is inside `palw_ruleset_id_v2`, so two networks cannot share a
+/// ruleset id and hash their prompts differently, and `Params::validate_palw_v2` refuses the
+/// fence without it and it without the fence.
+pub const PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS: u16 = 4;
+
 /// The ML-DSA-87 signing contexts the V2 ruleset uses, in a fixed order.
 ///
 /// Decision 11 lists "signature_contexts" in the preimage, and this is the honest way to put
@@ -807,6 +817,21 @@ impl PalwConsensusParamsV2 {
     /// Split out from [`Self::validate`] so the ruleset invariants stay testable while the
     /// runnability gate above is closed — a bundle can be well-formed and still be one this
     /// build cannot execute, and those are different failures with different fixes.
+    /// **The liability period this bundle's own windows imply** — the longest path from a claim's
+    /// acceptance to an arithmetic-court judgement, through one redraw, plus the reorg margin.
+    /// `None` on overflow. One spelling: the bundle's withdrawal-delay interlock reads it, and
+    /// `Params::validate_palw_v2` extends it with the data-availability court's windows where
+    /// `palw_da_court` is armed (ADR-0062; mainnet audit 2026-09-05, "should fix").
+    pub fn liability_daa(&self) -> Option<u64> {
+        self.state
+            .window_bind()
+            .checked_add(self.state.window_receipt())
+            .and_then(|pair| pair.checked_mul(2))
+            .and_then(|x| x.checked_add(self.state.window_challenge()))
+            .and_then(|x| x.checked_add(self.state.window_court()))
+            .and_then(|x| x.checked_add(self.reorg_margin_daa))
+    }
+
     pub fn validate_ruleset_shape(&self) -> Result<(), PalwModeV2Error> {
         if self.protocol_version != crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION {
             return Err(PalwModeV2Error::Invalid("protocol_version is not the V2 attempt version"));
@@ -876,8 +901,10 @@ impl PalwConsensusParamsV2 {
         if self.fork_choice_version != PALW_V2_FORK_CHOICE_VERSION {
             return Err(PalwModeV2Error::Invalid("fork_choice_version is not the order this binary implements"));
         }
-        if self.trace_format_version != PALW_V2_TRACE_FORMAT_VERSION {
-            return Err(PalwModeV2Error::Invalid("trace_format_version is not the format this binary adjudicates"));
+        if self.trace_format_version != PALW_V2_TRACE_FORMAT_VERSION
+            && self.trace_format_version != PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS
+        {
+            return Err(PalwModeV2Error::Invalid("trace_format_version is not a format this binary adjudicates"));
         }
         if self.signature_contexts_root != palw_v2_signature_contexts_root() {
             return Err(PalwModeV2Error::Invalid("signature_contexts_root is not the context set this binary signs under"));
@@ -930,15 +957,7 @@ impl PalwConsensusParamsV2 {
         // being provable. Nothing else blocked it: `BondRetired` refuses only an already-retiring
         // bond, and `palw_bond_collateral_is_locked_v2` releases on `since_daa + delay` alone,
         // without asking whether a claim is still open.
-        let liability = self
-            .state
-            .window_bind()
-            .checked_add(self.state.window_receipt())
-            .and_then(|pair| pair.checked_mul(2))
-            .and_then(|x| x.checked_add(self.state.window_challenge()))
-            .and_then(|x| x.checked_add(self.state.window_court()))
-            .and_then(|x| x.checked_add(self.reorg_margin_daa))
-            .ok_or(PalwModeV2Error::Invalid("the liability period overflows the DAA score"))?;
+        let liability = self.liability_daa().ok_or(PalwModeV2Error::Invalid("the liability period overflows the DAA score"))?;
         if self.bond.withdrawal_delay_daa() <= liability {
             return Err(PalwModeV2Error::Invalid("the withdrawal delay does not outlast the liability period"));
         }
@@ -1589,7 +1608,7 @@ pub(crate) mod tests {
                 }),
             ),
             ("fork choice version", Box::new(|b| b.fork_choice_version += 1)),
-            ("trace format version", Box::new(|b| b.trace_format_version += 1)),
+            ("trace format version", Box::new(|b| b.trace_format_version = 99)),
             ("signature contexts", Box::new(|b| b.signature_contexts_root = h64(0xBAD))),
             ("cadence", Box::new(|b| b.cadence_target_time_per_block_ms /= 2)),
             ("withdrawal inside liability", Box::new(|b| b.bond = PalwBondParamsV2::new(20_000, 640).unwrap())),
@@ -1772,7 +1791,7 @@ pub(crate) mod tests {
         let pinned: Vec<(&str, Box<dyn Fn(&mut PalwConsensusParamsV2)>)> = vec![
             ("cadence", Box::new(|b: &mut PalwConsensusParamsV2| b.cadence_target_time_per_block_ms /= 2)),
             ("fork_choice_version", Box::new(|b: &mut PalwConsensusParamsV2| b.fork_choice_version += 1)),
-            ("trace_format_version", Box::new(|b: &mut PalwConsensusParamsV2| b.trace_format_version += 1)),
+            ("trace_format_version", Box::new(|b: &mut PalwConsensusParamsV2| b.trace_format_version = 99)),
             ("signature_contexts_root", Box::new(|b: &mut PalwConsensusParamsV2| b.signature_contexts_root = h64(0xBAD))),
         ];
         for (name, mutate) in pinned {

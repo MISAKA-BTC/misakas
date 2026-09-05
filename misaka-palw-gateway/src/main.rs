@@ -199,6 +199,12 @@ struct Config {
     claim_exposure_sompi: u64,
     /// ADR-0077 SA-1(c): the operator marks this source class "answer, never commit".
     answer_never_commit: bool,
+    /// **Which privacy mode every job this gateway files declares** (ADR-0077 Decision 16):
+    /// `PALW_FP_PRIVACY_PUBLIC_DA` (the prompt rides the commitment, readable by anyone) or
+    /// `PALW_FP_PRIVACY_PANEL_DA` (the prompt reaches only the drawn seats over the authenticated
+    /// pull, and the chain carries its commitment alone). Mode 2 is refused per request where the
+    /// chain has not armed the fence (`ChainFacts::panel_da_armed`), before the inference.
+    privacy_mode: u8,
     /// SA-8's secondary bound: public jobs per source address per [`PER_SOURCE_WINDOW`].
     per_source_jobs_per_window: u32,
     /// ADR-0079 Decision 5's platform half, installed and PROVEN at boot before the bind guard
@@ -458,6 +464,7 @@ impl ResidentWorker {
     fn run_job(
         &mut self,
         request: &PalwFpWorkerRequestV3,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
         on_token: &mut dyn FnMut(u32, &[u8]),
     ) -> Result<PalwFpWorkerResultV3, String> {
         let payload = borsh::to_vec(request).map_err(|e| format!("cannot serialize the worker request: {e}"))?;
@@ -474,7 +481,7 @@ impl ResidentWorker {
                     // The caller-side re-binding: the worker is never trusted about what it was
                     // asked, and `request_hash` is re-derived from OUR canonical encoding.
                     result
-                        .validate_against_request(request, request_hash)
+                        .validate_against_request(request, request_hash, prompt_ids_form)
                         .map_err(|e| format!("the worker result does not bind the request: {e}"))?;
                     return Ok(*result);
                 }
@@ -522,12 +529,17 @@ impl WorkerSupervisor {
         &self.manifest
     }
 
-    fn run(&self, request: &PalwFpWorkerRequestV3, on_token: &mut dyn FnMut(u32, &[u8])) -> Result<PalwFpWorkerResultV3, String> {
+    fn run(
+        &self,
+        request: &PalwFpWorkerRequestV3,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        on_token: &mut dyn FnMut(u32, &[u8]),
+    ) -> Result<PalwFpWorkerResultV3, String> {
         let mut slot = self.current.lock().expect("the worker lock is never poisoned");
         if slot.is_none() {
             *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out)?);
         }
-        let outcome = slot.as_mut().expect("just spawned").run_job(request, on_token);
+        let outcome = slot.as_mut().expect("just spawned").run_job(request, prompt_ids_form, on_token);
         if let Err(e) = &outcome
             && !e.starts_with("the worker refused the job")
         {
@@ -602,6 +614,19 @@ struct ChatRequest {
 /// 3. **The seed is the requester's.** 64 hex characters, or absent for the zero seed. The gateway
 ///    never rolls one: a seed this process chose would make the same request twice two different
 ///    answers, and would put the draw in the hands of the party that is not paying for it.
+/// **The privacy mode a job may declare on THIS chain** (ADR-0077 Decision 16), decided from the
+/// configuration and the chain before the model is loaded — `sampling_from_request`'s shape, for
+/// its reason: a mode-2 commitment the chain will not extract is an inference spent for nothing,
+/// so the refusal names the fence and costs a 4xx.
+fn privacy_mode_for_request(config: &Config, facts: &chain::ChainFacts) -> Result<u8, String> {
+    if config.privacy_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA && !facts.panel_da_armed {
+        return Err("this gateway is configured for --privacy panel-da, and the chain has not armed palw_panel_da (ADR-0077 D16): a \
+             private commitment would not become a claim, so the job is refused before the inference"
+            .to_string());
+    }
+    Ok(config.privacy_mode)
+}
+
 fn sampling_from_request(chat: &ChatRequest, facts: &chain::ChainFacts) -> Result<([u8; 32], u32), String> {
     use kaspa_consensus_core::palw_decode_select_v2::{PALW_DECODE_SEED_GREEDY, PALW_DECODE_T_ONE, PALW_DECODE_TEMPERATURE_GREEDY};
     let temperature_q = match chat.temperature {
@@ -655,10 +680,7 @@ const MAX_REQUEST_LINE_BYTES: u64 = 8 * 1024;
 /// production caller and it passes the socket's `BufReader`.
 fn read_capped_line<R: BufRead>(reader: &mut R, what: &str) -> Result<String, String> {
     let mut line = String::new();
-    let read = reader
-        .take(MAX_REQUEST_LINE_BYTES)
-        .read_line(&mut line)
-        .map_err(|e| format!("cannot read {what}: {e}"))?;
+    let read = reader.take(MAX_REQUEST_LINE_BYTES).read_line(&mut line).map_err(|e| format!("cannot read {what}: {e}"))?;
     if read as u64 == MAX_REQUEST_LINE_BYTES && !line.ends_with('\n') {
         return Err(format!("{what} exceeds the {MAX_REQUEST_LINE_BYTES}-byte cap"));
     }
@@ -886,7 +908,7 @@ fn handle_chat(
         job_nonce,
         decode_token_limit: decode_limit,
         max_context_tokens: manifest.n_ctx,
-        privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+        privacy_mode: privacy_mode_for_request(config, &facts)?,
         prompt_mode: PALW_FP_PROMPT_MODE_USER,
         sampling_seed,
         temperature_q,
@@ -907,7 +929,7 @@ fn handle_chat(
                 sink.delta(&delta);
             }
         };
-        worker.run(&request, &mut on_token)?
+        worker.run(&request, facts.prompt_ids_form(), &mut on_token)?
     };
     if let Some(delta) = stream.finish() {
         sink.delta(&delta);
@@ -1124,6 +1146,7 @@ fn main() {
     let mut public_job_budget_permille: u64 = 200;
     let mut claim_exposure_sompi: u64 = 0;
     let mut answer_never_commit = false;
+    let mut privacy_mode: u8 = PALW_FP_PRIVACY_PUBLIC_DA;
     let mut per_source_jobs_per_window: u32 = 120;
     while let Some(arg) = args.pop_front() {
         let mut value = |what: &str| args.pop_front().unwrap_or_else(|| die(format!("{what} needs a value")));
@@ -1158,6 +1181,13 @@ fn main() {
                 claim_exposure_sompi = value("--claim-exposure-sompi").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
             "--answer-never-commit" => answer_never_commit = true,
+            "--privacy" => {
+                privacy_mode = match value("--privacy").as_str() {
+                    "public-da" => PALW_FP_PRIVACY_PUBLIC_DA,
+                    "panel-da" => kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA,
+                    other => die(format!("--privacy {other}: expected `public-da` or `panel-da`")),
+                }
+            }
             "--per-source-jobs-per-window" => {
                 per_source_jobs_per_window = value("--per-source-jobs-per-window").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
@@ -1191,6 +1221,7 @@ fn main() {
         public_job_budget_permille: public_job_budget_permille.min(1_000),
         claim_exposure_sompi,
         answer_never_commit,
+        privacy_mode,
         per_source_jobs_per_window,
         confinement: Confinement::none(),
     };
@@ -1272,6 +1303,14 @@ fn main() {
         worker.manifest().n_ctx,
         wire::template_id_for(worker.manifest()),
     );
+    // ADR-0077 Decision 16's disclosure, verbatim, on every boot that files private commitments:
+    // the operator is the one who reads it, and it says what "private" buys and does not.
+    if config.privacy_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA {
+        eprintln!(
+            "[misaka-palw-gateway] --privacy panel-da: {}",
+            kaspa_consensus_core::palw_panel_da_v1::PALW_FP_PANEL_DA_DISCLOSURE_V1
+        );
+    }
     let boot_facts = chain_source.read();
     eprintln!(
         "[misaka-palw-gateway] chain {} | registered {} | fp_certified {} | bond_active {} | exposure_room {}",
@@ -1546,6 +1585,7 @@ mod tests {
             public_job_budget_permille: 200,
             claim_exposure_sompi: 50_000,
             answer_never_commit: false,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             per_source_jobs_per_window: 2,
             confinement: Confinement::none(),
             derive_seed: None,

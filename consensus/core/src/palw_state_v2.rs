@@ -366,7 +366,13 @@ pub(crate) fn check_capable_classes_declared_v1(
     }
     let price = (capable_classes.len() as u128) * (PALW_CAPABILITY_EXPOSURE_SOMPI as u128);
     if already.saturating_add(price) > collateral as u128 {
-        return Err(PalwStateV2Error::CapabilityExposureUnaffordable { bond, classes: capable_classes.len(), already, price, collateral });
+        return Err(PalwStateV2Error::CapabilityExposureUnaffordable {
+            bond,
+            classes: capable_classes.len(),
+            already,
+            price,
+            collateral,
+        });
     }
     Ok(())
 }
@@ -2339,7 +2345,6 @@ pub fn palw_da_paused_daa_v2(phase: &PalwClaimPhaseV2, now_daa: u64) -> u64 {
         _ => 0,
     }
 }
-
 
 /// What a registrant signs: the class it is registering and the share it is taking.
 ///
@@ -4428,6 +4433,34 @@ impl PalwChainStateV2 {
     /// order. Empty on every state whose last block finalized nothing, which is most of them.
     pub fn pending_payouts_iter(&self) -> impl Iterator<Item = (&Hash64, &PalwPayoutV2)> {
         self.pending_payouts.iter()
+    }
+
+    /// **Who may be served a claim's PRIVATE material** (ADR-0077 Decision 16's transport half;
+    /// private-prompts design, 2026-09-05): the executor's own bond, every seat of the panel
+    /// bound to the claim, and the challenger of every court session open on it. Each of those
+    /// has a duty that needs the bytes; nobody else does, and under `PanelDa` the prompt inside
+    /// them is exactly what the commitment withheld from the chain. Read by the executor's node
+    /// before it answers a pull for a mode-2 claim — a stranger's pull, however well signed, is
+    /// refused by name.
+    pub fn claim_readers_v2(&self, claim: &Hash64) -> Vec<PalwBondKeyV2> {
+        let mut readers: Vec<PalwBondKeyV2> = Vec::new();
+        let mut admit = |bond: &PalwBondKeyV2| {
+            if !readers.contains(bond) {
+                readers.push(bond.clone());
+            }
+        };
+        if let Some(record) = self.claims.get(claim) {
+            admit(&record.bond);
+        }
+        if let Some(panel) = self.panels.get(claim) {
+            for seat in &panel.seats {
+                admit(&seat.bond);
+            }
+        }
+        for session in self.court_sessions.values().filter(|s| s.claim == *claim) {
+            admit(&session.challenger_bond);
+        }
+        readers
     }
 
     pub fn panel(&self, claim: &Hash64) -> Option<&PalwPanelStateV2> {
@@ -9414,7 +9447,11 @@ fn apply_object(
             let (accused_row, _accused_tile) = palw_da_event_index_parts_v1(*missing_event_index);
             let accusable_rows = palw_da_max_accusable_rows_v1(claim.trace_chunk_count);
             if accused_row >= accusable_rows {
-                return Err(PalwStateV2Error::DaIndexOutOfRange { claim: *claim_id, index: *missing_event_index, count: accusable_rows });
+                return Err(PalwStateV2Error::DaIndexOutOfRange {
+                    claim: *claim_id,
+                    index: *missing_event_index,
+                    count: accusable_rows,
+                });
             }
             // **The whole disclose window must fit inside the retention obligation** (SA-1, SA-6).
             // Accusing at the last DAA of retention would otherwise be a conviction dressed as a
@@ -10654,7 +10691,10 @@ pub(crate) mod tests {
         };
         apply(register(&ids[..PALW_MAX_CAPABLE_CLASSES]), true).expect("sixteen registers under the fence");
         let err = apply(register(&ids[..]), true).expect_err("seventeen is one past the bound at registration too");
-        assert!(matches!(err, PalwStateV2Error::CapableClassesTooMany { got, max, .. } if got == PALW_MAX_CAPABLE_CLASSES + 1 && max == PALW_MAX_CAPABLE_CLASSES), "got {err}");
+        assert!(
+            matches!(err, PalwStateV2Error::CapableClassesTooMany { got, max, .. } if got == PALW_MAX_CAPABLE_CLASSES + 1 && max == PALW_MAX_CAPABLE_CLASSES),
+            "got {err}"
+        );
         // A class not yet registered may be named at REGISTRATION (a registrant's bond declares for
         // the class it is about to register); it is the declaration arm that refuses it.
         let future = [kaspa_hashes::Hash64::from_u64_word(0xD0E5_0000)];
@@ -12945,7 +12985,10 @@ pub(crate) mod tests {
             operand_openings: Vec::new(),
         };
         assert!(
-            matches!(adjudicate_court_close_v2(&s5, &sid, &proof, &court_params()), Err(PalwCourtV2Error::LadderNotTerminal)),
+            matches!(
+                adjudicate_court_close_v2(&s5, &sid, &proof, &court_params(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+                Err(PalwCourtV2Error::LadderNotTerminal)
+            ),
             "a close before the ladder terminates must be refused"
         );
 
@@ -12967,7 +13010,8 @@ pub(crate) mod tests {
             _ => unreachable!(),
         };
         assert_ne!(opened, 4, "the fixture must open a leaf other than the narrowed one");
-        let outcome = adjudicate_court_close_v2(&s13, &sid, &proof, &court_params());
+        let outcome =
+            adjudicate_court_close_v2(&s13, &sid, &proof, &court_params(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat);
         assert!(
             matches!(outcome, Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: o, narrowed: 4 }) if o == opened),
             "a close about another step must be refused, got {outcome:?}"
@@ -12983,7 +13027,8 @@ pub(crate) mod tests {
             pin: crate::palw_step_refute::PalwBase0DecodeTokensV1 { logits_rows: vec![vec![1, 2]], generated_token_ids: vec![0] },
             position: 7,
         };
-        let outcome = adjudicate_court_close_v2(&s13, &sid, &decode, &court_params());
+        let outcome =
+            adjudicate_court_close_v2(&s13, &sid, &decode, &court_params(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat);
         assert!(
             matches!(outcome, Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: 7, narrowed: 4 })),
             "a decode-token close at a position the ladder did not narrow to must be refused, got {outcome:?}"
@@ -18614,7 +18659,10 @@ pub(crate) mod tests {
             signature: vec![5; 8],
         };
         let dodged = apply_da_err(&s4b, &p, &ctx(5, 104, 5), &[dodge]);
-        assert!(matches!(dodged, PalwStateV2Error::DaOpeningRefused { .. }), "a producer may not declare absent an event it committed: {dodged:?}");
+        assert!(
+            matches!(dodged, PalwStateV2Error::DaOpeningRefused { .. }),
+            "a producer may not declare absent an event it committed: {dodged:?}"
+        );
     }
 
     /// **DA-4: a disclosure carried by a block the producer did not mine is accepted.**
@@ -20182,7 +20230,13 @@ pub(crate) mod tests {
         ) -> Result<PalwCourtVerdictV2, crate::palw_court_v2::PalwCourtV2Error> {
             let bottom = if anchored { drill.bottom_anchored(sid, tile) } else { drill.bottom(sid, tile) };
             let court = crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 22, 20, 2).unwrap();
-            crate::palw_court_v2::adjudicate_court_close_v2(state, &sid, &dissection_close(drill, bottom), &court)
+            crate::palw_court_v2::adjudicate_court_close_v2(
+                state,
+                &sid,
+                &dissection_close(drill, bottom),
+                &court,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
         }
 
         fn play_to_the_bottom(

@@ -39,7 +39,13 @@ trait DifficultyManagerExtension {
             .iter()
             .map(|item| {
                 let data = self.headers_store().get_compact_header_data(item.0.hash).unwrap();
-                DifficultyBlock { timestamp: data.timestamp, bits: data.bits, sortable_block: item.0.clone(), priced: true, receipt: false }
+                DifficultyBlock {
+                    timestamp: data.timestamp,
+                    bits: data.bits,
+                    sortable_block: item.0.clone(),
+                    priced: true,
+                    receipt: false,
+                }
             })
             .collect()
     }
@@ -322,7 +328,8 @@ fn retarget_bits(
     // Decision 1). Before the first fence every row counts; past it the heartbeat lane does not;
     // past the second the receipt lane does not either — its digest is admitted unconditionally,
     // so counting it measured quanta being spent rather than work (mainnet audit, 2026-09-05).
-    let counts = |diff_block: &DifficultyBlock| (!priced_rows_only || diff_block.priced) && !(receipt_rows_unpriced && diff_block.receipt);
+    let counts =
+        |diff_block: &DifficultyBlock| (!priced_rows_only || diff_block.priced) && !(receipt_rows_unpriced && diff_block.receipt);
     let counted_rows = if priced_rows_only || receipt_rows_unpriced {
         difficulty_blocks.iter().filter(|diff_block| counts(diff_block)).count() as u64
     } else {

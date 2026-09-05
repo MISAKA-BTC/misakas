@@ -82,44 +82,120 @@ publishes the answer; an arithmetic dispute at an embedding gather publishes one
 accusation's charge, `min(⌈reserved / seats⌉, min_collateral_sompi)` — which the audit's O-10
 already flags as low on the shipped registry; the number is the operator's, not this design's.
 
-## 3. The responder
+## 3. The responder, and the accuser
 
-A duty: every claim in `DefaultDisputed` whose producing bond this node holds. The panel opens the
-accused event out of the capture it already retains (ADR-0084 D7 keeps it home), through one
-backend verb `disclose_trace_event`, signs the object's digest under the bond key, and submits it
-as a lifecycle carrier through the same queue and funding the court moves use. It answers only
-inside the disclose window and never re-executes anything. There is no automatic accuser: a seat
-that received nothing cannot distinguish withholding from transport loss, and an accusation against
-an honest producer is a charge to the accuser — accusing is an operator's act (`misaka-cli`).
+A duty: every claim in `DefaultDisputed` whose producing bond this node holds
+(`palw_da_duties_v2`). The panel opens the accused event out of the capture it already retains
+(ADR-0084 D7 keeps it home), through one backend verb `PalwBackend::disclose_trace_event` (the
+floor and both model tiers implement it), signs the object's keyed digest under the bond key, and
+files `MaterialDisclosed` as a lifecycle carrier through the same queue and funding the court moves
+use. It answers only inside the disclose window and never re-executes anything.
+
+There is no automatic accuser: a seat that received nothing cannot distinguish withholding from
+transport loss, and ADR-0065 D4 (armed on every shipped V2 network) already turns "I never got it"
+into a slash-free abstention. Accusing is an operator's act: `misaka palw da-accuse --claim <id>
+--row <r> [--tile <t>] --bond <txid:index> --key-file <seed> --out <file>` builds and signs a
+`DefaultAccused` (after checking the key is the bond's registered one, so the carrier's fee is not
+spent on a signature the chain refuses), and `palw submit-object` files it. The chain's rules — an
+Active bond above the floor, a seat of the claim's panel or a bonded challenger, never the
+executor, the event inside `trace_chunk_count × 256` rows — are the chain's; the command
+re-derives none of them.
 
 ## 4. Merkle prompt ids, wired
 
-The commitment form is a function of the ruleset, resolved once: `Params::palw_prompt_ids_form_at`.
-Everything that writes or checks `prompt_token_ids_hash` takes the form — the job-context writer,
-the free-prompt admission predicate the seat and both decoders share, the material codec. The court
-gains an appended close variant, `ArithmeticOpened { refutation, operand_openings,
-prompt_ids_opening }`, admissible only under the Merkle form and routed to the opened refutation
-check; a flat `Arithmetic` close that carries ids is refused by name under the Merkle form. The
-fence is **genesis-only**, like `palw_uncertified_weightless`, so no chain ever holds claims under
-two forms. `validate_palw_v2`'s refusal — "no writer or checker reads it" — is replaced by that
-rule, because the sentence stopped being true.
+**The form is a network constant.** `Params::palw_prompt_ids_form_v1()` is
+`palw_prompt_ids_form_at(0)`, and `validate_palw_v2` refuses `palw_prompt_ids_merkle` at any
+height but genesis: a fence that flipped mid-chain would make the form a function of each job's
+anchor height, which no reader of a `prompt_token_ids_hash` holds — a decoder sees bytes, the tx
+door holds no DAA score, a worker knows only the network it was started for. The bundle's
+`trace_format_version` says the same thing inside `palw_ruleset_id_v2` (3 flat, 4 Merkle —
+`PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS`), written by the assembly from the fence and refused by
+`validate_palw_v2` in either direction alone, so two networks cannot share a ruleset id and hash
+their prompts differently.
+
+**One spelling of the comparison.** `prompt_token_ids_match_v1(form, ids, committed)` and
+`prompt_token_ids_commitment_v1(form, ids)` are the only two functions that touch the form; every
+writer and reader takes it as an argument:
+
+* writers — the FP worker runtime (`fp_worker_prompt_ids_form_v1(network_id)`, derived exactly as
+  its court is), the panel's canonical job, the raw lane's `base0_rc_job_v1`, and the three
+  backends' `job_for_anchor` (`with_prompt_ids_form`, set by the SDK's lineages beside the ladder
+  cap, from the registry's `Params`);
+* readers — `palw_fp_prompt_ids_admit_v1` and the seat's wrapper, the three payload decoders, the
+  payload's `validate_*` family, the transaction door (`TransactionValidator` holds
+  `palw_prompt_ids_form` and `palw_panel_da_admissible`), the extraction walk (which used to pass a
+  literal `false` for `PanelDa` — fixed: `palw_panel_da_at(block_daa)`), the worker-result
+  rebinding in the gateway (under the form the CHAIN reports, `ChainFacts::prompt_ids_merkle`), the
+  backends' carried-prompt checks and the four interval checkers.
+
+**The court.** `PalwCourtVerdictProofV2::ArithmeticOpened { refutation, operand_openings,
+prompt_ids_opening }`, appended after `AttnDissection` so every shipped close keeps its borsh
+discriminant. It runs the same two pins as `Arithmetic` and the opened checker
+(`check_execution_step_refutation_opened_capped_v1`), which verifies the tile against the job
+context's root before an id is read. `check_close_speaks_the_networks_prompt_form` refuses, by
+name, an `ArithmeticOpened` on a flat network and a whole-id-list `Arithmetic` on a Merkle one
+(the arithmetic already cannot be fooled — a flat digest is no Merkle root — the gate is a
+readable refusal and one spelling per network); the cost bound charges the opening like the operand
+paths. The challenger seat builds the opened form itself: on a Merkle network it takes the ids out
+of the refutation and opens the one tile at the disputed step's position when the step is a
+prefill step (`call_index == 0`); a decode step reads no prompt id and carries nothing.
+
+**What the court is shown.** 32 ids and a Merkle path — the tile the disputed gather read — not the
+conversation. That is the whole difference from the flat form, where a dispute at an embedding
+publishes every id of the prompt.
 
 ## 5. `PanelDa`, transported
 
-* A producer never broadcasts a mode-2 material; seats pull it with the signed request that
-  already exists.
-* The relay refuses to admit or forward a mode-2 material whatever peer sent it — defence in depth
-  against a misconfigured producer.
-* The serve authorizes a mode-2 request only for a seat of the claim's panel or the challenger of
-  an open court session on it, read from chain state; and refuses mode-2 material outright when no
-  authorizer is installed.
-* The gateway and the submitter build mode-2 commitments on request, only where the node reports
-  the fence armed (a new `ChainFacts` field), and show `PALW_FP_PANEL_DA_DISCLOSURE_V1` verbatim.
+The mode is read off a payload's prefix and nothing else (`palw_fp_privacy_mode_peek_v1`: the job
+is the first field of `FPM1`, `FPC1` and `FPA1` alike), so the transport can judge bytes before it
+can know whether they are honest and without being given the network's form. Then:
+
+* **never announced** — `broadcast_palw_material` returns before `mark_own_material` for a mode-2
+  payload (one place, both the producer's and the panel's broadcasts pass through it);
+* **never relayed** — `admit_material` answers `PalwGossipAdmit::Private`: an unasked copy is
+  dropped without a digest (so the honest pull's answer is not a `Duplicate` of a stranger's
+  refused copy); a solicited copy is handed to this node's inbox and still not relayed;
+* **never served to a stranger** — the unsigned pull returns nothing (after the read, so the
+  refusal is priced like a served answer); the signed pull with no authorizer installed is
+  `NotAReader`; with the panel's authorizer, both lanes (the whole capture and the interval
+  opening — a prefill interval's opening carries the prompt's embeddings, which anyone holding the
+  artifact inverts) require the requester's bond to be in `PalwChainStateV2::claim_readers_v2`:
+  the executor, the bound panel's seats, the challengers of open sessions. The answer envelope
+  (`FPA1`, which carries the prompt ids) rides the same lane and the same rule;
+* **built on request** — the gateway's `--privacy panel-da` (refused per request where
+  `ChainFacts::panel_da_armed` is false, before the inference; the disclosure sentence printed
+  verbatim at boot); the commitment builder drops the ids from a mode-2 payload
+  (`validate_stateless_v3` would refuse them as `PanelDaPayloadCarriesPrompt`), and the submitter
+  stages the worker's ids beside the material (`FpStaging::prompt_token_ids`, refused as
+  `PanelDaNeedsPromptIds` when absent) for the executor's node to serve to the claim's readers.
+* **reported** — `GetPalwProducerFactsResponse` wire version 6 carries `panel_da_armed` and
+  `prompt_ids_merkle`, both fail-closed on an older node.
 
 ## 6. Where it is armed
 
 A carded mainnet states `palw_da_court`, `palw_prompt_ids_merkle` and `palw_panel_da` on its base
-(`mainnet_card_base_v1`), with the trace format version the bundle carries moved to 4 on that card.
-testnet-11 stays as it is — every one of these is a genesis rule there or a re-mint, and its bundle
-keeps trace format 3. `PALW_STATE_V2_VERSION` is coupled to the arming by test: the day a shipped
-preset arms the court, the version must move (ADR-0062's own rule), and the test says so.
+(`mainnet_card_base_v1`), and the assembly writes trace format 4 for it. testnet-11 and devnet stay
+exactly as they are — every one of these is a genesis rule there, and their fingerprints do not
+move. `PALW_STATE_V2_VERSION` is coupled to the arming by test
+(`arming_the_da_court_on_a_network_with_history_moves_the_state_version`): the day a preset with
+history arms the court, the version must move past 20, and the test says so. The DA-court windows
+are inside the card's depths (`palw_v2_da_court_lattice_daa`) and, since this pass, inside the
+withdrawal-delay interlock (§7).
+
+## 7. Limits, stated
+
+* **Private from the public, not from the panel.** Five seats read the prompt to verify the work
+  (ADR-0077 D16's own sentence), and an arithmetic dispute publishes one tile of it; a
+  data-availability dispute publishes the answer's ids (§2). Withholding from the panel voids the
+  claim and slashes nobody (ADR-0065 D4).
+* **Availability is the executor's.** A mode-2 claim's material exists on the executor's node and
+  the readers it served; a node that goes dark before its seats pulled is voided at the receipt
+  timeout, exactly as a public claim whose material was never delivered.
+* **The drill runs flat.** `e2e_drill` (family certification) hashes its own prompt flat by
+  construction; its root is about arithmetic capability, not about what a prompt is called, and is
+  the same value on either kind of network.
+* **The rail derives the form from the result** (whichever of the two forms the worker's ids match
+  the job under), because it constructs its own devnet bundle and reads no chain facts before it
+  builds.
+* **The user-facing surface.** The disclosure sentence is printed by the gateway at boot and
+  carried in the ADR; a Studio front end that offers "private" must show it to the person typing.

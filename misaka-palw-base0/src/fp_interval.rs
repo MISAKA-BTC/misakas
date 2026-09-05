@@ -885,8 +885,16 @@ pub fn base0_open_fp_interval_v1(
     index: u32,
     prompt_token_ids: &[u32],
     family_checkpoint_interval: u32,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<Vec<u8>, Base0FpIntervalError> {
-    base0_open_fp_interval_capped_v1(material, index, prompt_token_ids, family_checkpoint_interval, PALW_STEP_LEG_MAX_LEAVES)
+    base0_open_fp_interval_capped_v1(
+        material,
+        index,
+        prompt_token_ids,
+        family_checkpoint_interval,
+        PALW_STEP_LEG_MAX_LEAVES,
+        prompt_ids_form,
+    )
 }
 
 /// [`base0_open_fp_interval_v1`] against the ladder top the CALLER states — the ruleset's
@@ -899,6 +907,7 @@ pub fn base0_open_fp_interval_capped_v1(
     prompt_token_ids: &[u32],
     family_checkpoint_interval: u32,
     max_step_leaf_count: u64,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<Vec<u8>, Base0FpIntervalError> {
     let (binding, tiles, _logits_rows, _generated, chunks) = material;
     let profile = &binding.shape_profile;
@@ -907,7 +916,11 @@ pub fn base0_open_fp_interval_capped_v1(
     // **The ids are an INPUT on this lane and are refused unless they are the job's** — the rule
     // `refutation_for_free_prompt_index` states: a wrong list reads to the court as
     // `InputSetNotCanonical`, which is no verdict at all.
-    if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != ctx.prompt_token_ids_hash {
+    if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+        prompt_ids_form,
+        prompt_token_ids,
+        &ctx.prompt_token_ids_hash,
+    ) {
         return Err(Base0FpIntervalError::PromptIdsAreNotTheJobs);
     }
     // **The sentinel refuses by name.** A class that registers no state chunk map takes no
@@ -1053,8 +1066,9 @@ pub fn base0_open_fp_interval_chunkless_v1(
     index: u32,
     prompt_token_ids: &[u32],
     family_checkpoint_interval: u32,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<Vec<u8>, Base0FpIntervalError> {
-    let bytes = base0_open_fp_interval_v1(material, index, prompt_token_ids, family_checkpoint_interval)?;
+    let bytes = base0_open_fp_interval_v1(material, index, prompt_token_ids, family_checkpoint_interval, prompt_ids_form)?;
     let chunked = Base0FpIntervalOpeningV1::decode_v1(&bytes)?;
     Base0FpIntervalOpeningV2::from_chunked_v1(&chunked).encode_v1()
 }
@@ -1183,6 +1197,7 @@ pub fn base0_open_fp_interval_sparse_v1<K: Base0FpIntervalKernelsV1>(
     prompt_token_ids: &[u32],
     family_checkpoint_interval: u32,
     kernels: &K,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<Vec<u8>, Base0FpIntervalError> {
     base0_open_fp_interval_sparse_capped_v1(
         material,
@@ -1191,6 +1206,7 @@ pub fn base0_open_fp_interval_sparse_v1<K: Base0FpIntervalKernelsV1>(
         family_checkpoint_interval,
         PALW_STEP_LEG_MAX_LEAVES,
         kernels,
+        prompt_ids_form,
     )
 }
 
@@ -1203,6 +1219,7 @@ pub fn base0_open_fp_interval_sparse_capped_v1<K: Base0FpIntervalKernelsV1>(
     family_checkpoint_interval: u32,
     max_step_leaf_count: u64,
     kernels: &K,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<Vec<u8>, Base0FpIntervalError> {
     let binding = &material.binding;
     let profile = &binding.shape_profile;
@@ -1210,7 +1227,11 @@ pub fn base0_open_fp_interval_sparse_capped_v1<K: Base0FpIntervalKernelsV1>(
 
     // The ids are an INPUT on this lane and are refused unless they are the job's — the dense
     // route's rule, for the dense route's reason.
-    if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != ctx.prompt_token_ids_hash {
+    if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+        prompt_ids_form,
+        prompt_token_ids,
+        &ctx.prompt_token_ids_hash,
+    ) {
         return Err(Base0FpIntervalError::PromptIdsAreNotTheJobs);
     }
     if profile.state_chunk_map_id == Hash64::default() && index > 0 {
@@ -1571,6 +1592,7 @@ pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
     max_step_leaf_count: u64,
     state: Option<&crate::fp_recompute::Base0FpSeatStateV1>,
     kernels: &K,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<(Base0FpIntervalOpeningV2, crate::legs::Base0StepTilesV1), String> {
     let any = base0_fp_interval_opening_decode_any_v1(opening_bytes).map_err(|e| format!("the opening does not decode: {e:?}"))?;
     let carried = match &any {
@@ -1593,7 +1615,11 @@ pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
     }
     let profile = &binding.shape_profile;
     let ctx = &binding.job_context;
-    if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != ctx.prompt_token_ids_hash {
+    if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+        prompt_ids_form,
+        prompt_token_ids,
+        &ctx.prompt_token_ids_hash,
+    ) {
         return Err("the prompt is not the one the opening's context commits to".to_string());
     }
     let step_leaf_count = base0_fp_binding_step_space_v1(binding, max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
@@ -1658,6 +1684,7 @@ pub fn base0_verify_fp_interval_opening_v1<K: Base0FpIntervalKernelsV1>(
     work_leaves: u64,
     family_checkpoint_interval: u32,
     kernels: &K,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> PalwFpIntervalVerdictV1 {
     base0_verify_fp_interval_opening_with_state_capped_v1(
         opening_bytes,
@@ -1669,6 +1696,7 @@ pub fn base0_verify_fp_interval_opening_v1<K: Base0FpIntervalKernelsV1>(
         PALW_STEP_LEG_MAX_LEAVES,
         None,
         kernels,
+        prompt_ids_form,
     )
     .to_consensus_v1()
 }
@@ -1685,6 +1713,7 @@ pub fn base0_verify_fp_interval_opening_capped_v1<K: Base0FpIntervalKernelsV1>(
     family_checkpoint_interval: u32,
     max_step_leaf_count: u64,
     kernels: &K,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> PalwFpIntervalVerdictV1 {
     base0_verify_fp_interval_opening_with_state_capped_v1(
         opening_bytes,
@@ -1696,6 +1725,7 @@ pub fn base0_verify_fp_interval_opening_capped_v1<K: Base0FpIntervalKernelsV1>(
         max_step_leaf_count,
         None,
         kernels,
+        prompt_ids_form,
     )
     .to_consensus_v1()
 }
@@ -1777,6 +1807,7 @@ pub fn base0_verify_fp_interval_opening_with_state_v1<K: Base0FpIntervalKernelsV
     family_checkpoint_interval: u32,
     state: Option<&crate::fp_recompute::Base0FpSeatStateV1>,
     kernels: &K,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Base0FpIntervalSeatVerdictV1 {
     base0_verify_fp_interval_opening_with_state_capped_v1(
         opening_bytes,
@@ -1788,6 +1819,7 @@ pub fn base0_verify_fp_interval_opening_with_state_v1<K: Base0FpIntervalKernelsV
         PALW_STEP_LEG_MAX_LEAVES,
         state,
         kernels,
+        prompt_ids_form,
     )
 }
 
@@ -1810,6 +1842,7 @@ pub fn base0_verify_fp_interval_opening_with_state_capped_v1<K: Base0FpIntervalK
     max_step_leaf_count: u64,
     state: Option<&crate::fp_recompute::Base0FpSeatStateV1>,
     kernels: &K,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Base0FpIntervalSeatVerdictV1 {
     // Bytes that are not this family's are bytes this seat cannot check — never an accusation.
     let Ok(any) = base0_fp_interval_opening_decode_any_v1(opening_bytes) else {
@@ -1853,7 +1886,11 @@ pub fn base0_verify_fp_interval_opening_with_state_capped_v1<K: Base0FpIntervalK
     }
     let profile = &binding.shape_profile;
     let ctx = &binding.job_context;
-    if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != ctx.prompt_token_ids_hash {
+    if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+        prompt_ids_form,
+        prompt_token_ids,
+        &ctx.prompt_token_ids_hash,
+    ) {
         return Base0FpIntervalSeatVerdictV1::Mismatch;
     }
     // **A limit is not a verdict.** A binding priced ABOVE the ladder this seat was handed is a
@@ -2194,6 +2231,7 @@ mod tests {
             geometry.vocab_size as usize,
             prefill,
             decode,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         );
         (artifact, profile, ctx, prompt)
     }
@@ -2266,8 +2304,14 @@ mod tests {
             .interval_count;
         assert!(count > 1, "the fixture must exercise both the genesis and the anchored arms");
         for index in 0..count {
-            let opening = base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
-                .unwrap_or_else(|e| panic!("interval {index} opens: {e}"));
+            let opening = base0_open_fp_interval_v1(
+                &material,
+                index,
+                &ids,
+                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .unwrap_or_else(|e| panic!("interval {index} opens: {e}"));
             assert_eq!(
                 base0_verify_fp_interval_opening_v1(
                     &opening,
@@ -2277,6 +2321,7 @@ mod tests {
                     binding.step_leaf_count,
                     PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
                     &FloorKernels(&artifact),
+                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                 ),
                 PalwFpIntervalVerdictV1::Valid,
                 "interval {index} of an honest capture replays exactly"
@@ -2299,12 +2344,28 @@ mod tests {
         let leaves = binding.step_leaf_count;
         let interval = PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
         let verify = |bytes: &[u8], index: u32| {
-            base0_verify_fp_interval_opening_v1(bytes, claim, index, &ids, leaves, interval, &FloorKernels(&artifact))
+            base0_verify_fp_interval_opening_v1(
+                bytes,
+                claim,
+                index,
+                &ids,
+                leaves,
+                interval,
+                &FloorKernels(&artifact),
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
         };
 
         // (1) The last anchored interval, opened honestly, then one byte of a COMMITTED ROW moved.
         let index = Base0FpIntervalGeometryV1::from_binding_v1(binding, interval).expect("a geometry").interval_count - 1;
-        let opening = base0_open_fp_interval_v1(&material, index, &ids, interval).expect("opens");
+        let opening = base0_open_fp_interval_v1(
+            &material,
+            index,
+            &ids,
+            interval,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect("opens");
         assert_eq!(verify(&opening, index), PalwFpIntervalVerdictV1::Valid);
 
         let mut decoded = Base0FpIntervalOpeningV1::decode_v1(&opening).expect("decodes");
@@ -2327,13 +2388,31 @@ mod tests {
         assert_eq!(verify(&opening, index.saturating_sub(1)), PalwFpIntervalVerdictV1::Mismatch);
         let stranger = PalwClaimRootsV1 { execution_root: Hash64::from_u64_word(9), ..claim };
         assert_eq!(
-            base0_verify_fp_interval_opening_v1(&opening, stranger, index, &ids, leaves, interval, &FloorKernels(&artifact)),
+            base0_verify_fp_interval_opening_v1(
+                &opening,
+                stranger,
+                index,
+                &ids,
+                leaves,
+                interval,
+                &FloorKernels(&artifact),
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            ),
             PalwFpIntervalVerdictV1::Mismatch
         );
         // …and against the wrong PRICE, which is the same accusation: a claim is priced by the
         // leaf count its binding carries (ADR-0074 Decision 5).
         assert_eq!(
-            base0_verify_fp_interval_opening_v1(&opening, claim, index, &ids, leaves + 1, interval, &FloorKernels(&artifact)),
+            base0_verify_fp_interval_opening_v1(
+                &opening,
+                claim,
+                index,
+                &ids,
+                leaves + 1,
+                interval,
+                &FloorKernels(&artifact),
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            ),
             PalwFpIntervalVerdictV1::Mismatch
         );
     }
@@ -2394,9 +2473,25 @@ mod tests {
         let leaf_count = binding.step_leaf_count;
         material.0 = binding;
 
-        let opening = base0_open_fp_interval_v1(&material, index, &ids, interval).expect("a liar still opens its own capture");
+        let opening = base0_open_fp_interval_v1(
+            &material,
+            index,
+            &ids,
+            interval,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect("a liar still opens its own capture");
         assert_eq!(
-            base0_verify_fp_interval_opening_v1(&opening, claim, index, &ids, leaf_count, interval, &FloorKernels(&artifact)),
+            base0_verify_fp_interval_opening_v1(
+                &opening,
+                claim,
+                index,
+                &ids,
+                leaf_count,
+                interval,
+                &FloorKernels(&artifact),
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            ),
             PalwFpIntervalVerdictV1::Fault { leaf_index: target },
             "the seat returns the leaf a court is opened at, and convicts nobody"
         );
@@ -2457,7 +2552,14 @@ mod tests {
         let measure = |decode: u32| -> (usize, usize, usize, usize, usize, u64) {
             let (material, _, ids, _) = floor_material(3, decode);
             let count = Base0FpIntervalGeometryV1::from_binding_v1(&material.0, interval).expect("a geometry").interval_count;
-            let bytes = base0_open_fp_interval_v1(&material, count - 1, &ids, interval).expect("opens");
+            let bytes = base0_open_fp_interval_v1(
+                &material,
+                count - 1,
+                &ids,
+                interval,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .expect("opens");
             let opened = Base0FpIntervalOpeningV1::decode_v1(&bytes).expect("decodes");
             let state: usize = opened.anchor.as_ref().map(|a| a.chunks.iter().map(Vec::len).sum()).unwrap_or(0);
             let capture = borsh::to_vec(&material).expect("the capture encodes").len();
@@ -2725,10 +2827,22 @@ mod tests {
         let geometry =
             Base0FpIntervalGeometryV1::from_binding_v1(binding, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("a geometry");
         for index in 0..geometry.interval_count {
-            let chunked = base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
-                .expect("the chunked form opens");
-            let flat = base0_open_fp_interval_chunkless_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
-                .expect("the flat form opens");
+            let chunked = base0_open_fp_interval_v1(
+                &material,
+                index,
+                &ids,
+                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .expect("the chunked form opens");
+            let flat = base0_open_fp_interval_chunkless_v1(
+                &material,
+                index,
+                &ids,
+                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .expect("the flat form opens");
             let state = geometry.anchor_covered_call(index).map(|covered| seat_state(&material, &artifact, &ids, covered));
             let with_history = base0_verify_fp_interval_opening_with_state_v1(
                 &chunked,
@@ -2739,6 +2853,7 @@ mod tests {
                 PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
                 None,
                 &FloorKernels(&artifact),
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             );
             let recomputed = base0_verify_fp_interval_opening_with_state_v1(
                 &flat,
@@ -2749,6 +2864,7 @@ mod tests {
                 PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
                 state.as_ref(),
                 &FloorKernels(&artifact),
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             );
             assert_eq!(with_history, Base0FpIntervalSeatVerdictV1::Valid, "interval {index}, the carried form");
             assert_eq!(recomputed, Base0FpIntervalSeatVerdictV1::Valid, "interval {index}, from the seat's own state");
@@ -2810,8 +2926,14 @@ mod tests {
             anchor: lying.job_context.job_id,
         };
         let material: Base0RetainedMaterialV1 = (lying, honest.1.clone(), honest.2.clone(), honest.3.clone(), chunks);
-        let opening = base0_open_fp_interval_chunkless_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
-            .expect("the liar serves an opening");
+        let opening = base0_open_fp_interval_chunkless_v1(
+            &material,
+            index,
+            &ids,
+            PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect("the liar serves an opening");
         let state = seat_state(&material, &artifact, &ids, covered);
         let verdict = base0_verify_fp_interval_opening_with_state_v1(
             &opening,
@@ -2822,6 +2944,7 @@ mod tests {
             PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
             Some(&state),
             &FloorKernels(&artifact),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         );
         match verdict {
             Base0FpIntervalSeatVerdictV1::CheckpointRootMismatch { checkpoint_index, covered_decode_call, committed, recomputed } => {
@@ -2848,10 +2971,22 @@ mod tests {
         let measure = |prefill: u32, decode: u32| {
             let (material, _claim, ids, _artifact) = floor_material(prefill, decode);
             let index = 1;
-            let chunked = base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
-                .expect("the chunked form opens");
-            let flat = base0_open_fp_interval_chunkless_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1)
-                .expect("the flat form opens");
+            let chunked = base0_open_fp_interval_v1(
+                &material,
+                index,
+                &ids,
+                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .expect("the chunked form opens");
+            let flat = base0_open_fp_interval_chunkless_v1(
+                &material,
+                index,
+                &ids,
+                PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .expect("the flat form opens");
             let decoded = Base0FpIntervalOpeningV2::decode_v1(&flat).expect("the flat form decodes");
             let state_bytes: usize = Base0FpIntervalOpeningV1::decode_v1(&chunked)
                 .expect("decodes")
@@ -2942,8 +3077,14 @@ mod tests {
         let (material, claim, ids, artifact) = floor_material(3, 4);
         let binding = &material.0;
         let index = 1;
-        let chunked =
-            base0_open_fp_interval_v1(&material, index, &ids, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1).expect("the chunked form opens");
+        let chunked = base0_open_fp_interval_v1(
+            &material,
+            index,
+            &ids,
+            PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect("the chunked form opens");
         let mut decoded = Base0FpIntervalOpeningV1::decode_v1(&chunked).expect("decodes");
         // The class declares the tiled map — Decision 4's graph-v5 declaration.
         decoded.binding.shape_profile.state_chunk_map_id =
@@ -2960,6 +3101,7 @@ mod tests {
                 PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
                 Some(&state),
                 &FloorKernels(&artifact),
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             ),
             Base0FpIntervalSeatVerdictV1::HistoryNotAdmissible,
             "a class whose map is the tiled one is not served the history, and a seat that took it \
@@ -3007,8 +3149,14 @@ mod tests {
             .expect("a valid shape")
             .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
             .expect("the derived store is sorted and unique");
-        let (ctx, prompt) =
-            crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(0x0000_82C1), geometry.vocab_size as usize, 3, 4);
+        let (ctx, prompt) = crate::produce::base0_rc_job_v1(
+            &profile,
+            Hash64::from_u64_word(0x0000_82C1),
+            geometry.vocab_size as usize,
+            3,
+            4,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
         let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
         let plan = engine.plan_from_profile(&profile).expect("the v5 declaration is this engine's program");
         let run = crate::qwen25_a16_backend::a16_execute_free_prompt_streaming_v1(
@@ -3111,8 +3259,15 @@ mod tests {
         let claim = PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor: ctx.job_id };
         let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
         for index in 0..geometry.interval_count {
-            let opened = base0_open_fp_interval_sparse_v1(&material, index, &ids, interval, &kernels)
-                .unwrap_or_else(|e| panic!("interval {index} must open from a fold that retained nothing: {e}"));
+            let opened = base0_open_fp_interval_sparse_v1(
+                &material,
+                index,
+                &ids,
+                interval,
+                &kernels,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .unwrap_or_else(|e| panic!("interval {index} must open from a fold that retained nothing: {e}"));
             // A folded class is served FLAT: the anchor is named, never carried.
             assert!(
                 opened.starts_with(&PALW_BASE0_FP_INTERVAL_MAGIC_V2),
@@ -3156,6 +3311,7 @@ mod tests {
                     interval,
                     state.as_ref(),
                     &kernels,
+                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                 ),
                 Base0FpIntervalSeatVerdictV1::Valid,
                 "interval {index}: a seat holding its own state must license an honest graph-v5 opening"
@@ -3298,7 +3454,14 @@ mod tests {
         let mut anchored = 0usize;
         let mut previous: Option<(Base0FpIntervalOpeningV2, crate::legs::Base0StepTilesV1)> = None;
         for index in 0..geometry.interval_count {
-            let opening_bytes = base0_open_fp_interval_v1(&material, index, &ids, interval).expect("the interval opens");
+            let opening_bytes = base0_open_fp_interval_v1(
+                &material,
+                index,
+                &ids,
+                interval,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .expect("the interval opens");
             let (opening, replay) = base0_fp_challenger_replay_tiles_capped_v1(
                 &opening_bytes,
                 claim,
@@ -3309,6 +3472,7 @@ mod tests {
                 cap,
                 None,
                 &FloorKernels(&artifact),
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             )
             .expect("the challenger replays the interval");
             let first = opening.range.first_leaf_index;
@@ -3482,6 +3646,7 @@ mod the_rulesets_ladder {
             row.artifact_shape.vocab,
             prefill,
             decode,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         );
         let step_leaf_count =
             kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&row.profile, &job_context, COURT_MAX_STEP_LEAVES)
@@ -3606,11 +3771,30 @@ mod the_rulesets_ladder {
         eprintln!("the graph-v5 fixture prices {leaves} leaves; licensed at {wide}, refused at {narrow}");
 
         // The honest opening, produced at the wide ladder.
-        let opened = base0_open_fp_interval_sparse_capped_v1(&material, 0, &ids, interval, wide, &kernels)
-            .expect("an honest graph-v5 interval opens at the ruleset's ladder");
+        let opened = base0_open_fp_interval_sparse_capped_v1(
+            &material,
+            0,
+            &ids,
+            interval,
+            wide,
+            &kernels,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect("an honest graph-v5 interval opens at the ruleset's ladder");
 
         assert_eq!(
-            base0_verify_fp_interval_opening_with_state_capped_v1(&opened, claim, 0, &ids, leaves, interval, wide, None, &kernels),
+            base0_verify_fp_interval_opening_with_state_capped_v1(
+                &opened,
+                claim,
+                0,
+                &ids,
+                leaves,
+                interval,
+                wide,
+                None,
+                &kernels,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            ),
             Base0FpIntervalSeatVerdictV1::Valid,
             "a seat handed the ladder the class was admitted under must license its honest opening"
         );
@@ -3622,13 +3806,32 @@ mod the_rulesets_ladder {
             Err(Base0FpIntervalError::LeafCountOutOfRange { got: leaves, max: narrow }),
         );
         assert_eq!(
-            base0_verify_fp_interval_opening_with_state_capped_v1(&opened, claim, 0, &ids, leaves, interval, narrow, None, &kernels),
+            base0_verify_fp_interval_opening_with_state_capped_v1(
+                &opened,
+                claim,
+                0,
+                &ids,
+                leaves,
+                interval,
+                narrow,
+                None,
+                &kernels,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            ),
             Base0FpIntervalSeatVerdictV1::Unverifiable,
             "a seat whose ladder cannot hold the class declines to replay it — a limit is not a verdict, so never Mismatch"
         );
         // The executor cannot serve one either, and says so with the numbers.
         assert_eq!(
-            base0_open_fp_interval_sparse_capped_v1(&material, 0, &ids, interval, narrow, &kernels),
+            base0_open_fp_interval_sparse_capped_v1(
+                &material,
+                0,
+                &ids,
+                interval,
+                narrow,
+                &kernels,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            ),
             Err(Base0FpIntervalError::LeafCountOutOfRange { got: leaves, max: narrow }),
         );
     }
