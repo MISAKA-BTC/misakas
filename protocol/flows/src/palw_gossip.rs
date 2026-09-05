@@ -918,6 +918,25 @@ struct PalwOpeningLane {
     in_flight: Mutex<std::collections::HashSet<(Hash64, u32)>>,
 }
 
+/// **The in-flight mark is cleared whatever happens to the serving future.**
+///
+/// It used to be cleared on the line after the `.await`, which never runs when the flow is dropped
+/// — the asking peer disconnects, or its request flow gives up while the opener is still folding.
+/// Measured on testnet-11: two `(claim, interval)` pairs leaked that way, every later ask for them
+/// was refused as `Throttled` — which is logged at debug, so the lane went silent rather than
+/// wrong — and a seat asked into it for forty minutes. Nothing but a restart could clear it, and a
+/// restart also threw away the openings the node had already computed.
+struct InFlightMark<'a> {
+    lane: &'a PalwOpeningLane,
+    key: (Hash64, u32),
+}
+
+impl Drop for InFlightMark<'_> {
+    fn drop(&mut self) {
+        self.lane.in_flight.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.key);
+    }
+}
+
 impl Default for PalwOpeningLane {
     fn default() -> Self {
         Self {
@@ -1108,8 +1127,10 @@ impl PalwGossipCenter {
             self.refund_serve_budget(peer, reservation);
             return Err(PalwServeRefusalV1::Throttled);
         }
+        // Cleared however this future ends — see `InFlightMark`. The blocking task itself is not
+        // cancellable, so the opening still finishes and still reaches the panel's own cache.
+        let _mark = InFlightMark { lane: &self.openings, key: (claim, interval_index) };
         let opened = tokio::task::spawn_blocking(move || resolver(claim, interval_index)).await;
-        self.openings.in_flight.lock().unwrap().remove(&(claim, interval_index));
         let Some(bytes) = opened.ok().flatten() else {
             self.refund_serve_budget(peer, reservation);
             return Err(PalwServeRefusalV1::NotHeld);
