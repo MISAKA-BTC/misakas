@@ -3539,7 +3539,23 @@ impl PalwPanelService {
             let backend = self.resolve_backend(&session, payload.material.job.class_id, facts.artifact_root).ok()?;
             // The ids the interval consumed: the user's own, hash-bound to the job by
             // `palw_fp_capture_decode_v1` before this line is reached. Never logged (SA-7).
-            return backend.open_fp_interval(&payload.capture, interval_index, &payload.material.prompt_token_ids).ok();
+            let started = std::time::Instant::now();
+            return match backend.open_fp_interval(&payload.capture, interval_index, &payload.material.prompt_token_ids) {
+                Ok(opening) => {
+                    info!(
+                        "[{PALW_PANEL}] claim {claim}: opened interval {interval_index} of the free-prompt capture ({} bytes served, {:.0?})",
+                        opening.len(),
+                        started.elapsed()
+                    );
+                    Some(opening)
+                }
+                Err(e) => {
+                    // A silent refusal here left a 300-token claim unanswered for 35 minutes on the
+                    // devnet with no line on either side; the reason is the operator's to read.
+                    info!("[{PALW_PANEL}] claim {claim}: interval {interval_index} of the free-prompt capture does not open ({:.0?}): {e}", started.elapsed());
+                    None
+                }
+            };
         }
         // A raw family capture — the attempt lane's retention (ADR-0084 Decision 4). The prompt is
         // the anchor's derivation, which the asking seat re-derives on its own; an opening over

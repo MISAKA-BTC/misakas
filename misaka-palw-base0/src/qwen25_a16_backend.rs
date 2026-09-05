@@ -2795,3 +2795,45 @@ mod free_prompt_tests {
             .expect("the derived floor declares no tokenizer and may");
     }
 }
+
+/// A diagnostic, never part of the suite: open intervals of a staged free-prompt capture
+/// (`MISAKA_PROBE_MATERIAL`, FPC1) with the real artifact (`MISAKA_PALW_ARTIFACT`) and report
+/// what the opener says, interval by interval (`MISAKA_PROBE_INTERVALS`, comma-separated).
+#[cfg(test)]
+mod probe_open_interval {
+    #[test]
+    #[ignore]
+    fn open_intervals_of_a_staged_capture() {
+        use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+        let Ok(material_path) = std::env::var("MISAKA_PROBE_MATERIAL") else { return };
+        let artifact_path = std::env::var("MISAKA_PALW_ARTIFACT").expect("MISAKA_PALW_ARTIFACT");
+        let indices: Vec<u32> = std::env::var("MISAKA_PROBE_INTERVALS")
+            .unwrap_or_else(|_| "0".into())
+            .split(',')
+            .map(|s| s.trim().parse().expect("an interval index"))
+            .collect();
+        let started = std::time::Instant::now();
+        let bytes = std::fs::read(&material_path).expect("the material reads");
+        let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes).expect("an FPC1 capture");
+        eprintln!("material {} bytes, capture {} bytes, prompt ids {}, class {} ({:.0?})", bytes.len(), payload.capture.len(), payload.material.prompt_token_ids.len(), payload.material.job.class_id, started.elapsed());
+        let retention = crate::produce::base0_material_decode_any_v1(&payload.capture).expect("the capture decodes");
+        let binding = match &retention {
+            crate::produce::Base0RetentionV1::Folded(m) => m.binding.clone(),
+            crate::produce::Base0RetentionV1::Dense(m) => m.0.clone(),
+        };
+        eprintln!("binding: leaves {} checkpoints {} ctx prefill {} decode {} ({:.0?})", binding.step_leaf_count, binding.checkpoint_count, binding.job_context.declared_prefill_tokens, binding.job_context.exact_decode_tokens, started.elapsed());
+        let file = std::fs::read(&artifact_path).expect("the artifact reads");
+        let artifact = crate::artifact::decode_artifact_file_v1(&file).expect("the artifact decodes");
+        eprintln!("artifact decoded ({:.0?})", started.elapsed());
+        let backend = super::Qwen25A16Backend::new(std::sync::Arc::new(artifact), b"devnet".to_vec(), binding.shape_profile.clone(), (63, 2))
+            .expect("the backend builds")
+            .with_step_ladder_cap(1 << 26);
+        for index in indices {
+            let t = std::time::Instant::now();
+            match backend.open_fp_interval(&payload.capture, index, &payload.material.prompt_token_ids) {
+                Ok(opening) => eprintln!("interval {index}: opened, {} bytes ({:.0?})", opening.len(), t.elapsed()),
+                Err(e) => eprintln!("interval {index}: does not open ({:.0?}): {e}", t.elapsed()),
+            }
+        }
+    }
+}
