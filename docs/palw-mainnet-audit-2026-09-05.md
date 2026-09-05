@@ -144,6 +144,39 @@ alarm so the gap can neither close nor widen silently.
 
 ---
 
+## Follow-through (same day, second pass)
+
+The open list below was worked a second time with one rule: fix inside the decision that governs
+the item, never change the decision. Items marked **closed** are fixed in the tree; **bounded**
+means the damage is capped but the design question stands; **open** means the fix is a design or
+operator decision this pass does not make. Everything that touches a live chain's validity sits
+behind a fence testnet-11 leaves dormant and a card states from genesis — testnet-11 reaches each
+as a scheduled height (ADR-0083's path (a)) or a re-mint, which is the operator's call.
+
+| # | Status | What landed | Commit |
+|---|---|---|---|
+| O-1 | **closed** | the court's walkers open against the ruleset's ladder past `palw_context_ladder`; the cap is resolved once, at the block's DAA | `1cbcb1f6` |
+| O-2 | **bounded** | a carriage whose frontier stands above the pruning point's own blue score is refused before a byte is rebuilt; the frontier is still not re-derived (the claim that set it may be pruned) | this pass |
+| O-4 | **closed on a card** | `palw_certification_rent` and `palw_chunk_cap_charge` stated from genesis on a card; the repairs existed behind fences no preset armed | this pass |
+| O-7 | **closed, fenced** | `algo_id_is_priced_by_bits_v2` and `Params::palw_receipt_rows_unpriced` — a receipt row leaves the difficulty count; refused unless ADR-0083's first fence is armed at or before it | this pass |
+| O-12 | **closed** | `BondRegistered` bounds and prices `capable_classes` under `palw_capability_bound`, by the same function the declaration arm uses | this pass |
+| O-14 | **closed on a card** | a card certifies the free-prompt lane of the classes it registers; testnet-11's pinned set (names 71bbb755…, omits 4277d84f…) is recorded by test and closable there by an on-chain `ClassLaneCertified` | this pass |
+| O-16 | **closed** | declarations offered with a pruning-point state are bounded by the registered class set, one each | this pass |
+| O-17 | **closed** | a per-peer material relay budget in bytes per window, which the claim id cannot move | this pass |
+| O-18 | **closed** | the seat compares leaf counts against the claim's price only when the claim prices its work — one predicate, four sites | this pass |
+| O-3 | open | the open-court concurrency cap is a design choice (one answer to "how much court may one block ask for"); a per-bond bound is a rule change the design has not made | — |
+| O-5, O-6 | open | `output_root` pinned by replay rather than admission, and the block-hash sortition, are ADR-0072/0074 decisions; changing what is pinned is a policy change | — |
+| O-8 | open | no shipped binary constructs `CourtAttnRootClaimed`, so an honest producer of a fused class is convicted by silence at Terminal; the rule is ADR-0082's and the missing half is the responder's software, a feature rather than a patch | — |
+| O-9, O-10, O-11 | open | ADR-0065 D4's abstention, the post-genesis bond floor and the share price are economics decisions; the numbers are the operator's to choose before a mint | — |
+| O-13 | open | attempt blue work as a constant beside a `bits`-priced PoW is ADR-0068 F2 | — |
+| O-15 | open in the tail | the widened coinbase cap absorbs a real validator set with an ordinary mergeset; a maximal mergeset plus more than 16 paid validators still overflows, and bounding the fan-out per block is ADR-0018 §E's to decide | — |
+
+The four fences a card now states and testnet-11 does not (`palw_context_ladder`,
+`palw_receipt_rows_unpriced`, `palw_certification_rent`, `palw_chunk_cap_charge`) are each a
+consensus rule on the live chain. Arming them there is one coordinated flag day per fence or one
+re-mint for all; the fork-id gate lists the scheduled heights so an un-upgraded peer is refused at
+the handshake rather than at consensus.
+
 ## Open — blocks a mainnet card
 
 | # | What | Where |
