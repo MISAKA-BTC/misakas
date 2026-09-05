@@ -256,6 +256,21 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **ADR-0087 Decision 8: a class's market as the tip holds it.** `None` when the class is not
+    /// registered; a class with no market row yet reads as an unopened market (the whole supply in
+    /// the curve, no MSK) beside its status, so a reader can quote before the first move.
+    fn palw_model_market_v1(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+    ) -> Option<(crate::palw_model_market_v1::PalwModelMarketV1, bool, crate::palw_state_v2::PalwClassStatusV2)> {
+        None
+    }
+
+    /// ADR-0087 Decision 8: every position a holder has at the tip, by class.
+    fn palw_model_positions_v1(&self, _holder: kaspa_hashes::Hash64) -> Vec<(kaspa_hashes::Hash64, u64)> {
+        Vec::new()
+    }
+
     fn get_virtual_bits(&self) -> u32 {
         unimplemented!()
     }

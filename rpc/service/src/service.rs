@@ -939,6 +939,56 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         })
     }
 
+    async fn get_palw_model_market_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwModelMarketRequest,
+    ) -> RpcResult<GetPalwModelMarketResponse> {
+        use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1, PALW_MODEL_SUPPLY_UNITS_V1};
+        let class_id = request
+            .class_id
+            .parse::<kaspa_hashes::Hash64>()
+            .map_err(|_| RpcError::General(format!("class id '{}' is not a 128-hex Hash64", request.class_id)))?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some((market, opened, status)) = session.palw_model_market_v1(class_id) else {
+            return Ok(GetPalwModelMarketResponse { class_id: class_id.to_string(), ..Default::default() });
+        };
+        Ok(GetPalwModelMarketResponse {
+            found: true,
+            class_id: class_id.to_string(),
+            opened,
+            opened_daa: market.opened_daa,
+            msk_reserve: market.msk_reserve,
+            position_units: market.position_units,
+            sold_units: market.sold_units,
+            burned_sompi: market.burned_sompi,
+            registrant_paid_sompi: market.registrant_paid_sompi,
+            closed_to_buys: market.closed_to_buys || !matches!(status, kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Active),
+            price_sompi_per_position: market.price_sompi_per_position_v1(),
+            supply_units: PALW_MODEL_SUPPLY_UNITS_V1,
+            virtual_sompi: PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1,
+            class_status: format!("{status:?}"),
+        })
+    }
+
+    async fn get_palw_model_positions_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwModelPositionsRequest,
+    ) -> RpcResult<GetPalwModelPositionsResponse> {
+        let holder = request
+            .holder
+            .parse::<kaspa_hashes::Hash64>()
+            .map_err(|_| RpcError::General(format!("holder '{}' is not a 128-hex Hash64", request.holder)))?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let positions = session
+            .palw_model_positions_v1(holder)
+            .into_iter()
+            .map(|(class_id, units)| RpcPalwModelPosition { class_id: class_id.to_string(), units })
+            .collect();
+        Ok(GetPalwModelPositionsResponse { holder: holder.to_string(), positions })
+    }
+
     async fn get_palw_producer_facts_call(
         &self,
         _connection: Option<&DynRpcConnection>,

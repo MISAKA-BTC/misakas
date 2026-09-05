@@ -1042,6 +1042,11 @@ pub struct Params {
     /// this is a fence and not a bug fix: nodes on either side would grade the same proof
     /// differently. Read it through `palw_court_ladder_fence` only.
     pub palw_court_ladder: Option<ForkActivation>,
+    /// **ADR-0087 Decision 6 — the model market is a consensus rule armed by activation.** `None`
+    /// on every shipped preset: below it `ModelBuy`/`ModelSell` are refused by name at acceptance
+    /// and no market exists; past it the fold opens a class's market on its first buy. The
+    /// fingerprint moves only where this is set. Read through `palw_model_market_fence` only.
+    pub palw_model_market: Option<ForkActivation>,
     /// **ADR-0075 Decision 14 — only a chunk that can complete a group may spend the block's
     /// certification cap.** `None` on every shipped preset, so the behaviour is byte-identical to
     /// not having the field.
@@ -2207,6 +2212,10 @@ impl Params {
         if self.palw_court_ladder == Some(ForkActivation::never()) {
             self.palw_court_ladder = None;
         }
+        // ADR-0087 Decision 6, a bare fence: the same collapse, for the same reason.
+        if self.palw_model_market == Some(ForkActivation::never()) {
+            self.palw_model_market = None;
+        }
         // ADR-0075 D14, a bare fence: the D2 collapse, for the D2 reason.
         if self.palw_chunk_cap_charge == Some(ForkActivation::never()) {
             self.palw_chunk_cap_charge = None;
@@ -2391,6 +2400,20 @@ impl Params {
     /// Is ADR-0084 U-08's court ladder in force at `daa_score`? `false` on every shipped preset.
     pub fn palw_court_ladder_active_at(&self, daa_score: u64) -> bool {
         matches!(self.palw_court_ladder_fence(), Some(fence) if fence.is_active(daa_score))
+    }
+
+    /// ADR-0087 Decision 6's fence with the mode condition folded in — `Some` only on a
+    /// `ConsensusV2` network that has armed it. The ONE place the model market is decided.
+    pub fn palw_model_market_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_model_market) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Is ADR-0087's model market in force at `daa_score`? `false` on every shipped preset.
+    pub fn palw_model_market_active_at(&self, daa_score: u64) -> bool {
+        matches!(self.palw_model_market_fence(), Some(fence) if fence.is_active(daa_score))
     }
 
     /// ADR-0082 Decision 3's fence with the mode condition already folded in — `Some` only on a
@@ -2682,6 +2705,7 @@ impl Params {
             palw_uncertified_weightless,
             palw_da_court,
             palw_court_ladder,
+            palw_model_market,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -2837,6 +2861,14 @@ impl Params {
         }
         // ADR-0084 U-08. A pure fence with no payload, the D2 shape again.
         match palw_court_ladder.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0087 Decision 6. A pure fence with no payload, the D2 shape again.
+        match palw_model_market.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -3121,6 +3153,7 @@ impl Params {
             palw_uncertified_weightless,
             palw_da_court,
             palw_court_ladder,
+            palw_model_market,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -3360,6 +3393,11 @@ impl Params {
         // ADR-0084 U-08: the same contract — absent is byte-identical to a build without the field.
         if let Some(activation) = palw_court_ladder {
             h.write(b"palw_court_ladder");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0087 Decision 6: the same contract.
+        if let Some(activation) = palw_model_market {
+            h.write(b"palw_model_market");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0075 D14, Some-only like its siblings: an unset fence writes nothing, so every
@@ -3685,6 +3723,7 @@ impl Params {
             palw_uncertified_weightless: self.palw_uncertified_weightless,
             palw_da_court: self.palw_da_court,
             palw_court_ladder: self.palw_court_ladder,
+            palw_model_market: self.palw_model_market,
             palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
             palw_kary_court: self.palw_kary_court,
@@ -4613,6 +4652,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_uncertified_weightless: None,
     palw_da_court: None,
     palw_court_ladder: None,
+    palw_model_market: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -4765,6 +4805,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_uncertified_weightless: None,
     palw_da_court: None,
     palw_court_ladder: None,
+    palw_model_market: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -4899,6 +4940,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_uncertified_weightless: None,
     palw_da_court: None,
     palw_court_ladder: None,
+    palw_model_market: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -8543,6 +8585,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_uncertified_weightless: Some(ForkActivation::always()),
     palw_da_court: None,
     palw_court_ladder: None,
+    palw_model_market: None,
     palw_chunk_cap_charge: None,
     // ADR-0082 Decision 5: NOT armed. At the registered 512 row the flat prompt ids are 82,080
     // bytes against a one-carrier budget of 83,333, so the Merkle form buys nothing and arming it
@@ -10608,6 +10651,32 @@ mod consensus_params_id_tests {
 
         let mut other = MAINNET_PARAMS;
         other.palw_da_court = Some(ForkActivation::always());
+        assert_ne!(other.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
+    }
+
+    /// **ADR-0087 Decision 6's fence has the DA court's contract** and is independent of its
+    /// neighbours.
+    #[test]
+    fn the_model_market_fence_is_dormant_on_every_shipped_preset_and_costs_nothing_while_it_is() {
+        for (name, params) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("devnet", DEVNET_PARAMS), ("simnet", SIMNET_PARAMS)]
+        {
+            assert!(params.palw_model_market.is_none(), "{name}: every shipped preset must leave ADR-0087 dormant");
+            assert!(!params.palw_model_market_active_at(u64::MAX), "{name}: never in force while dormant");
+        }
+        let shipped = MAINNET_PARAMS;
+        let mut scheduled = MAINNET_PARAMS;
+        scheduled.palw_model_market = Some(ForkActivation::new(9_000_000));
+        assert_eq!(shipped.consensus_identity_id(), scheduled.consensus_identity_id(), "scheduled keeps the builds peers");
+        assert_ne!(shipped.consensus_params_id(), scheduled.consensus_params_id(), "…and is a visible commitment");
+        let mut at_genesis = MAINNET_PARAMS;
+        at_genesis.palw_model_market = Some(ForkActivation::always());
+        assert_ne!(shipped.consensus_identity_id(), at_genesis.consensus_identity_id(), "in force from block one is a rule");
+        let mut never_armed = MAINNET_PARAMS;
+        never_armed.palw_model_market = Some(ForkActivation::never());
+        assert_eq!(shipped.consensus_identity_id(), never_armed.consensus_identity_id(), "Some(never()) is absence");
+        let mut other = MAINNET_PARAMS;
+        other.palw_court_ladder = Some(ForkActivation::always());
         assert_ne!(other.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
     }
 

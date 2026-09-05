@@ -1257,6 +1257,38 @@ impl ConsensusApi for Consensus {
 
     /// ADR-0080 design A, on the node: the materialized tip, then the row itself. The tip read is
     /// the same snapshot every other `palw_*` answer here takes.
+    fn palw_model_market_v1(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+    ) -> Option<(
+        kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1,
+        bool,
+        kaspa_consensus_core::palw_state_v2::PalwClassStatusV2,
+    )> {
+        let state_params = match &self.config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => &bundle.state,
+            _ => return None,
+        };
+        let (_chain_point, state) = self.storage.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let class = state.class(&class_id)?;
+        let daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
+        match state.model_market(&class_id) {
+            Some(market) => Some((*market, true, class.status.clone())),
+            None => Some((kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1::open_v1(daa), false, class.status.clone())),
+        }
+    }
+
+    fn palw_model_positions_v1(&self, holder: kaspa_hashes::Hash64) -> Vec<(kaspa_hashes::Hash64, u64)> {
+        let state_params = match &self.config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => &bundle.state,
+            _ => return Vec::new(),
+        };
+        let Ok(Some((_chain_point, state))) = self.storage.palw_state_v2_store.read().load_tip_cached(state_params) else {
+            return Vec::new();
+        };
+        state.model_positions_of(&holder)
+    }
+
     fn palw_court_close_group_v1(
         &self,
         session_id: kaspa_hashes::Hash64,

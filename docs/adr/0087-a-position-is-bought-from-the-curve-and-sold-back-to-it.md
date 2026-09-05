@@ -121,14 +121,16 @@ everything else. CLI: `misaka palw model buy|sell|show`.
 
   | move | gross MSK | burn (5 %) | registrant (1 %) | net (94 %) | positions out / in | price after (MSK) |
   |---|---|---|---|---|---|---|
-  | buy | 1,000 | 50 | 10 | 940 → reserve | 48,454 out | 0.0376 |
-  | buy | 1,000 | 50 | 10 | 940 → reserve | 12,846 out | 0.0742 |
-  | sell all 61,300 | 3,014 from reserve | 151 | 30 | 2,833 paid | 61,300 in | 0.0100 |
+  | buy | 1,000 | 50 | 10 | 940 → reserve | 48,453 out | 0.0376 |
+  | buy | 1,000 | 50 | 10 | 940 → reserve | 16,824 out | 0.0576 |
+  | sell all 65,277 | 1,880 from reserve | 94 | 18.8 | 1,767.2 paid | 65,277 in | 0.0100 |
 
-  Two buys of 1,000 MSK and one sell return 2,833 MSK of the 2,000 paid in: the reserve is
-  1,880 after the buys and the curve pays out on its own price, so the last seller is paid from
-  the virtual reserve's slope, not from other holders — there is no last-out loss beyond fees and
-  slippage, and no first-in gain beyond the curve.
+  (Corrected with the implementation, §7: the design draft's rows read 12,846 out, 3,014 from the
+  reserve and 2,833 paid, which the curve cannot produce — a reserve of 1,880 pays at most 1,880.)
+  Two buys of 1,000 MSK and one sell of everything bought return 1,767.2 MSK of the 2,000 paid in:
+  when every unit comes back the curve's `x` returns to `V`, so the gross leg is exactly the
+  reserve — there is no last-out loss beyond the fees, and no first-in gain beyond the curve. A
+  partial sell is paid on the curve's slope at that point, which is the only place slippage lives.
 * **State:** one market row per class, one position row per (class, holder); ≈ 150 bytes each.
 * **Fold:** O(1) per move; a carrier per move (≈ 300 bytes plus the sink output).
 * **Consensus:** an activation; a state version; two objects; one sink script; one payout kind.
@@ -158,9 +160,45 @@ everything else. CLI: `misaka palw model buy|sell|show`.
 3. RPC, CLI, the explorer page.
 4. A devnet drill: register a class, buy, sell, retire, drain; then testnet-11 by activation.
 
-## 7. Implementation record
+## 7. Implementation record (2026-09-05, `palw-adr0084-served-answer`)
 
-(none — design only)
+**Landed — §6 items 1–3 (state, params, RPC, CLI); the explorer page and the devnet drill are
+not.**
+
+| where | what |
+|---|---|
+| `consensus/core/src/palw_model_market_v1.rs` | The constants (`10^6` units a position, `100,000` positions a class, `V = 1,000 MSK`, 50 ‰ burn, 10 ‰ registrant), `PalwModelMarketV1`, the fee split (exact, remainder on the net leg), `palw_model_buy_quote_v1` / `palw_model_sell_quote_v1` over `(x + V) × u = K` with the rounding that keeps the product at or above `K` and the sell's gross capped by the reserve, the sink script `OP_RETURN "MSKMDL01" <class id>` and its reader, the holder as `BLAKE2b-512(pubkey)` — the same identity a bond pays — and the sell's signed message under its own ML-DSA-87 context. |
+| `palw_state_v2.rs` | `model_markets` and `model_positions` on the state; **in the state root only when non-empty** — the root is committed in headers, so a chain on which the rule is dormant commits the roots a build without the fields computes; the carriage (persisted and served over IBD) encodes the two collections as a tagged tail only once a move was folded, so the legacy layout is byte-identical until then (`PalwStateCarriageV2Legacy` pins it); two delta entries with replay and revert; `ModelBuy { class_id, holder, msk_in, min_units_out, sink_index }` and `ModelSell { class_id, holder, units_in, min_msk_out, pubkey, signature }` appended to the object enum; the two fold arms (a buy opens the market lazily, requires `Active`, refuses under the floor; a sell debits, pays the net leg and the registrant's through `pending_payouts` keyed by the move; a class with no registrant burns that leg); eight error kinds. |
+| `palw_lifecycle_objects_v2.rs` | A buy rides only when its carrier's output `sink_index` holds exactly `msk_in` under the class's sink script; a sell rides only signed. |
+| `config/params.rs` | `palw_model_market: Option<ForkActivation>` with the `palw_da_court` contract; `palw_model_market_fence` / `palw_model_market_active_at`. |
+| `virtual_processor/processor.rs` | Both objects refused by name below the fence at the block's DAA; a sell's signature verified at acceptance against the payload its key derives to (M8). |
+| `mining/.../check_transaction_standard.rs` | The sink is the one unspendable output that is not dust — recognised by its exact script. |
+| RPC | `getPalwModelMarket(classId)` (an unregistered class is `found: false`; an unopened market reads as the whole supply in the curve) and `getPalwModelPositions(holder)`, through core, service, gRPC (proto ids 1144–1147) and wRPC. |
+| CLI | `misaka palw model-show [--quote-msk]`, `model-positions`, `model-buy --class --msk --min-positions --key --yes`, `model-sell --class --positions --min-msk --key --yes`; every move prints the quote the chain's own arithmetic gives against the tip and sends nothing without `--yes`. |
+
+**Tests.** `palw_model_market_v1` (6): the corrected §4 table, the product never below `K` at
+every size tried, a round trip returns at most `0.94²` of the gross, a closed market refuses buys
+and honours sells, the sink names its class and nothing else does, the sell message binds its
+fields. `palw_state_v2::tests::model_market` (5): M1 and M2 at every stop of a two-buyer run; M5's
+floors refuse whole (`ModelBuyBelowFloor`, `ModelSellBelowFloor`, `ModelSellExceedsPosition`) and
+fill at the floor exactly; M3 as "one move changes one holder's row"; M6 as a not-yet-Active
+class refusing buys, a registrant paid 1 % to its payload, a registrant-less class burning it;
+M7 as the deltas replaying and reverting to the same root and the carriage staying legacy until
+the first move. The params test pins M7's fingerprint half. M4's monotonicity is asserted in both
+suites; M8's signature check is at acceptance and is covered by reading, not by a test — a
+processor-level fixture for a signed lifecycle object does not exist yet.
+
+**What the implementation taught.** (1) The design draft's worked table was wrong twice (above);
+the curve's arithmetic is now the test's golden and the table follows it. (2) "State v21" cannot
+be a root-version bump: the state root is in every header, so the version and the collections
+enter the root only where a move has been folded, and the carriage grows a tail rather than a
+field. (3) "The market opens when the class is registered" became "on its first buy": the same
+observable market at a fraction of the fold, and no edge at activation for genesis classes.
+(4) The mempool's dust rule treats every unspendable output as dust; the sink needs the one
+exception, matched on its exact script.
+
+**Not landed.** The explorer's Model Market page (another repository); the devnet drill (§6 item
+4) — buy, sell, retire, drain on a chain with the fence armed; arming on testnet-11.
 
 ## 8. What is deliberately not decided
 

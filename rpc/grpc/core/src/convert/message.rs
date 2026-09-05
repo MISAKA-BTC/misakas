@@ -500,6 +500,42 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwPendingChunkGroupResponse>, protow
         error: None,
     }
 });
+from!(item: &kaspa_rpc_core::GetPalwModelMarketRequest, protowire::GetPalwModelMarketRequestMessage, {
+    Self { class_id: item.class_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelMarketResponse>, protowire::GetPalwModelMarketResponseMessage, {
+    Self {
+        found: item.found,
+        class_id: item.class_id.clone(),
+        opened: item.opened,
+        opened_daa: item.opened_daa,
+        msk_reserve: item.msk_reserve,
+        position_units: item.position_units,
+        sold_units: item.sold_units,
+        burned_sompi: item.burned_sompi,
+        registrant_paid_sompi: item.registrant_paid_sompi,
+        closed_to_buys: item.closed_to_buys,
+        price_sompi_per_position: item.price_sompi_per_position,
+        supply_units: item.supply_units,
+        virtual_sompi: item.virtual_sompi,
+        class_status: item.class_status.clone(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwModelPositionsRequest, protowire::GetPalwModelPositionsRequestMessage, {
+    Self { holder: item.holder.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelPositionsResponse>, protowire::GetPalwModelPositionsResponseMessage, {
+    Self {
+        holder: item.holder.clone(),
+        positions: item
+            .positions
+            .iter()
+            .map(|p| protowire::RpcPalwModelPosition { class_id: p.class_id.clone(), units: p.units })
+            .collect(),
+        error: None,
+    }
+});
 from!(item: &kaspa_rpc_core::GetTokenSupplyRequest, protowire::GetTokenSupplyRequestMessage, { Self { asset_id: item.asset_id } });
 from!(item: RpcResult<&kaspa_rpc_core::GetTokenSupplyResponse>, protowire::GetTokenSupplyResponseMessage, {
     Self {
@@ -1285,6 +1321,40 @@ try_from!(item: &protowire::GetPalwPendingChunkGroupResponseMessage, RpcResult<k
         verdict: item.verdict.clone(),
         declarer_bond: item.declarer_bond.clone(),
         deposit: item.deposit,
+    }
+});
+try_from!(item: &protowire::GetPalwModelMarketRequestMessage, kaspa_rpc_core::GetPalwModelMarketRequest, {
+    Self { class_id: item.class_id.clone() }
+});
+try_from!(item: &protowire::GetPalwModelMarketResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelMarketResponse>, {
+    Self {
+        found: item.found,
+        class_id: item.class_id.clone(),
+        opened: item.opened,
+        opened_daa: item.opened_daa,
+        msk_reserve: item.msk_reserve,
+        position_units: item.position_units,
+        sold_units: item.sold_units,
+        burned_sompi: item.burned_sompi,
+        registrant_paid_sompi: item.registrant_paid_sompi,
+        closed_to_buys: item.closed_to_buys,
+        price_sompi_per_position: item.price_sompi_per_position,
+        supply_units: item.supply_units,
+        virtual_sompi: item.virtual_sompi,
+        class_status: item.class_status.clone(),
+    }
+});
+try_from!(item: &protowire::GetPalwModelPositionsRequestMessage, kaspa_rpc_core::GetPalwModelPositionsRequest, {
+    Self { holder: item.holder.clone() }
+});
+try_from!(item: &protowire::GetPalwModelPositionsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelPositionsResponse>, {
+    Self {
+        holder: item.holder.clone(),
+        positions: item
+            .positions
+            .iter()
+            .map(|p| kaspa_rpc_core::RpcPalwModelPosition { class_id: p.class_id.clone(), units: p.units })
+            .collect(),
     }
 });
 try_from!(item: &protowire::GetTokenSupplyRequestMessage, kaspa_rpc_core::GetTokenSupplyRequest, { Self { asset_id: item.asset_id } });

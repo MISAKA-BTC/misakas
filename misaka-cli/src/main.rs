@@ -32,6 +32,7 @@ mod node;
 mod palw_court;
 mod palw_derived;
 mod palw_fp;
+mod palw_model;
 #[cfg(feature = "evm-send")]
 mod prea;
 /// ADR-0079 Decision 13: `node security-report` — the host posture, printed from live state.
@@ -309,6 +310,10 @@ impl KeyArgs {
     fn source(&self) -> keys::KeySource {
         keys::KeySource { key_file: self.key_file.clone(), key_stdin: self.key_stdin }
     }
+    /// `None` when no key was named — for commands that can read without one.
+    fn source_opt(&self) -> Option<keys::KeySource> {
+        (self.key_file.is_some() || self.key_stdin).then(|| self.source())
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -451,6 +456,69 @@ enum PalwCmd {
         /// JSON output (`--output json` does the same).
         #[arg(long)]
         json: bool,
+    },
+    /// **ADR-0087: a class's model market** as the tip holds it — reserve, positions in the curve,
+    /// price, sold, burned, paid, status — and a quote for a buy (`--quote-msk`). Nothing signs.
+    ModelShow {
+        /// 128-hex class id.
+        class_id: String,
+        /// Quote a buy of this many MSK (e.g. `12.5`, or `1250000000sompi`).
+        #[arg(long)]
+        quote_msk: Option<String>,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0087: every position a holder has**, by class. The holder is its payout payload —
+    /// name it, or name the key it is derived from.
+    ModelPositions {
+        /// 128-hex holder (the BLAKE2b-512 of an ML-DSA-87 public key).
+        #[arg(long)]
+        holder: Option<String>,
+        #[command(flatten)]
+        key: KeyArgs,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0087: buy positions of a class from its curve.** The carrier pays `--msk` into the
+    /// class's sink; the fold credits 94 % to the curve (5 % burned, 1 % to the registrant) and
+    /// the curve's positions to the key's payout payload. Refused on chain when fewer than
+    /// `--min-positions` would be released.
+    ModelBuy {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex class id.
+        #[arg(long)]
+        class: String,
+        /// MSK to pay (e.g. `12.5`, or `1250000000sompi`).
+        #[arg(long)]
+        msk: String,
+        /// The fewest positions to accept; the move is refused, never partially filled, below it.
+        #[arg(long, default_value_t = 0)]
+        min_positions: u64,
+        /// Actually broadcast (otherwise a dry-run preview with the quote).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0087: sell positions back to the curve.** Signed by the key whose payout payload
+    /// holds them; the net leg (94 % of what the curve pays) reaches the same payload through the
+    /// coinbase. Refused on chain when the net would be under `--min-msk`.
+    ModelSell {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex class id.
+        #[arg(long)]
+        class: String,
+        /// Positions to sell.
+        #[arg(long)]
+        positions: u64,
+        /// The least MSK to accept for them (e.g. `12.5`).
+        #[arg(long)]
+        min_msk: Option<String>,
+        /// Actually broadcast (otherwise a dry-run preview with the quote).
+        #[arg(long)]
+        yes: bool,
     },
     /// ADR-0078 Decision 5: read what the chain holds about a free-prompt claim's DERIVATIONS —
     /// the grammar, the transformer, the DSL and artifact hashes, and the claim's own output_root.
@@ -1021,6 +1089,17 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Palw(PalwCmd::Certified { class_id, json }) => palw_fp::certified(&ctx, &class_id, json).await,
         Command::Palw(PalwCmd::Derived { claim_id, json }) => palw_derived::show(&ctx, &claim_id, json).await,
+        Command::Palw(PalwCmd::ModelShow { class_id, quote_msk, json }) => palw_model::show(&ctx, &class_id, quote_msk, json).await,
+        Command::Palw(PalwCmd::ModelPositions { holder, key, json }) => {
+            let source = key.source_opt();
+            palw_model::positions(&ctx, holder, source.as_ref(), json).await
+        }
+        Command::Palw(PalwCmd::ModelBuy { key, class, msk, min_positions, yes }) => {
+            palw_model::buy(&ctx, &key.source(), &class, &msk, min_positions, yes).await
+        }
+        Command::Palw(PalwCmd::ModelSell { key, class, positions, min_msk, yes }) => {
+            palw_model::sell(&ctx, &key.source(), &class, positions, min_msk, yes).await
+        }
         Command::Palw(PalwCmd::DerivedVerify { claim_id, answer, dsl, job_context, tokenizer, job_context_hash, family, json }) => {
             palw_derived::verify(
                 &ctx,

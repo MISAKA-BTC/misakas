@@ -109,6 +109,9 @@ pub enum KaspadPayloadOps {
     GetPalwFreePromptClaim,
     // ADR-0080 design A: a declared close, mid-assembly
     GetPalwPendingChunkGroup,
+    // ADR-0087 Decision 8: the model market
+    GetPalwModelMarket,
+    GetPalwModelPositions,
     GetTokenSupply,
     GetTokenEmissionInfo,
 

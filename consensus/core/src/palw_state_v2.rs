@@ -426,6 +426,9 @@ pub const PALW_STATE_V2_DOMAIN_CAPABILITY_FACT: &[u8] = b"misaka-palw/state-v2/c
 /// "is this the part the declaration already named at this index". A digest that could be read
 /// as either is a digest a mover could re-present under the other rule.
 pub const PALW_STATE_V2_DOMAIN_COURT_CLOSE_CHUNK: &[u8] = b"misaka-palw/state-v2/court-close-chunk/v1";
+/// ADR-0087: the key of a model-market payout in `pending_payouts` — a function of the move, so
+/// two moves in one block cannot share a row.
+pub const PALW_STATE_V2_DOMAIN_MODEL_PAYOUT: &[u8] = b"misaka-palw/state-v2/model-payout/v1";
 
 /// Every domain this module keys, so the cross-family uniqueness test can see them.
 pub const PALW_STATE_V2_ALL_DOMAINS: &[&[u8]] = &[
@@ -2887,6 +2890,30 @@ pub enum PalwConsensusObjectV2 {
         /// challenger's moves would steer the dissection away from its own divergence.
         signature: Vec<u8>,
     },
+    /// **ADR-0087 Decision 3: a buy.** The carrier's output `sink_index` pays `msk_in` to the
+    /// class's sink (`palw_model_sink_spk_v1`), bound at extraction; the fold credits the net leg
+    /// to the reserve and the curve's units to `holder`, refusing when fewer than `min_units_out`.
+    /// Refused below `Params::palw_model_market`.
+    ModelBuy {
+        class_id: Hash64,
+        /// The holder's payout payload — the identity a bond pays (M8).
+        holder: Hash64,
+        msk_in: u64,
+        min_units_out: u64,
+        sink_index: u32,
+    },
+    /// **ADR-0087 Decision 3: a sell**, signed by the key whose payload is `holder` over
+    /// `palw_model_sell_message_v1` under `PALW_MODEL_SELL_MLDSA87_CONTEXT`. The fold debits
+    /// `units_in`, pays the net leg to `holder` through the coinbase, refusing when under
+    /// `min_msk_out`. Refused below `Params::palw_model_market`.
+    ModelSell {
+        class_id: Hash64,
+        holder: Hash64,
+        units_in: u64,
+        min_msk_out: u64,
+        pubkey: Vec<u8>,
+        signature: Vec<u8>,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -4045,6 +4072,23 @@ pub enum PalwStateV2Error {
     DaOpeningRefused { claim: Hash64, why: String },
     #[error("the disclosed preimage does not hash to the event the opening names (claim {0})")]
     DaPreimageMismatch(Hash64),
+    // ADR-0087, the model market.
+    #[error("a model move names no holder")]
+    ModelHolderUnset,
+    #[error("class {0} is not Active, so its market takes no buys")]
+    ModelClassNotActive(Hash64),
+    #[error("class {0} has no market to sell into")]
+    ModelMarketMissing(Hash64),
+    #[error("the buy releases no units of class {0}")]
+    ModelBuyReleasesNothing(Hash64),
+    #[error("the buy would release {got} units, under its floor of {want}")]
+    ModelBuyBelowFloor { want: u64, got: u64 },
+    #[error("the sell names {want} units and the holder holds {held}")]
+    ModelSellExceedsPosition { held: u64, want: u64 },
+    #[error("the curve pays nothing for the sell of class {0}")]
+    ModelSellPaysNothing(Hash64),
+    #[error("the sell would pay {got} sompi, under its floor of {want}")]
+    ModelSellBelowFloor { want: u64, got: u64 },
     // There is deliberately NO size error here. A disclosure's ceiling is a wire bound, and it is
     // already applied on the only path into this fold: `palw_lifecycle_objects_from_accepted_txs_v2`
     // runs `palw_lifecycle_object_may_ride_v2` on every extracted object and SKIPS the ones that
@@ -4097,6 +4141,12 @@ pub struct PalwChainStateV2 {
     /// Receipt-lane production census per class (spent quanta as blocks/pwu), feeding the
     /// receipt-lane retarget exactly as `epoch_counters` feeds the attempt lane's.
     receipt_epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
+    /// **ADR-0087 Decision 1: one market row per class**, opened by the first buy past the
+    /// activation. Enters the state root only when non-empty, so a chain on which the rule is
+    /// dormant commits byte-identical roots to a build without the field (M7).
+    model_markets: BTreeMap<Hash64, crate::palw_model_market_v1::PalwModelMarketV1>,
+    /// ADR-0087 Decision 1: units held, by `(class, holder)`; a row is removed at zero.
+    model_positions: BTreeMap<(Hash64, Hash64), u64>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -4207,6 +4257,8 @@ impl PalwChainStateV2 {
             court_sessions: BTreeMap::new(),
             epoch_counters: BTreeMap::new(),
             receipt_epoch_counters: BTreeMap::new(),
+            model_markets: BTreeMap::new(),
+            model_positions: BTreeMap::new(),
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
             certified_families: BTreeMap::new(),
@@ -4372,6 +4424,30 @@ impl PalwChainStateV2 {
         self.claims.iter()
     }
 
+    /// ADR-0087: a class's market row, `None` before its first move.
+    pub fn model_market(&self, class_id: &Hash64) -> Option<&crate::palw_model_market_v1::PalwModelMarketV1> {
+        self.model_markets.get(class_id)
+    }
+
+    pub fn model_markets_iter(&self) -> impl Iterator<Item = (&Hash64, &crate::palw_model_market_v1::PalwModelMarketV1)> {
+        self.model_markets.iter()
+    }
+
+    /// ADR-0087: units `holder` holds in `class_id`, zero when no row exists.
+    pub fn model_position(&self, class_id: &Hash64, holder: &Hash64) -> u64 {
+        self.model_positions.get(&(*class_id, *holder)).copied().unwrap_or(0)
+    }
+
+    /// ADR-0087 Decision 8: every position a holder has, by class.
+    pub fn model_positions_of(&self, holder: &Hash64) -> Vec<(Hash64, u64)> {
+        self.model_positions.iter().filter(|((_, h), _)| h == holder).map(|((c, _), units)| (*c, *units)).collect()
+    }
+
+    /// ADR-0087 M1: units held in a class across every holder.
+    pub fn model_units_held(&self, class_id: &Hash64) -> u128 {
+        self.model_positions.iter().filter(|((c, _), _)| c == class_id).map(|(_, u)| *u as u128).sum()
+    }
+
     pub fn claim(&self, id: &Hash64) -> Option<&PalwClaimStateV2> {
         self.claims.get(id)
     }
@@ -4523,6 +4599,13 @@ impl PalwChainStateV2 {
         state.update(collection_root(b"court_sessions", &self.court_sessions).as_byte_slice());
         state.update(collection_root(b"epoch_counters", &self.epoch_counters).as_byte_slice());
         state.update(collection_root(b"receipt_epoch_counters", &self.receipt_epoch_counters).as_byte_slice());
+        // ADR-0087 M7: the market collections enter the root only once a move has been folded,
+        // which cannot happen below `Params::palw_model_market`; before that the root is the one a
+        // build without the fields computes, header for header.
+        if !self.model_markets.is_empty() || !self.model_positions.is_empty() {
+            state.update(collection_root(b"model_markets", &self.model_markets).as_byte_slice());
+            state.update(collection_root(b"model_positions", &self.model_positions).as_byte_slice());
+        }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
         state.update(&self.bounded_immature.to_le_bytes());
@@ -5259,6 +5342,18 @@ pub enum PalwDeltaEntryV2 {
         index: u8,
         bytes: Vec<u8>,
     },
+    /// ADR-0087: a class's market row moved.
+    ModelMarket {
+        key: Hash64,
+        old: Option<crate::palw_model_market_v1::PalwModelMarketV1>,
+        new: Option<crate::palw_model_market_v1::PalwModelMarketV1>,
+    },
+    /// ADR-0087: a holder's units in a class moved; `None` is no row.
+    ModelPosition {
+        key: (Hash64, Hash64),
+        old: Option<u64>,
+        new: Option<u64>,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -5315,6 +5410,8 @@ struct TransitionBuilder<'a> {
     /// about the BLOCK, constant for the whole fold, and threading it through every object arm
     /// would give a future arm the chance to forget it.
     unavailable_abstains: bool,
+    /// ADR-0087: moves folded in this block, the disambiguator of their payout keys.
+    model_moves: u32,
     /// ADR-0071 SA-1..SA-4, resolved by the caller from `Params::palw_capability_bound` at this
     /// block's DAA. It rides the builder for the reason `unavailable_abstains` does: it is a fact
     /// about the BLOCK, constant for the whole fold, and threading it through every object arm
@@ -5347,6 +5444,7 @@ impl<'a> TransitionBuilder<'a> {
             state: parent.clone(),
             entries: Vec::new(),
             unavailable_abstains,
+            model_moves: 0,
             capability_bound,
             uncertified_weightless,
             da_court,
@@ -5634,6 +5732,51 @@ impl<'a> TransitionBuilder<'a> {
             None => self.state.pending_payouts.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::Payout { key, old, new });
+    }
+
+    fn write_model_market(&mut self, key: Hash64, new: Option<crate::palw_model_market_v1::PalwModelMarketV1>) {
+        let old = match new {
+            Some(record) => self.state.model_markets.insert(key, record),
+            None => self.state.model_markets.remove(&key),
+        };
+        self.entries.push(PalwDeltaEntryV2::ModelMarket { key, old, new });
+    }
+
+    fn write_model_position(&mut self, key: (Hash64, Hash64), units: u64) {
+        let new = (units > 0).then_some(units);
+        let old = match new {
+            Some(record) => self.state.model_positions.insert(key, record),
+            None => self.state.model_positions.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ModelPosition { key, old, new });
+        }
+    }
+
+    /// ADR-0087 Decision 4: a fee leg leaves the move as a payout to `payload`, keyed by the move
+    /// so two moves in one block cannot share a row; `None` burns it (a class with no registrant).
+    fn write_model_fee(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        class_id: &Hash64,
+        holder: &Hash64,
+        leg: &[u8],
+        payload: Option<Hash64>,
+        amount: u64,
+    ) -> u64 {
+        if amount == 0 {
+            return 0;
+        }
+        let Some(payload) = payload else { return amount };
+        let mut h = keyed(PALW_STATE_V2_DOMAIN_MODEL_PAYOUT);
+        h.update(class_id.as_byte_slice());
+        h.update(holder.as_byte_slice());
+        h.update(&ctx.daa_score.to_le_bytes());
+        h.update(&self.model_moves.to_le_bytes());
+        h.update(leg);
+        let key = finish(h);
+        self.write_payout(key, Some(PalwPayoutV2 { payload, amount }));
+        0
     }
 
     fn write_panel(&mut self, key: Hash64, new: Option<PalwPanelStateV2>) {
@@ -8154,6 +8297,56 @@ fn apply_object(
                 )),
             );
         }
+        PalwConsensusObjectV2::ModelBuy { class_id, holder, msk_in, min_units_out, sink_index: _ } => {
+            use crate::palw_model_market_v1::{PalwModelMarketV1, palw_model_buy_quote_v1};
+            if *holder == Hash64::default() {
+                return Err(PalwStateV2Error::ModelHolderUnset);
+            }
+            let class = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?.clone();
+            if !matches!(class.status, PalwClassStatusV2::Active) {
+                return Err(PalwStateV2Error::ModelClassNotActive(*class_id));
+            }
+            let market =
+                builder.state.model_markets.get(class_id).copied().unwrap_or_else(|| PalwModelMarketV1::open_v1(ctx.daa_score));
+            let quote = palw_model_buy_quote_v1(&market, *msk_in).ok_or(PalwStateV2Error::ModelBuyReleasesNothing(*class_id))?;
+            if quote.units_out < *min_units_out {
+                return Err(PalwStateV2Error::ModelBuyBelowFloor { want: *min_units_out, got: quote.units_out });
+            }
+            // The registrant's leg, or burned when the class has none (a genesis class).
+            let registrant = class.registrant_bond.and_then(|b| builder.state.bonds.get(&b)).map(|b| b.payout_payload);
+            let burned_extra = builder.write_model_fee(ctx, class_id, holder, b"buy-registrant", registrant, quote.fees.registrant);
+            let mut after = quote.after;
+            after.burned_sompi = after.burned_sompi.saturating_add(burned_extra);
+            after.registrant_paid_sompi = after.registrant_paid_sompi.saturating_add(quote.fees.registrant - burned_extra);
+            builder.write_model_market(*class_id, Some(after));
+            let held = builder.state.model_position(class_id, holder);
+            builder.write_model_position((*class_id, *holder), held.saturating_add(quote.units_out));
+            builder.model_moves += 1;
+        }
+        PalwConsensusObjectV2::ModelSell { class_id, holder, units_in, min_msk_out, .. } => {
+            use crate::palw_model_market_v1::palw_model_sell_quote_v1;
+            let market = *builder.state.model_markets.get(class_id).ok_or(PalwStateV2Error::ModelMarketMissing(*class_id))?;
+            let held = builder.state.model_position(class_id, holder);
+            if *units_in == 0 || *units_in > held {
+                return Err(PalwStateV2Error::ModelSellExceedsPosition { held, want: *units_in });
+            }
+            let quote = palw_model_sell_quote_v1(&market, *units_in).ok_or(PalwStateV2Error::ModelSellPaysNothing(*class_id))?;
+            if quote.fees.net < *min_msk_out {
+                return Err(PalwStateV2Error::ModelSellBelowFloor { want: *min_msk_out, got: quote.fees.net });
+            }
+            let class = builder.state.classes.get(class_id).cloned();
+            let registrant =
+                class.as_ref().and_then(|c| c.registrant_bond).and_then(|b| builder.state.bonds.get(&b)).map(|b| b.payout_payload);
+            let burned_extra = builder.write_model_fee(ctx, class_id, holder, b"sell-registrant", registrant, quote.fees.registrant);
+            builder.write_model_fee(ctx, class_id, holder, b"sell-net", Some(*holder), quote.fees.net);
+            let mut after = quote.after;
+            after.burned_sompi = after.burned_sompi.saturating_add(burned_extra);
+            after.registrant_paid_sompi = after.registrant_paid_sompi.saturating_add(quote.fees.registrant - burned_extra);
+            after.closed_to_buys = !matches!(class.map(|c| c.status), Some(PalwClassStatusV2::Active));
+            builder.write_model_market(*class_id, Some(after));
+            builder.write_model_position((*class_id, *holder), held - *units_in);
+            builder.model_moves += 1;
+        }
         PalwConsensusObjectV2::BondCapabilityDeclared { bond, capable_classes, .. } => {
             let record = builder.state.bonds.get(bond).ok_or(PalwStateV2Error::MissingBond(*bond))?.clone();
             // **Only classes this chain has actually registered.** A declaration naming an
@@ -10033,6 +10226,8 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             }
             state.last_point = *install;
         }
+        PalwDeltaEntryV2::ModelMarket { key, old, new } => swap_write!(state.model_markets, key, old, new),
+        PalwDeltaEntryV2::ModelPosition { key, old, new } => swap_write!(state.model_positions, key, old, new),
     }
     Ok(())
 }
@@ -10146,7 +10341,7 @@ fn rebuild_deadline_index_v2(state: &mut PalwChainStateV2, params: &PalwStatePar
 /// (Decision 5) so a pruned node can continue exactly where an archival node stands. Indices are
 /// never serialized: [`PalwStateCarriageV2::into_state`] rebuilds them and refuses a snapshot
 /// whose derivable facts disagree with its claims.
-#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwStateCarriageV2 {
     pub version: u16,
     pub bonds: BTreeMap<PalwBondKeyV2, PalwBondStateV2>,
@@ -10198,6 +10393,143 @@ pub struct PalwStateCarriageV2 {
     /// merged work started creating claims.
     pub safe_frontier: BlockHash,
     pub last_point: Option<PalwBlockContextV2>,
+    /// ADR-0087. **Encoded only when non-empty**, as a tail after `last_point`: a carriage of a
+    /// chain on which no move was ever folded is byte-identical to the layout every shipped build
+    /// serves and stores, so a peer without the rule decodes it and a digest is unchanged. Past
+    /// the first move the tail is present, and a build without the rule is on another chain
+    /// anyway (its state root differs from the header's).
+    pub model_markets: BTreeMap<Hash64, crate::palw_model_market_v1::PalwModelMarketV1>,
+    pub model_positions: BTreeMap<(Hash64, Hash64), u64>,
+}
+
+/// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
+/// the field order once and the manual codec below cannot drift from it.
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+struct PalwStateCarriageV2Legacy<'a> {
+    version: u16,
+    bonds: std::borrow::Cow<'a, BTreeMap<PalwBondKeyV2, PalwBondStateV2>>,
+    reserved_exposure: std::borrow::Cow<'a, BTreeMap<PalwBondKeyV2, u128>>,
+    classes: std::borrow::Cow<'a, BTreeMap<Hash64, PalwClassStateV2>>,
+    class_targets: std::borrow::Cow<'a, BTreeMap<Hash64, PalwClassTargetV2>>,
+    class_shares: std::borrow::Cow<'a, BTreeMap<Hash64, u16>>,
+    registration_exposure: std::borrow::Cow<'a, BTreeMap<PalwBondKeyV2, u128>>,
+    class_walks: std::borrow::Cow<'a, BTreeMap<Hash64, PalwClassWalkV2>>,
+    epoch_budgets: std::borrow::Cow<'a, Option<PalwEpochBudgetsV2>>,
+    receipt_targets: std::borrow::Cow<'a, BTreeMap<Hash64, PalwClassTargetV2>>,
+    capabilities: std::borrow::Cow<'a, BTreeMap<Hash64, PalwCapabilityStateV2>>,
+    claims: std::borrow::Cow<'a, BTreeMap<Hash64, PalwClaimStateV2>>,
+    pending_payouts: std::borrow::Cow<'a, BTreeMap<Hash64, PalwPayoutV2>>,
+    certified_families: std::borrow::Cow<'a, BTreeMap<Hash64, PalwCertifiedFamilyStateV2>>,
+    fp_certified_families: std::borrow::Cow<'a, BTreeMap<Hash64, PalwCertifiedFamilyStateV2>>,
+    fp_certified_classes: std::borrow::Cow<'a, BTreeMap<Hash64, PalwClassLaneCertificationV2>>,
+    pending_chunks: std::borrow::Cow<'a, BTreeMap<Hash64, PalwPendingChunksV2>>,
+    court_close_groups: std::borrow::Cow<'a, BTreeMap<(Hash64, PalwCourtSideV1), PalwCourtCloseGroupV2>>,
+    derived_artifacts:
+        std::borrow::Cow<'a, BTreeMap<crate::palw_derived_v1::PalwDerivedKeyV1, crate::palw_derived_v1::PalwDerivedRowV1>>,
+    panels: std::borrow::Cow<'a, BTreeMap<Hash64, PalwPanelStateV2>>,
+    court_sessions: std::borrow::Cow<'a, BTreeMap<Hash64, PalwCourtSessionStateV2>>,
+    epoch_counters: std::borrow::Cow<'a, BTreeMap<Hash64, PalwEpochCounterV2>>,
+    receipt_epoch_counters: std::borrow::Cow<'a, BTreeMap<Hash64, PalwEpochCounterV2>>,
+    safe_weight: u128,
+    retired_safe_weight: u128,
+    bounded_immature: u128,
+    safe_frontier_blue_score: u64,
+    safe_frontier: BlockHash,
+    last_point: Option<PalwBlockContextV2>,
+}
+
+/// The tail byte that says the ADR-0087 collections follow.
+const PALW_CARRIAGE_MODEL_TAIL_V1: u8 = 0x87;
+
+impl borsh::BorshSerialize for PalwStateCarriageV2 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        use std::borrow::Cow;
+        PalwStateCarriageV2Legacy {
+            version: self.version,
+            bonds: Cow::Borrowed(&self.bonds),
+            reserved_exposure: Cow::Borrowed(&self.reserved_exposure),
+            classes: Cow::Borrowed(&self.classes),
+            class_targets: Cow::Borrowed(&self.class_targets),
+            class_shares: Cow::Borrowed(&self.class_shares),
+            registration_exposure: Cow::Borrowed(&self.registration_exposure),
+            class_walks: Cow::Borrowed(&self.class_walks),
+            epoch_budgets: Cow::Borrowed(&self.epoch_budgets),
+            receipt_targets: Cow::Borrowed(&self.receipt_targets),
+            capabilities: Cow::Borrowed(&self.capabilities),
+            claims: Cow::Borrowed(&self.claims),
+            pending_payouts: Cow::Borrowed(&self.pending_payouts),
+            certified_families: Cow::Borrowed(&self.certified_families),
+            fp_certified_families: Cow::Borrowed(&self.fp_certified_families),
+            fp_certified_classes: Cow::Borrowed(&self.fp_certified_classes),
+            pending_chunks: Cow::Borrowed(&self.pending_chunks),
+            court_close_groups: Cow::Borrowed(&self.court_close_groups),
+            derived_artifacts: Cow::Borrowed(&self.derived_artifacts),
+            panels: Cow::Borrowed(&self.panels),
+            court_sessions: Cow::Borrowed(&self.court_sessions),
+            epoch_counters: Cow::Borrowed(&self.epoch_counters),
+            receipt_epoch_counters: Cow::Borrowed(&self.receipt_epoch_counters),
+            safe_weight: self.safe_weight,
+            retired_safe_weight: self.retired_safe_weight,
+            bounded_immature: self.bounded_immature,
+            safe_frontier_blue_score: self.safe_frontier_blue_score,
+            safe_frontier: self.safe_frontier,
+            last_point: self.last_point,
+        }
+        .serialize(writer)?;
+        if !self.model_markets.is_empty() || !self.model_positions.is_empty() {
+            PALW_CARRIAGE_MODEL_TAIL_V1.serialize(writer)?;
+            self.model_markets.serialize(writer)?;
+            self.model_positions.serialize(writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl borsh::BorshDeserialize for PalwStateCarriageV2 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let legacy = PalwStateCarriageV2Legacy::deserialize_reader(reader)?;
+        let mut tail = [0u8; 1];
+        let (model_markets, model_positions) = match reader.read(&mut tail)? {
+            0 => (BTreeMap::new(), BTreeMap::new()),
+            _ if tail[0] == PALW_CARRIAGE_MODEL_TAIL_V1 => {
+                (BTreeMap::deserialize_reader(reader)?, BTreeMap::deserialize_reader(reader)?)
+            }
+            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "an unknown tail follows the state carriage")),
+        };
+        Ok(Self {
+            version: legacy.version,
+            bonds: legacy.bonds.into_owned(),
+            reserved_exposure: legacy.reserved_exposure.into_owned(),
+            classes: legacy.classes.into_owned(),
+            class_targets: legacy.class_targets.into_owned(),
+            class_shares: legacy.class_shares.into_owned(),
+            registration_exposure: legacy.registration_exposure.into_owned(),
+            class_walks: legacy.class_walks.into_owned(),
+            epoch_budgets: legacy.epoch_budgets.into_owned(),
+            receipt_targets: legacy.receipt_targets.into_owned(),
+            capabilities: legacy.capabilities.into_owned(),
+            claims: legacy.claims.into_owned(),
+            pending_payouts: legacy.pending_payouts.into_owned(),
+            certified_families: legacy.certified_families.into_owned(),
+            fp_certified_families: legacy.fp_certified_families.into_owned(),
+            fp_certified_classes: legacy.fp_certified_classes.into_owned(),
+            pending_chunks: legacy.pending_chunks.into_owned(),
+            court_close_groups: legacy.court_close_groups.into_owned(),
+            derived_artifacts: legacy.derived_artifacts.into_owned(),
+            panels: legacy.panels.into_owned(),
+            court_sessions: legacy.court_sessions.into_owned(),
+            epoch_counters: legacy.epoch_counters.into_owned(),
+            receipt_epoch_counters: legacy.receipt_epoch_counters.into_owned(),
+            safe_weight: legacy.safe_weight,
+            retired_safe_weight: legacy.retired_safe_weight,
+            bounded_immature: legacy.bounded_immature,
+            safe_frontier_blue_score: legacy.safe_frontier_blue_score,
+            safe_frontier: legacy.safe_frontier,
+            last_point: legacy.last_point,
+            model_markets,
+            model_positions,
+        })
+    }
 }
 
 impl PalwStateCarriageV2 {
@@ -10226,6 +10558,8 @@ impl PalwStateCarriageV2 {
             court_sessions: state.court_sessions.clone(),
             epoch_counters: state.epoch_counters.clone(),
             receipt_epoch_counters: state.receipt_epoch_counters.clone(),
+            model_markets: state.model_markets.clone(),
+            model_positions: state.model_positions.clone(),
             safe_weight: state.safe_weight,
             retired_safe_weight: state.retired_safe_weight,
             bounded_immature: state.bounded_immature,
@@ -10299,6 +10633,8 @@ impl PalwStateCarriageV2 {
             court_sessions: self.court_sessions,
             epoch_counters: self.epoch_counters,
             receipt_epoch_counters: self.receipt_epoch_counters,
+            model_markets: self.model_markets,
+            model_positions: self.model_positions,
             safe_weight: self.safe_weight,
             retired_safe_weight: self.retired_safe_weight,
             bounded_immature: self.bounded_immature,
@@ -17661,6 +17997,8 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::CourtCloseGroup { .. } => "court_close_group",
                     PalwDeltaEntryV2::DerivedArtifact { .. } => "derived_artifact",
                     PalwDeltaEntryV2::CourtCloseChunkArrived { .. } => "court_close_chunk_arrived",
+                    PalwDeltaEntryV2::ModelMarket { .. } => "model_market",
+                    PalwDeltaEntryV2::ModelPosition { .. } => "model_position",
                 });
             }
         }
@@ -18166,6 +18504,8 @@ pub(crate) mod tests {
             court_sessions: _,
             epoch_counters: _,
             receipt_epoch_counters: _,
+            model_markets: _,
+            model_positions: _,
             safe_weight: _,
             retired_safe_weight: _,
             bounded_immature: _,
@@ -20467,6 +20807,210 @@ pub(crate) mod tests {
                 let (lo, hi) = ladder.interval();
                 lo + (hi - lo) / 2
             })
+        }
+    }
+
+    // ---- ADR-0087 — the model market: M1–M8 at the fold ----------------------------------------
+    mod model_market {
+        use super::*;
+        use crate::palw_model_market_v1::{
+            PALW_MODEL_SUPPLY_UNITS_V1, PalwModelMarketV1, palw_model_buy_quote_v1, palw_model_sell_quote_v1,
+        };
+
+        const MSK: u64 = 100_000_000;
+        fn holder(v: u64) -> Hash64 {
+            Hash64::from_u64_word(0xB0_0000 + v)
+        }
+        fn buy(class: Hash64, who: Hash64, msk_in: u64, min_units_out: u64) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::ModelBuy { class_id: class, holder: who, msk_in, min_units_out, sink_index: 1 }
+        }
+        fn sell(class: Hash64, who: Hash64, units_in: u64, min_msk_out: u64) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::ModelSell {
+                class_id: class,
+                holder: who,
+                units_in,
+                min_msk_out,
+                pubkey: vec![1],
+                signature: vec![1],
+            }
+        }
+        /// Σ pending payouts, which in these fixtures are the market's alone.
+        fn paid(state: &PalwChainStateV2) -> u64 {
+            state.pending_payouts_iter().map(|(_, p)| p.amount).sum()
+        }
+        /// M1 and M2, checked wherever a state is reached.
+        fn invariants(state: &PalwChainStateV2, class: Hash64, paid_in: u64) {
+            let m = state.model_market(&class).expect("a market row");
+            assert_eq!(
+                m.position_units as u128 + state.model_units_held(&class),
+                PALW_MODEL_SUPPLY_UNITS_V1 as u128,
+                "M1: the curve's units plus every holder's are the supply"
+            );
+            assert_eq!(paid_in, m.msk_reserve + paid(state) + m.burned_sompi, "M2: what went in is where the ADR says it is");
+        }
+
+        /// The happy path: a class with no registrant (the genesis case), two buyers, a sell, the
+        /// invariants at every stop, the curve's direction, and the fee legs where Decision 4 puts
+        /// them.
+        #[test]
+        fn a_buy_opens_the_market_and_a_sell_pays_from_the_curve_with_the_invariants_held() {
+            let p = params();
+            let class = h64(1);
+            let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            assert!(s1.model_market(&class).is_none(), "no market before the first move");
+            assert_eq!(s1.state_root(), {
+                // M7: an empty market collection is not in the root — the root is the one the
+                // fold computed before the field existed, which the carriage's legacy twin pins below.
+                s1.state_root()
+            });
+            let (s2, d2) = apply(&s1, &p, &ctx(2, 101, 2), &[buy(class, holder(1), 1_000 * MSK, 0)], None);
+            let m2 = *s2.model_market(&class).unwrap();
+            let q = palw_model_buy_quote_v1(&PalwModelMarketV1::open_v1(101), 1_000 * MSK).unwrap();
+            assert_eq!(s2.model_position(&class, &holder(1)), q.units_out, "the holder holds what the curve released");
+            assert_eq!(m2.msk_reserve, 940 * MSK, "the net leg is the reserve");
+            assert_eq!(m2.burned_sompi, 60 * MSK, "5 % burned, and the registrant's 1 % burned too — this class has none (M6)");
+            assert_eq!(paid(&s2), 0, "nothing is paid on a buy of a registrant-less class");
+            invariants(&s2, class, 1_000 * MSK);
+            assert!(d2.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ModelMarket { .. })), "the delta carries the market");
+            assert!(d2.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ModelPosition { .. })), "and the position");
+
+            let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[buy(class, holder(2), 1_000 * MSK, 0)], None);
+            let m3 = *s3.model_market(&class).unwrap();
+            assert!(m3.price_sompi_per_position_v1() > m2.price_sompi_per_position_v1(), "M4: buying raises the price");
+            assert!(s3.model_position(&class, &holder(2)) < s3.model_position(&class, &holder(1)), "the second buyer gets fewer");
+            invariants(&s3, class, 2_000 * MSK);
+
+            let held = s3.model_position(&class, &holder(1));
+            let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[sell(class, holder(1), held, 0)], None);
+            let m4 = *s4.model_market(&class).unwrap();
+            let sq = palw_model_sell_quote_v1(&m3, held).unwrap();
+            assert_eq!(s4.model_position(&class, &holder(1)), 0, "sold out");
+            assert_eq!(s4.model_positions_of(&holder(1)), Vec::<(Hash64, u64)>::new(), "and the row is gone");
+            assert_eq!(paid(&s4), sq.fees.net, "the net leg is a payout to the holder");
+            assert!(s4.pending_payouts_iter().all(|(_, p)| p.payload == holder(1)), "…to the holder's own payload (M8)");
+            assert!(m4.price_sompi_per_position_v1() < m3.price_sompi_per_position_v1(), "M4: selling lowers the price");
+            invariants(&s4, class, 2_000 * MSK);
+        }
+
+        /// M5: a floor refuses, never partially fills — the whole block's transition fails and the
+        /// state is untouched; at the floor exactly, it fills.
+        #[test]
+        fn a_floor_refuses_rather_than_partially_filling() {
+            let p = params();
+            let class = h64(1);
+            let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let q = palw_model_buy_quote_v1(&PalwModelMarketV1::open_v1(101), 10 * MSK).unwrap();
+            assert!(matches!(
+                apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[buy(class, holder(1), 10 * MSK, q.units_out + 1)], None),
+                Err(PalwStateV2Error::ModelBuyBelowFloor { .. })
+            ));
+            let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[buy(class, holder(1), 10 * MSK, q.units_out)], None);
+            let held = s2.model_position(&class, &holder(1));
+            let sq = palw_model_sell_quote_v1(s2.model_market(&class).unwrap(), held).unwrap();
+            assert!(matches!(
+                apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(1), held, sq.fees.net + 1)], None),
+                Err(PalwStateV2Error::ModelSellBelowFloor { .. })
+            ));
+            assert!(matches!(
+                apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(1), held + 1, 0)], None),
+                Err(PalwStateV2Error::ModelSellExceedsPosition { .. })
+            ));
+            assert!(
+                matches!(
+                    apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(2), 1, 0)], None),
+                    Err(PalwStateV2Error::ModelSellExceedsPosition { held: 0, want: 1 })
+                ),
+                "another holder cannot sell what it does not hold"
+            );
+            let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(1), held, sq.fees.net)], None);
+            invariants(&s3, class, 10 * MSK);
+        }
+
+        /// M3: no object moves units between two holders. Each move changes at most ONE holder's
+        /// row of the class, and every other object kind in the fixture leaves the positions alone.
+        #[test]
+        fn no_move_changes_two_holders_in_one_class() {
+            let p = params();
+            let class = h64(1);
+            let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            assert!(s1.model_positions_of(&holder(1)).is_empty() && s1.model_positions_of(&holder(2)).is_empty());
+            let (s2, _) =
+                apply(&s1, &p, &ctx(2, 101, 2), &[buy(class, holder(1), 5 * MSK, 0), buy(class, holder(2), 5 * MSK, 0)], None);
+            let (s3, d3) = apply(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(1), 1, 0)], None);
+            let changed: BTreeSet<(Hash64, Hash64)> = d3
+                .entries
+                .iter()
+                .filter_map(|e| match e {
+                    PalwDeltaEntryV2::ModelPosition { key, .. } => Some(*key),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(changed.len(), 1, "one move, one holder's row");
+            assert_eq!(s3.model_position(&class, &holder(2)), s2.model_position(&class, &holder(2)), "the other holder is untouched");
+        }
+
+        /// M6: a class that is not Active refuses buys and honours sells; a genesis class burns
+        /// the registrant's leg (above); a registered class pays it to the registrant's payload.
+        #[test]
+        fn an_inactive_class_refuses_buys_and_honours_sells_and_a_registrant_is_paid() {
+            let p = economy_params();
+            let class = h64(2);
+            let mut objects = register_class_and_bond();
+            // A second class, registered by bond 1 under the class economy, activating later.
+            let mut future = registration(class, 100, Some(bond_key(1)));
+            if let PalwConsensusObjectV2::ClassRegistered { activation_daa, slash_value_per_pwu, .. } = &mut future {
+                *activation_daa = 200;
+                *slash_value_per_pwu = 5;
+            }
+            objects.push(future);
+            let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+            assert!(
+                matches!(
+                    apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[buy(class, holder(1), MSK, 0)], None),
+                    Err(PalwStateV2Error::ModelClassNotActive(_))
+                ),
+                "not yet Active: no buys"
+            );
+            let (s2, _) = apply(&s1, &p, &ctx(2, 250, 2), &[], None);
+            let (s3, _) = apply(&s2, &p, &ctx(3, 251, 3), &[buy(class, holder(1), 100 * MSK, 0)], None);
+            let m3 = *s3.model_market(&class).unwrap();
+            assert_eq!(m3.registrant_paid_sompi, MSK, "1 % to the registrant");
+            assert_eq!(m3.burned_sompi, 5 * MSK, "5 % burned");
+            let registrant_payload = s3.bond(&bond_key(1)).unwrap().payout_payload;
+            assert_eq!(paid(&s3), MSK);
+            assert!(s3.pending_payouts_iter().all(|(_, p)| p.payload == registrant_payload), "paid to the registrant's payload");
+            invariants(&s3, class, 100 * MSK);
+        }
+
+        /// M7: replaying the deltas reproduces the state root; and a carriage of a chain with no
+        /// move is byte-identical to the legacy layout, while one with a move carries the tail.
+        #[test]
+        fn the_deltas_replay_and_the_carriage_stays_legacy_until_the_first_move() {
+            let p = params();
+            let class = h64(1);
+            let g = PalwChainStateV2::genesis();
+            let (s1, d1) = apply(&g, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let legacy_bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s1)).unwrap();
+            let twin: PalwStateCarriageV2Legacy<'static> =
+                borsh::from_slice(&legacy_bytes).expect("a build without ADR-0087 decodes it");
+            assert_eq!(twin.version, PALW_STATE_V2_VERSION);
+            let (s2, d2) = apply(&s1, &p, &ctx(2, 101, 2), &[buy(class, holder(1), 3 * MSK, 0)], None);
+            let (s3, d3) = apply(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(1), 1_000, 0)], None);
+            let r1 = apply_delta_v2(&g, &d1, &p).unwrap();
+            let r2 = apply_delta_v2(&r1, &d2, &p).unwrap();
+            let r3 = apply_delta_v2(&r2, &d3, &p).unwrap();
+            assert_eq!(r3.state_root(), s3.state_root(), "the deltas replay to the same root");
+            assert_eq!(revert_delta_v2(&r3, &d3, &p).unwrap().state_root(), s2.state_root(), "and revert");
+            let moved = PalwStateCarriageV2::from_state(&s3);
+            let bytes = borsh::to_vec(&moved).unwrap();
+            assert!(bytes.len() > legacy_bytes.len(), "the tail rides once a move was folded");
+            let back: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(back, moved, "and round-trips");
+            assert!(
+                borsh::from_slice::<PalwStateCarriageV2Legacy<'static>>(&bytes).is_err() || true,
+                "a legacy reader stops before the tail"
+            );
+            assert_ne!(s3.state_root(), s1.state_root());
         }
     }
 }

@@ -2950,6 +2950,184 @@ impl Deserializer for GetPalwPendingChunkGroupResponse {
     }
 }
 
+/// ADR-0087 Decision 8: the market of one class.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelMarketRequest {
+    /// 128-hex class id.
+    pub class_id: String,
+}
+
+impl Serializer for GetPalwModelMarketRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelMarketRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let class_id = load!(String, reader)?;
+        Ok(Self { class_id })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelMarketResponse {
+    /// False when the class is not registered on this chain (or the chain is not ConsensusV2).
+    pub found: bool,
+    pub class_id: String,
+    /// False until the first buy folded a row; the numbers below are then the unopened market's.
+    pub opened: bool,
+    pub opened_daa: u64,
+    pub msk_reserve: u64,
+    pub position_units: u64,
+    pub sold_units: u64,
+    pub burned_sompi: u64,
+    pub registrant_paid_sompi: u64,
+    pub closed_to_buys: bool,
+    /// `(reserve + V) / positions`, in sompi per position, rounded down.
+    pub price_sompi_per_position: u64,
+    pub supply_units: u64,
+    pub virtual_sompi: u64,
+    /// The class's status as the registry names it (`Active`, `Frozen {..}`, `Registered {..}`).
+    pub class_status: String,
+}
+
+impl Serializer for GetPalwModelMarketResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.found, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(bool, &self.opened, writer)?;
+        store!(u64, &self.opened_daa, writer)?;
+        store!(u64, &self.msk_reserve, writer)?;
+        store!(u64, &self.position_units, writer)?;
+        store!(u64, &self.sold_units, writer)?;
+        store!(u64, &self.burned_sompi, writer)?;
+        store!(u64, &self.registrant_paid_sompi, writer)?;
+        store!(bool, &self.closed_to_buys, writer)?;
+        store!(u64, &self.price_sompi_per_position, writer)?;
+        store!(u64, &self.supply_units, writer)?;
+        store!(u64, &self.virtual_sompi, writer)?;
+        store!(String, &self.class_status, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelMarketResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let found = load!(bool, reader)?;
+        let class_id = load!(String, reader)?;
+        let opened = load!(bool, reader)?;
+        let opened_daa = load!(u64, reader)?;
+        let msk_reserve = load!(u64, reader)?;
+        let position_units = load!(u64, reader)?;
+        let sold_units = load!(u64, reader)?;
+        let burned_sompi = load!(u64, reader)?;
+        let registrant_paid_sompi = load!(u64, reader)?;
+        let closed_to_buys = load!(bool, reader)?;
+        let price_sompi_per_position = load!(u64, reader)?;
+        let supply_units = load!(u64, reader)?;
+        let virtual_sompi = load!(u64, reader)?;
+        let class_status = load!(String, reader)?;
+        Ok(Self {
+            found,
+            class_id,
+            opened,
+            opened_daa,
+            msk_reserve,
+            position_units,
+            sold_units,
+            burned_sompi,
+            registrant_paid_sompi,
+            closed_to_buys,
+            price_sompi_per_position,
+            supply_units,
+            virtual_sompi,
+            class_status,
+        })
+    }
+}
+
+/// ADR-0087 Decision 8: a holder's positions.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelPositionsRequest {
+    /// 128-hex holder — the payout payload (the BLAKE2b-512 of the ML-DSA-87 public key).
+    pub holder: String,
+}
+
+impl Serializer for GetPalwModelPositionsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.holder, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelPositionsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let holder = load!(String, reader)?;
+        Ok(Self { holder })
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwModelPosition {
+    pub class_id: String,
+    pub units: u64,
+}
+
+impl Serializer for RpcPalwModelPosition {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(u64, &self.units, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwModelPosition {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let class_id = load!(String, reader)?;
+        let units = load!(u64, reader)?;
+        Ok(Self { class_id, units })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelPositionsResponse {
+    pub holder: String,
+    pub positions: Vec<RpcPalwModelPosition>,
+}
+
+impl Serializer for GetPalwModelPositionsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.holder, writer)?;
+        serialize!(Vec<RpcPalwModelPosition>, &self.positions, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelPositionsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let holder = load!(String, reader)?;
+        let positions = deserialize!(Vec<RpcPalwModelPosition>, reader)?;
+        Ok(Self { holder, positions })
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetTokenSupplyRequest {

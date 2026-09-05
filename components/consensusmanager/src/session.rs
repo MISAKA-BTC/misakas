@@ -352,6 +352,24 @@ impl ConsensusSessionOwned {
         self.consensus.palw_court_close_group_v1(session_id, side)
     }
 
+    /// ADR-0087 Decision 8: a class's model market at the tip, whether a row exists, and the class's
+    /// status. `None` for an unregistered class or off ConsensusV2.
+    pub fn palw_model_market_v1(
+        &self,
+        class_id: kaspa_consensus_core::Hash64,
+    ) -> Option<(
+        kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1,
+        bool,
+        kaspa_consensus_core::palw_state_v2::PalwClassStatusV2,
+    )> {
+        self.consensus.palw_model_market_v1(class_id)
+    }
+
+    /// ADR-0087 Decision 8: every position a holder has at the tip, by class.
+    pub fn palw_model_positions_v1(&self, holder: kaspa_consensus_core::Hash64) -> Vec<(kaspa_consensus_core::Hash64, u64)> {
+        self.consensus.palw_model_positions_v1(holder)
+    }
+
     /// The PALW-RC producer contract (ADR-0042). Reads the state store's tip, which is a lock-free
     /// snapshot read like the virtual fields above.
     pub fn palw_producer_facts_v2(

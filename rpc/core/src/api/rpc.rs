@@ -582,6 +582,32 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwPendingChunkGroupResponse::default())
     }
 
+    /// ADR-0087 Decision 8: a class's model market as the tip holds it.
+    async fn get_palw_model_market(&self, class_id: String) -> RpcResult<GetPalwModelMarketResponse> {
+        self.get_palw_model_market_call(None, GetPalwModelMarketRequest { class_id }).await
+    }
+    async fn get_palw_model_market_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelMarketRequest,
+    ) -> RpcResult<GetPalwModelMarketResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelMarketResponse::default())
+    }
+
+    /// ADR-0087 Decision 8: every position a holder has, by class.
+    async fn get_palw_model_positions(&self, holder: String) -> RpcResult<GetPalwModelPositionsResponse> {
+        self.get_palw_model_positions_call(None, GetPalwModelPositionsRequest { holder }).await
+    }
+    async fn get_palw_model_positions_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelPositionsRequest,
+    ) -> RpcResult<GetPalwModelPositionsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelPositionsResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

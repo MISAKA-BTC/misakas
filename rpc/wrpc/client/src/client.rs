@@ -670,6 +670,8 @@ impl RpcApi for KaspaRpcClient {
             GetPalwDerivedArtifacts,
             GetPalwFreePromptClaim,
             GetPalwPendingChunkGroup,
+            GetPalwModelMarket,
+            GetPalwModelPositions,
             GetTokenSupply,
             GetTokenEmissionInfo,
             GetStakeBond,

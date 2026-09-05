@@ -177,6 +177,12 @@ impl Mempool {
     ///
     /// It is exposed by [MiningManager] for use by transaction generators and wallets.
     pub(crate) fn is_transaction_output_dust(&self, transaction_output: &TransactionOutput) -> bool {
+        // ADR-0087 Decision 3: a model market's sink is unspendable BY DESIGN and carries the MSK a
+        // buy pays into the curve; it is the one unspendable output that is not dust, and it is
+        // recognised by its exact script, never by its shape.
+        if kaspa_consensus_core::palw_model_market_v1::palw_model_sink_class_v1(&transaction_output.script_public_key).is_some() {
+            return false;
+        }
         // Unspendable outputs are considered dust.
         if is_unspendable::<PopulatedTransaction, SigHashReusedValuesUnsync>(transaction_output.script_public_key.script()) {
             return true;

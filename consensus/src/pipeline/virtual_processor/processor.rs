@@ -479,6 +479,10 @@ pub struct VirtualStateProcessor {
     /// `PALW_STEP_LEG_MAX_LEAVES`. Resolved in exactly one place, `palw_court_step_ladder_at`,
     /// at the BLOCK's own DAA — the same discipline as every fence above it.
     pub(super) palw_court_ladder: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0087 Decision 6's fence, `None` on every shipped preset.** Past it `ModelBuy` and
+    /// `ModelSell` are accepted (a sell's signature checked here, at acceptance); before it both
+    /// are refused by name and the fold never sees them. Resolved at the BLOCK's DAA.
+    pub(super) palw_model_market: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0077 Phase B's fence, `None` on every shipped preset.** Past it a class registration
     /// is judged against `palw_class_ladder_rules_*` — the ladder both leaf counts are enumerated
     /// against, the court the close is priced for and Decision 14's canonical floor — instead of
@@ -920,6 +924,7 @@ impl VirtualStateProcessor {
             palw_kary_court: params.palw_kary_court_fence(),
             palw_prompt_ids_merkle: params.palw_prompt_ids_merkle_fence(),
             palw_court_ladder: params.palw_court_ladder_fence(),
+            palw_model_market: params.palw_model_market_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_uncertified_weightless: params.palw_uncertified_weightless,
             palw_da_court: params.palw_da_court,
@@ -5871,6 +5876,38 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| e.to_string())?;
                 }
+                // ADR-0087 Decision 6: the market's two moves exist only past the fence, refused by
+                // name before it (the drop-not-invalidate shape). A sell is signed by the key whose
+                // payload is the holder (M8), checked here where the verifier lives.
+                Obj::ModelBuy { class_id, .. } => {
+                    if !self.palw_model_market_active_at(point.daa_score) {
+                        return Err(format!("a model buy of class {class_id} on a chain where the model market is not in force"));
+                    }
+                }
+                Obj::ModelSell { class_id, holder, units_in, min_msk_out, pubkey, signature } => {
+                    if !self.palw_model_market_active_at(point.daa_score) {
+                        return Err(format!("a model sell of class {class_id} on a chain where the model market is not in force"));
+                    }
+                    if kaspa_consensus_core::palw_model_market_v1::palw_model_holder_of_pubkey_v1(pubkey) != *holder {
+                        return Err(format!("a model sell of class {class_id} is signed by a key that is not the holder's"));
+                    }
+                    let message = kaspa_consensus_core::palw_model_market_v1::palw_model_sell_message_v1(
+                        class_id,
+                        holder,
+                        *units_in,
+                        *min_msk_out,
+                    );
+                    if !kaspa_txscript::verify_mldsa87_with_context(
+                        pubkey,
+                        &message,
+                        signature,
+                        kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SELL_MLDSA87_CONTEXT,
+                    )
+                    .unwrap_or(false)
+                    {
+                        return Err(format!("a model sell of class {class_id} carries a signature the holder's key does not verify"));
+                    }
+                }
                 Obj::CourtVerdictPosted { session_id, verdict, signature } => {
                     kaspa_consensus_core::palw_court_v2::check_court_verdict_acceptance_v2(
                         state,
@@ -6564,6 +6601,11 @@ impl VirtualStateProcessor {
     /// a court close is adjudicated at: the ruleset's past the fence, `2^22` before it. Read at
     /// the block's acceptance DAA and not the tip's for the reason the weight fences above give —
     /// two nodes grading one close proof must read one ladder.
+    /// **ADR-0087 Decision 6, resolved in exactly one place, at the BLOCK's own DAA.**
+    fn palw_model_market_active_at(&self, daa_score: u64) -> bool {
+        self.palw_model_market.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     fn palw_court_step_ladder_at(&self, daa_score: u64, court: &kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2) -> u64 {
         if self.palw_court_ladder.is_some_and(|fence| fence.is_active(daa_score)) {
             court.max_step_leaf_count()
@@ -13652,6 +13694,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
     use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as O;
     match object {
         O::BondRegistered { .. } => "BondRegistered",
+        O::ModelBuy { .. } => "ModelBuy",
+        O::ModelSell { .. } => "ModelSell",
         O::BondRetireRequested { .. } => "BondRetireRequested",
         O::BondCapabilityDeclared { .. } => "BondCapabilityDeclared",
         O::ClassRegistered { .. } => "ClassRegistered",

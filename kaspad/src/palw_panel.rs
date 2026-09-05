@@ -3447,6 +3447,8 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ReceiptLicensed { .. } => "ReceiptLicensed",
         PalwConsensusObjectV2::ProducerDefaulted { .. } => "ProducerDefaulted",
         PalwConsensusObjectV2::BondRegistered { .. } => "BondRegistered",
+        PalwConsensusObjectV2::ModelBuy { .. } => "ModelBuy",
+        PalwConsensusObjectV2::ModelSell { .. } => "ModelSell",
         PalwConsensusObjectV2::BondRetireRequested { .. } => "BondRetireRequested",
         PalwConsensusObjectV2::BondCapabilityDeclared { .. } => "BondCapabilityDeclared",
         PalwConsensusObjectV2::ClassRegistered { .. } => "ClassRegistered",

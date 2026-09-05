@@ -6345,3 +6345,17 @@ leaf hashes from the same span replay; the seat checks they fold to the digest i
 differs from its own. Nothing here has been walked to a live verdict — that needs a producer that lies on a devnet.
 Devnet run 9 (300 tokens) ended at the drill's `WAIT` before the panel binding at that hour's ~3-minute cadence; run 10
 waits long enough.
+
+### 10r. ADR-0087 implemented: a position is bought from the curve and sold back to it (2026-09-05)
+
+The model market is in the tree behind `Params::palw_model_market` (`None` everywhere): a class's
+market is a constant-product curve over its reserve plus a 1,000 MSK virtual reserve, opened by the
+first `ModelBuy` (a carrier paying into the class's `OP_RETURN "MSKMDL01" <class>` sink), drained by
+`ModelSell` (signed by the holder's key, paid through the coinbase like every escrowed reward), 5 %
+burned and 1 % to the registrant on every leg, no transfer object of any kind. The state root takes
+the two collections only once a move exists — the root rides in headers, so a dormant chain commits
+byte-identical roots — and the served carriage grows a tagged tail rather than a field. Two RPCs and
+four CLI verbs read and move; 12 tests pin the ADR's invariants, and the design's worked table was
+corrected by them (the second buy releases 16,824 positions, not 12,846; a full sell returns the
+1,880 MSK reserve, not 3,014). Not done: the explorer page, the devnet buy/sell/retire/drain drill,
+and the activation height on testnet-11.

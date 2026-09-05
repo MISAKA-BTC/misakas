@@ -184,6 +184,11 @@ pub enum RpcApiOps {
     /// `present` bitmap, the count, the deadline and the digest. What lets `misaka palw
     /// court-close` resume a partial filing from the CHAIN rather than from a journal on disk.
     GetPalwPendingChunkGroup = 170,
+    /// ADR-0087 Decision 8: a class's model market — reserve, units, price, sold, burned, paid,
+    /// status — as the tip holds it.
+    GetPalwModelMarket = 171,
+    /// ADR-0087 Decision 8: every position a holder (its payout payload) has, by class.
+    GetPalwModelPositions = 172,
 }
 
 impl RpcApiOps {

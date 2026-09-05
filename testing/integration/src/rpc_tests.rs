@@ -920,6 +920,32 @@ async fn sanity_test() {
                     );
                 })
             }
+            // ADR-0087 Decision 8: a class this chain does not register is `found: false`, a
+            // malformed class id is an error, and an unknown holder holds nothing.
+            KaspadPayloadOps::GetPalwModelMarket => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_model_market_call(None, GetPalwModelMarketRequest { class_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!response.found, "a non-ConsensusV2 network registers no class, and does not error");
+                    assert!(
+                        rpc_client.get_palw_model_market_call(None, GetPalwModelMarketRequest { class_id: "nonsense".into() }).await.is_err(),
+                        "a malformed class id is an error, not an absence"
+                    );
+                })
+            }
+            KaspadPayloadOps::GetPalwModelPositions => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_model_positions_call(None, GetPalwModelPositionsRequest { holder: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(response.positions.is_empty(), "an unknown holder holds nothing");
+                })
+            }
             KaspadPayloadOps::GetTokenSupply => {
                 tst!(op, "TOK supply read — inert preset answers available:false by design")
             }

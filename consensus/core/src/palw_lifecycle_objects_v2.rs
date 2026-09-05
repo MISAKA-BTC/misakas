@@ -141,6 +141,11 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             "a fused-attention dissection move must carry the signature of the party it is attributed to — unsigned, either side could write the other's moves",
         ),
         PalwConsensusObjectV2::CourtCloseDeclared { signature, .. } if !signature.is_empty() => Ok(()),
+        // ADR-0087 Decision 3: a buy is bound to its carrier's sink output below; a sell must carry
+        // the holder's signature, checked at acceptance against the payload it names.
+        PalwConsensusObjectV2::ModelBuy { .. } => Ok(()),
+        PalwConsensusObjectV2::ModelSell { signature, .. } if !signature.is_empty() => Ok(()),
+        PalwConsensusObjectV2::ModelSell { .. } => Err("a model sell must carry the holder's signature — unsigned, anyone could drain a position"),
         PalwConsensusObjectV2::CourtCloseDeclared { .. } => Err(
             "a close declaration must carry the signature of the side it declares for — without one either party could write the other's close and pin it to a verdict it never asserted",
         ),
@@ -331,6 +336,25 @@ pub fn palw_bond_registration_binds_its_carrier_v2(tx: &Transaction, object: &Pa
 /// One function, two call sites — the extractor's substitution and the block validator's signature
 /// check — because a registrant and a verifier that disagreed about which bytes were signed would
 /// reject every honest registration with "not signed by the key it declares".
+/// **ADR-0087 Decision 3: a buy's carrier pays `msk_in` to the class's sink**, at the output the
+/// object names, or the object does not ride. The value is read off the carrier and never off
+/// the object alone, so the reserve the fold credits is MSK that left a spendable output.
+pub fn palw_model_buy_binds_its_carrier_v1(tx: &Transaction, object: &PalwConsensusObjectV2) -> Result<(), &'static str> {
+    let PalwConsensusObjectV2::ModelBuy { class_id, msk_in, sink_index, .. } = object else {
+        return Ok(());
+    };
+    let Some(output) = tx.outputs.get(*sink_index as usize) else {
+        return Err("a model buy names a sink output its carrier does not have");
+    };
+    if output.value != *msk_in {
+        return Err("a model buy declares an MSK leg its sink output does not hold");
+    }
+    if crate::palw_model_market_v1::palw_model_sink_class_v1(&output.script_public_key) != Some(*class_id) {
+        return Err("a model buy's sink output must be the class's own sink script");
+    }
+    Ok(())
+}
+
 pub fn palw_bond_registration_signed_key_v2(bond: &crate::palw_state_v2::PalwBondKeyV2) -> crate::palw_state_v2::PalwBondKeyV2 {
     crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(TransactionId::default(), bond.0.index))
 }
@@ -385,6 +409,10 @@ pub fn palw_lifecycle_objects_from_accepted_txs_v2(txs: &[Transaction]) -> PalwL
             continue;
         }
         if let Err(reason) = palw_bond_registration_binds_its_carrier_v2(tx, &payload.object) {
+            out.skipped.push((id, reason));
+            continue;
+        }
+        if let Err(reason) = palw_model_buy_binds_its_carrier_v1(tx, &payload.object) {
             out.skipped.push((id, reason));
             continue;
         }

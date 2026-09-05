@@ -1529,3 +1529,42 @@ message GetPalwPendingChunkGroupResponseMessage {
   uint64 deposit = 13;
   RPCError error = 1000;
 }
+
+// ADR-0087 Decision 8: a class's model market as the tip holds it.
+message GetPalwModelMarketRequestMessage {
+  string classId = 1;
+}
+
+message GetPalwModelMarketResponseMessage {
+  bool found = 1;
+  string classId = 2;
+  bool opened = 3;
+  uint64 openedDaa = 4;
+  uint64 mskReserve = 5;
+  uint64 positionUnits = 6;
+  uint64 soldUnits = 7;
+  uint64 burnedSompi = 8;
+  uint64 registrantPaidSompi = 9;
+  bool closedToBuys = 10;
+  uint64 priceSompiPerPosition = 11;
+  uint64 supplyUnits = 12;
+  uint64 virtualSompi = 13;
+  string classStatus = 14;
+  RPCError error = 1000;
+}
+
+message RpcPalwModelPosition {
+  string classId = 1;
+  uint64 units = 2;
+}
+
+// ADR-0087 Decision 8: every position a holder (its payout payload) has, by class.
+message GetPalwModelPositionsRequestMessage {
+  string holder = 1;
+}
+
+message GetPalwModelPositionsResponseMessage {
+  string holder = 1;
+  repeated RpcPalwModelPosition positions = 2;
+  RPCError error = 1000;
+}

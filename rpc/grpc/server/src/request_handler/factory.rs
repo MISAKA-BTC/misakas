@@ -95,6 +95,8 @@ impl Factory {
                 GetPalwDerivedArtifacts,
                 GetPalwFreePromptClaim,
                 GetPalwPendingChunkGroup,
+                GetPalwModelMarket,
+                GetPalwModelPositions,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 NotifyBlockAdded,

@@ -542,6 +542,55 @@ impl ValidatorKey {
     /// the native lane admission already accepts. The payload is opaque HERE by design —
     /// carriage validity is the palw_carriage module's stateless check, run by the caller
     /// before spending a fee on it.
+    /// **ADR-0087 Decision 3: a lifecycle carrier with value outputs beside the change.** Output
+    /// 0 is the change (`funding − fee − Σ extra`), outputs 1.. are `extra` in order — a model
+    /// buy names its sink at index 1. Refused when the funding does not cover fee and extras.
+    pub fn build_palw_lifecycle_tx_with_outputs(
+        &self,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+        extra: Vec<TransactionOutput>,
+    ) -> Result<Transaction, String> {
+        let payload = kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2 {
+            version: kaspa_consensus_core::palw_lifecycle_objects_v2::PALW_LIFECYCLE_TX_VERSION_V2,
+            object: object.clone(),
+        };
+        let bytes = borsh::to_vec(&payload).map_err(|e| format!("a lifecycle object must serialize: {e}"))?;
+        let extra_total: u64 = extra.iter().map(|o| o.value).sum();
+        let spent = fee.checked_add(extra_total).ok_or("fee and outputs overflow")?;
+        if funding.amount <= spent {
+            return Err(format!("funding UTXO amount {} does not cover fee {fee} and outputs {extra_total}", funding.amount));
+        }
+        let input = TransactionInput::new(funding_outpoint, vec![], MAX_TX_IN_SEQUENCE_NUM, 1);
+        let mut outputs = vec![TransactionOutput::new(funding.amount - spent, funding.script_public_key.clone())];
+        outputs.extend(extra);
+        let tx = Transaction::new(
+            TX_VERSION,
+            vec![input],
+            outputs,
+            0,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            bytes,
+        );
+        let mtx = MutableTransaction::with_entries(tx, vec![funding.clone()]);
+        let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
+        let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused_mldsa);
+        let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
+        sig_data.push(SIG_HASH_ALL.to_u8());
+        let signature_script = ScriptBuilder::new()
+            .add_data(&sig_data)
+            .map_err(|e| format!("compute overlay funding sig push failed: {e}"))?
+            .add_data(self.keypair.verification_key.as_ref())
+            .map_err(|e| format!("compute overlay funding pubkey push failed: {e}"))?
+            .drain();
+        let mut tx = mtx.tx;
+        tx.inputs[0].signature_script = signature_script;
+        Ok(tx)
+    }
+
     pub fn build_funded_native_carriage_tx(
         &self,
         payload: Vec<u8>,
