@@ -391,7 +391,6 @@ mod tests {
             params.max_script_public_key_len,
             params.coinbase_payload_script_public_key_max_len,
             params.coinbase_maturity(),
-            params.ghostdag_k(),
             params.mergeset_size_limit(),
             Default::default(),
         );
@@ -544,7 +543,6 @@ mod tests {
             params.max_script_public_key_len,
             params.coinbase_payload_script_public_key_max_len,
             params.coinbase_maturity(),
-            params.ghostdag_k(),
             params.mergeset_size_limit(),
             Default::default(),
         );
@@ -619,7 +617,6 @@ mod tests {
             params.max_script_public_key_len,
             params.coinbase_payload_script_public_key_max_len,
             params.coinbase_maturity(),
-            params.ghostdag_k(),
             params.mergeset_size_limit(),
             Default::default(),
         );
@@ -778,7 +775,6 @@ mod tests {
             params.max_script_public_key_len,
             params.coinbase_payload_script_public_key_max_len,
             params.coinbase_maturity(),
-            params.ghostdag_k(),
             params.mergeset_size_limit(),
             Default::default(),
         );
@@ -917,7 +913,6 @@ mod pq_output_class_enforcement_tests {
             p.max_script_public_key_len,
             p.coinbase_payload_script_public_key_max_len,
             p.coinbase_maturity,
-            p.ghostdag_k(),
             p.mergeset_size_limit(),
             Arc::new(TxScriptCacheCounters::default()),
         );
@@ -1023,7 +1018,6 @@ mod pq_output_class_enforcement_tests {
             params.max_script_public_key_len,
             params.coinbase_payload_script_public_key_max_len,
             params.coinbase_maturity(),
-            params.ghostdag_k(),
             params.mergeset_size_limit(),
             Default::default(),
         );

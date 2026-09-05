@@ -4412,7 +4412,10 @@ impl VirtualStateProcessor {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let court = self.palw_court_params_v2.as_ref()?;
         let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
-        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(&state, session_id, proof, court).ok()
+        // Resolved at VIRTUAL's DAA — where the close that asks this question would be accepted —
+        // for the reason `palw_v2_receipt_quorum_assemble_impl` gives.
+        let cap = self.palw_refutation_leaf_cap_at(self.lkg_virtual_state.load().daa_score);
+        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_capped_v2(&state, session_id, proof, court, cap).ok()
     }
 
     /// The court's half of [`Self::palw_seat_duties_v2_impl`]: the open sessions this node is a
@@ -5831,7 +5834,7 @@ impl VirtualStateProcessor {
                                 .as_ref()
                                 .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
                             let derived =
-                                kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(state, session_id, proof, court)
+                                kaspa_consensus_core::palw_court_v2::adjudicate_court_close_capped_v2(state, session_id, proof, court, self.palw_refutation_leaf_cap_at(point.daa_score))
                                     .map_err(|e| e.to_string())?;
                             if derived != *verdict {
                                 return Err(format!(
@@ -5888,7 +5891,7 @@ impl VirtualStateProcessor {
                         .palw_court_params_v2
                         .as_ref()
                         .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(state, session_id, proof, court)
+                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_capped_v2(state, session_id, proof, court, self.palw_refutation_leaf_cap_at(point.daa_score))
                         .map_err(|e| e.to_string())?;
                     if derived != *verdict {
                         return Err(format!("court {session_id} declares {verdict:?}; its own proof adjudicates {derived:?}"));
@@ -6661,10 +6664,27 @@ impl VirtualStateProcessor {
         }
     }
 
-    /// **ADR-0077 Phase B's fence at this block, resolved in exactly one place.** `false` on every
-    /// shipped preset.
+    /// **ADR-0077 Phase B's fence at this block, resolved in exactly one place.** `false` on
+    /// testnet-11 and the hash-lineage presets; armed from genesis on devnet and on a carded
+    /// mainnet.
     pub(super) fn palw_context_ladder_at(&self, daa_score: u64) -> bool {
         self.palw_context_ladder.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **The leaf ladder the court's refutation walkers open against at this block — resolved in
+    /// exactly one place** (ADR-0084 U-08; mainnet audit, 2026-09-05).
+    ///
+    /// The executor's constant (`2^22`) while `palw_context_ladder` is dormant — byte-identical
+    /// to the court every shipped block was judged under — and the ruleset's own
+    /// `max_step_leaf_count` past it: the number admission priced every class at, which the
+    /// walkers never honoured, so a class deeper than `2^22` leaves could be admitted and never
+    /// convicted. `None` on a network with no V2 court is unreachable at every caller (each has
+    /// already resolved `palw_court_params_v2`), and answers the constant anyway.
+    pub(super) fn palw_refutation_leaf_cap_at(&self, daa_score: u64) -> u64 {
+        match self.palw_court_params_v2.as_ref() {
+            Some(court) => kaspa_consensus_core::palw_court_v2::palw_refutation_leaf_cap_v2(court, self.palw_context_ladder_at(daa_score)),
+            None => kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+        }
     }
 
     /// **The court a session is judged under at this block** (ADR-0082 Decision 3, patch note 7).

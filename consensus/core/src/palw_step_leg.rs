@@ -1534,7 +1534,27 @@ fn verify_binding(binding: &PalwStepBindingV2) -> Result<(Hash64, Hash64, Hash64
 /// Model-free adjudication of a structural step-leg refutation. Honest material yields
 /// `NoFaultFound` on every arm (the challenger-loses verdict); arithmetic recomputation
 /// (`ExecutionStepRefutationV1`) is the separate, catalog-bound increment.
+///
+/// The DEFAULT-ladder form: every opening is walked against [`PALW_STEP_LEG_MAX_LEAVES`]. The court
+/// calls [`check_step_refutation_capped_v1`] with the ladder the ruleset froze — see that function.
 pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<PalwStepRefutationVerdictV1, PalwStepLegError> {
+    check_step_refutation_capped_v1(refutation, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`check_step_refutation_v1`] against the ruleset's `max_step_leaf_count` — **the wiring ADR-0084
+/// U-08 was about** (mainnet audit, 2026-09-05).
+///
+/// The capped opening walkers below existed and the court did not call them: every arm here opened
+/// through the default-ladder names, so a class the ruleset admitted at `2^26` leaves — the dense
+/// graph-v5@512 row, 52,778,128 worst case — met `LeafCountOutOfRange` before its first leaf was
+/// read, and no dispute of it could reach a verdict. The cap is now a parameter the court resolves
+/// from `Params::palw_context_ladder` at the block's own DAA (`palw_refutation_leaf_cap_at`, the
+/// ONE place), so under a dormant fence this is byte-identical to the default form and under an
+/// armed one the walkers honour what the ruleset froze.
+pub fn check_step_refutation_capped_v1(
+    refutation: &PalwStepRefutationV1,
+    max_step_leaf_count: u64,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepLegError> {
     let binding = &refutation.binding;
     let (context_hash, profile_hash, checkpoint_profile_hash) = verify_binding(binding)?;
     let committed = &binding.committed_execution_root;
@@ -1631,7 +1651,7 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
     match &refutation.evidence {
         PalwStepEvidenceV1::Shape => unreachable!("handled above"),
         PalwStepEvidenceV1::StepTile { opening, preimage } => {
-            open_against(binding.step_leaf_count, &binding.step_merkle_root, opening)?;
+            open_against(binding.step_leaf_count, &binding.step_merkle_root, opening, max_step_leaf_count)?;
             if step_tile_leaf_hash_v1(&context_hash, &profile_hash, preimage) != opening.leaf_hash {
                 return Err(PalwStepLegError::LeafPreimageMismatch { leaf: "step tile" });
             }
@@ -1644,7 +1664,7 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
             }
         }
         PalwStepEvidenceV1::KvChunk { opening, preimage } => {
-            open_against(binding.step_leaf_count, &binding.step_merkle_root, opening)?;
+            open_against(binding.step_leaf_count, &binding.step_merkle_root, opening, max_step_leaf_count)?;
             if kv_chunk_leaf_hash_v1(&context_hash, &profile_hash, preimage) != opening.leaf_hash {
                 return Err(PalwStepLegError::LeafPreimageMismatch { leaf: "kv chunk" });
             }
@@ -1657,7 +1677,7 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
             }
         }
         PalwStepEvidenceV1::Checkpoint { opening, preimage } => {
-            open_checkpoint(binding, &context_hash, &checkpoint_profile_hash, opening, preimage)?;
+            open_checkpoint(binding, &context_hash, &checkpoint_profile_hash, opening, preimage, max_step_leaf_count)?;
             let fault = checkpoint_fault(binding, &context_hash, opening, preimage);
             match fault {
                 Some(fault) => {
@@ -1667,8 +1687,8 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
             }
         }
         PalwStepEvidenceV1::CheckpointChain { earlier_opening, earlier_preimage, later_opening, later_preimage } => {
-            open_checkpoint(binding, &context_hash, &checkpoint_profile_hash, earlier_opening, earlier_preimage)?;
-            open_checkpoint(binding, &context_hash, &checkpoint_profile_hash, later_opening, later_preimage)?;
+            open_checkpoint(binding, &context_hash, &checkpoint_profile_hash, earlier_opening, earlier_preimage, max_step_leaf_count)?;
+            open_checkpoint(binding, &context_hash, &checkpoint_profile_hash, later_opening, later_preimage, max_step_leaf_count)?;
             if later_opening.leaf_index != earlier_opening.leaf_index + 1 {
                 return Err(PalwStepLegError::Step(PalwStepError::CoordinatesNotCanonical));
             }
@@ -1684,8 +1704,13 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
     }
 }
 
-fn open_against(leaf_count: u64, committed_root: &Hash64, opening: &PalwStepOpeningV1) -> Result<(), PalwStepLegError> {
-    let implied = step_opening_root_v1(leaf_count, opening)?;
+fn open_against(
+    leaf_count: u64,
+    committed_root: &Hash64,
+    opening: &PalwStepOpeningV1,
+    max_step_leaf_count: u64,
+) -> Result<(), PalwStepLegError> {
+    let implied = step_opening_root_capped_v1(leaf_count, opening, max_step_leaf_count)?;
     if implied != *committed_root {
         return Err(PalwStepLegError::CommittedRootMismatch);
     }
@@ -1698,8 +1723,9 @@ fn open_checkpoint(
     checkpoint_profile_hash: &Hash64,
     opening: &PalwStepOpeningV1,
     preimage: &PalwCheckpointLeafV2,
+    max_step_leaf_count: u64,
 ) -> Result<(), PalwStepLegError> {
-    let implied = step_opening_root_v1(binding.checkpoint_count as u64, opening)?;
+    let implied = step_opening_root_capped_v1(binding.checkpoint_count as u64, opening, max_step_leaf_count)?;
     if implied != binding.checkpoint_merkle_root {
         return Err(PalwStepLegError::CommittedRootMismatch);
     }
@@ -2823,10 +2849,13 @@ mod tests {
     /// of the WIRING: `adjudicate_close_proof_v2` already holds `court: &PalwCourtParamsV2` and
     /// passes the constant instead of `court.max_step_leaf_count()`.
     ///
-    /// Rewiring it changes which closes are valid, so it is an activation, not a patch —
-    /// `Params::palw_context_ladder` is the fence ADR-0077 Phase B reserved for exactly this and
-    /// today gates nothing. Until that lands, this test is the alarm: it fails the day either
-    /// number moves, so the gap cannot close or widen silently.
+    /// Rewiring it changes which closes are valid, so it is an activation, not a patch. **Landed
+    /// the same day, behind `Params::palw_context_ladder`** — the fence ADR-0077 Phase B reserved
+    /// for exactly this: the court now calls the `_capped_v1` walkers with the ladder
+    /// `palw_refutation_leaf_cap_v2` resolves at the block, which is the ruleset's past the fence
+    /// and this constant before it. The default-ladder names below still refuse, by design (they
+    /// are the dormant court), so this test keeps standing as the alarm: it fails the day either
+    /// number moves, and the resolver's test in `config::params` holds the fence side.
     #[test]
     fn the_shipped_court_admits_a_row_no_refutation_walker_can_open() {
         use crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT;

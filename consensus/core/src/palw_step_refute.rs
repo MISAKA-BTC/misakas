@@ -2883,6 +2883,23 @@ pub fn check_tiled_decode_token_refutation_v1(
     check_tiled_decode_token_refutation_v2(binding, pin, crate::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY)
 }
 
+/// [`check_tiled_decode_token_refutation_v1`] with the ladder the ruleset froze (the court's entry
+/// point). The two trees this arm opens — the decode row tree and a row's tile tree — are far
+/// below any ladder a class can register, so the cap is carried for one spelling's sake rather
+/// than because either can reach it.
+pub fn check_tiled_decode_token_refutation_capped_v1(
+    binding: &PalwStepBindingV2,
+    pin: &PalwTiledDecodePinV1,
+    max_step_leaf_count: u64,
+) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    check_tiled_decode_token_refutation_capped_v2(
+        binding,
+        pin,
+        crate::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY,
+        max_step_leaf_count,
+    )
+}
+
 /// **ADR-0082 Decision 11's arm: the same two disclosures, compared as KEYS.**
 ///
 /// Identical to [`check_tiled_decode_token_refutation_v1`] in everything the court carries — the
@@ -2910,6 +2927,16 @@ pub fn check_tiled_decode_token_refutation_v2(
     pin: &PalwTiledDecodePinV1,
     sampling: crate::palw_decode_select_v2::PalwDecodeSamplingV2,
 ) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    check_tiled_decode_token_refutation_capped_v2(binding, pin, sampling, crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`check_tiled_decode_token_refutation_v2`] with the ladder the ruleset froze.
+pub fn check_tiled_decode_token_refutation_capped_v2(
+    binding: &PalwStepBindingV2,
+    pin: &PalwTiledDecodePinV1,
+    sampling: crate::palw_decode_select_v2::PalwDecodeSamplingV2,
+    max_step_leaf_count: u64,
+) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     let bad = PalwStepRefuteError::InputSetNotCanonical;
     // The mirror of the flat arm's rule: this arm adjudicates only the class that registered the
     // tiled commitment.
@@ -2933,8 +2960,8 @@ pub fn check_tiled_decode_token_refutation_v2(
     // the producer commits `decode` rows, one per generated token, each the row its token was
     // selected from.
     let row_count = decode as u64;
-    let recomputed_row_root =
-        crate::palw_step_leg::step_opening_root_v1(row_count, &pin.row_opening).map_err(|_| bad("the row opening does not walk"))?;
+    let recomputed_row_root = crate::palw_step_leg::step_opening_root_capped_v1(row_count, &pin.row_opening, max_step_leaf_count)
+        .map_err(|_| bad("the row opening does not walk"))?;
     if pin.row_opening.leaf_index != position as u64 || pin.row_opening.leaf_hash != pin.row_root {
         return Err(bad("the row opening does not open the challenged row's root"));
     }
@@ -2982,7 +3009,8 @@ pub fn check_tiled_decode_token_refutation_v2(
             if opening.leaf_hash != tiled_logits_tile_leaf_v1(&ctx_hash, pin.position, tile as u32, lanes) {
                 return Err(bad("an opened tile's lanes do not hash to its leaf"));
             }
-            let root = crate::palw_step_leg::step_opening_root_v1(tiles, opening).map_err(|_| bad("a tile opening does not walk"))?;
+            let root = crate::palw_step_leg::step_opening_root_capped_v1(tiles, opening, max_step_leaf_count)
+                .map_err(|_| bad("a tile opening does not walk"))?;
             if root != pin.row_root {
                 return Err(bad("a tile opening does not reach the challenged row's root"));
             }
@@ -3683,9 +3711,10 @@ fn verify_kv_anchor<'a>(
     ops: &'a PalwCheckpointKvOperandsV1,
     disputed_call: u32,
     disputed_position: u32,
+    max_step_leaf_count: u64,
 ) -> Result<VerifiedKvAnchor<'a>, PalwStepRefuteError> {
     use crate::palw_state_chunk_map as map;
-    use crate::palw_step_leg::{checkpoint_leaf_hash_v2, state_chunk_leaf_hash_v1, state_chunks_root_v1, step_opening_root_v1};
+    use crate::palw_step_leg::{checkpoint_leaf_hash_v2, state_chunk_leaf_hash_v1, state_chunks_root_v1, step_opening_root_capped_v1};
 
     // **Which checkpoint is this step's anchor, at the cadence the CLASS's map runs.** Per decode
     // call: the prefill has no anchor at all and a decode call's is the checkpoint before it,
@@ -3723,7 +3752,7 @@ fn verify_kv_anchor<'a>(
             leaf: "checkpoint leaf",
         }));
     }
-    let implied = step_opening_root_v1(binding.checkpoint_count as u64, &ops.opening)
+    let implied = step_opening_root_capped_v1(binding.checkpoint_count as u64, &ops.opening, max_step_leaf_count)
         .map_err(|_| PalwStepRefuteError::InputSetNotCanonical("the checkpoint opening is malformed for this leg"))?;
     if implied != binding.checkpoint_merkle_root {
         return Err(PalwStepRefuteError::Leg(crate::palw_step_leg::PalwStepLegError::CommittedRootMismatch));
@@ -3834,6 +3863,17 @@ pub fn check_execution_step_refutation_v1(
     check_execution_step_refutation_opened_v1(refutation, weights, None)
 }
 
+/// [`check_execution_step_refutation_v1`] against the ruleset's `max_step_leaf_count` — the court's
+/// entry point (ADR-0084 U-08; mainnet audit, 2026-09-05). The default-ladder name above keeps the
+/// executor's constant for the callers that have no ruleset in scope.
+pub fn check_execution_step_refutation_capped_v1(
+    refutation: &PalwExecutionStepRefutationV1,
+    weights: &dyn PalwWeightOracleV1,
+    max_step_leaf_count: u64,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    check_execution_step_refutation_opened_capped_v1(refutation, weights, None, max_step_leaf_count)
+}
+
 /// **The same check, with ADR-0081 Decision 3's prompt-id opening carried beside the refutation.**
 ///
 /// A separate entry point rather than a field on [`PalwExecutionStepRefutationV1`], and that is
@@ -3860,7 +3900,22 @@ pub fn check_execution_step_refutation_opened_v1(
     weights: &dyn PalwWeightOracleV1,
     prompt_ids_opening: Option<&crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
-    use crate::palw_step_leg::{PalwStepEvidenceV1, PalwStepRefutationV1, check_step_refutation_v1};
+    check_execution_step_refutation_opened_capped_v1(refutation, weights, prompt_ids_opening, crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`check_execution_step_refutation_opened_v1`] with the ladder the ruleset froze.
+///
+/// Every opening this walk verifies — the structural leg, the carried checkpoint anchor and each
+/// input row's range opening against `binding.step_leaf_count` — is walked against
+/// `max_step_leaf_count`. The default-ladder names pass [`crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES`]
+/// (`2^22`); the court passes what `Params::palw_context_ladder` resolves to at the block.
+pub fn check_execution_step_refutation_opened_capped_v1(
+    refutation: &PalwExecutionStepRefutationV1,
+    weights: &dyn PalwWeightOracleV1,
+    prompt_ids_opening: Option<&crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
+    max_step_leaf_count: u64,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    use crate::palw_step_leg::{PalwStepEvidenceV1, PalwStepRefutationV1, check_step_refutation_capped_v1};
 
     let binding = &refutation.binding;
     // 1) Structural pass on the output leaf: a structurally-faulty leaf convicts without
@@ -3872,7 +3927,7 @@ pub fn check_execution_step_refutation_opened_v1(
             preimage: refutation.output_preimage.clone(),
         },
     };
-    match check_step_refutation_v1(&structural) {
+    match check_step_refutation_capped_v1(&structural, max_step_leaf_count) {
         Ok(verdict) => return Ok(verdict),                              // structural conviction subsumes
         Err(crate::palw_step_leg::PalwStepLegError::NoFaultFound) => {} // structurally honest
         Err(e) => return Err(e.into()),
@@ -3893,7 +3948,7 @@ pub fn check_execution_step_refutation_opened_v1(
     // form: silently ignoring attached evidence makes a refutation mean something other than what
     // it says.
     let anchor = match refutation.kv_checkpoint.as_ref() {
-        Some(ops) => Some(verify_kv_anchor(binding, ops, out_coord.call_index, out_coord.position)?),
+        Some(ops) => Some(verify_kv_anchor(binding, ops, out_coord.call_index, out_coord.position, max_step_leaf_count)?),
         None => None,
     };
     let required = canonical_input_leaves_anchored(
@@ -3940,7 +3995,7 @@ pub fn check_execution_step_refutation_opened_v1(
                 leaf_hashes: leaf_hashes[*start..*start + *len].to_vec(),
                 siblings: siblings.clone(),
             };
-            let implied = crate::palw_step_leg::step_range_opening_root_v1(binding.step_leaf_count, &opening)?;
+            let implied = crate::palw_step_leg::step_range_opening_root_capped_v1(binding.step_leaf_count, &opening, max_step_leaf_count)?;
             if implied != binding.step_merkle_root {
                 return Err(PalwStepRefuteError::Leg(crate::palw_step_leg::PalwStepLegError::CommittedRootMismatch));
             }

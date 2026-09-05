@@ -8064,6 +8064,15 @@ pub fn mainnet_shipped_params() -> Params {
     if palw_mainnet_qwen25_a16_is_registered() {
         base.palw_kary_court = Some(ForkActivation::always());
     }
+    // **ADR-0077 Phase B's fence, STATED on mainnet's base from genesis** (ADR-0084 U-08; mainnet
+    // audit, 2026-09-05). Past it the court's refutation walkers open against the ladder the
+    // ruleset froze (`PalwCourtParamsV2::max_step_leaf_count`) instead of the executor's `2^22`,
+    // so a class is prosecuted at the ladder it was admitted at — dormant, every class deeper than
+    // `2^22` leaves is admitted and un-convictable, which on a chain with value is faked work
+    // nobody can charge for. A fresh chain arms it for free (no history was judged under the
+    // other ladder); testnet-11 has such history and reaches it as a flag day or a re-mint, which
+    // is the operator's decision and not this function's. Devnet arms it from genesis already.
+    base.palw_context_ladder = Some(ForkActivation::always());
     let assembled = if palw_mainnet_qwen36_is_registered() {
         let dense = palw_mainnet_qwen25_a16_is_registered().then_some(PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT);
         palw_v2_params_with_classes_on_base(
@@ -8357,9 +8366,15 @@ pub fn palw_rc_base_params() -> Params {
     //   set registering a fused row needs the dissection court and refuses a preset that
     //   disagrees — belt and braces: the preset says it, the derivation enforces it.
     //
-    // NOT `palw_context_ladder`: no accessor reads that fence to gate anything — the 512 row is
-    // registered and priced from the bundle's own `max_step_leaf_count` with it dormant — so arming
-    // it would move the fingerprint and gate nothing (ADR-0065 D1's mistake).
+    // NOT `palw_context_ladder` — and no longer for the reason this comment used to give ("no
+    // accessor reads that fence to gate anything"). It gates two things now: the class ladder
+    // rules at post-genesis admission (`palw_class_ladder_rules_for_court_v1`) and, since the
+    // 2026-09-05 mainnet audit, the leaf ladder the court's refutation walkers open against
+    // (`palw_refutation_leaf_cap_v2`, ADR-0084 U-08). Dormant here, the 512 row this genesis
+    // registers is admitted at `2^26` and prosecuted at `2^22`, i.e. not at all. It stays dormant
+    // on this preset because testnet-11 is a LIVE chain with closes judged under the constant:
+    // arming it is a scheduled height (ADR-0083's path (a)) or a re-mint, and either is the
+    // operator's call. A carded mainnet and devnet arm it from genesis.
     params.palw_uncertified_weightless = Some(ForkActivation::always());
     params.palw_kary_court = Some(ForkActivation::always());
     // **ADR-0083 Decision 1, SCHEDULED on the live chain — testnet-11 Relaunch 5f's flag day.**
@@ -11948,6 +11963,52 @@ mod consensus_params_id_tests {
             "ADR-0069 D7 is genesis-only: a mainnet minted without it can never acquire it"
         );
         carded.validate_palw_v2().expect("the startup gate a mainnet node runs accepts the armed card");
+    }
+
+    /// **The court prosecutes at the ladder it admitted at — where the fence says so** (ADR-0084
+    /// U-08; mainnet audit, 2026-09-05).
+    ///
+    /// On every shipped preset the bundle freezes `max_step_leaf_count = 2^26` and the walkers'
+    /// constant is `2^22`. The resolver hands the court the constant while `palw_context_ladder`
+    /// is dormant (testnet-11, whose closes were all judged under it) and the ruleset's number
+    /// past it (devnet from genesis; a carded mainnet, which states the fence on its base).
+    #[test]
+    fn the_refutation_ladder_is_the_rulesets_only_past_the_context_ladder() {
+        use crate::palw_court_v2::palw_refutation_leaf_cap_v2;
+        use crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES;
+
+        let court_of = |p: &Params| match &p.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.court,
+            _ => panic!("V2"),
+        };
+        let rc = palw_rc_shipped_params();
+        let devnet = devnet_shipped_params();
+        assert!(
+            court_of(&rc).max_step_leaf_count() > PALW_STEP_LEG_MAX_LEAVES,
+            "the premise: the ruleset admits deeper than the walkers' constant ({} vs {PALW_STEP_LEG_MAX_LEAVES})",
+            court_of(&rc).max_step_leaf_count()
+        );
+
+        // testnet-11: dormant, so the constant — the court every shipped close was judged under.
+        assert!(rc.palw_context_ladder.is_none(), "testnet-11 leaves the ladder dormant: it is a live chain");
+        assert_eq!(palw_refutation_leaf_cap_v2(&court_of(&rc), false), PALW_STEP_LEG_MAX_LEAVES);
+        // devnet: armed from genesis, so the ruleset's own ladder.
+        assert_eq!(devnet.palw_context_ladder, Some(ForkActivation::always()));
+        assert_eq!(palw_refutation_leaf_cap_v2(&court_of(&devnet), true), court_of(&devnet).max_step_leaf_count());
+
+        // A carded mainnet states the fence on its base, so its court prosecutes the dense row it
+        // registers. Through the same tail `mainnet_shipped_params` runs.
+        let mut base = mainnet_v2_mint_base();
+        base.palw_context_ladder = Some(ForkActivation::always());
+        let carded = palw_rc_arm_phase1(
+            palw_v2_params_from_artifacts_on_base(base, PALW_RC_GENESIS_ARTIFACT_ROOT, vec![])
+                .expect("a zero-seat mainnet card assembles (ADR-0061)"),
+        );
+        assert_eq!(carded.palw_context_ladder, Some(ForkActivation::always()), "…and the arming survives assembly");
+        assert_eq!(
+            palw_refutation_leaf_cap_v2(&court_of(&carded), carded.palw_context_ladder.is_some_and(|f| f.is_active(0))),
+            court_of(&carded).max_step_leaf_count()
+        );
     }
 
     /// **A mainnet card that pins the dense tier can state the court that tries it.**

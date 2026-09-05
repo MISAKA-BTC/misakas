@@ -9,7 +9,7 @@ use kaspa_txscript::{
     caches::{Cache, TxScriptCacheCounters},
 };
 
-use kaspa_consensus_core::{KType, config::params::PqEnforcementMode, mass::MassCalculator};
+use kaspa_consensus_core::{config::params::PqEnforcementMode, mass::MassCalculator};
 use kaspa_txscript::ScriptPolicy;
 
 #[derive(Clone)]
@@ -20,7 +20,6 @@ pub struct TransactionValidator {
     max_script_public_key_len: usize,
     coinbase_payload_script_public_key_max_len: u8,
     coinbase_maturity: u64,
-    ghostdag_k: KType,
     /// **The mergeset's own bound, because the coinbase carries one output per entitled RED**
     /// (ADR-0058; mainnet audit 2026-09-05). `ghostdag_k` bounds the blues; nothing bounds the
     /// reds but this, and the isolation guard was sized as though the reds shared one aggregate
@@ -43,7 +42,6 @@ impl TransactionValidator {
         max_script_public_key_len: usize,
         coinbase_payload_script_public_key_max_len: u8,
         coinbase_maturity: u64,
-        ghostdag_k: KType,
         mergeset_size_limit: u64,
         counters: Arc<TxScriptCacheCounters>,
         mass_calculator: MassCalculator,
@@ -57,7 +55,6 @@ impl TransactionValidator {
             max_script_public_key_len,
             coinbase_payload_script_public_key_max_len,
             coinbase_maturity,
-            ghostdag_k,
             mergeset_size_limit,
             sig_cache: Cache::with_counters(10_000, counters),
             mass_calculator,
@@ -73,7 +70,6 @@ impl TransactionValidator {
         max_script_public_key_len: usize,
         coinbase_payload_script_public_key_max_len: u8,
         coinbase_maturity: u64,
-        ghostdag_k: KType,
         mergeset_size_limit: u64,
         counters: Arc<TxScriptCacheCounters>,
     ) -> Self {
@@ -84,7 +80,6 @@ impl TransactionValidator {
             max_script_public_key_len,
             coinbase_payload_script_public_key_max_len,
             coinbase_maturity,
-            ghostdag_k,
             mergeset_size_limit,
             sig_cache: Cache::with_counters(10_000, counters),
             mass_calculator: MassCalculator::new(0, 0, 0, 0),

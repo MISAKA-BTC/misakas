@@ -56,7 +56,7 @@ use crate::palw_bisect::{PalwBisectSpaceV1, bisect_session_id_v1};
 use crate::palw_state_v2::{
     PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwCourtVerdictV2, PalwStateParamsV2,
 };
-use crate::palw_step_refute::{PalwExecutionStepRefutationV1, PalwStepRefuteError, check_execution_step_refutation_v1};
+use crate::palw_step_refute::{PalwExecutionStepRefutationV1, PalwStepRefuteError, check_execution_step_refutation_capped_v1};
 use blake2b_simd::Params;
 
 pub const PALW_COURT_V2_DOMAIN_PARTY_ID: &[u8] = b"misaka-palw/court-v2/party-id/v1";
@@ -759,6 +759,25 @@ pub fn adjudicate_court_close_v2(
     state: &PalwChainStateV2,
     session_id: &Hash64,
     proof: &PalwCourtVerdictProofV2,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
+    adjudicate_court_close_capped_v2(state, session_id, proof, court, crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`adjudicate_court_close_v2`] with the leaf ladder the refutation walkers may open against —
+/// **the court's entry point** (ADR-0084 U-08; mainnet audit, 2026-09-05).
+///
+/// `court.max_step_leaf_count()` is what the ruleset FROZE and what admission priced the class at;
+/// the walkers opened against the executor's constant, so a class deeper than `2^22` leaves was
+/// admitted at one ladder and prosecuted at another — and at the second it was un-prosecutable.
+/// The cap is passed rather than read off `court`, because which ladder the walkers honour is a
+/// consensus rule a running chain acquires at a height: the acceptance pipeline resolves it from
+/// `Params::palw_context_ladder` at the block's own DAA (`palw_refutation_leaf_cap_at`, the ONE
+/// place) and hands it here. The default-ladder name above is the dormant form, byte for byte.
+pub fn adjudicate_court_close_capped_v2(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    proof: &PalwCourtVerdictProofV2,
     // **ADR-0049 Decision C's bounds, applied to the OBJECT** (audit H-03).
     //
     // The four cost bounds live in `PalwCourtParamsV2` and are inside `palw_ruleset_id_v2`, and
@@ -771,6 +790,7 @@ pub fn adjudicate_court_close_v2(
     // Checked FIRST, before a single path is walked, because the whole point of a cost bound is
     // that exceeding it costs nothing to detect.
     court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    max_step_leaf_count: u64,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     // The cost gate runs before ANY state is read, which is the cheapest-first ordering a cost
     // bound has to have: an oversized object must be refusable without a lookup, a decode or a
@@ -880,7 +900,7 @@ pub fn adjudicate_court_close_v2(
             });
         }
     }
-    adjudicate_close_proof_v2(state, claim, proof, court)
+    adjudicate_close_proof_capped_v2(state, claim, proof, court, max_step_leaf_count)
 }
 
 /// The arithmetic half of a close: given the CLAIM the dispute is about, what verdict does this
@@ -896,6 +916,18 @@ pub fn adjudicate_close_proof_v2(
     proof: &PalwCourtVerdictProofV2,
     court: &crate::palw_mode_v2::PalwCourtParamsV2,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
+    adjudicate_close_proof_capped_v2(state, claim, proof, court, crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`adjudicate_close_proof_v2`] with the leaf ladder the walkers may open against — see
+/// [`adjudicate_court_close_capped_v2`].
+pub fn adjudicate_close_proof_capped_v2(
+    state: &PalwChainStateV2,
+    claim: &crate::palw_state_v2::PalwClaimStateV2,
+    proof: &PalwCourtVerdictProofV2,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    max_step_leaf_count: u64,
+) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     check_close_cost_v2(proof, court)?;
     // Before ANY arm reads geometry out of the binding. See the function's own docs: this is the
     // bound that does not have to be repeated at each consumer.
@@ -907,7 +939,7 @@ pub fn adjudicate_close_proof_v2(
             let class = state.class(&claim.class_id).ok_or(PalwCourtV2Error::MissingClass(claim.class_id))?;
             let operands = PalwProvenOperandsV1::from_openings_v1(operand_openings, class.artifact_root)
                 .map_err(|e| PalwCourtV2Error::OperandProofInvalid(e.to_string()))?;
-            map_refutation_outcome(check_execution_step_refutation_v1(refutation, &operands))
+            map_refutation_outcome(check_execution_step_refutation_capped_v1(refutation, &operands, max_step_leaf_count))
         }
         PalwCourtVerdictProofV2::DecodeToken { binding, pin, position } => {
             // The same two pins the arithmetic close runs, for the same reason: the dispute is
@@ -923,7 +955,7 @@ pub fn adjudicate_close_proof_v2(
             // tiled pin against a class that registered the flat commitment.
             check_arithmetic_close_binding(claim.trace_root, binding_logits_root_of(binding))?;
             check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
-            map_refutation_outcome(crate::palw_step_refute::check_tiled_decode_token_refutation_v1(binding, pin))
+            map_refutation_outcome(crate::palw_step_refute::check_tiled_decode_token_refutation_capped_v1(binding, pin, max_step_leaf_count))
         }
         // The one arm that cannot be graded from the claim alone — see `adjudicate_court_close_v2`,
         // which returns before reaching here. Refused rather than silently acquitted, because an
@@ -990,6 +1022,17 @@ pub fn palw_attn_widest_registered_site_v2(bundle: &crate::palw_mode_v2::PalwCon
         }
     }
     (history, lanes)
+}
+
+/// **The leaf ladder the refutation walkers open against, as a function of the fence** — the
+/// one spelling the acceptance pipeline resolves at a block's DAA and the shipped-preset tests
+/// read directly (ADR-0084 U-08; mainnet audit, 2026-09-05).
+///
+/// Dormant: [`crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES`], the executor's constant every
+/// shipped block has been judged under. Armed: the ruleset's own `max_step_leaf_count` — what
+/// admission priced the class at, so a class is prosecuted at the ladder it was admitted at.
+pub fn palw_refutation_leaf_cap_v2(court: &crate::palw_mode_v2::PalwCourtParamsV2, context_ladder_active: bool) -> u64 {
+    if context_ladder_active { court.max_step_leaf_count() } else { crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES }
 }
 
 /// **ADR-0082 Decision 3 at activation: the court a session is judged under.**
