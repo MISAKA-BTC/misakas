@@ -250,7 +250,10 @@ pub fn check_palw_producer_entitlement_v2_with_bootstrap(
     }
 
     // 5. The artifact the trace claims to open against is the one the class registered.
-    if class.artifact_root != attempt.artifact_root {
+    // ADR-0088 Decision 3: one of the roots in force for the class — its registration's, or a
+    // line's version in force (current, a preview, a superseded one inside its grace).
+    let daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
+    if !state.class_roots_in_force(&attempt.class_id, daa).contains(&attempt.artifact_root) {
         return Err(PalwAdmissionV2Error::ArtifactRootMismatch);
     }
 

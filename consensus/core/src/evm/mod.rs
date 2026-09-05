@@ -28,6 +28,8 @@ mod log_index;
 pub use log_index::*;
 
 mod state_diff;
+/// ADR-0089: the contract between the fold and the EVM's window and hand.
+pub mod model_market;
 pub use state_diff::*;
 
 use crate::tx::{ScriptPublicKey, TransactionOutpoint};
@@ -540,6 +542,10 @@ pub enum EvmSystemOp {
     /// Claim an `EVM_DEPOSIT_LOCK` UTXO output and credit the EVM account
     /// (design §7.3). The lock is consumed in the same block's UTXO diff (P4).
     DepositClaim(DepositClaim),
+    /// **ADR-0089 Decision 6: a settlement the selected parent's fold decided**, carried by the
+    /// producer and validated equal to the list derived from that fold; the settling block burns a
+    /// filled buy's escrow into a sink output, refunds a refused one, credits a filled sell.
+    MarketSettle(model_market::PalwEvmSettlementV1),
 }
 
 impl MemSizeEstimator for EvmSystemOp {}
@@ -845,6 +851,13 @@ pub struct EvmExecutionResult {
     /// §16: per-candidate outcomes, parallel to the acceptance input order
     /// (feeds the tx-lookup index; NOT part of the commitment).
     pub candidate_outcomes: Vec<EvmCandidateOutcome>,
+    /// **ADR-0089 Decision 5: the actions the writer queued in this block**, scanned from its
+    /// `ActionQueued` logs in log order and handed to the same block's PALW transition. Transient:
+    /// never stored, never part of the commitment (the logs are), so the persisted layout is the
+    /// one every shipped build reads.
+    #[borsh(skip)]
+    #[serde(skip)]
+    pub market_actions: Vec<model_market::PalwEvmMarketActionV1>,
 }
 
 impl MemSizeEstimator for EvmExecutionResult {}

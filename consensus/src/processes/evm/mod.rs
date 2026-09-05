@@ -133,7 +133,9 @@ pub fn validate_evm_deposit_claims<V: kaspa_consensus_core::utxo::utxo_view::Utx
     let mut consumed = Vec::with_capacity(payload.system_ops.len());
     let mut seen = std::collections::HashSet::new();
     for (i, op) in payload.system_ops.iter().enumerate() {
-        let EvmSystemOp::DepositClaim(claim) = op;
+        // ADR-0089: a settlement is validated against the selected parent's fold by
+        // `validate_evm_market_settlements`, not here — it consumes no lock.
+        let EvmSystemOp::DepositClaim(claim) = op else { continue };
         if !seen.insert(claim.deposit_outpoint) {
             return Err(format!("system op #{i}: duplicate deposit-lock outpoint {}", claim.deposit_outpoint));
         }

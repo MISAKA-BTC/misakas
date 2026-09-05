@@ -51,6 +51,9 @@ pub struct PalwModelMarketV1 {
     pub registrant_paid_sompi: u64,
     /// Set when the class left `Active`; sells continue, buys are refused (Decision 7).
     pub closed_to_buys: bool,
+    /// ADR-0088 Decision 8: the part of the registrant leg paid to an adopted contributor.
+    /// `registrant_paid_sompi` is the owner's total.
+    pub contributor_paid_sompi: u64,
 }
 
 impl PalwModelMarketV1 {
@@ -63,6 +66,7 @@ impl PalwModelMarketV1 {
             burned_sompi: 0,
             registrant_paid_sompi: 0,
             closed_to_buys: false,
+            contributor_paid_sompi: 0,
         }
     }
 

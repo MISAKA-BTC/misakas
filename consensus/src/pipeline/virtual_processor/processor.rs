@@ -483,6 +483,11 @@ pub struct VirtualStateProcessor {
     /// `ModelSell` are accepted (a sell's signature checked here, at acceptance); before it both
     /// are refused by name and the fold never sees them. Resolved at the BLOCK's DAA.
     pub(super) palw_model_market: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0088 Decision 11's fence, `None` on every shipped preset.** Past it the ten registry
+    /// objects are accepted (their signatures checked here, against the bond each is attributed
+    /// to) and the fold attributes claims to versions; before it all ten are refused by name.
+    /// Resolved at the BLOCK's DAA.
+    pub(super) palw_model_lines: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0077 Phase B's fence, `None` on every shipped preset.** Past it a class registration
     /// is judged against `palw_class_ladder_rules_*` — the ladder both leaf counts are enumerated
     /// against, the court the close is priced for and Decision 14's canonical floor — instead of
@@ -925,6 +930,7 @@ impl VirtualStateProcessor {
             palw_prompt_ids_merkle: params.palw_prompt_ids_merkle_fence(),
             palw_court_ladder: params.palw_court_ladder_fence(),
             palw_model_market: params.palw_model_market_fence(),
+            palw_model_lines: params.palw_model_lines_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_uncertified_weightless: params.palw_uncertified_weightless,
             palw_da_court: params.palw_da_court,
@@ -1627,7 +1633,7 @@ impl VirtualStateProcessor {
                                         }
                                     })
                                     .collect();
-                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v6(
+                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
                                     state,
                                     state_params,
                                     self.palw_admission_params_v2.as_ref(),
@@ -1641,6 +1647,8 @@ impl VirtualStateProcessor {
                                     // shipped preset, where the fold is byte-identical.
                                     self.palw_uncertified_weightless_at(point.daa_score),
                                     self.palw_da_court_at(point.daa_score),
+                                    // ADR-0088 Decision 11, at this BLOCK's DAA.
+                                    &self.palw_transition_extras_at(point.daa_score),
                                 ) {
                                     Ok((next, delta, merged_skips)) => {
                                         // A skipped merged work is the block standing while a
@@ -5478,7 +5486,7 @@ impl VirtualStateProcessor {
                     if spends_the_court_slot {
                         court_closes_completed += 1;
                     }
-                    match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_policies(
+                    match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_extras(
                         &folded,
                         state_params,
                         &rehearsal,
@@ -5494,6 +5502,7 @@ impl VirtualStateProcessor {
                         // different state roots for the same block.
                         self.palw_uncertified_weightless_at(point.daa_score),
                         self.palw_da_court_at(point.daa_score),
+                        &self.palw_transition_extras_at(point.daa_score),
                     ) {
                         Ok((next, _)) => {
                             if completes_a_group {
@@ -5879,20 +5888,20 @@ impl VirtualStateProcessor {
                 // ADR-0087 Decision 6: the market's two moves exist only past the fence, refused by
                 // name before it (the drop-not-invalidate shape). A sell is signed by the key whose
                 // payload is the holder (M8), checked here where the verifier lives.
-                Obj::ModelBuy { class_id, .. } => {
+                Obj::ModelBuy { line_id, .. } => {
                     if !self.palw_model_market_active_at(point.daa_score) {
-                        return Err(format!("a model buy of class {class_id} on a chain where the model market is not in force"));
+                        return Err(format!("a model buy of line {line_id} on a chain where the model market is not in force"));
                     }
                 }
-                Obj::ModelSell { class_id, holder, units_in, min_msk_out, pubkey, signature } => {
+                Obj::ModelSell { line_id, holder, units_in, min_msk_out, pubkey, signature } => {
                     if !self.palw_model_market_active_at(point.daa_score) {
-                        return Err(format!("a model sell of class {class_id} on a chain where the model market is not in force"));
+                        return Err(format!("a model sell of line {line_id} on a chain where the model market is not in force"));
                     }
                     if kaspa_consensus_core::palw_model_market_v1::palw_model_holder_of_pubkey_v1(pubkey) != *holder {
-                        return Err(format!("a model sell of class {class_id} is signed by a key that is not the holder's"));
+                        return Err(format!("a model sell of line {line_id} is signed by a key that is not the holder's"));
                     }
                     let message = kaspa_consensus_core::palw_model_market_v1::palw_model_sell_message_v1(
-                        class_id,
+                        line_id,
                         holder,
                         *units_in,
                         *min_msk_out,
@@ -5905,8 +5914,159 @@ impl VirtualStateProcessor {
                     )
                     .unwrap_or(false)
                     {
-                        return Err(format!("a model sell of class {class_id} carries a signature the holder's key does not verify"));
+                        return Err(format!("a model sell of line {line_id} carries a signature the holder's key does not verify"));
                     }
+                }
+                // ADR-0088 Decision 11: the registry's ten objects exist only past the fence, refused
+                // by name before it. Each is attributed to a bond the fold names — the founder, the
+                // line's developer, its owner, the proposer, the evaluator — and its signature is
+                // checked HERE, against that bond's stored key, over the message the object's fields
+                // spell; the fold then enforces referential integrity and the bounds.
+                Obj::ModelLineFounded { class_id, name, founder, root, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a line founding on class {class_id} on a chain where the model registry is not in force"));
+                    }
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_line_founded_message_v1(
+                        self.palw_network_domain_v2(),
+                        class_id,
+                        name,
+                        founder,
+                        root,
+                    );
+                    self.palw_model_check_bond_signature(state, founder, &message, signature, "a line founding")?;
+                }
+                Obj::ModelVersionPublished {
+                    line_id,
+                    version,
+                    root,
+                    parent,
+                    adopted_from,
+                    runtime_hash,
+                    dataset_commitment,
+                    training_config_hash,
+                    notes_hash,
+                    preview,
+                    signature,
+                } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a version of line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let developer = self.palw_model_line_role(state, line_id, "developer")?;
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_version_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        *version,
+                        root,
+                        *parent,
+                        adopted_from.as_ref(),
+                        runtime_hash.as_ref(),
+                        dataset_commitment.as_ref(),
+                        training_config_hash.as_ref(),
+                        notes_hash.as_ref(),
+                        *preview,
+                    );
+                    self.palw_model_check_bond_signature(state, &developer, &message, signature, "a version")?;
+                }
+                Obj::ModelVersionPromoted { line_id, version, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a promotion on line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let developer = self.palw_model_line_role(state, line_id, "developer")?;
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_version_move_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        *version,
+                        b"promote",
+                    );
+                    self.palw_model_check_bond_signature(state, &developer, &message, signature, "a promotion")?;
+                }
+                Obj::ModelVersionWithdrawn { line_id, version, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a withdrawal on line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let developer = self.palw_model_line_role(state, line_id, "developer")?;
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_version_move_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        *version,
+                        b"withdraw",
+                    );
+                    self.palw_model_check_bond_signature(state, &developer, &message, signature, "a withdrawal")?;
+                }
+                Obj::ModelLineRolesSet { line_id, developer, maintainer, contributor_permille_of_leg, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a roles change on line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let owner = self.palw_model_line_role(state, line_id, "owner")?;
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_roles_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        developer.as_ref(),
+                        maintainer.as_ref(),
+                        *contributor_permille_of_leg,
+                    );
+                    self.palw_model_check_bond_signature(state, &owner, &message, signature, "a roles change")?;
+                }
+                Obj::ModelLineOwnerTransferred { line_id, new_owner, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a transfer of line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let owner = self.palw_model_line_role(state, line_id, "owner")?;
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_transfer_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        new_owner,
+                    );
+                    self.palw_model_check_bond_signature(state, &owner, &message, signature, "a transfer")?;
+                }
+                Obj::ModelLineRetired { line_id, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a retirement of line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let owner = self.palw_model_line_role(state, line_id, "owner")?;
+                    let message =
+                        kaspa_consensus_core::palw_model_lines_v1::palw_model_retire_message_v1(self.palw_network_domain_v2(), line_id);
+                    self.palw_model_check_bond_signature(state, &owner, &message, signature, "a retirement")?;
+                }
+                Obj::ModelProposalPosted { line_id, root, note_hash, by, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a proposal on line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_proposal_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        root,
+                        note_hash,
+                        by,
+                    );
+                    self.palw_model_check_bond_signature(state, by, &message, signature, "a proposal")?;
+                }
+                Obj::ModelProposalClosed { line_id, proposal_id, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a proposal close on line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let developer = self.palw_model_line_role(state, line_id, "developer")?;
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_proposal_close_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        proposal_id,
+                    );
+                    self.palw_model_check_bond_signature(state, &developer, &message, signature, "a proposal close")?;
+                }
+                Obj::ModelEvaluationPosted { line_id, version, evaluator_id, score_permille, report_hash, by, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("an evaluation on line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_evaluation_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        *version,
+                        evaluator_id,
+                        *score_permille,
+                        report_hash,
+                        by,
+                    );
+                    self.palw_model_check_bond_signature(state, by, &message, signature, "an evaluation")?;
                 }
                 Obj::CourtVerdictPosted { session_id, verdict, signature } => {
                     kaspa_consensus_core::palw_court_v2::check_court_verdict_acceptance_v2(
@@ -6532,6 +6692,53 @@ impl VirtualStateProcessor {
 
     /// `verify_mldsa87_with_context` as a `bool`, which is the shape every PALW verifier callback
     /// takes — one place, so two call sites cannot disagree about what an error means.
+    /// ADR-0088: the network domain every registry message is signed under — the same one a class
+    /// registration is signed under.
+    fn palw_network_domain_v2(&self) -> kaspa_hashes::Hash64 {
+        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash))
+    }
+
+    /// ADR-0088: the bond a line's `role` ("owner" or "developer") names, read from the acceptance
+    /// state — a founding line without a row answers from its class.
+    fn palw_model_line_role(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        line_id: &kaspa_hashes::Hash64,
+        role: &str,
+    ) -> Result<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, String> {
+        let line = state.model_line_or_founding(line_id).ok_or_else(|| format!("line {line_id} does not exist"))?;
+        let bond = match role {
+            "owner" => line.owner,
+            _ => line.developer_bond(),
+        };
+        bond.ok_or_else(|| format!("line {line_id} has no {role}: nobody may act on it"))
+    }
+
+    /// ADR-0088: the signature of a registry object, checked against the stored key of the bond
+    /// it is attributed to, under the registry's own ML-DSA-87 context.
+    fn palw_model_check_bond_signature(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        message: &kaspa_hashes::Hash64,
+        signature: &[u8],
+        what: &str,
+    ) -> Result<(), String> {
+        let record = state.bond(bond).ok_or_else(|| format!("{what} is attributed to a bond this chain does not have"))?;
+        if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+            return Err(format!("{what} is attributed to a bond that is not Active"));
+        }
+        if !Self::verify_mldsa87_with_context_bool(
+            &record.pubkey,
+            message.as_byte_slice(),
+            signature,
+            kaspa_consensus_core::palw_model_lines_v1::PALW_MODEL_LINE_MLDSA87_CONTEXT,
+        ) {
+            return Err(format!("{what} carries a signature the attributed bond's key does not verify"));
+        }
+        Ok(())
+    }
+
     fn verify_mldsa87_with_context_bool(key: &[u8], message: &[u8], sig: &[u8], context: &[u8]) -> bool {
         verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
     }
@@ -6604,6 +6811,19 @@ impl VirtualStateProcessor {
     /// **ADR-0087 Decision 6, resolved in exactly one place, at the BLOCK's own DAA.**
     fn palw_model_market_active_at(&self, daa_score: u64) -> bool {
         self.palw_model_market.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0088 Decision 11, resolved in exactly one place, at the BLOCK's own DAA.**
+    pub(super) fn palw_model_lines_active_at(&self, daa_score: u64) -> bool {
+        self.palw_model_lines.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// The extras every production fold and every acceptance rehearsal carry (ADR-0088 D11).
+    fn palw_transition_extras_at(&self, daa_score: u64) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+        kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+            model_lines_active: self.palw_model_lines_active_at(daa_score),
+            ..Default::default()
+        }
     }
 
     fn palw_court_step_ladder_at(&self, daa_score: u64, court: &kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2) -> u64 {
@@ -13696,6 +13916,16 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::BondRegistered { .. } => "BondRegistered",
         O::ModelBuy { .. } => "ModelBuy",
         O::ModelSell { .. } => "ModelSell",
+        O::ModelLineFounded { .. } => "ModelLineFounded",
+        O::ModelVersionPublished { .. } => "ModelVersionPublished",
+        O::ModelVersionPromoted { .. } => "ModelVersionPromoted",
+        O::ModelVersionWithdrawn { .. } => "ModelVersionWithdrawn",
+        O::ModelLineRolesSet { .. } => "ModelLineRolesSet",
+        O::ModelLineOwnerTransferred { .. } => "ModelLineOwnerTransferred",
+        O::ModelLineRetired { .. } => "ModelLineRetired",
+        O::ModelProposalPosted { .. } => "ModelProposalPosted",
+        O::ModelProposalClosed { .. } => "ModelProposalClosed",
+        O::ModelEvaluationPosted { .. } => "ModelEvaluationPosted",
         O::BondRetireRequested { .. } => "BondRetireRequested",
         O::BondCapabilityDeclared { .. } => "BondCapabilityDeclared",
         O::ClassRegistered { .. } => "ClassRegistered",

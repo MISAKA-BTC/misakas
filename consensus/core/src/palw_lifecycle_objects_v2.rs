@@ -146,6 +146,33 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::ModelBuy { .. } => Ok(()),
         PalwConsensusObjectV2::ModelSell { signature, .. } if !signature.is_empty() => Ok(()),
         PalwConsensusObjectV2::ModelSell { .. } => Err("a model sell must carry the holder's signature — unsigned, anyone could drain a position"),
+        // ADR-0088: every registry object is attributed to a bond and carries that bond's signature,
+        // checked at acceptance against the bond's stored key; unsigned, anyone could publish a
+        // version, hand a line over or speak in a line's name.
+        PalwConsensusObjectV2::ModelLineFounded { signature, name, .. } => {
+            if signature.is_empty() {
+                Err("a line founding must carry the founder's signature")
+            } else if name.is_empty() || name.len() > crate::palw_model_lines_v1::PALW_MODEL_LINE_NAME_MAX_BYTES {
+                Err("a line's name must be 1..=64 bytes")
+            } else {
+                Ok(())
+            }
+        }
+        PalwConsensusObjectV2::ModelVersionPublished { signature, .. }
+        | PalwConsensusObjectV2::ModelVersionPromoted { signature, .. }
+        | PalwConsensusObjectV2::ModelVersionWithdrawn { signature, .. }
+        | PalwConsensusObjectV2::ModelLineRolesSet { signature, .. }
+        | PalwConsensusObjectV2::ModelLineOwnerTransferred { signature, .. }
+        | PalwConsensusObjectV2::ModelLineRetired { signature, .. }
+        | PalwConsensusObjectV2::ModelProposalPosted { signature, .. }
+        | PalwConsensusObjectV2::ModelProposalClosed { signature, .. }
+        | PalwConsensusObjectV2::ModelEvaluationPosted { signature, .. } => {
+            if signature.is_empty() {
+                Err("a model registry object must carry the signature of the bond it is attributed to")
+            } else {
+                Ok(())
+            }
+        }
         PalwConsensusObjectV2::CourtCloseDeclared { .. } => Err(
             "a close declaration must carry the signature of the side it declares for — without one either party could write the other's close and pin it to a verdict it never asserted",
         ),
@@ -340,7 +367,7 @@ pub fn palw_bond_registration_binds_its_carrier_v2(tx: &Transaction, object: &Pa
 /// object names, or the object does not ride. The value is read off the carrier and never off
 /// the object alone, so the reserve the fold credits is MSK that left a spendable output.
 pub fn palw_model_buy_binds_its_carrier_v1(tx: &Transaction, object: &PalwConsensusObjectV2) -> Result<(), &'static str> {
-    let PalwConsensusObjectV2::ModelBuy { class_id, msk_in, sink_index, .. } = object else {
+    let PalwConsensusObjectV2::ModelBuy { line_id: class_id, msk_in, sink_index, .. } = object else {
         return Ok(());
     };
     let Some(output) = tx.outputs.get(*sink_index as usize) else {
