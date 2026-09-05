@@ -6365,8 +6365,15 @@ fleet runs it: kaspad `56f77a3d75f376de` on seat2, .113 (node, seat4, slots 01�
 free-prompt claim is ~41 M leaves, exposure `pwu × 5` ≈ 207 M sompi, and a bond may hold half its collateral — the
 pool's slot-04 bond (265 M, sized for the class's canonical 6.6 M-leaf job) cannot carry one, which is also why the
 257/300-token jobs it submitted at 03:06Z/03:11Z never reached the chain. The pool now accepts a caller-sized bond;
-slot-05 (600 M sompi, token `78ffd436…`, gateway port 18795) was funded 8.5 MSK from the faucet wallet and is
-registering. Studio needs that slot's token and the 256-token clamp lifted (`backend/gateway.rs`) to use it.
+slot-05 (600 M sompi, token `78ffd436…`, gateway port 18795) was funded 8.5 MSK from the faucet wallet, registered its
+bond `8c52206c…:0` at 06:12Z (its panel gives a carrier ten minutes and testnet-11 mines a block about every ten, so the
+first attempt timed out and the second found the bond already there), and answered a 300-token request in 222 s
+(42,272,640 leaves, claim `019efe78…`, submitted as tx `0415254c…`). **A second pool defect surfaced there:** the
+autosubmitter called the rail without `--capture`, so it staged the question-only `FPM1` — 3,372 bytes of retention
+beside a 183 MB capture sitting in the gateway's own traces — and no seat could have opened an interval. The capture is
+now staged for the live claim (`FPC1` is the `FPM1` body plus the capture as a borsh `Vec<u8>`, so it assembles from the
+two files) and `fp-autosubmit.py` passes `--capture` from now on (`/opt/misaka-minerpool/`, backups `.pre-capture`,
+`.pre-anchor`). Studio needs the slot token and the 256-token clamp lifted (`backend/gateway.rs`) to use this lane.
 
 ### 10r. ADR-0087 implemented: a position is bought from the curve and sold back to it (2026-09-05)
 
