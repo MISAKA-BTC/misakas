@@ -9,8 +9,8 @@ trading model positions; and Hyperliquid's HyperEVM is the reference.
 **Builds on:** ADR-0020 (the selected-parent EVM lane — live on testnet-10, testnet-11 and
 devnet from genesis, inert on mainnet), ADR-0022 (the EVM snapshot at the pruning point),
 ADR-0023 (Lane 2; per-lane precompile profile; the frozen security labels), ADR-0087 (the market
-is a balance in the state fold; implemented behind `palw_model_market`), ADR-0088 (heads, the
-index, the exam), ADR-0059 (carve, never mint), `docs/misaka-evm-design-v0.4.md` §3.2 (system
+is a balance in the state fold; implemented behind `palw_model_market`), ADR-0088 (lines, versions,
+roles, usage; the market keyed by line), ADR-0059 (carve, never mint), `docs/misaka-evm-design-v0.4.md` §3.2 (system
 ops), §8 (fees), §9 (the UTXO ⇄ EVM bridge), §17 (invariants).
 **Amends:** ADR-0087 Decision 3 (two more ways to make the same two moves — from the EVM),
 Decision 8 (what a participant reads gains the EVM's surfaces); design v0.4 §9.1's supply
@@ -19,14 +19,14 @@ transfer) is not amended: this ADR is the proof that the EVM cannot manufacture 
 
 ## 0. The sentence this ADR is
 
-The PALW state fold holds every fact about a model — its class, its weights in force, its exam
-index, its curve, every position — and that is where they stay. The EVM gets **three windows**
+The PALW state fold holds every fact about a model — its class, its line and its owner, the
+versions in force and how each was used, its curve, every position — and that is where they stay. The EVM gets **three windows**
 (precompiles that return the fold's rows as facts) and **one hand** (a system contract whose
 calls become fold actions, applied after the block), and every class gets an address at which
 the ERC-20 *read* surface works and the ERC-20 *transfer* surface does not exist. That is what
-HyperEVM did with an order book. MISAKA does it with a model registry, a version exam and a
-curve — things no other EVM can read as consensus facts, because no other chain holds them as
-consensus.
+HyperEVM did with an order book. MISAKA does it with a model registry — lines, their versions,
+their owners, their usage — and a curve: things no other EVM can read as consensus facts, because
+no other chain holds them as consensus.
 
 ## 1. The reference: what HyperEVM built (read 2026-09-05, Hyperliquid's own docs)
 
@@ -101,8 +101,10 @@ are cited here for the shape, not the values.
   pays the class's sink (`OP_RETURN ‖ "MSKMDL01" ‖ class_id`, unspendable); a sell writes a
   `PalwPayoutV2` the coinbase honours; the rows enter the state root only when non-empty; the
   market opens at its first buy; `palw_model_market: Option<ForkActivation>`, `None` everywhere.
-  ADR-0088 adds, per class, the head root and its author, the chained index, the exam calendar
-  — all fold rows, all bond-signed on the UTXO side.
+  ADR-0088 keys the market by *line* (a class, an owner, a name; the founding line's key is the
+  class id) and adds, per line, the owner/developer/maintainer roles, the versions with their
+  declared hashes and chain-counted usage, proposals and declared evaluations — all fold rows,
+  all bond-signed on the UTXO side.
 * **Two key domains, no shared address.** A fold identity is a 64-byte hash of an ML-DSA-87
   key; an EVM account is a 20-byte secp256k1 address. Hyperliquid's "same address on both
   sides" does not exist here and cannot be made to: ADR-0023 FD-SUPPLY calls a move from the
@@ -125,8 +127,9 @@ are cited here for the shape, not the values.
 ## 3. The requirement, and what "native" has to mean
 
 The operator's three words name three things the fold already holds: the **registry** (class
-rows, heads, index, exams — ADR-0056/0067/0088), the **AMM** (the curve, the reserve, the fees —
-ADR-0087 Decisions 2–4), the **position** (a balance keyed by holder — ADR-0087 Decision 1).
+rows; lines, versions, roles, usage — ADR-0056/0067/0088), the **AMM** (the curve, the reserve,
+the fees — ADR-0087 Decisions 2–4), the **position** (a balance keyed by holder — ADR-0087
+Decision 1).
 "Native primitives of the EVM" can mean two things, and only one of them is right:
 
 * **Move the truth into the EVM** — system contracts holding the reserve, the positions and
@@ -134,8 +137,8 @@ ADR-0087 Decisions 2–4), the **position** (a balance keyed by holder — ADR-0
   `u64::MAX` on mainnet, so the market would not exist where the EVM does not ("optional
   feature" is no longer the reason — the lane is a default build since 2026-08-21 — the network
   fence is); its keys are secp256k1, so every position would leave the PQ domain;
-  ADR-0087's M1–M8 and ADR-0088's exam are fold invariants proven against fold objects, and the
-  successor proposals, exam answers and certifications are ML-DSA-87 bond signatures that no
+  ADR-0087's M1–M8 and ADR-0088's L1–L10 are fold invariants proven against fold objects, and a
+  version, a role change, a transfer and a certification are ML-DSA-87 bond signatures that no
   EVM account can produce; and a second copy of the class table is the two-products split
   ADR-0077 R0 exists to close.
 * **Keep the truth in the fold and make the EVM its window and its hand** — the HyperEVM
@@ -161,7 +164,7 @@ transfers fails at the selector, loudly, and no contract can be written around i
 | `0x…F011` | `ModelAMM` | read precompile (quotes are pure functions of a fold row) |
 | `0x…F012` | `ModelPosition` | read precompile |
 | `0x…F013` | `ModelWriter` | the hand: `sendAction(bytes)`, escrow account — a call-frame intercept, F002's shape |
-| `0x4d50 ‖ blake2b(b"misaka-evm/model-position-facade/v1" ‖ class_id)[..18]` | the class's **MRC-20 facade** | a native contract at a derived address (Decision 3): reads as a precompile, writes as an intercept |
+| `0x4d50 ‖ blake2b(b"misaka-evm/model-position-facade/v1" ‖ line_id)[..18]` | the line's **MRC-20 facade** | a native contract at a derived address (Decision 3): reads as a precompile, writes as an intercept |
 
 Two mechanisms, chosen by what a call needs to see. The three reads and the facade's view
 selectors are stateless precompiles installed through `register_all_misaka_precompiles` with a
@@ -172,8 +175,9 @@ handle on the selected parent's fold rows — input in, bytes out. The writer an
 Hyperliquid's `0x0800…` and `0x2000…`/`0x3333…` ranges are not reused, so a contract ported
 from HyperEVM cannot silently call the wrong thing. The facade's 2-byte prefix (`MP`) is
 Hyperliquid's `0x20 ‖ token index` idea with a hash where an index would be a free field.
-`ModelRegistry.facadeOf(class_id)` and `classOf(address)` map both ways; an address with the
-prefix that names no class behaves as an empty account.
+`ModelRegistry.facadeOf(line_id)` and `lineOf(address)` map both ways; an address with the
+prefix that names no line behaves as an empty account. A line is ADR-0088's unit of the market —
+a class, an owner, a name — and the founding line of a class has the class id as its line id.
 
 **Decision 2 — What a read returns is the fold at the EVM block's selected parent, stated as
 Hyperliquid states it.** Every read precompile returns rows of `fold(selected_parent(B))` — the
@@ -186,44 +190,36 @@ Malformed input reverts and consumes the frame's gas, Hyperliquid's rule. Gas: `
 (input_len + output_len)`, the reference's schedule taken as the starting point and re-measured
 against `EVM_GAS_LIMIT` before the fence is armed (§5).
 
-`ModelRegistry` (ADR-0056/0067/0075/0088 rows): `classCount()`, `classAt(i)`, `classRow(class)`
-→ `(status, sharePermille, budgetBlocks, canonicalLeaves, isBase, registrantPayload,
-registeredDaa)`, `head(class)` → `(root, authorPayload, sinceDaa, previousRoot, graceUntilDaa)`,
-`index(class)` → `(indexPermille, breakDaa)`, `certified(class, lane)`, `examWindow(class, w)`
-→ `(phase, seed, poolDigest, headRoot, candidateCount)`, `examCandidate(class, w, i)` →
-`(root, authorPayload, answered, correct, passed)`, `lastExam(class)` → the
-`PalwExamRecordV1` fields, `facadeOf(class)`, `classOf(address)`, `chainDaa()` (the selected
-parent's DAA score — the fold's clock, the analogue of `l1BlockNumber`).
+`ModelRegistry` (ADR-0056/0067/0075/0088 rows; every 64-byte id is two `bytes32` words): `classCount()`, `classAt(i)`, `classRow(class)` → `(status, sharePermille, budgetBlocks, canonicalLeaves, isBase, registrantPayload, registeredDaa)`, `certified(class, lane)`, `rootsInForce(class)` → the count and `rootInForceAt(class, i)`; `lineCount()`, `lineAt(i)`, `linesOf(class)` → count and `lineOfClassAt(class, i)`, `line(line)` → `(class, ownerPayload, developerPayload, maintainerPayload, current, versionsPublished, previewCount, contributorPermille, status, nameHash)`, `version(line, n)` → `(root, parent, adoptedFrom, runtimeHash, datasetCommitment, trainingConfigHash, notesHash, publishedDaa, publishedByPayload, status, untilDaa)`, `usage(line, n)` → `(attemptClaims, fpClaims, workLeaves, firstUsedDaa, lastUsedDaa)`, `evaluationCount(line, n)` and `evaluation(line, n, i)` → `(evaluatorId, scorePermille, reportHash, byPayload, postedDaa, isLinesOwn)`, `proposalCount(line)` and `proposal(line, i)` → `(proposalId, root, noteHash, byPayload, postedDaa, adoptedIn)`, `facadeOf(line)`, `lineOf(address)`, `chainDaa()` (the selected parent's DAA score — the fold's clock, the analogue of `l1BlockNumber`). Declared values are returned as declared and labelled so in the Solidity interface; nothing in the EVM treats a score as a fact.
 
-`ModelAMM` (ADR-0087 rows and arithmetic): `market(class)` → `(openedDaa, mskReserve,
-positionUnits, soldUnits, burned, registrantPaid, authorPaid, bountyReserve, closedToBuys)`,
-`price(class)` (sompi per position), `quoteBuy(class, mskIn)` → `(unitsOut, burn, registrant,
-author, net, priceAfter)`, `quoteSell(class, unitsIn)` → `(mskOut, burn, registrant, author,
-net, priceAfter)`, `constants()` → `(supplyUnits, unitsPerPosition, virtualSompi,
-burnPermille, registrantPermille, authorPermilleOfLeg, bountyPermille)`. The quotes call the
+`ModelAMM` (ADR-0087 rows and arithmetic, keyed by line): `market(line)` → `(openedDaa,
+mskReserve, positionUnits, soldUnits, burned, ownerPaid, contributorPaid, closedToBuys, exists)`,
+`price(line)` (sompi per position), `quoteBuy(line, mskIn)` → `(unitsOut, burn, leg, net,
+priceAfter)`, `quoteSell(line, unitsIn)` → `(mskOut, burn, leg, net, priceAfter)`, `constants()`
+→ `(supplyUnits, unitsPerPosition, virtualSompi, burnPermille, legPermille)`. The quotes call the
 same `palw_model_buy_quote_v1` / `palw_model_sell_quote_v1` the fold calls, so a quote is the
 fold's arithmetic and not a re-implementation of it. A quote is a quote against the selected
 parent's row; Decision 7 says what a trade actually gets.
 
-`ModelPosition`: `balanceOf(class, holderId)` for any 64-byte holder id, `balanceOfAddress
-(class, address)` for the EVM namespace (Decision 8), `totalSupply(class)`, `sold(class)`,
+`ModelPosition`: `balanceOf(line, holderId)` for any 64-byte holder id, `balanceOfAddress
+(line, address)` for the EVM namespace (Decision 7), `totalSupply(line)`, `sold(line)`,
 `holderIdOf(address)`.
 
 **Decision 3 — The MRC-20 facade: ERC-20's read half, the curve in place of its transfer half.**
-At each class's facade address the executor implements, natively, the interface below; there
+At each line's facade address the executor implements, natively, the interface below; there
 is no bytecode, `EXTCODESIZE` returns 0 and `EXTCODEHASH` the empty hash, exactly as for a
 precompile, and the registry is how a caller learns that the address is live.
 
 ```solidity
 interface IMRC20 /* MISAKA Request for Comment 20: a model position */ {
     // ---- ERC-20's read half, kept ----
-    function name() external view returns (string memory);      // "MISAKA Model Position <8 hex of class id>"
+    function name() external view returns (string memory);      // "MISAKA Model Position <8 hex of line id>"
     function symbol() external view returns (string memory);    // "MP-<8 hex>"
     function decimals() external view returns (uint8);          // 6: one position is 10^6 units (ADR-0087 D1)
     function totalSupply() external view returns (uint256);     // PALW_MODEL_SUPPLY_UNITS_V1, fixed at opening
     function balanceOf(address holder) external view returns (uint256); // EVM-namespace units only (D8)
     // ---- the curve, in place of the transfer half ----
-    function classId() external view returns (bytes memory);    // 64 bytes
+    function lineId() external view returns (bytes32, bytes32); // the line, 64 bytes as two words
     function circulating() external view returns (uint256);     // sold_units, every namespace
     function price() external view returns (uint256);           // sompi per position
     function quoteBuy(uint256 mskInSompi) external view returns (uint256 unitsOut, uint256 priceAfter);
@@ -242,8 +238,8 @@ interface IMRC20 /* MISAKA Request for Comment 20: a model position */ {
 `decimals() == 6` and `totalSupply()` in units keep ADR-0087's arithmetic on the wire
 unchanged; `msg.value` is in wei and must be a multiple of `EVM_NATIVE_SCALE` (the F002 rule),
 so the fold's sompi leg is exact. `supportsInterface(type(IMRC20).interfaceId) == true`. A
-facade for a class whose market is `closed_to_buys` (ADR-0087 D7) reverts `buy` at the call
-and still queues `sell`.
+facade for a line whose market is `closed_to_buys` (ADR-0087 D7; a retired line, ADR-0088 D6)
+reverts `buy` at the call and still queues `sell`.
 
 **Decision 4 — There is no `Transfer` because there is no transfer, and the EVM cannot build
 one.** ADR-0087 Decision 5 is a fold fact: no object moves units between holders. On the EVM
@@ -265,13 +261,13 @@ payable`: byte 1 = encoding version (`1`), bytes 2–4 = action id big-endian, t
 
 | id | action | ABI | value |
 |---|---|---|---|
-| 1 | buy | `(bytes classId, uint256 minUnitsOut)` | `msg.value` = the gross MSK leg, wei, a multiple of `EVM_NATIVE_SCALE` |
-| 2 | sell | `(bytes classId, uint256 unitsIn, uint256 minMskOutSompi)` | 0 |
+| 1 | buy | `(bytes32 lineA, bytes32 lineB, uint256 minUnitsOut)` | `msg.value` = the gross MSK leg, wei, a multiple of `EVM_NATIVE_SCALE` |
+| 2 | sell | `(bytes32 lineA, bytes32 lineB, uint256 unitsIn, uint256 minMskOutSompi)` | 0 |
 | 3–255 | reserved | — | — |
 
-No action proposes a successor, answers an exam, registers a class or certifies a family: those
-are ML-DSA-87 bond signatures on the UTXO side (ADR-0056, 0075, 0088), and an EVM account has
-no bond. The call burns `PALW_EVM_WRITER_GAS_V1 = 25,000` gas before emitting
+No action founds a line, publishes a version, sets a role, registers a class or certifies a
+family: those are ML-DSA-87 bond signatures on the UTXO side (ADR-0056, 0075, 0088), and an EVM
+account has no bond. The call burns `PALW_EVM_WRITER_GAS_V1 = 25,000` gas before emitting
 `ActionQueued(address indexed account, uint8 actionId, bytes data)` (Hyperliquid's ~25,000 and
 ~47,000 for a basic call, taken as the starting schedule; F002's in-tree figure is 9,000). The
 block's **action list** is built the way F002's withdrawals are: the executor scans the
@@ -281,18 +277,18 @@ a forged log from any other address is not the writer's. A buy's `msg.value` is 
 writer's own account (`0x…F013`) — the **escrow** — until the settling block; a sell holds
 nothing, because the units are the fold's and are debited there. At most
 `PALW_EVM_MARKET_ACTIONS_PER_BLOCK_V1 = 128` actions per EVM block: the 129th reverts at the
-call. Malformed data, an unknown class, `msg.value` not a multiple of the scale, or a sell of
+call. Malformed data, an unknown line, `msg.value` not a multiple of the scale, or a sell of
 zero revert at the call — the same "user-input fault ⇒ tx revert, block valid" class as F002.
-`facade.buy` / `facade.sell` are the two actions with `classId` filled in by the address, and
+`facade.buy` / `facade.sell` are the two actions with the line filled in by the address, and
 nothing else: one write path, two doors.
 
 **Decision 6 — The hand moves after the block, in the fold, and settles one block later.**
 
 | step | where | what happens |
 |---|---|---|
-| **emit** | `EVM(B)` — the EVM block of chain block `B`, executing the accepted payloads of `B`'s mergeset | the writer validates the call, escrows a buy's value, appends `PalwEvmMarketActionV1 { seq, account, action, class, amount, min }` to the block's **action list**, emits `ActionQueued` |
-| **apply** | `fold(B)` — `apply_palw_transition_v6` gains the action list as an input | after every carrier-borne object of `B` (ADR-0087's `ModelBuy`/`ModelSell` in acceptance order), the EVM actions in `seq` order: each is quoted on the row *as it then stands*, the `min` is checked, the row and the holder's units move (a buy credits `evm_holder(account)`, a sell debits it) or the action is **refused** with a reason; the outcome is written to the delta as `PalwEvmSettlementV1 { seq, account, class, outcome: Filled { units, sompi, priceAfter } \| Refused { reason } }` — a state-root collection that enters the root only when non-empty (ADR-0087's rule) |
-| **settle** | `EVM(C)`, `C = the selected child of B` — `evm_chain_context_step(C)` runs system ops before user txs (v0.4 §3.2) | a second `EvmSystemOp` kind, `MarketSettle { seq, account, class, outcome }`: the producer of `C` puts `fold(B)`'s settlement list into `C`'s payload `system_ops` in `seq` order, and validation requires the set to equal the list derived from the selected parent exactly — a missing, extra or reordered op disqualifies `C` as a bad claim does — so v0.4 I2 (the EVM result is a function of the parents and the system ops) holds unchanged and `system_ops_root` commits them. A filled buy **burns the escrow** (writer balance −= gross) and `apply_evm_bridge_effects` materialises the class's **sink output** (`OP_RETURN ‖ MSKMDL01 ‖ class`, value = gross) into `C`'s own UTXO diff under a new outpoint domain `MISAKA_EVM_MARKET_SINK_V1` — F002's mechanism with the sink script in place of the withdrawal script; a refused buy **refunds the escrow** to `account`; a filled sell **credits** `account` with `net × EVM_NATIVE_SCALE`, a `DepositClaim`-shaped credit with no lock and no tip; each emits `Bought` / `Sold` / `Refused` from the facade in a system receipt at index 0 of `C`'s EVM block |
+| **emit** | `EVM(B)` — the EVM block of chain block `B`, executing the accepted payloads of `B`'s mergeset | the writer validates the call, escrows a buy's value, appends `PalwEvmMarketActionV1 { seq, account, action, line, amount, min }` to the block's **action list**, emits `ActionQueued` |
+| **apply** | `fold(B)` — `apply_palw_transition_v6` gains the action list as an input | after every carrier-borne object of `B` (ADR-0087's `ModelBuy`/`ModelSell` in acceptance order), the EVM actions in `seq` order: each is quoted on the row *as it then stands*, the `min` is checked, the row and the holder's units move (a buy credits `evm_holder(account)`, a sell debits it) or the action is **refused** with a reason; the outcome is written to the delta as `PalwEvmSettlementV1 { seq, account, line, outcome: Filled { units, sompi, priceAfter } \| Refused { reason } }` — a state-root collection that enters the root only when non-empty (ADR-0087's rule) |
+| **settle** | `EVM(C)`, `C = the selected child of B` — `evm_chain_context_step(C)` runs system ops before user txs (v0.4 §3.2) | a second `EvmSystemOp` kind, `MarketSettle { seq, account, line, outcome }`: the producer of `C` puts `fold(B)`'s settlement list into `C`'s payload `system_ops` in `seq` order, and validation requires the set to equal the list derived from the selected parent exactly — a missing, extra or reordered op disqualifies `C` as a bad claim does — so v0.4 I2 (the EVM result is a function of the parents and the system ops) holds unchanged and `system_ops_root` commits them. A filled buy **burns the escrow** (writer balance −= gross) and `apply_evm_bridge_effects` materialises the line's **sink output** (`OP_RETURN ‖ MSKMDL01 ‖ line`, value = gross) into `C`'s own UTXO diff under a new outpoint domain `MISAKA_EVM_MARKET_SINK_V1` — F002's mechanism with the sink script in place of the withdrawal script; a refused buy **refunds the escrow** to `account`; a filled sell **credits** `account` with `net × EVM_NATIVE_SCALE`, a `DepositClaim`-shaped credit with no lock and no tip; each emits `Bought` / `Sold` / `Refused` from the facade in a system receipt at index 0 of `C`'s EVM block |
 | **visible** | `EVM(C)` and after | precompiles at `C` read `fold(B)`, which already holds the moved row: a position bought at `B` is readable, and settled, one chain block later |
 
 Order and price: carriers first, then EVM actions, so an EVM trade is always quoted after
@@ -313,8 +309,8 @@ the coinbase honours (unchanged); an EVM holder's sell is a settlement credit at
 `PalwPayoutKindV2::EvmCredit { address }` beside the payload kind, and the coinbase skips that
 kind while the EVM step consumes it. The security label of an EVM-held position is ADR-0023's
 `CLASSICAL-ECC`, and `getPalwModelPositions` returns it per row so a wallet shows it; the
-fold's own positions keep the PQ domain. Registrant and author legs (ADR-0087 D4, ADR-0088 D9)
-are unchanged by which door the trade came through: they are fold payouts to bonds' payloads.
+fold's own positions keep the PQ domain. The owner's and an adopted contributor's legs (ADR-0087 D4, ADR-0088 D8) are unchanged by
+which door the trade came through: they are fold payouts to bonds' payloads.
 
 **Decision 8 — Supply, stated with the new pools in it.** Design v0.4 §9.1 becomes
 
@@ -354,8 +350,8 @@ version bump: the settlement list and the EVM-namespace rows enter the root only
   that exists (deposit lock/claim, F002, and now the escrow/settlement pair).
 * *Contracts as core actors.* Refused by Decision 4.
 * *Dual blocks.* The EVM block cadence is the selected chain's, and the chain's interval is
-  `header.bits`' (ADR-0071 as amended); a market action is one small tx, and the exam and the
-  registry do not run in the EVM.
+  `header.bits`' (ADR-0071 as amended); a market action is one small tx, and the registry's
+  writes do not run in the EVM.
 * *The same address on both sides.* Impossible across ML-DSA-87 and secp256k1 (§2); Decision 7
   is the honest replacement.
 * *Priority fees burned.* v0.4 §8 pays them to the payload miner; unchanged.
@@ -397,9 +393,9 @@ account; the explorer's Model Market page shows one curve with two doors.
 * **Latency:** emit at `B`, applied at `fold(B)`, settled and visible at `C` — one chain block,
   which at the RC's cadence is the interval `bits` sets. The reference's "a few seconds" is a
   design choice made for the same reason; here it is one block for a structural one.
-* **The fee table is ADR-0087's, unchanged**, plus ADR-0088 D9's author split when a
-  succession has happened: 5 % burned, 1 % to registrant/author, 94 % net, 12 % round trip
-  before slippage — from either door.
+* **The fee table is ADR-0087's, unchanged**, with ADR-0088 D8's owner/contributor split of
+  the leg: 5 % burned, 1 % to the line's owner (and its adopted contributor), 94 % net, 12 %
+  round trip before slippage — from either door.
 
 ## 6. Security — the four principles, checked before it is built
 
@@ -441,7 +437,7 @@ chain never takes the host's word* (README §"Security amendments").
 * **E7 (namespaces).** No fold transition changes an ML-DSA holder's units by an EVM action or
   an EVM holder's units by a carrier object; `evm_holder_v1` is injective on (chain id,
   address) up to the hash.
-* **E8 (ADR-0087 M1–M8 and ADR-0088 S1–S11 hold unchanged** with EVM-originated moves in the
+* **E8 (ADR-0087 M1–M8 and ADR-0088 L1–L10 hold unchanged** with EVM-originated moves in the
   recorded sequences.
 * **E9 (the fence).** Fingerprint unchanged where `None`; arming without `palw_model_market` or
   on a lane-inert preset is refused at validation; a chain with the fence armed and no action
@@ -473,9 +469,10 @@ chain never takes the host's word* (README §"Security amendments").
 
 * The gas schedule's final numbers (`2,000 + 65·n`, 25,000, 47,000) — Hyperliquid's are the
   starting values; MISAKA's are set from a measurement against `EVM_GAS_LIMIT` before arming.
-* Whether ADR-0088's exam *reads* (candidate counts, scores) should be served at all before
-  the exam is armed; the registry's shape carries them either way.
-* A Lane 1 (PQ-EVM) writer that can carry bond-signed objects (proposals, exam answers) —
+* Whether ADR-0088's *declared* rows (evaluations, dataset and config hashes) should be served
+  by the precompile at all, or left to the explorer; the registry's shape carries them either
+  way, labelled as declarations.
+* A Lane 1 (PQ-EVM) writer that can carry bond-signed objects (a version, a role change) —
   possible only where the lane's native auth *is* the bond's key (ADR-0023 O-03), and its own ADR.
 * Whether a contract wallet could ever hold a position under a stricter rule (for instance, a
   wallet whose only owner is one EOA and whose code is a known hash) — the operator's legal
@@ -486,5 +483,5 @@ chain never takes the host's word* (README §"Security amendments").
 ## 11. Number hygiene
 
 This is ADR-0089. The README's next free number was 0089 after 0088's row; it becomes 0090 with
-this row. The ADR is written on `docs/adr-0089-evm-model-primitives`, branched from
-`docs/adr-0088-succession-exam` at `7d17fa18`, so 0087 → 0088 → 0089 read in one line.
+this row. First written on `docs/adr-0089-evm-model-primitives`; revised with ADR-0088's
+2026-09-05 rewrite on `palw-adr0088-0089-impl`, where 0087 → 0088 → 0089 read in one line.
