@@ -75,6 +75,58 @@ pub const PALW_EVM_MARKET_ACTION_ENCODING_V1: u8 = 1;
 pub const PALW_EVM_ACTION_BUY: u32 = 1;
 pub const PALW_EVM_ACTION_SELL: u32 = 2;
 
+/// The four bytes of `keccak256("sendAction(bytes)")` — the writer's one function (Decision 5).
+/// Spelled here, in the crate every client already links, so a wallet or a CLI can build the
+/// call without the executor's crate; the executor's intercept asserts the same selector.
+pub fn send_action_selector() -> [u8; 4] {
+    abi_selector("sendAction(bytes)")
+}
+
+/// The four bytes of `keccak256(signature)` — an ABI selector, so a client can build a call to
+/// any of the four doors from the signature strings `contracts/misaka-model/` spells.
+pub fn abi_selector(signature: &str) -> [u8; 4] {
+    use sha3::{Digest, Keccak256};
+    let h = Keccak256::digest(signature.as_bytes());
+    [h[0], h[1], h[2], h[3]]
+}
+
+fn abi_word_u64(v: u64) -> [u8; 32] {
+    let mut w = [0u8; 32];
+    w[24..].copy_from_slice(&v.to_be_bytes());
+    w
+}
+
+/// `sendAction(bytes)` calldata around raw action bytes (standard dynamic encoding).
+pub fn send_action_calldata(action: &[u8]) -> Vec<u8> {
+    let mut input = send_action_selector().to_vec();
+    input.extend_from_slice(&abi_word_u64(32));
+    input.extend_from_slice(&abi_word_u64(action.len() as u64));
+    input.extend_from_slice(action);
+    input.extend(std::iter::repeat_n(0u8, action.len().div_ceil(32) * 32 - action.len()));
+    input
+}
+
+/// The action bytes of a buy: `version ‖ id(3) ‖ line(64) ‖ minUnitsOut(32)`. The MSK paid is the
+/// call's `value` (whole sompi × `EVM_NATIVE_SCALE`), never a field.
+pub fn send_action_buy_calldata(line: &Hash64, min_units_out: u64) -> Vec<u8> {
+    let mut data = vec![PALW_EVM_MARKET_ACTION_ENCODING_V1];
+    data.extend_from_slice(&PALW_EVM_ACTION_BUY.to_be_bytes()[1..]);
+    data.extend_from_slice(line.as_byte_slice());
+    data.extend_from_slice(&abi_word_u64(min_units_out));
+    send_action_calldata(&data)
+}
+
+/// The action bytes of a sell: `version ‖ id(3) ‖ line(64) ‖ unitsIn(32) ‖ minMskOutSompi(32)`;
+/// the call carries no value.
+pub fn send_action_sell_calldata(line: &Hash64, units_in: u64, min_msk_out_sompi: u64) -> Vec<u8> {
+    let mut data = vec![PALW_EVM_MARKET_ACTION_ENCODING_V1];
+    data.extend_from_slice(&PALW_EVM_ACTION_SELL.to_be_bytes()[1..]);
+    data.extend_from_slice(line.as_byte_slice());
+    data.extend_from_slice(&abi_word_u64(units_in));
+    data.extend_from_slice(&abi_word_u64(min_msk_out_sompi));
+    send_action_calldata(&data)
+}
+
 // ---- identities (Decisions 6 and 7) ------------------------------------------------------------
 
 pub const PALW_EVM_HOLDER_DOMAIN_V1: &[u8] = b"misaka-palw/model-market/holder/evm/v1";

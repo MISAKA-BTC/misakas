@@ -1495,7 +1495,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             ),
             _ => false,
         };
-        if !bridge_finality_fresh {
+        if !bridge_finality_fresh && !self.config.evm_bridge_devnet_unpaused {
             return Err(RpcError::RpcSubsystem(format!(
                 "EVM bridge is paused: DNS finality is unconfirmed or stale at sink daa {sink_daa}; retry after validators advance a fresh DNS-confirmed anchor"
             )));

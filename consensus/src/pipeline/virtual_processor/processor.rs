@@ -595,6 +595,8 @@ pub struct VirtualStateProcessor {
     // disabled (its gap items 206-seed) and reads fall back to flat-materialize / §12-reconstruct.
     // Node-local, consensus-neutral. `false` on every current network and by default.
     pub(super) evm_retire_206: bool,
+    /// `Config::evm_bridge_devnet_unpaused` — the template ignores DNS-finality staleness.
+    pub(super) evm_bridge_devnet_unpaused: bool,
     // §12: this node's EVM state-history retention mode (`--evm-history-mode`). In
     // `head` mode the per-block archive diff/checkpoint (220/221) are not written at
     // all; `recent`/`archive` write them (the pruning processor decides how long
@@ -771,6 +773,7 @@ impl VirtualStateProcessor {
         evm_shadow_state_backend: bool,
         evm_flat_authoritative: bool,
         evm_retire_206: bool,
+        evm_bridge_devnet_unpaused: bool,
     ) -> Self {
         // C-01 S9: flat-authoritative seeding needs the shadow backend (which maintains + validates
         // the flat store); without it the flag is a silent no-op (the executor keeps seeding from
@@ -913,6 +916,7 @@ impl VirtualStateProcessor {
             evm_shadow_state_backend,
             evm_flat_authoritative,
             evm_retire_206,
+            evm_bridge_devnet_unpaused,
             evm_history_mode,
             evm_activation_daa_score: params.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: params.evm_gas_pool_v2_activation_daa_score,
@@ -12611,7 +12615,9 @@ impl VirtualStateProcessor {
         // Block validation deliberately does not reject by reading the current
         // dns_state_store; validity must stay determined by the candidate block and
         // its selected-parent state.
-        let bridge_finality_fresh = self.bridge_finality_is_fresh(virtual_state.daa_score);
+        // `evm_bridge_devnet_unpaused` (private devnets only) waives the staleness gate: a drill
+        // with no VLT overlay would otherwise never carry an EVM payload.
+        let bridge_finality_fresh = self.evm_bridge_devnet_unpaused || self.bridge_finality_is_fresh(virtual_state.daa_score);
         let evm_template_data = if bridge_finality_fresh {
             evm_template_data
         } else {

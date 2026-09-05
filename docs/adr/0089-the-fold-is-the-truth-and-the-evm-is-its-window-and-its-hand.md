@@ -506,8 +506,25 @@ counter is resynchronised from the scan at every tx. (4) The escrow moves inside
 so a revert after the queue (out of gas in the same frame is impossible, but the shape is kept)
 unwinds both the value and the log together.
 
-**Not landed.** The devnet drill (§8 item 6: carrier buy, EVM buy, EVM sell, refused buy, reorg
-across `B`/`C`); a historical `eth_call` sees the market's doors closed — the fold is kept only at
+**The devnet drill (§8 item 6), run 2026-09-05.** `scripts/misaka-palw-model-market-devnet-e2e.sh`:
+six fixture-PoW producers under the devnet's public-seed bonds, the three fences armed from genesis
+(`--palw-model-devnet=0`), the floor-only ruleset (`--palw-devnet-floor-only`) and the bridge's
+DNS-finality gate waived (`--evm-bridge-devnet-unpaused`) — three private-devnet-only `kaspad`
+flags this drill added. Run 8 passed 12/12: the founding line read through `getPalwModelLine`; a
+carrier buy of 5 MSK folded on every node (467,801,333 units); an EVM account funded through
+`EVM_DEPOSIT_LOCK` + claim (30 MSK); an EVM buy of 3 MSK queued in `B` and settled in `C` into
+278,585,835 units the position window returned; a refused buy (an impossible floor) refunded its
+escrow in `C` and moved no position; an EVM sell of one position debited exactly 10^6 units and
+credited 954,000 sompi net (94 % of the 1,015,085 gross the curve gave); six nodes returned one
+row, one balance, one position; a partition {0,1} | {2,3,4,5} in which the minority queued and
+settled a 2 MSK buy across its own `B`/`C` while the majority outgrew it (+2 vs +8), and a heal
+after which all six agreed again — on a row that carried the buy, re-included and re-settled on
+the winning chain (E10: the losing `B`/`C` dropped with their escrow, the action found its way back
+through the mempool); no node logged a settlement mismatch, a dropped market object or a panic.
+Seven earlier runs died on the harness and on ADR-0087's sink (its §7 records the defect); the
+drill's own traps are in the script's comments.
+
+**Not landed.** A historical `eth_call` sees the market's doors closed — the fold is kept only at
 the tip and a past view would need a replay this RPC does not run (`eth_rpc.rs` says so at the
 site); the `CLASSICAL-ECC` label (E12) — the fold keys a position by holder id alone and cannot
 tell an EVM-derived id from an ML-DSA one, so the RPC has nothing to label with; the wallet label;

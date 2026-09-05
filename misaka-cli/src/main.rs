@@ -484,6 +484,64 @@ enum PalwCmd {
         #[arg(long)]
         json: bool,
     },
+    /// ADR-0089 Decision 5: buy a position FROM THE EVM — a signed call to the ModelWriter
+    /// (0x…F013) carrying `sendAction(buy)` with the MSK as the call's value; the fold applies it
+    /// after the block and the next chain block settles it. [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    ModelEvmBuy {
+        #[command(flatten)]
+        key: EvmKeyArgs,
+        /// The line (128 hex; a class's own line has the class id).
+        #[arg(long)]
+        line: String,
+        /// MSK to pay, whole sompi (e.g. "5" or "0.25").
+        #[arg(long)]
+        msk: String,
+        #[arg(long, default_value_t = 0)]
+        min_positions: u64,
+        #[arg(long)]
+        gas_limit: Option<u64>,
+        #[arg(long)]
+        max_fee: Option<u128>,
+        #[arg(long)]
+        nonce: Option<u64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        wait: bool,
+    },
+    /// ADR-0089 Decision 5: sell positions FROM THE EVM — `sendAction(sell)` with no value; the
+    /// net MSK is credited to the signing account when the next chain block settles it.
+    #[cfg(feature = "evm-send")]
+    ModelEvmSell {
+        #[command(flatten)]
+        key: EvmKeyArgs,
+        #[arg(long)]
+        line: String,
+        #[arg(long)]
+        positions: u64,
+        /// The least MSK (whole sompi) the sell may net, else the fold refuses it.
+        #[arg(long, default_value = "0")]
+        min_msk: String,
+        #[arg(long)]
+        gas_limit: Option<u64>,
+        #[arg(long)]
+        max_fee: Option<u128>,
+        #[arg(long)]
+        nonce: Option<u64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        wait: bool,
+    },
+    /// ADR-0089 Decision 7: the units an EVM account holds on a line, read through the position
+    /// window (0x…F012) over the node's eth JSON-RPC.
+    ModelEvmPosition {
+        #[arg(long)]
+        line: String,
+        #[arg(long)]
+        address: String,
+    },
     /// **ADR-0087: buy positions of a line from its curve.** The carrier pays `--msk` into the
     /// line's sink; the fold credits 94 % to the curve (5 % burned, 1 % to the line's owner) and
     /// the curve's positions to the key's payout payload. Refused on chain when fewer than
@@ -1094,6 +1152,13 @@ enum EvmCmd {
         data: Option<String>,
     },
     /// EVM transaction lifecycle (`misaka_getEvmTxStatus`).
+    /// A read-only eth_call at latest (ADR-0089's doors answer any caller): --to <addr> --data <hex>.
+    View {
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        data: String,
+    },
     #[command(subcommand)]
     Tx(EvmTxCmd),
     /// EVM HD wallet — create / import / address. [needs --features evm-send]
@@ -1290,6 +1355,7 @@ async fn main() -> std::process::ExitCode {
         Command::Bootstrap(BootstrapCmd::Seeds) => bootstrap::seeds(ctx.output, &ctx.network),
         Command::Bootstrap(BootstrapCmd::Resolve) => bootstrap::resolve(ctx.output, &ctx.network),
         Command::Setup(cmd) => setup::run(&ctx, cmd).await,
+        Command::Evm(EvmCmd::View { to, data }) => eth::view(&ctx, &to, &data),
         Command::Evm(EvmCmd::Balance { address }) => eth::balance(&ctx, &address),
         Command::Evm(EvmCmd::Nonce { address }) => eth::nonce(&ctx, &address),
         Command::Evm(EvmCmd::EstimateGas { from, to, value, data }) => {
@@ -1325,6 +1391,15 @@ async fn main() -> std::process::ExitCode {
             let source = key.source_opt();
             palw_model::positions(&ctx, holder, source.as_ref(), json).await
         }
+        #[cfg(feature = "evm-send")]
+        Command::Palw(PalwCmd::ModelEvmBuy { key, line, msk, min_positions, gas_limit, max_fee, nonce, yes, wait }) => {
+            evm_send::model_evm_buy(&ctx, &key.source(), &line, &msk, min_positions, gas_limit, max_fee, nonce, yes, wait)
+        }
+        #[cfg(feature = "evm-send")]
+        Command::Palw(PalwCmd::ModelEvmSell { key, line, positions, min_msk, gas_limit, max_fee, nonce, yes, wait }) => {
+            evm_send::model_evm_sell(&ctx, &key.source(), &line, positions, &min_msk, gas_limit, max_fee, nonce, yes, wait)
+        }
+        Command::Palw(PalwCmd::ModelEvmPosition { line, address }) => eth::model_evm_position(&ctx, &line, &address),
         Command::Palw(PalwCmd::ModelBuy { key, line, msk, min_positions, yes }) => {
             palw_model::buy(&ctx, &key.source(), &line, &msk, min_positions, yes).await
         }

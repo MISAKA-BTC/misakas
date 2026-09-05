@@ -27,6 +27,10 @@ pub struct TransactionValidator {
     pq_enforcement: PqEnforcementMode,
     /// DAA score at/after which `PqEnforcementMode::Consensus` takes effect.
     pq_activation_daa_score: u64,
+    /// ADR-0087 Decision 3: whether a model market's sink output (`OP_RETURN "MSKMDL01" <line id>`)
+    /// is a consensus-legal output class here — `true` iff the network declares `palw_model_market`
+    /// at all; a dormant (`None`) network keeps the PQ-only rule byte-for-byte.
+    model_sink_outputs_allowed: bool,
 }
 
 impl TransactionValidator {
@@ -43,6 +47,7 @@ impl TransactionValidator {
         mass_calculator: MassCalculator,
         pq_enforcement: PqEnforcementMode,
         pq_activation_daa_score: u64,
+        model_sink_outputs_allowed: bool,
     ) -> Self {
         Self {
             max_tx_inputs,
@@ -56,6 +61,7 @@ impl TransactionValidator {
             mass_calculator,
             pq_enforcement,
             pq_activation_daa_score,
+            model_sink_outputs_allowed,
         }
     }
 
@@ -83,6 +89,7 @@ impl TransactionValidator {
             // explicitly exercises PQ-only via the script engine directly.
             pq_enforcement: PqEnforcementMode::Disabled,
             pq_activation_daa_score: 0,
+            model_sink_outputs_allowed: false,
         }
     }
 

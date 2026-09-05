@@ -94,6 +94,16 @@ impl TransactionValidator {
                 }
                 continue;
             }
+            // ADR-0087 Decision 3: a model market's sink is unspendable by design and holds the
+            // MSK a buy pays into the curve; recognised by its exact script, and only on a network
+            // that declares the market at all (a dormant network keeps this rule unchanged). Found
+            // by the devnet drill: without this arm no carrier buy was ever consensus-valid on a
+            // PQ-only network — ADR-0087's tests folded the object but never validated its carrier.
+            if self.model_sink_outputs_allowed
+                && kaspa_consensus_core::palw_model_market_v1::palw_model_sink_class_v1(&output.script_public_key).is_some()
+            {
+                continue;
+            }
             if !class.is_pq_standard() {
                 return Err(TxRuleError::NonPqStandardOutputClass(i));
             }
@@ -938,6 +948,30 @@ mod pq_output_class_enforcement_tests {
     fn consensus_mode_allows_mldsa_p2pkh_output() {
         let tv = validator(PqEnforcementMode::Consensus);
         assert!(tv.check_transaction_pq_output_classes(&tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE)).is_ok());
+    }
+
+    /// ADR-0087 Decision 3, as the devnet drill found it: the market's sink output (`OP_RETURN
+    /// "MSKMDL01" <line id>`) is consensus-legal ONLY on a network that declares the market; a
+    /// dormant network refuses it exactly as before, and no other `OP_RETURN` form rides along.
+    #[test]
+    fn consensus_mode_admits_the_model_sink_only_where_the_market_is_declared() {
+        use kaspa_consensus_core::palw_model_market_v1::palw_model_sink_spk_v1;
+        let line = kaspa_consensus_core::Hash64::from_u64_word(7);
+        let sink = tx_with_output(palw_model_sink_spk_v1(&line), SUBNETWORK_ID_NATIVE);
+        let dormant = validator(PqEnforcementMode::Consensus);
+        assert_eq!(dormant.check_transaction_pq_output_classes(&sink), Err(TxRuleError::NonPqStandardOutputClass(0)));
+        let mut declared = validator(PqEnforcementMode::Consensus);
+        declared.model_sink_outputs_allowed = true;
+        assert!(
+            declared.check_transaction_pq_output_classes(&sink).is_ok(),
+            "the sink is the one unspendable output the market needs"
+        );
+        // a look-alike: an OP_RETURN with another tag is not the sink and stays refused
+        let mut other = vec![codes::OpReturn, codes::OpData8];
+        other.extend_from_slice(b"MSKMDL02");
+        let not_sink = tx_with_output(ScriptPublicKey::new(0, other.into()), SUBNETWORK_ID_NATIVE);
+        assert_eq!(declared.check_transaction_pq_output_classes(&not_sink), Err(TxRuleError::NonPqStandardOutputClass(0)));
+        assert!(declared.check_transaction_pq_output_classes(&tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE)).is_ok());
     }
 
     #[test]

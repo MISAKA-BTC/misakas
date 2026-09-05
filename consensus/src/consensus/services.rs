@@ -155,6 +155,7 @@ impl ConsensusServices {
             mass_calculator.clone(),
             params.pq_enforcement,
             params.pq_activation_daa_score,
+            params.palw_model_market.is_some(),
         );
 
         let pruning_point_manager = PruningPointManager::new(

@@ -1303,34 +1303,20 @@ fn write_frame<EXT, DB: Database>(
 
 // ---- calldata builders (for callers, tests and the CLI) ------------------------------------------
 
-/// Calldata for `sendAction(bytes)` carrying a buy: `(bytes32 lineA, bytes32 lineB, uint256 minUnitsOut)`.
+/// Calldata for `sendAction(bytes)` carrying a buy — the core crate's spelling, re-exported so a
+/// caller that links this crate builds the same bytes a wallet linking only consensus-core does.
 pub fn send_action_buy_calldata(line: &Hash64, min_units_out: u64) -> Vec<u8> {
-    let mut data = vec![PALW_EVM_MARKET_ACTION_ENCODING_V1];
-    data.extend_from_slice(&PALW_EVM_ACTION_BUY.to_be_bytes()[1..]);
-    data.extend_from_slice(line.as_byte_slice());
-    data.extend_from_slice(&word_u64(min_units_out));
-    send_action_calldata(&data)
+    kaspa_consensus_core::evm::model_market::send_action_buy_calldata(line, min_units_out)
 }
 
-/// Calldata for `sendAction(bytes)` carrying a sell:
-/// `(bytes32 lineA, bytes32 lineB, uint256 unitsIn, uint256 minMskOutSompi)`.
+/// Calldata for `sendAction(bytes)` carrying a sell (the core crate's spelling).
 pub fn send_action_sell_calldata(line: &Hash64, units_in: u64, min_msk_out_sompi: u64) -> Vec<u8> {
-    let mut data = vec![PALW_EVM_MARKET_ACTION_ENCODING_V1];
-    data.extend_from_slice(&PALW_EVM_ACTION_SELL.to_be_bytes()[1..]);
-    data.extend_from_slice(line.as_byte_slice());
-    data.extend_from_slice(&word_u64(units_in));
-    data.extend_from_slice(&word_u64(min_msk_out_sompi));
-    send_action_calldata(&data)
+    kaspa_consensus_core::evm::model_market::send_action_sell_calldata(line, units_in, min_msk_out_sompi)
 }
 
-/// `sendAction(bytes)` around raw action bytes (standard dynamic encoding).
+/// `sendAction(bytes)` around raw action bytes (the core crate's spelling).
 pub fn send_action_calldata(action: &[u8]) -> Vec<u8> {
-    let mut input = sel().send_action.to_vec();
-    input.extend_from_slice(&word_u64(32));
-    input.extend_from_slice(&word_u64(action.len() as u64));
-    input.extend_from_slice(action);
-    input.extend(std::iter::repeat_n(0u8, action.len().div_ceil(32) * 32 - action.len()));
-    input
+    kaspa_consensus_core::evm::model_market::send_action_calldata(action)
 }
 
 /// Calldata for a static call: the selector of `signature` followed by `words`.
@@ -1383,6 +1369,11 @@ pub mod abi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_core_crate_spells_the_writer_selector_the_intercept_answers() {
+        assert_eq!(sel().send_action, kaspa_consensus_core::evm::model_market::send_action_selector());
+    }
 
     #[test]
     fn selectors_are_keccak_prefixes_and_the_interface_id_excludes_erc20() {

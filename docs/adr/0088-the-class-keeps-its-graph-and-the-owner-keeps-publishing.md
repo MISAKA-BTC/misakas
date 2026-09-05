@@ -393,7 +393,10 @@ the three objects anyone may post (founding, proposal, evaluation) and on nothin
 about its own line: the owner already paid to own it.
 
 **Not landed.** The free-prompt job v6 (§7 item 7); the SDK's `--line/--version`; the explorer's
-line and version pages; the devnet drill (§7 item 8); arming on testnet-11. As with ADR-0087, the
+line and version pages; the registry half of the devnet drill (§7 item 8: publish as preview,
+produce on both roots, promote, propose, adopt, transfer, retire — the 2026-09-05 model-market
+drill, ADR-0089 §9, exercised only the founding line's read and the market on both lanes); arming
+on testnet-11. As with ADR-0087, the
 acceptance-layer signature checks are covered by reading — a processor-level fixture for a signed
 lifecycle object still does not exist.
 

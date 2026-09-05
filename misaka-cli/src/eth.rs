@@ -135,6 +135,54 @@ pub fn balance(ctx: &Ctx, address: &str) -> CliResult {
     Ok(())
 }
 
+/// `misaka evm view`: a read-only `eth_call` at `latest` — ADR-0089's doors answer any caller.
+pub fn view(ctx: &Ctx, to: &str, data: &str) -> CliResult {
+    let to = normalize_evm_addr(to)?;
+    let data = normalize_hex_data(data)?;
+    let out = rpc_call(ctx, "eth_call", json!([{ "to": to, "data": data }, "latest"]))?;
+    match ctx.output {
+        OutputFormat::Human => println!("{out}"),
+        OutputFormat::Json => println!("{}", json!({ "ok": true, "to": to, "data": data, "result": out })),
+    }
+    Ok(())
+}
+
+/// `misaka palw model-evm-position`: `balanceOfAddress(lineA, lineB, address)` on the position
+/// window (`0x…F012`) — the units an EVM account holds on a line (ADR-0089 Decision 7's EVM
+/// namespace). Empty return data means the window is closed (the fence is dormant here).
+pub fn model_evm_position(ctx: &Ctx, line: &str, address: &str) -> CliResult {
+    let line_id = line
+        .trim()
+        .trim_start_matches("0x")
+        .parse::<kaspa_consensus_core::Hash64>()
+        .map_err(|_| CliError::new(exit::GENERIC, format!("line id '{line}' is not a 128-hex Hash64")))?;
+    let addr = normalize_evm_addr(address)?;
+    let mut addr_bytes = [0u8; 20];
+    faster_hex::hex_decode(addr.trim_start_matches("0x").as_bytes(), &mut addr_bytes)
+        .map_err(|_| CliError::new(exit::GENERIC, format!("address '{address}' is not 20 bytes of hex")))?;
+    let mut data = kaspa_consensus_core::evm::model_market::abi_selector("balanceOfAddress(bytes32,bytes32,address)").to_vec();
+    data.extend_from_slice(line_id.as_byte_slice());
+    let mut word = [0u8; 32];
+    word[12..].copy_from_slice(&addr_bytes);
+    data.extend_from_slice(&word);
+    let to = format!("0x{}", kaspa_consensus_core::evm::model_market::MISAKA_MODEL_POSITION_PRECOMPILE);
+    let out = rpc_call(ctx, "eth_call", json!([{ "to": to, "data": format!("0x{}", faster_hex::hex_string(&data)) }, "latest"]))?;
+    let out = out.as_str().unwrap_or("").to_string();
+    let hex = out.trim().trim_start_matches("0x");
+    let units: Option<u128> = if hex.len() >= 64 { u128::from_str_radix(&hex[hex.len() - 32..], 16).ok() } else { None };
+    match ctx.output {
+        OutputFormat::Human => match units {
+            Some(u) => println!("{u} units  ({} positions)", u / 1_000_000),
+            None => println!("(the window is closed here: empty return data)"),
+        },
+        OutputFormat::Json => println!(
+            "{}",
+            json!({ "ok": true, "line": line_id.to_string(), "address": addr, "units": units.map(|u| u.to_string()), "windowOpen": units.is_some() })
+        ),
+    }
+    Ok(())
+}
+
 pub fn nonce(ctx: &Ctx, address: &str) -> CliResult {
     let addr = normalize_evm_addr(address)?;
     let n = parse_hex_u128(&rpc_call(ctx, "eth_getTransactionCount", json!([addr, "latest"]))?)? as u64;

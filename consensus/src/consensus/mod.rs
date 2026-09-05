@@ -284,10 +284,11 @@ impl Consensus {
             notification_root.clone(),
             counters.clone(),
             mining_rules,
-            config.evm_history_mode,         // §12: gate the archive diff/checkpoint writer
-            config.evm_shadow_state_backend, // C-01 S4: node-local shadow dual-write + differential
-            config.evm_flat_authoritative,   // C-01 S9: flat-authoritative executor seed
-            config.evm_retire_206,           // C-01 S9b: stop persisting the per-block 206 snapshot
+            config.evm_history_mode,           // §12: gate the archive diff/checkpoint writer
+            config.evm_shadow_state_backend,   // C-01 S4: node-local shadow dual-write + differential
+            config.evm_flat_authoritative,     // C-01 S9: flat-authoritative executor seed
+            config.evm_retire_206,             // C-01 S9b: stop persisting the per-block 206 snapshot
+            config.evm_bridge_devnet_unpaused, // private devnets: no DNS-finality gate on the EVM template
         ));
 
         let pruning_processor = Arc::new(PruningProcessor::new(

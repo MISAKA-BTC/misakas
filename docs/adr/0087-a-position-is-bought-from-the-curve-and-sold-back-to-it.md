@@ -183,7 +183,7 @@ not.**
 | `palw_lifecycle_objects_v2.rs` | A buy rides only when its carrier's output `sink_index` holds exactly `msk_in` under the class's sink script; a sell rides only signed. |
 | `config/params.rs` | `palw_model_market: Option<ForkActivation>` with the `palw_da_court` contract; `palw_model_market_fence` / `palw_model_market_active_at`. |
 | `virtual_processor/processor.rs` | Both objects refused by name below the fence at the block's DAA; a sell's signature verified at acceptance against the payload its key derives to (M8). |
-| `mining/.../check_transaction_standard.rs` | The sink is the one unspendable output that is not dust — recognised by its exact script. |
+| `mining/.../check_transaction_standard.rs` | The sink is the one unspendable output that is not dust — recognised by its exact script. **Amended 2026-09-05 (the devnet drill):** the same script is also carved out of the mempool's *output-class* rule, which refused the form before the dust rule was ever reached; and out of consensus's `check_transaction_pq_output_classes` (`tx_validation_in_isolation.rs`), gated by `TransactionValidator::model_sink_outputs_allowed` = "the network declares `palw_model_market`" — a dormant network keeps the PQ-only rule byte-for-byte. Without both, no carrier buy was ever relayed or consensus-valid on a PQ-only network; the fold tests folded the object but never validated its carrier. Test: `consensus_mode_admits_the_model_sink_only_where_the_market_is_declared`. |
 | RPC | `getPalwModelMarket(classId)` (an unregistered class is `found: false`; an unopened market reads as the whole supply in the curve) and `getPalwModelPositions(holder)`, through core, service, gRPC (proto ids 1144–1147) and wRPC. |
 | CLI | `misaka palw model-show [--quote-msk]`, `model-positions`, `model-buy --class --msk --min-positions --key --yes`, `model-sell --class --positions --min-msk --key --yes`; every move prints the quote the chain's own arithmetic gives against the tip and sends nothing without `--yes`. |
 
@@ -206,10 +206,16 @@ enter the root only where a move has been folded, and the carriage grows a tail 
 field. (3) "The market opens when the class is registered" became "on its first buy": the same
 observable market at a fraction of the fold, and no edge at activation for genesis classes.
 (4) The mempool's dust rule treats every unspendable output as dust; the sink needs the one
-exception, matched on its exact script.
+exception, matched on its exact script. (5, learnt on 2026-09-05 when `scripts/misaka-palw-model-market-devnet-e2e.sh`
+first ran a carrier buy through a live mempool) The dust exception was never reached: both the
+mempool and consensus refuse a non-PQ output *class* first, and an `OP_RETURN` sink is one. The
+carve-out now sits in both places, gated on the network declaring the market, so a dormant network
+is unchanged. A rule tested only at the fold is a rule tested for the half that cannot refuse.
 
-**Not landed.** The explorer's Model Market page (another repository); the devnet drill (§6 item
-4) — buy, sell, retire, drain on a chain with the fence armed; arming on testnet-11.
+**Not landed.** Retire and drain under the devnet drill (§6 item 4 — buy and sell ran on both lanes
+on 2026-09-05, ADR-0089 §9, once the sink's output class was carved out); arming on testnet-11.
+The market's page is no longer another repository's: `web/misaka-options/` (served at
+misakaoptions.com) reads the market over wRPC and the EVM windows, and offers only the two moves.
 
 ## 8. What is deliberately not decided
 
