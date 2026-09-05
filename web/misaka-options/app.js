@@ -454,7 +454,10 @@ class WRpc {
         for (const [, p] of this.pending) p.reject(new Error('wRPC disconnected'));
         this.pending.clear();
         if (!wasOpen) { this.failures++; this.nextTry = Date.now() + Math.min(60000, 5000 * 2 ** Math.min(this.failures - 1, 4)); }
-        setStatus({ wrpc: 'down', wrpcErr: wasOpen ? 'connection closed' : 'cannot connect' });
+        // A socket that WORKED and then closed is not a dead endpoint: this client keeps one
+        // connection and reopens it on the next read, so calling that "down" told the reader the
+        // node was unreachable while it was answering. Only a connect that never opened is "down".
+        setStatus(wasOpen ? { wrpc: 'idle', wrpcErr: 'reconnects on the next read' } : { wrpc: 'down', wrpcErr: 'cannot connect' });
         if (!wasOpen) reject(new Error('wRPC unreachable at ' + this.url));
       };
     });
@@ -954,7 +957,7 @@ function renderNav() {
   const dot = $('#netDot'), txt = $('#netText'), pill = $('#netPill');
   const daa = db.chain.daa != null ? fmtInt(db.chain.daa) : null;
   const market = db.armed === true ? 'market armed' : db.armed === false ? 'market dormant' : 'market: unknown';
-  const wr = status.wrpc === 'up' ? 'up' : status.wrpc === 'connecting' ? 'connecting' : 'down';
+  const wr = status.wrpc === 'up' ? 'up' : (status.wrpc === 'connecting' || status.wrpc === 'idle') ? 'connecting' : 'down';
   txt.textContent = (db.chain.network || CFG.NETWORK_NAME) + (daa ? ' · DAA ' + daa : '') + ' · ' + market;
   dot.className = 'dot ' + (wr === 'up' && db.armed ? 'ok' : wr === 'up' || status.evm === 'up' ? 'warn' : 'bad');
   pill.title = 'wRPC ' + (wrpc.url || '(not configured)') + ': ' + status.wrpc + (status.wrpcErr ? ' (' + status.wrpcErr + ')' : '') + '\nEVM RPC ' + (evm.url || '(not configured)') + ': ' + status.evm + (status.evmErr ? ' (' + status.evmErr + ')' : '') + (db.evmDaa != null ? '\nfold clock (chainDaa): ' + fmtInt(db.evmDaa) : '');
