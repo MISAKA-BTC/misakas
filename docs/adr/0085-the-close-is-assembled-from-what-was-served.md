@@ -1,6 +1,6 @@
 # ADR-0085: The close is assembled from what the executor served — a disputed tile, not a capture
 
-**Status:** PROPOSED (2026-09-04). Design complete; implementation NOT started (see §7). Consensus-inert
+**Status:** PROPOSED (2026-09-04). §6 items 1–3 LANDED 2026-09-04 (see §7); items 4–5 are being built under the 2026-09-05 goal, with ADR-0086 Decision 6's transport (the block-leaves annex) riding the same lane. Consensus-inert
 by construction: the refutation object (`PalwExecutionStepRefutationV1`), the adjudicator
 (`check_execution_step_refutation_v1`) and every court object are unchanged; what changes is how a
 party that holds no capture ASSEMBLES the close, and what the executor serves it.

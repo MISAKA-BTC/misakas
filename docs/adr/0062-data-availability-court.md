@@ -6,7 +6,7 @@
 > original branch commit (`554ca77c`) carries the old number in its message; this file is the
 > authority.
 
-Status: **Proposed** (2026-08-30). Supersedes nothing; completes ADR-0042 Decision 7.
+Status: **Implemented behind `Params::palw_da_court`, dormant** (the amended form landed 2026-09-02; SA-7 widened the same fence 2026-09-03 — see the implementation sections below). The "Proposed, not landed" reading that stood in this line and in the README until 2026-09-05 was stale. Supersedes nothing; completes ADR-0042 Decision 7.
 
 > **Standing (index reconciliation, 2026-09-02).** Still Proposed, not landed. The harm it was
 > written to stop — an `Unavailable` quorum voiding a claim and slashing the producer's bond with no

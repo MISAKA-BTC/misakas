@@ -277,3 +277,9 @@ dominates.
 retarget's `max_factor` (4 per epoch), and receipt weight ramps exactly as attempts do**
 (Provisional → ReceiptLicensed → Final); a receipt block whose claim voids is weightless
 retroactively only inside the ramp window and never after `Final` (ADR-0039 3e).
+
+## Record (2026-09-05)
+
+Phases ①–③ are code; Phase ④ (Decision 4 — receipt blocks gain position and share) is an
+ACTIVATION gated by this ADR's security amendment (the beacon's `k ≥ 3` fold, the supply metric's
+`1/seat_count` floor). No code item is open; the activation is the operator's, on a measurement.

@@ -1,7 +1,6 @@
 # ADR-0066 — The heartbeat lane out of `header.bits`, and the inactivity leak out of node memory
 
-Status: **Decisions 1, 2 and 4's fence LANDED (2026-08-31), both dormant. Decision 3 and Decision
-4's committed table remain PROPOSED.** Supersedes the *implementation* of ADR-0060 Decisions 1–2
+Status: **Decisions 1, 2 and 4's fence LANDED (2026-08-31), both dormant. Decision 3 LANDED through ADR-0068 Phase 1 (`Params::palw_attempt_work_fence`: an attempt block's blue work is the constant `1 << PALW_ATTEMPT_BLUE_WORK_LOG2`, a heartbeat's is ε — ghostdag/protocol.rs names this ADR's Decision 3 as closed). Decision 4's committed per-validator table is NOT pursued: it belongs to the validator lineage, which is retired (recorded 2026-09-05).** Supersedes the *implementation* of ADR-0060 Decisions 1–2
 and Decision 4; the doctrine those decisions state is unaffected. Both features still ship OFF —
 but they ship off behind **fences that can be armed**, which is the difference this ADR was written
 to make. See "What landed" at the foot of this document for exactly what is and is not in the tree.
