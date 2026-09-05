@@ -53,6 +53,25 @@ pub struct PalwExecutionOutcomeV1 {
     pub material: Vec<u8>,
 }
 
+/// **Whether a claim prices its own work** (ADR-0084 Decision 7's rule, in one place; mainnet
+/// audit, 2026-09-05). A free-prompt claim carries the leaf count it was priced at; an attempt-lane
+/// claim carries `work_leaves == 0` — the state's spelling for "the class's canonical job, priced
+/// by the class" — and its own leaf count is the class's space, not a claim field.
+#[inline]
+pub fn palw_claim_prices_work_v1(work_leaves: u64) -> bool {
+    work_leaves != 0
+}
+
+/// **Is an opening, capture or replay at the claim's own price?** The comparison is made only
+/// when the claim prices its work. Before this existed the seat compared every attempt-lane
+/// artefact's real leaf count against the unpriced `0` — at the replay (fixed by the run-5 rule
+/// this generalises), the capture, the material replay and the interval opening — so on the
+/// attempt lane the seat could never file `Valid` through three of its four routes.
+#[inline]
+pub fn palw_opening_is_at_the_claims_price_v1(opening_leaves: u64, work_leaves: u64) -> bool {
+    !palw_claim_prices_work_v1(work_leaves) || opening_leaves == work_leaves
+}
+
 /// **What a replay of an attempt job yields for a verdict** (ADR-0084 Decision 7): the two roots
 /// the claim committed and, when the family prices work in step leaves, the leaves the replay
 /// covered — a seat refuses a claim whose roots match but whose work does not, as the free-prompt
@@ -566,5 +585,20 @@ mod tests {
                 "{banned} is back in the execution seam — ADR-0053 withdrew the second family"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod price_rule_tests {
+    use super::*;
+
+    /// The price rule, both arms (mainnet audit, 2026-09-05).
+    #[test]
+    fn an_unpriced_claim_is_at_its_price_at_any_leaf_count_and_a_priced_one_only_at_its_own() {
+        assert!(!palw_claim_prices_work_v1(0));
+        assert!(palw_claim_prices_work_v1(30));
+        assert!(palw_opening_is_at_the_claims_price_v1(6_630_544, 0), "an attempt-lane claim prices no leaves");
+        assert!(palw_opening_is_at_the_claims_price_v1(30, 30));
+        assert!(!palw_opening_is_at_the_claims_price_v1(31, 30), "a priced claim must reproduce its price");
     }
 }

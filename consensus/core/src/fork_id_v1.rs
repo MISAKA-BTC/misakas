@@ -215,13 +215,15 @@ pub fn fork_id_gate_armed_v1(params: &Params) -> bool {
 /// reasons [`Params::fence_schedule_v1`] excludes them: a fence active at genesis is
 /// `consensus_identity_id`'s business and never "crossed", and `never()` is not a height.
 ///
-/// Today: ADR-0072's `palw_attempt_activation` and ADR-0083's `palw_difficulty_priced_rows` (the
-/// difficulty window counts only bits-priced rows; scheduled at DAA 1150 on testnet-11). A fence
+/// Today: ADR-0072's `palw_attempt_activation`, ADR-0083's `palw_difficulty_priced_rows` (the
+/// difficulty window counts only bits-priced rows; scheduled at DAA 1150 on testnet-11), and its
+/// second half `palw_receipt_rows_unpriced` (the receipt lane leaves the count; mainnet audit
+/// 2026-09-05, dormant on testnet-11 until the operator schedules it). A fence
 /// that is scheduled on a preset is that operator's opt-in — there is no second field to set,
 /// because the schedule entry already says everything the gate needs: the height, and that this
 /// build carries the rule. Sorted and deduplicated so the list reads as a schedule.
 pub fn fork_id_gate_fences_v1(params: &Params) -> Vec<u64> {
-    let mut fences: Vec<u64> = [params.palw_attempt_activation, params.palw_difficulty_priced_rows]
+    let mut fences: Vec<u64> = [params.palw_attempt_activation, params.palw_difficulty_priced_rows, params.palw_receipt_rows_unpriced]
         .into_iter()
         .flatten()
         .map(|fence| fence.daa_score())

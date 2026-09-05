@@ -83,7 +83,9 @@ pub fn replay_licenses_v1(
     priced_work_leaves: u64,
 ) -> bool {
     let roots_reproduce = roots.execution_root == claimed_execution_root && roots.trace_root == claimed_trace_root;
-    let work_reproduces = priced_work_leaves == 0 || roots.work_leaves.is_none_or(|w| w == priced_work_leaves);
+    let work_reproduces = roots
+        .work_leaves
+        .is_none_or(|w| kaspa_consensus_core::palw_backend::palw_opening_is_at_the_claims_price_v1(w, priced_work_leaves));
     roots_reproduce && work_reproduces
 }
 /// How many receipts one claim's pool holds. A panel has 5 seats; the rest is an attacker's spam,
@@ -2549,7 +2551,7 @@ impl PalwPanelService {
                                 // priced from the leaf count its commitment declared; the capture
                                 // the execution root binds has a leaf count of its own, and the
                                 // two must be one number (ADR-0074 Decision 5).
-                                if shape.step_leaf_count != duty.work_leaves {
+                                if !kaspa_consensus_core::palw_backend::palw_opening_is_at_the_claims_price_v1(shape.step_leaf_count, duty.work_leaves) {
                                     warn!(
                                         "[{PALW_PANEL}] claim {}: the capture has {} leaves and the claim was priced at {} — the roots \
                                          match but the WORK does not, so this is not the claim's capture",
@@ -2648,7 +2650,7 @@ impl PalwPanelService {
                             // recycled collateral instead of inference. That is the one property
                             // this lane exists to establish, so the seat re-prices what it
                             // actually ran and refuses anything that is not the claim's price.
-                            if run.facts.step_leaf_count != duty.work_leaves {
+                            if !kaspa_consensus_core::palw_backend::palw_opening_is_at_the_claims_price_v1(run.facts.step_leaf_count, duty.work_leaves) {
                                 warn!(
                                     "[{PALW_PANEL}] claim {}: the replay has {} leaves and the claim was priced at {} — the roots \
                                      match but the WORK does not, so this is not the claim's material",

@@ -3268,6 +3268,15 @@ async fn palw_v2_the_pruning_point_import_verifies_the_root_before_it_writes() {
         "the refusal happens BEFORE the write — detection afterwards would be no defence"
     );
 
+    // **A frontier above the point itself is refused before the root is even rebuilt** (mainnet
+    // audit, 2026-09-05). The root check cannot catch this one when the peer also authored the
+    // witness header; the pruning point's own blue score can, and does.
+    let mut pinned = honest.clone();
+    pinned.safe_frontier_blue_score = u64::MAX;
+    let err = vp.import_pruning_point_palw_state(point, pinned).expect_err("a frontier above the point must not install");
+    assert!(format!("{err}").contains("safe frontier"), "and the refusal names the frontier: {err}");
+    assert!(vp.palw_state_v2_store.read().tip_record().unwrap().is_none(), "…and nothing was written");
+
     // The honest one installs, and what lands is the state the chain had.
     vp.import_pruning_point_palw_state(point, honest).expect("the honest carriage installs");
     let (imported_block, imported) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("installed");

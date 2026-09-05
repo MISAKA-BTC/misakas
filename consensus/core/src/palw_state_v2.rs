@@ -335,6 +335,42 @@ pub const PALW_MAX_CAPABLE_CLASSES: usize = 16;
 /// actually holds spends a tenth of its headroom.
 pub const PALW_CAPABILITY_EXPOSURE_SOMPI: u64 = 10_000;
 
+/// **ADR-0071 SA-1, SA-2 and SA-4 on a declared `capable_classes` set — the ONE spelling, called
+/// by both writers** (`BondCapabilityDeclared`, and since the 2026-09-05 mainnet audit
+/// `BondRegistered`). Applied only under `Params::palw_capability_bound`; the callers resolve that.
+///
+/// * a Retiring bond may not declare — its collateral is on its way out, so the promise has
+///   nothing behind it (SA-4);
+/// * the set is bounded, because it is hashed into `state_root` and carried by every node forever
+///   while the object is priced only by transaction mass (SA-1);
+/// * the declaration must be affordable against the collateral itself — the weaker invariant
+///   reachable here, strictly implied by the admission lane's ratio ceiling (SA-2, audit M2-16).
+pub(crate) fn check_capable_classes_declared_v1(
+    state: &PalwChainStateV2,
+    bond: PalwBondKeyV2,
+    capable_classes: &std::collections::BTreeSet<Hash64>,
+    retiring: bool,
+    already: u128,
+    collateral: u64,
+) -> Result<(), PalwStateV2Error> {
+    // Not here: "every id names a registered class" (SA-4's second half). The declaration arm
+    // checks it unconditionally, as it did before the fence; the registration arm may not, because
+    // a registrant's bond names the class it is about to register — the carriage of that
+    // registration must name a bond the chain already holds, so the bond comes first.
+    let _ = state;
+    if retiring {
+        return Err(PalwStateV2Error::CapabilityDeclarationWhileRetiring(bond));
+    }
+    if capable_classes.len() > PALW_MAX_CAPABLE_CLASSES {
+        return Err(PalwStateV2Error::CapableClassesTooMany { bond, got: capable_classes.len(), max: PALW_MAX_CAPABLE_CLASSES });
+    }
+    let price = (capable_classes.len() as u128) * (PALW_CAPABILITY_EXPOSURE_SOMPI as u128);
+    if already.saturating_add(price) > collateral as u128 {
+        return Err(PalwStateV2Error::CapabilityExposureUnaffordable { bond, classes: capable_classes.len(), already, price, collateral });
+    }
+    Ok(())
+}
+
 /// **ADR-0071 SA-2: the exposure this bond's declaration holds**, derived from the declared set
 /// rather than accumulated beside it.
 ///
@@ -8142,6 +8178,18 @@ fn apply_object(
             if *payout_payload == Hash64::default() {
                 return Err(PalwStateV2Error::EmptyPayoutPayload(*bond));
             }
+            // **ADR-0071 SA-1/SA-2/SA-4 at the OTHER writer of `capable_classes`** (mainnet audit,
+            // 2026-09-05). Every amendment guarded `BondCapabilityDeclared` and none guarded this
+            // arm, which writes the registrant's set straight into `state_root`: unknown ids, an
+            // unbounded count, and a reservation the collateral cannot carry, all admitted at
+            // registration and refused only at the next declaration. One rule, two writers — the
+            // shape this codebase names as the one two readers change apart. Under the same fence,
+            // for the same reason, and by the same function. (Naming a class not yet registered
+            // is allowed HERE and refused at declaration: a registrant's bond declares for the class
+            // it is about to register, and that registration's carriage needs the bond first.)
+            if builder.capability_bound {
+                check_capable_classes_declared_v1(&builder.state, *bond, capable_classes, false, 0, *collateral)?;
+            }
             builder.write_bond(
                 *bond,
                 Some(palw_bond_state_from_registration_v2(
@@ -8168,54 +8216,25 @@ fn apply_object(
                 return Err(PalwStateV2Error::MissingClass(*unknown));
             }
             if builder.capability_bound {
-                // **SA-4: a Retiring bond may not declare.** Its collateral is on its way out, so
-                // the promise has nothing behind it — the same reason `BondNotActive` refuses a
-                // retiring bond an accusation. Undeclaring is not blocked by this: retirement
-                // itself drops the whole set, three arms down.
-                if matches!(record.status, PalwBondStatusV2::Retiring { .. }) {
-                    return Err(PalwStateV2Error::CapabilityDeclarationWhileRetiring(*bond));
-                }
-                // **SA-1: the set is bounded.** `capable_classes` is hashed into `state_root` and
-                // carried by every node forever, and this object is priced only by transaction
-                // mass, so without a bound one declaration is an unbounded state write.
-                if capable_classes.len() > PALW_MAX_CAPABLE_CLASSES {
-                    return Err(PalwStateV2Error::CapableClassesTooMany {
-                        bond: *bond,
-                        got: capable_classes.len(),
-                        max: PALW_MAX_CAPABLE_CLASSES,
-                    });
-                }
-                // **SA-2: the declaration must be affordable, and it is refused BY NAME.**
-                //
                 // The bond's own capability exposure is excluded from `already` deliberately: the
                 // new set REPLACES the old one (see below), so what the previous declaration
                 // reserved is released by this very write and charging both would refuse an
                 // operator for exposure it is in the act of giving back. Everything else the bond
                 // backs — live claims and its own class registrations — is counted, on the
                 // ADR-0056 Decision 3 rule that the ceiling applies to the SUM.
-                //
-                // **The ceiling is the collateral itself, not `collateral × ratio`**, for the
-                // reason the registry's own price is checked the same way one arm down (audit
-                // M2-16): the ratio lives in the ADMISSION params, which the transition does not
-                // hold. The weaker invariant that IS reachable here — total exposure may not
-                // exceed the collateral — is strictly implied by the ratio ceiling, so a
-                // declaration this admits can still be refused by the lane that has the ratio, and
-                // one this refuses could never have passed there.
                 let already = builder
                     .state
                     .reserved_exposure(bond)
                     .checked_add(builder.state.registration_exposure(bond))
                     .ok_or(PalwStateV2Error::Overflow("total exposure"))?;
-                let price = (capable_classes.len() as u128) * (PALW_CAPABILITY_EXPOSURE_SOMPI as u128);
-                if already.saturating_add(price) > record.collateral as u128 {
-                    return Err(PalwStateV2Error::CapabilityExposureUnaffordable {
-                        bond: *bond,
-                        classes: capable_classes.len(),
-                        already,
-                        price,
-                        collateral: record.collateral,
-                    });
-                }
+                check_capable_classes_declared_v1(
+                    &builder.state,
+                    *bond,
+                    capable_classes,
+                    matches!(record.status, PalwBondStatusV2::Retiring { .. }),
+                    already,
+                    record.collateral,
+                )?;
             }
             // **SA-1's second half: a declaration REPLACES, it does not grow.** This assignment is
             // the whole of it and it predates the amendment — recorded here rather than changed,
@@ -10601,6 +10620,37 @@ pub(crate) mod tests {
             ),
             "the bound must refuse by name, got {err}"
         );
+    }
+
+    /// **The registration writer is bounded like the declaration writer** (mainnet audit,
+    /// 2026-09-05). `BondRegistered` wrote `capable_classes` straight into `state_root` with none
+    /// of ADR-0071's amendments; under the fence it is now the same rule, by the same function.
+    /// Dormant, the arm is byte-identical to what testnet-11 runs — asserted too, so the fence
+    /// stays the only thing that changes it.
+    #[test]
+    fn a_registration_declaring_seventeen_classes_is_refused_under_the_fence_and_not_before() {
+        let (state, p, ids) = chain_with_classes(PALW_MAX_CAPABLE_CLASSES as u64 + 1, 1_000_000);
+        let register = |classes: &[Hash64]| PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(2),
+            pubkey: vec![8; 4],
+            operator_pubkey: op_key(22),
+            collateral: 1_000_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A12),
+            capable_classes: classes.iter().copied().collect(),
+            signature: Vec::new(),
+        };
+        let apply = |obj: PalwConsensusObjectV2, fence: bool| {
+            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[obj], PalwBlockWorkV3::None, &[], false, fence, false, false)
+        };
+        apply(register(&ids[..PALW_MAX_CAPABLE_CLASSES]), true).expect("sixteen registers under the fence");
+        let err = apply(register(&ids[..]), true).expect_err("seventeen is one past the bound at registration too");
+        assert!(matches!(err, PalwStateV2Error::CapableClassesTooMany { got, max, .. } if got == PALW_MAX_CAPABLE_CLASSES + 1 && max == PALW_MAX_CAPABLE_CLASSES), "got {err}");
+        // A class not yet registered may be named at REGISTRATION (a registrant's bond declares for
+        // the class it is about to register); it is the declaration arm that refuses it.
+        let future = [kaspa_hashes::Hash64::from_u64_word(0xD0E5_0000)];
+        apply(register(&future), true).expect("a registrant may name the class it is about to register");
+        // Dormant: the shipped arm, unchanged.
+        apply(register(&ids[..]), false).expect("dormant, the registration arm admits what testnet-11 admits");
     }
 
     /// **SA-2: a replacing declaration releases the dropped classes' exposure.**

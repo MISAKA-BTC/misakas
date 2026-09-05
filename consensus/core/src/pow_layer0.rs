@@ -387,13 +387,28 @@ pub fn algo_id_derives_no_block_level(algo_id: u8) -> bool {
 /// That is ADR-0066's F1 re-entering through the row COUNT after Decision 1 took the lane's
 /// PRICE out of `bits`.
 ///
-/// Every other lane compares a digest against `bits` — the attempt lanes (6, 9) through the
-/// Layer-0 finalizer, the hash lanes (1–3) directly, the receipt lane (7) through the same arm —
-/// so this is the exact complement of the constant-target arm, and must stay that way: a lane that
-/// gets a fixed target of its own must be added HERE the same day, or it inherits the defect.
+/// The attempt lanes (6, 9) compare a digest against `bits` through the Layer-0 finalizer and the
+/// hash lanes (1–3) directly. **This used to say the receipt lane (7) does too, and it does not**
+/// (mainnet audit, 2026-09-05): `check_pow_layer0` returns `true` unconditionally for lane 7 —
+/// ADR-0044 Decision 6, a receipt's digest is identity-binding and its work is the certified quantum
+/// it spends — so a receipt row costs the same whatever `bits` says, exactly as a heartbeat row
+/// does. Counted as a priced row it measures how fast quanta are being spent, not work, and a
+/// producer holding a stock of certified quanta could tighten every attempt lane's `bits` off its
+/// own chain: ADR-0066's F1 again, through the lane this doctrine forgot. The corrected predicate is
+/// [`algo_id_is_priced_by_bits_v2`]; this one is kept, byte for byte, as the rule every block before
+/// `Params::palw_receipt_rows_unpriced` was judged under.
 #[inline]
 pub fn algo_id_is_priced_by_bits(algo_id: u8) -> bool {
     algo_id != POW_ALGO_ID_HEARTBEAT_V1
+}
+
+/// **ADR-0083 Decision 1's predicate, as the decision states it**: a row counts iff its lane
+/// compares a digest against `header.bits`. The heartbeat lane (8) has a constant target; the
+/// receipt lane (7) has no target at all (`check_pow_layer0` admits every receipt digest). Every
+/// other lane is priced. In force past `Params::palw_receipt_rows_unpriced`.
+#[inline]
+pub fn algo_id_is_priced_by_bits_v2(algo_id: u8) -> bool {
+    algo_id != POW_ALGO_ID_HEARTBEAT_V1 && algo_id != POW_ALGO_ID_PALW_RECEIPT_V3
 }
 
 /// Output width of the `algo_id = 5` tag:

@@ -1586,7 +1586,7 @@ pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
         || binding.committed_execution_root != claim.execution_root
         || binding.full_logits_trace_root != claim.trace_root
         || (claim.anchor != Hash64::default() && binding.job_context.job_id != claim.anchor)
-        || binding.step_leaf_count != work_leaves
+        || !kaspa_consensus_core::palw_backend::palw_opening_is_at_the_claims_price_v1(binding.step_leaf_count, work_leaves)
         || opening.interval_index != index
     {
         return Err("the opening does not bind to the claim's roots".to_string());
@@ -1846,7 +1846,7 @@ pub fn base0_verify_fp_interval_opening_with_state_capped_v1<K: Base0FpIntervalK
         || binding.committed_execution_root != claim.execution_root
         || binding.full_logits_trace_root != claim.trace_root
         || (claim.anchor != Hash64::default() && binding.job_context.job_id != claim.anchor)
-        || binding.step_leaf_count != work_leaves
+        || !kaspa_consensus_core::palw_backend::palw_opening_is_at_the_claims_price_v1(binding.step_leaf_count, work_leaves)
         || opening.interval_index != index
     {
         return Base0FpIntervalSeatVerdictV1::Mismatch;

@@ -2561,14 +2561,30 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         // them leaves this empty and the node falls back to `--palw-class-carriage`; and each one
         // is checked against the IMPORTED state before it is stored, so a hostile list is refused
         // entry by entry rather than trusted wholesale.
+        // **Bounded by the state they will be checked against** (mainnet audit, 2026-09-05). Each
+        // declaration costs a full PALW state materialization to verify, and the list was accepted
+        // at whatever length the peer sent — one IBD peer could hold the single IBD latch for as
+        // long as it cared to pad the list. A declaration is only ever adopted for a class the
+        // imported carriage registers, so that set is the bound: one entry per registered class,
+        // the first one offered, everything else dropped here before anything is spent on it.
+        let registered: std::collections::BTreeSet<kaspa_consensus_core::Hash64> = carriage.classes.keys().copied().collect();
+        let offered = msg.class_carriages.len();
+        let mut seen = std::collections::BTreeSet::new();
         let declarations: Vec<(kaspa_consensus_core::Hash64, Vec<u8>)> = msg
             .class_carriages
             .into_iter()
             .filter_map(|entry| {
                 let id: kaspa_consensus_core::Hash64 = entry.class_id?.try_into().ok()?;
-                Some((id, entry.carriage))
+                (registered.contains(&id) && seen.insert(id)).then_some((id, entry.carriage))
             })
             .collect();
+        if declarations.len() < offered {
+            debug!(
+                "[palw-class-carriage] peer offered {offered} class declaration(s) with the pruning point state; {} name a registered \
+                 class once and are kept, the rest are dropped unread",
+                declarations.len()
+            );
+        }
         Ok(Some((carriage, declarations)))
     }
 

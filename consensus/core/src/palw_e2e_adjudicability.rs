@@ -1036,6 +1036,16 @@ pub fn palw_rc_fp_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
 /// off; the coverage is decided here, once, and re-decided on chain for every later class.
 pub fn palw_rc_fp_certified_class_ids_v1() -> BTreeSet<Hash64> {
     let families = palw_rc_fp_certified_families_v1();
+    palw_rc_typed_class_profiles_v1()
+        .iter()
+        .filter(|profile| palw_profile_is_fp_covered_v1(profile, &families))
+        .map(|profile| profile.shape_profile_id())
+        .collect()
+}
+
+/// The profiles the RC's catalog is TYPED from — the floor, the QWEN36 hybrid and the graph-v2
+/// dense projection — in one place, because two functions read them (mainnet audit, 2026-09-05).
+fn palw_rc_typed_class_profiles_v1() -> Vec<crate::palw_step::PalwShapeProfileV3> {
     let mut classes: Vec<crate::palw_step::PalwShapeProfileV3> = Vec::with_capacity(3);
     if let Ok(floor) = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY) {
         classes.push(floor);
@@ -1049,11 +1059,56 @@ pub fn palw_rc_fp_certified_class_ids_v1() -> BTreeSet<Hash64> {
         classes.push(dense);
     }
     classes
+}
+
+/// The coverage rule itself: a profile's free-prompt lane is certified iff some drilled family's
+/// kernel set covers every kernel the profile can reach (ADR-0074 D6).
+fn palw_profile_is_fp_covered_v1(profile: &crate::palw_step::PalwShapeProfileV3, families: &[PalwE2eFamilyV1]) -> bool {
+    let reachable = crate::palw_class_admission_v2::reachable_kernels_v1(profile);
+    families.iter().any(|f| reachable.is_subset(&f.kernel_ids))
+}
+
+/// **The same rule, applied to the classes a bundle ACTUALLY registers** (mainnet audit,
+/// 2026-09-05; ADR-0074 Decision 6, ADR-0075 Decision 6).
+///
+/// [`palw_rc_fp_certified_class_ids_v1`] applies the coverage rule to a list of profiles typed
+/// here — the floor, the QWEN36 hybrid and `qwen25_a16_profile_v2`, the graph-v2 dense projection.
+/// The 5f genesis registers the graph-v5@512 dense row instead, so the shipped set names a class
+/// the card does not register and omits the one it does: the 489‰ dense tier's free-prompt lane
+/// is uncertified from genesis on testnet-11, closable there only by an on-chain
+/// `ClassLaneCertified`. A set derived from a typed list survives exactly as long as the list.
+///
+/// This applies the coverage rule to the profiles of the classes the bundle REGISTERS — the typed
+/// ones for catalog classes (which carry no admission carriage) and the carried one for a class
+/// admitted through the post-genesis shape — so a registered id is certified iff a drilled family
+/// covers it, and an unregistered id is never named. testnet-11 keeps the pinned set (its bundle
+/// is a live identity); a carded mainnet installs this one, so what it certifies is what it
+/// registers.
+pub fn palw_fp_certified_class_ids_of_registered_v1(bundle: &crate::palw_mode_v2::PalwConsensusParamsV2) -> BTreeSet<Hash64> {
+    use crate::palw_state_v2::PalwConsensusObjectV2;
+    let families = palw_rc_fp_certified_families_v1();
+    // What the bundle registers, by id — with or without an admission carriage. A genesis class
+    // from the catalog carries `admission: None` (ADR-0053: the ruleset id commits to the
+    // catalog), so its profile is the typed one; a class the assembly admitted through the
+    // post-genesis shape carries its profile with it, and that is the only source for a row the
+    // typed list does not know (the graph-v5@512 dense row).
+    let registered: BTreeSet<Hash64> = bundle
+        .genesis_objects
         .iter()
-        .filter(|profile| {
-            let reachable = crate::palw_class_admission_v2::reachable_kernels_v1(profile);
-            families.iter().any(|f| reachable.is_subset(&f.kernel_ids))
+        .filter_map(|object| match object {
+            PalwConsensusObjectV2::ClassRegistered { class_id, .. } => Some(*class_id),
+            _ => None,
         })
+        .collect();
+    let mut profiles = palw_rc_typed_class_profiles_v1();
+    profiles.extend(bundle.genesis_objects.iter().filter_map(|object| match object {
+        PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. } => Some(carriage.profile.clone()),
+        _ => None,
+    }));
+    profiles
+        .iter()
+        .filter(|profile| registered.contains(&profile.shape_profile_id()))
+        .filter(|profile| palw_profile_is_fp_covered_v1(profile, &families))
         .map(|profile| profile.shape_profile_id())
         .collect()
 }

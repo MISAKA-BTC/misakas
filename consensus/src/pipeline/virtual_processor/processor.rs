@@ -13019,6 +13019,29 @@ impl VirtualStateProcessor {
         // carriage is exactly the one an attacker supplies, and the IBD can be retried once the
         // child header is in hand.
         let (expected_root, witness_daa) = witness.ok_or(PruningImportError::ImportedPalwStateHeaderMissing(pruning_point))?;
+        // **A frontier above the point it is the state of is a lie on its face** (mainnet audit,
+        // 2026-09-05). `safe_frontier_blue_score` is fork choice's FIRST key and the frontier only
+        // ever advances (`claim.accepted_blue_score > old_frontier`), so a carriage declaring one
+        // the chain never reached pins this node to the peer's chain for the rest of its life — and
+        // the root check below cannot see it, because the peer authored the header that commits
+        // the root. What the root check cannot see, the chain can: every claim this state counts
+        // was accepted at or below `pruning_point`, so no frontier can stand above the point's own
+        // blue score. Checked first, before a byte is rebuilt, because it costs one comparison.
+        let point_blue_score = self
+            .ghostdag_store
+            .get_blue_score(pruning_point)
+            .map_err(|_| PruningImportError::ImportedPalwStateHeaderMissing(pruning_point))?;
+        if carriage.safe_frontier_blue_score > point_blue_score {
+            return Err(PruningImportError::ImportedPalwStateInvalid(
+                pruning_point,
+                expected_root,
+                format!(
+                    "the carriage declares a safe frontier at blue score {} above the pruning point's own {point_blue_score}: no \
+                     claim accepted by this point can stand above it",
+                    carriage.safe_frontier_blue_score
+                ),
+            ));
+        }
         let state = carriage
             // ADR-0069 Decision 7: the consistency check has to know the rule the snapshot was
             // built under, or it refuses a state for having obeyed it.

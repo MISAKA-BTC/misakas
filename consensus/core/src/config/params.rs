@@ -1197,6 +1197,25 @@ pub struct Params {
     /// first block, because its window holds no priced row.
     pub palw_difficulty_priced_rows: Option<ForkActivation>,
 
+    /// **ADR-0083 Decision 1, the half its own text states and its predicate forgot: a receipt row
+    /// is not a priced row** (mainnet audit, 2026-09-05).
+    ///
+    /// The decision says the window counts "only rows priced by `bits`". Its predicate excluded the
+    /// heartbeat lane alone, and the receipt lane (7) is not priced either — `check_pow_layer0`
+    /// admits every receipt digest unconditionally (ADR-0044 Decision 6: the work is the certified
+    /// quantum the block spends). Counted as priced, a receipt row measures how fast quanta are
+    /// spent, not work: a producer holding a stock of certified quanta tightens every attempt
+    /// lane's `bits` off its own chain, which is ADR-0066's F1 through the lane the doctrine
+    /// forgot. Past this fence the retarget uses
+    /// [`crate::pow_layer0::algo_id_is_priced_by_bits_v2`]; before it, byte for byte, the rule
+    /// every shipped block was judged under.
+    ///
+    /// **TOP LEVEL, bare, for `palw_difficulty_priced_rows`' reasons**, and it requires that fence:
+    /// `validate_palw_v2` refuses it armed on a preset whose first fence is dormant or later. A
+    /// fresh chain arms it from genesis (a carded mainnet does); testnet-11 reaches it as a
+    /// scheduled height, ADR-0083's path (a), which is the operator's call.
+    pub palw_receipt_rows_unpriced: Option<ForkActivation>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -1540,6 +1559,23 @@ impl Params {
                     "palw_uncertified_weightless is armed above genesis: ADR-0069 Decision 7 carries the free-prompt \
                      retirement repair, and arming it on a chain that may already have stranded weight while it was \
                      dormant does not repair that chain — it is genesis-only, or dormant",
+                ));
+            }
+        }
+        // **ADR-0083's second fence needs its first** (mainnet audit, 2026-09-05). The receipt rows
+        // leave the count only on a window that already counts by lane; armed alone, or armed
+        // before `palw_difficulty_priced_rows`, it would name a rule the window is not running.
+        if let Some(receipts) = self.palw_receipt_rows_unpriced
+            && receipts != ForkActivation::never()
+        {
+            let first_in_time = self
+                .palw_difficulty_priced_rows
+                .filter(|priced| *priced != ForkActivation::never())
+                .is_some_and(|priced| priced.daa_score() <= receipts.daa_score());
+            if !first_in_time {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_receipt_rows_unpriced is armed while palw_difficulty_priced_rows is dormant or scheduled later: the \
+                     receipt lane can only leave a count that is already taken by lane (ADR-0083 Decision 1)",
                 ));
             }
         }
@@ -2257,6 +2293,9 @@ impl Params {
         if self.palw_difficulty_priced_rows == Some(ForkActivation::never()) {
             self.palw_difficulty_priced_rows = None;
         }
+        if self.palw_receipt_rows_unpriced == Some(ForkActivation::never()) {
+            self.palw_receipt_rows_unpriced = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -2608,6 +2647,10 @@ impl Params {
             h.write(b"palw_difficulty_priced_rows");
             h.write(priced.daa_score().to_le_bytes());
         }
+        if let Some(receipts) = self.palw_receipt_rows_unpriced {
+            h.write(b"palw_receipt_rows_unpriced");
+            h.write(receipts.daa_score().to_le_bytes());
+        }
         h.finalize()
     }
 
@@ -2697,6 +2740,7 @@ impl Params {
             palw_kary_court,
             palw_fp_decode_rules,
             palw_difficulty_priced_rows,
+            palw_receipt_rows_unpriced,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -2931,6 +2975,9 @@ impl Params {
         if let Some(activation) = palw_difficulty_priced_rows.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_receipt_rows_unpriced.as_mut() {
+            fork(activation, visit);
+        }
 
         let Some(dns) = dns_params.as_mut() else {
             absent = u64::MAX;
@@ -3127,6 +3174,7 @@ impl Params {
             palw_kary_court,
             palw_fp_decode_rules,
             palw_difficulty_priced_rows,
+            palw_receipt_rows_unpriced,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -3391,6 +3439,10 @@ impl Params {
         // preset leaves it `None` and fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_difficulty_priced_rows {
             h.write(b"palw_difficulty_priced_rows");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_receipt_rows_unpriced {
+            h.write(b"palw_receipt_rows_unpriced");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
@@ -3685,6 +3737,7 @@ impl Params {
             palw_kary_court: self.palw_kary_court,
             palw_fp_decode_rules: self.palw_fp_decode_rules,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
+            palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -4612,6 +4665,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_kary_court: None,
     palw_fp_decode_rules: None,
     palw_difficulty_priced_rows: None,
+    palw_receipt_rows_unpriced: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -4763,6 +4817,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_kary_court: None,
     palw_fp_decode_rules: None,
     palw_difficulty_priced_rows: None,
+    palw_receipt_rows_unpriced: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -4896,6 +4951,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_kary_court: None,
     palw_fp_decode_rules: None,
     palw_difficulty_priced_rows: None,
+    palw_receipt_rows_unpriced: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -8060,19 +8116,7 @@ pub fn mainnet_shipped_params() -> Params {
     // pinning `PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT`, which is the dense slot the RC fills with
     // ADR-0082's graph-v5@512 row. A card that instead pins a fused row through some other slot
     // still meets the assembly's refusal, by name, which is the fail-closed direction.
-    let mut base = MAINNET_PARAMS;
-    if palw_mainnet_qwen25_a16_is_registered() {
-        base.palw_kary_court = Some(ForkActivation::always());
-    }
-    // **ADR-0077 Phase B's fence, STATED on mainnet's base from genesis** (ADR-0084 U-08; mainnet
-    // audit, 2026-09-05). Past it the court's refutation walkers open against the ladder the
-    // ruleset froze (`PalwCourtParamsV2::max_step_leaf_count`) instead of the executor's `2^22`,
-    // so a class is prosecuted at the ladder it was admitted at — dormant, every class deeper than
-    // `2^22` leaves is admitted and un-convictable, which on a chain with value is faked work
-    // nobody can charge for. A fresh chain arms it for free (no history was judged under the
-    // other ladder); testnet-11 has such history and reaches it as a flag day or a re-mint, which
-    // is the operator's decision and not this function's. Devnet arms it from genesis already.
-    base.palw_context_ladder = Some(ForkActivation::always());
+    let base = mainnet_card_base_v1(MAINNET_PARAMS, palw_mainnet_qwen25_a16_is_registered());
     let assembled = if palw_mainnet_qwen36_is_registered() {
         let dense = palw_mainnet_qwen25_a16_is_registered().then_some(PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT);
         palw_v2_params_with_classes_on_base(
@@ -8085,7 +8129,62 @@ pub fn mainnet_shipped_params() -> Params {
     } else {
         palw_v2_params_from_artifacts_on_base(base, PALW_MAINNET_GENESIS_ARTIFACT_ROOT, bonds)
     };
-    palw_rc_arm_phase1(assembled.unwrap_or_else(|e| panic!("the pinned mainnet PALW genesis card does not assemble: {e}")))
+    let assembled = assembled.unwrap_or_else(|e| panic!("the pinned mainnet PALW genesis card does not assemble: {e}"));
+    palw_rc_arm_phase1(mainnet_certify_registered_classes_v1(assembled))
+}
+
+/// **The fences a mainnet card STATES on its base — in one place** (mainnet audit, 2026-09-05).
+///
+/// Stated rather than derived, for the reason `palw_rc_base_params` gives: a fence armed by a
+/// derivation alone is an arming nobody decided. The RC states its set on its own base; a card
+/// states its set here, and the tests compare the two as sets so the next fence added cannot be
+/// stated on one shipped network and forgotten on the other.
+///
+/// * `palw_kary_court` (ADR-0082 D3) — when the card pins the dense tier, whose graph-v5 row only a
+///   dissection court can try. The operator's statement is the act of pinning
+///   `PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT`; a fused row pinned through another slot still meets the
+///   assembly's refusal by name, which is the fail-closed direction.
+/// * `palw_context_ladder` (ADR-0077 Phase B, ADR-0084 U-08) — the court's refutation walkers open
+///   against the ladder the ruleset froze instead of the executor's `2^22`, so a class is
+///   prosecuted at the ladder it was admitted at. Free on a fresh chain: no history was judged
+///   under the other ladder.
+/// * `palw_difficulty_priced_rows` and `palw_receipt_rows_unpriced` (ADR-0083 D1, both halves) — the
+///   window counts by lane, and a receipt row is not a priced row. The first is also what
+///   `palw_rc_arm_phase1` would add; stated here because the assembly validates before it runs.
+/// * `palw_certification_rent` (ADR-0075 SA-1/SA-2) and `palw_chunk_cap_charge` (ADR-0075 D14) —
+///   without them two ~60-byte `ObjectChunk`s a block spend the certification grading slots before
+///   the object is validated, and eight unsigned chunks squat every pending-chunk slot: a
+///   block-cheap way to keep an honest class weightless for the life of the chain.
+///
+/// testnet-11 arms none of these five from genesis; each is a scheduled height or a re-mint
+/// there, which is the operator's call and not this function's. Devnet arms the ladder.
+fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
+    if dense_tier_pinned {
+        base.palw_kary_court = Some(ForkActivation::always());
+    }
+    base.palw_context_ladder = Some(ForkActivation::always());
+    // Both halves of ADR-0083 Decision 1, stated together: the assembly validates before
+    // `palw_rc_arm_phase1` runs, and the second half is refused on a base whose first is dormant.
+    base.palw_difficulty_priced_rows = Some(ForkActivation::always());
+    base.palw_receipt_rows_unpriced = Some(ForkActivation::always());
+    base.palw_certification_rent = Some(ForkActivation::always());
+    base.palw_chunk_cap_charge = Some(ForkActivation::always());
+    base
+}
+
+/// **A card certifies the free-prompt lane of the classes it REGISTERS** (mainnet audit,
+/// 2026-09-05; ADR-0074 D6, ADR-0075 D6). The shared assembly installs
+/// `palw_rc_fp_certified_class_ids_v1`, a set computed from a typed list of profiles that names the
+/// graph-v2 dense projection while the card registers the graph-v5 row — so the RC's set names a
+/// class its card does not register and omits the one it does. testnet-11 keeps that set (its
+/// bundle is a live identity, closable only by an on-chain `ClassLaneCertified`); a card
+/// re-derives it from the objects it actually assembled.
+fn mainnet_certify_registered_classes_v1(mut params: Params) -> Params {
+    if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode {
+        let derived = crate::palw_e2e_adjudicability::palw_fp_certified_class_ids_of_registered_v1(bundle);
+        bundle.state = bundle.state.clone().with_fp_certified_classes(derived);
+    }
+    params
 }
 
 /// **ADR-0068 Phase 1: the DAA height at which testnet-11's clock arms.** Chosen 2026-09-01
@@ -8710,6 +8809,7 @@ pub const DEVNET_PARAMS: Params = Params {
     // mistake.
     palw_fp_decode_rules: None,
     palw_difficulty_priced_rows: None,
+    palw_receipt_rows_unpriced: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -11882,6 +11982,7 @@ mod consensus_params_id_tests {
             ("palw_kary_court", p.palw_kary_court.is_some()),
             ("palw_fp_decode_rules", p.palw_fp_decode_rules.is_some()),
             ("palw_difficulty_priced_rows", p.palw_difficulty_priced_rows.is_some()),
+            ("palw_receipt_rows_unpriced", p.palw_receipt_rows_unpriced.is_some()),
         ]
     }
 
@@ -11917,10 +12018,26 @@ mod consensus_params_id_tests {
         let money: Vec<(u32, [u8; 64])> =
             specs.iter().enumerate().map(|(i, spec)| (i as u32, *spec.payout_payload.as_byte_slice())).collect();
         let utxos = bonded_genesis_utxos(MAINNET_PARAMS.net, &money, std::iter::empty());
-        let assembled =
-            palw_v2_params_from_artifacts_on_base_with_utxos(mainnet_v2_mint_base(), PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
-                .expect("a mainnet-equivalent genesis assembles");
-        let carded = palw_rc_arm_phase1(assembled);
+        let assembled = palw_v2_params_from_artifacts_on_base_with_utxos(
+            mainnet_card_base_v1(mainnet_v2_mint_base(), false),
+            PALW_RC_GENESIS_ARTIFACT_ROOT,
+            specs,
+            utxos,
+        )
+        .expect("a mainnet-equivalent genesis assembles");
+        let carded = palw_rc_arm_phase1(mainnet_certify_registered_classes_v1(assembled));
+
+        // The five the card STATES on its base (`mainnet_card_base_v1`), individually: four armed
+        // from genesis on every card, the court only when the dense tier is pinned.
+        for (name, armed) in [
+            ("palw_context_ladder", carded.palw_context_ladder),
+            ("palw_receipt_rows_unpriced", carded.palw_receipt_rows_unpriced),
+            ("palw_certification_rent", carded.palw_certification_rent),
+            ("palw_chunk_cap_charge", carded.palw_chunk_cap_charge),
+        ] {
+            assert_eq!(armed, Some(ForkActivation::always()), "a card states {name} from genesis");
+        }
+        assert!(carded.palw_kary_court.is_none(), "…and the court only with the dense tier, which this floor-only card does not pin");
 
         let rc = palw_rc_shipped_params();
         let rc_armed: Vec<&'static str> =
@@ -12156,6 +12273,103 @@ mod consensus_params_id_tests {
             MAINNET_PARAMS.max_difficulty_target.compact_target_bits(),
             "mainnet's shipped genesis is minted for the hash lineage, 256x above a V2 network's ambient target"
         );
+    }
+
+    /// **The receipt lane leaves the difficulty count where the fence says so** (mainnet audit,
+    /// 2026-09-05). Dormant on testnet-11 (a live chain, ADR-0083's path (a) is the operator's),
+    /// stated from genesis on a card — and refused anywhere its first fence is not in force.
+    #[test]
+    fn the_receipt_rows_fence_is_stated_on_a_card_and_needs_the_first_fence() {
+        let rc = palw_rc_shipped_params();
+        assert!(rc.palw_receipt_rows_unpriced.is_none(), "testnet-11 leaves it dormant: a scheduled height is the operator's call");
+        assert_eq!(rc.palw_difficulty_priced_rows, Some(ForkActivation::new(1150)), "…on a chain whose first fence fired at 1150");
+
+        // Scheduled after the first fence: legal. Before it, or with the first dormant: refused.
+        let mut later = rc.clone();
+        later.palw_receipt_rows_unpriced = Some(ForkActivation::new(2000));
+        later.validate_palw_v2().expect("a second fence scheduled after the first is a legal schedule");
+        let mut earlier = rc.clone();
+        earlier.palw_receipt_rows_unpriced = Some(ForkActivation::new(1000));
+        let e = earlier.validate_palw_v2().expect_err("the second fence cannot fire before the first");
+        assert!(format!("{e:?}").contains("palw_receipt_rows_unpriced"), "{e:?}");
+        let mut alone = rc.clone();
+        alone.palw_difficulty_priced_rows = None;
+        alone.palw_receipt_rows_unpriced = Some(ForkActivation::always());
+        alone.validate_palw_v2().expect_err("the second fence cannot stand alone");
+
+        // A card: both from genesis, and the fork-id schedule carries neither (genesis fences are
+        // the identity's business, not the handshake's).
+        let base = mainnet_card_base_v1(mainnet_v2_mint_base(), false);
+        let carded = palw_rc_arm_phase1(
+            palw_v2_params_from_artifacts_on_base(base, PALW_RC_GENESIS_ARTIFACT_ROOT, vec![]).expect("a zero-seat card assembles"),
+        );
+        assert_eq!(carded.palw_receipt_rows_unpriced, Some(ForkActivation::always()));
+        assert_eq!(carded.palw_difficulty_priced_rows, Some(ForkActivation::always()));
+        assert!(crate::fork_id_v1::fork_id_gate_fences_v1(&carded).is_empty(), "nothing scheduled: everything is at genesis");
+        assert_eq!(crate::fork_id_v1::fork_id_gate_fences_v1(&later), vec![1150, 2000], "…and a schedule lists both heights");
+    }
+
+    /// **A card certifies the free-prompt lane of the classes it registers; the RC's pinned set
+    /// does not** (mainnet audit, 2026-09-05). The pinned set is computed from a typed list of
+    /// profiles — the graph-v2 dense projection among them — while the 5f card registers the
+    /// graph-v5 row, so on testnet-11 the 489‰ dense tier's free-prompt lane is uncertified from
+    /// genesis. Asserted here as the difference, so the defect is on the record until an on-chain
+    /// `ClassLaneCertified` closes it there.
+    #[test]
+    fn a_card_certifies_the_free_prompt_lane_of_what_it_registers_and_the_rc_set_does_not() {
+        use crate::palw_e2e_adjudicability::palw_fp_certified_class_ids_of_registered_v1;
+        use crate::palw_mode_v2::PalwConsensusMode;
+        use crate::palw_state_v2::PalwConsensusObjectV2;
+
+        // Every class the bundle registers, by id — the catalog classes carry no admission
+        // carriage (ADR-0053) and are registered all the same.
+        let registered_ids = |p: &Params| -> std::collections::BTreeSet<crate::Hash64> {
+            let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("V2") };
+            bundle
+                .genesis_objects
+                .iter()
+                .filter_map(|o| match o {
+                    PalwConsensusObjectV2::ClassRegistered { class_id, .. } => Some(*class_id),
+                    _ => None,
+                })
+                .collect()
+        };
+        let certified = |p: &Params| -> std::collections::BTreeSet<crate::Hash64> {
+            let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("V2") };
+            bundle.state.fp_certified_classes().cloned().unwrap_or_default()
+        };
+
+        // testnet-11: the pinned set names a class the card does not register.
+        let rc = palw_rc_shipped_params();
+        let PalwConsensusMode::ConsensusV2(rc_bundle) = &rc.palw_consensus_mode else { panic!("V2") };
+        let pinned = certified(&rc);
+        let derived = palw_fp_certified_class_ids_of_registered_v1(rc_bundle);
+        let registered = registered_ids(&rc);
+        assert!(derived.is_subset(&registered), "the derived set is a subset of what is registered, by construction");
+        assert!(!pinned.is_subset(&registered), "the RC's pinned set names a class its card does not register — the defect, on the record");
+        assert_ne!(pinned, derived);
+        assert_eq!(derived.len(), 3, "the floor, the hybrid and the registered dense row are all covered ({derived:?})");
+        assert_eq!(registered.len(), 3, "…which is every class the card registers");
+
+        // A card with the same tiers: what it certifies is what it registers.
+        let base = mainnet_card_base_v1(mainnet_v2_mint_base(), true);
+        let assembled = palw_v2_params_with_classes_on_base(
+            base,
+            PALW_RC_GENESIS_ARTIFACT_ROOT,
+            PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
+            Some(PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT),
+            vec![],
+        )
+        .expect("the dense tier assembles on a card that states its court");
+        let carded = palw_rc_arm_phase1(mainnet_certify_registered_classes_v1(assembled));
+        let card_registered = registered_ids(&carded);
+        let card_certified = certified(&carded);
+        assert!(card_certified.is_subset(&card_registered), "a card certifies only classes it registers");
+        assert_eq!(card_certified, palw_fp_certified_class_ids_of_registered_v1(match &carded.palw_consensus_mode {
+            PalwConsensusMode::ConsensusV2(b) => b,
+            _ => unreachable!(),
+        }));
+        assert!(card_certified.len() >= derived.len(), "…and the dense row it registers is covered too ({card_certified:?})");
     }
 
     /// **Half a mainnet card is refused by name.** The ruleset reads the artifact root and the

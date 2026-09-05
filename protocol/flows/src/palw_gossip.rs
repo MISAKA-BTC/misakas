@@ -238,6 +238,12 @@ const SERVE_ATTEMPT_FLOOR_BYTES: u64 = 64 << 10;
 /// the LAST voice and the panel pool evicts its oldest.
 const PALW_SOLICITED_MATERIALS_PER_CLAIM: usize = 16;
 const PALW_MATERIALS_PER_PEER_PER_CLAIM: usize = 2;
+/// How many bytes of unsolicited material one peer may have relayed per [`PALW_MATERIAL_BUDGET_WINDOW`]
+/// (mainnet audit, 2026-09-05): four maximal materials, which is the per-claim budget itself — a
+/// peer that is not answering a pull has no honest reason to exceed it across ANY set of claims.
+pub const PALW_MATERIAL_BYTES_PER_PEER_PER_WINDOW: u64 = 4 * PALW_MATERIAL_MAX_BYTES as u64;
+/// The window [`PALW_MATERIAL_BYTES_PER_PEER_PER_WINDOW`] is measured over.
+pub const PALW_MATERIAL_BUDGET_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// **The serve throttle's memory, bounded per entry.**
 ///
@@ -294,6 +300,12 @@ struct GossipState {
     /// How many of a claim's admitted payloads came from one peer (audit3 H7). Same FIFO-derived
     /// lifetime as `materials_per_claim`, so it cannot outlive the digests that fed it.
     materials_per_peer_claim: HashMap<(PeerKey, Hash64), usize>,
+    /// **Bytes of UNSOLICITED material one peer has been allowed to relay in the current window**
+    /// (mainnet audit, 2026-09-05). The per-claim and per-peer-per-claim counts above are keyed by
+    /// a claim id the peer chooses, so a peer naming a fresh id per payload sat under every one of
+    /// them and had each payload — up to 16 MiB — relayed to every other peer. This is the bound
+    /// the id cannot move: a peer's relay budget in bytes, per window, whatever it calls the claim.
+    material_bytes_per_peer: HashMap<PeerKey, (std::time::Instant, u64)>,
 }
 
 impl Default for PalwGossipCenter {
@@ -305,6 +317,7 @@ impl Default for PalwGossipCenter {
                 seen_order: VecDeque::new(),
                 materials_per_claim: HashMap::new(),
                 materials_per_peer_claim: HashMap::new(),
+                material_bytes_per_peer: HashMap::new(),
             }),
             inbox_tx,
             inbox_rx: Mutex::new(Some(inbox_rx)),
@@ -615,6 +628,22 @@ impl PalwGossipCenter {
 
     /// Admit a material broadcast. `Fresh` means: push [`PalwGossipEvent::Material`] to the inbox
     /// (done here) and the caller should relay the message to its other peers.
+    /// **Charge `len` bytes of unsolicited material to `peer`'s window budget; `false` means the
+    /// budget is spent** (mainnet audit, 2026-09-05). Windows are per peer and start at the peer's
+    /// first charge; a window older than [`PALW_MATERIAL_BUDGET_WINDOW`] is dropped on the next
+    /// charge from anyone, so the map holds at most one entry per peer that spoke this minute.
+    fn charge_material_budget(&self, peer: PeerKey, len: u64) -> bool {
+        let mut state = self.state.lock().unwrap();
+        let now = std::time::Instant::now();
+        state.material_bytes_per_peer.retain(|_, (since, _)| now.duration_since(*since) < PALW_MATERIAL_BUDGET_WINDOW);
+        let (_, spent) = state.material_bytes_per_peer.entry(peer).or_insert((now, 0));
+        if spent.saturating_add(len) > PALW_MATERIAL_BYTES_PER_PEER_PER_WINDOW {
+            return false;
+        }
+        *spent += len;
+        true
+    }
+
     pub fn admit_material(&self, peer: PeerKey, claim: Hash64, bytes: &[u8]) -> PalwGossipAdmit {
         if bytes.len() > PALW_MATERIAL_MAX_BYTES {
             return PalwGossipAdmit::TooBig;
@@ -630,8 +659,16 @@ impl PalwGossipCenter {
         // Taking the slot FIRST is the version of that with nothing to undo, and no counters
         // charged to a claim whose payload was never kept.
         let Ok(permit) = self.inbox_permit() else { return PalwGossipAdmit::Duplicate };
+        // The budget the claim id cannot move: an answer this node asked for is exempt (it is
+        // still digest-deduplicated, size-capped and bounded per claim); everything else spends
+        // the peer's window budget before it is even hashed, and a spent budget is `Duplicate` —
+        // dropped, not relayed.
+        let solicited = self.is_solicited(claim);
+        if !solicited && !self.charge_material_budget(peer, bytes.len() as u64) {
+            return PalwGossipAdmit::Duplicate;
+        }
         let digest = self.digest(1, Some(&claim), bytes);
-        let verdict = self.admit_digest(digest, Some((peer, claim)), self.is_solicited(claim));
+        let verdict = self.admit_digest(digest, Some((peer, claim)), solicited);
         // No permit means no consumer, which is most nodes: they relay and deduplicate for the
         // network without keeping a copy.
         if verdict == PalwGossipAdmit::Fresh
@@ -1245,6 +1282,33 @@ mod tests {
     /// no bond binding, so a peer could name a fresh claim per message and grow this map until the
     /// node died — while holding no bond and landing no block. Bounding it by the digest FIFO
     /// makes it a derived index instead of an independent map.
+    /// **A peer's relay budget is in bytes, and the claim id cannot move it** (mainnet audit,
+    /// 2026-09-05). Every earlier bound is keyed by a claim id the peer chooses; a fresh id per
+    /// payload sat under all of them and had each 16 MiB payload relayed to every peer. Four maximal
+    /// unsolicited materials fit the window; the fifth is dropped, and a solicited answer still
+    /// goes through.
+    #[test]
+    fn an_unsolicited_peer_cannot_relay_more_bytes_than_its_window_budget_whatever_it_calls_the_claim() {
+        let center = PalwGossipCenter::default();
+        let body = vec![0u8; PALW_MATERIAL_MAX_BYTES];
+        assert_eq!(PALW_MATERIAL_BYTES_PER_PEER_PER_WINDOW, 4 * PALW_MATERIAL_MAX_BYTES as u64);
+        for i in 1..=4u64 {
+            assert_eq!(center.admit_material(peer(1), Hash64::from_u64_word(0x1000 + i), &body), PalwGossipAdmit::Fresh, "material {i} is inside the budget");
+        }
+        assert_eq!(
+            center.admit_material(peer(1), Hash64::from_u64_word(0x1005), &body),
+            PalwGossipAdmit::Duplicate,
+            "the fifth maximal material from the same peer is over budget, fresh claim id or not"
+        );
+        assert_eq!(center.admit_material(peer(1), Hash64::from_u64_word(0x1006), b"tiny"), PalwGossipAdmit::Duplicate, "…and so is anything else in the window");
+        // Another peer has its own window.
+        assert_eq!(center.admit_material(peer(2), Hash64::from_u64_word(0x1007), &body), PalwGossipAdmit::Fresh);
+        // An answer this node asked for is exempt from the budget (still deduplicated and capped per claim).
+        let asked = Hash64::from_u64_word(0x1008);
+        center.note_pull_request(asked);
+        assert_eq!(center.admit_material(peer(1), asked, &body), PalwGossipAdmit::Fresh, "a solicited answer is not crowded out by the budget");
+    }
+
     #[test]
     fn the_material_map_cannot_outgrow_the_digest_window() {
         let center = PalwGossipCenter::default();

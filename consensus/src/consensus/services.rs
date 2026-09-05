@@ -104,6 +104,7 @@ impl ConsensusServices {
             params.past_median_time_window_size,
             params.past_median_time_sample_rate,
             params.palw_difficulty_priced_rows.unwrap_or(ForkActivation::never()),
+            params.palw_receipt_rows_unpriced.unwrap_or(ForkActivation::never()),
         );
         let depth_manager = BlockDepthManager::new(
             params.merge_depth(),
