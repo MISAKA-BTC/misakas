@@ -6351,6 +6351,23 @@ with tile capture — the offline probe on run 10's material measured interval 0
 state it recomputes without capture and memoizes, as the seat does; not in this tree yet, so free-prompt claims past ~20
 decode tokens on graph-v5 cannot be licensed by the interval lane — Studio's 256-token cap stands, for this reason now.
 
+### 10s. The 300-token free-prompt claim licenses again: the opener resumes from a recomputed anchor (2026-09-05, `594015b9`, fleet `56f77a3d`)
+
+Run 10 named the cause (§10q addendum): a fold holds no checkpoint state, so the executor's opener replayed every
+interval from genesis with tiles captured — 5–10 s a decode call, 1,991 s for interval 187. `594015b9` hands the fold
+opener an anchor-state closure: the three backends recompute the span's starting anchor with their recompute kernels
+(a plain forward, memoized as the seat's own state is) and replay only the interval's calls with tiles; the lane also
+refuses a re-ask while an opener for that `(claim, interval)` is in flight. Offline on run 10's material: interval 0
+17 s, 57 19 s, 187 69 s, 253 90 s, 298 54 s. **Devnet run 11 (300 tokens): node-0 opened `[34, 105, 134, 209]` in
+17–65 s, node-1 replayed all four against its own state and filed `Valid` ten minutes after the binding.** The
+fleet runs it: kaspad `56f77a3d75f376de` on seat2, .113 (node, seat4, slots 01–04), ibm (node1, node0); the pool's
+`palw-a16-fp-worker` `69c0e194955cc41c` on .113. **Testnet's next wall is economics, not code:** a 300-token
+free-prompt claim is ~41 M leaves, exposure `pwu × 5` ≈ 207 M sompi, and a bond may hold half its collateral — the
+pool's slot-04 bond (265 M, sized for the class's canonical 6.6 M-leaf job) cannot carry one, which is also why the
+257/300-token jobs it submitted at 03:06Z/03:11Z never reached the chain. The pool now accepts a caller-sized bond;
+slot-05 (600 M sompi, token `78ffd436…`, gateway port 18795) was funded 8.5 MSK from the faucet wallet and is
+registering. Studio needs that slot's token and the 256-token clamp lifted (`backend/gateway.rs`) to use it.
+
 ### 10r. ADR-0087 implemented: a position is bought from the curve and sold back to it (2026-09-05)
 
 The model market is in the tree behind `Params::palw_model_market` (`None` everywhere): a class's

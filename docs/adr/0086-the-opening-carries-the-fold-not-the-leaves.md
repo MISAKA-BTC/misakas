@@ -231,6 +231,12 @@ the next cut, not this one.
   interval lane also refuses a re-ask for a `(claim, interval)` whose opener is still in flight:
   a seat re-asks every ~100 s and `served_recently` covered 10 s, so each re-ask had started
   another minute-long opener for the same pair.
+* **Devnet run 11 (2026-09-05 13:35–14:48 JST, 300 tokens, `afa75b9e`): Y6 at 300 tokens.** The
+  claim `7ed38205…` (prefill 16, decode 300) bound at 14:37; node-1 drew `[34, 105, 134, 209]` of
+  299 and node-0 opened them in **17 s, 43 s, 49 s and 65 s** (1.11 MB each), node-1 held all
+  four, "4 interval(s) replayed against this seat's own recomputed state — no history fetched",
+  and **filed a `Valid` receipt at 14:47:50** — ten minutes after the binding, where runs 8 and 10
+  had nothing after thirty. Node-2 (no artifact) filed `Incapable`, as every run.
 * **Deployed to testnet-11 (2026-09-05 04:50–05:06Z):** kaspad `56f77a3d75f376de` on seat2, the
   .113 node / seat4 / pool slots 01–04, ibm node1 and node0 (SIGINT, respawn, 21–150 s each); the
   pool's `palw-a16-fp-worker` `69c0e194955cc41c` (the manifest fix) on .113 with `misaka-pool-fp@04`
