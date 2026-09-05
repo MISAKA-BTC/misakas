@@ -6445,3 +6445,31 @@ with no line in its log and would not take SIGINT — SIGKILL both times. `1d81f
 at a time on a node; the same work then costs the same CPU and the first answer arrives in a
 fraction of the time. **Fleet load is a live variable, not a constant:** four hosted producer slots
 sharing the executor's box is what put it into swap in the first place.
+
+### 10v. LICENSED: the 300-token free-prompt claim carries a panel quorum on the public chain (2026-09-05 16:59Z)
+
+Claim `019efe78…` — 300 decode tokens, 299 intervals, class `4277d84f…` (`qwen25-a16`), executor bond
+`8c52206c…:0` on pool slot-05 — is **`receipt_licensed`**. Three seats replayed four drawn intervals
+each against state they recomputed for themselves, and **not one of them fetched a capture**:
+
+| seat | drew | `Valid` filed |
+|---|---|---|
+| ibm node0 | 187, 101, 62, 11 | 14:06:39Z |
+| .113 node (seat 6) | 90, 218, 287, 206 | 15:21:26Z |
+| seat2 (5.104.81.23) | 278, 222, 159, 47 | 16:52Z |
+
+The answer the gateway returned at 06:22Z recomputes the root the chain licensed —
+`output_root 0658d893…` on both sides, `job_context_hash acf9093d…`, 300 ids. `derived-verify`
+declines it by design (ADR-0078 X4: a prose answer carries no derivation and still certifies), so
+the check is the root, not the DSL.
+
+**A third serving defect, and the one that explains the silence.** `serve_interval_opening` marked a
+pair in flight, awaited the blocking opener, and cleared the mark on the NEXT LINE — which never
+runs when the future is dropped. Two of seat2's intervals were computed, not delivered, and then
+permanently unaskable: every later ask was refused as `Throttled`, which is logged at debug, so the
+lane went silent rather than wrong. The fact that named it was **zero cache hits** while a seat
+asked every minute for bytes the executor was holding. `16df8d7e` makes the mark an RAII guard;
+the blocking task is not cancellable, so the opening still lands in the cache — and the moment
+seat2 asked again, `request 0x9f` and `request 0x2f` were answered from cache in milliseconds and
+the seat held four. **A slow answer is a lost answer on this lane; the cache is what makes the
+second ask cheap enough to win.**
