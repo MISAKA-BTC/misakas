@@ -920,19 +920,22 @@ async fn sanity_test() {
                     );
                 })
             }
-            // ADR-0087 Decision 8: a class this chain does not register is `found: false`, a
-            // malformed class id is an error, and an unknown holder holds nothing.
+            // ADR-0087 Decision 8: a line this chain does not hold is `found: false`, a
+            // malformed line id is an error, and an unknown holder holds nothing.
             KaspadPayloadOps::GetPalwModelMarket => {
                 let rpc_client = client.clone();
                 tst!(op, {
                     let response = rpc_client
-                        .get_palw_model_market_call(None, GetPalwModelMarketRequest { class_id: "00".repeat(64) })
+                        .get_palw_model_market_call(None, GetPalwModelMarketRequest { line_id: "00".repeat(64) })
                         .await
                         .unwrap();
-                    assert!(!response.found, "a non-ConsensusV2 network registers no class, and does not error");
+                    assert!(!response.found, "a non-ConsensusV2 network holds no line, and does not error");
                     assert!(
-                        rpc_client.get_palw_model_market_call(None, GetPalwModelMarketRequest { class_id: "nonsense".into() }).await.is_err(),
-                        "a malformed class id is an error, not an absence"
+                        rpc_client
+                            .get_palw_model_market_call(None, GetPalwModelMarketRequest { line_id: "nonsense".into() })
+                            .await
+                            .is_err(),
+                        "a malformed line id is an error, not an absence"
                     );
                 })
             }
@@ -944,6 +947,59 @@ async fn sanity_test() {
                         .await
                         .unwrap();
                     assert!(response.positions.is_empty(), "an unknown holder holds nothing");
+                })
+            }
+            // ADR-0088 Decision 12: on a chain without the registry every read answers
+            // `exists: false` / empty and does not error; a malformed id is an error, not an
+            // absence — the same distinction the market reads make.
+            KaspadPayloadOps::GetPalwModelLine => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response =
+                        rpc_client.get_palw_model_line_call(None, GetPalwModelLineRequest { line_id: "00".repeat(64) }).await.unwrap();
+                    assert!(
+                        !response.exists && response.line.is_none(),
+                        "a non-ConsensusV2 network holds no line, and does not error"
+                    );
+                    assert!(response.roots_in_force.is_empty());
+                    assert!(
+                        rpc_client
+                            .get_palw_model_line_call(None, GetPalwModelLineRequest { line_id: "nonsense".into() })
+                            .await
+                            .is_err(),
+                        "a malformed line id is an error, not an absence"
+                    );
+                })
+            }
+            KaspadPayloadOps::GetPalwModelVersion => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_model_version_call(None, GetPalwModelVersionRequest { line_id: "00".repeat(64), version: 1 })
+                        .await
+                        .unwrap();
+                    assert!(!response.exists && response.version.is_none() && response.evaluations.is_empty());
+                    assert_eq!(response.version_number, 1, "the answer names the version it was asked for");
+                })
+            }
+            KaspadPayloadOps::GetPalwModelLines => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_model_lines_call(None, GetPalwModelLinesRequest { class_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!response.exists && response.lines.is_empty(), "an unregistered class has no lines");
+                })
+            }
+            KaspadPayloadOps::GetPalwModelProposals => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_model_proposals_call(None, GetPalwModelProposalsRequest { line_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!response.exists && response.proposals.is_empty(), "a line that does not exist holds no proposal");
                 })
             }
             KaspadPayloadOps::GetTokenSupply => {

@@ -35,7 +35,7 @@ pub(crate) fn parse_outpoint(s: &str) -> Result<TransactionOutpoint, CliError> {
 /// The network domain a PALW signature is made under — bound to the GENESIS, not just the network
 /// name (audit M2-18), so a signature is a statement about one incarnation of a network. The node
 /// tells us both, which is what keeps this from being a constant the CLI could get wrong.
-fn network_domain(nv: &NodeView) -> kaspa_consensus_core::Hash64 {
+pub(crate) fn network_domain(nv: &NodeView) -> kaspa_consensus_core::Hash64 {
     kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
         nv.params.net.to_string().as_bytes(),
         Some(nv.params.genesis.hash),

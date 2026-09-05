@@ -1,4 +1,5 @@
-//! **`misaka palw model …` — ADR-0087's two moves and two reads.**
+//! **`misaka palw model-… ` — ADR-0087's two moves and two reads, keyed by LINE (ADR-0088
+//! Decision 9: a class id names the class's founding line).**
 //!
 //! `show` and `positions` are reads of the tip (`getPalwModelMarket`, `getPalwModelPositions`);
 //! `buy` files a `ModelBuy` in a carrier whose output 1 pays the class's sink; `sell` files a
@@ -21,10 +22,11 @@ use kaspa_rpc_core::api::rpc::RpcApi;
 
 const SOMPI_PER_MSK: u64 = 100_000_000;
 
-fn parse_class(class_id: &str) -> Result<kaspa_consensus_core::Hash64, CliError> {
-    class_id
+/// A line id — a class id names the class's founding line (ADR-0088 Decision 9).
+fn parse_line(line_id: &str) -> Result<kaspa_consensus_core::Hash64, CliError> {
+    line_id
         .parse::<kaspa_consensus_core::Hash64>()
-        .map_err(|_| CliError::new(exit::GENERIC, format!("class id '{class_id}' is not a 128-hex Hash64")))
+        .map_err(|_| CliError::new(exit::GENERIC, format!("line id '{line_id}' is not a 128-hex Hash64")))
 }
 
 /// MSK with an optional fraction ("12.5"), or sompi with a `sompi` suffix ("1250000000sompi").
@@ -64,6 +66,7 @@ fn market_from_response(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwM
         burned_sompi: r.burned_sompi,
         registrant_paid_sompi: r.registrant_paid_sompi,
         closed_to_buys: r.closed_to_buys,
+        contributor_paid_sompi: r.contributor_paid_sompi,
     }
 }
 
@@ -71,7 +74,7 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
     serde_json::json!({
         "schema": "misaka.palw.model-market.v1",
         "found": r.found,
-        "class_id": r.class_id,
+        "line_id": r.line_id,
         "opened": r.opened,
         "opened_daa": r.opened_daa,
         "msk_reserve_sompi": r.msk_reserve,
@@ -80,6 +83,7 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
         "sold_units": r.sold_units,
         "burned_sompi": r.burned_sompi,
         "registrant_paid_sompi": r.registrant_paid_sompi,
+        "contributor_paid_sompi": r.contributor_paid_sompi,
         "closed_to_buys": r.closed_to_buys,
         "price_sompi_per_position": r.price_sompi_per_position,
         "supply_units": r.supply_units,
@@ -88,13 +92,13 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
     })
 }
 
-/// `misaka palw model show <class>`: the market as the tip holds it, and a quote for `--quote-msk`.
-pub async fn show(ctx: &Ctx, class_id: &str, quote_msk: Option<String>, json: bool) -> CliResult {
-    let class = parse_class(class_id)?;
+/// `misaka palw model-show <line>`: the market as the tip holds it, and a quote for `--quote-msk`.
+pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: bool) -> CliResult {
+    let line = parse_line(line_id)?;
     let nv = connect(ctx).await?;
     let r = nv
         .client
-        .get_palw_model_market(class.to_string())
+        .get_palw_model_market(line.to_string())
         .await
         .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwModelMarket: {e}")))?;
     let _ = nv.client.disconnect().await;
@@ -114,10 +118,10 @@ pub async fn show(ctx: &Ctx, class_id: &str, quote_msk: Option<String>, json: bo
         }
         println!("{}", serde_json::to_string_pretty(&v).expect("serializable"));
     } else if !r.found {
-        println!("this chain registers no class {class}");
+        println!("this chain holds no line {line}");
     } else {
-        println!("class {}", r.class_id);
-        println!("  status         {}{}", r.class_status, if r.closed_to_buys { " (closed to buys)" } else { "" });
+        println!("line {}", r.line_id);
+        println!("  class status   {}{}", r.class_status, if r.closed_to_buys { " (closed to buys)" } else { "" });
         println!(
             "  market         {}",
             if r.opened { format!("opened at DAA {}", r.opened_daa) } else { "not yet opened (the first buy opens it)".to_string() }
@@ -127,7 +131,8 @@ pub async fn show(ctx: &Ctx, class_id: &str, quote_msk: Option<String>, json: bo
         println!("  price          {} per position", msk(r.price_sompi_per_position));
         println!("  sold (gross)   {} positions", r.sold_units / PALW_MODEL_POSITION_UNITS_V1);
         println!("  burned         {}", msk(r.burned_sompi));
-        println!("  registrant     {} paid", msk(r.registrant_paid_sompi));
+        println!("  owner          {} paid (the 1 % leg)", msk(r.registrant_paid_sompi));
+        println!("  contributor    {} paid", msk(r.contributor_paid_sompi));
         if let Some((msk_in, q)) = &quote {
             println!("quote: a buy of {} now", msk(*msk_in));
             println!("  burn 5 %       {}", msk(q.fees.burn));
@@ -138,12 +143,12 @@ pub async fn show(ctx: &Ctx, class_id: &str, quote_msk: Option<String>, json: bo
         }
     }
     if !r.found {
-        return Err(CliError::new(exit::GENERIC, format!("this chain registers no class {class}")));
+        return Err(CliError::new(exit::GENERIC, format!("this chain holds no line {line}")));
     }
     Ok(())
 }
 
-/// `misaka palw model positions [--holder <hex> | --key …]`.
+/// `misaka palw model-positions [--holder <hex> | --key …]`.
 pub async fn positions(ctx: &Ctx, holder: Option<String>, ks: Option<&crate::keys::KeySource>, json: bool) -> CliResult {
     let holder = match (holder, ks) {
         (Some(h), _) => h
@@ -166,7 +171,7 @@ pub async fn positions(ctx: &Ctx, holder: Option<String>, ks: Option<&crate::key
                 "schema": "misaka.palw.model-positions.v1",
                 "holder": r.holder,
                 "positions": r.positions.iter().map(|p| serde_json::json!({
-                    "class_id": p.class_id, "units": p.units, "positions": p.units / PALW_MODEL_POSITION_UNITS_V1,
+                    "line_id": p.line_id, "units": p.units, "positions": p.units / PALW_MODEL_POSITION_UNITS_V1,
                 })).collect::<Vec<_>>(),
             }))
             .expect("serializable")
@@ -176,7 +181,7 @@ pub async fn positions(ctx: &Ctx, holder: Option<String>, ks: Option<&crate::key
     } else {
         println!("holder {}", r.holder);
         for p in &r.positions {
-            println!("  class {}  {} positions ({} units)", p.class_id, p.units / PALW_MODEL_POSITION_UNITS_V1, p.units);
+            println!("  line {}  {} positions ({} units)", p.line_id, p.units / PALW_MODEL_POSITION_UNITS_V1, p.units);
         }
     }
     Ok(())
@@ -211,7 +216,7 @@ fn build_move_carrier(
     Ok((tx, fee))
 }
 
-async fn submit_move(
+pub(crate) async fn submit_move(
     ctx: &Ctx,
     nv: &crate::wallet::NodeView,
     tx: kaspa_consensus_core::tx::Transaction,
@@ -243,20 +248,20 @@ async fn submit_move(
     Ok(())
 }
 
-/// `misaka palw model buy --class <id> --msk <amount> [--min-positions <n>] --key … [--yes]`.
-pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, class_id: &str, msk_text: &str, min_positions: u64, yes: bool) -> CliResult {
-    let class = parse_class(class_id)?;
+/// `misaka palw model-buy --line <id> --msk <amount> [--min-positions <n>] --key … [--yes]`.
+pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text: &str, min_positions: u64, yes: bool) -> CliResult {
+    let line = parse_line(line_id)?;
     let msk_in = parse_msk_amount(msk_text)?;
     let key = ks.load_key()?;
     let holder = palw_model_holder_of_pubkey_v1(key.public_key());
     let nv = connect(ctx).await?;
     let r = nv
         .client
-        .get_palw_model_market(class.to_string())
+        .get_palw_model_market(line.to_string())
         .await
         .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwModelMarket: {e}")))?;
     if !r.found {
-        return Err(CliError::new(exit::GENERIC, format!("this chain registers no class {class}")));
+        return Err(CliError::new(exit::GENERIC, format!("this chain holds no line {line}")));
     }
     let market = market_from_response(&r);
     let Some(quote) = palw_model_buy_quote_v1(&market, msk_in) else {
@@ -272,17 +277,17 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, class_id: &str, msk_tex
             ),
         ));
     }
-    let object = PalwConsensusObjectV2::ModelBuy { class_id: class, holder, msk_in, min_units_out, sink_index: 1 };
+    let object = PalwConsensusObjectV2::ModelBuy { line_id: line, holder, msk_in, min_units_out, sink_index: 1 };
     let addr = key.funding_address(nv.params.prefix());
     let candidates = crate::palw_fp::spendable_candidates_v1(&nv, &addr).await?;
     let (outpoint, entry) = candidates
         .into_iter()
         .find(|(_, e)| e.amount > msk_in.saturating_add(kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI))
         .ok_or_else(|| CliError::new(exit::GENERIC, format!("no mature, unbonded UTXO at {addr} holds {} plus a fee", msk(msk_in))))?;
-    let sink = TransactionOutput::new(msk_in, palw_model_sink_spk_v1(&class));
+    let sink = TransactionOutput::new(msk_in, palw_model_sink_spk_v1(&line));
     let (tx, fee) = build_move_carrier(&key, &nv, &object, outpoint, &entry, vec![sink])?;
     if ctx.output != OutputFormat::Json {
-        println!("buy {} of class {class}", msk(msk_in));
+        println!("buy {} of line {line}", msk(msk_in));
         println!("  holder         {holder}");
         println!("  burn 5 %       {}", msk(quote.fees.burn));
         println!("  registrant 1 % {}", msk(quote.fees.registrant));
@@ -294,22 +299,22 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, class_id: &str, msk_tex
         );
         println!("  price after    {} per position", msk(quote.after.price_sompi_per_position_v1()));
     }
-    let what = format!("ModelBuy {} of class {}", msk(msk_in), class);
+    let what = format!("ModelBuy {} of line {}", msk(msk_in), line);
     let out = submit_move(ctx, &nv, tx, fee, &what, yes).await;
     let _ = nv.client.disconnect().await;
     out
 }
 
-/// `misaka palw model sell --class <id> --positions <n> [--min-msk <amount>] --key … [--yes]`.
+/// `misaka palw model-sell --line <id> --positions <n> [--min-msk <amount>] --key … [--yes]`.
 pub async fn sell(
     ctx: &Ctx,
     ks: &crate::keys::KeySource,
-    class_id: &str,
+    line_id: &str,
     positions: u64,
     min_msk_text: Option<String>,
     yes: bool,
 ) -> CliResult {
-    let class = parse_class(class_id)?;
+    let line = parse_line(line_id)?;
     let units_in = positions
         .checked_mul(PALW_MODEL_POSITION_UNITS_V1)
         .ok_or_else(|| CliError::new(exit::GENERIC, "too many positions".to_string()))?;
@@ -319,11 +324,11 @@ pub async fn sell(
     let nv = connect(ctx).await?;
     let r = nv
         .client
-        .get_palw_model_market(class.to_string())
+        .get_palw_model_market(line.to_string())
         .await
         .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwModelMarket: {e}")))?;
     if !r.found || !r.opened {
-        return Err(CliError::new(exit::GENERIC, format!("class {class} has no market to sell into")));
+        return Err(CliError::new(exit::GENERIC, format!("line {line} has no market to sell into")));
     }
     let held = nv
         .client
@@ -332,13 +337,13 @@ pub async fn sell(
         .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwModelPositions: {e}")))?
         .positions
         .iter()
-        .find(|p| p.class_id == class.to_string())
+        .find(|p| p.line_id == line.to_string())
         .map(|p| p.units)
         .unwrap_or(0);
     if units_in == 0 || units_in > held {
         return Err(CliError::new(
             exit::GENERIC,
-            format!("you hold {} positions of class {class}, not {positions}", held / PALW_MODEL_POSITION_UNITS_V1),
+            format!("you hold {} positions of line {line}, not {positions}", held / PALW_MODEL_POSITION_UNITS_V1),
         ));
     }
     let market = market_from_response(&r);
@@ -351,10 +356,10 @@ pub async fn sell(
             format!("the curve pays {} now, under your floor of {}", msk(quote.fees.net), msk(min_msk_out)),
         ));
     }
-    let message = palw_model_sell_message_v1(&class, &holder, units_in, min_msk_out);
+    let message = palw_model_sell_message_v1(&line, &holder, units_in, min_msk_out);
     let signature = key.sign_with_context(&message, PALW_MODEL_SELL_MLDSA87_CONTEXT).to_vec();
     let object = PalwConsensusObjectV2::ModelSell {
-        class_id: class,
+        line_id: line,
         holder,
         units_in,
         min_msk_out,
@@ -369,7 +374,7 @@ pub async fn sell(
         .ok_or_else(|| CliError::new(exit::GENERIC, format!("no mature, unbonded UTXO at {addr} to fund the carrier")))?;
     let (tx, fee) = build_move_carrier(&key, &nv, &object, outpoint, &entry, Vec::new())?;
     if ctx.output != OutputFormat::Json {
-        println!("sell {positions} positions of class {class}");
+        println!("sell {positions} positions of line {line}");
         println!("  holder         {holder}");
         println!("  gross          {}", msk(quote.fees.gross));
         println!("  burn 5 %       {}", msk(quote.fees.burn));
@@ -377,7 +382,7 @@ pub async fn sell(
         println!("  paid to you    {} (coinbase payout), at least {}", msk(quote.fees.net), msk(min_msk_out));
         println!("  price after    {} per position", msk(quote.after.price_sompi_per_position_v1()));
     }
-    let what = format!("ModelSell {positions} positions of class {class}");
+    let what = format!("ModelSell {positions} positions of line {line}");
     let out = submit_move(ctx, &nv, tx, fee, &what, yes).await;
     let _ = nv.client.disconnect().await;
     out

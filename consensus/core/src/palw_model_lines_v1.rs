@@ -148,7 +148,9 @@ pub enum PalwVersionStatusV1 {
     /// In force, not the default (Decision 2).
     Preview = 1,
     /// Was current; its root stays in force until `until_daa` (Decision 2).
-    Superseded { until_daa: u64 } = 2,
+    Superseded {
+        until_daa: u64,
+    } = 2,
     /// Taken out of force by the developer (Decision 2).
     Withdrawn = 3,
 }
@@ -297,7 +299,13 @@ fn begin(domain: &[u8], network_domain: Hash64, line_id: &Hash64) -> blake2b_sim
 }
 
 /// `ModelLineFounded` (Decision 1), signed by the founder.
-pub fn palw_model_line_founded_message_v1(network_domain: Hash64, class_id: &Hash64, name: &[u8], founder: &PalwBondKeyV2, root: &Hash64) -> Hash64 {
+pub fn palw_model_line_founded_message_v1(
+    network_domain: Hash64,
+    class_id: &Hash64,
+    name: &[u8],
+    founder: &PalwBondKeyV2,
+    root: &Hash64,
+) -> Hash64 {
     let mut s = begin(b"misaka-palw/model-line/founded/v1", network_domain, class_id);
     s.update(&(name.len() as u32).to_le_bytes());
     s.update(name);
@@ -380,7 +388,13 @@ pub fn palw_model_retire_message_v1(network_domain: Hash64, line_id: &Hash64) ->
 }
 
 /// `ModelProposalPosted` (Decision 7), signed by the proposer.
-pub fn palw_model_proposal_message_v1(network_domain: Hash64, line_id: &Hash64, root: &Hash64, note_hash: &Hash64, by: &PalwBondKeyV2) -> Hash64 {
+pub fn palw_model_proposal_message_v1(
+    network_domain: Hash64,
+    line_id: &Hash64,
+    root: &Hash64,
+    note_hash: &Hash64,
+    by: &PalwBondKeyV2,
+) -> Hash64 {
     let mut s = begin(b"misaka-palw/model-proposal/posted/v1", network_domain, line_id);
     s.update(root.as_byte_slice());
     s.update(note_hash.as_byte_slice());
@@ -507,10 +521,7 @@ mod tests {
         assert_ne!(palw_model_roles_message_v1(n, &l, None, None, 0), palw_model_roles_message_v1(n, &l, None, None, 1));
         assert_ne!(palw_model_transfer_message_v1(n, &l, &bond(1)), palw_model_transfer_message_v1(n, &l, &bond(2)));
         assert_ne!(palw_model_retire_message_v1(n, &l), palw_model_retire_message_v1(n, &r));
-        assert_ne!(
-            palw_model_proposal_message_v1(n, &l, &r, &h, &bond(1)),
-            palw_model_proposal_message_v1(n, &l, &r, &h, &bond(2))
-        );
+        assert_ne!(palw_model_proposal_message_v1(n, &l, &r, &h, &bond(1)), palw_model_proposal_message_v1(n, &l, &r, &h, &bond(2)));
         assert_ne!(
             palw_model_evaluation_message_v1(n, &l, 1, &h, 700, &r, &bond(1)),
             palw_model_evaluation_message_v1(n, &l, 1, &h, 701, &r, &bond(1))

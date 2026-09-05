@@ -32,6 +32,8 @@ mod node;
 mod palw_court;
 mod palw_derived;
 mod palw_fp;
+/// ADR-0088 Decision 12: `palw line-… / version-… / proposal-… / evaluate` — the model registry.
+mod palw_line;
 mod palw_model;
 #[cfg(feature = "evm-send")]
 mod prea;
@@ -457,11 +459,12 @@ enum PalwCmd {
         #[arg(long)]
         json: bool,
     },
-    /// **ADR-0087: a class's model market** as the tip holds it — reserve, positions in the curve,
+    /// **ADR-0087: a line's model market** as the tip holds it — reserve, positions in the curve,
     /// price, sold, burned, paid, status — and a quote for a buy (`--quote-msk`). Nothing signs.
+    /// Keyed by LINE (ADR-0088 Decision 9): a class id names the class's founding line.
     ModelShow {
-        /// 128-hex class id.
-        class_id: String,
+        /// 128-hex line id (a class id names the class's founding line).
+        line_id: String,
         /// Quote a buy of this many MSK (e.g. `12.5`, or `1250000000sompi`).
         #[arg(long)]
         quote_msk: Option<String>,
@@ -469,7 +472,7 @@ enum PalwCmd {
         #[arg(long)]
         json: bool,
     },
-    /// **ADR-0087: every position a holder has**, by class. The holder is its payout payload —
+    /// **ADR-0087: every position a holder has**, by line. The holder is its payout payload —
     /// name it, or name the key it is derived from.
     ModelPositions {
         /// 128-hex holder (the BLAKE2b-512 of an ML-DSA-87 public key).
@@ -481,16 +484,16 @@ enum PalwCmd {
         #[arg(long)]
         json: bool,
     },
-    /// **ADR-0087: buy positions of a class from its curve.** The carrier pays `--msk` into the
-    /// class's sink; the fold credits 94 % to the curve (5 % burned, 1 % to the registrant) and
+    /// **ADR-0087: buy positions of a line from its curve.** The carrier pays `--msk` into the
+    /// line's sink; the fold credits 94 % to the curve (5 % burned, 1 % to the line's owner) and
     /// the curve's positions to the key's payout payload. Refused on chain when fewer than
     /// `--min-positions` would be released.
     ModelBuy {
         #[command(flatten)]
         key: KeyArgs,
-        /// 128-hex class id.
+        /// 128-hex line id (a class id names the class's founding line).
         #[arg(long)]
-        class: String,
+        line: String,
         /// MSK to pay (e.g. `12.5`, or `1250000000sompi`).
         #[arg(long)]
         msk: String,
@@ -507,9 +510,9 @@ enum PalwCmd {
     ModelSell {
         #[command(flatten)]
         key: KeyArgs,
-        /// 128-hex class id.
+        /// 128-hex line id (a class id names the class's founding line).
         #[arg(long)]
-        class: String,
+        line: String,
         /// Positions to sell.
         #[arg(long)]
         positions: u64,
@@ -517,6 +520,234 @@ enum PalwCmd {
         #[arg(long)]
         min_msk: Option<String>,
         /// Actually broadcast (otherwise a dry-run preview with the quote).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: a line** as the tip holds it — owner, developer, maintainer (and their payout
+    /// payloads), the current and preview versions, the roots in force for its class. A class id
+    /// names the class's founding line. Nothing signs.
+    LineShow {
+        /// 128-hex line id.
+        line_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0088: every version of a line the node holds**, oldest first, with status and usage.
+    /// The last 64 stay in state; older ones are named as evicted (the explorer holds them).
+    LineLog {
+        /// 128-hex line id.
+        line_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0088: every line of a class**, the founding line included.
+    LineList {
+        /// 128-hex class id.
+        class_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0088: the proposals attached to a line** — root, note, proposer, adoption.
+    Proposals {
+        /// 128-hex line id.
+        line_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0088: found a further line on a class.** `--bond` becomes its owner, developer and
+    /// maintainer and signs; V1 is `--root`. Rent-priced (1 MSK of the fee is burned).
+    LineFound {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex class id.
+        #[arg(long)]
+        class: String,
+        /// The line's name (1..=64 bytes); shared, never squatted — the founder is in the line id.
+        #[arg(long)]
+        name: String,
+        /// 128-hex artifact root of V1.
+        #[arg(long)]
+        root: String,
+        /// The founding bond, `<txid>:<index>`; the key must be its registered key.
+        #[arg(long)]
+        bond: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: publish a version.** Signed by the line's developer bond; the version number is
+    /// read off the chain (`versions_published + 1`). Without `--preview` it becomes current at
+    /// once and the previous current keeps its root in force for the grace. Re-publishing an
+    /// older root is a rollback; the current root again is refused.
+    VersionPublish {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// 128-hex artifact root of the new version.
+        #[arg(long)]
+        root: String,
+        /// The version this one continues from (omit for none).
+        #[arg(long)]
+        parent: Option<u32>,
+        /// 128-hex proposal id this version adopts; the proposer is paid the contributor share.
+        #[arg(long)]
+        adopted_from: Option<String>,
+        /// Declared, recorded, never checked: 128-hex each.
+        #[arg(long)]
+        runtime_hash: Option<String>,
+        #[arg(long)]
+        dataset_commitment: Option<String>,
+        #[arg(long)]
+        training_config_hash: Option<String>,
+        #[arg(long)]
+        notes_hash: Option<String>,
+        /// Put the root in force without making it current (at most 2 previews at once).
+        #[arg(long)]
+        preview: bool,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: promote a preview to current** (developer).
+    VersionPromote {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        #[arg(long)]
+        version: u32,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: withdraw a preview, or a superseded version before its grace ends**
+    /// (developer). A current version is succeeded, never withdrawn.
+    VersionWithdraw {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        #[arg(long)]
+        version: u32,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: set a line's developer, maintainer and contributor share** (owner). A flag
+    /// omitted keeps the row's value; `owner` resets a role to the owner.
+    LineRoles {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// `<txid>:<index>`, or `owner`.
+        #[arg(long)]
+        developer: Option<String>,
+        /// `<txid>:<index>`, or `owner`.
+        #[arg(long)]
+        maintainer: Option<String>,
+        /// The share of the owner's 1 % leg an adopted contributor takes while its version is
+        /// current, in permille (0..=1000).
+        #[arg(long)]
+        contributor_permille: Option<u16>,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: hand a line to a new owner bond** (owner). Developer and maintainer reset to
+    /// the new owner; positions do not move.
+    LineTransfer {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// `<txid>:<index>` of an Active bond.
+        #[arg(long)]
+        new_owner: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: retire a line** (owner): the market closes to buys, the roots leave force
+    /// after the grace, the history stays.
+    LineRetire {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: post a proposal on a line** — a root and a note — from any Active bond.
+    /// Rent-priced (1 MSK of the fee is burned). Paid when a version adopts it.
+    ProposalPost {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// 128-hex artifact root proposed.
+        #[arg(long)]
+        root: String,
+        /// 128-hex hash of the note.
+        #[arg(long)]
+        note_hash: String,
+        /// The proposing bond, `<txid>:<index>`; the key must be its registered key.
+        #[arg(long)]
+        bond: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: close a proposal** (developer), to make room.
+    ProposalClose {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// 128-hex proposal id.
+        #[arg(long)]
+        proposal: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: post an evaluation of a version** — a declaration from any Active bond, at
+    /// most 16 per version, one per bond. Rent-priced (1 MSK of the fee is burned).
+    Evaluate {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        #[arg(long)]
+        version: u32,
+        /// 128-hex id of the evaluator (a benchmark, a suite, a person's key hash).
+        #[arg(long)]
+        evaluator_id: String,
+        /// The score, in permille (0..=1000).
+        #[arg(long)]
+        score_permille: u32,
+        /// 128-hex hash of the report.
+        #[arg(long)]
+        report_hash: String,
+        /// The evaluating bond, `<txid>:<index>`; the key must be its registered key.
+        #[arg(long)]
+        bond: String,
+        /// Actually broadcast (otherwise a dry-run preview).
         #[arg(long)]
         yes: bool,
     },
@@ -1089,16 +1320,74 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Palw(PalwCmd::Certified { class_id, json }) => palw_fp::certified(&ctx, &class_id, json).await,
         Command::Palw(PalwCmd::Derived { claim_id, json }) => palw_derived::show(&ctx, &claim_id, json).await,
-        Command::Palw(PalwCmd::ModelShow { class_id, quote_msk, json }) => palw_model::show(&ctx, &class_id, quote_msk, json).await,
+        Command::Palw(PalwCmd::ModelShow { line_id, quote_msk, json }) => palw_model::show(&ctx, &line_id, quote_msk, json).await,
         Command::Palw(PalwCmd::ModelPositions { holder, key, json }) => {
             let source = key.source_opt();
             palw_model::positions(&ctx, holder, source.as_ref(), json).await
         }
-        Command::Palw(PalwCmd::ModelBuy { key, class, msk, min_positions, yes }) => {
-            palw_model::buy(&ctx, &key.source(), &class, &msk, min_positions, yes).await
+        Command::Palw(PalwCmd::ModelBuy { key, line, msk, min_positions, yes }) => {
+            palw_model::buy(&ctx, &key.source(), &line, &msk, min_positions, yes).await
         }
-        Command::Palw(PalwCmd::ModelSell { key, class, positions, min_msk, yes }) => {
-            palw_model::sell(&ctx, &key.source(), &class, positions, min_msk, yes).await
+        Command::Palw(PalwCmd::ModelSell { key, line, positions, min_msk, yes }) => {
+            palw_model::sell(&ctx, &key.source(), &line, positions, min_msk, yes).await
+        }
+        Command::Palw(PalwCmd::LineShow { line_id, json }) => palw_line::line_show(&ctx, &line_id, json).await,
+        Command::Palw(PalwCmd::LineLog { line_id, json }) => palw_line::line_log(&ctx, &line_id, json).await,
+        Command::Palw(PalwCmd::LineList { class_id, json }) => palw_line::line_list(&ctx, &class_id, json).await,
+        Command::Palw(PalwCmd::Proposals { line_id, json }) => palw_line::proposals(&ctx, &line_id, json).await,
+        Command::Palw(PalwCmd::LineFound { key, class, name, root, bond, yes }) => {
+            palw_line::line_found(&ctx, &key.source(), &class, &name, &root, &bond, yes).await
+        }
+        Command::Palw(PalwCmd::VersionPublish {
+            key,
+            line,
+            root,
+            parent,
+            adopted_from,
+            runtime_hash,
+            dataset_commitment,
+            training_config_hash,
+            notes_hash,
+            preview,
+            yes,
+        }) => {
+            palw_line::version_publish(
+                &ctx,
+                &key.source(),
+                &line,
+                &root,
+                parent,
+                adopted_from,
+                runtime_hash,
+                dataset_commitment,
+                training_config_hash,
+                notes_hash,
+                preview,
+                yes,
+            )
+            .await
+        }
+        Command::Palw(PalwCmd::VersionPromote { key, line, version, yes }) => {
+            palw_line::version_move(&ctx, &key.source(), &line, version, true, yes).await
+        }
+        Command::Palw(PalwCmd::VersionWithdraw { key, line, version, yes }) => {
+            palw_line::version_move(&ctx, &key.source(), &line, version, false, yes).await
+        }
+        Command::Palw(PalwCmd::LineRoles { key, line, developer, maintainer, contributor_permille, yes }) => {
+            palw_line::line_roles(&ctx, &key.source(), &line, developer, maintainer, contributor_permille, yes).await
+        }
+        Command::Palw(PalwCmd::LineTransfer { key, line, new_owner, yes }) => {
+            palw_line::line_transfer(&ctx, &key.source(), &line, &new_owner, yes).await
+        }
+        Command::Palw(PalwCmd::LineRetire { key, line, yes }) => palw_line::line_retire(&ctx, &key.source(), &line, yes).await,
+        Command::Palw(PalwCmd::ProposalPost { key, line, root, note_hash, bond, yes }) => {
+            palw_line::proposal_post(&ctx, &key.source(), &line, &root, &note_hash, &bond, yes).await
+        }
+        Command::Palw(PalwCmd::ProposalClose { key, line, proposal, yes }) => {
+            palw_line::proposal_close(&ctx, &key.source(), &line, &proposal, yes).await
+        }
+        Command::Palw(PalwCmd::Evaluate { key, line, version, evaluator_id, score_permille, report_hash, bond, yes }) => {
+            palw_line::evaluate(&ctx, &key.source(), &line, version, &evaluator_id, score_permille, &report_hash, &bond, yes).await
         }
         Command::Palw(PalwCmd::DerivedVerify { claim_id, answer, dsl, job_context, tokenizer, job_context_hash, family, json }) => {
             palw_derived::verify(

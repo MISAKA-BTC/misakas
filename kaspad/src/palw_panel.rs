@@ -3472,6 +3472,19 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::CourtAttnRootClaimed { .. } => "CourtAttnRootClaimed",
         PalwConsensusObjectV2::CourtAttnDissected { .. } => "CourtAttnDissected",
         PalwConsensusObjectV2::CourtAttnChildChosen { .. } => "CourtAttnChildChosen",
+        // ADR-0088 — the registry's ten moves (a line is founded, a version published and
+        // moved, roles set, the owner seat transferred, the line retired, a proposal posted and
+        // closed, an evaluation posted).
+        PalwConsensusObjectV2::ModelLineFounded { .. } => "ModelLineFounded",
+        PalwConsensusObjectV2::ModelVersionPublished { .. } => "ModelVersionPublished",
+        PalwConsensusObjectV2::ModelVersionPromoted { .. } => "ModelVersionPromoted",
+        PalwConsensusObjectV2::ModelVersionWithdrawn { .. } => "ModelVersionWithdrawn",
+        PalwConsensusObjectV2::ModelLineRolesSet { .. } => "ModelLineRolesSet",
+        PalwConsensusObjectV2::ModelLineOwnerTransferred { .. } => "ModelLineOwnerTransferred",
+        PalwConsensusObjectV2::ModelLineRetired { .. } => "ModelLineRetired",
+        PalwConsensusObjectV2::ModelProposalPosted { .. } => "ModelProposalPosted",
+        PalwConsensusObjectV2::ModelProposalClosed { .. } => "ModelProposalClosed",
+        PalwConsensusObjectV2::ModelEvaluationPosted { .. } => "ModelEvaluationPosted",
     }
 }
 

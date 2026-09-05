@@ -945,17 +945,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         request: GetPalwModelMarketRequest,
     ) -> RpcResult<GetPalwModelMarketResponse> {
         use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1, PALW_MODEL_SUPPLY_UNITS_V1};
-        let class_id = request
-            .class_id
-            .parse::<kaspa_hashes::Hash64>()
-            .map_err(|_| RpcError::General(format!("class id '{}' is not a 128-hex Hash64", request.class_id)))?;
+        let line_id = parse_hash64(&request.line_id, "line id")?;
         let session = self.consensus_manager.consensus().unguarded_session();
-        let Some((market, opened, status)) = session.palw_model_market_v1(class_id) else {
-            return Ok(GetPalwModelMarketResponse { class_id: class_id.to_string(), ..Default::default() });
+        let Some((market, opened, status)) = session.palw_model_market_v1(line_id) else {
+            return Ok(GetPalwModelMarketResponse { line_id: line_id.to_string(), ..Default::default() });
         };
         Ok(GetPalwModelMarketResponse {
             found: true,
-            class_id: class_id.to_string(),
+            line_id: line_id.to_string(),
             opened,
             opened_daa: market.opened_daa,
             msk_reserve: market.msk_reserve,
@@ -968,6 +965,107 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             supply_units: PALW_MODEL_SUPPLY_UNITS_V1,
             virtual_sompi: PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1,
             class_status: format!("{status:?}"),
+            contributor_paid_sompi: market.contributor_paid_sompi,
+        })
+    }
+
+    async fn get_palw_model_line_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwModelLineRequest,
+    ) -> RpcResult<GetPalwModelLineResponse> {
+        let line_id = parse_hash64(&request.line_id, "line id")?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(read) = session.palw_model_line_v1(line_id) else {
+            return Ok(GetPalwModelLineResponse { line_id: line_id.to_string(), ..Default::default() });
+        };
+        Ok(GetPalwModelLineResponse {
+            exists: true,
+            line_id: line_id.to_string(),
+            line: Some(rpc_palw_model_line(&read.row)),
+            current_root: read.current_root.map(|h| h.to_string()),
+            roots_in_force: read.roots_in_force.iter().map(|h| h.to_string()).collect(),
+            tip_daa: read.tip_daa,
+        })
+    }
+
+    async fn get_palw_model_version_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwModelVersionRequest,
+    ) -> RpcResult<GetPalwModelVersionResponse> {
+        let line_id = parse_hash64(&request.line_id, "line id")?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(read) = session.palw_model_version_v1(line_id, request.version) else {
+            return Ok(GetPalwModelVersionResponse {
+                line_id: line_id.to_string(),
+                version_number: request.version,
+                ..Default::default()
+            });
+        };
+        Ok(GetPalwModelVersionResponse {
+            exists: true,
+            line_id: line_id.to_string(),
+            version_number: request.version,
+            version: Some(rpc_palw_model_version(line_id, request.version, &read.version, read.tip_daa)),
+            evaluations: read
+                .evaluations
+                .iter()
+                .map(|(by, e)| RpcPalwModelEvaluation {
+                    evaluator_id: e.evaluator_id.to_string(),
+                    score_permille: e.score_permille,
+                    report_hash: e.report_hash.to_string(),
+                    posted_daa: e.posted_daa,
+                    by: by.0.into(),
+                    is_lines_own: e.is_lines_own,
+                })
+                .collect(),
+            tip_daa: read.tip_daa,
+        })
+    }
+
+    async fn get_palw_model_lines_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwModelLinesRequest,
+    ) -> RpcResult<GetPalwModelLinesResponse> {
+        let class_id = parse_hash64(&request.class_id, "class id")?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(rows) = session.palw_model_lines_v1(class_id) else {
+            return Ok(GetPalwModelLinesResponse { class_id: class_id.to_string(), ..Default::default() });
+        };
+        Ok(GetPalwModelLinesResponse {
+            exists: true,
+            class_id: class_id.to_string(),
+            lines: rows.iter().map(rpc_palw_model_line).collect(),
+        })
+    }
+
+    async fn get_palw_model_proposals_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwModelProposalsRequest,
+    ) -> RpcResult<GetPalwModelProposalsResponse> {
+        let line_id = parse_hash64(&request.line_id, "line id")?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(proposals) = session.palw_model_proposals_v1(line_id) else {
+            return Ok(GetPalwModelProposalsResponse { line_id: line_id.to_string(), ..Default::default() });
+        };
+        Ok(GetPalwModelProposalsResponse {
+            exists: true,
+            line_id: line_id.to_string(),
+            proposals: proposals
+                .iter()
+                .map(|(id, p)| RpcPalwModelProposal {
+                    proposal_id: id.to_string(),
+                    line_id: p.line_id.to_string(),
+                    root: p.root.to_string(),
+                    note_hash: p.note_hash.to_string(),
+                    by: p.by.0.into(),
+                    posted_daa: p.posted_daa,
+                    adopted_in: p.adopted_in,
+                })
+                .collect(),
         })
     }
 
@@ -976,15 +1074,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetPalwModelPositionsRequest,
     ) -> RpcResult<GetPalwModelPositionsResponse> {
-        let holder = request
-            .holder
-            .parse::<kaspa_hashes::Hash64>()
-            .map_err(|_| RpcError::General(format!("holder '{}' is not a 128-hex Hash64", request.holder)))?;
+        let holder = parse_hash64(&request.holder, "holder")?;
         let session = self.consensus_manager.consensus().unguarded_session();
         let positions = session
             .palw_model_positions_v1(holder)
             .into_iter()
-            .map(|(class_id, units)| RpcPalwModelPosition { class_id: class_id.to_string(), units })
+            .map(|(line_id, units)| RpcPalwModelPosition { line_id: line_id.to_string(), units })
             .collect();
         Ok(GetPalwModelPositionsResponse { holder: holder.to_string(), positions })
     }
@@ -2475,5 +2570,73 @@ impl AsyncService for RpcCoreService {
             trace!("{} stopped", Self::IDENT);
             Ok(())
         })
+    }
+}
+
+/// A 128-hex `Hash64` off the wire, or an error naming the field — a malformed id is a request
+/// error, never an absence (the integration test pins the difference).
+fn parse_hash64(text: &str, what: &str) -> RpcResult<kaspa_hashes::Hash64> {
+    text.parse::<kaspa_hashes::Hash64>().map_err(|_| RpcError::General(format!("{what} '{text}' is not a 128-hex Hash64")))
+}
+
+/// ADR-0088 Decision 12: one line's row for the wire.
+fn rpc_palw_model_line(row: &kaspa_consensus_core::api::PalwModelLineRowReadV1) -> RpcPalwModelLine {
+    let line = &row.line;
+    RpcPalwModelLine {
+        line_id: row.line_id.to_string(),
+        class_id: line.class_id.to_string(),
+        has_row: row.has_row,
+        owner: line.owner.map(|b| b.0.into()),
+        owner_payout_payload: row.owner_payout_payload.map(|h| h.to_string()),
+        developer: line.developer.map(|b| b.0.into()),
+        developer_payout_payload: row.developer_payout_payload.map(|h| h.to_string()),
+        maintainer: line.maintainer.map(|b| b.0.into()),
+        maintainer_payout_payload: row.maintainer_payout_payload.map(|h| h.to_string()),
+        name: String::from_utf8_lossy(&line.name).into_owned(),
+        name_hex: faster_hex::hex_string(&line.name),
+        founded_daa: line.founded_daa,
+        current: line.current,
+        previews: line.previews.clone(),
+        versions_published: line.versions_published,
+        contributor_permille_of_leg: line.contributor_permille_of_leg as u32,
+        status: format!("{:?}", line.status),
+        retired_daa: line.retired_daa,
+    }
+}
+
+/// ADR-0088 Decision 12: one version's row for the wire, `in_force` judged at `tip_daa`.
+fn rpc_palw_model_version(
+    line_id: kaspa_hashes::Hash64,
+    version: u32,
+    row: &kaspa_consensus_core::palw_model_lines_v1::PalwModelVersionV1,
+    tip_daa: u64,
+) -> RpcPalwModelVersion {
+    use kaspa_consensus_core::palw_model_lines_v1::PalwVersionStatusV1;
+    let (status, until_daa) = match row.status {
+        PalwVersionStatusV1::Current => ("Current", None),
+        PalwVersionStatusV1::Preview => ("Preview", None),
+        PalwVersionStatusV1::Superseded { until_daa } => ("Superseded", Some(until_daa)),
+        PalwVersionStatusV1::Withdrawn => ("Withdrawn", None),
+    };
+    RpcPalwModelVersion {
+        line_id: line_id.to_string(),
+        version,
+        root: row.root.to_string(),
+        parent: row.parent,
+        adopted_from: row.adopted_from.map(|h| h.to_string()),
+        runtime_hash: row.runtime_hash.map(|h| h.to_string()),
+        dataset_commitment: row.dataset_commitment.map(|h| h.to_string()),
+        training_config_hash: row.training_config_hash.map(|h| h.to_string()),
+        notes_hash: row.notes_hash.map(|h| h.to_string()),
+        published_daa: row.published_daa,
+        published_by: row.published_by.map(|b| b.0.into()),
+        status: status.to_string(),
+        until_daa,
+        in_force: row.in_force_at(tip_daa),
+        attempt_claims: row.usage.attempt_claims,
+        fp_claims: row.usage.fp_claims,
+        work_leaves: row.usage.work_leaves.to_string(),
+        first_used_daa: row.usage.first_used_daa,
+        last_used_daa: row.usage.last_used_daa,
     }
 }

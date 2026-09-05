@@ -88,6 +88,10 @@ message KaspadRequest {
     GetPalwPendingChunkGroupRequestMessage getPalwPendingChunkGroupRequest = 1142;
     GetPalwModelMarketRequestMessage getPalwModelMarketRequest = 1144;
     GetPalwModelPositionsRequestMessage getPalwModelPositionsRequest = 1146;
+    GetPalwModelLineRequestMessage getPalwModelLineRequest = 1148;
+    GetPalwModelVersionRequestMessage getPalwModelVersionRequest = 1150;
+    GetPalwModelLinesRequestMessage getPalwModelLinesRequest = 1152;
+    GetPalwModelProposalsRequestMessage getPalwModelProposalsRequest = 1154;
   }
 }
 
@@ -171,6 +175,10 @@ message KaspadResponse {
     GetPalwPendingChunkGroupResponseMessage getPalwPendingChunkGroupResponse = 1143;
     GetPalwModelMarketResponseMessage getPalwModelMarketResponse = 1145;
     GetPalwModelPositionsResponseMessage getPalwModelPositionsResponse = 1147;
+    GetPalwModelLineResponseMessage getPalwModelLineResponse = 1149;
+    GetPalwModelVersionResponseMessage getPalwModelVersionResponse = 1151;
+    GetPalwModelLinesResponseMessage getPalwModelLinesResponse = 1153;
+    GetPalwModelProposalsResponseMessage getPalwModelProposalsResponse = 1155;
   }
 }
 

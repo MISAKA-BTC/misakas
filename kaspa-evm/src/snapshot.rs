@@ -208,6 +208,7 @@ mod tests {
         parent: Option<&'a EvmExecutionHeader>,
     ) -> EvmBlockInput<'a> {
         EvmBlockInput {
+            market: Default::default(),
             parent,
             header_timestamp_ms: 10_000,
             selected_parent_hash: [7u8; 64],

@@ -18,6 +18,7 @@ pub mod env;
 pub mod executor;
 pub mod flat_backend;
 pub mod mldsa_verify;
+pub mod model_market;
 pub mod precompiles;
 pub mod reconstruct;
 pub mod roots;
@@ -28,7 +29,7 @@ pub mod trace;
 pub mod tx;
 pub mod withdraw;
 
-pub use executor::{AcceptedTxCandidate, EvmBlockInput, execute_block_evm};
+pub use executor::{AcceptedTxCandidate, EvmBlockInput, EvmMarketInput, execute_block_evm};
 
 use revm::primitives::{AccountInfo, Address, KECCAK_EMPTY, SpecId, TxKind, U256};
 use revm::{
@@ -113,6 +114,12 @@ pub enum EvmExecError {
     /// silently saturate and hide the broken invariant (audit #5).
     #[display("evm consensus invariant violated: {_0}")]
     InvariantViolation(String),
+    /// ADR-0089 Decision 6: the block's `MarketSettle` system ops are not EXACTLY the
+    /// settlement list its selected parent's fold decided (a missing, extra, reordered or
+    /// altered op). A producer fault: the block is disqualified, as a bad deposit claim
+    /// disqualifies it.
+    #[display("evm market settlement mismatch: {_0}")]
+    MarketSettlementMismatch(String),
 }
 
 /// P2 block-execution helper: seed a fresh in-memory state, run the raw EIP-2718

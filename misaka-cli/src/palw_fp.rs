@@ -550,7 +550,10 @@ pub(crate) fn carrier_rent_v1(object: &kaspa_consensus_core::palw_state_v2::Palw
             };
             opener.max(completing)
         }
-        _ => 0,
+        // Every other object owes exactly what the chain's own ceiling says — ADR-0088 Decision
+        // 11's three rent-priced registry objects (a founding, a proposal, an evaluation) among
+        // them; the rest read 0 and pay carriage only.
+        other => kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v1(other),
     }
 }
 

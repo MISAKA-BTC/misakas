@@ -461,9 +461,57 @@ chain never takes the host's word* (README §"Security amendments").
 6. Devnet drill (both lanes of the market on one class: carrier buy, EVM buy, EVM sell, refused
    buy, reorg across `B`/`C`); then testnet-11 by activation.
 
-## 9. Implementation record
+## 9. Implementation record (2026-09-05, `palw-adr0088-0089-impl`)
 
-(none — design only)
+**Landed — §8 items 1–5 (fold, executor, processor, params, RPC/CLI and the Solidity
+interfaces); item 6 (the devnet drill) is not.** The fold half is commit `bf4ed1d8`; the rest is
+the branch's closing commit.
+
+| where | what |
+|---|---|
+| `consensus/core/src/evm/model_market.rs` | Decision 1's addresses (`0x…F010`–`0x…F013` through `system_address`) and `facade_address_v1` (`0x4d50` ‖ 18 bytes of BLAKE2b over the line id); `evm_holder_v1(chain_id, address)` (Decision 7); `PalwEvmMarketActionV1` / `PalwEvmSettlementV1` with the refusal codes; `PalwEvmMarketFencesV1`; the view `PalwEvmViewV1` (classes, lines, versions, proposals, evaluations, markets, positions — flattened rows the doors answer from and nothing else); `synthetic_market_sink_txid`; the bounds (128 actions an EVM block, 25,000 gas a settlement, 25,000 gas a writer call). |
+| `palw_state_v2.rs` | `evm_settlements` on the state (root only when non-empty; carriage tail `0x89`); `PalwTransitionExtrasV1 { evm_market_active, evm_actions }`; slot 1c′ drains the selected parent's settlement list, slot 3c applies the block's actions after every carrier-borne market object (E4) through `model_buy_v1` / `model_sell_v1(.., pay_net_via_coinbase = false)` — an EVM buy is a position under the EVM holder id, an EVM sell's net is the settlement row and never a coinbase payout; a refused action is a settlement with a reason, never a fault of the block; `evm_view_v1(chain_id, base_class_id)`. |
+| `config/params.rs`, `palw_mode_v2.rs` | `palw_model_evm: Option<ForkActivation>`; `validate_palw_v2` refuses it before `palw_model_market` (`ModelEvmBeforeMarket`) and on a preset whose EVM lane is inert (`ModelEvmOnInertLane`); `palw_evm_market_fences_at(daa)`; pinned in the fingerprint; `None` on every preset. |
+| `consensus/core/src/evm/mod.rs` | `EvmSystemOp::MarketSettle(PalwEvmSettlementV1)`; `EvmExecutionResult.market_actions` (not committed — the fold recomputes nothing from it; the settlements it produces are). |
+| `kaspa-evm/src/model_market.rs` | The intercept: `MarketHandlers` wrapping `handler.execution.call` (the F002 seam's shape) — the three read doors decode the ABI and answer from the view; the facade family answers ERC-20's read half, refuses its transfer half with `NonTransferable`, and routes `buy`/`sell` to the writer's path; the writer charges its gas, refuses a static frame, a caller that is not `tx.origin` or has code (Decision 4), a dormant market, an unknown line, a market closed to buys, a value that is not whole sompi, the 129th action, then moves the escrow caller → writer in the tx's journal and emits `ActionQueued` — the two unwind together on a revert; `decode_action_log` (strict: address, topics, lengths, zero padding) and `settlement_log` (`Bought` / `Sold` / `Refused` from the line's facade). |
+| `kaspa-evm/src/executor.rs`, `precompiles.rs`, `sim.rs`, `trace.rs` | `EvmBlockInput.market: EvmMarketInput { palw_view, fences, expected_settlements, chain_id }`; the `MarketSettle` ops validated equal, in order and in count, to the selected parent's list (E5) and applied before any user tx — a filled buy burns the writer's escrow, a refused buy reroutes it to the account, a filled sell credits the net — their events in ONE system receipt at index 0 (user receipt indices unchanged, `accepted_tx_count` counts user txs); the committed `ActionQueued` logs scanned into `market_actions` in log order; Decision 8's accumulator `+ credited − burned`; `register_all_misaka_precompiles(handler, f003_active, market)`; `EthCallEnv { palw_view, market_fences, chain_id_for_holders }` so `eth_call` registers the same doors. |
+| `consensus/src/processes/evm/mod.rs`, `virtual_processor/processor.rs`, `body_validation_in_isolation.rs` | `evm_chain_context_step` builds the view and the fences from the selected parent's fold and the block's DAA, hands the parent's settlement list as `expected_settlements`, validates the payload's ops (`validate_evm_market_settlements`), materialises a filled buy's escrow as a sink output (`apply_evm_market_effects`, `synthetic_market_sink_txid`) and feeds `market_actions` into `PalwTransitionExtrasV1.evm_actions`; the EVM pre-execution pipeline is bypassed while the fence is armed (a block's fold input is its own); the template builder pushes the selected parent's `MarketSettle` ops and mirrors the sink effects; the system-op cap split (claims ≤ 256, settlements ≤ 128, E11). |
+| `kaspad/src/eth_rpc.rs`, `consensus/core/src/api/mod.rs`, `consensus/mod.rs`, `session.rs` | `palw_evm_view_v1()` — the tip's view and the fences at the tip's DAA — set on the head `EthCallEnv`; a historical block's env carries no view (recorded below). |
+| `contracts/misaka-model/` | `MisakaModelAddresses.sol`, `IMisakaModelRegistry.sol`, `IMisakaModelAMM.sol`, `IMisakaModelPosition.sol`, `IMRC20.sol`, `IMisakaModelWriter.sol`, a README — 64-byte ids as two `bytes32` words; compiled with solc 0.8.28. |
+
+**Tests.** `palw_state_v2::tests::evm_market` (4): a buy from the EVM is a position in the EVM
+namespace and a settlement the child carries (E2, E7); a sell from the EVM credits through its
+settlement and never the coinbase (E2, E6); a refused action is a settlement and not a fault of the
+block (E5); the settlement tail rides the carriage only while a list waits (E10's revert side).
+`evm::model_market` (3): the addresses are where the ADR puts them, the holder id binds the chain
+and the account (E7), the view answers by id and by facade (E1). `kaspa_evm::model_market` (4):
+selectors and the interface id excluding ERC-20 (E3), the action record round-trips through the
+log, `sendAction` calldata decodes strictly, the settlement log names the facade and the outcome.
+`kaspa_evm::executor` (2): the writer escrows and the block lists its actions in order — a buy, a
+sell, a torn buy reverted, and the same calls finding an empty account while the fence is dormant
+(E2, E9, E11's revert shape); a settlement block burns, refunds and credits exactly the parent's
+list, the system receipt at index 0 ahead of the user's, the supply identity across a deposit, a
+burn, a credit and a basefee burn (E5, E6), and a short, altered or unexpected list refused whole.
+The params test pins E9. E4 and E8 hold by the fold's slot order and by ADR-0087's and ADR-0088's
+suites running unchanged over the same state (1,868 green). E10's forward side (dropping `B`) and
+E12 are not tested — see below.
+
+**What the implementation taught.** (1) `PalwPayoutKindV2::EvmCredit` (§8 item 1) was not needed:
+the settlement row *is* the credit, and the executor pays it at `C`; a payout kind would have been
+a second copy of the same number. (2) The settlement list has to live in the fold's state for one
+block (not only in `B`'s result) so that `C`'s validation, `C`'s template and a node that replays
+`B` from its delta all read the same list. (3) The action list must be scanned from the *committed*
+logs, not from the writer's own counter — a tx that queued and then failed leaves no log, and the
+counter is resynchronised from the scan at every tx. (4) The escrow moves inside the tx's journal,
+so a revert after the queue (out of gas in the same frame is impossible, but the shape is kept)
+unwinds both the value and the log together.
+
+**Not landed.** The devnet drill (§8 item 6: carrier buy, EVM buy, EVM sell, refused buy, reorg
+across `B`/`C`); a historical `eth_call` sees the market's doors closed — the fold is kept only at
+the tip and a past view would need a replay this RPC does not run (`eth_rpc.rs` says so at the
+site); the `CLASSICAL-ECC` label (E12) — the fold keys a position by holder id alone and cannot
+tell an EVM-derived id from an ML-DSA one, so the RPC has nothing to label with; the wallet label;
+the explorer; arming on testnet-11.
 
 ## 10. What is deliberately not decided
 

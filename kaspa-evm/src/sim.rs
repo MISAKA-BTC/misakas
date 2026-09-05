@@ -5,7 +5,8 @@
 
 use crate::snapshot::seed_cachedb;
 use crate::{EVM_SPEC_ID, EvmExecError};
-use kaspa_consensus_core::evm::{EvmAddress, EvmStateSnapshot, EvmU256};
+use kaspa_consensus_core::evm::model_market::{PalwEvmMarketFencesV1, PalwEvmViewV1};
+use kaspa_consensus_core::evm::{EVM_CHAIN_ID, EvmAddress, EvmStateSnapshot, EvmU256};
 use revm::Evm;
 use revm::primitives::{Address, B256, ExecutionResult, TxEnv, TxKind, U256};
 
@@ -22,7 +23,7 @@ pub struct EthCall {
 }
 
 /// The block context the call executes against (the canonical EVM head).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct EthCallEnv {
     pub chain_id: u64,
     pub number: u64,
@@ -35,6 +36,36 @@ pub struct EthCallEnv {
     /// set the executor uses (parity). `false` (inert) ⇒ no F003 in simulation,
     /// matching the executor below the fence.
     pub f003_active: bool,
+    /// ADR-0089 Decision 2: the fold's rows at the simulated head (the head's own
+    /// `evm_view_v1`, the same view the executor read for the head's child). `None`
+    /// ⇒ the market's doors are not registered, whatever the fences say.
+    pub palw_view: Option<std::sync::Arc<PalwEvmViewV1>>,
+    /// ADR-0089 Decision 9: the market fences at the simulated head, resolved by the
+    /// RPC the way consensus resolves them for a block. `evm_active == false` ⇒ the
+    /// four addresses and the facades are empty accounts in simulation too.
+    pub market_fences: PalwEvmMarketFencesV1,
+    /// ADR-0089 Decision 7: the chain id an EVM account's holder id is derived under
+    /// (`evm_holder_v1(chain_id, address)`); `EVM_CHAIN_ID` on every network.
+    pub chain_id_for_holders: u64,
+}
+
+impl Default for EthCallEnv {
+    /// Every field zero/inert EXCEPT `chain_id_for_holders`, which defaults to `EVM_CHAIN_ID`:
+    /// a forgotten field must not silently move every EVM holder into a namespace the fold
+    /// never credits.
+    fn default() -> Self {
+        Self {
+            chain_id: 0,
+            number: 0,
+            timestamp: 0,
+            coinbase: EvmAddress::default(),
+            gas_limit: 0,
+            f003_active: false,
+            palw_view: None,
+            market_fences: PalwEvmMarketFencesV1::default(),
+            chain_id_for_holders: EVM_CHAIN_ID,
+        }
+    }
 }
 
 /// Outcome of a simulated call.
@@ -108,7 +139,14 @@ pub fn simulate_call(snapshot: &EvmStateSnapshot, env: &EthCallEnv, call: &EthCa
         // uses (parity): F002 always, F003 iff active at this head.
         .append_handler_register_box({
             let f003_active = env.f003_active;
-            Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active))
+            // ADR-0089: the market's doors in simulation are the executor's, bound to the head's
+            // view and fences the RPC resolved (parity).
+            let market = env
+                .palw_view
+                .clone()
+                .filter(|_| env.market_fences.evm_active)
+                .map(|view| crate::model_market::MarketHandlers::new(view, env.market_fences, env.chain_id_for_holders));
+            Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active, market.clone()))
         })
         .build();
     evm.context.evm.env.tx = txenv;

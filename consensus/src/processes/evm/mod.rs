@@ -210,6 +210,66 @@ pub fn prepare_deposit_claims<V: kaspa_consensus_core::utxo::utxo_view::UtxoView
 /// persisted per-block diff, reorg apply/revert is the existing UTXO
 /// machinery — the EVM side never reverts (pointer-switch only), so combined
 /// supply is conserved across any reorg with zero bespoke code (invariant I7).
+/// **ADR-0089 Decision 6: the settling block's market side-effects on the UTXO set.** A filled
+/// buy's escrow, burned in the EVM by its `MarketSettle` op, becomes the line's sink output —
+/// `OP_RETURN ‖ MSKMDL01 ‖ line` (ADR-0087 D3's script), dead by script, keyed by
+/// `synthetic_market_sink_txid` (pre-mining-stable: the deciding block, the sequence, the
+/// account, the line, the amount). Refunds and credits are EVM-side and leave no output.
+pub fn apply_evm_market_effects(
+    diff: &mut kaspa_consensus_core::utxo::utxo_diff::UtxoDiff,
+    multiset: &mut kaspa_muhash::MuHash,
+    pov_daa_score: u64,
+    decided_at: kaspa_consensus_core::BlockHash,
+    settlements: &[kaspa_consensus_core::evm::model_market::PalwEvmSettlementV1],
+) -> Result<(), String> {
+    use kaspa_consensus_core::evm::model_market::{PalwEvmSettlementOutcomeV1, synthetic_market_sink_txid};
+    use kaspa_consensus_core::muhash::MuHashExtensions;
+    for s in settlements {
+        let PalwEvmSettlementOutcomeV1::Filled { gross_sompi, .. } = s.outcome else { continue };
+        if !s.is_buy || gross_sompi == 0 {
+            continue;
+        }
+        let txid = synthetic_market_sink_txid(decided_at, s.seq, &s.account, &s.line_id, gross_sompi);
+        let outpoint = kaspa_consensus_core::tx::TransactionOutpoint::new(txid, 0);
+        let spk = kaspa_consensus_core::palw_model_market_v1::palw_model_sink_spk_v1(&s.line_id);
+        let entry = kaspa_consensus_core::tx::UtxoEntry::new(gross_sompi, spk, pov_daa_score, false);
+        diff.add_utxo(outpoint, entry.clone()).map_err(|e| format!("materialize market sink {outpoint}: {e}"))?;
+        multiset.add_utxo(&outpoint, &entry);
+    }
+    Ok(())
+}
+
+/// **ADR-0089 Decision 6: the settlements a block carries are the ones its selected parent's
+/// fold decided — the same count, the same order, the same values.** A missing, extra or
+/// reordered op is the producer's fault, as a bad deposit claim is.
+pub fn validate_evm_market_settlements(
+    payload: &kaspa_consensus_core::evm::EvmExecutionPayload,
+    expected: &[kaspa_consensus_core::evm::model_market::PalwEvmSettlementV1],
+) -> Result<(), String> {
+    use kaspa_consensus_core::evm::EvmSystemOp;
+    let carried: Vec<_> = payload
+        .system_ops
+        .iter()
+        .filter_map(|op| match op {
+            EvmSystemOp::MarketSettle(s) => Some(s.to_owned()),
+            _ => None,
+        })
+        .collect();
+    if carried.len() != expected.len() {
+        return Err(format!(
+            "the block carries {} market settlements and its selected parent decided {}",
+            carried.len(),
+            expected.len()
+        ));
+    }
+    for (i, (c, e)) in carried.iter().zip(expected).enumerate() {
+        if c != e {
+            return Err(format!("market settlement #{i} (seq {}) is not the one the selected parent decided", c.seq));
+        }
+    }
+    Ok(())
+}
+
 pub fn apply_evm_bridge_effects(
     diff: &mut kaspa_consensus_core::utxo::utxo_diff::UtxoDiff,
     multiset: &mut kaspa_muhash::MuHash,
@@ -1835,6 +1895,7 @@ mod driver {
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
         typed_receipt_root_activation_daa_score: u64,
+        market: kaspa_evm::EvmMarketInput<'_>,
     ) -> Result<Option<super::EvmStaged>, EvmValidateError> {
         // No-replay: this block's EVM result was computed when it first joined the
         // selected chain; never recompute it.
@@ -1855,6 +1916,7 @@ mod driver {
             f002_withdraw_cap_activation_daa_score,
             f003_mldsa_verify_activation_daa_score,
             typed_receipt_root_activation_daa_score,
+            market,
         )?;
 
         // The only block-invalidating EVM condition: producer commitment mismatch
@@ -1889,6 +1951,7 @@ mod driver {
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
         typed_receipt_root_activation_daa_score: u64,
+        market: kaspa_evm::EvmMarketInput<'_>,
     ) -> Result<Option<super::EvmStaged>, EvmValidateError> {
         if header_store.has(block).map_err(EvmValidateError::Store)? {
             return Ok(None);
@@ -1906,6 +1969,7 @@ mod driver {
             f002_withdraw_cap_activation_daa_score,
             f003_mldsa_verify_activation_daa_score,
             typed_receipt_root_activation_daa_score,
+            market,
         )?;
         if result.header.commitment_root() != l1_header.evm_commitment_root {
             return Err(EvmValidateError::CommitmentMismatch { block });
@@ -1936,6 +2000,7 @@ mod driver {
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
         typed_receipt_root_activation_daa_score: u64,
+        market: kaspa_evm::EvmMarketInput<'_>,
     ) -> Result<
         (
             kaspa_consensus_core::evm::EvmExecutionResult,
@@ -1962,6 +2027,7 @@ mod driver {
             f002_withdraw_cap_activation_daa_score,
             f003_mldsa_verify_activation_daa_score,
             typed_receipt_root_activation_daa_score,
+            market,
         )
     }
 
@@ -1986,6 +2052,7 @@ mod driver {
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
         typed_receipt_root_activation_daa_score: u64,
+        market: kaspa_evm::EvmMarketInput<'_>,
     ) -> Result<
         (
             kaspa_consensus_core::evm::EvmExecutionResult,
@@ -2054,6 +2121,7 @@ mod driver {
         };
 
         let input = super::EvmBlockInput {
+            market,
             parent: parent_header.as_ref(),
             header_timestamp_ms: l1_header.timestamp,
             selected_parent_hash: selected_parent.as_bytes(),
@@ -2138,6 +2206,7 @@ mod driver {
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
         typed_receipt_root_activation_daa_score: u64,
+        market: kaspa_evm::EvmMarketInput<'_>,
     ) -> Result<(), EvmValidateError> {
         let Some(staged) = evm_validate(
             header_store,
@@ -2152,6 +2221,7 @@ mod driver {
             f002_withdraw_cap_activation_daa_score,
             f003_mldsa_verify_activation_daa_score,
             typed_receipt_root_activation_daa_score,
+            market,
         )?
         else {
             return Ok(());
@@ -2614,6 +2684,9 @@ impl EvmPipeline {
                             f002_withdraw_cap_activation_daa_score,
                             f003_mldsa_verify_activation_daa_score,
                             typed_receipt_root_activation_daa_score,
+                            // ADR-0089: the pipeline pre-executes without the market's window; its
+                            // result is discarded by the walk when the fence is active.
+                            Default::default(),
                         )?;
                         // The pipeline only runs over blocks WITHOUT committed EVM rows
                         // (filtered by the caller), so a None (no-replay hit) is a race
@@ -2897,6 +2970,7 @@ mod tests {
         let candidates =
             vec![AcceptedTxCandidate { raw: vec![0xde, 0xad, 0xbe, 0xef], payload_coinbase: merged_payload.evm_coinbase }];
         let input = EvmBlockInput {
+            market: Default::default(),
             parent: None,
             header_timestamp_ms: l1.timestamp,
             selected_parent_hash: selected_parent.as_bytes(),
@@ -2938,6 +3012,7 @@ mod tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
+            Default::default(),
         )
         .unwrap();
         db.write(b1).unwrap();
@@ -3021,6 +3096,7 @@ mod tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
+            Default::default(),
         )
         .unwrap();
 
@@ -3050,6 +3126,7 @@ mod tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
+            Default::default(),
         );
         assert!(matches!(err, Err(EvmValidateError::CommitmentMismatch { .. })));
 
@@ -3079,6 +3156,7 @@ mod tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
+            Default::default(),
         );
         assert!(
             matches!(err, Err(EvmValidateError::CommitmentMismatch { .. })),

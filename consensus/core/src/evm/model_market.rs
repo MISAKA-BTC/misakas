@@ -144,8 +144,15 @@ pub mod refusal {
 pub enum PalwEvmSettlementOutcomeV1 {
     /// A filled buy: `units` credited, `gross_sompi` sunk, the price after. A filled sell:
     /// `units` debited, `gross_sompi` taken from the reserve, `net_sompi` credited.
-    Filled { units: u64, gross_sompi: u64, net_sompi: u64, price_after_sompi: u64 },
-    Refused { reason: u8 },
+    Filled {
+        units: u64,
+        gross_sompi: u64,
+        net_sompi: u64,
+        price_after_sompi: u64,
+    },
+    Refused {
+        reason: u8,
+    },
 }
 
 /// What `fold(B)` decided about one action; carried by `EVM(C)` as `EvmSystemOp::MarketSettle`

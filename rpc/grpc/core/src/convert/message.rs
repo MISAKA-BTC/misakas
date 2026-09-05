@@ -501,12 +501,12 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwPendingChunkGroupResponse>, protow
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwModelMarketRequest, protowire::GetPalwModelMarketRequestMessage, {
-    Self { class_id: item.class_id.clone() }
+    Self { line_id: item.line_id.clone() }
 });
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelMarketResponse>, protowire::GetPalwModelMarketResponseMessage, {
     Self {
         found: item.found,
-        class_id: item.class_id.clone(),
+        line_id: item.line_id.clone(),
         opened: item.opened,
         opened_daa: item.opened_daa,
         msk_reserve: item.msk_reserve,
@@ -519,6 +519,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelMarketResponse>, protowire::G
         supply_units: item.supply_units,
         virtual_sompi: item.virtual_sompi,
         class_status: item.class_status.clone(),
+        contributor_paid_sompi: item.contributor_paid_sompi,
         error: None,
     }
 });
@@ -531,8 +532,125 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelPositionsResponse>, protowire
         positions: item
             .positions
             .iter()
-            .map(|p| protowire::RpcPalwModelPosition { class_id: p.class_id.clone(), units: p.units })
+            .map(|p| protowire::RpcPalwModelPosition { line_id: p.line_id.clone(), units: p.units })
             .collect(),
+        error: None,
+    }
+});
+// ---- ADR-0088 Decision 12: the model registry ----
+from!(item: &kaspa_rpc_core::RpcPalwModelLine, protowire::RpcPalwModelLine, {
+    Self {
+        line_id: item.line_id.clone(),
+        class_id: item.class_id.clone(),
+        has_row: item.has_row,
+        owner: item.owner.as_ref().map(protowire::RpcOutpoint::from),
+        owner_payout_payload: item.owner_payout_payload.clone(),
+        developer: item.developer.as_ref().map(protowire::RpcOutpoint::from),
+        developer_payout_payload: item.developer_payout_payload.clone(),
+        maintainer: item.maintainer.as_ref().map(protowire::RpcOutpoint::from),
+        maintainer_payout_payload: item.maintainer_payout_payload.clone(),
+        name: item.name.clone(),
+        name_hex: item.name_hex.clone(),
+        founded_daa: item.founded_daa,
+        current: item.current,
+        previews: item.previews.clone(),
+        versions_published: item.versions_published,
+        contributor_permille_of_leg: item.contributor_permille_of_leg,
+        status: item.status.clone(),
+        retired_daa: item.retired_daa,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwModelVersion, protowire::RpcPalwModelVersion, {
+    Self {
+        line_id: item.line_id.clone(),
+        version: item.version,
+        root: item.root.clone(),
+        parent: item.parent,
+        adopted_from: item.adopted_from.clone(),
+        runtime_hash: item.runtime_hash.clone(),
+        dataset_commitment: item.dataset_commitment.clone(),
+        training_config_hash: item.training_config_hash.clone(),
+        notes_hash: item.notes_hash.clone(),
+        published_daa: item.published_daa,
+        published_by: item.published_by.as_ref().map(protowire::RpcOutpoint::from),
+        status: item.status.clone(),
+        until_daa: item.until_daa,
+        in_force: item.in_force,
+        attempt_claims: item.attempt_claims,
+        fp_claims: item.fp_claims,
+        work_leaves: item.work_leaves.clone(),
+        first_used_daa: item.first_used_daa,
+        last_used_daa: item.last_used_daa,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwModelEvaluation, protowire::RpcPalwModelEvaluation, {
+    Self {
+        evaluator_id: item.evaluator_id.clone(),
+        score_permille: item.score_permille,
+        report_hash: item.report_hash.clone(),
+        posted_daa: item.posted_daa,
+        by: Some(protowire::RpcOutpoint::from(&item.by)),
+        is_lines_own: item.is_lines_own,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwModelProposal, protowire::RpcPalwModelProposal, {
+    Self {
+        proposal_id: item.proposal_id.clone(),
+        line_id: item.line_id.clone(),
+        root: item.root.clone(),
+        note_hash: item.note_hash.clone(),
+        by: Some(protowire::RpcOutpoint::from(&item.by)),
+        posted_daa: item.posted_daa,
+        adopted_in: item.adopted_in,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwModelLineRequest, protowire::GetPalwModelLineRequestMessage, {
+    Self { line_id: item.line_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelLineResponse>, protowire::GetPalwModelLineResponseMessage, {
+    Self {
+        exists: item.exists,
+        line_id: item.line_id.clone(),
+        line: item.line.as_ref().map(protowire::RpcPalwModelLine::from),
+        current_root: item.current_root.clone(),
+        roots_in_force: item.roots_in_force.clone(),
+        tip_daa: item.tip_daa,
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwModelVersionRequest, protowire::GetPalwModelVersionRequestMessage, {
+    Self { line_id: item.line_id.clone(), version: item.version }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelVersionResponse>, protowire::GetPalwModelVersionResponseMessage, {
+    Self {
+        exists: item.exists,
+        line_id: item.line_id.clone(),
+        version_number: item.version_number,
+        version: item.version.as_ref().map(protowire::RpcPalwModelVersion::from),
+        evaluations: item.evaluations.iter().map(protowire::RpcPalwModelEvaluation::from).collect(),
+        tip_daa: item.tip_daa,
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwModelLinesRequest, protowire::GetPalwModelLinesRequestMessage, {
+    Self { class_id: item.class_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelLinesResponse>, protowire::GetPalwModelLinesResponseMessage, {
+    Self {
+        exists: item.exists,
+        class_id: item.class_id.clone(),
+        lines: item.lines.iter().map(protowire::RpcPalwModelLine::from).collect(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwModelProposalsRequest, protowire::GetPalwModelProposalsRequestMessage, {
+    Self { line_id: item.line_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelProposalsResponse>, protowire::GetPalwModelProposalsResponseMessage, {
+    Self {
+        exists: item.exists,
+        line_id: item.line_id.clone(),
+        proposals: item.proposals.iter().map(protowire::RpcPalwModelProposal::from).collect(),
         error: None,
     }
 });
@@ -1324,12 +1442,12 @@ try_from!(item: &protowire::GetPalwPendingChunkGroupResponseMessage, RpcResult<k
     }
 });
 try_from!(item: &protowire::GetPalwModelMarketRequestMessage, kaspa_rpc_core::GetPalwModelMarketRequest, {
-    Self { class_id: item.class_id.clone() }
+    Self { line_id: item.line_id.clone() }
 });
 try_from!(item: &protowire::GetPalwModelMarketResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelMarketResponse>, {
     Self {
         found: item.found,
-        class_id: item.class_id.clone(),
+        line_id: item.line_id.clone(),
         opened: item.opened,
         opened_daa: item.opened_daa,
         msk_reserve: item.msk_reserve,
@@ -1342,6 +1460,7 @@ try_from!(item: &protowire::GetPalwModelMarketResponseMessage, RpcResult<kaspa_r
         supply_units: item.supply_units,
         virtual_sompi: item.virtual_sompi,
         class_status: item.class_status.clone(),
+        contributor_paid_sompi: item.contributor_paid_sompi,
     }
 });
 try_from!(item: &protowire::GetPalwModelPositionsRequestMessage, kaspa_rpc_core::GetPalwModelPositionsRequest, {
@@ -1353,8 +1472,129 @@ try_from!(item: &protowire::GetPalwModelPositionsResponseMessage, RpcResult<kasp
         positions: item
             .positions
             .iter()
-            .map(|p| kaspa_rpc_core::RpcPalwModelPosition { class_id: p.class_id.clone(), units: p.units })
+            .map(|p| kaspa_rpc_core::RpcPalwModelPosition { line_id: p.line_id.clone(), units: p.units })
             .collect(),
+    }
+});
+// ---- ADR-0088 Decision 12: the model registry ----
+try_from!(item: &protowire::RpcPalwModelLine, kaspa_rpc_core::RpcPalwModelLine, {
+    Self {
+        line_id: item.line_id.clone(),
+        class_id: item.class_id.clone(),
+        has_row: item.has_row,
+        owner: item.owner.as_ref().map(kaspa_rpc_core::RpcTransactionOutpoint::try_from).transpose()?,
+        owner_payout_payload: item.owner_payout_payload.clone(),
+        developer: item.developer.as_ref().map(kaspa_rpc_core::RpcTransactionOutpoint::try_from).transpose()?,
+        developer_payout_payload: item.developer_payout_payload.clone(),
+        maintainer: item.maintainer.as_ref().map(kaspa_rpc_core::RpcTransactionOutpoint::try_from).transpose()?,
+        maintainer_payout_payload: item.maintainer_payout_payload.clone(),
+        name: item.name.clone(),
+        name_hex: item.name_hex.clone(),
+        founded_daa: item.founded_daa,
+        current: item.current,
+        previews: item.previews.clone(),
+        versions_published: item.versions_published,
+        contributor_permille_of_leg: item.contributor_permille_of_leg,
+        status: item.status.clone(),
+        retired_daa: item.retired_daa,
+    }
+});
+try_from!(item: &protowire::RpcPalwModelVersion, kaspa_rpc_core::RpcPalwModelVersion, {
+    Self {
+        line_id: item.line_id.clone(),
+        version: item.version,
+        root: item.root.clone(),
+        parent: item.parent,
+        adopted_from: item.adopted_from.clone(),
+        runtime_hash: item.runtime_hash.clone(),
+        dataset_commitment: item.dataset_commitment.clone(),
+        training_config_hash: item.training_config_hash.clone(),
+        notes_hash: item.notes_hash.clone(),
+        published_daa: item.published_daa,
+        published_by: item.published_by.as_ref().map(kaspa_rpc_core::RpcTransactionOutpoint::try_from).transpose()?,
+        status: item.status.clone(),
+        until_daa: item.until_daa,
+        in_force: item.in_force,
+        attempt_claims: item.attempt_claims,
+        fp_claims: item.fp_claims,
+        work_leaves: item.work_leaves.clone(),
+        first_used_daa: item.first_used_daa,
+        last_used_daa: item.last_used_daa,
+    }
+});
+try_from!(item: &protowire::RpcPalwModelEvaluation, kaspa_rpc_core::RpcPalwModelEvaluation, {
+    Self {
+        evaluator_id: item.evaluator_id.clone(),
+        score_permille: item.score_permille,
+        report_hash: item.report_hash.clone(),
+        posted_daa: item.posted_daa,
+        by: item
+            .by
+            .as_ref()
+            .ok_or_else(|| RpcError::MissingRpcFieldError("RpcPalwModelEvaluation".to_string(), "by".to_string()))?
+            .try_into()?,
+        is_lines_own: item.is_lines_own,
+    }
+});
+try_from!(item: &protowire::RpcPalwModelProposal, kaspa_rpc_core::RpcPalwModelProposal, {
+    Self {
+        proposal_id: item.proposal_id.clone(),
+        line_id: item.line_id.clone(),
+        root: item.root.clone(),
+        note_hash: item.note_hash.clone(),
+        by: item
+            .by
+            .as_ref()
+            .ok_or_else(|| RpcError::MissingRpcFieldError("RpcPalwModelProposal".to_string(), "by".to_string()))?
+            .try_into()?,
+        posted_daa: item.posted_daa,
+        adopted_in: item.adopted_in,
+    }
+});
+try_from!(item: &protowire::GetPalwModelLineRequestMessage, kaspa_rpc_core::GetPalwModelLineRequest, {
+    Self { line_id: item.line_id.clone() }
+});
+try_from!(item: &protowire::GetPalwModelLineResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelLineResponse>, {
+    Self {
+        exists: item.exists,
+        line_id: item.line_id.clone(),
+        line: item.line.as_ref().map(kaspa_rpc_core::RpcPalwModelLine::try_from).transpose()?,
+        current_root: item.current_root.clone(),
+        roots_in_force: item.roots_in_force.clone(),
+        tip_daa: item.tip_daa,
+    }
+});
+try_from!(item: &protowire::GetPalwModelVersionRequestMessage, kaspa_rpc_core::GetPalwModelVersionRequest, {
+    Self { line_id: item.line_id.clone(), version: item.version }
+});
+try_from!(item: &protowire::GetPalwModelVersionResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelVersionResponse>, {
+    Self {
+        exists: item.exists,
+        line_id: item.line_id.clone(),
+        version_number: item.version_number,
+        version: item.version.as_ref().map(kaspa_rpc_core::RpcPalwModelVersion::try_from).transpose()?,
+        evaluations: item.evaluations.iter().map(kaspa_rpc_core::RpcPalwModelEvaluation::try_from).collect::<RpcResult<Vec<_>>>()?,
+        tip_daa: item.tip_daa,
+    }
+});
+try_from!(item: &protowire::GetPalwModelLinesRequestMessage, kaspa_rpc_core::GetPalwModelLinesRequest, {
+    Self { class_id: item.class_id.clone() }
+});
+try_from!(item: &protowire::GetPalwModelLinesResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelLinesResponse>, {
+    Self {
+        exists: item.exists,
+        class_id: item.class_id.clone(),
+        lines: item.lines.iter().map(kaspa_rpc_core::RpcPalwModelLine::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(item: &protowire::GetPalwModelProposalsRequestMessage, kaspa_rpc_core::GetPalwModelProposalsRequest, {
+    Self { line_id: item.line_id.clone() }
+});
+try_from!(item: &protowire::GetPalwModelProposalsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelProposalsResponse>, {
+    Self {
+        exists: item.exists,
+        line_id: item.line_id.clone(),
+        proposals: item.proposals.iter().map(kaspa_rpc_core::RpcPalwModelProposal::try_from).collect::<RpcResult<Vec<_>>>()?,
     }
 });
 try_from!(item: &protowire::GetTokenSupplyRequestMessage, kaspa_rpc_core::GetTokenSupplyRequest, { Self { asset_id: item.asset_id } });

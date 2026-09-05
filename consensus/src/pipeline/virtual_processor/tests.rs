@@ -8042,6 +8042,7 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
     b1.header.version = EVM_HEADER_VERSION;
     b1.header.evm_payload_hash = payload1.payload_hash();
     let input1 = EvmBlockInput {
+        market: Default::default(),
         parent: None,
         header_timestamp_ms: b1.header.timestamp,
         selected_parent_hash: genesis.as_bytes(),
@@ -8077,6 +8078,7 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
     b2.header.version = EVM_HEADER_VERSION;
     b2.header.evm_payload_hash = payload2.payload_hash();
     let input2 = EvmBlockInput {
+        market: Default::default(),
         parent: Some(&exp1.header),
         header_timestamp_ms: b2.header.timestamp,
         selected_parent_hash: BlockHash::from(1u64).as_bytes(),
@@ -8124,6 +8126,7 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
     b4.header.version = EVM_HEADER_VERSION;
     b4.header.evm_payload_hash = payload4.payload_hash();
     let input4 = EvmBlockInput {
+        market: Default::default(),
         parent: Some(&exp2.header),
         header_timestamp_ms: b4.header.timestamp,
         selected_parent_hash: BlockHash::from(2u64).as_bytes(),
@@ -8294,6 +8297,7 @@ async fn evm_active_canonical_number_map_follows_reorg() {
     b1.header.version = EVM_HEADER_VERSION;
     b1.header.evm_payload_hash = payload1.payload_hash();
     let input1 = EvmBlockInput {
+        market: Default::default(),
         parent: None,
         header_timestamp_ms: b1.header.timestamp,
         selected_parent_hash: genesis.as_bytes(),
@@ -8317,6 +8321,7 @@ async fn evm_active_canonical_number_map_follows_reorg() {
     b2.header.version = EVM_HEADER_VERSION;
     b2.header.evm_payload_hash = payload2.payload_hash();
     let input2 = EvmBlockInput {
+        market: Default::default(),
         parent: Some(&exp1.header),
         header_timestamp_ms: b2.header.timestamp,
         selected_parent_hash: BlockHash::from(1u64).as_bytes(),
@@ -8342,6 +8347,7 @@ async fn evm_active_canonical_number_map_follows_reorg() {
     x3.header.version = EVM_HEADER_VERSION;
     x3.header.evm_payload_hash = payloadx.payload_hash();
     let inputx = EvmBlockInput {
+        market: Default::default(),
         parent: Some(&exp2.header),
         header_timestamp_ms: x3.header.timestamp,
         selected_parent_hash: BlockHash::from(2u64).as_bytes(),
@@ -8369,6 +8375,7 @@ async fn evm_active_canonical_number_map_follows_reorg() {
     y3.header.version = EVM_HEADER_VERSION;
     y3.header.evm_payload_hash = payloady3.payload_hash();
     let inputy3 = EvmBlockInput {
+        market: Default::default(),
         parent: Some(&exp2.header),
         header_timestamp_ms: y3.header.timestamp,
         selected_parent_hash: BlockHash::from(2u64).as_bytes(),
@@ -8394,6 +8401,7 @@ async fn evm_active_canonical_number_map_follows_reorg() {
     y4.header.version = EVM_HEADER_VERSION;
     y4.header.evm_payload_hash = payloady4.payload_hash();
     let inputy4 = EvmBlockInput {
+        market: Default::default(),
         parent: Some(&expy3.header),
         header_timestamp_ms: y4.header.timestamp,
         selected_parent_hash: BlockHash::from(5u64).as_bytes(),

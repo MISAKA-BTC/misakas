@@ -582,9 +582,10 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwPendingChunkGroupResponse::default())
     }
 
-    /// ADR-0087 Decision 8: a class's model market as the tip holds it.
-    async fn get_palw_model_market(&self, class_id: String) -> RpcResult<GetPalwModelMarketResponse> {
-        self.get_palw_model_market_call(None, GetPalwModelMarketRequest { class_id }).await
+    /// ADR-0087 Decision 8: a line's model market as the tip holds it (ADR-0088 Decision 9: keyed
+    /// by line; a class id names the class's founding line).
+    async fn get_palw_model_market(&self, line_id: String) -> RpcResult<GetPalwModelMarketResponse> {
+        self.get_palw_model_market_call(None, GetPalwModelMarketRequest { line_id }).await
     }
     async fn get_palw_model_market_call(
         &self,
@@ -595,7 +596,7 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwModelMarketResponse::default())
     }
 
-    /// ADR-0087 Decision 8: every position a holder has, by class.
+    /// ADR-0087 Decision 8: every position a holder has, by line.
     async fn get_palw_model_positions(&self, holder: String) -> RpcResult<GetPalwModelPositionsResponse> {
         self.get_palw_model_positions_call(None, GetPalwModelPositionsRequest { holder }).await
     }
@@ -606,6 +607,58 @@ pub trait RpcApi: Sync + Send + AnySync {
     ) -> RpcResult<GetPalwModelPositionsResponse> {
         let _ = (connection, request);
         Ok(GetPalwModelPositionsResponse::default())
+    }
+
+    /// ADR-0088 Decision 12: a line — the row, the current root, the roots in force.
+    async fn get_palw_model_line(&self, line_id: String) -> RpcResult<GetPalwModelLineResponse> {
+        self.get_palw_model_line_call(None, GetPalwModelLineRequest { line_id }).await
+    }
+    async fn get_palw_model_line_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelLineRequest,
+    ) -> RpcResult<GetPalwModelLineResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelLineResponse::default())
+    }
+
+    /// ADR-0088 Decision 12: one version of a line, with its usage and its evaluations.
+    async fn get_palw_model_version(&self, line_id: String, version: u32) -> RpcResult<GetPalwModelVersionResponse> {
+        self.get_palw_model_version_call(None, GetPalwModelVersionRequest { line_id, version }).await
+    }
+    async fn get_palw_model_version_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelVersionRequest,
+    ) -> RpcResult<GetPalwModelVersionResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelVersionResponse::default())
+    }
+
+    /// ADR-0088 Decision 12: every line of a class, the founding line included.
+    async fn get_palw_model_lines(&self, class_id: String) -> RpcResult<GetPalwModelLinesResponse> {
+        self.get_palw_model_lines_call(None, GetPalwModelLinesRequest { class_id }).await
+    }
+    async fn get_palw_model_lines_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelLinesRequest,
+    ) -> RpcResult<GetPalwModelLinesResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelLinesResponse::default())
+    }
+
+    /// ADR-0088 Decision 12: the proposals attached to a line.
+    async fn get_palw_model_proposals(&self, line_id: String) -> RpcResult<GetPalwModelProposalsResponse> {
+        self.get_palw_model_proposals_call(None, GetPalwModelProposalsRequest { line_id }).await
+    }
+    async fn get_palw_model_proposals_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelProposalsRequest,
+    ) -> RpcResult<GetPalwModelProposalsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelProposalsResponse::default())
     }
 
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.

@@ -27,9 +27,9 @@ pub use u256::*;
 mod log_index;
 pub use log_index::*;
 
-mod state_diff;
 /// ADR-0089: the contract between the fold and the EVM's window and hand.
 pub mod model_market;
+mod state_diff;
 pub use state_diff::*;
 
 use crate::tx::{ScriptPublicKey, TransactionOutpoint};

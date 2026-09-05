@@ -30,7 +30,12 @@
 //! sweep would be a consensus rule. Re-evaluate at any spec bump (EIP-6780
 //! changes SELFDESTRUCT semantics — see the EVM_SPEC_ID pin in lib.rs).
 
+use crate::model_market::{MarketHandlers, decode_action_log, settlement_log};
 use crate::{EvmExecError, env, roots, state};
+use kaspa_consensus_core::evm::model_market::{
+    MARKET_SETTLE_GAS, MISAKA_MODEL_WRITER, PalwEvmMarketActionV1, PalwEvmMarketFencesV1, PalwEvmSettlementOutcomeV1,
+    PalwEvmSettlementV1, PalwEvmViewV1,
+};
 use kaspa_consensus_core::evm::{
     DepositClaim, EVM_GENESIS_STATE_ROOT, EVM_NATIVE_SCALE, EvmAddress, EvmBloom, EvmExecutionHeader, EvmExecutionPayload,
     EvmExecutionResult, EvmLog, EvmReceipt, EvmSystemOp, EvmU256, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK, MAX_WITHDRAWALS_PER_EVM_BLOCK,
@@ -105,6 +110,36 @@ pub struct EvmBlockInput<'a> {
     /// `receipts_root` encoding — never which txs are accepted/executed, the receipts'
     /// contents, gas, or the aggregate `logs_bloom`.
     pub typed_receipt_root_activation_daa_score: u64,
+    /// **ADR-0089: the fold's window and the settlements the block must carry.** `Default`
+    /// (no view, every fence dormant, no expected settlements) is byte-identical to the executor
+    /// before the field existed: nothing is registered and no op is validated.
+    pub market: EvmMarketInput<'a>,
+}
+
+/// **ADR-0089 Decisions 2, 6 and 9, as the executor is told them by consensus.**
+#[derive(Clone)]
+pub struct EvmMarketInput<'a> {
+    /// The fold's rows at the block's selected parent (`PalwChainStateV2::evm_view_v1`). `None`
+    /// ⇒ the market's doors are not registered whatever the fences say.
+    pub palw_view: Option<std::sync::Arc<PalwEvmViewV1>>,
+    /// The three fences at the block's DAA (`Params::palw_evm_market_fences_at`).
+    pub fences: PalwEvmMarketFencesV1,
+    /// The settlement list the selected parent's fold decided — the block's `MarketSettle` ops
+    /// must equal it exactly (Decision 6).
+    pub expected_settlements: &'a [PalwEvmSettlementV1],
+    /// The holder-id domain (Decision 7): `EVM_CHAIN_ID` on every network.
+    pub chain_id: u64,
+}
+
+impl Default for EvmMarketInput<'_> {
+    fn default() -> Self {
+        Self {
+            palw_view: None,
+            fences: PalwEvmMarketFencesV1::default(),
+            expected_settlements: &[],
+            chain_id: kaspa_consensus_core::evm::EVM_CHAIN_ID,
+        }
+    }
 }
 
 #[inline]
@@ -148,6 +183,14 @@ pub fn execute_block_evm(
 
     let mut gas_used: u64 = 0;
     let mut applied_claims: Vec<DepositClaim> = Vec::new();
+    // ADR-0089 Decision 6: the settlements the block carries, checked against the list its
+    // selected parent's fold decided, applied here before any user tx; their logs go into one
+    // system receipt at index 0; their supply effects into the accumulator below.
+    let mut settle_index = 0usize;
+    let mut system_logs: Vec<EvmLog> = Vec::new();
+    let mut market_burned_wei: u128 = 0;
+    let mut market_credited_wei: u128 = 0;
+    let writer = to_revm_address(&MISAKA_MODEL_WRITER);
 
     // 1. Bounded deposit claims, applied before user txs (design §3.2): credit
     //    `(amount − claim_tip) × EVM_NATIVE_SCALE` wei to the deposit address
@@ -168,7 +211,60 @@ pub fn execute_block_evm(
                 gas_used = gas_used.saturating_add(SYSTEM_DEPOSIT_GAS_PER_CLAIM);
                 applied_claims.push(claim.clone());
             }
+            EvmSystemOp::MarketSettle(s) => {
+                match input.market.expected_settlements.get(settle_index) {
+                    Some(expected) if expected == s => {}
+                    Some(_) => {
+                        return Err(EvmExecError::MarketSettlementMismatch(format!(
+                            "settlement #{settle_index} (seq {}) is not the one the selected parent decided",
+                            s.seq
+                        )));
+                    }
+                    None => {
+                        return Err(EvmExecError::MarketSettlementMismatch(format!(
+                            "settlement #{settle_index} (seq {}) has no counterpart in the selected parent's list of {}",
+                            s.seq,
+                            input.market.expected_settlements.len()
+                        )));
+                    }
+                }
+                settle_index += 1;
+                let account = to_revm_address(&s.account);
+                let escrow_wei = U256::from(s.escrow_sompi as u128 * EVM_NATIVE_SCALE as u128);
+                match s.outcome {
+                    // A filled buy: the escrow leaves the EVM (consensus materialises the sink).
+                    PalwEvmSettlementOutcomeV1::Filled { .. } if s.is_buy => {
+                        if !escrow_wei.is_zero() {
+                            burn_balance(&mut state_db, writer, escrow_wei)?;
+                            market_burned_wei = market_burned_wei.saturating_add(s.escrow_sompi as u128 * EVM_NATIVE_SCALE as u128);
+                        }
+                    }
+                    // A filled sell: the net leg is credited — issuance on this side, as a
+                    // coinbase payout is on the other.
+                    PalwEvmSettlementOutcomeV1::Filled { net_sompi, .. } => {
+                        let net_wei = U256::from(net_sompi as u128 * EVM_NATIVE_SCALE as u128);
+                        if !net_wei.is_zero() {
+                            credit_balance(&mut state_db, account, net_wei)?;
+                            market_credited_wei = market_credited_wei.saturating_add(net_sompi as u128 * EVM_NATIVE_SCALE as u128);
+                        }
+                    }
+                    // A refused buy: the escrow goes back; a refused sell moved nothing.
+                    PalwEvmSettlementOutcomeV1::Refused { .. } => {
+                        if s.is_buy && !escrow_wei.is_zero() {
+                            reroute_balance(&mut state_db, writer, account, escrow_wei)?;
+                        }
+                    }
+                }
+                gas_used = gas_used.saturating_add(MARKET_SETTLE_GAS);
+                system_logs.push(settlement_log(s));
+            }
         }
+    }
+    if settle_index != input.market.expected_settlements.len() {
+        return Err(EvmExecError::MarketSettlementMismatch(format!(
+            "the block carries {settle_index} market settlements and its selected parent decided {}",
+            input.market.expected_settlements.len()
+        )));
     }
 
     // audit R2-#1: the deposit claims above already consumed `gas_used` worth of
@@ -252,8 +348,24 @@ pub fn execute_block_evm(
 
     // 3. Accepted user txs in canonical order.
     let accepting_coinbase = derived.coinbase;
-    let mut receipts: Vec<EvmReceipt> = Vec::with_capacity(planned.len());
+    let mut receipts: Vec<EvmReceipt> = Vec::with_capacity(planned.len() + 1);
     let mut executed_raws: Vec<Vec<u8>> = Vec::with_capacity(planned.len());
+    // ADR-0089 Decision 6: the settlements' events ride ONE system receipt at index 0, pushed
+    // before any user receipt so every receipt index recorded below stays what it says.
+    let system_receipts = usize::from(!system_logs.is_empty());
+    if system_receipts == 1 {
+        receipts.push(EvmReceipt { succeeded: true, cumulative_gas_used: 0, gas_used: 0, logs: std::mem::take(&mut system_logs) });
+    }
+    // ADR-0089 Decisions 2 and 5: the window and the hand, bound to this block's view, registered
+    // only when the fence says so and a view was given.
+    let market: Option<MarketHandlers> = input
+        .market
+        .palw_view
+        .clone()
+        .filter(|_| input.market.fences.evm_active)
+        .map(|view| MarketHandlers::new(view, input.market.fences, input.market.chain_id));
+    let market_for_seam = market.clone();
+    let mut market_actions: Vec<PalwEvmMarketActionV1> = Vec::new();
     let mut burn_this_block: u128 = 0;
     let mut withdrawals: Vec<WithdrawOp> = Vec::new();
     // Receipt-side cumulative gas counts USER txs only (eth semantics:
@@ -288,11 +400,17 @@ pub fn execute_block_evm(
         // MISAKA precompiles via the single shared seam (PREA §9.5): F002 always,
         // F003 iff its fence is active. Both executor and the eth_call simulator
         // register through this one fn so they can never diverge (parity).
-        .append_handler_register_box(Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active)))
+        .append_handler_register_box(Box::new(move |h| {
+            crate::precompiles::register_all_misaka_precompiles(h, f003_active, market_for_seam.clone())
+        }))
         .build();
     if !gas_pool_v2 {
         // === v1: execute the prefix-take-selected `planned` set (UNCHANGED) ===
         for (txenv, cand, cand_idx) in planned {
+            // ADR-0089 Decision 5: the writer's running count is the COMMITTED count.
+            if let Some(m) = &market {
+                m.set_queued(market_actions.len());
+            }
             // Effective gas price (EIP-1559): legacy txs carry no priority field —
             // their tip is gas_price − basefee; typed txs tip min(max_fee, basefee
             // + max_priority) − basefee. Needed below to reroute the tip.
@@ -370,6 +488,13 @@ pub fn execute_block_evm(
                     if withdrawn_wei > 0 {
                         burn_balance(evm.db_mut(), crate::withdraw::f002_address(), U256::from(withdrawn_wei))?;
                     }
+                    // ADR-0089 Decision 5: the COMMITTED `ActionQueued` logs are the block's
+                    // action list, in log order, sequenced as they are found.
+                    for log in result.logs() {
+                        if let Some(action) = decode_action_log(log, market_actions.len() as u32) {
+                            market_actions.push(action);
+                        }
+                    }
                     outcomes[cand_idx] =
                         Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Accepted { receipt_index: receipts.len() as u32 });
                     receipts.push(make_receipt(&result, tx_cumulative_gas));
@@ -398,6 +523,10 @@ pub fn execute_block_evm(
         let mut remaining_user_gas = user_gas_budget;
         let mut accepted_hashes: std::collections::HashSet<kaspa_hashes::EvmH256> = std::collections::HashSet::new();
         for (cand_idx, cand) in input.accepted_txs.iter().enumerate() {
+            // ADR-0089 Decision 5: the writer's running count is the COMMITTED count.
+            if let Some(m) = &market {
+                m.set_queued(market_actions.len());
+            }
             let evm_tx_hash = crate::tx::tx_hash(&cand.raw);
             if accepted_hashes.contains(&evm_tx_hash) {
                 skipped_tx_count += 1; // class 3 (duplicate already executed in this block)
@@ -494,6 +623,13 @@ pub fn execute_block_evm(
                     if withdrawn_wei > 0 {
                         burn_balance(evm.db_mut(), crate::withdraw::f002_address(), U256::from(withdrawn_wei))?;
                     }
+                    // ADR-0089 Decision 5: the COMMITTED `ActionQueued` logs are the block's
+                    // action list, in log order, sequenced as they are found.
+                    for log in result.logs() {
+                        if let Some(action) = decode_action_log(log, market_actions.len() as u32) {
+                            market_actions.push(action);
+                        }
+                    }
                     outcomes[cand_idx] =
                         Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Accepted { receipt_index: receipts.len() as u32 });
                     receipts.push(make_receipt(&result, tx_cumulative_gas));
@@ -533,7 +669,14 @@ pub fn execute_block_evm(
     // would be worse than an imprecise supply readout. So keep the saturating form
     // here. (audit #5 is enforced where it matters — the F002 escrow `burn_balance`
     // and the per-account credit/reroute moves are checked and fail closed.)
-    let total_native_balance = parent_total.saturating_add(deposited).saturating_sub(withdrawn).saturating_sub(burn_this_block);
+    // ADR-0089 Decision 8: a filled sell's credit adds (issuance on this side), a filled buy's
+    // escrow burn removes (the sink output is on the other side).
+    let total_native_balance = parent_total
+        .saturating_add(deposited)
+        .saturating_add(market_credited_wei)
+        .saturating_sub(withdrawn)
+        .saturating_sub(market_burned_wei)
+        .saturating_sub(burn_this_block);
     // audit INFO-b (revised): the saturating form above is the committed source of truth and is
     // intentional — it never hard-halts. A previous `debug_assert_eq!` here demanded the EXACT
     // checked identity, but it false-positived on every executor/snapshot test: those harnesses fund
@@ -549,9 +692,16 @@ pub fn execute_block_evm(
     // accepted txs in order — every accepted tx pushes BOTH in lockstep, skips push
     // neither); v2 reads each tx's EIP-2718 type from it. The invariant is what makes
     // the index zip in receipts_root_v2 sound.
-    debug_assert_eq!(receipts.len(), executed_raws.len(), "receipts and executed_raws must be parallel for the typed receipt root");
-    let receipts_root =
-        if typed_receipt_root_v2 { roots::receipts_root_v2(&receipts, &executed_raws) } else { roots::receipts_root(&receipts) };
+    debug_assert_eq!(
+        receipts.len(),
+        executed_raws.len() + system_receipts,
+        "user receipts and executed_raws must be parallel for the typed receipt root (the system receipt sits at index 0)"
+    );
+    let receipts_root = if typed_receipt_root_v2 {
+        roots::receipts_root_v2(&receipts[system_receipts..], &executed_raws)
+    } else {
+        roots::receipts_root(&receipts)
+    };
     let header = EvmExecutionHeader {
         parent_state_root,
         state_root: b256_to_evmh256(state::state_root(&state_db)),
@@ -571,7 +721,7 @@ pub fn execute_block_evm(
         evm_chain_id: derived.chain_id,
         // v0.4 §8.2 (audit AM-3): the accepting block's declared coinbase.
         coinbase: input.payload.evm_coinbase,
-        accepted_tx_count: receipts.len() as u32,
+        accepted_tx_count: (receipts.len() - system_receipts) as u32,
         skipped_tx_count,
         evm_total_native_balance: EvmU256::from(total_native_balance),
         evm_burn_accumulator: EvmU256::from(
@@ -583,7 +733,14 @@ pub fn execute_block_evm(
 
     let candidate_outcomes =
         outcomes.into_iter().map(|o| o.expect("every candidate received an outcome in the planning or execution loop")).collect();
-    let result = EvmExecutionResult { header, receipts, withdrawals, applied_deposit_claims: applied_claims, candidate_outcomes };
+    let result = EvmExecutionResult {
+        header,
+        receipts,
+        withdrawals,
+        applied_deposit_claims: applied_claims,
+        candidate_outcomes,
+        market_actions,
+    };
     Ok((result, state_db))
 }
 
@@ -651,7 +808,14 @@ pub fn empty_acceptance_result(input: &EvmBlockInput) -> EvmExecutionResult {
         evm_total_native_balance: EvmU256::from(parent_total),
         evm_burn_accumulator: EvmU256::from(parent_burn),
     };
-    EvmExecutionResult { header, receipts: vec![], withdrawals: vec![], applied_deposit_claims: vec![], candidate_outcomes: vec![] }
+    EvmExecutionResult {
+        header,
+        receipts: vec![],
+        withdrawals: vec![],
+        applied_deposit_claims: vec![],
+        candidate_outcomes: vec![],
+        market_actions: vec![],
+    }
 }
 
 /// Credit `amount` wei directly in the working state. `load_account`
@@ -784,6 +948,7 @@ mod tests {
 
     fn input_with<'a>(payload: &'a EvmExecutionPayload, accepted: &'a [AcceptedTxCandidate]) -> EvmBlockInput<'a> {
         EvmBlockInput {
+            market: Default::default(),
             parent: None,
             header_timestamp_ms: 5_000,
             selected_parent_hash: [9u8; 64],
@@ -966,6 +1131,7 @@ mod tests {
 
         // Child block with EMPTY acceptance on top of that state.
         let child_input = EvmBlockInput {
+            market: Default::default(),
             parent: Some(&parent_result.header),
             header_timestamp_ms: 6_000,
             selected_parent_hash: [7u8; 64],
@@ -1446,5 +1612,217 @@ mod tests {
         assert_eq!(db.basic(Address::from([0xCC; 20])).unwrap().unwrap().balance, U256::from(93 * scale));
         assert_eq!(db.basic(Address::from([0xFE; 20])).unwrap().unwrap().balance, U256::from(7 * scale));
         assert_eq!(result.header.evm_total_native_balance, EvmU256::from(100 * scale), "the split is supply-neutral");
+    }
+
+    // ---- ADR-0089: the hand and the settlement, at the executor -------------------------------
+
+    /// One founded line with an open market — the smallest view the doors accept.
+    fn line_view(line: kaspa_consensus_core::Hash64) -> std::sync::Arc<PalwEvmViewV1> {
+        use kaspa_consensus_core::evm::model_market::PalwEvmLineRowV1;
+        let row = PalwEvmLineRowV1 {
+            class_id: line,
+            owner_payload: None,
+            developer_payload: None,
+            maintainer_payload: None,
+            name: b"line".to_vec(),
+            founded_daa: 1,
+            current: 0,
+            versions_published: 1,
+            preview_count: 0,
+            contributor_permille_of_leg: 0,
+            status: 0,
+        };
+        let mut view = PalwEvmViewV1 { chain_daa: 42, chain_id: EVM_CHAIN_ID, lines: vec![(line, row)], ..Default::default() };
+        view.markets.insert(line, kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1::open_v1(1));
+        std::sync::Arc::new(view)
+    }
+
+    fn market_input<'a>(
+        view: &std::sync::Arc<PalwEvmViewV1>,
+        evm_active: bool,
+        expected: &'a [PalwEvmSettlementV1],
+    ) -> EvmMarketInput<'a> {
+        EvmMarketInput {
+            palw_view: Some(view.clone()),
+            fences: PalwEvmMarketFencesV1 { market_active: true, lines_active: true, evm_active },
+            expected_settlements: expected,
+            chain_id: EVM_CHAIN_ID,
+        }
+    }
+
+    /// ADR-0089 Decisions 4 and 5 at the executor: an account's call to the writer moves its
+    /// value into escrow and commits an `ActionQueued` log that the block lists, in order; a
+    /// sell carries no value; a buy whose value is not whole sompi reverts and lists nothing;
+    /// and with the `palw_model_evm` fence dormant the SAME calls find an empty account.
+    #[test]
+    fn adr0089_the_writer_escrows_and_the_block_lists_its_actions_in_order() {
+        use crate::model_market::{send_action_buy_calldata, send_action_sell_calldata, writer_address};
+        use kaspa_consensus_core::evm::model_market::PalwEvmMarketActionKindV1;
+        let basefee = EVM_INITIAL_BASE_FEE as u128;
+        let scale = EVM_NATIVE_SCALE as u128;
+        let line = kaspa_consensus_core::Hash64::from_u64_word(7);
+        let writer = writer_address();
+        let (from, buy) = signed_call(0x11, 0, writer, 7 * scale, 100_000, basefee, send_action_buy_calldata(&line, 1));
+        let (_, sell) = signed_call(0x11, 1, writer, 0, 100_000, basefee, send_action_sell_calldata(&line, 5, 2));
+        let (_, torn) = signed_call(0x11, 2, writer, 3 * scale + 1, 100_000, basefee, send_action_buy_calldata(&line, 1));
+        let payload = EvmExecutionPayload { evm_coinbase: EvmAddress::from_bytes([0xFE; 20]), ..Default::default() };
+        let accepted = [cand(buy, 0xAA), cand(sell, 0xAA), cand(torn, 0xAA)];
+        let view = line_view(line);
+        let holder = EvmAddress::from_bytes(from.into_array());
+
+        // The fence dormant: no door is registered; the writer is an empty account that simply
+        // receives what is sent to it, and the block lists nothing.
+        let dormant = EvmBlockInput { market: market_input(&view, false, &[]), ..input_v2(&payload, &accepted) };
+        let (res, mut db) = execute_block_evm(funded_seed(from, HUGE_SEED), &dormant).unwrap();
+        assert_eq!(res.header.accepted_tx_count, 3);
+        assert!(res.receipts.iter().all(|r| r.succeeded), "plain value transfers into an empty account");
+        assert!(res.market_actions.is_empty(), "no door ⇒ no action");
+        assert_eq!(db.basic(writer).unwrap().unwrap().balance, U256::from(10 * scale + 1));
+
+        // The fence active: the hand is registered.
+        let armed = EvmBlockInput { market: market_input(&view, true, &[]), ..input_v2(&payload, &accepted) };
+        let (res, mut db) = execute_block_evm(funded_seed(from, HUGE_SEED), &armed).unwrap();
+        assert_eq!(res.header.accepted_tx_count, 3, "all three executed (the torn buy executes and reverts)");
+        assert!(res.receipts[0].succeeded && res.receipts[1].succeeded, "the buy and the sell queued");
+        assert!(!res.receipts[2].succeeded, "a value that is not whole sompi is refused");
+        assert_eq!(res.market_actions.len(), 2, "two actions, in log order");
+        assert_eq!(
+            res.market_actions[0],
+            PalwEvmMarketActionV1 {
+                seq: 0,
+                account: holder,
+                line_id: line,
+                kind: PalwEvmMarketActionKindV1::Buy { min_units_out: 1 },
+                gross_sompi: 7
+            }
+        );
+        assert_eq!(
+            res.market_actions[1],
+            PalwEvmMarketActionV1 {
+                seq: 1,
+                account: holder,
+                line_id: line,
+                kind: PalwEvmMarketActionKindV1::Sell { units_in: 5, min_msk_out_sompi: 2 },
+                gross_sompi: 0
+            }
+        );
+        assert_eq!(
+            db.basic(writer).unwrap().unwrap().balance,
+            U256::from(7 * scale),
+            "only the buy's value is escrowed; the reverted call's value went back"
+        );
+        assert_eq!(res.receipts[0].logs.len(), 1, "the buy's receipt carries the one ActionQueued log");
+        assert_eq!(res.receipts[0].logs[0].address, MISAKA_MODEL_WRITER);
+        assert_eq!(db.basic(from).unwrap().unwrap().nonce, 3);
+    }
+
+    /// ADR-0089 Decision 6 at the executor: a block's `MarketSettle` ops must equal, in order,
+    /// the list its selected parent's fold decided; a filled buy's escrow leaves the EVM, a
+    /// refused buy's escrow goes back to its account, a filled sell's net is credited; their
+    /// events ride one system receipt at index 0 ahead of every user receipt; and a list that
+    /// is short, altered or unexpected is refused as a whole.
+    #[test]
+    fn adr0089_a_settlement_block_burns_refunds_and_credits_exactly_the_parents_list() {
+        use crate::model_market::writer_address;
+        use kaspa_consensus_core::evm::model_market::{facade_address_v1, refusal};
+        let basefee = EVM_INITIAL_BASE_FEE as u128;
+        let scale = EVM_NATIVE_SCALE as u128;
+        let line = kaspa_consensus_core::Hash64::from_u64_word(7);
+        let writer = writer_address();
+        let buyer = EvmAddress::from_bytes([0xB1; 20]);
+        let seller = EvmAddress::from_bytes([0x5E; 20]);
+        let expected = [
+            PalwEvmSettlementV1 {
+                seq: 0,
+                account: buyer,
+                line_id: line,
+                is_buy: true,
+                escrow_sompi: 7,
+                outcome: PalwEvmSettlementOutcomeV1::Filled { units: 3, gross_sompi: 7, net_sompi: 6, price_after_sompi: 100 },
+            },
+            PalwEvmSettlementV1 {
+                seq: 1,
+                account: buyer,
+                line_id: line,
+                is_buy: true,
+                escrow_sompi: 5,
+                outcome: PalwEvmSettlementOutcomeV1::Refused { reason: refusal::BELOW_FLOOR },
+            },
+            PalwEvmSettlementV1 {
+                seq: 2,
+                account: seller,
+                line_id: line,
+                is_buy: false,
+                escrow_sompi: 0,
+                outcome: PalwEvmSettlementOutcomeV1::Filled { units: 2, gross_sompi: 4, net_sompi: 3, price_after_sompi: 90 },
+            },
+        ];
+        let to = Address::with_last_byte(0x22);
+        let (from, transfer) = signed_transfer(0, to, 111, basefee);
+        let accepted = [cand(transfer, 0xAA)];
+        // The 12 sompi the writer holds, and the sender's gas money, enter the EVM through
+        // deposit claims in this block, so the supply accumulator knows them (a seeded balance
+        // is invisible to it, and the sender's basefee burn alone would swamp 12 sompi).
+        const GAS_MONEY_SOMPI: u64 = 1_000_000;
+        let claim = |to: EvmAddress, amount_sompi: u64| {
+            EvmSystemOp::DepositClaim(DepositClaim {
+                deposit_outpoint: Default::default(),
+                evm_address: to,
+                amount_sompi,
+                claim_tip_sompi: 0,
+            })
+        };
+        let ops = |settle: &[PalwEvmSettlementV1]| -> Vec<EvmSystemOp> {
+            [claim(MISAKA_MODEL_WRITER, 12), claim(EvmAddress::from_bytes(from.into_array()), GAS_MONEY_SOMPI)]
+                .into_iter()
+                .chain(settle.iter().copied().map(EvmSystemOp::MarketSettle))
+                .collect()
+        };
+        let payload =
+            EvmExecutionPayload { evm_coinbase: EvmAddress::from_bytes([0xFE; 20]), system_ops: ops(&expected), ..Default::default() };
+        let view = line_view(line);
+        let input = EvmBlockInput { market: market_input(&view, true, &expected), ..input_v2(&payload, &accepted) };
+        let (res, mut db) = execute_block_evm(funded_seed(from, 0), &input).unwrap();
+        assert_eq!(db.basic(writer).unwrap().unwrap().balance, U256::ZERO, "12 in: 7 burned out of the EVM, 5 refunded");
+        assert_eq!(
+            db.basic(to_revm_address(&buyer)).unwrap().unwrap().balance,
+            U256::from(5 * scale),
+            "the refused buy's escrow came back"
+        );
+        assert_eq!(
+            db.basic(to_revm_address(&seller)).unwrap().unwrap().balance,
+            U256::from(3 * scale),
+            "the filled sell's net was credited"
+        );
+        assert_eq!(res.receipts.len(), 2, "one system receipt, then the user's");
+        assert_eq!(res.header.accepted_tx_count, 1, "the system receipt is not a user tx");
+        assert_eq!(res.receipts[0].logs.len(), 3, "three settlement events in the system receipt");
+        assert!(
+            res.receipts[0].logs.iter().all(|l| l.address == facade_address_v1(&line)),
+            "each event is emitted from the line's facade"
+        );
+        assert_eq!(res.receipts[1].cumulative_gas_used, 21_000, "user cumulative gas counts user txs only");
+        assert_eq!(res.header.gas_used, 21_000 + 2 * SYSTEM_DEPOSIT_GAS_PER_CLAIM + 3 * MARKET_SETTLE_GAS);
+        assert_eq!(
+            res.header.evm_total_native_balance,
+            EvmU256::from((GAS_MONEY_SOMPI as u128 + 12 - 7 + 3) * scale - 21_000 * basefee),
+            "the claims entered, 7 left with the filled buy, 3 were issued for the filled sell, the refund crossed nothing, the transfer burned its basefee"
+        );
+        assert!(res.market_actions.is_empty());
+
+        // The list is whole or nothing: short, altered, or carried when the parent decided none.
+        let short = EvmExecutionPayload { system_ops: ops(&expected[..2]), ..payload.clone() };
+        let input = EvmBlockInput { market: market_input(&view, true, &expected), ..input_v2(&short, &accepted) };
+        let err = execute_block_evm(funded_seed(from, 0), &input).err().unwrap();
+        assert!(matches!(err, EvmExecError::MarketSettlementMismatch(_)), "{err:?}");
+        let mut altered = expected;
+        altered[1].escrow_sompi = 4;
+        let altered = EvmExecutionPayload { system_ops: ops(&altered), ..payload.clone() };
+        let input = EvmBlockInput { market: market_input(&view, true, &expected), ..input_v2(&altered, &accepted) };
+        let err = execute_block_evm(funded_seed(from, 0), &input).err().unwrap();
+        assert!(matches!(err, EvmExecError::MarketSettlementMismatch(_)), "{err:?}");
+        let input = EvmBlockInput { market: market_input(&view, true, &[]), ..input_v2(&payload, &accepted) };
+        let err = execute_block_evm(funded_seed(from, 0), &input).err().unwrap();
+        assert!(matches!(err, EvmExecError::MarketSettlementMismatch(_)), "{err:?}");
     }
 }

@@ -348,9 +348,54 @@ chain never takes the host's word* (README §"Security amendments").
    post a proposal, adopt it in V3 with a contributor share, transfer the line, retire it; then
    testnet-11 by activation.
 
-## 8. Implementation record
+## 8. Implementation record (2026-09-05, `palw-adr0088-0089-impl`)
 
-(none — design only)
+**Landed — §7 items 1–6 (state, objects and arms, admission, market, params, RPC and CLI);
+item 7 (the free-prompt job v6) and item 8 (the devnet drill) are not, nor the SDK's
+`--line/--version` and the explorer page.** The fold half is commit `bf4ed1d8`; the rest is the
+branch's closing commit.
+
+| where | what |
+|---|---|
+| `consensus/core/src/palw_model_lines_v1.rs` | The constants (64 lines a class, 2 previews a line, 64 versions of history, 32 proposals a line, 16 evaluations a version, a grace of 4,000 DAA, a name of at most 64 bytes, a rent of 1 MSK on a founding, a proposal and an evaluation); the rows (`PalwModelLineV1`, `PalwModelVersionV1`, `PalwModelProposalV1`, `PalwModelEvaluationV1`); `founding_line_v1` — the class's own row synthesised, never written: its id the class id, its owner the registrant, its version 1 the genesis root; `model_line_id_v1` (class, founder, name — so a name is shared, never squatted) and `model_proposal_id_v1`; `split_owner_leg_v1` (Decision 8); the ten messages under ONE ML-DSA-87 context, `misaka-palw-model-line-v1`. |
+| `palw_state_v2.rs` | `model_lines`, `model_versions`, `model_proposals`, `model_evaluations`, `claim_roots` on the state, **in the root only when non-empty** (Decision 10 — the same shape ADR-0087 §7 taught); the carriage tail `0x88`; delta variants with replay and revert; the ten objects appended after `ModelSell`; the fold arms — a founding pays rent, needs an active bond and a name unused on the class; a publish is the dense next version with its parent in the history, at most two previews, an adopted proposal marked; a promotion opens the grace on the root it supersedes; a withdrawal refuses the current; roles, transfer and retirement are the owner's; proposals and evaluations are any active bond's; `class_roots_in_force(class, daa)` and `model_version_of_root`; usage counted on the version a claim named (`note_claim_usage`) and uncounted when the claim is voided; `apply_palw_transition_v7` taking `PalwTransitionExtrasV1 { model_lines_active, .. }` (`v6` stays for callers that carry no extras). |
+| `palw_admission_v2.rs` | Decision 3: an attempt's `artifact_root` must be one of the class's roots in force at the block's DAA, else `ArtifactRootMismatch`. |
+| `palw_lifecycle_objects_v2.rs` | Ride gates for the ten objects; a buy's sink binding keyed by line. |
+| `palw_model_market_v1.rs` | `contributor_paid_sompi` beside `registrant_paid_sompi`; the 1 % leg split owner/contributor by the line's permille. |
+| `config/params.rs` | `palw_model_lines: Option<ForkActivation>` requiring `palw_model_market`; `palw_model_lines_fence` / `palw_model_lines_active_at`; pinned in the fingerprint; `None` on every preset. |
+| `virtual_processor/processor.rs`, `utxo_validation.rs`, `body_validation_in_isolation.rs` | The ten objects refused by name below the fence at the block's DAA; each signature verified at acceptance against the pubkey the bond registry stores for the bond the object names, and the role checked against the line's row (the owner for roles/transfer/retire, the developer for a publish or a move, any active bond for a proposal or an evaluation); carrier fees collected once the fence is armed. |
+| `kaspad/src/palw_panel.rs` | The ten names in the panel's transcript. |
+| RPC | `getPalwModelLine(lineId)` (the row, its roots in force, its current root), `getPalwModelVersion(lineId, version)` (the row with its evaluations), `getPalwModelLines(classId)`, `getPalwModelProposals(lineId)` — ops 173–176 through core, service, gRPC and wRPC; `getPalwModelMarket` and `getPalwModelPositions` re-keyed to `lineId`; the integration test's round trips. |
+| CLI | `misaka palw line-show`, `line-log`, `line-list`, `proposals` (readers, `--json`); `line-found`, `version-publish [--preview]`, `version-promote`, `version-withdraw`, `line-roles`, `line-transfer`, `line-retire`, `proposal-post`, `proposal-close`, `evaluate` — each signs the fold's own message with the bond's key, checks the key owns the bond the row names, and sends nothing without `--yes`. |
+
+**Tests.** `palw_model_lines_v1` (6): a line id carries its founder; the founding line is the
+registrant's with the roles defaulting to the owner (L1); a version is in force by its status and
+the grace (L3); usage counts paid work and a voiding takes it back (L4); the leg is the owner's
+unless the owner shares it (L5); every message binds every field. `palw_state_v2::tests::model_lines`
+(8): the founding line is the registrant's and a publish moves the root with a grace (L1, L2, L3);
+a preview is in force but not current until promoted and a withdrawal takes it out (L3); roles are
+the owner's to set, a transfer resets them, a genesis line has nobody (L1); a proposal is adopted by
+a version and the owner shares the leg (L5, L7); usage is counted on the version a claim named and
+admission reads the roots in force (L4, L3); a founded line shares the class and the roots are the
+union (L3, L7); evaluations are declarations from anyone and say whose they are (L6); the carriage
+stays legacy until a line row exists and the deltas replay and revert (L8). The params test pins L9
+(fingerprint unchanged where `None`, the ten refused below the fence). L10 is the court reading
+`claim_roots`, covered by reading. The consensus-core suite is green at 1,868.
+
+**What the implementation taught.** (1) The founding line is best *synthesised* rather than
+written at activation: a class registered before the fence has a line the moment the fence is
+armed, with no genesis edge and no object. (2) A free-prompt claim names no root today (the job
+carries the class only), so its usage is attributed to the founding line's current version until
+job v6 carries `artifact_root` — recorded as the open item it is, not hidden in a default.
+(3) One signing context for all ten objects is enough because every message spells its own kind
+first; ten contexts would have been ten places to get a domain wrong. (4) The rent is charged on
+the three objects anyone may post (founding, proposal, evaluation) and on nothing an owner posts
+about its own line: the owner already paid to own it.
+
+**Not landed.** The free-prompt job v6 (§7 item 7); the SDK's `--line/--version`; the explorer's
+line and version pages; the devnet drill (§7 item 8); arming on testnet-11. As with ADR-0087, the
+acceptance-layer signature checks are covered by reading — a processor-level fixture for a signed
+lifecycle object still does not exist.
 
 ## 9. What the first draft decided, and why it was withdrawn
 

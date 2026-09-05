@@ -187,8 +187,16 @@ pub enum RpcApiOps {
     /// ADR-0087 Decision 8: a class's model market — reserve, units, price, sold, burned, paid,
     /// status — as the tip holds it.
     GetPalwModelMarket = 171,
-    /// ADR-0087 Decision 8: every position a holder (its payout payload) has, by class.
+    /// ADR-0087 Decision 8: every position a holder (its payout payload) has, by line.
     GetPalwModelPositions = 172,
+    /// ADR-0088 Decision 12: a line — the row, the current root, the roots in force.
+    GetPalwModelLine = 173,
+    /// ADR-0088 Decision 12: one version of a line, with its usage and its evaluations.
+    GetPalwModelVersion = 174,
+    /// ADR-0088 Decision 12: every line of a class, the founding line included.
+    GetPalwModelLines = 175,
+    /// ADR-0088 Decision 12: the proposals attached to a line.
+    GetPalwModelProposals = 176,
 }
 
 impl RpcApiOps {
