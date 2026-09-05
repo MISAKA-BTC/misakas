@@ -88,8 +88,17 @@ pending is refused if that parent is ever evicted, and a wallet that reached for
 turn a rare failure into a surprising one. Ignored under `--coinbase-only`, where a pending output
 is by definition not settled coinbase.
 
+**And an input this wallet has already spent is not offered again.** This is the half that makes
+the flag work, and leaving it out was measured: with only the pending change added, two sends in a
+row still produced *one txid twice*. The UTXO set drops a spent output when a BLOCK accepts the
+spend, so until then largest-first reaches for the same large confirmed output and rebuilds the
+identical transaction. Under `--spend-unconfirmed` the wallet therefore also subtracts what its own
+pending transactions spend — the flag means "be mempool-aware", both halves of it — and the default
+path is left byte-identical.
+
 Both are served by one reader, `wallet::pending_outputs`, over
-`getMempoolEntriesByAddresses`. Two things it must get right:
+`getMempoolEntriesByAddresses`, which returns the pending outputs AND the outpoints the address's
+own pending transactions consume. Two things it must get right:
 
 * an output another pending transaction already spends is not offered — a mempool holding both a
   parent and its spender would otherwise hand out the parent's output twice;

@@ -252,7 +252,10 @@ fn parse_outpoint_str(s: &str) -> Option<TransactionOutpoint> {
 ///
 /// The entries are marked `mature` — a non-coinbase output has no maturity floor — and never
 /// `bonded`: a bond that consensus locks is registered, and a registration is not in the mempool.
-pub(crate) async fn pending_outputs(nv: &NodeView, address: &Address) -> Result<Vec<Funding>, CliError> {
+pub(crate) async fn pending_outputs(
+    nv: &NodeView,
+    address: &Address,
+) -> Result<(Vec<Funding>, std::collections::HashSet<TransactionOutpoint>), CliError> {
     let by_address = nv
         .client
         .get_mempool_entries_by_addresses(vec![address.clone()], true, false)
@@ -291,7 +294,7 @@ pub(crate) async fn pending_outputs(nv: &NodeView, address: &Address) -> Result<
             });
         }
     }
-    Ok(out)
+    Ok((out, spent))
 }
 
 pub(crate) async fn page_all(nv: &NodeView, address: &Address) -> Result<Vec<Funding>, CliError> {
@@ -615,7 +618,14 @@ pub async fn send(
     // request it is what lets a caller fund a second carrier inside one block interval — with
     // `--coinbase-only` it stays off, because a pending output is by definition not settled coinbase.
     if spend_unconfirmed && !coinbase_only {
-        mature.extend(pending_outputs(&nv, &from_addr).await?);
+        let (pending, already_spent) = pending_outputs(&nv, &from_addr).await?;
+        // **An input this wallet has already spent is not available, whatever the UTXO set says.**
+        // The set only drops it when a block accepts the spend, so largest-first selects the same
+        // large confirmed output again and rebuilds the identical transaction — which is the
+        // failure this flag exists to end, and reaching for the pending change alone does not end
+        // it. Measured: two sends in a row produced one txid twice.
+        mature.retain(|u| !already_spent.contains(&u.outpoint));
+        mature.extend(pending);
     }
     mature.sort_by(|a, b| b.amount.cmp(&a.amount));
 
@@ -635,7 +645,7 @@ pub async fn send(
         // Looked for among everything this address owns — confirmed AND pending — because the
         // whole point of naming one is that the wallet's own selection could not have found it.
         let mut all = page_all(&nv, &from_addr).await?;
-        all.extend(pending_outputs(&nv, &from_addr).await?);
+        all.extend(pending_outputs(&nv, &from_addr).await?.0);
         let found = all.into_iter().find(|u| u.outpoint == wanted).ok_or_else(|| {
             CliError::new(
                 exit::GENERIC,
