@@ -6346,8 +6346,8 @@ differs from its own. Nothing here has been walked to a live verdict — that ne
 Devnet run 9 (300 tokens) ended at the drill's `WAIT` before the panel binding at that hour's ~3-minute cadence. **Run 10
 (WAIT 1800) reproduced run 8 and named it:** the seat asked node-0 for intervals 198/110/132/72 of 299 for 22 minutes and
 node-0 never answered, because a fold retention carries no checkpoint state and the executor's opener replays from GENESIS
-with tile capture at ~5 s per decode call — run 7 served interval 17 in 94 s, so interval 198 costs ~18 minutes against a
-120 s solicitation window. Interval-lane refusals now log at INFO. The fix (ADR-0086 §7): the executor opens from the anchor
+with tile capture — the offline probe on run 10's material measured interval 0 in 21 s, 57 in 298 s and 187 in 1,991 s
+(5→10 s per call as the cache grows), against a 120 s solicitation window. Interval-lane refusals now log at INFO. The fix (ADR-0086 §7): the executor opens from the anchor
 state it recomputes without capture and memoizes, as the seat does; not in this tree yet, so free-prompt claims past ~20
 decode tokens on graph-v5 cannot be licensed by the interval lane — Studio's 256-token cap stands, for this reason now.
 

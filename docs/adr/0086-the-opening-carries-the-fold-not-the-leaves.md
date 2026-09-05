@@ -202,9 +202,11 @@ the next cut, not this one.
   replay (`base0_replay_span_leaves_v1`) starts at GENESIS for every interval and captures tiles
   as it goes; run 7 served interval 17 in 94 s, 10 in ~60 s, 4 and 0 in ~30 s — about 5 s per
   decode call — and interval 198 costs ~18 minutes, interval 298 ~27, past the seat's 120 s
-  solicitation window many times over. An offline probe of run 10's material with the real
-  artifact was still opening its first late interval after 55 minutes at 4.4 GB RSS and was
-  stopped. Two things land here: refusals on the interval lane now log at the default level
+  solicitation window many times over. The offline probe (`probe_open_interval`, release, the real
+  artifact) on run 10's material measured it: interval 0 **21 s**, interval 1 **22 s**, interval
+  57 **298 s** (≈5.2 s per call), interval 187 **1,991 s** (≈10.6 s per call — the cache grows with
+  the position, so the slope steepens), RSS past 4 GB from the captured tiles; interval 253 was
+  stopped after 55 minutes. Two things land here: refusals on the interval lane now log at the default level
   (`[palw-interval] refused …: NoAllowance|Stale|NotBonded|NotHeld|Oversized`; a throttled re-ask
   stays quiet), so the next run reads what node-0 answered. **The fix is the next cut, not this
   commit:** the executor must open an interval from the anchor state it RECOMPUTES without tile
