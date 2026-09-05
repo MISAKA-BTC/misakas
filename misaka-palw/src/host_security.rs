@@ -912,9 +912,7 @@ where
             }
             let len = meta.len();
             let seed_shaped = len == VALIDATOR_SEED_FILE_LEN
-                || (len >= VALIDATOR_SEED_HEX_FILE_LEN
-                    && len <= VALIDATOR_SEED_HEX_FILE_LEN + 2
-                    && is_hex_seed_file(&entry.path()));
+                || ((VALIDATOR_SEED_HEX_FILE_LEN..=VALIDATOR_SEED_HEX_FILE_LEN + 2).contains(&len) && is_hex_seed_file(&entry.path()));
             if seed_shaped {
                 found.push(ReachableSecret::SeedShapedFile(entry.path()));
             }

@@ -4446,7 +4446,7 @@ impl PalwChainStateV2 {
         let mut readers: Vec<PalwBondKeyV2> = Vec::new();
         let mut admit = |bond: &PalwBondKeyV2| {
             if !readers.contains(bond) {
-                readers.push(bond.clone());
+                readers.push(*bond);
             }
         };
         if let Some(record) = self.claims.get(claim) {
