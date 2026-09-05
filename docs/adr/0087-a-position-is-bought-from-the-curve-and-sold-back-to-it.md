@@ -9,6 +9,15 @@ transfer between holders**, so that a position is never something one person han
 The operator's word is *position* (ポジション), not *share*: it is bought from the protocol's
 curve and sold back to it, and that is the whole of what it is.
 
+> **Amended (design, 2026-09-05).** [ADR-0088](0088-the-class-keeps-its-graph-and-the-exam-names-its-weights.md) keeps this market per class and changes
+> two clauses: Decision 4's registrant leg gains a second payee — the author of the weights in
+> force — and Decision 7's "a new version is a new class with a new market" is narrowed to a new
+> *graph*: new weights on the same graph succeed inside the class by an exam, and the position
+> stays where it is. Both ADRs are design only. [ADR-0089](0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md) (design, 2026-09-05) adds the EVM's
+> two doors to Decision 3's two moves and three read precompiles plus a per-class MRC-20 facade to
+> Decision 8; §1's "an optional, non-default feature" is stale — the lane is a default build since
+> 2026-08-21. Map: [`README.md`](README.md).
+
 ## 1. What exists, and what a market can therefore see
 
 * **A model is a class.** `PalwClassRowV2 { class_id, status, share_permille, budget_blocks,
