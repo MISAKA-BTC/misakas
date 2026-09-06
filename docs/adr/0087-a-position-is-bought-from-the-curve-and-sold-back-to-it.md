@@ -9,6 +9,8 @@ transfer between holders**, so that a position is never something one person han
 The operator's word is *position* (ポジション), not *share*: it is bought from the protocol's
 curve and sold back to it, and that is the whole of what it is.
 
+> **Amended a third time (2026-09-06, design first).** [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) adds the chain's own move to Decision 3: at a claim's `Final`, five percent of its escrowed worker reward buys from the pair of the line the claim ran, the positions the curve gives up are retired (the chain's, for good — M1 counts them), no leg is taken (Decision 4), and the miner is named the other ninety-five percent; nothing is ever distributed to a holder. Decision 8's row gains `buyback_sompi` and `retired_units`.
+>
 > **Amended again (2026-09-05, implemented the same day).** [ADR-0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md) retires the virtual reserve and the lazy opening: a market opens only by a **seed** of at least 100,000 MSK that becomes the reserve, fee-free and locked for good (the reserve never falls under it); a position is **whole** and there are **500,000** a line; a third move (`ModelSeed`) rides beside the buy and the sell. Decisions 1, 2, 3, 4 and 8 below read with that in mind.
 >
 > **Amended (design, 2026-09-05, revised the same day).** [ADR-0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md) keys this market by a

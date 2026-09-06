@@ -1,5 +1,7 @@
 # ADR-0089 — the fold is the truth; the EVM is its window and its hand
 
+> **Amended again (2026-09-06, design first).** [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md): the AMM window's `market()` (Decision 2) gains two words at its end — `buybackSompi`, `retiredUnits` — the MSK the mining reward has put into the pair and the positions the chain holds for good; every earlier word keeps its offset. The move itself is the fold's, on no lane: no action, no event.
+>
 > **Amended (2026-09-05, implemented the same day).** [ADR-0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md) adds a third action to the writer (`3`, the seed — `msg.value` is the seed, at least 100,000 MSK), `seed()` and the `Seeded` event to the facade, `SeedTooSmall()`, the settlement's `action` in place of `is_buy`, and puts the least seed in `constants()` where the virtual reserve was; `decimals()` is 0. Decisions 3, 5 and 6 read with that in mind.
 
 **Status:** PROPOSED 2026-09-05, design only (no implementation yet). Requested by the operator

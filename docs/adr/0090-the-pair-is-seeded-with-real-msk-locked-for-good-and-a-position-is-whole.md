@@ -7,6 +7,8 @@
 * Builds on: 0087 (the market), 0088 (the line the market is keyed by), 0089 (the EVM's hand).
 * Supersedes nothing.
 
+> **Amended (2026-09-06, design first).** [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md): the reserve grows by a third source — five percent of every model block's escrowed worker reward, at the claim's `Final`, with the positions the curve gives up retired — so Decision 2's floor tightens to `K / (supply − retired) ≥ seed` and §5's identity gains the slices as a source. Nothing here loosens: no seed leaves, no holder is paid.
+
 ## 0. The sentence this ADR is
 
 A model's market is a pair the model's people make by locking at least one hundred thousand MSK
