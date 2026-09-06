@@ -112,40 +112,6 @@ mod unix_daemon {
         })
     }
 
-    #[cfg(test)]
-    mod deny_purpose_tests {
-        use super::*;
-
-        /// **Every purpose a signer can be asked for can be denied.** The four PALW purposes were
-        /// unnameable, so the free-prompt quantum spend could not be refused on an HSM.
-        #[test]
-        fn every_signing_purpose_can_be_denied() {
-            for purpose in ALL_SIGNING_PURPOSES {
-                let name = purpose_cli_name(purpose);
-                assert_eq!(parse_purpose(name), Ok(purpose), "--deny-purpose {name} must name {purpose:?}");
-                assert_eq!(parse_purpose(&name.to_ascii_uppercase()), Ok(purpose), "and case must not matter");
-            }
-            // The array is the whole enum: discriminants 0..8, each mapped to a distinct name.
-            let names: std::collections::BTreeSet<&str> = ALL_SIGNING_PURPOSES.into_iter().map(purpose_cli_name).collect();
-            assert_eq!(names.len(), ALL_SIGNING_PURPOSES.len(), "no two purposes share a name");
-            let mut discriminants: Vec<u8> = ALL_SIGNING_PURPOSES.iter().map(|p| *p as u8).collect();
-            discriminants.sort_unstable();
-            assert_eq!(
-                discriminants,
-                (0u8..8).collect::<Vec<_>>(),
-                "the array is the whole enum: every discriminant present, none twice"
-            );
-            // The four the audit found, named individually.
-            for name in ["palw-attempt", "palw-fp-commitment", "palw-fp-spend", "palw-derived"] {
-                assert!(parse_purpose(name).is_ok(), "{name} must be deniable");
-            }
-            // The shipped aliases still work, and an unknown name still fails with the full list.
-            assert_eq!(parse_purpose("tx"), Ok(SigningPurpose::Transaction));
-            let e = parse_purpose("nonsense").expect_err("unknown purposes are refused");
-            assert!(e.contains("palw-fp-spend"), "the error lists what is available: {e}");
-        }
-    }
-
     fn parse_policy(s: &str) -> Result<SignerPolicy, String> {
         match s.to_ascii_lowercase().as_str() {
             "permissive" => Ok(SignerPolicy::Permissive),
@@ -308,5 +274,39 @@ mod unix_daemon {
             }
         }
         std::process::ExitCode::SUCCESS
+    }
+
+    #[cfg(test)]
+    mod deny_purpose_tests {
+        use super::*;
+
+        /// **Every purpose a signer can be asked for can be denied.** The four PALW purposes were
+        /// unnameable, so the free-prompt quantum spend could not be refused on an HSM.
+        #[test]
+        fn every_signing_purpose_can_be_denied() {
+            for purpose in ALL_SIGNING_PURPOSES {
+                let name = purpose_cli_name(purpose);
+                assert_eq!(parse_purpose(name), Ok(purpose), "--deny-purpose {name} must name {purpose:?}");
+                assert_eq!(parse_purpose(&name.to_ascii_uppercase()), Ok(purpose), "and case must not matter");
+            }
+            // The array is the whole enum: discriminants 0..8, each mapped to a distinct name.
+            let names: std::collections::BTreeSet<&str> = ALL_SIGNING_PURPOSES.into_iter().map(purpose_cli_name).collect();
+            assert_eq!(names.len(), ALL_SIGNING_PURPOSES.len(), "no two purposes share a name");
+            let mut discriminants: Vec<u8> = ALL_SIGNING_PURPOSES.iter().map(|p| *p as u8).collect();
+            discriminants.sort_unstable();
+            assert_eq!(
+                discriminants,
+                (0u8..8).collect::<Vec<_>>(),
+                "the array is the whole enum: every discriminant present, none twice"
+            );
+            // The four the audit found, named individually.
+            for name in ["palw-attempt", "palw-fp-commitment", "palw-fp-spend", "palw-derived"] {
+                assert!(parse_purpose(name).is_ok(), "{name} must be deniable");
+            }
+            // The shipped aliases still work, and an unknown name still fails with the full list.
+            assert_eq!(parse_purpose("tx"), Ok(SigningPurpose::Transaction));
+            let e = parse_purpose("nonsense").expect_err("unknown purposes are refused");
+            assert!(e.contains("palw-fp-spend"), "the error lists what is available: {e}");
+        }
     }
 }

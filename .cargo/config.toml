@@ -11,5 +11,20 @@ rustflags = [
 
 # Static link CRT on Windows to avoid VCRedist dependency
 # (similar to how we use musl on Linux for portable binaries)
+#
+# **/STACK gives the Windows main thread the stack every other platform already gives it.**
+#
+# Windows reserves 1 MiB for a process's main thread; Linux and macOS give it 8 MiB. `misaka`'s
+# clap tree — 56 top-level commands, 219 arguments after the 2026-09-06 release merged the model
+# registry, the market and the DA-court accuser — renders its help by recursive descent and needs
+# between 2 and 4 MiB. So `misaka.exe --help` died with STATUS_STACK_OVERFLOW (0xC00000FD, the
+# exit code -1073741571 the CI smoke step reported) while the same command was fine everywhere
+# else. Measured, not guessed: under `ulimit -s`, `--help` aborts at 1 MiB and at 2 MiB, and
+# succeeds at 4 MiB.
+#
+# 8 MiB rather than 4: it is what the other platforms give, so the three stop differing, and the
+# reserve is address space rather than committed memory — Windows commits stack pages on touch.
+# This is a link-time property of every binary built for this target, `kaspad.exe` included, which
+# is the right scope: the difference being corrected is the platform's, not one program's.
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/STACK:8388608"]

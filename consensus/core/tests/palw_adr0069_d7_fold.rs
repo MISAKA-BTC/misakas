@@ -597,10 +597,12 @@ fn a_retiring_free_prompt_claim_carries_its_spent_weight_across() {
 /// The repair therefore rides `Params::palw_uncertified_weightless`, which is `None` on every
 /// shipped preset including `palw_rc_shipped_params()`.
 ///
-/// So on a network running the shipped RC ruleset (`claim_retirement_daa = WINDOW_COURT = 3000`),
-/// the first free-prompt claim that spends a quantum and then retires produces a durable tip its
-/// own node refuses on the next restart. If this test ever starts passing with `Ok`, the fence has
-/// been armed or the repair has been unfenced, and either way this test is the one to read first.
+/// **Where this still applies, since 2026-09-04: a preset that leaves the fence dormant.** Both V2
+/// presets — `palw_rc_shipped_params()` and the devnet — now arm it at GENESIS, so the stranding is
+/// unreachable on either (see `the_shipped_v2_presets_close_the_dormant_free_prompt_retirement`,
+/// which measures exactly that). The fixture below builds its own params with the fence off, which
+/// is the configuration the limitation describes and the one a new preset could still ship. If this
+/// test ever starts passing with `Ok`, the repair has been unfenced and the note can go.
 #[test]
 fn known_limitation_dormant_a_spent_free_prompt_retirement_strands_its_weight() {
     let p = fp_params();
@@ -620,38 +622,62 @@ fn known_limitation_dormant_a_spent_free_prompt_retirement_strands_its_weight() 
     );
 }
 
-/// **The reachability claim above, measured on the ruleset testnet-11 actually runs, so it is
-/// re-runnable rather than asserted.**
+/// **The claim above, measured on the rulesets the networks actually run — and since 2026-09-04
+/// the answer changed: both close the path.**
 ///
-/// The remediation report said the retirement path was unreachable "because `CLAIM_RETIREMENT`
-/// is 0". It is 0 on `PalwStateParamsV2::new`, which is what the report read; it is
-/// `WINDOW_COURT` = 3000 on `palw_rc_shipped_params()`, which is what the network runs. Every
-/// gate between a live chain and
-/// `known_limitation_dormant_a_spent_free_prompt_retirement_strands_its_weight` is checked here,
-/// so if any of them closes later this test says which one.
+/// This test began as the reachability proof for the limitation above ("the report said the
+/// retirement path was unreachable because `CLAIM_RETIREMENT` is 0; it is 0 on
+/// `PalwStateParamsV2::new`, which is what the report read, and `WINDOW_COURT` = 3000 on
+/// `palw_rc_shipped_params()`, which is what the network runs"). Every gate it walks is still
+/// walked, because they are what make the ARMED path reachable and therefore worth having: a
+/// terminal claim really is swept, the free-prompt lane really is priced, and at least one class
+/// may take a claim.
+///
+/// What changed is the last gate. `palw_uncertified_weightless` is armed at genesis on both V2
+/// presets, and `Params::validate_palw_v2` refuses any other height for it (genesis, or not at
+/// all), so on the networks that exist the retirement books its weight instead of stranding it.
+/// The limitation above is now a statement about a preset that ships the fence dormant, and this
+/// test says which presets do not.
 #[test]
-fn the_shipped_rc_ruleset_can_reach_the_dormant_free_prompt_retirement() {
+fn the_shipped_v2_presets_close_the_dormant_free_prompt_retirement() {
+    use kaspa_consensus_core::config::params::ForkActivation;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
-    let p = kaspa_consensus_core::config::params::palw_rc_shipped_params();
-    assert!(
-        p.palw_uncertified_weightless.is_none(),
-        "the repair is dormant on the shipped RC — if this ever fails, the exposure below is closed and the note can go"
-    );
-    let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else {
-        panic!("the shipped RC is a ConsensusV2 network");
-    };
-    assert_eq!(bundle.state.claim_retirement_daa(), 3_000, "terminal claims really are swept — the report read `new`'s zero instead");
-    assert_ne!(
-        bundle.state.fp_quanta_per_canonical_job(),
-        0,
-        "the free-prompt lane is priced, so a commitment is not `FreePromptLaneUnpriced`"
-    );
-    let certified = bundle.state.fp_certified_classes().expect("a shipped preset always carries the drilled free-prompt set");
-    assert!(
-        !certified.is_empty(),
-        "at least one class may take a free-prompt claim — with an empty set the commitment arm refuses every one and the \
-         stranding is unreachable on this network"
-    );
+    for (name, p) in [
+        ("testnet-11", kaspa_consensus_core::config::params::palw_rc_shipped_params()),
+        ("devnet", kaspa_consensus_core::config::params::devnet_shipped_params()),
+    ] {
+        assert_eq!(
+            p.palw_uncertified_weightless,
+            Some(ForkActivation::always()),
+            "{name}: the repair is armed FROM GENESIS — a scheduled arming is refused by validate_palw_v2, because a chain \
+             that stranded weight below the fence cannot be healed by crossing it"
+        );
+        let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else {
+            panic!("{name} is a ConsensusV2 network");
+        };
+        // The gates that make the retirement path reachable at all. They are unchanged by the
+        // arming: what the fence decides is whether reaching it strands weight or books it.
+        // Non-zero, not a literal: the devnet runs the minute-scale windows (300) and testnet-11
+        // the RC's (3,000). What the reachability argument needs is that the sweep happens at all
+        // — `PalwStateParamsV2::new`'s zero is what the remediation report read and what would
+        // make it unreachable.
+        assert_ne!(
+            bundle.state.claim_retirement_daa(),
+            0,
+            "{name}: terminal claims really are swept — the remediation report read `new`'s zero instead"
+        );
+        assert_ne!(
+            bundle.state.fp_quanta_per_canonical_job(),
+            0,
+            "{name}: the free-prompt lane is priced, so a commitment is not `FreePromptLaneUnpriced`"
+        );
+        let certified = bundle.state.fp_certified_classes().expect("a shipped preset always carries the drilled free-prompt set");
+        assert!(
+            !certified.is_empty(),
+            "{name}: at least one class may take a free-prompt claim — with an empty set the commitment arm refuses every one \
+             and neither the stranding nor its repair is reachable"
+        );
+    }
 }
 
 /// **Arming the fence does not REPAIR a chain that already stranded weight while it was dormant —

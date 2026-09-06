@@ -5237,7 +5237,7 @@ mod the_rulesets_ladder {
                     material.binding.step_leaf_count,
                     interval,
                     wide,
-                    geometry.anchor_covered_call(index).and_then(|c| anchor_state_for(c)).as_ref(),
+                    geometry.anchor_covered_call(index).and_then(&anchor_state_for).as_ref(),
                     &kernels,
                     kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
                 ),

@@ -129,7 +129,16 @@ fn time_integer_class(class: &CanonicalClassV1, reps: u32) -> Result<(f64, usize
     let artifact = Base0ArtifactV1::derive_deterministic(class.artifact_shape, seed).map_err(|e| format!("{e:?}"))?;
     let bytes = artifact_bytes(&artifact);
     let (prefill, decode) = class.canonical_job;
-    let (job, prompt) = base0_rc_job_v1(&class.profile, Hash64::from_u64_word(7), artifact.shape.vocab, prefill, decode);
+    let (job, prompt) = base0_rc_job_v1(
+        &class.profile,
+        Hash64::from_u64_word(7),
+        artifact.shape.vocab,
+        prefill,
+        decode,
+        // A weight report measures leaves, not prompts: the form only decides what the prompt is
+        // CALLED, and every shipped preset calls it flat.
+        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+    );
     // One warm-up: the first pass faults in the pages the derivation just wrote.
     base0_execute_for_attempt_v1(&artifact, &class.profile, &job, &prompt).map_err(|e| format!("{e:?}"))?;
     let start = Instant::now();

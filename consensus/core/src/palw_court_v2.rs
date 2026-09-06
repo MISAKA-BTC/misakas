@@ -2092,6 +2092,121 @@ mod tests {
         );
     }
 
+    /// **ADR-0081 Decision 3: a close speaks the network's prompt-commitment form or it is not a
+    /// move** (private-prompts design, 2026-09-05).
+    ///
+    /// Four cases, two per network. On a flat network an `ArithmeticOpened` is refused by name
+    /// before its opening is read; on a Merkle network an `Arithmetic` that carries a whole id
+    /// list is refused the same way, and one that carries none is a move on either (it addresses
+    /// no gather). The gate names the refusal; the arithmetic is what makes it sound — a flat
+    /// digest is no Merkle root — and the cost bound charges the opening like the operand paths.
+    #[test]
+    fn a_close_speaks_the_networks_prompt_form_or_it_is_not_a_move() {
+        use crate::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_ids_opening_v1};
+        let (refutation, openings, _) = crate::palw_step_refute::tests::base0_matmul_fraud();
+        let opening = prompt_ids_opening_v1(&[7u32, 8], 0).expect("opens");
+
+        let mut listed = refutation.clone();
+        listed.prompt_token_ids = vec![7, 8];
+        let bare = PalwCourtVerdictProofV2::Arithmetic { refutation: refutation.clone(), operand_openings: openings.clone() };
+        let listed = PalwCourtVerdictProofV2::Arithmetic { refutation: listed, operand_openings: openings.clone() };
+        let opened = PalwCourtVerdictProofV2::ArithmeticOpened {
+            refutation: refutation.clone(),
+            operand_openings: openings.clone(),
+            prompt_ids_opening: opening.clone(),
+        };
+
+        assert!(check_close_speaks_the_networks_prompt_form(&bare, PalwPromptIdsFormV1::Flat).is_ok());
+        assert!(check_close_speaks_the_networks_prompt_form(&listed, PalwPromptIdsFormV1::Flat).is_ok());
+        assert!(matches!(
+            check_close_speaks_the_networks_prompt_form(&opened, PalwPromptIdsFormV1::Flat),
+            Err(PalwCourtV2Error::CloseFormIsNotTheNetworks { close: "ArithmeticOpened", .. })
+        ));
+        assert!(check_close_speaks_the_networks_prompt_form(&bare, PalwPromptIdsFormV1::MerkleV1).is_ok());
+        assert!(matches!(
+            check_close_speaks_the_networks_prompt_form(&listed, PalwPromptIdsFormV1::MerkleV1),
+            Err(PalwCourtV2Error::CloseFormIsNotTheNetworks { close: "whole-id-list Arithmetic", .. })
+        ));
+        assert!(check_close_speaks_the_networks_prompt_form(&opened, PalwPromptIdsFormV1::MerkleV1).is_ok());
+
+        // The opened close is priced as the bare one plus its opening — and nothing else moved.
+        let bare_bytes = arithmetic_close_bytes_v2(&bare).expect("an arithmetic close measures");
+        let opened_bytes = arithmetic_close_bytes_v2(&opened).expect("an opened close measures");
+        assert_eq!(opened_bytes, bare_bytes + crate::palw_prompt_ids_v1::prompt_ids_opening_bytes_v1(&opening));
+        assert_eq!(binding_of(&opened), binding_of(&bare), "the opened close carries the same binding");
+    }
+
+    /// **The opened arm adjudicates a claim whose prompt commitment is a Merkle root** — the
+    /// routing half of ADR-0081 Decision 3, on a real claim state: the same two pins the flat
+    /// arm runs, then the opened checker with the tile. The opening is verified against the job
+    /// context's root before the step is judged (the step layer's own test shows a lying tile
+    /// refused); here the honest one lets an honest step be judged on its merits, which is
+    /// `ChallengerDefeated`, and the SAME close is refused by name on a flat network, as the
+    /// whole-list form is on this one.
+    #[test]
+    fn an_opened_arithmetic_close_adjudicates_on_a_merkle_network_and_nowhere_else() {
+        use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+        let (refutation, opening) = crate::palw_step_refute::tests::base0_merkle_prompt_honest();
+        let trace_root = refutation.binding.full_logits_trace_root;
+        let execution_root = refutation.binding.committed_execution_root;
+        let cid = refutation.binding.shape_profile.shape_profile_id();
+        let p = params_for(cid);
+        let artifact_root = h64(0xA7);
+        let objects = vec![
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: cid,
+                artifact_root,
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                initial_target: u128::MAX / 2,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(1),
+                pubkey: vec![7; 4],
+                operator_pubkey: op_key(0x21),
+                collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            },
+        ];
+        let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
+        let mut env = attempt(40, 1);
+        env.attempt.class_id = cid;
+        env.attempt.artifact_root = artifact_root;
+        env.attempt.trace_root = trace_root;
+        env.attempt.execution_root = execution_root;
+        env.attempt.challenge = challenge_v2(h64(999), h64(5), 1_700, 1, cid, &bond_key(1).0);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[], Some(&env)).unwrap();
+        let claim_rec = s2.claim(&claim_id).expect("the claim exists");
+
+        let opened = PalwCourtVerdictProofV2::ArithmeticOpened {
+            refutation: refutation.clone(),
+            operand_openings: Vec::new(),
+            prompt_ids_opening: opening,
+        };
+        assert_eq!(
+            adjudicate_close_proof_v2(&s2, claim_rec, &opened, &court(), LADDER, PalwPromptIdsFormV1::MerkleV1),
+            Ok(PalwCourtVerdictV2::ChallengerDefeated),
+            "an honest step, judged on its merits through the opened arm"
+        );
+        assert!(matches!(
+            adjudicate_close_proof_v2(&s2, claim_rec, &opened, &court(), LADDER, PalwPromptIdsFormV1::Flat),
+            Err(PalwCourtV2Error::CloseFormIsNotTheNetworks { .. })
+        ));
+        let mut listed = refutation;
+        listed.prompt_token_ids = vec![7, 8];
+        let listed = PalwCourtVerdictProofV2::Arithmetic { refutation: listed, operand_openings: Vec::new() };
+        assert!(matches!(
+            adjudicate_close_proof_v2(&s2, claim_rec, &listed, &court(), LADDER, PalwPromptIdsFormV1::MerkleV1),
+            Err(PalwCourtV2Error::CloseFormIsNotTheNetworks { .. })
+        ));
+    }
+
     /// **P0-8's owed end-to-end: a MatMul fraud convicts through the WHOLE path, with no model.**
     ///
     /// The register asks for exactly this and said no test anywhere did it: "give a full node with

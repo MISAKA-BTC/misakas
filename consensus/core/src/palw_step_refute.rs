@@ -1858,7 +1858,7 @@ fn qwen36_row(
                 || hd_v == 0
                 || hd_k > PALW_GDN_MAX_DIM
                 || hd_v > PALW_GDN_MAX_DIM
-                || hd_k.checked_mul(hd_v).is_none_or(|n| n > PALW_GDN_MAX_DIM * PALW_GDN_MAX_DIM)
+                || hd_k.checked_mul(hd_v).is_none_or(|n| n as u64 > PALW_GDN_MAX_DIM_SQUARED)
             {
                 return Err(PalwStepRefuteError::Unadjudicable);
             }
@@ -4662,6 +4662,16 @@ fn vec_dot_f32(a: &[u32], b: &[u32], dot: DotStructure) -> u32 {
 /// the hybrid classes actually declare.
 const PALW_GDN_MAX_DIM: usize = 1 << 16;
 
+/// **The product ceiling, in `u64` because `usize` is not wide enough everywhere** (CI: the
+/// wasm32 jobs).
+///
+/// `PALW_GDN_MAX_DIM * PALW_GDN_MAX_DIM` is `2^32`, which is one past `usize::MAX` on a 32-bit
+/// target — so spelling the bound as a `usize` product is a compile-time overflow on wasm32 and
+/// silently correct everywhere else. The bound itself is a quantity, not a machine word; stating
+/// it in `u64` is what makes the same rule hold on both widths. On a 32-bit target the caller's
+/// own `checked_mul` refuses the product first, which is strictly stricter and fails closed.
+const PALW_GDN_MAX_DIM_SQUARED: u64 = (PALW_GDN_MAX_DIM as u64) * (PALW_GDN_MAX_DIM as u64);
+
 /// **The whole GDN state, in words** — because three legal dimensions still multiply.
 ///
 /// `PALW_GDN_MAX_DIM` alone admits `2^16 x 2^16 x 2^16`. This is the figure a court may actually
@@ -5599,10 +5609,14 @@ pub(crate) mod tests {
         // for `hd_v * hd_k` elements in one go. A failed Rust allocation ABORTS rather than
         // unwinding, so unlike the shift there is no panic to catch and no error to return — which
         // is why that site bounds the product on its own and not just each factor.
-        let widest = PALW_GDN_MAX_DIM;
-        assert!(widest.checked_mul(widest).is_some(), "the ceiling squared must itself be representable");
+        // In `u64`, because the ceiling squared is `2^32` — representable in a `usize` on the
+        // 64-bit targets this fleet runs and NOT on the 32-bit ones this repository also builds
+        // for (the wasm32 jobs). The bound is a quantity; the width it is checked in is a property
+        // of the machine, and mixing the two is a compile-time overflow on one of them.
+        let widest = PALW_GDN_MAX_DIM as u64;
+        assert_eq!(widest.checked_mul(widest), Some(PALW_GDN_MAX_DIM_SQUARED), "the ceiling squared is the constant the guard uses");
         assert!(
-            (u32::MAX as usize).checked_mul(u32::MAX as usize).unwrap() > widest * widest,
+            (u32::MAX as u64).checked_mul(u32::MAX as u64).unwrap() > widest * widest,
             "…and the unbounded declaration reaches far past it, which is the whole reason for the bound"
         );
 
