@@ -6388,3 +6388,38 @@ four CLI verbs read and move; 12 tests pin the ADR's invariants, and the design'
 corrected by them (the second buy releases 16,824 positions, not 12,846; a full sell returns the
 1,880 MSK reserve, not 3,014). Not done: the explorer page, the devnet buy/sell/retire/drain drill,
 and the activation height on testnet-11.
+
+### 10t. The pair is seeded, and the reward buys it: ADR-0090 and ADR-0091 (2026-09-06, `palw-adr0088-0089-impl`)
+
+10r above is the ADR-0087 design as first built, and two ADRs have moved it since. Both are behind
+the same three dormant fences (`palw_model_market`, `palw_model_lines`, `palw_model_evm`, `None`
+on every shipped preset), so this section changes nothing about the live chain until they are armed
+— which is one release, and the only thing still outstanding for either ADR.
+
+**[ADR-0090](adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)
+— the pair is made, not conjured.** The virtual reserve and the lazy opening are gone: a line's
+market exists only once a **seed of at least 100,000 MSK** reaches its sink, and the whole seed
+becomes the reserve, fee-free and never payable out (the curve's product never falls, so the
+reserve never falls under the seed). A position is **whole** — one unit, no fraction — and there
+are **500,000** a line, so 10r's worked numbers (positions of 10^6 units, a 1,000 MSK virtual
+reserve) do not describe today's curve. A third move rides beside the buy and the sell on both
+lanes: the carrier object `ModelSeed`, the writer's action 3, the facade's `seed()`.
+
+**[ADR-0091](adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) — the reward buys the
+pair, and no holder is paid.** At a claim's `Final`, **5 % of its escrowed worker reward** (the
+ADR-0042 Decision 10 carve, which on every shipped preset is the miner's whole subsidy reward)
+buys from the pair of the **line the claim ran**, and the miner is named the other **95 %**. The
+slice takes no leg and gives nobody a position: what the curve gives up is **retired**, held by
+the chain for good, so `positions in the curve + every holder's + retired = 500,000`. A line with
+no pair, a pair closed to buys, or a claim the registry attributed to nothing pays its miner in
+full — nothing is burned for a model. Nothing is ever distributed to holders; the only thing
+mining does for a holder is raise the price the curve will pay them when they sell. On this
+network's pre-deflationary subsidy the escrow is 2.29690373 MSK a block, the slice 0.11484518 MSK
+and the miner's 2.18205855 MSK, which lifts a freshly seeded pair from 0.2 to 0.20000022 MSK a
+position and about +2.5 % over a month of such blocks.
+
+Read on the row and both windows as `seedSompi` / `seededBy` / `seedMinSompi` (wire 3) and
+`buybackSompi` / `retiredUnits` (wire 4; the AMM window's `market()` appends two words, so every
+earlier offset holds). The market's front end is <https://misakaoptions.com>. Both ADRs are drilled
+on a private devnet with the three fences armed from genesis
+(`scripts/misaka-palw-model-market-devnet-e2e.sh`, `--palw-model-devnet=0`).
