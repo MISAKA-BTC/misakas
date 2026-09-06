@@ -3064,6 +3064,135 @@ impl Params {
         crate::pow_layer0::PalwAttemptLaneV1::from_fence(self.palw_attempt_activation.map(|fence| fence.is_active(daa_score)))
     }
 
+    /// **Every top-level PALW activation fence, named, in ONE compiler-forced spelling.**
+    ///
+    /// The destructure below is exhaustive, for [`Self::for_each_fence`]'s reason: a fence added to
+    /// `Params` will not compile until it is named here. Two hand-written lists needed it and both
+    /// had already fallen behind when the DA-court and model-market branches merged — the test-only
+    /// fence table (mainnet audit 2026-09-06, L-3) and `fork_id_v1::fork_id_gate_fences_v1` (M-6),
+    /// which the merge grew four fences without touching either.
+    ///
+    /// Some-only fences that carry a companion value (`palw_heartbeat`, `palw_attempt_work`,
+    /// `palw_bond_maturity`, `palw_inactivity_leak`, `palw_beacon_fold`) contribute their
+    /// `activation` and nothing else: a duration beside a fence is deliberately not a fence, for
+    /// the reason `for_each_fence` gives about normalisation.
+    ///
+    /// Order is the declaration order of the struct and should stay stable — a caller may hash it.
+    pub fn palw_fences_v1(&self) -> Vec<(&'static str, Option<ForkActivation>)> {
+        // Exhaustive on purpose — see the doc block. Non-fence fields are bound and ignored.
+        let Params {
+            dns_seeders: _,
+            net: _,
+            genesis: _,
+            timestamp_deviation_tolerance: _,
+            max_difficulty_target: _,
+            max_difficulty_target_f64: _,
+            past_median_time_window_size: _,
+            difficulty_window_size: _,
+            min_difficulty_window_size: _,
+            coinbase_payload_script_public_key_max_len: _,
+            max_coinbase_payload_len: _,
+            max_tx_inputs: _,
+            max_tx_outputs: _,
+            max_signature_script_len: _,
+            max_script_public_key_len: _,
+            mass_per_tx_byte: _,
+            mass_per_script_pub_key_byte: _,
+            mass_per_sig_op: _,
+            max_block_mass: _,
+            storage_mass_parameter: _,
+            deflationary_phase_daa_score: _,
+            pre_deflationary_phase_base_subsidy: _,
+            skip_proof_of_work: _,
+            max_block_level: _,
+            pruning_proof_m: _,
+            blockrate: _,
+            pre_crescendo_target_time_per_block: _,
+            crescendo_activation: _,
+            dns_params: _,
+            palw_credit: _,
+            palw_fork_choice: _,
+            palw_schedule: _,
+            palw_ramp: _,
+            palw_block_commitment: _,
+            palw_bootstrap_activation,
+            palw_unavailable_abstains,
+            palw_bond_maturity,
+            palw_frontier_provenance,
+            palw_heartbeat,
+            palw_attempt_work,
+            palw_attempt_activation,
+            palw_inactivity_leak,
+            palw_beacon_fold,
+            palw_capability_bound,
+            palw_context_ladder,
+            palw_panel_da,
+            palw_certification_rent,
+            palw_uncertified_weightless,
+            palw_da_court,
+            palw_court_ladder,
+            palw_fp_da_pins,
+            palw_validator_payout_bounds,
+            palw_epoch_boundary_budget,
+            palw_fp_ruleset_caps,
+            palw_model_market,
+            palw_model_lines,
+            palw_model_evm,
+            palw_chunk_cap_charge,
+            palw_prompt_ids_merkle,
+            palw_kary_court,
+            palw_court_responder_coverage,
+            palw_fp_decode_rules,
+            palw_difficulty_priced_rows,
+            palw_receipt_rows_unpriced,
+            palw_attempt_header_pins,
+            palw_consensus_mode: _,
+            pow_blake2b_sha3_activation: _,
+            pow_palw_activation: _,
+            pow_palw_ollama_activation: _,
+            pq_enforcement: _,
+            pq_activation_daa_score: _,
+            evm_activation_daa_score: _,
+            evm_gas_pool_v2_activation_daa_score: _,
+            evm_f002_withdraw_cap_activation_daa_score: _,
+            evm_f003_mldsa_verify_activation_daa_score: _,
+            evm_typed_receipt_root_activation_daa_score: _,
+        } = self;
+        vec![
+            ("palw_bootstrap_activation", *palw_bootstrap_activation),
+            ("palw_unavailable_abstains", *palw_unavailable_abstains),
+            ("palw_bond_maturity", palw_bond_maturity.map(|f| f.activation)),
+            ("palw_frontier_provenance", *palw_frontier_provenance),
+            ("palw_heartbeat", palw_heartbeat.map(|f| f.activation)),
+            ("palw_attempt_work", palw_attempt_work.map(|f| f.activation)),
+            ("palw_attempt_activation", *palw_attempt_activation),
+            ("palw_inactivity_leak", palw_inactivity_leak.map(|f| f.activation)),
+            ("palw_beacon_fold", palw_beacon_fold.map(|f| f.activation)),
+            ("palw_capability_bound", *palw_capability_bound),
+            ("palw_context_ladder", *palw_context_ladder),
+            ("palw_panel_da", *palw_panel_da),
+            ("palw_certification_rent", *palw_certification_rent),
+            ("palw_uncertified_weightless", *palw_uncertified_weightless),
+            ("palw_da_court", *palw_da_court),
+            ("palw_court_ladder", *palw_court_ladder),
+            ("palw_fp_da_pins", *palw_fp_da_pins),
+            ("palw_validator_payout_bounds", *palw_validator_payout_bounds),
+            ("palw_epoch_boundary_budget", *palw_epoch_boundary_budget),
+            ("palw_fp_ruleset_caps", *palw_fp_ruleset_caps),
+            ("palw_model_market", *palw_model_market),
+            ("palw_model_lines", *palw_model_lines),
+            ("palw_model_evm", *palw_model_evm),
+            ("palw_chunk_cap_charge", *palw_chunk_cap_charge),
+            ("palw_prompt_ids_merkle", *palw_prompt_ids_merkle),
+            ("palw_kary_court", *palw_kary_court),
+            ("palw_court_responder_coverage", *palw_court_responder_coverage),
+            ("palw_fp_decode_rules", *palw_fp_decode_rules),
+            ("palw_difficulty_priced_rows", *palw_difficulty_priced_rows),
+            ("palw_receipt_rows_unpriced", *palw_receipt_rows_unpriced),
+            ("palw_attempt_header_pins", *palw_attempt_header_pins),
+        ]
+    }
+
     /// **Every scheduled fence height this build carries, sorted and deduped** (ADR-0072 SA-2).
     ///
     /// Derived from [`Self::for_each_fence`] and nothing else, so it can never drift from the
@@ -13536,38 +13665,52 @@ mod consensus_params_id_tests {
         assert_eq!(crate::config::genesis::DEVNET_GENESIS.bits, 0x207fffff);
     }
 
-    /// Every V2 fence a preset can arm, as `(name, armed)` — ONE spelling, so a fence added
-    /// tomorrow appears in every preset comparison that uses it instead of being silently absent
-    /// from the one nobody re-read.
+    /// Every V2 fence a preset can arm, as `(name, armed)`.
+    ///
+    /// **Derived, not restated** (mainnet audit 2026-09-06, L-3). This was a hand-written `vec![]`
+    /// of 25 entries — the one fence list in the tree the compiler did not police — and the
+    /// model-market branch added four fences to `Params` without joining it, with zero merge
+    /// conflict here, while the audit summary claimed the property "the next fence added cannot be
+    /// armed on one shipped network and forgotten on another". It reads `Params::palw_fences_v1`
+    /// now, whose destructure is exhaustive.
     #[cfg(test)]
     fn palw_v2_fence_table(p: &Params) -> Vec<(&'static str, bool)> {
-        vec![
-            ("palw_bootstrap_activation", p.palw_bootstrap_activation.is_some()),
-            ("palw_unavailable_abstains", p.palw_unavailable_abstains.is_some()),
-            ("palw_bond_maturity", p.palw_bond_maturity.is_some()),
-            ("palw_frontier_provenance", p.palw_frontier_provenance.is_some()),
-            ("palw_heartbeat", p.palw_heartbeat.is_some()),
-            ("palw_attempt_work", p.palw_attempt_work.is_some()),
-            ("palw_attempt_activation", p.palw_attempt_activation.is_some()),
-            ("palw_inactivity_leak", p.palw_inactivity_leak.is_some()),
-            ("palw_beacon_fold", p.palw_beacon_fold.is_some()),
-            ("palw_capability_bound", p.palw_capability_bound.is_some()),
-            ("palw_context_ladder", p.palw_context_ladder.is_some()),
-            ("palw_panel_da", p.palw_panel_da.is_some()),
-            ("palw_certification_rent", p.palw_certification_rent.is_some()),
-            ("palw_uncertified_weightless", p.palw_uncertified_weightless.is_some()),
-            ("palw_da_court", p.palw_da_court.is_some()),
-            ("palw_chunk_cap_charge", p.palw_chunk_cap_charge.is_some()),
-            ("palw_prompt_ids_merkle", p.palw_prompt_ids_merkle.is_some()),
-            ("palw_kary_court", p.palw_kary_court.is_some()),
-            ("palw_court_responder_coverage", p.palw_court_responder_coverage.is_some()),
-            ("palw_fp_decode_rules", p.palw_fp_decode_rules.is_some()),
-            ("palw_difficulty_priced_rows", p.palw_difficulty_priced_rows.is_some()),
-            ("palw_receipt_rows_unpriced", p.palw_receipt_rows_unpriced.is_some()),
-            ("palw_attempt_header_pins", p.palw_attempt_header_pins.is_some()),
-            ("palw_fp_da_pins", p.palw_fp_da_pins.is_some()),
-            ("palw_validator_payout_bounds", p.palw_validator_payout_bounds.is_some()),
-        ]
+        p.palw_fences_v1().into_iter().map(|(name, fence)| (name, fence.is_some())).collect()
+    }
+
+    /// **The fence table names every PALW fence `Params` carries** (mainnet audit 2026-09-06, L-3).
+    ///
+    /// Deliberately NOT a hand-maintained count: a count is the defect one level up. The property
+    /// is that the table and the struct agree, and the compiler is what actually enforces it —
+    /// `palw_fences_v1`'s destructure is exhaustive, so a fence added to `Params` fails to BUILD
+    /// until it is named. This asserts the consequence, and names the four the DA-court/model-market
+    /// merge added to `Params` while the hand-written table sat unchanged with zero merge conflict.
+    #[test]
+    fn the_fence_table_names_every_palw_fence_on_params() {
+        let names: std::collections::BTreeSet<&str> =
+            palw_v2_fence_table(&MAINNET_PARAMS).into_iter().map(|(n, _)| n).collect();
+        for (name, _) in MAINNET_PARAMS.palw_fences_v1() {
+            assert!(names.contains(name), "{name} is a PALW fence on Params and the table does not name it");
+        }
+        for name in ["palw_court_ladder", "palw_model_market", "palw_model_lines", "palw_model_evm"] {
+            assert!(names.contains(name), "{name}: one of the four the 2026-09-06 merge added");
+        }
+        // …and the table is a table OF the presets, so it answers per preset rather than per build.
+        for (preset_name, preset) in [
+            ("testnet-11", palw_rc_shipped_params()),
+            ("devnet", devnet_shipped_params()),
+            ("mainnet card", mainnet_card_fixture_v1(true)),
+        ] {
+            let table = palw_v2_fence_table(&preset);
+            assert_eq!(table.len(), names.len(), "{preset_name}: one spelling, one length");
+            for (name, armed) in table {
+                assert_eq!(
+                    armed,
+                    preset.palw_fences_v1().into_iter().find(|(n, _)| *n == name).expect("named above").1.is_some(),
+                    "{preset_name}: the table's {name} must be the params' own answer"
+                );
+            }
+        }
     }
 
     /// **A carded mainnet arms what testnet-11 arms, and the one difference is a derivation**
@@ -13637,17 +13780,35 @@ mod consensus_params_id_tests {
             palw_v2_fence_table(&carded).into_iter().filter(|(_, on)| *on).map(|(n, _)| n).collect();
         let missing: Vec<&'static str> = rc_armed.iter().copied().filter(|n| !mainnet_armed.contains(n)).collect();
 
-        // The one legitimate difference, and it is legitimate only because it is DERIVED from the
-        // class set rather than forgotten: `palw_kary_court` is the court for a fused-attention
-        // row, this equivalent registers only the floor, and `validate_palw_v2` refuses the fence
-        // on a ruleset whose frozen arity does not match one it can derive. A carded mainnet that
-        // pins the dense tier states it on the base — see the test below.
+        // The legitimate differences, and each is legitimate for a stated reason rather than by
+        // having been forgotten:
+        //
+        // * `palw_kary_court` is DERIVED from the class set — it is the court for a fused-attention
+        //   row, this equivalent registers only the floor, and `validate_palw_v2` refuses the fence
+        //   on a ruleset whose frozen arity does not match one it can derive. A carded mainnet that
+        //   pins the dense tier states it on the base — see the test below.
+        // * The three model fences (ADR-0087 D6, ADR-0088 D11, ADR-0089 D9) are SCHEDULED on
+        //   testnet-11, at `PALW_RC_DA_COURT_FENCE_DAA`, and a card states none of them. Arming a
+        //   market, a registry and an EVM from block one on a network with value is the measured
+        //   decision ADR-0087 D6 reserves for the operator, not a default a card takes; the mainnet
+        //   row of `docs/adr/README.md`'s activation table records them as not armed. **This
+        //   difference was invisible until the 2026-09-06 audit (L-3): the fence table was
+        //   hand-written and the model branch never joined it, so a set comparison could not see a
+        //   fence the table did not name.** If a card is ever meant to arm them, this is the line
+        //   that has to be changed deliberately.
         assert_eq!(
             missing,
-            vec!["palw_kary_court"],
-            "a carded mainnet must arm every fence testnet-11 arms; the floor-only difference is the k-ary court alone \
+            vec!["palw_model_market", "palw_model_lines", "palw_model_evm", "palw_kary_court"],
+            "a carded mainnet must arm every fence testnet-11 arms except the four named above \
              (rc: {rc_armed:?}, mainnet: {mainnet_armed:?})"
         );
+        for name in ["palw_model_market", "palw_model_lines", "palw_model_evm"] {
+            assert!(
+                rc.palw_fences_v1().into_iter().any(|(n, fence)| n == name && fence.is_some_and(|f| f.daa_score() > 0)),
+                "{name}: the RC SCHEDULES it at a height — a card that does not state it is behind a decision, not an \
+                 oversight"
+            );
+        }
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &carded.palw_consensus_mode else {
             panic!("the equivalent is V2")
         };
