@@ -5304,6 +5304,20 @@ impl VirtualStateProcessor {
         let mut certifications_graded = 0usize;
         // ADR-0080 design A, W9: how many declared closes this block has already completed.
         let mut court_closes_completed = 0usize;
+        // **ADR-0042 Decision 10 / ADR-0087 Decision 3 (mainnet audit 2026-09-06, M-10): the payout
+        // rows this block's CARRIER-borne market moves have already promised.**
+        //
+        // Counted here, in transaction order, against the state each accepted object leaves behind —
+        // the same rehearsal `PALW_CERTIFICATION_MAX_PER_BLOCK` and `PALW_COURT_CLOSE_MAX_PER_BLOCK`
+        // are counted against — and the excess move is DROPPED with the block standing, exactly as
+        // those two are. Invalidating instead would be audit M-01's shape: admission on the
+        // lifecycle band is stateless, so a second market carrier relays and mines freely and honest
+        // miners would be the ones producing the invalid blocks.
+        //
+        // Without it the fold would refuse the move with `ModelPayoutQueueFull` and take the whole
+        // block with it. The rehearsal drops it first, so the fold's guard is the belt to this
+        // brace and is unreachable on the carrier lane.
+        let mut model_payout_rows_promised = 0usize;
         // **ADR-0075 SA-1/SA-2's fence, asked HERE and not only where the fees were resolved.**
         // `false` on every shipped preset, and then neither rent below can fire whatever a caller
         // passed for a carrier fee — so the filter's behaviour is byte-identical to before the
@@ -5595,6 +5609,34 @@ impl VirtualStateProcessor {
             // did no court work (the drop path does none), and must not deny the block's real
             // close its slot. A close denied inside its assembly window is not a delay, it is the
             // conviction of the party that filed it.
+            // **ADR-0042 Decision 10's queue, on the carrier lane** (audit M-10). A market move
+            // writes fee legs into `pending_payouts`, which drains at
+            // `PALW_V2_MAX_PAYOUTS_PER_BLOCK` and is capped at `PALW_V2_MAX_PENDING_PAYOUTS`. The
+            // fold refuses the move that would breach the cap; the rehearsal drops it here so the
+            // block stands. Read against `folded`, which is the state this block's earlier objects
+            // have already moved — the same state the fold will see.
+            {
+                use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as MObj;
+                let rows = match &object {
+                    MObj::ModelBuy { .. } => 2usize,
+                    MObj::ModelSell { .. } => 3usize,
+                    MObj::ModelSeed { .. } => 0usize,
+                    _ => 0usize,
+                };
+                if rows > 0 {
+                    let held = folded.pending_payouts_iter().count();
+                    let cap = kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PENDING_PAYOUTS;
+                    if held.saturating_add(model_payout_rows_promised).saturating_add(rows) > cap {
+                        info!(
+                            "Block {block}: a model-market move was dropped, and the block stands: the payout queue holds {held} \
+                             rows and this block has already promised {model_payout_rows_promised} more, against a cap of {cap} \
+                             (PALW_V2_MAX_PENDING_PAYOUTS)"
+                        );
+                        continue;
+                    }
+                    model_payout_rows_promised += rows;
+                }
+            }
             let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
                 || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);
             if spends_the_court_slot && court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK {

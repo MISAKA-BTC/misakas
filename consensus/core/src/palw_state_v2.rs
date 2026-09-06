@@ -251,7 +251,45 @@ pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/opera
 ///
 /// Eight against at most one new claim per block: a backlog drains eight times faster than it can
 /// be created, so this bounds latency, not throughput.
+///
+/// **The premise had a second writer and no argument** (mainnet audit 2026-09-06, M-10). ADR-0087's
+/// market writes fee legs into this same map — up to two rows a buy and three a carrier sell
+/// (`write_model_fee`), and the same functions are reached by up to
+/// [`crate::evm::model_market::MAX_MARKET_ACTIONS_PER_EVM_BLOCK`] EVM actions per block — so
+/// "at most one new claim per block" stopped being the whole story. It is restored as a *bound*
+/// rather than an assumption by [`PALW_V2_MAX_PENDING_PAYOUTS`] below: the queue has a ceiling and a
+/// market move that would breach it is refused, so the map cannot grow without limit whatever the
+/// market does, and claim rows drain ahead of market rows (see
+/// [`PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX`]).
 pub const PALW_V2_MAX_PAYOUTS_PER_BLOCK: usize = 8;
+
+/// **The ceiling on the payout queue itself** (mainnet audit 2026-09-06, M-10).
+///
+/// `pending_payouts` is in the state-root preimage and is served over IBD, so an unbounded writer
+/// into it is an unbounded consensus table. Claims cannot fill it — at most one is created per
+/// block against a drain of [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] — but ADR-0087's market can, from two
+/// lanes at once. This is the bound that makes the drain's sizing argument true again.
+///
+/// 1,024 = 128 blocks of drain: a market payout that queues behind a full table waits at most that
+/// long, and the table costs at most 1,024 × ~72 bytes ≈ 74 KB of state-root preimage.
+///
+/// **Only market moves are measured against it.** A claim payout is never refused: ADR-0042
+/// Decision 10's escrow release is the worker's own reward and refusing it would burn it. What
+/// keeps claims safe is that market rows sort after claim rows and the market's own ceiling leaves
+/// the drain's whole prefix available to them.
+pub const PALW_V2_MAX_PENDING_PAYOUTS: usize = 1_024;
+
+/// **The first byte of every model-market payout key** (mainnet audit 2026-09-06, M-10).
+///
+/// The drain is "the first [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] in `BTreeMap` key order", and market
+/// rows were interleaved with claim rows in hash order — so market traffic delayed the escrow
+/// releases ADR-0042 Decision 10 sizes this queue for. Minting market keys in the top 1/256 of the
+/// key space puts every market row after every claim row whose id does not begin `0xFF`, which
+/// restores Decision 10's latency bound for claims at the cost of nothing but market latency.
+///
+/// It costs no serialization change: the key is a `Hash64` either way, and no chain has a market
+/// row (the fence is `None` on every shipped preset), so no existing state moves.
+pub const PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX: u8 = 0xFF;
 
 /// **Coinbase outputs a ConsensusV2 block may carry beyond the classic mergeset payout.**
 ///
@@ -4255,6 +4293,15 @@ pub enum PalwStateV2Error {
     ModelMarketAlreadySeeded(Hash64),
     #[error("the seed of {got} sompi is under the least seed of {want}")]
     ModelSeedTooSmall { want: u64, got: u64 },
+
+    /// **ADR-0042 Decision 10's queue is full** (mainnet audit 2026-09-06, M-10). A market move
+    /// whose fee legs would push `pending_payouts` past [`PALW_V2_MAX_PENDING_PAYOUTS`] is refused;
+    /// the queue drains [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] rows a block, so this clears on its own.
+    /// On the carrier lane the acceptance rehearsal drops the move before the fold sees it (the
+    /// block stands); on the EVM lane it becomes ADR-0089 Decision 6's `Refused { reason }` and the
+    /// caller's escrow is refunded at the settling block.
+    #[error("the payout queue is full ({held} of {cap}); this market move would add {want} rows")]
+    ModelPayoutQueueFull { held: usize, want: usize, cap: usize },
     #[error("class {0} is frozen, so its line takes no seed")]
     ModelClassClosed(Hash64),
     // ADR-0088, the model registry.
@@ -6403,6 +6450,14 @@ impl<'a> TransitionBuilder<'a> {
 
     /// ADR-0087 Decision 4: a fee leg leaves the move as a payout to `payload`, keyed by the move
     /// so two moves in one block cannot share a row; `None` burns it (a class with no registrant).
+    ///
+    /// **The key is minted in the top 1/256 of the key space** (mainnet audit 2026-09-06, M-10).
+    /// The drain and `palw_v2_payout_outputs` both take "the first N in `BTreeMap` key order", and
+    /// a market row that sorted among the claim rows delayed the escrow release ADR-0042 Decision 10
+    /// sizes the queue for. Forcing `PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX` puts every market row
+    /// after every claim row whose id does not begin with that byte, so claims keep Decision 10's
+    /// latency and market rows take the remainder. The other 63 bytes are the keyed hash they always
+    /// were, so two legs of two moves still cannot share a row.
     fn write_model_fee(
         &mut self,
         ctx: &PalwBlockContextV2,
@@ -6422,9 +6477,44 @@ impl<'a> TransitionBuilder<'a> {
         h.update(&ctx.daa_score.to_le_bytes());
         h.update(&self.model_moves.to_le_bytes());
         h.update(leg);
-        let key = finish(h);
+        let mut key_bytes = finish(h).as_bytes();
+        key_bytes[0] = PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX;
+        let key = Hash64::from_bytes(key_bytes);
         self.write_payout(key, Some(PalwPayoutV2 { payload, amount }));
         0
+    }
+
+    /// **How many payout rows a market move of this shape will write, at most** (audit M-10).
+    ///
+    /// Counted BEFORE the move touches anything, so a move that would breach
+    /// [`PALW_V2_MAX_PENDING_PAYOUTS`] is refused whole rather than half-applied. An upper bound,
+    /// not exact: a leg whose amount rounds to zero or whose payee has no bond writes nothing
+    /// (`write_model_fee`'s first two lines), so this over-counts in the safe direction.
+    ///
+    ///   * a buy: the owner leg and the contributor leg  → 2
+    ///   * a carrier sell: those two plus `sell-net`     → 3
+    ///   * an EVM sell: those two; the net leg is an ADR-0089 Decision 7 settlement credit, and
+    ///     "the coinbase never emits it"                 → 2
+    ///   * a seed: fee-free by ADR-0090 Decision 2       → 0
+    fn model_payout_rows_would_add(pays_net_via_coinbase: bool, is_seed: bool) -> usize {
+        if is_seed {
+            0
+        } else if pays_net_via_coinbase {
+            3
+        } else {
+            2
+        }
+    }
+
+    /// **ADR-0042 Decision 10's queue has a ceiling** (audit M-10). Refuses a market move whose fee
+    /// legs would push `pending_payouts` past [`PALW_V2_MAX_PENDING_PAYOUTS`]. Called first in each
+    /// of the three move functions, before any write.
+    fn check_model_payout_room(&self, rows: usize) -> Result<(), PalwStateV2Error> {
+        let held = self.state.pending_payouts.len();
+        if held.saturating_add(rows) > PALW_V2_MAX_PENDING_PAYOUTS {
+            return Err(PalwStateV2Error::ModelPayoutQueueFull { held, want: rows, cap: PALW_V2_MAX_PENDING_PAYOUTS });
+        }
+        Ok(())
     }
 
     fn write_panel(&mut self, key: Hash64, new: Option<PalwPanelStateV2>) {
@@ -7318,6 +7408,12 @@ pub fn apply_palw_transition_v7(
     //     The prefix is the first N in `BTreeMap` key order, which is the same set on every node
     //     and the same set `palw_v2_payout_outputs` pays. A backlog drains at N per block against
     //     at most one new claim per block, so the queue cannot grow.
+    //
+    //     **The second writer** (mainnet audit 2026-09-06, M-10): ADR-0087's market writes fee legs
+    //     into this same map from two lanes, so "at most one new claim per block" is no longer the
+    //     whole story. What holds the sentence up now is `PALW_V2_MAX_PENDING_PAYOUTS` — every
+    //     market move is measured against it and refused by it — and market keys are minted in the
+    //     top 1/256 of the key space, so this prefix still belongs to the claims it was sized for.
     for claim_id in builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>() {
         builder.write_payout(claim_id, None);
     }
@@ -10877,6 +10973,12 @@ fn model_seed_v1(
     msk_seed: u64,
 ) -> Result<crate::palw_model_market_v1::PalwModelMarketV1, PalwStateV2Error> {
     use crate::palw_model_market_v1::{PALW_MODEL_SEED_MIN_SOMPI_V1, PalwModelMarketV1};
+    // **ADR-0042 Decision 10's queue has room, or this move does not happen** (audit M-10).
+    // Checked first, before any read that could leave a half-applied move: the fee legs below are
+    // rows in `pending_payouts`, which is in the state-root preimage, and this is the only bound on
+    // how many of them a block may add. Refused, never truncated — a truncated fee leg is a payee
+    // silently not paid.
+    builder.check_model_payout_room(TransitionBuilder::model_payout_rows_would_add(false, true))?;
     if *seeder == Hash64::default() {
         return Err(PalwStateV2Error::ModelHolderUnset);
     }
@@ -10913,6 +11015,12 @@ fn model_buy_v1(
     min_units_out: u64,
 ) -> Result<crate::palw_model_market_v1::PalwModelBuyQuoteV1, PalwStateV2Error> {
     use crate::palw_model_market_v1::palw_model_buy_quote_v1;
+    // **ADR-0042 Decision 10's queue has room, or this move does not happen** (audit M-10).
+    // Checked first, before any read that could leave a half-applied move: the fee legs below are
+    // rows in `pending_payouts`, which is in the state-root preimage, and this is the only bound on
+    // how many of them a block may add. Refused, never truncated — a truncated fee leg is a payee
+    // silently not paid.
+    builder.check_model_payout_room(TransitionBuilder::model_payout_rows_would_add(false, false))?;
     if *holder == Hash64::default() {
         return Err(PalwStateV2Error::ModelHolderUnset);
     }
@@ -10952,6 +11060,12 @@ fn model_sell_v1(
     pay_net_via_coinbase: bool,
 ) -> Result<crate::palw_model_market_v1::PalwModelSellQuoteV1, PalwStateV2Error> {
     use crate::palw_model_market_v1::palw_model_sell_quote_v1;
+    // **ADR-0042 Decision 10's queue has room, or this move does not happen** (audit M-10).
+    // Checked first, before any read that could leave a half-applied move: the fee legs below are
+    // rows in `pending_payouts`, which is in the state-root preimage, and this is the only bound on
+    // how many of them a block may add. Refused, never truncated — a truncated fee leg is a payee
+    // silently not paid.
+    builder.check_model_payout_room(TransitionBuilder::model_payout_rows_would_add(pay_net_via_coinbase, false))?;
     let market = *builder.state.model_markets.get(line_id).ok_or(PalwStateV2Error::ModelMarketMissing(*line_id))?;
     let held = builder.state.model_position(line_id, holder);
     if units_in == 0 || units_in > held {
@@ -10997,6 +11111,10 @@ fn evm_refusal_reason(error: &PalwStateV2Error) -> u8 {
         PalwStateV2Error::ModelSellPaysNothing(_) => PAYS_NOTHING,
         PalwStateV2Error::ModelMarketAlreadySeeded(_) => ALREADY_SEEDED,
         PalwStateV2Error::ModelSeedTooSmall { .. } => SEED_TOO_SMALL,
+        // ADR-0089 Decision 6 (audit M-10): the fold's own payout queue is full, so this action is
+        // refused with a reason and its escrow is refunded at the settling block — the Decision's
+        // own mechanism, applied to the Decision's own resource.
+        PalwStateV2Error::ModelPayoutQueueFull { .. } => PAYOUT_QUEUE_FULL,
         PalwStateV2Error::ModelClassClosed(_) => CLASS_CLOSED,
         _ => OTHER,
     }
@@ -22996,6 +23114,178 @@ pub(crate) mod tests {
                 market.msk_reserve + market.burned_sompi + market.registrant_paid_sompi + market.contributor_paid_sompi,
                 "ADR-0087 M2 with the split (and ADR-0090's seed in the reserve)"
             );
+        }
+
+        /// **ADR-0042 Decision 10's queue is bounded, and a claim still drains ahead of every
+        /// market row** (mainnet audit 2026-09-06, M-10).
+        ///
+        /// `PALW_V2_MAX_PAYOUTS_PER_BLOCK`'s sizing premise is "at most one new claim per block",
+        /// and ADR-0087's market is a second writer into the same map — reached from the carrier
+        /// lane and from up to `MAX_MARKET_ACTIONS_PER_EVM_BLOCK` EVM actions, through the SAME
+        /// three functions. The premise is restored by bounding the writer, and this test asserts
+        /// the three things that bound is made of, on a line whose leg pays BOTH halves (an owner
+        /// bond and an adopted proposal's contributor) so every leg a move can write is written.
+        ///
+        /// It is deliberately not a test of the constants' values: parts (1) and (2) read
+        /// `PALW_V2_MAX_PENDING_PAYOUTS` and `PALW_V2_MAX_PAYOUTS_PER_BLOCK` from the code, so
+        /// re-tuning either keeps the test meaningful and only the RULES fail.
+        #[test]
+        fn the_payout_queue_cannot_be_grown_past_its_cap_by_market_moves() {
+            let (p, s, class) = owned_class_chain();
+            // A line with an owner and an adopted contributor: the leg splits 25/75 and both halves
+            // are payable, so a buy writes two rows and a carrier sell three.
+            let proposal = PalwConsensusObjectV2::ModelProposalPosted {
+                line_id: class,
+                root: h64(0xC1),
+                note_hash: h64(0xC2),
+                by: bond_key(2),
+                signature: vec![1],
+            };
+            let id = model_proposal_id_v1(&class, &h64(0xC1), &bond_key(2));
+            let (s3, _) = apply_lines(&s, &p, &ctx(3, 251, 3), std::slice::from_ref(&proposal), None);
+            let share = PalwConsensusObjectV2::ModelLineRolesSet {
+                line_id: class,
+                developer: None,
+                maintainer: None,
+                contributor_permille_of_leg: 250,
+                signature: vec![1],
+            };
+            let mut adopting = publish(class, 2, h64(0xC1), false);
+            if let PalwConsensusObjectV2::ModelVersionPublished { adopted_from, .. } = &mut adopting {
+                *adopted_from = Some(id);
+            }
+            let (s4, _) = apply_lines(&s3, &p, &ctx(4, 252, 4), &[share, adopting], None);
+
+            let buyer = h64(0xB0_0001);
+            let seed = PalwConsensusObjectV2::ModelSeed {
+                line_id: class,
+                seeder: h64(0xB0_0009),
+                msk_seed: crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1,
+                sink_index: 1,
+            };
+            let sell_one = |units: u64| PalwConsensusObjectV2::ModelSell {
+                line_id: class,
+                holder: buyer,
+                units_in: units,
+                min_msk_out: 0,
+                pubkey: vec![1],
+                signature: vec![1],
+            };
+
+            // ---- (3) the sizing identity: what a move writes is what the bound counts ----------
+            // Each of these blocks starts with fewer than PALW_V2_MAX_PAYOUTS_PER_BLOCK rows
+            // queued, so step 1b drains the lot and the count afterwards is this move's own rows.
+            let (s5, _) = apply_lines(&s4, &p, &ctx(5, 253, 5), std::slice::from_ref(&seed), None);
+            assert_eq!(s5.pending_payouts_iter().count(), 0, "ADR-0090 Decision 2: a seed takes no leg");
+            assert_eq!(TransitionBuilder::model_payout_rows_would_add(false, true), 0);
+
+            let buy = PalwConsensusObjectV2::ModelBuy {
+                line_id: class,
+                holder: buyer,
+                msk_in: 10_000 * MSK,
+                min_units_out: 0,
+                sink_index: 1,
+            };
+            let (s6, _) = apply_lines(&s5, &p, &ctx(6, 254, 6), &[buy], None);
+            assert_eq!(
+                s6.pending_payouts_iter().count(),
+                TransitionBuilder::model_payout_rows_would_add(false, false),
+                "a buy writes the owner leg and the contributor leg, and the bound counts exactly those"
+            );
+
+            let (s7, _) = apply_lines(&s6, &p, &ctx(7, 255, 7), &[sell_one(1)], None);
+            assert_eq!(
+                s7.pending_payouts_iter().count(),
+                TransitionBuilder::model_payout_rows_would_add(true, false),
+                "a carrier sell writes those two plus `sell-net`, and the bound counts exactly those"
+            );
+
+            // ---- (1) the cap: market moves cannot grow the queue past it -----------------------
+            // Twenty carrier sells a block is sixty rows against a drain of eight, so the queue
+            // fills; every intermediate state must still respect the cap, and the block that would
+            // breach it must be REFUSED by name rather than truncated.
+            let per_block = 20usize;
+            let mut state = s7.clone();
+            let mut daa = 256u64;
+            let mut refusal = None;
+            for round in 0..64 {
+                let objects: Vec<_> = (0..per_block).map(|_| sell_one(1)).collect();
+                match try_lines(&state, &p, &ctx(8 + round, daa, 8 + round), &objects, None) {
+                    Ok((next, _)) => {
+                        assert!(
+                            next.pending_payouts_iter().count() <= PALW_V2_MAX_PENDING_PAYOUTS,
+                            "the queue never exceeds its cap"
+                        );
+                        state = next;
+                    }
+                    Err(e) => {
+                        refusal = Some(e);
+                        break;
+                    }
+                }
+                daa += 1;
+            }
+            let refusal = refusal.expect("twenty sells a block against a drain of eight must reach the cap");
+            assert!(
+                matches!(
+                    refusal,
+                    PalwStateV2Error::ModelPayoutQueueFull { cap, want, .. } if cap == PALW_V2_MAX_PENDING_PAYOUTS && want == 3
+                ),
+                "the refusal names the queue, its cap and the rows the move wanted: {refusal}"
+            );
+            let held = state.pending_payouts_iter().count();
+            assert!(held <= PALW_V2_MAX_PENDING_PAYOUTS, "and the state it refused from is itself under the cap");
+            assert!(
+                held + per_block * 3 > PALW_V2_MAX_PENDING_PAYOUTS,
+                "the cap is what refused, not some earlier limit: the last accepted block left the queue within one \
+                 block's writing of it"
+            );
+
+            // ..and the edge itself, pinned by the legal maximum rather than only by the refusal.
+            // The block drains PALW_V2_MAX_PAYOUTS_PER_BLOCK rows before any object is applied, so
+            // a queue of `rows + drain` is a queue of `rows` by the time the move is quoted.
+            let at_the_edge = |rows: usize| {
+                let mut st = s7.clone();
+                st.pending_payouts.clear();
+                for i in 0..(rows + PALW_V2_MAX_PAYOUTS_PER_BLOCK) {
+                    let mut bytes = [0u8; 64];
+                    bytes[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                    st.pending_payouts.insert(Hash64::from_bytes(bytes), PalwPayoutV2 { payload: h64(0xFEED), amount: 1 });
+                }
+                try_lines(&st, &p, &ctx(900, 900, 900), &[sell_one(1)], None)
+            };
+            assert!(
+                at_the_edge(PALW_V2_MAX_PENDING_PAYOUTS - 3).is_ok(),
+                "a sell that fills the queue's last three rows is legal — the cap is a ceiling, not a margin"
+            );
+            let over = at_the_edge(PALW_V2_MAX_PENDING_PAYOUTS - 2).expect_err("one row over the ceiling is refused");
+            assert!(
+                matches!(over, PalwStateV2Error::ModelPayoutQueueFull { held, want: 3, cap }
+                    if cap == PALW_V2_MAX_PENDING_PAYOUTS && held == PALW_V2_MAX_PENDING_PAYOUTS - 2),
+                "and the refusal names where the queue stood: {over}"
+            );
+
+            // ---- (2) the drain's prefix still belongs to claims --------------------------------
+            // The rule is about the KEY SPACE, not about the one id this fixture happens to make:
+            // every market row is minted in the top 1/256, so every claim id outside that band
+            // sorts ahead of all of them and takes the drain's prefix.
+            let market_keys: Vec<Hash64> = state.pending_payouts_iter().map(|(k, _)| *k).collect();
+            assert!(market_keys.len() > PALW_V2_MAX_PAYOUTS_PER_BLOCK, "enough rows queued for the question to matter");
+            assert!(
+                market_keys.iter().all(|k| k.as_bytes()[0] == PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX),
+                "every market payout key carries the market prefix"
+            );
+            for lead in [0u8, 1, 0x42, 0x7F, 0xC3, 0xFE] {
+                let mut bytes = [0xA5u8; 64];
+                bytes[0] = lead;
+                let claim_id = Hash64::from_bytes(bytes);
+                assert!(market_keys.iter().all(|m| claim_id < *m), "a claim id outside the top 1/256 sorts first");
+                let mut with_claim = state.clone();
+                with_claim.pending_payouts.insert(claim_id, PalwPayoutV2 { payload: h64(0xFEED), amount: 1 });
+                let prefix: Vec<Hash64> =
+                    with_claim.pending_payouts_iter().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).map(|(k, _)| *k).collect();
+                assert_eq!(prefix[0], claim_id, "the block that drains eight rows pays the claim, not the market backlog");
+            }
         }
 
         #[test]

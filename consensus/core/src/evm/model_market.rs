@@ -224,6 +224,12 @@ pub mod refusal {
     pub const SEED_TOO_SMALL: u8 = 11;
     /// ADR-0090: the line's class is frozen.
     pub const CLASS_CLOSED: u8 = 12;
+    /// **ADR-0042 Decision 10's payout queue is full** (mainnet audit 2026-09-06, M-10): the fold
+    /// would have to write this move's fee legs into `pending_payouts` past
+    /// `PALW_V2_MAX_PENDING_PAYOUTS`. Decision 6's own mechanism — the action is refused with a
+    /// reason and the caller's escrow is refunded at the settling block — applied to the queue.
+    /// The queue drains `PALW_V2_MAX_PAYOUTS_PER_BLOCK` rows a block, so it clears on its own.
+    pub const PAYOUT_QUEUE_FULL: u8 = 13;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
