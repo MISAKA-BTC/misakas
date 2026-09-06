@@ -211,31 +211,37 @@ pub fn fork_id_gate_armed_v1(params: &Params) -> bool {
 /// for the entire rollout window BEFORE the fence fired. That is M1-6's deploy-day partition
 /// arriving through the module written to prevent it.
 ///
-/// A later ADR arming a different fence adds it HERE. `0` and `u64::MAX` are excluded for the same
-/// reasons [`Params::fence_schedule_v1`] excludes them: a fence active at genesis is
-/// `consensus_identity_id`'s business and never "crossed", and `never()` is not a height.
+/// **DERIVED from [`Params::palw_fences_v1`], not restated** (mainnet audit 2026-09-06, M-6).
 ///
-/// Today: ADR-0072's `palw_attempt_activation`, ADR-0083's `palw_difficulty_priced_rows` (the
-/// difficulty window counts only bits-priced rows; scheduled at DAA 1150 on testnet-11), its
-/// second half `palw_receipt_rows_unpriced` (the receipt lane leaves the count; mainnet audit
-/// 2026-09-05, dormant on testnet-11 until the operator schedules it), and ADR-0062's
-/// `palw_da_court` (testnet-11's second flag day, scheduled at DAA 1900): past it a node folds two
-/// consensus objects an un-upgraded peer refuses, locks a retiring bond for the court's own
-/// windows, and keeps a wider pruning horizon — three rules whose crossing an un-upgraded peer
-/// cannot follow, which is exactly what this gate is for. `palw_panel_da` and the three model
-/// fences ride the same height and are NOT listed separately: the gate keys on heights, and
-/// listing one fence per rule at the same height would only repeat it. A fence
-/// that is scheduled on a preset is that operator's opt-in — there is no second field to set,
-/// because the schedule entry already says everything the gate needs: the height, and that this
-/// build carries the rule. Sorted and deduplicated so the list reads as a schedule.
+/// This used to be a hand-written array of four field names, and the module's own doc directly
+/// above told a later ADR to add its fence "HERE". That step is a thing a person has to remember,
+/// and by the 2026-09-06 merge it had been skipped four times: `palw_court_ladder`,
+/// `palw_model_market`, `palw_model_lines` and `palw_model_evm` joined `Params` and not this list.
+/// It happened to cost nothing on testnet-11 — the three model fences ride `palw_da_court`'s
+/// height, so `dedup` produced the same set — and it costs everything on a carded mainnet, where a
+/// card arms its fences at `always()` (score 0, filtered below) and writes none of the four names:
+/// `fork_id_gate_armed_v1` is then `false` permanently, `evaluate_fork_id_v1` returns `Unfenced`
+/// before comparing anything, and the fence the operator schedules NEXT is not gated either.
+///
+/// Every PALW fence qualifies, and that is not a widening: a top-level `Option<ForkActivation>` on
+/// `Params` is by construction a rule an un-upgraded peer does not implement, which is exactly the
+/// criterion the doc above states. What is excluded stays excluded — `crescendo_activation`, the
+/// PoW activations and the EVM scores are rules every build in circulation implements, and
+/// `palw_fences_v1` does not return them.
+///
+/// `0` and `u64::MAX` are excluded for the same reasons [`Params::fence_schedule_v1`] excludes
+/// them: a fence active at genesis is `consensus_identity_id`'s business and never "crossed", and
+/// `never()` is not a height. Sorted and deduplicated so the list reads as a schedule — which is
+/// also why fences that ride one height contribute one entry, as `palw_panel_da` and the three
+/// model fences do on testnet-11 behind `palw_da_court`.
 pub fn fork_id_gate_fences_v1(params: &Params) -> Vec<u64> {
-    let mut fences: Vec<u64> =
-        [params.palw_attempt_activation, params.palw_difficulty_priced_rows, params.palw_receipt_rows_unpriced, params.palw_da_court]
-            .into_iter()
-            .flatten()
-            .map(|fence| fence.daa_score())
-            .filter(|&score| score != 0 && score != u64::MAX)
-            .collect();
+    let mut fences: Vec<u64> = params
+        .palw_fences_v1()
+        .into_iter()
+        .filter_map(|(_, fence)| fence)
+        .map(|fence| fence.daa_score())
+        .filter(|&score| score != 0 && score != u64::MAX)
+        .collect();
     fences.sort_unstable();
     fences.dedup();
     fences
@@ -369,7 +375,7 @@ pub fn evaluate_fork_id_v1(params: &Params, local_daa_score: u64, peer_fired: &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::params::{ForkActivation, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS};
+    use crate::config::params::{ForkActivation, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, palw_rc_shipped_params};
     use crate::network::NetworkId;
 
     fn shipped() -> Vec<(&'static str, Params)> {
@@ -380,6 +386,116 @@ mod tests {
             ("devnet", Params::from(NetworkId::new(crate::network::NetworkType::Devnet))),
             ("simnet", Params::from(NetworkId::new(crate::network::NetworkType::Simnet))),
         ]
+    }
+
+    /// **The gate names every PALW fence a preset SCHEDULES** (mainnet audit 2026-09-06, M-6).
+    ///
+    /// Two clauses. The first is the RULE, and the probe is what makes it a test of the rule rather
+    /// than of the patch: every PALW fence on `Params`, each at its own distinct height, must appear
+    /// in the gate's schedule. On the pre-patch tree it fails with twenty-one unnamed fences and
+    /// cannot be satisfied by adding one name to a hand-written array — which is the step the
+    /// module's own doc used to prescribe, and which the 2026-09-06 merge skipped four times.
+    ///
+    /// The second is the INVARIANCE clause, and it is the guard on the repair: deriving the list
+    /// must not widen the gate on the live chain. testnet-11's set is {1150, 1900} before and
+    /// after, because the three model fences ride `palw_da_court`'s height and dedup away.
+    #[test]
+    fn the_fork_id_gate_names_every_scheduled_palw_fence() {
+        for (name, params) in [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())] {
+            let gate = fork_id_gate_fences_v1(&params);
+            for (fence_name, fence) in params.palw_fences_v1() {
+                let Some(fence) = fence else { continue };
+                let score = fence.daa_score();
+                if score == 0 || score == u64::MAX {
+                    continue;
+                }
+                assert!(
+                    gate.contains(&score),
+                    "{name}: {fence_name} is scheduled at {score} and the fork-id gate does not name it: an un-upgraded \
+                     seat would fork at the height with nothing but a log line"
+                );
+            }
+        }
+
+        // The probe: EVERY fence at its own distinct height, so no fence can hide behind a
+        // neighbour that happens to share one. A hand-written list cannot pass this.
+        let mut probe = palw_rc_shipped_params();
+        let names: Vec<&'static str> = probe.palw_fences_v1().into_iter().map(|(n, _)| n).collect();
+        for (i, name) in names.iter().enumerate() {
+            let at = ForkActivation::new(9_000_000 + i as u64);
+            set_fence_for_probe(&mut probe, name, at);
+        }
+        let gate = fork_id_gate_fences_v1(&probe);
+        for (i, name) in names.iter().enumerate() {
+            let score = 9_000_000 + i as u64;
+            assert!(gate.contains(&score), "{name} scheduled at {score} and the gate does not name it");
+        }
+
+        // The invariance the repair had to meet: the live chain's gate set does not move.
+        assert_eq!(
+            fork_id_gate_fences_v1(&palw_rc_shipped_params()),
+            vec![1150, crate::config::params::PALW_RC_DA_COURT_FENCE_DAA],
+            "testnet-11's gate set is ADR-0083's flag day and ADR-0062's, and deriving the list must not widen it"
+        );
+    }
+
+    /// Write one named fence on a probe `Params`. A `match` rather than reflection, so a fence
+    /// added to `Params` and not to `palw_fences_v1` cannot reach here at all, and one added to
+    /// both but not here fails the probe by name instead of passing silently.
+    fn set_fence_for_probe(params: &mut Params, name: &str, at: ForkActivation) {
+        match name {
+            "palw_bootstrap_activation" => params.palw_bootstrap_activation = Some(at),
+            "palw_unavailable_abstains" => params.palw_unavailable_abstains = Some(at),
+            "palw_bond_maturity" => {
+                params.palw_bond_maturity = Some(crate::config::params::PalwBondMaturityV1 { activation: at, window_daa: 1_000 })
+            }
+            "palw_frontier_provenance" => params.palw_frontier_provenance = Some(at),
+            "palw_heartbeat" => {
+                let hb = params.palw_heartbeat.as_mut().expect("the RC probe base carries the heartbeat lane");
+                hb.activation = at;
+            }
+            "palw_attempt_work" => {
+                let work = params.palw_attempt_work.as_mut().expect("the RC probe base carries the attempt-work constant");
+                work.activation = at;
+            }
+            "palw_attempt_activation" => params.palw_attempt_activation = Some(at),
+            "palw_inactivity_leak" => {
+                params.palw_inactivity_leak = Some(crate::config::params::PalwInactivityLeakV1 {
+                    activation: at,
+                    t_leak_daa: 1_000,
+                    reentry_final_depth_daa: 1_000,
+                })
+            }
+            "palw_beacon_fold" => {
+                params.palw_beacon_fold = Some(crate::config::params::PalwBeaconFoldV1 {
+                    activation: at,
+                    k: crate::palw_fp_beacon_v3::PALW_BEACON_FOLD_MIN_K_V1,
+                })
+            }
+            "palw_capability_bound" => params.palw_capability_bound = Some(at),
+            "palw_context_ladder" => params.palw_context_ladder = Some(at),
+            "palw_panel_da" => params.palw_panel_da = Some(at),
+            "palw_certification_rent" => params.palw_certification_rent = Some(at),
+            "palw_uncertified_weightless" => params.palw_uncertified_weightless = Some(at),
+            "palw_da_court" => params.palw_da_court = Some(at),
+            "palw_court_ladder" => params.palw_court_ladder = Some(at),
+            "palw_fp_da_pins" => params.palw_fp_da_pins = Some(at),
+            "palw_validator_payout_bounds" => params.palw_validator_payout_bounds = Some(at),
+            "palw_epoch_boundary_budget" => params.palw_epoch_boundary_budget = Some(at),
+            "palw_fp_ruleset_caps" => params.palw_fp_ruleset_caps = Some(at),
+            "palw_model_market" => params.palw_model_market = Some(at),
+            "palw_model_lines" => params.palw_model_lines = Some(at),
+            "palw_model_evm" => params.palw_model_evm = Some(at),
+            "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
+            "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
+            "palw_kary_court" => params.palw_kary_court = Some(at),
+            "palw_court_responder_coverage" => params.palw_court_responder_coverage = Some(at),
+            "palw_fp_decode_rules" => params.palw_fp_decode_rules = Some(at),
+            "palw_difficulty_priced_rows" => params.palw_difficulty_priced_rows = Some(at),
+            "palw_receipt_rows_unpriced" => params.palw_receipt_rows_unpriced = Some(at),
+            "palw_attempt_header_pins" => params.palw_attempt_header_pins = Some(at),
+            other => panic!("{other} is a PALW fence `palw_fences_v1` returns and this probe cannot set — add it here"),
+        }
     }
 
     /// **The shipped schedules, measured rather than assumed** — and the measurement is the reason

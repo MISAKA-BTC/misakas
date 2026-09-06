@@ -9169,6 +9169,15 @@ fn mainnet_card_params_v1(
 ///   registers. `a_carded_registry_still_draws_a_full_panel_with_the_capability_fence_armed` is the
 ///   assertion, over the card's own assembly, not a deployment note.
 ///
+/// **What a card does NOT get from this function, and the checklist item it owes.** Every fence
+/// here is `always()`, i.e. DAA score 0, and `fork_id_gate_fences_v1` excludes 0 by design — a
+/// fence in force at block 1 is `consensus_identity_id`'s business and is never "crossed". So a
+/// carded mainnet's fork-id gate is `Unfenced` from genesis, correctly, and it BECOMES armed the
+/// moment the operator schedules any fence at a height. That is now automatic (the gate list is
+/// derived from [`Params::palw_fences_v1`]), where it used to require a per-fence edit to
+/// `fork_id_v1::fork_id_gate_fences_v1` that nobody's checklist named — see mainnet audit
+/// 2026-09-06, M-6, and `docs/mainnet-palw-certification-runbook.md` §0.
+///
 /// testnet-11 arms none of these from genesis; each is a scheduled height or a re-mint there,
 /// which is the operator's call and not this function's. Devnet arms the context ladder.
 fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
