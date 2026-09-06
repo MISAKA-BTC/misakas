@@ -42,6 +42,37 @@ impl<T> CachedDbItem<T> {
         }
     }
 
+    /// **A PROJECTION of the cached item, without copying it** (mainnet audit H-1).
+    ///
+    /// [`Self::read`] clones the whole `T` on every call. That is the right shape for the small
+    /// singletons this type was written for and the wrong one for an item that carries megabytes:
+    /// `PalwStateTipRecordV2` holds the entire borsh carriage, so a caller that wanted only the two
+    /// hashes inside it paid a full memcpy of the carriage per call — the audit M-7 cache's own HIT
+    /// path among them, which skipped the decode and the re-rooting and then copied the bytes
+    /// anyway. This hands `op` a reference under the read lock instead.
+    ///
+    /// Same trust discipline as `read`: on a cold cache it fetches, deserializes and populates,
+    /// and a missing key is `KeyNotFound`, not `None`.
+    pub fn read_with<R>(&self, op: impl FnOnce(&T) -> R) -> Result<R, StoreError>
+    where
+        T: Clone + DeserializeOwned,
+    {
+        {
+            let guard = self.cached_item.read();
+            if let Some(item) = guard.as_ref() {
+                return Ok(op(item));
+            }
+        }
+        if let Some(slice) = self.db.get_pinned(&self.key)? {
+            let item: T = bincode::deserialize(&slice)?;
+            let projected = op(&item);
+            *self.cached_item.write() = Some(item);
+            Ok(projected)
+        } else {
+            Err(StoreError::KeyNotFound(DbKey::prefix_only(&self.key)))
+        }
+    }
+
     pub fn write(&mut self, mut writer: impl DbWriter, item: &T) -> Result<(), StoreError>
     where
         T: Clone + Serialize,

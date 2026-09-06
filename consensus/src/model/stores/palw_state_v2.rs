@@ -126,6 +126,25 @@ pub struct DbPalwStateV2Store {
     /// rule: it is what makes "the cache works" a number in a test rather than an assertion about
     /// code that was read.
     tip_bytes_decoded: Arc<std::sync::atomic::AtomicU64>,
+    /// **The pruning-point snapshot's SERVED CARRIAGE, materialized once per snapshot row**
+    /// (mainnet audit H-1). The p2p sibling of `tip_cache`, and the same reasoning: a 40-byte
+    /// `RequestPruningPointPalwState` from any peer that completed the handshake bought a full
+    /// borsh decode, both index rebuilds, both consistency walks, a complete `state_root()` and a
+    /// deep copy of the whole state into a carriage — with no per-peer budget and no operator
+    /// opt-in, on every mainnet node rather than only on the ones exposing wRPC.
+    ///
+    /// What is cached is the CARRIAGE, not the state: the carriage is the served answer and it is
+    /// produced by exactly the expression the uncached path produced it by, so the bytes on the
+    /// wire are identical and the requester's `state_root` comparison is untouched.
+    ///
+    /// Keyed on `(block, state_root)` read fresh from the snapshot row on every call, which is
+    /// what makes it correct across reorgs: a re-captured snapshot writes a different row, the key
+    /// misses, and the answer is re-materialized. Nothing invalidates this cache by hand, so
+    /// nothing can forget to.
+    pruning_snapshot_cache: Arc<parking_lot::Mutex<Option<(BlockHash, Hash64, Arc<PalwStateCarriageV2>)>>>,
+    /// Carriage bytes borsh-decoded for pruning-point snapshot serves. The same measurement as
+    /// `tip_bytes_decoded`, for the lane that has no authentication in front of it at all.
+    pruning_snapshot_bytes_decoded: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl DbPalwStateV2Store {
@@ -139,6 +158,8 @@ impl DbPalwStateV2Store {
             uncertified_weightless: None,
             tip_cache: Arc::new(parking_lot::Mutex::new(None)),
             tip_bytes_decoded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            pruning_snapshot_cache: Arc::new(parking_lot::Mutex::new(None)),
+            pruning_snapshot_bytes_decoded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -146,6 +167,12 @@ impl DbPalwStateV2Store {
     /// measurement).
     pub fn tip_bytes_decoded(&self) -> u64 {
         self.tip_bytes_decoded.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Carriage bytes borsh-decoded serving pruning-point snapshots since this store was built
+    /// (mainnet audit H-1's measurement — the p2p lane's twin of the number above).
+    pub fn pruning_snapshot_bytes_decoded(&self) -> u64 {
+        self.pruning_snapshot_bytes_decoded.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Install ADR-0069 Decision 7's fence. Every construction path starts dormant, so a caller
@@ -275,6 +302,28 @@ impl DbPalwStateV2Store {
         self.tip.write(BatchDbWriter::new(batch), &record)
     }
 
+    /// **The tip row's IDENTITY — block and root — WITHOUT copying the carriage** (mainnet audit
+    /// H-1). `tip_record()` clones the whole record, carriage bytes and all; a caller that only
+    /// needs to know which row it is looking at must not pay a memcpy of the state to find out.
+    pub(crate) fn tip_key(&self) -> StoreResult<Option<(BlockHash, Hash64)>> {
+        match self.tip.read_with(|record| (record.block, record.state_root)) {
+            Ok(key) => Ok(Some(key)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The pruning-snapshot row's identity, on the same terms as [`Self::tip_key`]. This is what
+    /// the p2p serve path compares the peer's requested hash against: a request naming a point
+    /// this node did not capture must cost two hash comparisons, not a decode and not a copy.
+    fn pruning_snapshot_key(&self) -> StoreResult<Option<(BlockHash, Hash64)>> {
+        match self.pruning_snapshot.read_with(|record| (record.block, record.state_root)) {
+            Ok(key) => Ok(Some(key)),
+            Err(StoreError::KeyNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// The tip row undecoded (which block, which root), without rebuilding the state.
     pub fn tip_record(&self) -> StoreResult<Option<PalwStateTipRecordV2>> {
         match self.tip.read() {
@@ -357,6 +406,65 @@ impl DbPalwStateV2Store {
         Ok(Some((record.block, state)))
     }
 
+    /// **The carriage a peer asking for `pruning_point` is served — the identity check FIRST, and
+    /// the materialization at most once per captured snapshot** (mainnet audit H-1).
+    ///
+    /// The serve path used to decode, rebuild both indices, walk both consistency checks,
+    /// recompute the root and deep-copy the state into a carriage, and only then ask whether the
+    /// block it had just rebuilt was the one the peer named. Any peer past the p2p handshake could
+    /// spend that with forty bytes, forever, in parallel, on the blocking pool block processing
+    /// shares. Both halves are fixed here, in the order that matters: a hash this node did not
+    /// capture costs two hash comparisons and no copy, and a hash it did costs one materialization
+    /// per snapshot row rather than one per request.
+    ///
+    /// **The answer is byte-identical to the uncached one by construction**: the value memoized is
+    /// `PalwStateCarriageV2::from_state(&state)` over exactly the state
+    /// [`Self::load_pruning_snapshot`] returns, so the requester's `state_root` comparison against
+    /// the pruning point's own header sees the same bytes it saw before. The round trip through
+    /// `into_state_v2` is kept, not skipped: the recorded root is still demanded back, so a
+    /// corrupted row is still refused rather than served.
+    ///
+    /// Invalidated by its own key: `(block, state_root)` is read from the row on every call, so a
+    /// re-capture at a new pruning point, or a reorg that rewrites the row, misses and
+    /// re-materializes. There is no hand-written invalidation to forget.
+    pub fn load_pruning_snapshot_carriage_cached(
+        &self,
+        params: &PalwStateParamsV2,
+        pruning_point: BlockHash,
+    ) -> StoreResult<Option<Arc<PalwStateCarriageV2>>> {
+        let Some((block, root)) = self.pruning_snapshot_key()? else {
+            return Ok(None);
+        };
+        // **The check that used to run after the damage.** Same predicate the caller applied
+        // afterwards, same `None` for a mismatch — only now nothing has been decoded or copied to
+        // reach it.
+        if block != pruning_point {
+            return Ok(None);
+        }
+        if let Some((cached_block, cached_root, carriage)) = self.pruning_snapshot_cache.lock().as_ref()
+            && *cached_block == block
+            && *cached_root == root
+        {
+            return Ok(Some(Arc::clone(carriage)));
+        }
+        let Some(record) = self.pruning_snapshot_record()? else {
+            return Ok(None);
+        };
+        if record.block != pruning_point {
+            return Ok(None); // the row moved between the key read and the record read
+        }
+        self.pruning_snapshot_bytes_decoded.fetch_add(record.carriage_borsh.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        let carriage = borsh::from_slice::<PalwStateCarriageV2>(&record.carriage_borsh)
+            .map_err(|e| StoreError::DataInconsistency(format!("palw v2 pruning snapshot does not decode: {e}")))?;
+        let armed = self.uncertified_weightless_at(&carriage);
+        let state = carriage
+            .into_state_v2(params, Some(record.state_root), armed)
+            .map_err(|e: PalwStateV2Error| StoreError::DataInconsistency(format!("palw v2 pruning snapshot refused: {e}")))?;
+        let served = Arc::new(PalwStateCarriageV2::from_state(&state));
+        *self.pruning_snapshot_cache.lock() = Some((record.block, record.state_root, Arc::clone(&served)));
+        Ok(Some(served))
+    }
+
     pub fn load_tip(&self, params: &PalwStateParamsV2) -> StoreResult<Option<(BlockHash, PalwChainStateV2)>> {
         let Some(record) = self.tip_record()? else {
             return Ok(None);
@@ -374,15 +482,23 @@ impl DbPalwStateV2Store {
     /// finding: an unauthenticated client looping `getPalwPendingChunkGroup` paid the node a decode,
     /// a consistency walk and a blake2b over the entire PALW state per ~200-byte request.
     pub fn load_tip_cached(&self, params: &PalwStateParamsV2) -> StoreResult<Option<(BlockHash, Arc<PalwChainStateV2>)>> {
+        // **The KEY first, and the record only on a miss** (mainnet audit H-1). `tip_record()`
+        // clones `carriage_borsh`, so the hit path used to skip the decode, the two index
+        // rebuilds, the two walks and the `state_root()` — and then memcpy the entire carriage
+        // anyway, once per unauthenticated call. A cache whose hit costs O(state) is not the
+        // bound audit M-7 said it was.
+        let Some((block, root)) = self.tip_key()? else {
+            return Ok(None);
+        };
+        if let Some((cached_block, cached_root, state)) = self.tip_cache.lock().as_ref()
+            && *cached_block == block
+            && *cached_root == root
+        {
+            return Ok(Some((block, Arc::clone(state))));
+        }
         let Some(record) = self.tip_record()? else {
             return Ok(None);
         };
-        if let Some((block, root, state)) = self.tip_cache.lock().as_ref()
-            && *block == record.block
-            && *root == record.state_root
-        {
-            return Ok(Some((record.block, Arc::clone(state))));
-        }
         let state = Arc::new(self.materialize_tip(&record, params)?);
         *self.tip_cache.lock() = Some((record.block, record.state_root, Arc::clone(&state)));
         Ok(Some((record.block, state)))
@@ -500,6 +616,105 @@ mod tests {
         let (block, state) = moved.load_tip_cached(&p).unwrap().expect("the tip is there");
         assert_eq!(block, c2.block, "the cache answered from a tip the chain has left");
         assert_eq!(*state, grand);
+    }
+
+    /// **A pruning-point snapshot serve costs one materialization per CAPTURED SNAPSHOT, and
+    /// nothing at all for a hash this node never captured** (mainnet audit H-1).
+    ///
+    /// The rule, not the patch: the serve path may reach the carriage however it likes, so long as
+    /// (a) a peer naming a point this node did not capture buys no decode, (b) a peer naming the
+    /// one it did buys at most one decode however often it asks, (c) the bytes handed over are the
+    /// bytes the pre-patch expression produced — the requester compares their root against the
+    /// pruning point's own header — and (d) a re-capture stops serving the point it has left.
+    /// Any implementation that satisfies those passes; one that regresses the ORDER of the
+    /// identity check, or the memo, or the served value, fails.
+    ///
+    /// Driven through ONE store instance, because that is the shape production has: the serve path
+    /// reads `self.palw_state_v2_store`, and `capture_pruning_point_palw_state` writes the same
+    /// one. A second `DbPalwStateV2Store` over the same database would answer from its own
+    /// `CachedDbItem`, which no write of this store's ever touches — a pre-existing property of
+    /// `CachedDbItem` that has nothing to do with this cache, and would make (d) measure it.
+    #[test]
+    fn a_pruning_point_snapshot_serve_decodes_once_per_row_and_not_at_all_for_a_hash_we_do_not_hold() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        store.reindex_if_stale().unwrap();
+
+        let p = params();
+        let c1 = ctx(0xB1, 100, 100);
+        let (child, _delta) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &c1, &registrations(), None).unwrap();
+        let mut batch = WriteBatch::default();
+        store.set_pruning_snapshot_batch(&mut batch, c1.block, &child).unwrap();
+        db.write(batch).unwrap();
+
+        const CALLS: u64 = 64;
+        let wrong = BlockHash::from_u64_word(0xBAD);
+        assert_ne!(wrong, c1.block);
+
+        // (a) A hash this node did not capture costs two hash comparisons — no decode, no copy.
+        for _ in 0..CALLS {
+            assert!(
+                store.load_pruning_snapshot_carriage_cached(&p, wrong).unwrap().is_none(),
+                "a point this node never captured must answer not-found"
+            );
+        }
+        assert_eq!(
+            store.pruning_snapshot_bytes_decoded(),
+            0,
+            "the peer's hash must be compared BEFORE anything is decoded — a wrong hash bought a full \
+             materialization per forty-byte request"
+        );
+
+        // (b) The captured point costs one materialization however often it is asked for.
+        let mut answers = Vec::new();
+        for _ in 0..CALLS {
+            answers.push(store.load_pruning_snapshot_carriage_cached(&p, c1.block).unwrap().expect("the snapshot is there"));
+        }
+        let first_carriage = store.pruning_snapshot_record().unwrap().unwrap().carriage_borsh.len() as u64;
+        assert_eq!(
+            store.pruning_snapshot_bytes_decoded(),
+            first_carriage,
+            "{CALLS} serves of one captured snapshot decoded more than one carriage"
+        );
+        for answer in &answers {
+            assert_eq!(**answer, *answers[0], "two serves of the same row disagreed");
+        }
+
+        // (c) The bytes are the pre-patch expression's bytes: the requester compares this
+        // carriage's root against the pruning point's own header, so a serve that is merely
+        // "equivalent" is a serve that fails IBD.
+        let uncached = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        let (block, state) = uncached.load_pruning_snapshot(&p).unwrap().expect("the snapshot is there");
+        assert_eq!(block, c1.block);
+        let expected = PalwStateCarriageV2::from_state(&state);
+        assert_eq!(*answers[0], expected, "the served carriage is not the one the uncached path produced");
+        assert_eq!(
+            borsh::to_vec(&*answers[0]).unwrap(),
+            borsh::to_vec(&expected).unwrap(),
+            "the bytes on the wire moved, which moves the root the requester verifies"
+        );
+
+        // (d) Re-capture at a different block: the key misses, the OLD point stops being served,
+        // and the new one costs exactly one more carriage. Nothing invalidates this by hand.
+        let c2 = ctx(0xB2, 101, 101);
+        let (grand, _delta2) = apply_palw_transition_v2(&child, &p, &c2, &[], None).unwrap();
+        assert_ne!(grand.state_root(), child.state_root(), "the fixture must move the state, not only the block");
+        let mut batch = WriteBatch::default();
+        store.set_pruning_snapshot_batch(&mut batch, c2.block, &grand).unwrap();
+        db.write(batch).unwrap();
+
+        assert!(
+            store.load_pruning_snapshot_carriage_cached(&p, c1.block).unwrap().is_none(),
+            "a re-captured snapshot must stop serving the point it has left"
+        );
+        let after = store.load_pruning_snapshot_carriage_cached(&p, c2.block).unwrap().expect("the new snapshot is there");
+        assert_eq!(*after, PalwStateCarriageV2::from_state(&grand), "the re-capture served the stale carriage");
+        let second_carriage = store.pruning_snapshot_record().unwrap().unwrap().carriage_borsh.len() as u64;
+        assert_eq!(
+            store.pruning_snapshot_bytes_decoded(),
+            first_carriage + second_carriage,
+            "the re-capture cost more than one materialization"
+        );
     }
 
     /// One real transition, through the disk and back: the loaded tip is the state the machine
