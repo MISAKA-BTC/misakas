@@ -252,15 +252,77 @@ pub fn palw_model_holder_of_pubkey_v1(pubkey: &[u8]) -> Hash64 {
     crate::dns_finality::validator_id_from_pubkey(pubkey)
 }
 
-/// The message a sell is signed over: the domain, the class, the holder, the units, the floor.
-pub fn palw_model_sell_message_v1(class_id: &Hash64, holder: &Hash64, units_in: u64, min_msk_out: u64) -> Vec<u8> {
-    let mut m = Vec::with_capacity(32 + 64 + 64 + 16);
+/// The message a sell is signed over: the tag, **the network**, the line, the holder, the units,
+/// the floor, **the position the holder is selling out of**, and **the score the authority dies at**.
+///
+/// **The last three are what stop it being a permanent bearer authorisation** (mainnet audit
+/// 2026-09-06, M-11). As first written this message bound the sell to nothing but its own terms, so
+/// a stranger could copy the public payload into a new transaction and re-fire it whenever the
+/// holder held `units_in` again — a forced liquidation with no revocation and no expiry, on which
+/// the line's owner collected 1 % every time. ADR-0087 M8 says "no other key can sell it"; nothing
+/// made that true of the second firing.
+///
+/// * `network_domain` — every ADR-0088 registry message carries `palw_network_domain_v2`; this one
+///   did not, so one signature was good on every chain that happened to share the line id.
+/// * `held_units` — the holder's position at signing. The fold refuses unless the position still
+///   stands at exactly that number, and the sell's own effect moves it, so **a signature is
+///   consumed by the move it authorises**. It becomes re-usable only if the holder buys back to the
+///   identical unit count, which is what `not_after_daa` then bounds. Statelessly single-use: no
+///   nonce table, no new consensus row, nothing added to the state root.
+/// * `not_after_daa` — the last DAA score at which the fold will honour it. An authority with an
+///   end.
+pub fn palw_model_sell_message_v1(
+    network_domain: Hash64,
+    class_id: &Hash64,
+    holder: &Hash64,
+    units_in: u64,
+    min_msk_out: u64,
+    held_units: u64,
+    not_after_daa: u64,
+) -> Vec<u8> {
+    let mut m = Vec::with_capacity(32 + 64 + 64 + 64 + 32);
     m.extend_from_slice(PALW_MODEL_SELL_SIGN_DOMAIN_V1);
+    m.extend_from_slice(network_domain.as_byte_slice());
     m.extend_from_slice(class_id.as_byte_slice());
     m.extend_from_slice(holder.as_byte_slice());
     m.extend_from_slice(&units_in.to_le_bytes());
     m.extend_from_slice(&min_msk_out.to_le_bytes());
+    m.extend_from_slice(&held_units.to_le_bytes());
+    m.extend_from_slice(&not_after_daa.to_le_bytes());
     m
+}
+
+/// **The longest a sell's authority may run** (audit M-11). A holder who signs for a window longer
+/// than this is refused at acceptance, so "forever" is not expressible. 4,000 DAA — the same span
+/// ADR-0088 Decision 2 gives a superseded version's grace (`PALW_VERSION_GRACE_DAA_V1`), so the
+/// chain has one idea of "long enough to act, short enough to forget".
+pub const PALW_MODEL_SELL_MAX_WINDOW_DAA_V1: u64 = 4_000;
+
+/// What a block at `point_daa` may do with a sell that dies at `not_after_daa` (audit M-11).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwModelSellWindowV1 {
+    /// The authority is live here.
+    Live,
+    /// The score is past the one the holder signed for.
+    Expired,
+    /// The window it names is longer than the chain honours; `daa` is the span it asked for.
+    TooLong { daa: u64 },
+}
+
+/// **ADR-0087 M8's authority has an end, and the end is bounded** (mainnet audit 2026-09-06, M-11).
+///
+/// Both halves live here, in one function, so acceptance cannot ask one of them and a later reader
+/// the other. `not_after_daa` is inclusive: the score the holder signed for is a score their sell
+/// still fills at.
+pub fn palw_model_sell_window_v1(point_daa: u64, not_after_daa: u64) -> PalwModelSellWindowV1 {
+    if point_daa > not_after_daa {
+        return PalwModelSellWindowV1::Expired;
+    }
+    let span = not_after_daa - point_daa;
+    if span > PALW_MODEL_SELL_MAX_WINDOW_DAA_V1 {
+        return PalwModelSellWindowV1::TooLong { daa: span };
+    }
+    PalwModelSellWindowV1::Live
 }
 
 #[cfg(test)]
@@ -447,14 +509,77 @@ mod tests {
         assert_eq!(palw_model_sink_class_v1(&ScriptPublicKey::new(0, crate::tx::ScriptVec::from_slice(&forged))), None);
     }
 
-    /// The sell message binds every field a holder commits to.
+    /// **A sell signature authorises one sale, on one chain, out of one position, until one score**
+    /// (mainnet audit 2026-09-06, M-11).
+    ///
+    /// ADR-0087 M8 is "no other key can sell it". The message as first written bound the domain,
+    /// the line, the holder, the units and the floor — and nothing else — so a stranger could copy
+    /// the public payload out of a mined transaction and re-fire it whenever the holder held
+    /// `units_in` again. The rule this test states is that every input a replay would have to reuse
+    /// is IN the signed bytes: change any one of the seven and the holder's signature no longer
+    /// speaks for it.
+    ///
+    /// The three that were missing are asserted first, because those are the ones the old message
+    /// would have passed this test without.
     #[test]
-    fn the_sell_message_binds_its_fields() {
+    fn a_sell_signature_authorises_one_sale_on_one_chain_and_then_dies() {
         let (c, h) = (Hash64::from_bytes([1u8; 64]), Hash64::from_bytes([2u8; 64]));
-        let m = palw_model_sell_message_v1(&c, &h, 5, 6);
-        assert_ne!(m, palw_model_sell_message_v1(&c, &h, 5, 7));
-        assert_ne!(m, palw_model_sell_message_v1(&c, &h, 6, 6));
-        assert_ne!(m, palw_model_sell_message_v1(&h, &c, 5, 6));
-        assert!(m.starts_with(PALW_MODEL_SELL_SIGN_DOMAIN_V1));
+        let net_a = Hash64::from_bytes([3u8; 64]);
+        let net_b = Hash64::from_bytes([4u8; 64]);
+        let m = palw_model_sell_message_v1(net_a, &c, &h, 5, 6, 40, 1_000);
+
+        // The three the audit found missing.
+        assert_ne!(m, palw_model_sell_message_v1(net_b, &c, &h, 5, 6, 40, 1_000), "one chain: the network domain is signed");
+        assert_ne!(m, palw_model_sell_message_v1(net_a, &c, &h, 5, 6, 41, 1_000), "one position: `held_units` is signed");
+        assert_ne!(m, palw_model_sell_message_v1(net_a, &c, &h, 5, 6, 40, 1_001), "one window: `not_after_daa` is signed");
+
+        // ..and the four it always had.
+        assert_ne!(m, palw_model_sell_message_v1(net_a, &c, &h, 5, 7, 40, 1_000), "the floor is signed");
+        assert_ne!(m, palw_model_sell_message_v1(net_a, &c, &h, 6, 6, 40, 1_000), "the size is signed");
+        assert_ne!(m, palw_model_sell_message_v1(net_a, &h, &c, 5, 6, 40, 1_000), "the line and the holder are signed");
+        assert!(m.starts_with(PALW_MODEL_SELL_SIGN_DOMAIN_V1), "and the tag says which message this is");
+
+        // No two of the seven can be swapped for one another to reach the same bytes: every field
+        // has a fixed offset, so the message is unambiguous rather than merely different.
+        let all: Vec<Vec<u8>> = vec![
+            m.clone(),
+            palw_model_sell_message_v1(net_b, &c, &h, 5, 6, 40, 1_000),
+            palw_model_sell_message_v1(net_a, &h, &c, 5, 6, 40, 1_000),
+            palw_model_sell_message_v1(net_a, &c, &h, 6, 6, 40, 1_000),
+            palw_model_sell_message_v1(net_a, &c, &h, 5, 7, 40, 1_000),
+            palw_model_sell_message_v1(net_a, &c, &h, 5, 6, 41, 1_000),
+            palw_model_sell_message_v1(net_a, &c, &h, 5, 6, 40, 1_001),
+        ];
+        for (i, a) in all.iter().enumerate() {
+            assert_eq!(a.len(), m.len(), "every message is the same fixed length");
+            for b in all.iter().skip(i + 1) {
+                assert_ne!(a, b, "seven distinct commitments produce seven distinct messages");
+            }
+        }
+
+        // The ceiling on the window is a real bound, not a comment: a holder cannot sign "forever".
+        assert_eq!(PALW_MODEL_SELL_MAX_WINDOW_DAA_V1, 4_000, "the longest authority the chain honours");
+    }
+
+    /// **The window is inclusive at its end and bounded at its start** (mainnet audit 2026-09-06,
+    /// M-11) — the two edges a holder and a miner disagree about if either is left to a comment.
+    #[test]
+    fn a_sell_authority_is_live_up_to_its_own_score_and_no_longer_than_the_ceiling() {
+        let max = PALW_MODEL_SELL_MAX_WINDOW_DAA_V1;
+        // The score the holder signed for is a score the sell still fills at.
+        assert_eq!(palw_model_sell_window_v1(1_000, 1_000), PalwModelSellWindowV1::Live, "inclusive at the end");
+        assert_eq!(palw_model_sell_window_v1(1_001, 1_000), PalwModelSellWindowV1::Expired, "and dead one score later");
+        assert_eq!(palw_model_sell_window_v1(u64::MAX, 1_000), PalwModelSellWindowV1::Expired);
+
+        // The longest window the chain honours is exactly the ceiling, and one past it is refused
+        // wherever the block sits — so "forever" is not expressible at any height.
+        assert_eq!(palw_model_sell_window_v1(500, 500 + max), PalwModelSellWindowV1::Live, "the legal maximum window");
+        assert_eq!(
+            palw_model_sell_window_v1(500, 500 + max + 1),
+            PalwModelSellWindowV1::TooLong { daa: max + 1 },
+            "one score longer is refused, and the refusal names the span asked for"
+        );
+        assert!(matches!(palw_model_sell_window_v1(0, u64::MAX), PalwModelSellWindowV1::TooLong { .. }), "no bearer instrument");
+        assert_eq!(palw_model_sell_window_v1(0, 0), PalwModelSellWindowV1::Live, "and a window of zero is a window");
     }
 }

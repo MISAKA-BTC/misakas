@@ -6091,18 +6091,44 @@ impl VirtualStateProcessor {
                         return Err(format!("a model seed of line {line_id} on a chain where the model market is not in force"));
                     }
                 }
-                Obj::ModelSell { line_id, holder, units_in, min_msk_out, pubkey, signature } => {
+                Obj::ModelSell { line_id, holder, units_in, min_msk_out, held_units, not_after_daa, pubkey, signature } => {
                     if !self.palw_model_market_active_at(point.daa_score) {
                         return Err(format!("a model sell of line {line_id} on a chain where the model market is not in force"));
                     }
                     if kaspa_consensus_core::palw_model_market_v1::palw_model_holder_of_pubkey_v1(pubkey) != *holder {
                         return Err(format!("a model sell of line {line_id} is signed by a key that is not the holder's"));
                     }
+                    // **ADR-0087 M8 (mainnet audit 2026-09-06, M-11): an authority with an end.**
+                    // Past its own score the sell is refused; and a window longer than
+                    // `PALW_MODEL_SELL_MAX_WINDOW_DAA_V1` is refused at any score, so "forever" is
+                    // not expressible. Both compared against the ACCEPTING block's DAA, which is
+                    // the point the holder's key was asked about.
+                    match kaspa_consensus_core::palw_model_market_v1::palw_model_sell_window_v1(point.daa_score, *not_after_daa) {
+                        kaspa_consensus_core::palw_model_market_v1::PalwModelSellWindowV1::Live => {}
+                        kaspa_consensus_core::palw_model_market_v1::PalwModelSellWindowV1::Expired => {
+                            return Err(format!(
+                                "a model sell of line {line_id} expired at daa {not_after_daa}; this block is at {}",
+                                point.daa_score
+                            ));
+                        }
+                        kaspa_consensus_core::palw_model_market_v1::PalwModelSellWindowV1::TooLong { daa } => {
+                            return Err(format!(
+                                "a model sell of line {line_id} claims authority for {daa} daa, over the {} the chain allows",
+                                kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SELL_MAX_WINDOW_DAA_V1
+                            ));
+                        }
+                    }
                     let message = kaspa_consensus_core::palw_model_market_v1::palw_model_sell_message_v1(
+                        // **The network domain every other market/registry message already carries**
+                        // (audit M-11). ADR-0088's ten objects all sign under it; this one did not,
+                        // so one signature was good on any chain sharing the line id.
+                        self.palw_network_domain_v2(),
                         line_id,
                         holder,
                         *units_in,
                         *min_msk_out,
+                        *held_units,
+                        *not_after_daa,
                     );
                     if !kaspa_txscript::verify_mldsa87_with_context(
                         pubkey,

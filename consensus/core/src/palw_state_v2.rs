@@ -3000,12 +3000,22 @@ pub enum PalwConsensusObjectV2 {
     /// `palw_model_sell_message_v1` under `PALW_MODEL_SELL_MLDSA87_CONTEXT`. The fold debits
     /// `units_in`, pays the net leg to `holder` through the coinbase, refusing when under
     /// `min_msk_out`. Refused below `Params::palw_model_market`.
+    /// **`held_units` and `not_after_daa` are what make the signature single-use and mortal**
+    /// (mainnet audit 2026-09-06, M-11). ADR-0087 M8 is "no other key can sell it"; without these
+    /// two a stranger re-fired the holder's own public payload whenever the holder held enough
+    /// again. The fold refuses unless the holder's position is EXACTLY `held_units` — and the sell
+    /// itself moves it — and acceptance refuses past `not_after_daa`.
     ModelSell {
         /// ADR-0088 Decision 9: a LINE id; a class's founding line has the class id.
         line_id: Hash64,
         holder: Hash64,
         units_in: u64,
         min_msk_out: u64,
+        /// The position the holder is selling out of, at signing. Must equal the fold's own row.
+        held_units: u64,
+        /// The last DAA score at which this sell may be accepted. Refused past it, and refused if
+        /// it names a window longer than `PALW_MODEL_SELL_MAX_WINDOW_DAA_V1`.
+        not_after_daa: u64,
         pubkey: Vec<u8>,
         signature: Vec<u8>,
     },
@@ -4284,6 +4294,12 @@ pub enum PalwStateV2Error {
     ModelBuyBelowFloor { want: u64, got: u64 },
     #[error("the sell names {want} units and the holder holds {held}")]
     ModelSellExceedsPosition { held: u64, want: u64 },
+
+    /// **ADR-0087 M8 (mainnet audit 2026-09-06, M-11): the sell names a position the holder does
+    /// not have.** The signature covers `held_units`, and the fold honours it only against exactly
+    /// that row — so applying the sell consumes the signature, and a replay finds a different row.
+    #[error("a model sell was signed against a position of {signed}; the holder holds {held}")]
+    ModelSellPositionMoved { signed: u64, held: u64 },
     #[error("the curve pays nothing for the sell of class {0}")]
     ModelSellPaysNothing(Hash64),
     #[error("the sell would pay {got} sompi, under its floor of {want}")]
@@ -9134,8 +9150,8 @@ fn apply_object(
         PalwConsensusObjectV2::ModelBuy { line_id, holder, msk_in, min_units_out, sink_index: _ } => {
             model_buy_v1(builder, ctx, line_id, holder, *msk_in, *min_units_out)?;
         }
-        PalwConsensusObjectV2::ModelSell { line_id, holder, units_in, min_msk_out, .. } => {
-            model_sell_v1(builder, ctx, line_id, holder, *units_in, *min_msk_out, true)?;
+        PalwConsensusObjectV2::ModelSell { line_id, holder, units_in, min_msk_out, held_units, .. } => {
+            model_sell_v1(builder, ctx, line_id, holder, *units_in, *min_msk_out, true, Some(*held_units))?;
         }
         PalwConsensusObjectV2::ModelSeed { line_id, seeder, msk_seed, sink_index: _ } => {
             model_seed_v1(builder, ctx, line_id, seeder, *msk_seed)?;
@@ -11058,6 +11074,11 @@ fn model_sell_v1(
     units_in: u64,
     min_msk_out: u64,
     pay_net_via_coinbase: bool,
+    // **ADR-0087 M8 (audit M-11): the position the holder's signature was made against.**
+    // `Some` on the carrier lane, where a detached ML-DSA-87 message is what authorises the move;
+    // `None` on the ADR-0089 EVM lane, where the authority is the EVM transaction's own signature
+    // and nonce and there is no detached message to replay.
+    signed_held_units: Option<u64>,
 ) -> Result<crate::palw_model_market_v1::PalwModelSellQuoteV1, PalwStateV2Error> {
     use crate::palw_model_market_v1::palw_model_sell_quote_v1;
     // **ADR-0042 Decision 10's queue has room, or this move does not happen** (audit M-10).
@@ -11070,6 +11091,13 @@ fn model_sell_v1(
     let held = builder.state.model_position(line_id, holder);
     if units_in == 0 || units_in > held {
         return Err(PalwStateV2Error::ModelSellExceedsPosition { held, want: units_in });
+    }
+    // **ADR-0087 M8 (audit M-11): the signature covers the position it was signed against.**
+    // The sell's own effect moves that row, so the authority is spent by the move it authorises.
+    if let Some(signed) = signed_held_units
+        && signed != held
+    {
+        return Err(PalwStateV2Error::ModelSellPositionMoved { signed, held });
     }
     let quote = palw_model_sell_quote_v1(&market, units_in).ok_or(PalwStateV2Error::ModelSellPaysNothing(*line_id))?;
     if quote.fees.net < min_msk_out {
@@ -11148,7 +11176,7 @@ fn apply_evm_market_actions(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlock
                 }
             }
             PalwEvmMarketActionKindV1::Sell { units_in, min_msk_out_sompi } => {
-                match model_sell_v1(builder, ctx, &action.line_id, &holder, units_in, min_msk_out_sompi, false) {
+                match model_sell_v1(builder, ctx, &action.line_id, &holder, units_in, min_msk_out_sompi, false, None) {
                     Ok(quote) => (
                         0,
                         PalwEvmSettlementOutcomeV1::Filled {
@@ -22597,15 +22625,25 @@ pub(crate) mod tests {
         fn buy(class: Hash64, who: Hash64, msk_in: u64, min_units_out: u64) -> PalwConsensusObjectV2 {
             PalwConsensusObjectV2::ModelBuy { line_id: class, holder: who, msk_in, min_units_out, sink_index: 1 }
         }
-        fn sell(class: Hash64, who: Hash64, units_in: u64, min_msk_out: u64) -> PalwConsensusObjectV2 {
+        /// A sell signed against `held_units` — audit M-11's binding, spelled out where a test
+        /// wants to name a position other than the one the holder actually has.
+        fn sell_against(class: Hash64, who: Hash64, units_in: u64, min_msk_out: u64, held_units: u64) -> PalwConsensusObjectV2 {
             PalwConsensusObjectV2::ModelSell {
                 line_id: class,
                 holder: who,
                 units_in,
                 min_msk_out,
+                held_units,
+                // Far past every fixture's DAA; the window is acceptance's rule, not the fold's.
+                not_after_daa: u64::MAX,
                 pubkey: vec![1],
                 signature: vec![1],
             }
+        }
+        /// The honest sell: signed against the position the state actually holds, which is what a
+        /// holder's own tool builds.
+        fn sell_from(state: &PalwChainStateV2, class: Hash64, who: Hash64, units_in: u64, min_msk_out: u64) -> PalwConsensusObjectV2 {
+            sell_against(class, who, units_in, min_msk_out, state.model_position(&class, &who))
         }
         /// Σ pending payouts, which in these fixtures are the market's alone.
         fn paid(state: &PalwChainStateV2) -> u64 {
@@ -22670,7 +22708,7 @@ pub(crate) mod tests {
             invariants(&s3, class, 2_000 * MSK);
 
             let held = s3.model_position(&class, &holder(1));
-            let (s4, _) = apply(&s3, &p, &ctx(5, 104, 5), &[sell(class, holder(1), held, 0)], None);
+            let (s4, _) = apply(&s3, &p, &ctx(5, 104, 5), &[sell_from(&s3, class, holder(1), held, 0)], None);
             let m4 = *s4.model_market(&class).unwrap();
             let sq = palw_model_sell_quote_v1(&m3, held).unwrap();
             assert_eq!(s4.model_position(&class, &holder(1)), 0, "sold out");
@@ -22709,7 +22747,7 @@ pub(crate) mod tests {
             ));
             assert!(
                 matches!(
-                    apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(9), 1, 0)], None),
+                    apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[sell_from(&s2, class, holder(9), 1, 0)], None),
                     Err(PalwStateV2Error::ModelSellExceedsPosition { held: 0, want: 1 })
                 ),
                 "the seeder holds no position to sell"
@@ -22734,21 +22772,21 @@ pub(crate) mod tests {
             let held = s2.model_position(&class, &holder(1));
             let sq = palw_model_sell_quote_v1(s2.model_market(&class).unwrap(), held).unwrap();
             assert!(matches!(
-                apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), held, sq.fees.net + 1)], None),
+                apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell_from(&s2, class, holder(1), held, sq.fees.net + 1)], None),
                 Err(PalwStateV2Error::ModelSellBelowFloor { .. })
             ));
             assert!(matches!(
-                apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), held + 1, 0)], None),
+                apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell_from(&s2, class, holder(1), held + 1, 0)], None),
                 Err(PalwStateV2Error::ModelSellExceedsPosition { .. })
             ));
             assert!(
                 matches!(
-                    apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(2), 1, 0)], None),
+                    apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell_from(&s2, class, holder(2), 1, 0)], None),
                     Err(PalwStateV2Error::ModelSellExceedsPosition { held: 0, want: 1 })
                 ),
                 "another holder cannot sell what it does not hold"
             );
-            let (s3, _) = apply(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), held, sq.fees.net)], None);
+            let (s3, _) = apply(&s2, &p, &ctx(4, 103, 4), &[sell_from(&s2, class, holder(1), held, sq.fees.net)], None);
             invariants(&s3, class, 10 * MSK);
         }
 
@@ -22763,7 +22801,7 @@ pub(crate) mod tests {
             assert!(s1.model_positions_of(&holder(1)).is_empty() && s1.model_positions_of(&holder(2)).is_empty());
             let (s2, _) =
                 apply(&s1, &p, &ctx(3, 102, 3), &[buy(class, holder(1), 5 * MSK, 0), buy(class, holder(2), 5 * MSK, 0)], None);
-            let (s3, d3) = apply(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), 1, 0)], None);
+            let (s3, d3) = apply(&s2, &p, &ctx(4, 103, 4), &[sell_from(&s2, class, holder(1), 1, 0)], None);
             let changed: BTreeSet<(Hash64, Hash64)> = d3
                 .entries
                 .iter()
@@ -22774,6 +22812,87 @@ pub(crate) mod tests {
                 .collect();
             assert_eq!(changed.len(), 1, "one move, one holder's row");
             assert_eq!(s3.model_position(&class, &holder(2)), s2.model_position(&class, &holder(2)), "the other holder is untouched");
+        }
+
+        /// **ADR-0087 M8: "no other key can sell it" — including the second time** (mainnet audit
+        /// 2026-09-06, M-11).
+        ///
+        /// A sell's authorisation used to bind only its own terms, so the payload of a mined sell
+        /// was a bearer instrument: a stranger could re-fire it whenever the holder held `units_in`
+        /// again, force-exiting the position at a price the holder consented to once. The signature
+        /// now covers the position it is sold out of, and the sell's own effect moves that position,
+        /// so the authority is consumed by the move it authorises — with no nonce table and nothing
+        /// added to the state root.
+        ///
+        /// The last leg states the RESIDUAL honestly rather than overclaiming: the position binding
+        /// alone is not revocation. A holder who buys back to exactly the same unit count makes the
+        /// old payload fillable again, and what bounds that is `not_after_daa`, which acceptance
+        /// enforces (`processor.rs`'s `Obj::ModelSell` arm) — so the test asserts the fold WOULD
+        /// fill it, which is the fact the window exists to answer.
+        #[test]
+        fn a_replayed_sell_finds_a_position_that_moved() {
+            let p = params();
+            let class = h64(1);
+            let (s0, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let (s1, _) = apply(&s0, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None);
+            let (s2, _) = apply(&s1, &p, &ctx(3, 102, 3), &[buy(class, holder(1), 1_000 * MSK, 0)], None);
+            let full = s2.model_position(&class, &holder(1));
+            assert!(full > 2, "the holder has a position to be sold out of");
+
+            // The holder signs one sale out of the position it actually has, and it fills.
+            let authorised = sell_against(class, holder(1), 1, 0, full);
+            let (s3, _) = apply(&s2, &p, &ctx(4, 103, 4), std::slice::from_ref(&authorised), None);
+            assert_eq!(s3.model_position(&class, &holder(1)), full - 1, "one position sold");
+
+            // The identical object, fired again by anyone: the row it was signed against is gone.
+            let replay = apply_palw_transition_v2(&s3, &p, &ctx(5, 104, 5), std::slice::from_ref(&authorised), None)
+                .expect_err("a sell is not a bearer instrument");
+            assert!(
+                matches!(replay, PalwStateV2Error::ModelSellPositionMoved { signed, held } if signed == full && held == full - 1),
+                "the refusal names the position the signature bought and the one that is there: {replay}"
+            );
+
+            // ..and it is the SIGNED position that binds, not merely "some position": a payload
+            // naming a row the holder never had is refused the same way, even where the holder
+            // could afford the sale.
+            let never_held = sell_against(class, holder(1), 1, 0, full + 7);
+            let bogus = apply_palw_transition_v2(&s3, &p, &ctx(5, 104, 5), &[never_held], None).expect_err("not this row either");
+            assert!(matches!(bogus, PalwStateV2Error::ModelSellPositionMoved { signed, .. } if signed == full + 7), "{bogus}");
+
+            // The honest holder is not inconvenienced: a fresh signature against the row that IS
+            // there fills.
+            let (s4, _) = apply(&s3, &p, &ctx(5, 104, 5), &[sell_from(&s3, class, holder(1), 1, 0)], None);
+            assert_eq!(s4.model_position(&class, &holder(1)), full - 2);
+
+            // **The residual, stated.** Buy back to exactly the signed count and the old payload
+            // becomes fillable again — the position binding makes a signature single-use, not
+            // revocable. `not_after_daa` is what bounds that window, and acceptance refuses past
+            // it; the fold, which is what this test drives, has no clock of its own.
+            let mut back = s4;
+            let mut daa = 105u64;
+            for round in 0..8 {
+                let (next, _) = apply(&back, &p, &ctx(6 + round, daa, 6 + round), &[buy(class, holder(1), MSK, 0)], None);
+                back = next;
+                daa += 1;
+                if back.model_position(&class, &holder(1)) >= full {
+                    break;
+                }
+            }
+            let now = back.model_position(&class, &holder(1));
+            if now == full {
+                assert!(
+                    apply_palw_transition_v2(&back, &p, &ctx(20, daa, 20), std::slice::from_ref(&authorised), None).is_ok(),
+                    "the fold honours the old payload again once the row matches — which is what the window is for"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        apply_palw_transition_v2(&back, &p, &ctx(20, daa, 20), std::slice::from_ref(&authorised), None),
+                        Err(PalwStateV2Error::ModelSellPositionMoved { .. })
+                    ),
+                    "and while the row does not match exactly, it stays refused"
+                );
+            }
         }
 
         /// M6: a class that is not Active refuses buys and honours sells; a genesis class burns
@@ -22826,7 +22945,7 @@ pub(crate) mod tests {
                 borsh::from_slice(&legacy_bytes).expect("a build without ADR-0087 decodes it");
             assert_eq!(twin.version, PALW_STATE_V2_VERSION);
             let (s2, d2) = apply(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED), buy(class, holder(1), 3 * MSK, 0)], None);
-            let (s3, d3) = apply(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(1), 1, 0)], None);
+            let (s3, d3) = apply(&s2, &p, &ctx(3, 102, 3), &[sell_from(&s2, class, holder(1), 1, 0)], None);
             let r1 = apply_delta_v2(&g, &d1, &p).unwrap();
             let r2 = apply_delta_v2(&r1, &d2, &p).unwrap();
             let r3 = apply_delta_v2(&r2, &d3, &p).unwrap();
@@ -23163,14 +23282,20 @@ pub(crate) mod tests {
                 msk_seed: crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1,
                 sink_index: 1,
             };
-            let sell_one = |units: u64| PalwConsensusObjectV2::ModelSell {
+            // Audit M-11: a sell is signed against the position it is sold out of, and its own
+            // effect moves that position — so a holder firing several in one block signs each
+            // against the row the one before it leaves behind.
+            let sell_out_of = |held_units: u64| PalwConsensusObjectV2::ModelSell {
                 line_id: class,
                 holder: buyer,
-                units_in: units,
+                units_in: 1,
                 min_msk_out: 0,
+                held_units,
+                not_after_daa: u64::MAX,
                 pubkey: vec![1],
                 signature: vec![1],
             };
+            let sell_one = |state: &PalwChainStateV2| sell_out_of(state.model_position(&class, &buyer));
 
             // ---- (3) the sizing identity: what a move writes is what the bound counts ----------
             // Each of these blocks starts with fewer than PALW_V2_MAX_PAYOUTS_PER_BLOCK rows
@@ -23193,7 +23318,7 @@ pub(crate) mod tests {
                 "a buy writes the owner leg and the contributor leg, and the bound counts exactly those"
             );
 
-            let (s7, _) = apply_lines(&s6, &p, &ctx(7, 255, 7), &[sell_one(1)], None);
+            let (s7, _) = apply_lines(&s6, &p, &ctx(7, 255, 7), &[sell_one(&s6)], None);
             assert_eq!(
                 s7.pending_payouts_iter().count(),
                 TransitionBuilder::model_payout_rows_would_add(true, false),
@@ -23209,7 +23334,8 @@ pub(crate) mod tests {
             let mut daa = 256u64;
             let mut refusal = None;
             for round in 0..64 {
-                let objects: Vec<_> = (0..per_block).map(|_| sell_one(1)).collect();
+                let start = state.model_position(&class, &buyer);
+                let objects: Vec<_> = (0..per_block as u64).map(|i| sell_out_of(start - i)).collect();
                 match try_lines(&state, &p, &ctx(8 + round, daa, 8 + round), &objects, None) {
                     Ok((next, _)) => {
                         assert!(
@@ -23252,7 +23378,7 @@ pub(crate) mod tests {
                     bytes[..8].copy_from_slice(&(i as u64).to_be_bytes());
                     st.pending_payouts.insert(Hash64::from_bytes(bytes), PalwPayoutV2 { payload: h64(0xFEED), amount: 1 });
                 }
-                try_lines(&st, &p, &ctx(900, 900, 900), &[sell_one(1)], None)
+                try_lines(&st, &p, &ctx(900, 900, 900), &[sell_one(&st)], None)
             };
             assert!(
                 at_the_edge(PALW_V2_MAX_PENDING_PAYOUTS - 3).is_ok(),
