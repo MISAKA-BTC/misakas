@@ -1084,32 +1084,45 @@ fn palw_profile_is_fp_covered_v1(profile: &crate::palw_step::PalwShapeProfileV3,
 /// covers it, and an unregistered id is never named. testnet-11 keeps the pinned set (its bundle
 /// is a live identity); a carded mainnet installs this one, so what it certifies is what it
 /// registers.
-pub fn palw_fp_certified_class_ids_of_registered_v1(bundle: &crate::palw_mode_v2::PalwConsensusParamsV2) -> BTreeSet<Hash64> {
+/// **Every class a bundle registers, paired with the profile that describes it — one resolution,
+/// two readers** (mainnet audit 2026-09-06, C-5).
+///
+/// A genesis class from the catalog carries `admission: None` (ADR-0053: the ruleset id commits to
+/// the catalog), so its profile is the typed one; a class the assembly admitted through the
+/// post-genesis shape carries its profile with it, and that is the only source for a row the typed
+/// list does not know (the graph-v5@512 dense row).
+///
+/// A registered id with NEITHER source appears here with `None`, and both readers treat that as a
+/// refusal rather than as "nothing to check": a class the ruleset cannot describe is a class no
+/// rule about it can be evaluated for, and the fp set already lost a whole tier to a typed list
+/// that had drifted.
+pub fn palw_registered_class_profiles_v1(
+    bundle: &crate::palw_mode_v2::PalwConsensusParamsV2,
+) -> Vec<(Hash64, Option<crate::palw_step::PalwShapeProfileV3>)> {
     use crate::palw_state_v2::PalwConsensusObjectV2;
-    let families = palw_rc_fp_certified_families_v1();
-    // What the bundle registers, by id — with or without an admission carriage. A genesis class
-    // from the catalog carries `admission: None` (ADR-0053: the ruleset id commits to the
-    // catalog), so its profile is the typed one; a class the assembly admitted through the
-    // post-genesis shape carries its profile with it, and that is the only source for a row the
-    // typed list does not know (the graph-v5@512 dense row).
-    let registered: BTreeSet<Hash64> = bundle
+    let mut profiles = palw_rc_typed_class_profiles_v1();
+    profiles.extend(bundle.genesis_objects.iter().filter_map(|object| match object {
+        PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. } => Some(carriage.profile.clone()),
+        _ => None,
+    }));
+    bundle
         .genesis_objects
         .iter()
         .filter_map(|object| match object {
             PalwConsensusObjectV2::ClassRegistered { class_id, .. } => Some(*class_id),
             _ => None,
         })
-        .collect();
-    let mut profiles = palw_rc_typed_class_profiles_v1();
-    profiles.extend(bundle.genesis_objects.iter().filter_map(|object| match object {
-        PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. } => Some(carriage.profile.clone()),
-        _ => None,
-    }));
-    profiles
-        .iter()
-        .filter(|profile| registered.contains(&profile.shape_profile_id()))
-        .filter(|profile| palw_profile_is_fp_covered_v1(profile, &families))
-        .map(|profile| profile.shape_profile_id())
+        .map(|class_id| (class_id, profiles.iter().find(|p| p.shape_profile_id() == class_id).cloned()))
+        .collect()
+}
+
+pub fn palw_fp_certified_class_ids_of_registered_v1(bundle: &crate::palw_mode_v2::PalwConsensusParamsV2) -> BTreeSet<Hash64> {
+    let families = palw_rc_fp_certified_families_v1();
+    palw_registered_class_profiles_v1(bundle)
+        .into_iter()
+        .filter_map(|(class_id, profile)| profile.map(|p| (class_id, p)))
+        .filter(|(_, profile)| palw_profile_is_fp_covered_v1(profile, &families))
+        .map(|(class_id, _)| class_id)
         .collect()
 }
 

@@ -1400,6 +1400,7 @@ Do you confirm? (y/n)";
                     consensus_manager.clone(),
                     mining_manager.clone(),
                     flow_context.clone(),
+                    config.clone(),
                 )))
             }
             (None, _, _, _) => {

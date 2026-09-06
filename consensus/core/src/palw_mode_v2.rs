@@ -680,6 +680,9 @@ impl PalwBondParamsV2 {
 pub enum PalwModeV2Error {
     #[error("invalid V2 bundle: {0}")]
     Invalid(&'static str),
+    /// The same refusal as [`Self::Invalid`] where the message has to name a class id.
+    #[error("invalid V2 bundle: {0}")]
+    InvalidOwned(String),
     #[error("invalid V2 bundle: {0}")]
     State(#[from] PalwStateV2Error),
     #[error("invalid V2 bundle: {0}")]

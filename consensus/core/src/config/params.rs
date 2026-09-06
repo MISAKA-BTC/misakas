@@ -2008,6 +2008,59 @@ impl Params {
                      the deadline could flip the verdict without a finality violation (ADR-0062 SA-3)",
                 ));
             }
+            // **RESPONDER COVERAGE: a court may not be armed over a family that cannot answer it**
+            // (mainnet audit 2026-09-06, C-5; ADR-0062 SA-2).
+            //
+            // SA-2 says it in the ADR's own words: "a class whose event cannot be disclosed inside
+            // the budget is refused at admission rather than being undefendable afterwards." There
+            // was no door on the GENESIS route, and the fence's own doc says what that costs:
+            // armed with no responder, every accusation succeeds and every producer is slashable
+            // for the price of one bond.
+            //
+            // The fact asked here is CONSENSUS-VISIBLE and is the one
+            // `check_trace_event_disclosure_v1` itself refuses on ("this class commits under a
+            // scheme no disclosure form names"): the class's registered `logits_scheme_id`. It is
+            // deliberately NOT `PalwExecutionBackendV1::supports_court()` — that is node-local, it
+            // is a bool a family writes about itself, and `palw_e2e_adjudicability`'s own module
+            // doc records it as exactly the wrong shape for precisely this job.
+            //
+            // **A registered class this call cannot DESCRIBE is passed over, and that is a limit
+            // of this site rather than a verdict about the class.** The designed patch refused it,
+            // on the reasoning that a class nothing here can name is a class this rule has no
+            // opinion about while the court has a verdict about it. That reasoning does not survive
+            // contact with the assembly: a GENESIS class carries `admission: None` and its profile
+            // lives in the CATALOG, of which the bundle holds only `class_catalog_root` — a
+            // commitment, not a preimage. `palw_registered_class_profiles_v1` therefore answers for
+            // a genesis row only when the typed catalog in `palw_e2e_adjudicability` happens to
+            // carry it, which is true of the three rows this tree ships and false of every network
+            // `palw_rc_params` assembles from a catalog of its own. Refusing here would have
+            // stopped `the_shipped_palw_rc_network_boots_and_runs_its_genesis` from booting a
+            // ruleset that is not undefendable at all — only undescribable from this seam.
+            //
+            // So the residue is named instead of hidden: past this gate, "every registered class
+            // commits under a disclosable scheme" is proven for the rows the ruleset itself can
+            // resolve, and asserted for the rest by whoever supplied the catalog.
+            // `a_catalog_class_this_ruleset_cannot_describe_is_not_refused_here` pins that limit,
+            // so it can neither widen nor close silently.
+            //
+            // Assembly-time only: no fold reads this, no fence is added, no fingerprint field
+            // moves. Every shipped preset's registered classes declare one of the two named
+            // schemes (BASE-0 flat, both model tiers tiled), so nothing that assembles today stops
+            // assembling.
+            for (class_id, profile) in crate::palw_e2e_adjudicability::palw_registered_class_profiles_v1(bundle) {
+                let Some(profile) = profile else { continue };
+                let scheme = profile.logits_scheme_id;
+                if scheme != crate::palw_step_refute::flat_logits_scheme_id_v1()
+                    && scheme != crate::palw_step_refute::tiled_logits_scheme_id_v1()
+                {
+                    return Err(PalwModeV2Error::InvalidOwned(format!(
+                        "palw_da_court is armed and the genesis set registers class {class_id} under a logits commitment \
+                         scheme no disclosure form names: `PalwTraceEventDisclosureV1` has a Flat arm and a Tiled arm, \
+                         `check_trace_event_disclosure_v1` refuses anything else, so no `MaterialDisclosed` could ever \
+                         refute an accusation against this class and every accusation would win by silence (ADR-0062 SA-2)"
+                    )));
+                }
+            }
             // **The delay in force past the fence outlasts the DA court BY CONSTRUCTION** (mainnet
             // audit 2026-09-05, "should fix" `palw_mode_v2.rs:938`).
             //
@@ -12957,6 +13010,125 @@ mod consensus_params_id_tests {
             "ADR-0069 D7 is genesis-only: a mainnet minted without it can never acquire it"
         );
         carded.validate_palw_v2().expect("the startup gate a mainnet node runs accepts the armed card");
+    }
+
+    /// **A data-availability court may not be armed over a class that could not answer it**
+    /// (ADR-0062 SA-2; mainnet audit 2026-09-06, C-5).
+    ///
+    /// SA-2's own sentence is "a class whose event cannot be disclosed inside the budget is refused
+    /// at admission rather than being undefendable afterwards", and the genesis route had no door:
+    /// a ruleset could arm the court over a class whose commitment scheme no disclosure form names,
+    /// which is a class every accusation defeats by silence for the price of one bond.
+    ///
+    /// The rule under test is the RULESET's, not the patch's: it is asked of the same fact
+    /// `check_trace_event_disclosure_v1` refuses on — the registered `logits_scheme_id` — so a
+    /// class this gate admits is exactly a class that checker could be handed an answer for. Both
+    /// directions are pinned, because a gate that refuses everything is as wrong as one that
+    /// refuses nothing: every shipped ruleset must still assemble.
+    #[test]
+    fn arming_the_da_court_over_an_undisclosable_class_refuses_to_assemble() {
+        use crate::Hash64;
+        use crate::palw_mode_v2::PalwConsensusMode;
+        use crate::palw_state_v2::PalwConsensusObjectV2;
+
+        // **Nothing that ships stops shipping.** testnet-11 schedules the court over a class set
+        // that is entirely flat-or-tiled, devnet arms no court at all, and a card that pins the
+        // dense tier arms it from genesis over the fused row.
+        let rc = palw_rc_shipped_params();
+        assert!(rc.palw_da_court.is_some(), "testnet-11 schedules the data-availability court, so the rule engages there");
+        rc.validate_palw_v2().expect("testnet-11 assembles");
+        devnet_shipped_params().validate_palw_v2().expect("devnet assembles");
+        let carded = palw_rc_arm_phase1(
+            palw_v2_params_with_classes_on_base(
+                mainnet_card_base_v1(mainnet_v2_mint_base(), true),
+                PALW_RC_GENESIS_ARTIFACT_ROOT,
+                PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
+                Some(PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT),
+                vec![],
+            )
+            .expect("a dense-pinned mainnet card assembles"),
+        );
+        assert_eq!(carded.palw_da_court, Some(ForkActivation::always()), "a card arms the court from genesis");
+        carded.validate_palw_v2().expect("a dense-pinned card assembles");
+
+        // **A class committing under a third scheme is refused, by name.** The mutation is the
+        // honest one: the carriage's profile IS the class, so its id moves with it.
+        let mut mutated = palw_rc_shipped_params();
+        let PalwConsensusMode::ConsensusV2(bundle) = &mut mutated.palw_consensus_mode else { panic!("V2") };
+        let mut renamed = None;
+        for object in bundle.genesis_objects.iter_mut() {
+            if let PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(carriage), .. } = object {
+                carriage.profile.logits_scheme_id = Hash64::from_u64_word(0x5CE3);
+                *class_id = carriage.profile.shape_profile_id();
+                renamed = Some(*class_id);
+                break;
+            }
+        }
+        let renamed = renamed.expect("testnet-11 registers at least one class that carries its own profile");
+        let err = mutated.validate_palw_v2().expect_err(
+            "a ruleset arming the data-availability court over a class whose commitments no disclosure form names must \
+             not assemble: every accusation against it would win by silence",
+        );
+        let text = format!("{err}");
+        assert!(text.contains(&renamed.to_string()), "the refusal names the class it is about: {text}");
+        assert!(text.contains("scheme no disclosure form names"), "…and says what is wrong with it: {text}");
+
+        // **The gate reaches every row it can resolve, and it can resolve all of testnet-11's** —
+        // otherwise the assertions above would be about a smaller set than they read as.
+        let PalwConsensusMode::ConsensusV2(bundle) = &rc.palw_consensus_mode else { panic!("V2") };
+        let resolved = crate::palw_e2e_adjudicability::palw_registered_class_profiles_v1(bundle);
+        assert!(resolved.len() >= 2, "this test proves little on a genesis registering one class: {}", resolved.len());
+        assert!(
+            resolved.iter().all(|(_, profile)| profile.is_some()),
+            "testnet-11's registered classes are all describable from the ruleset, so the rule above covers all of them"
+        );
+    }
+
+    /// **THE LIMIT, pinned so it can neither widen nor close silently** (mainnet audit 2026-09-06,
+    /// C-5): the responder-coverage gate above judges the rows this ruleset can DESCRIBE, and a
+    /// genesis class whose profile lives only in the committed catalog is not one of them.
+    ///
+    /// `validate_palw_v2` holds `class_catalog_root` — a commitment, not a preimage — so for a
+    /// genesis registration (`admission: None`) the only profile source is the typed catalog in
+    /// `palw_e2e_adjudicability`, which carries the three rows this tree ships and nothing else.
+    /// The designed repair refused such a class outright; that would have refused
+    /// `palw_rc_params` over any catalog of the caller's own, which is a real, booting network
+    /// whose classes may be perfectly disclosable. Refusing what cannot be judged is fail-closed
+    /// only where the judgment was possible.
+    ///
+    /// This test asserts the residue rather than the fix: a class the ruleset cannot describe
+    /// assembles, and it is documented as covered by whoever supplied the catalog. The day
+    /// `validate_palw_v2` can reach the catalog preimage, this test goes red — which is the
+    /// trigger to close the gap rather than to re-derive this reasoning.
+    #[test]
+    fn a_catalog_class_this_ruleset_cannot_describe_is_not_refused_here() {
+        use crate::Hash64;
+        use crate::palw_mode_v2::PalwConsensusMode;
+        use crate::palw_state_v2::PalwConsensusObjectV2;
+
+        let mut orphaned = palw_rc_shipped_params();
+        assert!(orphaned.palw_da_court.is_some(), "the gate this is a limit of is engaged on this ruleset");
+        let PalwConsensusMode::ConsensusV2(bundle) = &mut orphaned.palw_consensus_mode else { panic!("V2") };
+        let mut unknown = None;
+        for object in bundle.genesis_objects.iter_mut() {
+            if let PalwConsensusObjectV2::ClassRegistered { class_id, admission: None, .. } = object {
+                *class_id = Hash64::from_u64_word(0xDEAD_C1A5);
+                unknown = Some(*class_id);
+                break;
+            }
+        }
+        let unknown = unknown.expect("testnet-11 registers at least one catalog class");
+        let PalwConsensusMode::ConsensusV2(bundle) = &orphaned.palw_consensus_mode else { panic!("V2") };
+        assert!(
+            crate::palw_e2e_adjudicability::palw_registered_class_profiles_v1(bundle)
+                .into_iter()
+                .any(|(id, profile)| id == unknown && profile.is_none()),
+            "the premise: this ruleset now registers a class it holds no profile for"
+        );
+        assert!(
+            orphaned.validate_palw_v2().is_ok(),
+            "a class this seam cannot describe is passed over, not refused — see the gate's own comment"
+        );
     }
 
     /// **The court prosecutes at the ladder it admitted at — where the fence says so** (ADR-0084

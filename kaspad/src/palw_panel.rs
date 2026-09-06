@@ -2643,7 +2643,11 @@ impl PalwPanelService {
             // accuses: a seat that received nothing cannot tell withholding from transport loss,
             // and an accusation against an honest producer is a charge to the accuser.
             let da_duties = session.palw_da_duties_v2(vec![bond_key]);
-            let da_armed = self.consensus_config.params.palw_da_court.is_some_and(|fence| fence.is_active(current_daa));
+            // One spelling of "is the DA court in force", shared with the producer's refusal to
+            // make a claim it could not answer for (mainnet audit 2026-09-06, C-5): the seat that
+            // answers and the producer that decides whether answering is possible must not be able
+            // to disagree about which chain they are on.
+            let da_armed = crate::palw_producer::palw_da_court_in_force_v1(&self.consensus_config, current_daa);
             for duty in &da_duties {
                 if !da_armed || current_daa > duty.disclose_deadline_daa {
                     continue;
