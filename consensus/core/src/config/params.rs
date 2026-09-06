@@ -8902,13 +8902,28 @@ fn mainnet_card_params_v1(
 ///   without them two ~60-byte `ObjectChunk`s a block spend the certification grading slots before
 ///   the object is validated, and eight unsigned chunks squat every pending-chunk slot: a
 ///   block-cheap way to keep an honest class weightless for the life of the chain.
+/// * `palw_capability_bound` (ADR-0071 SA-1/SA-2/SA-4) — a bond's `capable_classes` set is bounded
+///   at `PALW_MAX_CAPABLE_CLASSES` and priced at `PALW_CAPABILITY_EXPOSURE_SOMPI` against its own
+///   collateral, at BOTH writers (`BondRegistered` and `BondCapabilityDeclared`). Dormant it is a
+///   free, mass-priced, per-bond-lifetime state-growth lever and the SA-2 price is never charged —
+///   and the 2026-09-05 pass recorded the rule as closed while its fix sat behind a fence no preset
+///   armed and no card stated (mainnet audit 2026-09-06, M-14).
 ///
-/// testnet-11 arms none of these six from genesis; each is a scheduled height or a re-mint
-/// there, which is the operator's call and not this function's. Devnet arms the ladder.
+///   **The liveness trap it must not walk into, and the assertion that says it does not.** SA-3
+///   narrows the panel draw, and a short draw is not a smaller panel — it is
+///   `InsufficientEligibleBonds`, so the claim never binds and voids at `BindTimeout` with its
+///   escrow burned. What keeps a card drawable past the fence is the genesis-class exemption plus
+///   the fact that this assembly extends every genesis bond's `capable_classes` with the tiers it
+///   registers. `a_carded_registry_still_draws_a_full_panel_with_the_capability_fence_armed` is the
+///   assertion, over the card's own assembly, not a deployment note.
+///
+/// testnet-11 arms none of these from genesis; each is a scheduled height or a re-mint there,
+/// which is the operator's call and not this function's. Devnet arms the context ladder.
 fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     if dense_tier_pinned {
         base.palw_kary_court = Some(ForkActivation::always());
     }
+    base.palw_capability_bound = Some(ForkActivation::always());
     base.palw_context_ladder = Some(ForkActivation::always());
     // Both halves of ADR-0083 Decision 1, stated together: the assembly validates before
     // `palw_rc_arm_phase1` runs, and the second half is refused on a base whose first is dormant.
@@ -10962,6 +10977,18 @@ mod consensus_params_id_tests {
         assert!(
             palw_rc_shipped_params().palw_capability_bound.is_none(),
             "and so must the RC assembly — SA-3 narrows the panel draw, so arming it is a measured decision and not a default"
+        );
+        // **…and a CARD states it from genesis, which is the other half of "dormant" meaning
+        // something** (mainnet audit 2026-09-06, M-14). A fence every configuration leaves off is a
+        // rule that ships as a comment: the SA-1 bound and the SA-2 price are unreachable at both
+        // writers on every network this tree can build. A live chain reaches them by activation,
+        // which is the operator's call; a fresh network is born with them, which is this function's.
+        // The set-difference test below cannot see this — it compares armed sets and a fence dormant
+        // on both sides is in neither — so it is asserted here, positively.
+        assert_eq!(
+            mainnet_card_fixture_v1(true).palw_capability_bound,
+            Some(ForkActivation::always()),
+            "a carded mainnet states ADR-0071 SA-1/SA-2/SA-4 from genesis"
         );
 
         let shipped = MAINNET_PARAMS;
@@ -13495,6 +13522,74 @@ mod consensus_params_id_tests {
             "ADR-0069 D7 is genesis-only: a mainnet minted without it can never acquire it"
         );
         carded.validate_palw_v2().expect("the startup gate a mainnet node runs accepts the armed card");
+    }
+
+    /// **The liveness proof a card's arming cannot ship without** — the card's own registry, not
+    /// the RC's (ADR-0071 SA-3; mainnet audit 2026-09-06, M-14).
+    ///
+    /// This is `palw_panel_v2::the_shipped_registry_still_draws_a_full_panel_with_the_capability_fence_armed`
+    /// asked of the network that actually arms the fence. A short draw is
+    /// `InsufficientEligibleBonds`, so every claim voids at `BindTimeout` with its escrow burned,
+    /// and a card's registry has zero slack by construction (`seat_count + 1` bonds, the executor
+    /// excluded). Arming a fence that empties the panel is worse than leaving it dormant, so the
+    /// arming and this assertion are one change.
+    #[test]
+    fn a_carded_registry_still_draws_a_full_panel_with_the_capability_fence_armed() {
+        use crate::palw_mode_v2::PalwConsensusMode;
+        use crate::palw_state_v2::{
+            PalwBlockContextV2, PalwChainStateV2, apply_palw_transition_v2, palw_bond_may_judge_class_v3,
+            palw_bond_may_take_work_v2,
+        };
+
+        let params = mainnet_card_fixture_v1(true);
+        assert_eq!(params.palw_capability_bound, Some(ForkActivation::always()), "the premise: the card arms SA-3");
+        let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("the card is V2") };
+        let sp = bundle.state.clone();
+        let genesis_ctx =
+            PalwBlockContextV2 { block: params.genesis.hash, daa_score: params.genesis.daa_score, blue_score: 0, subsidy: 0 };
+        let (booted, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &genesis_ctx, &bundle.genesis_objects, None)
+            .expect("the card's genesis applies");
+
+        let seats_needed = bundle.panel.seat_count() as usize;
+        let min_collateral = sp.min_collateral_sompi();
+        let classes: Vec<crate::Hash64> = booted.classes_iter().map(|(id, _)| *id).collect();
+        assert_eq!(classes.len(), 3, "the card registers the floor and both model tiers");
+
+        for class_id in classes {
+            let count = |proof: bool| -> usize {
+                let mut operators: Vec<crate::Hash64> = booted
+                    .bonds_iter()
+                    .filter(|(key, bond)| {
+                        palw_bond_may_take_work_v2(bond, min_collateral)
+                            && palw_bond_may_judge_class_v3(&booted, key, bond, &class_id, proof)
+                    })
+                    .map(|(_, bond)| bond.operator_id)
+                    .collect();
+                operators.sort();
+                operators.dedup();
+                operators.len()
+            };
+            assert_eq!(
+                count(false),
+                count(true),
+                "class {class_id:?}: the capability fence removed a seat from the CARD's genesis registry — every claim on \
+                 that network would void at BindTimeout"
+            );
+            assert!(count(true) > seats_needed, "class {class_id:?}: a panel of {seats_needed} needs one spare for the executor");
+        }
+
+        // **SA-2's price is affordable at genesis**, which is the other way this arming could brick
+        // a card: each bond declares the floor plus both tiers, so it reserves
+        // 3 x PALW_CAPABILITY_EXPOSURE_SOMPI against its own collateral before it has done
+        // anything. If a future card registers more tiers than a genesis bond can pay for, this is
+        // the line that says so rather than a node that will not boot.
+        for (_, bond) in booted.bonds_iter() {
+            assert!(bond.capable_classes.len() <= crate::palw_state_v2::PALW_MAX_CAPABLE_CLASSES);
+            assert!(
+                crate::palw_state_v2::palw_bond_capability_exposure_v1(bond) <= bond.collateral as u128,
+                "a genesis bond's declared capability must be affordable against its own collateral (SA-2)"
+            );
+        }
     }
 
     /// **A ruleset must be able to pay its own validator floor inside ONE coinbase** (mainnet
