@@ -117,15 +117,29 @@ ceiling, the ladder depth and the court window simultaneously. This is already t
 one of the three without amending an ADR.
 
 **Decision 3 — the arity is the protocol-level knob that trades dissection depth against per-round
-Court cost, and its value is a measurement.** `palw_kary_rounds_v1(space, arity)` is
-`ceil(log_arity(space))`, so raising the arity from 2 to `k` divides the round count by `log2(k)`
-and raises what one round carries. **Fewer rounds is not the same as less cost**, and this ADR does
-not assume it is: `rounds(k) × cost_per_round(k) < rounds(2) × cost_per_round(2)` is a claim about
-this tree's close bytes and the seat's throughput, not an identity, and nothing here is entitled to
-it until §5's generator has measured both sides. Decision 3 records only that the arity — not the
-ladder — is the parameter where a future width problem is paid for, and that it is chosen at mint
-because it sits inside the bundle. The value stays open; §7 says so. *This amends ADR-0082
-Decision 3 only if the arity is later moved.*
+Court cost, and its value is DERIVED, not chosen.** `palw_kary_rounds_v1(space, arity)` is
+`ceil(log_arity(space))`, so raising the arity from 2 to `k` divides the *history* round count by
+`log2(k)` and raises what one round carries. **Fewer rounds is not the same as less cost**, and
+this ADR does not assume it is.
+
+It does not have to. `palw_court_params_at_v2` already derives the arity, per block, whenever
+`palw_kary_court` is armed: `palw_court_arity_v1` searches upward from the minimum and returns the
+first arity that satisfies **both** halves — the clock (`moves × deadline + reserve < window_court`,
+the same inequality admission applies) and the wire (one round must fit a framed carrier at the
+widest registered lane count) — and returns `None`, a refusal rather than a fallback to 2, when
+none does. Its own doc puts it plainly: *no preset writes a `k` and no `k` can be chosen.*
+
+Two consequences worth stating as decisions rather than leaving to be rediscovered:
+
+* **The arity scales with what is registered.** The derivation reads
+  `palw_attn_widest_registered_site_v2(bundle)`, so registering a wider model is what raises the
+  arity. This is the property that makes 7B and 1T the same protocol, and it is already the code.
+* **The leaf ladder is binary whatever `k` is** (`PALW_COURT_LEAF_LADDER_ARITY_V1`). `k` buys
+  history rounds only. An earlier derivation priced a k-ary leaf ladder no session plays and
+  reported 34 moves where the played dispute takes 60 — audit D H-2. Any future work that makes
+  the ladder itself k-ary moves that constant, and one place decides.
+
+*This amends ADR-0082 Decision 3 only if the derivation's inputs are later changed.*
 
 **Decision 4 — a model too wide for the minted ladder is a new class on a new ruleset, not a raised
 ceiling.** The honest shape, and the one the code already forces. A network that wants a wider model
@@ -182,7 +196,12 @@ What the table must answer before a mainnet card is minted:
 * **The fused-attention responder.** Audit C-2. It is the missing half of a court that already
   exists, it is the size of the close prover, and it belongs to its own ADR or to ADR-0082's
   implementation record — not here.
-* **Whether the RC's arity moves.** Decision 3 names the knob; the measurement decides the value.
+* ~~**Whether the RC's arity moves.**~~ **Withdrawn — this was never open.** An earlier draft of
+  this ADR left the arity's value to a later operator decision. It is not one:
+  `palw_court_params_at_v2` derives it from the widest registered site every time the k-ary court is
+  armed, and §8 records what it derives on this tree. Decision 3 now says so. The draft's error is
+  left visible rather than deleted, because "the value stays open" is exactly the kind of claim that
+  becomes a work item nobody can close.
 * **Whether testnet-11's ladder is re-armed at a height.** ADR-0084 U-08 / audit H-4 is an arming
   of `Params::palw_court_ladder`, and its schedule is an operator decision.
 * **Any number.** §5 says why.
@@ -215,6 +234,13 @@ So Decision 3's knob is not a refinement. On this window, raising the arity is w
 ladder reachable *at a real context at all*, and the decision table is where the two numbers are
 priced against one another. The value stays open, as §7 says: this measures the wall clock, and the
 bytes one round carries are the close ceiling's half of the same question.
+
+**The derived arity, measured.** The generator now also calls the production derivation. On this
+tree the widest registered site is 512 history positions at 8 lanes, and
+`palw_court_arity_v1` returns 2 — which is what the bundle stores, so the shipped court plays the
+arity its own ruleset derives. `palw_attn_court_v1`'s own test pins that pair. The report prints
+the derivation beside the table so a reader cannot mistake the table's columns for a menu: they are
+what *would* be derived at wider registered sites, which is the same thing said forward.
 
 **Step 2 was already done.** `mainnet_card_base_v1` arms both `palw_context_ladder` and
 `palw_court_ladder`; the second was the audit's M-15, a regression the merge of the two development

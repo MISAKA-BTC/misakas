@@ -251,7 +251,7 @@ fn main() {
     let PalwConsensusMode::ConsensusV2(bundle) = &shipped.palw_consensus_mode else {
         panic!("the RC ships a ConsensusV2 bundle");
     };
-    adr0092_wall_clock(&bundle.court, bundle.state.window_court());
+    adr0092_wall_clock(bundle, &bundle.court, bundle.state.window_court());
 }
 
 /// **ADR-0092 §5 — the wall-clock question, generated.**
@@ -265,7 +265,7 @@ fn main() {
 ///
 /// Every figure here is a generated artifact. ADR-0092 §5 says so, and says why: a worked example
 /// with no generator behind it is a number that drifts, and this repo has watched one drift twice.
-fn adr0092_wall_clock(rc: &PalwCourtParamsV2, window_court: u64) {
+fn adr0092_wall_clock(bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2, rc: &PalwCourtParamsV2, window_court: u64) {
     let reserve = palw_close_assembly_daa_v1(rc.max_close_chunks());
     println!("## ADR-0092 — what the court window buys\n");
     println!(
@@ -296,6 +296,39 @@ fn adr0092_wall_clock(rc: &PalwCourtParamsV2, window_court: u64) {
     // and two beyond them, so the table says where the shipped configuration sits AND where it
     // stops. 131,072 is the figure `palw_context_ladder`'s own test uses for a wide row.
     let histories: [u64; 5] = [0, 512, 4_096, 32_768, 131_072];
+
+    // **Decision 3's answer is DERIVED, not chosen.** `palw_court_params_at_v2` computes the arity
+    // from the widest registered site whenever the k-ary court is armed, and `palw_court_arity_v1`
+    // is where both halves of the question meet: the clock (`moves x deadline + reserve <
+    // window_court`, the SAME inequality admission applies) and the wire (a round must fit one
+    // framed carrier at the widest lane count). `None` is a refusal, never a fallback to 2. So this
+    // report prints what the ruleset derives rather than inviting anyone to pick a number.
+    let (history_max, widest_lanes) = kaspa_consensus_core::palw_court_v2::palw_attn_widest_registered_site_v2(bundle);
+    let derived = kaspa_consensus_core::palw_mode_v2::palw_court_arity_v1(
+        window_court,
+        rc.turn_deadline_daa(),
+        rc.max_step_leaf_count(),
+        history_max,
+        PALW_ATTN_HISTORY_TILE_V4,
+        rc.terminal_rounds(),
+        widest_lanes,
+        rc.max_close_chunks(),
+    );
+    println!("### The arity this ruleset derives\n");
+    println!(
+        "- widest registered site: **{history_max} history positions**, **{widest_lanes} lanes** \
+         (`palw_attn_widest_registered_site_v2`)\n- derived dissection arity: **{}**\n- stored on the \
+         bundle: **{}** (the value a court plays is the derived one whenever `palw_kary_court` is armed)\n",
+        derived.map(|a| a.to_string()).unwrap_or_else(|| "**REFUSED** — no legal arity fits this window".into()),
+        rc.dissection_arity(),
+    );
+    println!(
+        "The leaf ladder is binary whatever the arity is (`PALW_COURT_LEAF_LADDER_ARITY_V1`), so the \
+         arity buys HISTORY rounds only — which is why the zero-history row of the table below is the \
+         same at every arity. An earlier derivation priced a k-ary leaf ladder no session plays and \
+         reported 34 moves where the played dispute takes 60; that is audit D H-2 and this note is \
+         what stops it being reintroduced from this report.\n"
+    );
 
     println!("### The decision table — largest admissible `max_step_leaf_count`\n");
     println!("Rows are the history a dispute must dissect; columns are the court's arity. Each cell");
