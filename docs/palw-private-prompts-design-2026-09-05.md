@@ -199,3 +199,47 @@ withdrawal-delay interlock (§7).
   builds.
 * **The user-facing surface.** The disclosure sentence is printed by the gateway at boot and
   carried in the ADR; a Studio front end that offers "private" must show it to the person typing.
+
+## 8. testnet-11 without a re-genesis (2026-09-06)
+
+The design above arms three fences on a MAINNET CARD, where a fresh genesis makes every choice
+free. Doing the same to the live testnet-11 needed three questions answered, and the answers are
+what this section records.
+
+**Merkle prompt ids cannot go to testnet-11 at all.** The form is genesis-only by construction:
+`validate_palw_v2` refuses `palw_prompt_ids_merkle` at any height but zero, because no reader of a
+`prompt_token_ids_hash` holds a job's anchor height — a payload decoder sees bytes, the transaction
+door holds no DAA score, and a worker knows only the network it was started for. testnet-11 keeps
+the flat digest. A chain that wants the Merkle form mints for it.
+
+**The DA court and `PanelDa` can, at a height.** Both are already height-gated in the fold
+(`palw_da_court_at`, `palw_panel_da_at`), so the fold below the fence is byte-identical and the
+release is an ordinary scheduled activation. What made it non-obvious is that the DA court drags two
+values that are NOT fences:
+
+* the **withdrawal delay** — a bundle field, inside `palw_ruleset_id_v2`, inside every fingerprint
+  and identity. Rewriting it would have made the upgraded node a different network. Resolved at a
+  height instead (`palw_v2_bond_withdrawal_delay_at_v1`), so the ruleset is byte-identical and only
+  the fold's answer moves;
+* the **pruning horizon** — hashed into `consensus_params_id` directly, and SA-6 requires it to hold
+  `accuse + disclose` on top of the claim lattice (6,602 → 12,002). It cannot be resolved at a
+  height without rewriting Kaspa's pruning-point selection, so it is instead normalised back out of
+  `consensus_identity_id` with its own fence, in the function that exists for exactly that
+  (`normalize_values_a_scheduled_fence_drags_with_it`). Two builds that differ only about a future
+  height announce one identity and stay peers; past the height the wider horizon is in force.
+
+The residual is the one every scheduled fence has, and it is why `palw_da_court` now arms the
+fork-id gate: an un-upgraded seat peers until the height and then forks. With the gate it is
+refused and logged rather than silent. The horizon change is invisible in substance until blue
+score 6,602 — a depth this chain has never reached — so no header's pruning point differs under
+either build.
+
+**The state version does not move.** ADR-0062 asks for it in the release that arms the fence; that
+sentence was written for a re-mint, and on a live chain the bump IS the re-mint (the version is
+hashed into `state_root`, which every header commits). The rule as it now stands is in ADR-0062's
+own arming section and pinned by
+`a_scheduled_da_court_needs_no_state_version_move_and_a_genesis_one_would`.
+
+**The model market rides the same height.** ADR-0090 §7 item 6 asks for three lines in the
+testnet-11 preset; they are `Some(ForkActivation::new(1900))` beside the court's, because the
+fork-id gate keys on heights and three flag days would cost three fleet restarts.
