@@ -5956,10 +5956,36 @@ pub fn palw_v2_params_with_classes_on_base(
     qwen25_a16_artifact_root: Option<crate::Hash64>,
     genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
 ) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
+    let genesis_utxos = crate::config::premine::genesis_premine_utxos_for(base.net);
+    palw_v2_params_with_classes_on_base_with_utxos(
+        base,
+        base0_artifact_root,
+        qwen36_artifact_root,
+        qwen25_a16_artifact_root,
+        genesis_bonds,
+        genesis_utxos,
+    )
+}
+
+/// **[`palw_v2_params_with_classes_on_base`] against a SUPPLIED genesis UTXO set** — the same
+/// seam, for the same reason, as `palw_v2_params_from_artifacts_on_base_with_utxos` above it: a
+/// network whose premine does not carry its card's bond collateral YET (mainnet, whose
+/// `PALW_MAINNET_GENESIS_BONDS` is empty) can still be assembled and gated in a test, against a
+/// premine built the way its real one would be. Without it the class-registering card — the one a
+/// real mainnet mint runs — could only be checked by shipping it (mainnet audit 2026-09-06, M-7).
+pub fn palw_v2_params_with_classes_on_base_with_utxos(
+    base: Params,
+    base0_artifact_root: crate::Hash64,
+    qwen36_artifact_root: crate::Hash64,
+    qwen25_a16_artifact_root: Option<crate::Hash64>,
+    genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
+    genesis_utxos: crate::utxo::utxo_collection::UtxoCollection,
+) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
     use crate::palw_mode_v2::PalwModeV2Error as E;
     let invalid = |what: &'static str| E::Invalid(what);
 
-    let mut params = palw_v2_params_from_artifacts_on_base(base, base0_artifact_root, genesis_bonds)?;
+    let mut params =
+        palw_v2_params_from_artifacts_on_base_with_utxos(base, base0_artifact_root, genesis_bonds, genesis_utxos.clone())?;
     // **Which prompt-id form the dense row is PRICED at, read before the bundle is borrowed.**
     //
     // ADR-0082 Decision 5's fence (`palw_prompt_ids_merkle`) is `None` on every shipped preset, so
@@ -6193,7 +6219,9 @@ pub fn palw_v2_params_with_classes_on_base(
     let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
         unreachable!("still the bundle installed above");
     };
-    let genesis_utxos = crate::config::premine::genesis_premine_utxos_for(params.net);
+    // The SUPPLIED set, so both gate runs — the base assembly's and this one's — resolve a bond's
+    // collateral against one premine. Reading `genesis_premine_utxos_for` a second time here would
+    // make the two halves of one card answer to two different UTXO sets.
     crate::palw_genesis_v2::verify_palw_genesis_v2(bundle, &catalog, &bundle.genesis_objects, |outpoint| {
         genesis_utxos.get(outpoint).map(|entry| entry.amount)
     })?;
@@ -8798,15 +8826,50 @@ pub fn mainnet_shipped_params() -> Params {
     // pinning `PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT`, which is the dense slot the RC fills with
     // ADR-0082's graph-v5@512 row. A card that instead pins a fused row through some other slot
     // still meets the assembly's refusal, by name, which is the fail-closed direction.
-    let base = mainnet_card_base_v1(MAINNET_PARAMS, palw_mainnet_qwen25_a16_is_registered());
-    let assembled = if palw_mainnet_qwen36_is_registered() {
-        let dense = palw_mainnet_qwen25_a16_is_registered().then_some(PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT);
-        palw_v2_params_with_classes_on_base(base, PALW_MAINNET_GENESIS_ARTIFACT_ROOT, PALW_MAINNET_QWEN36_ARTIFACT_ROOT, dense, bonds)
-    } else {
-        palw_v2_params_from_artifacts_on_base(base, PALW_MAINNET_GENESIS_ARTIFACT_ROOT, bonds)
+    mainnet_card_params_v1(
+        PALW_MAINNET_GENESIS_ARTIFACT_ROOT,
+        palw_mainnet_qwen36_is_registered().then_some(PALW_MAINNET_QWEN36_ARTIFACT_ROOT),
+        palw_mainnet_qwen25_a16_is_registered().then_some(PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT),
+        bonds,
+        crate::config::premine::genesis_premine_utxos_for(MAINNET_PARAMS.net),
+    )
+    .unwrap_or_else(|e| panic!("the pinned mainnet PALW genesis card does not assemble: {e}"))
+}
+
+/// **The mainnet card assembly, with its constants as ARGUMENTS** (mainnet audit 2026-09-06, M-7).
+///
+/// `mainnet_shipped_params` is a wrapper that reads five `const`s and unwraps. Everything between
+/// those two facts — which base the card states its fences on, which of the two assemblies runs,
+/// the certification re-derivation and the Phase-1 arming — used to live inside a function no test
+/// could call with a card in place, because the card is compile-time. So the assembly a mainnet
+/// mint actually runs had ZERO test coverage: it panicked on the ambient-target gate and nothing in
+/// the tree noticed, while the runbook's named verification command
+/// (`shipped_presets_have_pinned_fingerprints`) pins the bundle-FREE `MAINNET_PARAMS` and stays
+/// green with a filled card.
+///
+/// Splitting the constants out is the whole of the fix on the test axis:
+/// `every_assembled_v2_ruleset_is_minted_at_its_ambient_target` now mints a card from the RC's own
+/// artifact roots and a bonded premine and asserts it assembles. Nothing about the assembly changed.
+fn mainnet_card_params_v1(
+    artifact_root: crate::Hash64,
+    qwen36_artifact_root: Option<crate::Hash64>,
+    qwen25_a16_artifact_root: Option<crate::Hash64>,
+    bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
+    genesis_utxos: crate::utxo::utxo_collection::UtxoCollection,
+) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
+    let base = mainnet_card_base_v1(MAINNET_PARAMS, qwen25_a16_artifact_root.is_some());
+    let assembled = match qwen36_artifact_root {
+        Some(hybrid) => palw_v2_params_with_classes_on_base_with_utxos(
+            base,
+            artifact_root,
+            hybrid,
+            qwen25_a16_artifact_root,
+            bonds,
+            genesis_utxos,
+        )?,
+        None => palw_v2_params_from_artifacts_on_base_with_utxos(base, artifact_root, bonds, genesis_utxos)?,
     };
-    let assembled = assembled.unwrap_or_else(|e| panic!("the pinned mainnet PALW genesis card does not assemble: {e}"));
-    palw_rc_arm_phase1(mainnet_certify_registered_classes_v1(assembled))
+    Ok(palw_rc_arm_phase1(mainnet_certify_registered_classes_v1(assembled)))
 }
 
 /// **The fences a mainnet card STATES on its base — in one place** (mainnet audit, 2026-09-05).
@@ -9400,6 +9463,37 @@ pub fn palw_v2_params_on_base(
         params.difficulty_window_size = PALW_V2_DIFFICULTY_WINDOW_SIZE;
         params.min_difficulty_window_size = PALW_V2_MIN_DIFFICULTY_WINDOW_SIZE;
     }
+    // **And the MINT, because a V2 ruleset that is not minted at the ambient target cannot exist**
+    // (mainnet audit 2026-09-06, M-7; the gate is `validate_palw_v2` at the bottom of this
+    // function).
+    //
+    // ADR-0066: "a V2 network runs at MAX because the class lottery, not the hash target, is its
+    // throttle", and ADR-0083 makes the retarget answer `max_difficulty_target` for a window with
+    // no bits-priced row. Both PALW presets already mint there (`PALW_RC_GENESIS` and
+    // `DEVNET_GENESIS` carry `bits: 0x207fffff`, which is exactly
+    // `MAX_DIFFICULTY_TARGET.compact_target_bits()`), so this line is the identity on every
+    // network that has ever run V2 and moves nothing: no genesis hash, no `consensus_params_id`,
+    // no fingerprint.
+    //
+    // The one ruleset it moves is a carded mainnet's, and there it is the whole point. Carding is
+    // a re-mint — the seats' collateral enters the premine — so `bits` is a value the ceremony
+    // chooses, and left at `MAINNET_GENESIS`' hash-lineage `0x1f7fffff` it was 256x harder than a
+    // V2 network's ambient maximum: the chain would be born needing 256x the inferences per block
+    // for the whole `min_difficulty_window_size` launch window before one retarget could answer.
+    // Until this line the card could not be assembled AT ALL — `mainnet_shipped_params` panicked
+    // on this very gate — and the only write of the value in the tree was a `#[cfg(test)]` helper,
+    // so every test over the mainnet base was rehearsing a mint production could not perform.
+    //
+    // Imposed HERE, beside the cadence and the windows, for the reason they are: this is the one
+    // place a V2 ruleset is assembled, and a quantity restated per caller is a quantity that
+    // drifts on the caller nobody re-read.
+    //
+    // **The ceremony consequence, stated because nothing runs a document:** the card's genesis
+    // hash moves with this value, so `GENESIS.bits`, `GENESIS.hash` and `GENESIS.utxo_commitment`
+    // in `config/genesis.rs` must be re-pinned in the same commit that fills the card, or
+    // `set_genesis_utxo_commitment_from_config`'s M-07 assert refuses to boot. See
+    // `repin::print_repinned_mainnet_card_genesis`.
+    params.genesis.bits = params.max_difficulty_target.compact_target_bits();
     // **The depths a V2 network needs, derived from its own bundle in ONE place.** Restated by
     // hand anywhere else, they drift — which is how a params set assembled outside this function
     // ended up failing the very lattice bound this derivation exists to satisfy.
@@ -13179,9 +13273,93 @@ mod consensus_params_id_tests {
     /// hash lineage's difficulty and nothing said a word.
     #[cfg(test)]
     fn mainnet_v2_mint_base() -> Params {
-        let mut base = MAINNET_PARAMS;
-        base.genesis.bits = base.max_difficulty_target.compact_target_bits();
-        base
+        // **The write that used to be here has moved into production** (mainnet audit 2026-09-06,
+        // M-7). It performed exactly the mint `palw_v2_params_on_base` omitted, so twelve tests
+        // asserted that a mainnet-shaped card assembles while the shipped assembly panicked on
+        // the same input. The helper stays — the name says what the base is FOR at eleven call
+        // sites — but it now hands the assembly the unmodified preset, so those twelve tests
+        // exercise the production mint and fail the moment it is removed again.
+        MAINNET_PARAMS
+    }
+
+    /// **A mainnet card, assembled the way a ceremony assembles one.**
+    ///
+    /// The card is five `const`s a test cannot set, so this supplies the same five facts to
+    /// `mainnet_card_params_v1` — the function `mainnet_shipped_params` is now a wrapper over. The
+    /// artifact roots are the RC's, which is the ADR-0042 Decision 11 premise ("RC and mainnet
+    /// agree by hash"); the bonds are the devnet registry's fabricated cards over mainnet premine
+    /// indices, which is how `a_mainnet_equivalent_genesis_carries_the_certification_rules`
+    /// already builds a mainnet-shaped registry without inventing real operator keys.
+    #[cfg(test)]
+    fn mainnet_card_fixture_v1(dense: bool) -> Params {
+        use crate::config::premine::{bonded_genesis_utxos, premine_outpoint};
+        use crate::palw_fp_devnet_v3::{palw_devnet_bond_registry_v1, palw_v2_maturity_armable_bonds_v1};
+        let specs: Vec<_> = palw_devnet_bond_registry_v1(palw_v2_maturity_armable_bonds_v1())
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut spec)| {
+                spec.bond = crate::palw_state_v2::PalwBondKeyV2(premine_outpoint(i as u32));
+                spec
+            })
+            .collect();
+        let money: Vec<(u32, [u8; 64])> =
+            specs.iter().enumerate().map(|(i, spec)| (i as u32, *spec.payout_payload.as_byte_slice())).collect();
+        let utxos = bonded_genesis_utxos(MAINNET_PARAMS.net, &money, std::iter::empty());
+        mainnet_card_params_v1(
+            PALW_RC_GENESIS_ARTIFACT_ROOT,
+            Some(PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT),
+            dense.then_some(PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT),
+            specs,
+            utxos,
+        )
+        .expect("a mainnet card assembles")
+    }
+
+    /// **Every ConsensusV2 ruleset this tree can assemble is minted at its own ambient target.**
+    ///
+    /// The RULE, not the patch: it names no constant and no network-specific value, so it holds for
+    /// a network added tomorrow. `validate_palw_v2` refuses anything else, and until the mainnet
+    /// audit of 2026-09-06 the card assembly could not satisfy it at all — `mainnet_shipped_params()`
+    /// panicked, and no test assembled a card to find out.
+    ///
+    /// Fails on the pre-patch tree at the mainnet rows: `mainnet_card_fixture_v1` returns
+    /// `Err("a ConsensusV2 genesis is minted at a target other than this network's ambient
+    /// maximum")` and the `expect` inside it panics.
+    #[test]
+    fn every_assembled_v2_ruleset_is_minted_at_its_ambient_target() {
+        for (name, params) in [
+            ("testnet-11", palw_rc_shipped_params()),
+            ("devnet", devnet_shipped_params()),
+            ("mainnet card (floor + hybrid)", mainnet_card_fixture_v1(false)),
+            ("mainnet card (all three tiers)", mainnet_card_fixture_v1(true)),
+        ] {
+            assert!(
+                matches!(params.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)),
+                "{name}: the premise — this row must be a V2 network"
+            );
+            assert_eq!(
+                params.genesis.bits,
+                params.max_difficulty_target.compact_target_bits(),
+                "{name}: a V2 network is throttled by the class lottery, not the hash target, so its genesis is minted at \
+                 the ambient maximum (ADR-0066; the gate is validate_palw_v2)"
+            );
+            params.validate_palw_v2().expect(name);
+        }
+    }
+
+    /// **The two shipped V2 presets do not move when the mint is imposed.**
+    ///
+    /// The other half of the rule above, and the half a fingerprint pin cannot state: the write in
+    /// `palw_v2_params_on_base` is the IDENTITY on every network that has ever run V2, so no
+    /// genesis hash and no `consensus_params_id` moves. A future edit that made it conditional, or
+    /// that changed `MAX_DIFFICULTY_TARGET`, breaks this rather than silently re-genesising a live
+    /// chain.
+    #[test]
+    fn imposing_the_v2_mint_moves_no_live_preset() {
+        assert_eq!(palw_rc_shipped_params().genesis.hash, crate::config::genesis::PALW_RC_GENESIS.hash);
+        assert_eq!(devnet_shipped_params().genesis.hash, crate::config::genesis::DEVNET_GENESIS.hash);
+        assert_eq!(crate::config::genesis::PALW_RC_GENESIS.bits, 0x207fffff);
+        assert_eq!(crate::config::genesis::DEVNET_GENESIS.bits, 0x207fffff);
     }
 
     /// Every V2 fence a preset can arm, as `(name, armed)` — ONE spelling, so a fence added
