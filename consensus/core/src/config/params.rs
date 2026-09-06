@@ -13810,6 +13810,12 @@ mod consensus_params_id_tests {
         }
     }
 
+    /// The names a params set arms, as a set — one spelling for the two assertions below.
+    #[cfg(test)]
+    fn card_armed_names(p: &Params) -> std::collections::BTreeSet<&'static str> {
+        palw_v2_fence_table(p).into_iter().filter(|(_, on)| *on).map(|(n, _)| n).collect()
+    }
+
     /// **A carded mainnet arms what testnet-11 arms, and the one difference is a derivation**
     /// (mainnet audit, 2026-09-05).
     ///
@@ -13906,6 +13912,49 @@ mod consensus_params_id_tests {
                  oversight"
             );
         }
+        // **The card's armed set, spelled out — and the document is downstream of it** (mainnet
+        // audit 2026-09-06, L-4). Deliberately a hand-maintained list, unlike everything above it:
+        // its job is not to catch a fence the compiler already catches (`palw_fences_v1` does that),
+        // it is to make a change to what a CARD arms impossible to land without a human reading
+        // this sentence — `docs/adr/README.md`'s activation-axis table is written FROM this set, and
+        // nothing runs a document.
+        let card_armed: std::collections::BTreeSet<&str> = card_armed_names(&carded);
+        let expected: std::collections::BTreeSet<&str> = [
+            "palw_attempt_header_pins",
+            "palw_attempt_work",
+            "palw_capability_bound",
+            "palw_certification_rent",
+            "palw_chunk_cap_charge",
+            "palw_context_ladder",
+            "palw_court_ladder",
+            "palw_da_court",
+            "palw_difficulty_priced_rows",
+            "palw_epoch_boundary_budget",
+            "palw_fp_da_pins",
+            "palw_fp_ruleset_caps",
+            "palw_heartbeat",
+            "palw_panel_da",
+            "palw_prompt_ids_merkle",
+            "palw_receipt_rows_unpriced",
+            "palw_unavailable_abstains",
+            "palw_uncertified_weightless",
+            "palw_validator_payout_bounds",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            card_armed, expected,
+            "the card's armed set changed. docs/adr/README.md's activation-axis table is written FROM this set; update it \
+             in the same commit"
+        );
+        // The dense card is this set plus the court its own pinned row needs, and nothing else.
+        let dense: std::collections::BTreeSet<&str> = card_armed_names(&mainnet_card_fixture_v1(true));
+        assert_eq!(
+            dense.difference(&expected).copied().collect::<Vec<_>>(),
+            vec!["palw_kary_court"],
+            "pinning the dense tier states the k-ary court and nothing else"
+        );
+
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &carded.palw_consensus_mode else {
             panic!("the equivalent is V2")
         };

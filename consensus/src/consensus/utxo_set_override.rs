@@ -130,6 +130,11 @@ mod repin {
     /// the hash lineage's value, 256x harder (`palw_v2_params_on_base`, and the gate at
     /// `validate_palw_v2`). Miss the second and `set_genesis_utxo_commitment_from_config`'s M-07
     /// assert refuses to boot with a message about the premine, which is the wrong diagnosis.
+    ///
+    /// **Run it AFTER the card constants are pinned, in that same commit.** With an unset card
+    /// `mainnet_shipped_params()` returns `MAINNET_PARAMS` unchanged, so this prints the hash
+    /// lineage's own `0x1f7fffff` and today's premine — correct for a hash-only mainnet and not the
+    /// values a carded one wants.
     #[test]
     #[ignore]
     fn print_repinned_mainnet_card_genesis() {

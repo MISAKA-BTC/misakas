@@ -154,7 +154,14 @@ What that chain means today, in the sentences people most often get wrong:
 Two labels to read with care: ADR-0076 cites "ADR-0071 Decision 1 as amended" — the standing rule
 it means is 0071 **Decision 1a** (`converge_idle_target_v1`); Decision 1 proper is withdrawn.
 ADR-0071 §5 says 0065 D4 is "armed on every shipped preset" — it is armed on testnet-11 from
-genesis and is `None` on devnet and mainnet.
+genesis (by `palw_rc_arm_phase1`, not by a preset literal) and is `None` on devnet, simnet,
+testnet-10 and the bundle-free `MAINNET_PARAMS`; a card arms it through the same Phase-1 tail.
+
+A third, added by the 2026-09-06 mainnet audit: **ADR-0077 Phase B's `palw_context_ladder` and
+ADR-0084 U-08's `palw_court_ladder` are two fences, not two names for one.** Two branches closed
+U-08 with two different fields at the same call sites; the merge kept both, and the field the
+virtual processor reads for the refutation walk is `palw_court_ladder`. An ADR, comment or runbook
+that cites `palw_context_ladder` for the court's ladder is citing the pre-merge spelling.
 
 ## Number hygiene — collisions, renumberings and dangling references
 
@@ -177,19 +184,30 @@ Renumbering rule used every time: the ADR with fewer citations in code moves, th
 number, and the index — this file — is the only place the mapping is written down. Take the next
 number from this file, not from `ls`.
 
-## Activation axis — what is armed where (2026-09-02, `consensus/core/src/config/params.rs`)
+## Activation axis — what is armed where (2026-09-06, `consensus/core/src/config/params.rs`)
 
 Supersession and activation are different axes. Most PALW ADRs are consensus-inert until a preset
 carries them; the table says what each shipped preset actually installs, read from the assembly
 functions (`palw_rc_shipped_params`, `devnet_shipped_params`, `mainnet_shipped_params`) rather
 than from any ADR's Status line.
 
-| Preset | PALW mode | Fences armed from genesis | Not armed |
-| --- | --- | --- | --- |
-| **testnet-11** (`--netsuffix=11`; the PALW-RC) | `ConsensusV2` — the RC bundle: floor + QWEN36 graph-v3 + QWEN25-A16 graph-v2 classes, 8 genesis bonds, genesis free-prompt set = all three families (ADR-0075 D6), per-class seeds (ADR-0076) | heartbeat lane (ADR-0060/0066/0068), attempt-work constant (ADR-0068 F2), `palw_unavailable_abstains` (ADR-0065 D4) | `palw_bond_maturity` (ADR-0065 D1, armable), `palw_inactivity_leak` (ADR-0066 D4 fence), `palw_bootstrap_activation` (ADR-0064) |
-| **devnet** | `ConsensusV2` — floor only, 6 public-seed genesis bonds (ADR-0075 §7's rehearsal chain) | heartbeat lane, attempt-work constant | maturity, abstains, leak, bootstrap |
-| **mainnet** | `Disabled` — the genesis card (`PALW_MAINNET_GENESIS_ARTIFACT_ROOT`, `PALW_MAINNET_GENESIS_BONDS`) is unset; when set, the same arming as the RC applies from genesis | — | everything. **One of these absences is permanent:** `palw_uncertified_weightless` (ADR-0069 D7) can only ever be armed IN a genesis, so the day the card is set is the only day it can be added — see the card checklist in `docs/mainnet-palw-certification-runbook.md` |
-| testnet-10, simnet | `Disabled` | — | everything |
+**This table was stale in BOTH directions when the 2026-09-06 mainnet audit read it** (L-4): it gave
+testnet-11 three genesis fences where the assembly arms five, named none of the six scheduled
+heights, and said a card applies "the same arming as the RC", which was never true and is now
+further from true. Its preamble's promise — read from the assembly functions — is the property it
+lost. It has three columns now, because a scheduled fence is neither armed nor absent and it was the
+column's absence that let six of them go unrecorded. **Re-read it against `palw_rc_base_params`,
+`mainnet_card_base_v1`, `palw_rc_arm_phase1` and `DEVNET_PARAMS` whenever a fence is added;
+`Params::palw_fences_v1` is the exhaustive list to check against, and
+`a_carded_mainnet_arms_every_fence_testnet_11_arms` fails if the card's armed set changes without
+this table being re-read.**
+
+| Preset | PALW mode | Armed from genesis | Scheduled | Not armed |
+| --- | --- | --- | --- | --- |
+| **testnet-11** (`--netsuffix=11`; the PALW-RC) | `ConsensusV2` — the RC bundle: floor + QWEN36 graph-v3 + QWEN25-A16 graph-v5 classes, 8 genesis bonds, genesis free-prompt set = all three families (ADR-0075 D6), per-class seeds (ADR-0076) | `palw_heartbeat` and `palw_attempt_work` (ADR-0068 Phase 2, via `palw_rc_arm_phase1`), `palw_unavailable_abstains` (ADR-0065 D4), `palw_uncertified_weightless` (ADR-0069 D7 — genesis-only by `validate_palw_v2`), `palw_kary_court` (ADR-0082 D3) | `palw_difficulty_priced_rows` at **DAA 1150** (ADR-0083 D1, the 5f flag day); `palw_da_court`, `palw_panel_da`, `palw_model_market`, `palw_model_lines`, `palw_model_evm` all at **`PALW_RC_DA_COURT_FENCE_DAA` = 1900** (ADR-0062, ADR-0077 D16, ADR-0087/0088/0089) | `palw_bond_maturity` (ADR-0065 D1, armable), `palw_inactivity_leak`, `palw_bootstrap_activation`, `palw_frontier_provenance`, `palw_attempt_activation`, `palw_beacon_fold`, `palw_capability_bound`, `palw_context_ladder`, `palw_court_ladder`, `palw_certification_rent`, `palw_chunk_cap_charge`, `palw_prompt_ids_merkle`, `palw_court_responder_coverage`, `palw_fp_decode_rules`, `palw_receipt_rows_unpriced`, `palw_attempt_header_pins`, `palw_fp_da_pins`, `palw_validator_payout_bounds`, `palw_epoch_boundary_budget`, `palw_fp_ruleset_caps` |
+| **devnet** | `ConsensusV2` — the three-class set on the devnet base, 6 public-seed genesis bonds (ADR-0075 §7's rehearsal chain) | `palw_heartbeat`, `palw_attempt_work`, `palw_uncertified_weightless`, `palw_kary_court`, **`palw_context_ladder`** (ADR-0077 Phase B) | — | everything else — including `palw_unavailable_abstains`, which ADR-0071 §5 claims is "armed on every shipped preset" and is not — and **note `palw_court_ladder` in particular**: devnet arms ADR-0077's ladder fence and not ADR-0084 U-08's, so it admits the graph-v5 row at 2^26 and its court walks it at 2^22. A known, pinned gap — see `the_refutation_ladder_is_the_rulesets_only_past_the_court_ladder_fence` |
+| **mainnet** | `Disabled` — the genesis card (`PALW_MAINNET_GENESIS_ARTIFACT_ROOT`, `PALW_MAINNET_GENESIS_BONDS`) is unset | when the card is set: the set `mainnet_card_base_v1` states (`palw_capability_bound`, `palw_context_ladder`, `palw_court_ladder`, `palw_difficulty_priced_rows`, `palw_receipt_rows_unpriced`, `palw_attempt_header_pins`, `palw_certification_rent`, `palw_chunk_cap_charge`, `palw_prompt_ids_merkle`, `palw_panel_da`, `palw_da_court`, `palw_fp_da_pins`, `palw_validator_payout_bounds`, `palw_epoch_boundary_budget`, `palw_fp_ruleset_caps`, plus `palw_kary_court` when the dense tier is pinned) and the three `palw_rc_arm_phase1` installs (`palw_heartbeat`, `palw_attempt_work`, `palw_unavailable_abstains`) plus `palw_uncertified_weightless`. **A card arms MORE than the RC, not the same**: the RC leaves most of these to a live chain's flag day or a re-mint. `a_carded_mainnet_arms_every_fence_testnet_11_arms` asserts the containment AND pins the exact set | — | `palw_bond_maturity`, `palw_inactivity_leak`, `palw_bootstrap_activation`, `palw_frontier_provenance`, `palw_attempt_activation`, `palw_beacon_fold`, `palw_court_responder_coverage`, `palw_fp_decode_rules`, and the three model fences (`palw_model_market`, `palw_model_lines`, `palw_model_evm`) — testnet-11 schedules those three and a card states none of them, because arming a market, a registry and an EVM from block one on a network with value is ADR-0087 D6's measured decision and the operator's. **One absence is permanent:** `palw_uncertified_weightless` (ADR-0069 D7) can only ever be armed IN a genesis, so the day the card is set is the only day it could be added — the card does state it |
+| testnet-10, simnet | `Disabled` | — | — | everything |
 
 testnet-12 is retired into 11 (`--netsuffix=12` is refused by name). The `LegacyTn11` algo-4 lane
 survives only as the unrouted `TESTNET11_PARAMS` constant.
