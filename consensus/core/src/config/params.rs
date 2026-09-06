@@ -1162,6 +1162,35 @@ pub struct Params {
     /// ruleset whose genesis set registers a graph-v5 class while this fence is dormant.
     pub palw_kary_court: Option<ForkActivation>,
 
+    /// **ADR-0082 Decision 2's clock does not convict for a move no party in the field can make**
+    /// (mainnet audit 2026-09-06, C-2/H-5). `None` on every shipped preset, so the fold is
+    /// byte-identical to not having the field at all.
+    ///
+    /// §10.6 gave the fused terminal a clock because "silence no longer wins challenger-side", on
+    /// the premise that the responder owes a `CourtAttnRootClaimed` it can file. No binary in this
+    /// tree constructs that object outside a test module, and a converged ladder has `round() > 0`
+    /// by construction, so the opening-rung mercy beside it cannot reach the terminal: every fused
+    /// session that runs its rung clock out ends in `void_and_slash(CourtFraud)` against the
+    /// accused, whether it is honest or guilty. A verdict that is independent of the facts is not
+    /// the trial Decision 2 designed; it is a funded, evidence-free way to burn a dense-tier
+    /// producer's collateral and its escrowed reward.
+    ///
+    /// Past this fence the fused terminal's silence routes to `rearm_after_unanswered_opening` —
+    /// this fold's own third direction, which ends the session, convicts nobody and fines nobody —
+    /// instead of to the void. NOTHING ELSE MOVES: the fused remap stands, the rung clock stands,
+    /// every other silence still convicts the party that owes the move, and the challenger-side
+    /// backstop is untouched.
+    ///
+    /// **This exemption is a placeholder for a responder and must be retired the day one ships**,
+    /// by activation on a fresh card or a scheduled height on a live chain — never by a silent
+    /// edit. `no_shipped_binary_files_a_court_attn_root_claimed` is the pin that goes red on that
+    /// day.
+    ///
+    /// **TOP LEVEL for the reason on `palw_unavailable_abstains`**: it has to be able to reach a
+    /// live network, and a fence inside the V2 bundle moves `palw_ruleset_id_v2`, which
+    /// `for_each_fence` never descends into.
+    pub palw_court_responder_coverage: Option<ForkActivation>,
+
     /// **ADR-0082 Decisions 10 and 11's fence: the free-prompt lane's numerator and its sampler.**
     ///
     /// Active, two rules move together because they are one ruleset move (ADR-0082 §4,
@@ -2509,6 +2538,11 @@ impl Params {
         if self.palw_kary_court == Some(ForkActivation::never()) {
             self.palw_kary_court = None;
         }
+        // The fused-terminal responder-coverage rule, a bare fence: the same collapse for the same
+        // reason — `never()` is absence, and absence must not write a name into the schedule id.
+        if self.palw_court_responder_coverage == Some(ForkActivation::never()) {
+            self.palw_court_responder_coverage = None;
+        }
         // ADR-0082 Decisions 10/11, likewise.
         if self.palw_fp_decode_rules == Some(ForkActivation::never()) {
             self.palw_fp_decode_rules = None;
@@ -2763,6 +2797,20 @@ impl Params {
         self.palw_kary_court_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// Is the fused terminal's responder-coverage rule in force at `daa_score`? `false` on every
+    /// shipped preset. The ONE place it is decided; the fold and the sync walk both switch on this
+    /// and never on the raw field.
+    pub fn palw_court_responder_coverage_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_court_responder_coverage) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn palw_court_responder_coverage_active_at(&self, daa_score: u64) -> bool {
+        self.palw_court_responder_coverage_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// ADR-0082 Decisions 10/11's fence with the mode condition already folded in — `Some` only on
     /// a `ConsensusV2` network that has armed it. The ONE place the free-prompt lane's numerator
     /// and its sampler are decided; the transition, the admission gate and the gateway switch on
@@ -2940,6 +2988,13 @@ impl Params {
             h.write(b"palw_kary_court");
             h.write(kary.daa_score().to_le_bytes());
         }
+        // The fused-terminal responder-coverage rule, NAMED for the same reason: its
+        // `for_each_fence` arm is Some-only, so the name is what keeps absence from aliasing a
+        // present value.
+        if let Some(coverage) = self.palw_court_responder_coverage {
+            h.write(b"palw_court_responder_coverage");
+            h.write(coverage.daa_score().to_le_bytes());
+        }
         // ADR-0082 Decisions 10/11's fence, NAMED for the same reason: it changes what a claim
         // earns and what a token may be, so an operator reading the schedule must see it.
         if let Some(decode) = self.palw_fp_decode_rules {
@@ -3054,6 +3109,7 @@ impl Params {
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
+            palw_court_responder_coverage,
             palw_fp_decode_rules,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
@@ -3316,6 +3372,10 @@ impl Params {
         if let Some(activation) = palw_kary_court.as_mut() {
             fork(activation, visit);
         }
+        // The fused-terminal responder-coverage rule. Visited SOME-ONLY, for the reason above it.
+        if let Some(activation) = palw_court_responder_coverage.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0082 Decisions 10/11. Some-only, likewise.
         if let Some(activation) = palw_fp_decode_rules.as_mut() {
             fork(activation, visit);
@@ -3530,6 +3590,7 @@ impl Params {
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
+            palw_court_responder_coverage,
             palw_fp_decode_rules,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
@@ -3804,6 +3865,14 @@ impl Params {
         // preset leaves it `None` and fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_kary_court {
             h.write(b"palw_kary_court");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // The fused-terminal responder-coverage rule, Some-only like every fence above it: arming
+        // it changes which party a fused terminal's silence charges, so it belongs in the
+        // fingerprint — and every shipped preset leaves it `None` and fingerprints byte-identically
+        // to a build without the field.
+        if let Some(activation) = palw_court_responder_coverage {
+            h.write(b"palw_court_responder_coverage");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0082 Decisions 10/11, Some-only for the same reason: arming it changes what a claim
@@ -4125,6 +4194,7 @@ impl Params {
             palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
             palw_kary_court: self.palw_kary_court,
+            palw_court_responder_coverage: self.palw_court_responder_coverage,
             palw_fp_decode_rules: self.palw_fp_decode_rules,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
@@ -5058,6 +5128,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
+    palw_court_responder_coverage: None,
     palw_fp_decode_rules: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
@@ -5215,6 +5286,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
+    palw_court_responder_coverage: None,
     palw_fp_decode_rules: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
@@ -5354,6 +5426,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
+    palw_court_responder_coverage: None,
     palw_fp_decode_rules: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
@@ -9278,6 +9351,10 @@ pub const DEVNET_PARAMS: Params = Params {
     // dormant fence by name (`FusedAttentionNeedsTheKaryCourt`), which is the guard; the property
     // is that a dispute reaches a verdict, and only the court drill asserts that.
     palw_kary_court: Some(ForkActivation::always()),
+    // **NOT armed on devnet, deliberately** (mainnet audit 2026-09-06, C-2/H-5): devnet is the
+    // drill network for the dissection court over a fused row, and the exemption would change what
+    // its fold does at a terminal. It is the network the responder will be built against.
+    palw_court_responder_coverage: None,
     // ADR-0082 stream H's (decode leaves earn, seeded argmax): NOT armed. Not a prosecutability
     // condition and not on the acceptance path, and its transition arm still refuses by name
     // (`FreePromptDecodeLeavesUnavailable`) for want of the profile-derived split quantities on
@@ -12906,6 +12983,7 @@ mod consensus_params_id_tests {
             ("palw_chunk_cap_charge", p.palw_chunk_cap_charge.is_some()),
             ("palw_prompt_ids_merkle", p.palw_prompt_ids_merkle.is_some()),
             ("palw_kary_court", p.palw_kary_court.is_some()),
+            ("palw_court_responder_coverage", p.palw_court_responder_coverage.is_some()),
             ("palw_fp_decode_rules", p.palw_fp_decode_rules.is_some()),
             ("palw_difficulty_priced_rows", p.palw_difficulty_priced_rows.is_some()),
             ("palw_receipt_rows_unpriced", p.palw_receipt_rows_unpriced.is_some()),

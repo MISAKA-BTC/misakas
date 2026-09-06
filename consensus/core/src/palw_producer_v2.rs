@@ -682,6 +682,20 @@ pub fn palw_court_duties_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) ->
         // no duty rather than a duty nobody can discharge — the same rule the seat list uses.
         let Some(artifact_root) = state.class(&claim.class_id).map(|c| c.artifact_root) else { continue };
         let (lo, hi) = session.ladder.interval();
+        // **Whose move it is, through the SAME helper the fold and the deadline index use**
+        // (ADR-0082 Decision 2; mainnet audit 2026-09-06, H-5 item d). This view read the LADDER's
+        // turn and the LADDER's rung deadline unconditionally, and `session.dissection` was never
+        // looked at — so a session with an open phase reported `Terminal` to the responder that
+        // owed the phase's next round, and a fused terminal reported `Terminal` to a responder the
+        // chain was already clocking as `AwaitDisclosure`. Every court arm in the panel switches on
+        // `duty.turn`, so this is the second half of the missing responder: it would misroute even
+        // a correct one.
+        let (turn, rung_deadline_daa) = crate::palw_state_v2::court_turn_and_rung_deadline_v2(
+            session,
+            crate::palw_state_v2::court_session_class_is_fused_v2(state, session),
+        );
+        // The round is the PHASE's once one is open, for the same reason the turn is.
+        let round = session.dissection.as_ref().map_or_else(|| session.ladder.round(), |phase| phase.round());
         out.push(PalwCourtDutyV2 {
             accepted_block: claim.accepted_block,
             session_id: *session_id,
@@ -691,13 +705,13 @@ pub fn palw_court_duties_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) ->
             executor_bond: claim.bond,
             challenger_bond: session.challenger_bond,
             i_am_responder,
-            round: session.ladder.round(),
+            round,
             interval: (lo, hi),
             midpoint: (hi.saturating_sub(lo) > 1).then(|| lo + (hi - lo) / 2),
             terminal_index: session.ladder.terminal_index(),
             last_disclosure: session.ladder.last_disclosure(),
-            turn: session.ladder.turn(),
-            rung_deadline_daa: session.ladder.last_deadline_daa(),
+            turn,
+            rung_deadline_daa,
             session_deadline_daa: session.deadline_daa,
             trace_root: claim.trace_root,
             execution_root: claim.execution_root,

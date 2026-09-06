@@ -4944,3 +4944,45 @@ mod replay_rule_tests {
         assert!(!replay_licenses_v1(&roots(Some(30)), Hash64::from_u64_word(0xE), Hash64::from_u64_word(0x8), 30));
     }
 }
+
+#[cfg(test)]
+mod court_responder_coverage_pin {
+    /// **PIN THE LIMITATION, NOT THE BEHAVIOUR: no shipped binary files a `CourtAttnRootClaimed`**
+    /// (ADR-0082 Decision 2; mainnet audit 2026-09-06, C-2/H-5).
+    ///
+    /// §10.6 gave a fused terminal a CLOCK — the responder owes the root claim, and silence past
+    /// the rung convicts it — on the premise that the responder can file one. That premise is what
+    /// `Params::palw_court_responder_coverage` exists to suspend, and the exemption is a
+    /// placeholder for a responder rather than a rule anybody wants: the whole k-ary dissection
+    /// responder (a panel arm, plus a backend verb producing the fused site's root, its arity, its
+    /// binding, its opened output tile and its operand openings) is a FEATURE nobody has built.
+    ///
+    /// This is the trigger to retire the exemption by activation. It scans the panel's own source
+    /// — the only file where a responder could live, since `palw_da_duties_v2` and
+    /// `palw_court_duties_v2` are both read here and nowhere else in this binary — and it goes RED
+    /// the day the identifier appears anywhere but the naming table. The day it does, the fix is
+    /// not to relax this test: it is to schedule `palw_court_responder_coverage` off, on a fresh
+    /// card or at a height, so the clock the ADR designed starts meaning what it says.
+    ///
+    /// A comment that mentions the object will also turn it red. That is the intended cost: the
+    /// question "can a party in the field actually make this move" must be re-answered by hand,
+    /// and it is cheap to answer. This module's own text is excluded, or the pin would be counting
+    /// itself.
+    #[test]
+    fn no_shipped_binary_files_a_court_attn_root_claimed() {
+        const MARKER: &str = "mod court_responder_coverage_pin";
+        let whole = include_str!("palw_panel.rs");
+        let panel = &whole[..whole.find(MARKER).expect("this module is in this file")];
+        let producer = include_str!("palw_producer.rs");
+        assert_eq!(
+            panel.matches("CourtAttnRootClaimed").count(),
+            2,
+            "the panel names ADR-0082's terminal move exactly twice — the match arm and the string it maps to — and              builds one nowhere. If that count moved because a RESPONDER now exists, retire              `Params::palw_court_responder_coverage` by activation rather than editing this number: the fence is only              correct while this is true."
+        );
+        assert_eq!(
+            producer.matches("CourtAttnRootClaimed").count(),
+            0,
+            "the producer does not file court moves at all; if it now does, the exemption above is a rule nobody chose"
+        );
+    }
+}

@@ -7915,7 +7915,10 @@ pub(crate) fn court_session_class_is_fused_v2(state: &PalwChainStateV2, session:
     state.claims.get(&session.claim).and_then(|claim| state.classes.get(&claim.class_id)).is_some_and(|class| class.fused_attention)
 }
 
-fn court_turn_and_rung_deadline_v2(
+/// Visible to the crate so the PRODUCER's duty view asks it too (mainnet audit 2026-09-06, H-5
+/// item d): that view spelled "whose move is it" a second way, off the ladder, and reported
+/// `Terminal` to a responder the fold was clocking as `AwaitDisclosure`.
+pub(crate) fn court_turn_and_rung_deadline_v2(
     session: &PalwCourtSessionStateV2,
     class_is_fused: bool,
 ) -> (crate::palw_bisect::PalwBisectTurnV1, u64) {
@@ -8064,8 +8067,18 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         // index uses. Asking the LADDER here would read `Terminal` on every session that had
         // reached its dissection and hand the whole exchange to the backstop, which closes
         // challenger-side: a responder could simply stop answering rounds and win.
-        let (turn, rung_deadline) =
-            court_turn_and_rung_deadline_v2(&session, court_session_class_is_fused_v2(&builder.state, &session));
+        let class_is_fused = court_session_class_is_fused_v2(&builder.state, &session);
+        let (turn, rung_deadline) = court_turn_and_rung_deadline_v2(&session, class_is_fused);
+        // **The fused terminal's OPENING move, named before the ladder is abandoned** (mainnet
+        // audit 2026-09-06, C-2/H-5).
+        //
+        // `declare_no_show` below takes `&mut` and stamps the ladder `Abandoned`, so this question
+        // cannot be asked after it; and the remap above has already rewritten the turn to
+        // `AwaitDisclosure`, so by then a fused terminal is indistinguishable from an ordinary rung.
+        // It is asked once, here, off the same two facts the remap used.
+        let owes_the_dissection_opening = session.dissection.is_none()
+            && class_is_fused
+            && session.ladder.turn() == crate::palw_bisect::PalwBisectTurnV1::Terminal;
         let turn_can_still_move =
             !matches!(turn, crate::palw_bisect::PalwBisectTurnV1::Terminal | crate::palw_bisect::PalwBisectTurnV1::Abandoned);
         let rung_fired = turn_can_still_move && rung_deadline < ctx.daa_score && rung_deadline < session.deadline_daa;
@@ -8131,8 +8144,24 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                     // PHASE inherit it would give an executor one free silence per dispute after
                     // it had already shown it could play — the exemption becoming a strategy
                     // rather than a mercy.
+                    //
+                    // **And the same mercy at a FUSED TERMINAL, past the fence** (mainnet audit
+                    // 2026-09-06, C-2/H-5). The exemption above is spelled `ladder.round() == 0`,
+                    // which is "the responder has not shown it can play"; the exemption's own
+                    // sentence for why it stops at a dissection is that "a session with an open
+                    // phase has a responder that filed a root claim, which is the move the
+                    // exemption doubts it can make". At a fused terminal `dissection.is_none()` —
+                    // the root claim is precisely the move that has NOT been made, and no binary in
+                    // the field constructs one. A converged ladder has `round() > 0` by
+                    // construction, so the `round() == 0` clause — written before ADR-0082 §10.6
+                    // added the fused remap — could never reach this state, and every fused
+                    // terminal that ran its clock out convicted the accused regardless of guilt.
+                    //
+                    // Fenced, and deliberately not merged into the clause above: that one is
+                    // unfenced and always was, and it decides a different question.
                     crate::palw_bisect::PalwBisectPartyV1::Responder
-                        if session.dissection.is_none() && session.ladder.round() == 0 && !class_holds_weight =>
+                        if (session.dissection.is_none() && session.ladder.round() == 0 && !class_holds_weight)
+                            || (builder.extras.court_responder_coverage_active && owes_the_dissection_opening) =>
                     {
                         // Ends the session, convicts nobody, and FINES nobody — see
                         // `rearm_after_unanswered_opening` (audit3 H4). Routing this to the
@@ -10876,6 +10905,15 @@ pub struct PalwTransitionExtrasV1 {
     /// ADR-0089 Decision 6: the actions the block's EVM execution queued, in sequence order —
     /// applied after every carrier-borne object, each quoted on the row as it then stands.
     pub evm_actions: Vec<crate::evm::model_market::PalwEvmMarketActionV1>,
+    /// `Params::palw_court_responder_coverage` resolved at the block's DAA (mainnet audit
+    /// 2026-09-06, C-2/H-5). Below it a fused terminal's silence convicts the responder exactly as
+    /// it does today; past it that one ending routes to `rearm_after_unanswered_opening` instead.
+    ///
+    /// It rides HERE rather than as a fourth positional bool on
+    /// `apply_palw_transition_v2_with_policies`, for the reason that function's own doc gives:
+    /// "Three lanes wrote three faces of this shape in one batch and a fourth would have been
+    /// written next; separate faces let a policy be added to one and forgotten in the other."
+    pub court_responder_coverage_active: bool,
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -14881,6 +14919,181 @@ pub(crate) mod tests {
         assert_eq!(ladder.interval(), (4, 5), "one index wide");
         assert_eq!(ladder.terminal_index(), Some(4), "and the dispute is located");
         assert_eq!(ladder.turn(), crate::palw_bisect::PalwBisectTurnV1::Terminal, "only an arithmetic close finishes it now");
+    }
+
+    /// Apply with the fused-terminal responder-coverage rule set either way — the ONLY difference
+    /// between the two tests below, so what they disagree about is the fence and nothing else.
+    fn apply_with_coverage(
+        parent: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        c: &PalwBlockContextV2,
+        objects: &[PalwConsensusObjectV2],
+        coverage: bool,
+    ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+        let extras = PalwTransitionExtrasV1 { court_responder_coverage_active: coverage, ..Default::default() };
+        let (state, delta) =
+            apply_palw_transition_v2_with_extras(parent, p, c, objects, None, false, false, false, false, &extras)
+                .expect("transition applies");
+        state.assert_internal_consistency(p).expect("internal consistency after apply");
+        state.assert_deadline_consistency(p).expect("deadline consistency after apply");
+        (state, delta)
+    }
+
+    /// **A court driven to a FUSED terminal, with two bonds so "who paid" is answerable.**
+    ///
+    /// `weightless` picks the class: `false` is the cadence-holding class (so the opening-rung
+    /// mercy's `!class_holds_weight` clause is false), `true` the share-0 one (so it is true). The
+    /// fusion is stamped on the class record before the court opens; the reason it cannot be
+    /// stamped afterwards is written at the line that does it.
+    fn fused_terminal_court(p: &PalwStateParamsV2, weightless: bool) -> (PalwChainStateV2, Hash64, Hash64) {
+        let (class, artifact) = if weightless { (h64(2), h64(12)) } else { (h64(1), h64(11)) };
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(2),
+            pubkey: vec![8; 4],
+            operator_pubkey: op_key(22),
+            collateral: 1_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A22),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        });
+        if weightless {
+            objects.push(register_weightless_class());
+        }
+        let genesis = PalwChainStateV2::genesis();
+        let (mut s1, _) = apply(&genesis, p, &ctx(1, 100, 1), &objects, None);
+        // **Stamped BEFORE the court opens, because the court-deadline index is maintained
+        // incrementally off this very bit.** `court_turn_and_rung_deadline_v2` remaps a fused
+        // terminal to `AwaitDisclosure`, and the index stores the deadline that remap produces, so
+        // a class fused after the ladder converged leaves the index naming a deadline the session
+        // no longer has — `assert_internal_consistency` says so, which is the checker doing its job.
+        // A genesis registration carries no profile, so this is where the bit
+        // `verify_class_admission_v6` would have written from a graph-v5 carriage goes in.
+        s1.classes.get_mut(&class).expect("the class is registered").fused_attention = true;
+        let env = attempt_for_class(40, 1, class, bond_key(1), vec![7; 4], op_id(21), artifact);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, p, &ctx(2, 101, 2), &[], Some(&env));
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+        let (s3, _) =
+            apply(&s2, p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        let (s4, _) = apply(
+            &s3,
+            p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
+        let (s5, _) = apply(&s4, p, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(2))], None);
+        let sid = court_session_of(claim_id, h64(31), bond_key(1), bond_key(2));
+        assert_eq!(s5.court_session(&sid).unwrap().ladder.interval(), (0, 16), "the fixture's space");
+
+        // Four rungs collapse [0,16) to one index — the same sequence
+        // `palw_v2_the_ladder_narrows_across_blocks` walks, because the state this is about is that
+        // test's ending.
+        let (s6, _) = apply(&s5, p, &ctx(6, 105, 6), &[disclose(sid, 0, 8, 0xD0)], None);
+        let (s7, _) = apply(&s6, p, &ctx(7, 106, 7), &[rung_verdict(sid, 0, false)], None);
+        let (s8, _) = apply(&s7, p, &ctx(8, 107, 8), &[disclose(sid, 1, 4, 0xD1)], None);
+        let (s9, _) = apply(&s8, p, &ctx(9, 108, 9), &[rung_verdict(sid, 1, true)], None);
+        let (s10, _) = apply(&s9, p, &ctx(10, 109, 10), &[disclose(sid, 2, 6, 0xD2)], None);
+        let (s11, _) = apply(&s10, p, &ctx(11, 110, 11), &[rung_verdict(sid, 2, false)], None);
+        let (s12, _) = apply(&s11, p, &ctx(12, 111, 12), &[disclose(sid, 3, 5, 0xD3)], None);
+        let (s13, _) = apply(&s12, p, &ctx(13, 112, 13), &[rung_verdict(sid, 3, false)], None);
+        assert_eq!(
+            s13.court_session(&sid).unwrap().ladder.turn(),
+            crate::palw_bisect::PalwBisectTurnV1::Terminal,
+            "the fixture's premise: the ladder has converged"
+        );
+        assert!(s13.classes.get(&class).expect("the class is registered").fused_attention, "…on a fused class");
+        (s13, claim_id, sid)
+    }
+
+    /// **A fused terminal's silence convicts nobody where no party in the field can open the
+    /// dissection** (ADR-0082 §10.6; mainnet audit 2026-09-06, C-2/H-5).
+    ///
+    /// §10.6 gave the fused terminal a clock so that "silence no longer wins challenger-side". Its
+    /// premise is a responder that owes a `CourtAttnRootClaimed` and can file one. Nothing in this
+    /// tree builds that object outside a test module and the panel's court arm has no arm that
+    /// produces it, so the move being clocked is the opening move of a machine no party has ever
+    /// moved in — and the ending was `void_and_slash(CourtFraud)`, which burns the producer's
+    /// collateral and forfeits its escrowed reward on a verdict independent of the facts.
+    ///
+    /// Past the fence the ending is this fold's own third direction: the session ends, nobody is
+    /// convicted, and NOBODY IS FINED — neither the accused for a move it cannot make nor the
+    /// accuser for opening a court that could not run.
+    #[test]
+    fn a_fused_terminal_silence_convicts_nobody_where_no_party_can_open_the_dissection() {
+        let p = params_with_ladder();
+        let (fused, claim_id, sid) = fused_terminal_court(&p, false);
+        let rung = fused.court_session(&sid).unwrap().ladder.last_deadline_daa();
+        assert!(rung < fused.court_session(&sid).unwrap().deadline_daa, "the RUNG fires first, not the session backstop");
+        let (executor_before, challenger_before) = (fused.bond(&bond_key(1)).unwrap(), fused.bond(&bond_key(2)).unwrap());
+        let (executor_before, challenger_before) = (executor_before.clone(), challenger_before.clone());
+
+        let (after, _) = apply_with_coverage(&fused, &p, &ctx(14, rung + 1, 14), &[], true);
+        assert!(after.court_session(&sid).is_none(), "the session is decided and gone");
+        assert!(
+            !matches!(after.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }),
+            "a producer must not be convicted for failing to make a move no binary in this tree can construct"
+        );
+        let executor_after = after.bond(&bond_key(1)).unwrap();
+        assert_eq!(executor_after.slashed, executor_before.slashed, "the accused was not fined");
+        assert_eq!(executor_after.collateral, executor_before.collateral, "…and its collateral is intact");
+        let challenger_after = after.bond(&bond_key(2)).unwrap();
+        assert_eq!(challenger_after.slashed, challenger_before.slashed, "and the accuser was not fined either");
+        assert_eq!(challenger_after.collateral, challenger_before.collateral, "…nor its collateral touched");
+    }
+
+    /// **The same silence convicts while the rule is dormant** — the fence's own pin.
+    ///
+    /// This is the assertion that fails if the exemption is written unfenced, which is the mistake
+    /// that would move testnet-11's and devnet's folds. It runs the identical fixture and the
+    /// identical block; the ONLY difference is `court_responder_coverage_active`.
+    #[test]
+    fn the_same_silence_convicts_while_the_rule_is_dormant() {
+        let p = params_with_ladder();
+        let (fused, claim_id, sid) = fused_terminal_court(&p, false);
+        let rung = fused.court_session(&sid).unwrap().ladder.last_deadline_daa();
+        let executor_before = fused.bond(&bond_key(1)).unwrap().clone();
+
+        let (after, _) = apply_with_coverage(&fused, &p, &ctx(14, rung + 1, 14), &[], false);
+        assert!(after.court_session(&sid).is_none(), "the session is decided and gone either way");
+        assert!(
+            matches!(after.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "below the fence the shipped behaviour stands: the fused terminal's silence is a fraud conviction"
+        );
+        assert!(
+            after.bond(&bond_key(1)).unwrap().slashed > executor_before.slashed,
+            "…and it costs the accused collateral, which is the whole reason the rule above it exists"
+        );
+    }
+
+    /// **The opening-rung mercy cannot reach a fused terminal, and `class_holds_weight` is not what
+    /// decides it.**
+    ///
+    /// The finding was first read as "the weightless exemption saves an honest producer here"; it
+    /// does not, and this pins why so nobody re-derives it. `PalwBisectLadderV1::apply_verdict`
+    /// increments `round` on every accepted verdict and only then may set `Terminal`, so a ladder
+    /// that has converged has `round() > 0` BY CONSTRUCTION and the `round() == 0` clause is
+    /// unreachable there — for a cadence-holding class and a weightless one alike. The second half
+    /// of the test is the demonstration: with the rule dormant, a WEIGHTLESS fused class is
+    /// convicted exactly as the weighted one is.
+    #[test]
+    fn the_round_zero_mercy_cannot_reach_a_fused_terminal() {
+        let p = params_with_ladder();
+        let (fused, _claim_id, sid) = fused_terminal_court(&p, false);
+        let ladder = &fused.court_session(&sid).unwrap().ladder;
+        assert_eq!(ladder.turn(), crate::palw_bisect::PalwBisectTurnV1::Terminal);
+        assert!(ladder.round() > 0, "a converged ladder has taken at least one verdict, so the round-0 clause cannot fire here");
+
+        let (weightless, claim_id, sid) = fused_terminal_court(&p, true);
+        assert_eq!(weightless.class_shares.get(&h64(2)).copied(), Some(0), "the premise: this class holds no cadence");
+        assert!(weightless.court_session(&sid).unwrap().ladder.round() > 0);
+        let rung = weightless.court_session(&sid).unwrap().ladder.last_deadline_daa();
+        let (after, _) = apply_with_coverage(&weightless, &p, &ctx(14, rung + 1, 14), &[], false);
+        assert!(
+            matches!(after.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "the weightless exemption is demonstrably not what saves anyone at a fused terminal: it is convicted too"
+        );
     }
 
     /// **A party can find out what it owes in a court it is in.**
@@ -22444,6 +22657,120 @@ pub(crate) mod tests {
             );
         }
 
+        /// **The same silence, past the responder-coverage fence, convicts nobody** (mainnet audit
+        /// 2026-09-06, C-2/H-5) — the test directly above, run over the same drill with the one
+        /// bit flipped.
+        ///
+        /// The test above is right about the DIRECTION: if a responder can file the root claim,
+        /// its silence is a default on the only defence it has, and charging it challenger-side
+        /// was the defect. It is wrong about the world: nothing in this tree constructs a
+        /// `CourtAttnRootClaimed` outside this very test module, and the panel's court arm has no
+        /// arm that produces one. So on a network that arms the k-ary court today, EVERY fused
+        /// terminal ends in `void_and_slash(CourtFraud)` — a verdict that is a function of the
+        /// fence and not of the facts, costing an honest producer its collateral and its escrowed
+        /// reward for the price of one accusation.
+        ///
+        /// Past the fence that one ending becomes this fold's own third direction. Nothing else
+        /// moves: the remap, the rung clock and every other silence are the tests around this one,
+        /// and they stay green.
+        #[test]
+        fn the_fused_terminal_conviction_is_lifted_past_the_responder_coverage_fence() {
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+            let (state, claim_id, sid, _daa) = court_at_the_fused_leaf(&p, &drill);
+            let session = state.court_session(&sid).expect("the session lives");
+            assert!(session.dissection.is_none(), "nobody has filed a root claim — that is the whole scenario");
+            assert_eq!(session.ladder.turn(), PalwBisectTurnV1::Terminal);
+            let after = session.ladder.last_deadline_daa() + 1;
+            assert!(after < session.deadline_daa, "the RUNG is what fires, not the backstop");
+
+            let extras = PalwTransitionExtrasV1 { court_responder_coverage_active: true, ..Default::default() };
+            let (swept, _) = apply_palw_transition_v2_with_extras(
+                &state,
+                &p,
+                &ctx(after, after, after),
+                &[],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &extras,
+            )
+            .expect("the sweep applies");
+            swept.assert_internal_consistency(&p).expect("internal consistency after apply");
+            swept.assert_deadline_consistency(&p).expect("deadline consistency after apply");
+            assert!(swept.court_session(&sid).is_none(), "the session is decided and gone either way");
+            assert!(
+                !matches!(swept.claim(&claim_id).expect("the claim is still a record").phase, PalwClaimPhaseV2::Voided { .. }),
+                "past the fence, a responder is not convicted for failing to file an object no binary in this tree builds"
+            );
+        }
+
+        /// **A dissection phase reports its OWN turn to the responder** (ADR-0082 Decision 2;
+        /// mainnet audit 2026-09-06, H-5 item d).
+        ///
+        /// `sweep_court_deadlines`' own comment states the rule — "the turn is the PHASE's once one
+        /// is open ... Asking the LADDER here would read `Terminal` on every session that had
+        /// reached its dissection" — and the producer's duty view was the third reader of that
+        /// question and the one still asking the ladder. It reported `Terminal` to a responder that
+        /// owed the phase's next round, and `Terminal` to a fused terminal the chain was clocking
+        /// as `AwaitDisclosure`; every court arm in the panel switches on `duty.turn`, so it would
+        /// misroute even a correct responder.
+        ///
+        /// The equality at the end IS the rule, and it survives either side being rewritten: what
+        /// the producer is told it owes is what the chain will charge it for.
+        #[test]
+        fn a_dissection_phase_reports_its_own_turn_to_the_responder() {
+            use crate::palw_producer_v2::palw_court_duties_v2;
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+
+            // (1) A fused terminal with no phase: the chain clocks it as `AwaitDisclosure` — the
+            // responder owes the root claim — and that is what the view must say.
+            let (terminal, _claim_id, sid, daa) = court_at_the_fused_leaf(&p, &drill);
+            let duties = palw_court_duties_v2(&terminal, &[bond_key(1)]);
+            assert_eq!(duties.len(), 1, "one open session names this bond");
+            assert_eq!(terminal.court_session(&sid).unwrap().ladder.turn(), PalwBisectTurnV1::Terminal, "the LADDER is terminal");
+            assert_eq!(duties[0].turn, PalwBisectTurnV1::AwaitDisclosure, "…and the responder is nonetheless owed a move");
+            assert_eq!(
+                duties[0].rung_deadline_daa,
+                terminal.court_session(&sid).unwrap().ladder.last_deadline_daa(),
+                "clocked by the rung the chain sweeps at"
+            );
+
+            // (2) The same session with the phase open: every one of the three fields is the
+            // PHASE's, and none of them is the ladder's.
+            let (opened, _) = apply(&terminal, &p, &ctx(daa, daa, daa), &[root_claimed(sid, &drill, 2)], None);
+            let phase = opened.court_session(&sid).unwrap().dissection.clone().expect("the root claim opened the phase");
+            let after = palw_court_duties_v2(&opened, &[bond_key(1)]);
+            assert_eq!(after[0].turn, phase.turn(), "the turn is the phase's");
+            assert_eq!(after[0].round, phase.round(), "…and so is the round");
+            assert_eq!(after[0].rung_deadline_daa, phase.last_deadline_daa(), "…and so is the rung deadline");
+            assert_eq!(
+                opened.court_session(&sid).unwrap().ladder.turn(),
+                PalwBisectTurnV1::Terminal,
+                "the ladder still says `Terminal`, which is what the view used to report"
+            );
+
+            // (3) The equality, over every session in both fixtures: the view and the fold answer
+            // "whose move is it, and by when" through one helper.
+            for state in [&terminal, &opened] {
+                for (id, session) in state.court_sessions_iter() {
+                    let (turn, rung) = crate::palw_state_v2::court_turn_and_rung_deadline_v2(
+                        session,
+                        crate::palw_state_v2::court_session_class_is_fused_v2(state, session),
+                    );
+                    let duty = palw_court_duties_v2(state, &[bond_key(1)])
+                        .into_iter()
+                        .find(|d| d.session_id == *id)
+                        .expect("this bond is party to every session in the fixture");
+                    assert_eq!(duty.turn, turn, "the duty view and the fold must not hold two answers to whose move it is");
+                    assert_eq!(duty.rung_deadline_daa, rung, "…nor two answers to when it is due");
+                }
+            }
+        }
+
         /// **The mirror, and the reason the flag has to exist at all.**
         ///
         /// The SAME row, the same ladder, the same narrowed leaf — entered as a genesis
@@ -23623,7 +23950,12 @@ pub(crate) mod tests {
         const MSK: u64 = 100_000_000;
 
         fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
-            PalwTransitionExtrasV1 { model_lines_active: true, evm_market_active: true, evm_actions: actions }
+            PalwTransitionExtrasV1 {
+                model_lines_active: true,
+                evm_market_active: true,
+                evm_actions: actions,
+                court_responder_coverage_active: false,
+            }
         }
 
         fn apply_evm(
@@ -23818,6 +24150,7 @@ pub(crate) mod tests {
                 model_lines_active: true,
                 evm_market_active: false,
                 evm_actions: vec![buy(0, 1, class, MSK, 0)],
+                court_responder_coverage_active: false,
             };
             let (s_off, _) =
                 apply_palw_transition_v2_with_extras(&s, &p, &ctx(3, 251, 3), &[], None, false, false, false, false, &dormant)

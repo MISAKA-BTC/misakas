@@ -485,6 +485,12 @@ pub struct VirtualStateProcessor {
     /// `PALW_STEP_LEG_MAX_LEAVES`. Resolved in exactly one place, `palw_court_step_ladder_at`,
     /// at the BLOCK's own DAA — the same discipline as every fence above it.
     pub(super) palw_court_ladder: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **The fused terminal's responder-coverage fence, `None` on every shipped preset** (mainnet
+    /// audit 2026-09-06, C-2/H-5). Past it a fused terminal's unanswered rung ends the session
+    /// without a conviction, because no party in the field can file the move it is being clocked
+    /// for; before it, it convicts exactly as it does today. Resolved in exactly one place,
+    /// `palw_court_responder_coverage_at`, at the BLOCK's own DAA.
+    pub(super) palw_court_responder_coverage: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0087 Decision 6's fence, `None` on every shipped preset.** Past it `ModelBuy` and
     /// `ModelSell` are accepted (a sell's signature checked here, at acceptance); before it both
     /// are refused by name and the fold never sees them. Resolved at the BLOCK's DAA.
@@ -944,6 +950,7 @@ impl VirtualStateProcessor {
             palw_prompt_ids_merkle: params.palw_prompt_ids_merkle_fence(),
             palw_panel_da: params.palw_panel_da_fence(),
             palw_court_ladder: params.palw_court_ladder_fence(),
+            palw_court_responder_coverage: params.palw_court_responder_coverage_fence(),
             palw_model_market: params.palw_model_market_fence(),
             palw_model_lines: params.palw_model_lines_fence(),
             palw_model_evm: params.palw_model_evm_fence(),
@@ -7067,8 +7074,20 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
             model_lines_active: self.palw_model_lines_active_at(daa_score),
             evm_market_active: self.palw_model_evm_active_at(daa_score),
-            ..Default::default()
+            // Written explicitly, never left to `..Default::default()`: an unwritten default inside
+            // a struct the fold reads is the one fault no golden can see, and this field decides
+            // whether a producer's collateral is destroyed.
+            court_responder_coverage_active: self.palw_court_responder_coverage_at(daa_score),
+            evm_actions: Vec::new(),
         }
+    }
+
+    /// **The fused terminal's responder-coverage rule, resolved in exactly one place** — the reason
+    /// its neighbours give: the object-acceptance rehearsal, the fold and the state walk must agree
+    /// about whether it is in force at THIS block, because one folding what another does not is two
+    /// rules wearing one name.
+    fn palw_court_responder_coverage_at(&self, daa_score: u64) -> bool {
+        self.palw_court_responder_coverage.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     fn palw_court_step_ladder_at(&self, daa_score: u64, court: &kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2) -> u64 {
@@ -13211,7 +13230,7 @@ impl VirtualStateProcessor {
                 // registers — it creates no claim, so there is nothing for a carve to attach to.
                 subsidy: 0,
             };
-            let (genesis_state, delta) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_policies(
+            let (genesis_state, delta) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_extras(
                 &kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis(),
                 state_params,
                 &point,
@@ -13221,6 +13240,10 @@ impl VirtualStateProcessor {
                 self.palw_capability_bound_at(self.genesis.daa_score),
                 self.palw_uncertified_weightless_at(self.genesis.daa_score),
                 self.palw_da_court_at(self.genesis.daa_score),
+                // The genesis block opens no court session, so this cannot change what it folds —
+                // and "cannot change anything" is exactly how a fence resolved differently in one
+                // face survives until the block where it matters.
+                &self.palw_transition_extras_at(self.genesis.daa_score),
             )
             .expect("the bundle's genesis registrations must apply — `validate_palw_v2` ran them at construction");
             let mut batch = WriteBatch::default();
