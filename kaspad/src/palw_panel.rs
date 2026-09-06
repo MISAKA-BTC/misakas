@@ -1320,18 +1320,28 @@ impl PalwPanelService {
     /// court cannot read) is re-drawn, bounded — a capture that yields fewer clear samples than
     /// asked is not verified either.
     fn fp_capture_samples_clear(
-        &self,
         backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
         capture: &[u8],
         prompt_token_ids: &[u32],
         step_leaf_count: u64,
         artifact_root: Hash64,
+        ladder: u64,
         claim: &Hash64,
     ) -> bool {
-        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_capped_v1};
         use rand::Rng;
         const SAMPLES: u64 = 4;
         const DRAWS_MAX: u64 = 32;
+        // **The seat grades a sample at the RULESET's step ladder** (ADR-0084 U-08, ADR-0080 W1b).
+        //
+        // This node's backends are built at `court.max_step_leaf_count()` (the SDK, `new`), and
+        // this check was made at the executor's `2^22` — so every capture of a class the chain
+        // admits above that was refused with `LeafCountOutOfRange` before a byte of evidence was
+        // read, landed in the redraw arm below, and burned all 32 draws while the seat filed
+        // nothing. The capped and uncapped names differ by a suffix and sit ten lines apart in
+        // `palw_step_refute`; `consensus/core/tests/palw_step_ladder_tree_guard.rs` is what keeps
+        // them from being confused again. The number arrives as an argument because the caller is
+        // the one holding `self.config.court`.
         if step_leaf_count == 0 {
             return false;
         }
@@ -1355,11 +1365,27 @@ impl PalwPanelService {
                     return false;
                 }
             };
-            match check_execution_step_refutation_v1(&refutation, &proven) {
+            match check_execution_step_refutation_capped_v1(&refutation, &proven, ladder) {
                 Err(PalwStepRefuteError::NoFaultFound) => cleared += 1,
                 Ok(_) => {
                     warn!(
                         "[{PALW_PANEL}] claim {claim}: leaf {index} of the served capture does not recompute — the court's business, not a receipt's"
+                    );
+                    return false;
+                }
+                // **A limit is not a verdict, and it is not a redraw either.** A capture priced
+                // above the ladder this node was handed is one this node cannot check at ANY leaf,
+                // so redrawing it costs a full job re-execution per draw (this class's retention is
+                // a fold: `refutation_for_free_prompt_index` re-runs the job with no cache) and
+                // buys thirty-two identical refusals. Said once, and the seat falls through to the
+                // caller's tail.
+                Err(PalwStepRefuteError::Leg(kaspa_consensus_core::palw_step_leg::PalwStepLegError::LeafCountOutOfRange {
+                    got,
+                    max,
+                })) => {
+                    warn!(
+                        "[{PALW_PANEL}] claim {claim}: the served capture is priced at {got} leaves and this node's ruleset ladder is \
+                         {max} — this seat cannot check it at any leaf, and says so once rather than redrawing"
                     );
                     return false;
                 }
@@ -2877,14 +2903,25 @@ impl PalwPanelService {
                                     );
                                     continue;
                                 };
-                                if !self.fp_capture_samples_clear(
-                                    backend.as_ref(),
-                                    &payload.capture,
-                                    &prompt_ids,
-                                    shape.step_leaf_count,
-                                    duty.artifact_root,
-                                    &duty.claim_id,
-                                ) {
+                                // **Off the panel's loop, like every other forward pass on this
+                                // lane.** Each of these draws re-executes the whole job on a fold
+                                // class (`refutation_for_free_prompt_index` →
+                                // `tiles_from_material_v1` → `dense_capture_from_fold_v1`, no
+                                // cache), and running them inline blocked this node's every other
+                                // duty for the duration. The FPM1 arm below has always used
+                                // `offload`; this one did not.
+                                let (capture_owned, prompt_owned, claim_owned) =
+                                    (payload.capture.clone(), prompt_ids.clone(), duty.claim_id);
+                                let (leaves, artifact_root, ladder) =
+                                    (shape.step_leaf_count, duty.artifact_root, self.config.court.max_step_leaf_count());
+                                let Ok((_backend, cleared)) = offload(backend, move |b| {
+                                    Self::fp_capture_samples_clear(b, &capture_owned, &prompt_owned, leaves, artifact_root, ladder, &claim_owned)
+                                })
+                                .await
+                                else {
+                                    continue;
+                                };
+                                if !cleared {
                                     continue;
                                 }
                                 self.persist_foreign_material(&duty.claim_id, &bytes);

@@ -1801,7 +1801,11 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         let recorder = kaspa_consensus_core::palw_artifact::PalwRecordingOracleV1::new(inventory.operands());
         // The verdict is not ours to read here — this runs the adjudicator only to learn WHICH
         // rows it resolves, and it resolves the same rows whichever way the step reads.
-        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_v1(refutation, &recorder);
+        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_capped_v1(
+            refutation,
+            &recorder,
+            self.step_ladder_cap,
+        );
         recorder.openings().ok_or_else(|| "the inventory could not open a recorded row".to_string())
     }
 

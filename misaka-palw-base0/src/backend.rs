@@ -161,7 +161,13 @@ impl Base0Backend {
                 prompt.iter().map(|t| *t as u32).collect()
             }
         };
-        crate::legs::base0_refutation_from_capture_v1(
+        // **The prover opens at the RULESET's ladder, not the module constant** (ADR-0080 W1b,
+        // ADR-0084 U-08). The count was already bounded by `self.step_ladder_cap` forty lines
+        // above; assembling the openings at `PALW_STEP_LEG_MAX_LEAVES` after passing that guard
+        // made an honest prover unable to answer for every class the chain admits above 2^22.
+        // The A16 backend has always passed the cap here; this backend and the Qwen3.6 one did
+        // not, which is one predicate at three sites with two of them wrong.
+        crate::legs::base0_refutation_from_capture_capped_v1(
             &binding.shape_profile.clone(),
             &binding.job_context.clone(),
             &step_tiles,
@@ -170,6 +176,7 @@ impl Base0Backend {
             prompt_token_ids,
             Some(pin),
             None,
+            self.step_ladder_cap,
         )
         .map_err(|e| format!("{e:?}"))
     }
@@ -881,7 +888,11 @@ impl PalwExecutionBackendV1 for Base0Backend {
         // so an error return (including `NoFaultFound`, which is what an honest party's own close
         // produces) is not a reason to withhold the openings. The chain re-runs the same check
         // against these rows and says what it means.
-        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_v1(refutation, &recorder);
+        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_capped_v1(
+            refutation,
+            &recorder,
+            self.step_ladder_cap,
+        );
         recorder.openings().ok_or_else(|| "the inventory cannot open a row its own oracle resolved".to_string())
     }
 }
