@@ -158,7 +158,13 @@ impl ConsensusServices {
             params.pq_activation_daa_score,
             params.palw_panel_da_admissible(),
             params.palw_prompt_ids_form_v1(),
-            params.palw_model_market.is_some(),
+            // **ADR-0087 Decision 6 (mainnet audit 2026-09-06, M-9): the resolved fence.**
+            // `palw_model_market.is_some()` was the only `is_some()` read of this fence in the
+            // tree — every other consumer goes through `palw_model_market_active_at` — and it made
+            // a build that merely SCHEDULES the market relax a consensus transaction rule from
+            // genesis. `palw_model_market_fence()` folds in the ConsensusV2 mode condition and is
+            // the one place the market is decided (`params.rs:2592`).
+            params.palw_model_market_fence(),
         );
 
         let pruning_point_manager = PruningPointManager::new(

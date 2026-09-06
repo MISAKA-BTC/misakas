@@ -174,6 +174,20 @@ pub enum TxRuleError {
     #[error("transaction output #{0} is an unclaimable EVM deposit lock (claim_tip {1} > value {2})")]
     EvmDepositLockTipExceedsValue(usize, u64, u64),
 
+    /// **ADR-0087 Decision 6 (mainnet audit 2026-09-06, M-9): a model-market sink output before
+    /// the market's own activation.**
+    ///
+    /// Decision 6 says "below the activation the objects are refused and no market exists". The PQ
+    /// output-class rule lives in ISOLATION, which holds no DAA score, so isolation can only ask
+    /// the height-free question "does this network declare the market at all". This is the
+    /// height-indexed half, asked where a DAA score exists: a sink output is a legal output class
+    /// only at or after `palw_model_market`'s activation. A build that merely SCHEDULES the fence
+    /// therefore has the same transaction validity as one that does not carry it, right up to the
+    /// activation score — which is what makes the scheduled and the dormant arms agree, and what
+    /// stops a scheduled build from being an attacker-timed premature flag day for the other.
+    #[error("transaction output #{0} is a model-market sink before the market's activation (daa {1})")]
+    ModelSinkBeforeMarketActivation(usize, u64),
+
     /// kaspa-pq (ADR-0016 §D.2, bond spend-gate mergeset hardening): a transaction spends a known
     /// non-releasable bond's locked output-0 ({0}). Above the
     /// `bond_spend_gate_mergeset_activation_daa_score` fence the per-tx UTXO validation rejects such a

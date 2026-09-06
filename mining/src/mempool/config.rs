@@ -69,6 +69,23 @@ pub struct Config {
     /// tests opt out (`pq_only = false`) to keep exercising the upstream class behavior.
     pub pq_only: bool,
 
+    /// **ADR-0087 Decision 6 (mainnet audit 2026-09-06, M-9): does this network declare the model
+    /// market at all?**
+    ///
+    /// The mempool's two sink carve-outs — the output-class rule and the dust rule in
+    /// `check_transaction_standard.rs` — read the raw script with no params gate, so on EVERY
+    /// network, including testnet-11 and a carded mainnet where `palw_model_market` is `None`, the
+    /// mempool relays a sink output that consensus refuses. "The mempool never relays a transaction
+    /// that consensus will reject" is this file's own standing rule and both carve-outs cite it;
+    /// neither obeyed it. `false` by default so the (non-market) unit fixtures and the
+    /// `MiningManager::new` test path keep the pre-ADR-0087 behaviour byte for byte; the daemon
+    /// sets it from `params.palw_model_market.is_some()`.
+    ///
+    /// The height-free question, deliberately, and for the same reason the isolation door asks it:
+    /// standardness is a relay policy, and a transaction that is merely EARLY is refused by
+    /// consensus at the accepting block's own DAA (`check_model_sink_outputs_in_context`).
+    pub model_sink_relay_allowed: bool,
+
     /// kaspa-pq DNS-finality: local mempool/mining policy for `StakeAttestationShard` txs (expiry,
     /// dedup, recent-epoch template preference). Sourced from the chain's `DnsParams`; defaults to
     /// disabled so behavior is byte-identical to upstream unless explicitly wired (see the daemon).
@@ -123,6 +140,9 @@ impl Config {
             // production node turns it on explicitly (see `MiningManager::new`'s `pq_only` arg /
             // the daemon wiring).
             pq_only: false,
+            // ADR-0087 Decision 6 (audit M-9): OFF unless the network declares the market, so a
+            // build with the market dormant relays exactly what it relayed before ADR-0087.
+            model_sink_relay_allowed: false,
             // kaspa-pq DNS-finality: disabled by default (overlay off); the daemon overrides this
             // with values derived from the chain's `DnsParams` when present.
             attestation_policy: AttestationMempoolPolicy::disabled(),
@@ -172,6 +192,9 @@ impl Config {
             // production node turns it on explicitly (see `MiningManager::new`'s `pq_only` arg /
             // the daemon wiring).
             pq_only: false,
+            // ADR-0087 Decision 6 (audit M-9): OFF unless the network declares the market, so a
+            // build with the market dormant relays exactly what it relayed before ADR-0087.
+            model_sink_relay_allowed: false,
             // kaspa-pq DNS-finality: disabled by default (overlay off); the daemon overrides this
             // with values derived from the chain's `DnsParams` when present.
             attestation_policy: AttestationMempoolPolicy::disabled(),

@@ -35,7 +35,10 @@ impl BlockBodyProcessor {
                 // We only evaluate the pmt calculation when actually needed
                 LockTimeType::Time => LockTimeArg::MedianTime((*lazy_pmt_res).clone()?),
             };
-            if let Err(e) = self.transaction_validator.validate_tx_in_header_context(tx, lock_time_arg) {
+            // ADR-0087 Decision 6 (audit M-9): the block's own DAA score goes in unconditionally,
+            // not only on the `DaaScore` lock-time arm — the sink rule is a height rule and most
+            // transactions are `Finalized`.
+            if let Err(e) = self.transaction_validator.validate_tx_in_header_context(tx, lock_time_arg, block.header.daa_score) {
                 return Err(RuleError::TxInContextFailed(tx.id(), e));
             };
         }

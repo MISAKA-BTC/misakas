@@ -997,6 +997,76 @@ mod pq_output_class_enforcement_tests {
         assert!(declared.check_transaction_pq_output_classes(&tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE)).is_ok());
     }
 
+    /// **ADR-0087 Decision 6: a build that SCHEDULES the market must accept, below the activation,
+    /// exactly what a build that does not carry the market accepts** (mainnet audit 2026-09-06,
+    /// M-9).
+    ///
+    /// The rule is an EQUALITY between two arms, not an agreement with one error value: arm (a) is
+    /// a dormant ruleset and arm (b) is the same ruleset with the fence scheduled at 9,000,000.
+    /// Below the activation both must REFUSE the same sink transaction — (a) in isolation, (b) in
+    /// header context, since isolation must stay permissive or no sink could ever be valid. At and
+    /// above the activation (b) accepts. Arm (c), armed from genesis, accepts everywhere.
+    ///
+    /// Before the repair (b) accepted the sink at DAA 0, H blocks before any market existed.
+    #[test]
+    fn a_scheduled_market_admits_the_sink_only_at_its_own_activation() {
+        use crate::processes::transaction_validator::tx_validation_in_header_context::LockTimeArg;
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::palw_model_market_v1::palw_model_sink_spk_v1;
+
+        let line = kaspa_consensus_core::Hash64::from_u64_word(7);
+        let sink = tx_with_output(palw_model_sink_spk_v1(&line), SUBNETWORK_ID_NATIVE);
+
+        // The three arms differ only in the fence they carry; the isolation boolean is DERIVED
+        // from it, exactly as `TransactionValidator::new` derives it.
+        let arm = |fence: Option<ForkActivation>| {
+            let mut tv = validator(PqEnforcementMode::Consensus);
+            tv.palw_model_market_fence = fence;
+            tv.model_sink_outputs_allowed = fence.is_some();
+            tv
+        };
+        // The whole verdict for one arm at one score: isolation first, then header context.
+        let verdict = |tv: &TransactionValidator, daa: u64| -> Result<(), TxRuleError> {
+            tv.check_transaction_pq_output_classes(&sink)?;
+            tv.validate_tx_in_header_context(&sink, LockTimeArg::Finalized, daa)
+        };
+
+        let dormant = arm(None);
+        let scheduled = arm(Some(ForkActivation::new(9_000_000)));
+        let from_genesis = arm(Some(ForkActivation::always()));
+
+        // (a) and (b) agree below the activation — that equality IS Decision 6.
+        assert!(verdict(&dormant, 8_999_999).is_err(), "a dormant ruleset has no sink output class");
+        assert!(
+            verdict(&scheduled, 8_999_999).is_err(),
+            "scheduling the fence must not relax a consensus rule before the fence's own score"
+        );
+        assert!(verdict(&dormant, 0).is_err());
+        assert!(verdict(&scheduled, 0).is_err());
+        // ..and they disagree only where the decision says they must: at the activation.
+        assert!(verdict(&scheduled, 9_000_000).is_ok(), "the market exists at its activation");
+        assert!(verdict(&scheduled, u64::MAX).is_ok());
+        assert!(verdict(&dormant, 9_000_000).is_err(), "a dormant ruleset never gets a market");
+
+        // The refusals are named, and each half names itself: isolation refuses the CLASS on a
+        // dormant ruleset, header context refuses the HEIGHT on a scheduled one.
+        assert_eq!(dormant.check_transaction_pq_output_classes(&sink), Err(TxRuleError::NonPqStandardOutputClass(0)));
+        assert!(scheduled.check_transaction_pq_output_classes(&sink).is_ok(), "isolation must stay permissive");
+        assert_eq!(
+            scheduled.validate_tx_in_header_context(&sink, LockTimeArg::Finalized, 8_999_999),
+            Err(TxRuleError::ModelSinkBeforeMarketActivation(0, 8_999_999))
+        );
+
+        // (c) armed from genesis: both doors open at DAA 0.
+        assert!(verdict(&from_genesis, 0).is_ok());
+
+        // A non-sink transaction is untouched by the new door on every arm, at every score.
+        let plain = tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE);
+        for tv in [&dormant, &scheduled, &from_genesis] {
+            assert!(tv.validate_tx_in_header_context(&plain, LockTimeArg::Finalized, 0).is_ok());
+        }
+    }
+
     #[test]
     fn consensus_mode_rejects_legacy_output() {
         let tv = validator(PqEnforcementMode::Consensus);
