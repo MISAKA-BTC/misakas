@@ -12497,6 +12497,37 @@ mod consensus_params_id_tests {
     /// carries the genesis free-prompt-certified set derived by kernel coverage — the floor, the
     /// QWEN36 graph-v3 class and the A16 graph-v2 class — under the same `court_e2e_root` the RC
     /// networks commit to; the chain half of every gate starts empty, as it must on a new identity.
+    /// **Every shipped genesis bond is paid at its own key's address, and a seat's funding
+    /// therefore is something that seat can sign for.**
+    ///
+    /// The panel resolves its funding through `fee_script`, which for a bonded node returns that
+    /// bond's `payout_payload` as a script — read from the chain, not derived from the local key.
+    /// The genesis fee floats pay there, every carrier pays its change back there, and the panel
+    /// signs every one of those spends with its own ML-DSA-87 key. So a registry row whose payout
+    /// payload were NOT its bond key's own address would seat a node that can see its money and
+    /// never spend it: every carrier refused with `script ran, but verification failed`, forever,
+    /// which is the shape reported as issue #97 from the other direction.
+    ///
+    /// `kaspad`'s pre-sign guard now refuses such a carrier by name instead of signing it, and
+    /// that guard is only safe while this holds — a row that broke it would turn a silent wedge
+    /// into a loud one but would still be a dead seat. The devnet rows below assert the same
+    /// thing about the derived seeds; this asserts it about the shipped cards, whose keys were
+    /// generated on eight different hosts and could disagree one row at a time.
+    ///
+    /// The comment above `PALW_RC_GENESIS_BONDS` already claims it. Nothing ran that claim.
+    #[test]
+    fn every_shipped_genesis_bond_is_paid_at_its_own_keys_address() {
+        assert!(!PALW_RC_GENESIS_BONDS.is_empty(), "there are cards to check, or this test is vacuous");
+        for (n, card) in PALW_RC_GENESIS_BONDS.iter().enumerate() {
+            let own: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(card.bond_pubkey).as_bytes();
+            assert_eq!(
+                own, card.payout_payload,
+                "genesis bond card {n} is paid to an address its own bond key cannot spend — that seat can never \
+                 fund a carrier"
+            );
+        }
+    }
+
     /// **Devnet's genesis bonds come from public seeds and seat a producing chain** (ADR-0075 §7):
     /// six bonds, six operators, each key derivable from `palw_devnet_genesis_bond_seed_v1` by
     /// anyone, each holding a fee float at its own address — and the assembled devnet passes the
