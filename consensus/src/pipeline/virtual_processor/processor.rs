@@ -524,6 +524,12 @@ pub struct VirtualStateProcessor {
     /// place, `palw_v2_check_attempt_admission`, at the BLOCK's own DAA, which is the same score
     /// admission divides by `epoch_length`.
     pub(super) palw_epoch_boundary_budget: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0044 Decision 9's advertised free-prompt caps, `None` on every shipped preset**
+    /// (mainnet audit 2026-09-06, L-2). Past it the extraction walk gives the lane's validation the
+    /// two numbers the ruleset advertises — `max_prompt_tokens` and `max_decode_tokens`, both
+    /// already inside `palw_ruleset_id_v2` — and a carrier above either is skipped. Resolved at the
+    /// ACCEPTING block's DAA, beside the ladder it rides with.
+    pub(super) palw_fp_ruleset_caps: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0069 Decision 7's fence, `None` on every shipped preset. Past it a block whose class
     /// holds no granted share contributes zero pwu to both chain weights — see
     /// [`Self::palw_uncertified_weightless_at`], which is the ONE place this is resolved.
@@ -976,6 +982,7 @@ impl VirtualStateProcessor {
             palw_model_evm: params.palw_model_evm_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_epoch_boundary_budget: params.palw_epoch_boundary_budget,
+            palw_fp_ruleset_caps: params.palw_fp_ruleset_caps,
             palw_uncertified_weightless: params.palw_uncertified_weightless,
             palw_da_court: params.palw_da_court,
             palw_frontier_provenance: params.palw_frontier_provenance,
@@ -7867,6 +7874,12 @@ impl VirtualStateProcessor {
             // commitment the door had admitted.
             self.palw_panel_da_at(block_daa),
             ladder,
+            // **ADR-0044 Decision 9's two advertised caps, at the same block's DAA** (mainnet audit
+            // 2026-09-06, L-2). The bundle's `max_prompt_tokens` and `max_decode_tokens` are inside
+            // every node's `palw_ruleset_id_v2` and were read by nothing; past this fence the walk
+            // reads them off the bundle it already holds. `None` on every shipped preset — both
+            // live chains have accepted jobs above them since genesis.
+            self.palw_fp_ruleset_caps.is_some_and(|fence| fence.is_active(block_daa)),
             self.palw_prompt_ids_form_at(block_daa),
             // Who authored the commitment. Unverified, a 0x4a transaction from any stranger created
             // a claim bound to any bond outpoint it named — the genesis premine bond among them.

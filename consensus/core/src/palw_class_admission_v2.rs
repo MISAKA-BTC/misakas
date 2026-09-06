@@ -3656,13 +3656,13 @@ mod tests {
             signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
         };
         envelope
-            .validate_stateless_under_ruleset_v3(network_domain, false, ruleset)
+            .validate_stateless_under_ruleset_v3(network_domain, false, ruleset, None)
             .expect("layer: the free-prompt commitment validator — the ruleset's ladder admits the honest claim");
         envelope
             .validate_shape_v3()
             .expect("layer: transaction isolation — the context-free door must never be stricter than the walk");
         assert_eq!(
-            envelope.validate_stateless_under_ruleset_v3(network_domain, false, executor),
+            envelope.validate_stateless_under_ruleset_v3(network_domain, false, executor, None),
             Err(PalwFpV3Error::WorkLeavesAboveCap { got: work_leaves, max: executor }),
             "layer: the free-prompt commitment validator — a ruleset that froze 2^22 refuses it, by its own number"
         );

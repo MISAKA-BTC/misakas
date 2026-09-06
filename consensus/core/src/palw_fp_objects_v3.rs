@@ -115,6 +115,9 @@ where
         accepted_block,
         panel_da_armed,
         crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+        // No bundle-resolved fence either, and the caps are a RULESET rule: a caller with no
+        // height cannot be stricter than the walk (ADR-0044 D9; mainnet audit 2026-09-06, L-2).
+        false,
         prompt_ids_form,
         verify_mldsa87,
     )
@@ -132,19 +135,30 @@ where
 /// A separate entry rather than a parameter on the old one, for the reason the `_under_v3` split
 /// gives: a caller that has not switched keeps the weaker structural bound rather than silently
 /// acquiring a stricter rule it did not ask for.
+///
+/// `ruleset_caps_armed` is `Params::palw_fp_ruleset_caps` resolved at the accepting block's DAA
+/// (ADR-0044 Decision 9; mainnet audit 2026-09-06, L-2). Past it the two caps the ruleset
+/// ADVERTISES — `max_prompt_tokens` and `max_decode_tokens`, already hashed into
+/// `palw_ruleset_id_v2` — are read off the bundle this walk already holds and a carrier above
+/// either is SKIPPED like every other refusal here. `false` on every shipped preset, where the
+/// walk behaves byte for byte as it did before the fence existed.
 pub fn palw_fp_objects_from_accepted_txs_under_ruleset_v3<V>(
     txs: &[Transaction],
     network_domain: Hash64,
-    _freeprompt: &PalwFreePromptParamsV3,
+    freeprompt: &PalwFreePromptParamsV3,
     _accepted_block: BlockHash,
     panel_da_armed: bool,
     max_step_leaf_count: u64,
+    ruleset_caps_armed: bool,
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     verify_mldsa87: V,
 ) -> PalwFpExtractionV3
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
+    // The ruleset's own numbers, off the bundle rather than typed — the same rule the ladder
+    // beside them follows.
+    let ruleset_caps = ruleset_caps_armed.then(|| (freeprompt.max_prompt_tokens(), freeprompt.max_decode_tokens()));
     let mut out = PalwFpExtractionV3::default();
     for tx in txs {
         if tx.subnetwork_id != SUBNETWORK_ID_PALW_FP_COMMITMENT {
@@ -160,7 +174,10 @@ where
         };
         // The same stateless rules a peer applies — re-run here rather than assumed, because this
         // walk must be total over whatever was accepted.
-        if payload.validate_stateless_under_ruleset_v3(network_domain, panel_da_armed, max_step_leaf_count, prompt_ids_form).is_err() {
+        if payload
+            .validate_stateless_under_ruleset_v3(network_domain, panel_da_armed, max_step_leaf_count, ruleset_caps, prompt_ids_form)
+            .is_err()
+        {
             out.skipped.push((id, "payload is not stateless-admissible"));
             continue;
         }
@@ -679,6 +696,7 @@ mod tests {
             h64(1),
             false,
             crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES,
+            false,
             crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             |_, _, _, _| true,
         );
@@ -690,6 +708,7 @@ mod tests {
             h64(1),
             false,
             crate::palw_step::PALW_STEP_MAX_LEAVES,
+            false,
             crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             |_, _, _, _| true,
         );

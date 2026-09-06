@@ -1162,6 +1162,24 @@ pub struct Params {
     /// `the_boundary_derivation_and_the_folds_snapshot_can_differ_when_growth_is_on`.
     pub palw_epoch_boundary_budget: Option<ForkActivation>,
 
+    /// **ADR-0044 Decision 9's two advertised caps, enforced** (mainnet audit 2026-09-06, L-2).
+    /// `None` on every shipped preset, so the behaviour is byte-identical to not having the field.
+    ///
+    /// `PalwFreePromptParamsV3::max_prompt_tokens` and `max_decode_tokens` are borsh-hashed into
+    /// `palw_ruleset_id_v2` — every node advertises them in its fingerprint — and no code read
+    /// them: `validate_v3` never took the params struct, and the surviving bounds were transaction
+    /// mass and the step ladder. Past this fence the ruleset-aware validation entry point carries
+    /// them and a job above either is refused by name.
+    ///
+    /// **Dormant on testnet-11 and devnet, and that is the whole reason it is a fence.** Both have
+    /// run since genesis with these numbers unread; enforcing them retroactively would refuse jobs
+    /// those chains already accepted. Arming them there is a scheduled height and the operator's
+    /// call. A card is born with the caps it advertises meaning something.
+    ///
+    /// **A bare fence with no companion value** — the two numbers are already
+    /// `PalwFreePromptParamsV3` fields and therefore already inside `palw_ruleset_id_v2`.
+    pub palw_fp_ruleset_caps: Option<ForkActivation>,
+
     /// **ADR-0087 Decision 6 — the model market is a consensus rule armed by activation.** `None`
     /// on every shipped preset: below it `ModelBuy`/`ModelSell` are refused by name at acceptance
     /// and no market exists; past it the fold opens a class's market on its first buy. The
@@ -2701,10 +2719,13 @@ impl Params {
         if self.palw_validator_payout_bounds == Some(ForkActivation::never()) {
             self.palw_validator_payout_bounds = None;
         }
-        // ADR-0045 D2's boundary budget (mainnet audit 2026-09-06, M-2): a bare fence, the same
-        // collapse for the same reason.
+        // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps (mainnet audit
+        // 2026-09-06, M-2 and L-2): bare fences, same collapse, same reason.
         if self.palw_epoch_boundary_budget == Some(ForkActivation::never()) {
             self.palw_epoch_boundary_budget = None;
+        }
+        if self.palw_fp_ruleset_caps == Some(ForkActivation::never()) {
+            self.palw_fp_ruleset_caps = None;
         }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
@@ -3213,11 +3234,15 @@ impl Params {
             h.write(b"palw_validator_payout_bounds");
             h.write(bounds.daa_score().to_le_bytes());
         }
-        // ADR-0045 D2's boundary budget. Some-only, at the tail, for the reason its siblings are:
-        // a preset that leaves it `None` prints the schedule id of a build from before the field
-        // existed.
+        // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps. Some-only, at the
+        // tail, for the reason their siblings are: a preset that leaves them `None` prints the
+        // schedule id of a build from before the fields existed.
         if let Some(activation) = self.palw_epoch_boundary_budget {
             h.write(b"palw_epoch_boundary_budget");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = self.palw_fp_ruleset_caps {
+            h.write(b"palw_fp_ruleset_caps");
             h.write(activation.daa_score().to_le_bytes());
         }
         h.finalize()
@@ -3319,6 +3344,7 @@ impl Params {
             palw_fp_da_pins,
             palw_validator_payout_bounds,
             palw_epoch_boundary_budget,
+            palw_fp_ruleset_caps,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -3609,10 +3635,13 @@ impl Params {
         if let Some(activation) = palw_validator_payout_bounds.as_mut() {
             fork(activation, visit);
         }
-        // ADR-0045 D2's boundary budget. Some-only and at the tail, for its siblings' reason: a
-        // `u64::MAX`-for-absence arm would put eight bytes into every preset that leaves it
-        // `None`.
+        // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps. Some-only and at the
+        // tail, for their siblings' reason: a `u64::MAX`-for-absence arm would put eight bytes
+        // into every preset that leaves them `None`.
         if let Some(activation) = palw_epoch_boundary_budget.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_fp_ruleset_caps.as_mut() {
             fork(activation, visit);
         }
 
@@ -3821,6 +3850,7 @@ impl Params {
             palw_fp_da_pins,
             palw_validator_payout_bounds,
             palw_epoch_boundary_budget,
+            palw_fp_ruleset_caps,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -4138,11 +4168,16 @@ impl Params {
             h.write(b"palw_validator_payout_bounds");
             h.write(activation.daa_score().to_le_bytes());
         }
-        // ADR-0045 D2's boundary budget (mainnet audit 2026-09-06, M-2). Some-only, at the tail,
-        // for the ADR-0065 D4 reason: every shipped preset leaves it `None` and fingerprints
-        // byte-identically to a build from before the field existed.
+        // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps (mainnet audit
+        // 2026-09-06, M-2 and L-2). Some-only, at the tail, for the ADR-0065 D4 reason: every
+        // shipped preset leaves them `None` and fingerprints byte-identically to a build from
+        // before the fields existed.
         if let Some(activation) = palw_epoch_boundary_budget {
             h.write(b"palw_epoch_boundary_budget");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_fp_ruleset_caps {
+            h.write(b"palw_fp_ruleset_caps");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
@@ -4447,6 +4482,7 @@ impl Params {
             palw_fp_da_pins: self.palw_fp_da_pins,
             palw_validator_payout_bounds: self.palw_validator_payout_bounds,
             palw_epoch_boundary_budget: self.palw_epoch_boundary_budget,
+            palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -5396,6 +5432,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
+    palw_fp_ruleset_caps: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -5557,6 +5594,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
+    palw_fp_ruleset_caps: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -5700,6 +5738,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
+    palw_fp_ruleset_caps: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -8983,6 +9022,9 @@ fn mainnet_card_params_v1(
 ///   crosses an epoch boundary derives its own epoch's budget from the parent state, which is the
 ///   ADR's own sentence. Dormant, every non-floor attempt at a boundary is `EpochBudgetUnspecified`
 ///   and the crossing block is permanently orphaned with its mergeset's claims.
+/// * `palw_fp_ruleset_caps` (ADR-0044 D9; mainnet audit 2026-09-06, L-2) — the free-prompt lane
+///   enforces the two caps its ruleset advertises. Dormant, `max_prompt_tokens` and
+///   `max_decode_tokens` are in every node's fingerprint and read by nothing.
 /// * `palw_capability_bound` (ADR-0071 SA-1/SA-2/SA-4) — a bond's `capable_classes` set is bounded
 ///   at `PALW_MAX_CAPABLE_CLASSES` and priced at `PALW_CAPABILITY_EXPOSURE_SOMPI` against its own
 ///   collateral, at BOTH writers (`BondRegistered` and `BondCapabilityDeclared`). Dormant it is a
@@ -9014,6 +9056,12 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     // chain with orphaned boundary blocks in its past, and a node on the new rule would accept
     // history a node on the old one refuses.
     base.palw_epoch_boundary_budget = Some(ForkActivation::always());
+    // **ADR-0044 Decision 9's two caps, enforced from block one** (mainnet audit 2026-09-06, L-2).
+    // `max_prompt_tokens` and `max_decode_tokens` are already hashed into `palw_ruleset_id_v2`, so
+    // every node advertises them; past this fence the lane's validation is given the struct it was
+    // never given and refuses a job above either by name. testnet-11 and devnet have run since
+    // genesis with them unread, so arming it there would refuse jobs those chains have accepted.
+    base.palw_fp_ruleset_caps = Some(ForkActivation::always());
     // Both halves of ADR-0083 Decision 1, stated together: the assembly validates before
     // `palw_rc_arm_phase1` runs, and the second half is refused on a base whose first is dormant.
     base.palw_difficulty_priced_rows = Some(ForkActivation::always());
@@ -9796,6 +9844,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
+    palw_fp_ruleset_caps: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
