@@ -969,6 +969,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             seed_sompi: market.seed_sompi,
             seeded_by: if opened { market.seeded_by.to_string() } else { String::new() },
             seed_min_sompi: kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1,
+            buyback_sompi: market.buyback_sompi,
+            retired_units: market.retired_units,
         })
     }
 

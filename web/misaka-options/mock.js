@@ -127,6 +127,14 @@ function seedWorld() {
   // balances: the mock wallet holds enough to seed a line (150,000 MSK) and the background accounts trade
   world.balances.set(ACCOUNT, 150000n * MO.SOMPI_PER_MSK * MO.NATIVE_SCALE_WEI);
   for (const a of OTHERS) world.balances.set(a, 60000n * MO.SOMPI_PER_MSK * MO.NATIVE_SCALE_WEI);
+  // ADR-0091: every block these Active classes produced since the seed put 5 % of its worker
+  // reward into the pair. Applied through the same move the fold performs, so the row stays
+  // consistent (reserve, product, retired, M1) — a few thousand blocks' worth, per line's share.
+  for (const [id, m] of world.markets) {
+    if (!m.seeded) continue;
+    const blocks = id === CLASS_A ? 5200 : id === CLASS_B ? 5400 : 900;
+    for (let i = 0; i < blocks; i++) { const q = curve.buyback(m.row, curve.buybackSlice(MOCK_ESCROW_SOMPI, C)); if (q) m.row = q.after; }
+  }
   // a trade tape over the past ~26 hours on the seeded lines, priced by the curve; each fill leaves a settlement log and a price sample
   const tape = [];
   const span = 26 * 3600000;
@@ -148,12 +156,24 @@ function seedWorld() {
   world.logs.sort((a, b) => Number(BigInt(a.blockNumber)) - Number(BigInt(b.blockNumber)));
 }
 
+// The escrowed worker reward of one block on testnet-11's pre-deflationary subsidy (370,468,345
+// sompi at a 620 permille carve) — what ADR-0091 takes its five percent of.
+const MOCK_ESCROW_SOMPI = 229690373n;
+
 // ---- blocks --------------------------------------------------------------------------------
 function tickBlock() {
   world.block++; world.daa++;
   const B = world.block;
   // the registered class activates at its DAA (a clock, not an object)
   for (const c of world.classes.values()) if (c.status === 2 && world.daa >= c.activationDaa) { c.status = 0; c.sharePermille = c.pendingShare; }
+  // ADR-0091: a block of an Active class escrows a worker reward and, at its Final, 5 % of it
+  // buys from that line's pair — the other 95 % is the miner's, and no holder is paid.
+  for (const [id, m] of world.markets) {
+    const cls = world.classes.get(world.lines.get(id).row.classId);
+    if (!m.seeded || !cls || cls.status !== 0) continue;
+    const q = curve.buyback(m.row, curve.buybackSlice(MOCK_ESCROW_SOMPI, C));
+    if (q) m.row = q.after;
+  }
   // settle what was queued in the previous block (fold(B-1) decided it; EVM(B) carries it)
   for (const a of world.queued.splice(0)) {
     let out;
@@ -203,7 +223,7 @@ function marketResponse(line) {
   if (!l || !m) return { found: false, lineId: line };
   const r = m.row, cls = world.classes.get(l.row.classId);
   const price = curve.price(r);
-  return { found: true, lineId: line, opened: m.seeded, openedDaa: m.openedDaa, mskReserve: num(r.mskReserve), positionUnits: num(r.positionUnits), soldUnits: num(r.soldUnits), burnedSompi: num(r.burnedSompi), registrantPaidSompi: num(r.ownerPaid || 0n), closedToBuys: !!r.closedToBuys || cls.status !== 0, priceSompiPerPosition: price == null ? 0 : num(price), supplyUnits: num(C.supplyUnits), virtualSompi: 0, classStatus: classStatusString(cls), contributorPaidSompi: num(r.contributorPaid || 0n), seedSompi: m.seeded ? num(r.seedSompi) : 0, seededBy: m.seeded ? r.seededBy : '', seedMinSompi: num(C.seedMinSompi) };
+  return { found: true, lineId: line, opened: m.seeded, openedDaa: m.openedDaa, mskReserve: num(r.mskReserve), positionUnits: num(r.positionUnits), soldUnits: num(r.soldUnits), burnedSompi: num(r.burnedSompi), registrantPaidSompi: num(r.ownerPaid || 0n), closedToBuys: !!r.closedToBuys || cls.status !== 0, priceSompiPerPosition: price == null ? 0 : num(price), supplyUnits: num(C.supplyUnits), virtualSompi: 0, classStatus: classStatusString(cls), contributorPaidSompi: num(r.contributorPaid || 0n), seedSompi: m.seeded ? num(r.seedSompi) : 0, seededBy: m.seeded ? r.seededBy : '', seedMinSompi: num(C.seedMinSompi), buybackSompi: num(r.buybackSompi || 0n), retiredUnits: num(r.retiredUnits || 0n) };
 }
 const rootsInForce = (classId) => { const roots = []; for (const l of world.lines.values()) if (l.row.classId === classId) for (const v of l.versions) if (v.inForce) roots.push(v.root); return roots; };
 const versionResponse = (v) => Object.assign({}, v, { attemptClaims: num(v.attemptClaims), fpClaims: num(v.fpClaims), workLeaves: v.workLeaves.toString() });
@@ -252,7 +272,7 @@ function ethCall(to, data) {
     // ADR-0090: the third word of constants() is the least seed (it carried the virtual reserve before)
     if (sel === S('constants')) return out(W(C.supplyUnits), W(C.unitsPerPosition), W(C.seedMinSompi), W(C.burnPermille), W(C.legPermille));
     const m = world.markets.get(id2(0));
-    if (sel === S('market')) return m ? out(W(m.openedDaa), W(m.row.mskReserve), W(m.row.positionUnits), W(m.row.soldUnits), W(m.row.burnedSompi), W(m.row.ownerPaid || 0n), W(m.row.contributorPaid || 0n), W(m.row.closedToBuys ? 1 : 0), W(m.seeded ? 1 : 0)) : out(...Array(9).fill(W(0)));
+    if (sel === S('market')) return m ? out(W(m.openedDaa), W(m.row.mskReserve), W(m.row.positionUnits), W(m.row.soldUnits), W(m.row.burnedSompi), W(m.row.ownerPaid || 0n), W(m.row.contributorPaid || 0n), W(m.row.closedToBuys ? 1 : 0), W(m.seeded ? 1 : 0), W(m.row.buybackSompi || 0n), W(m.row.retiredUnits || 0n)) : out(...Array(11).fill(W(0)));
     if (sel === S('price')) { const p = m ? curve.price(m.row) : null; return out(W(p == null ? 0 : p)); }
     if (sel === S('quoteBuy')) { const q = m && curve.buyQuote(m.row, ABI.u(a[2])); return q ? out(W(q.unitsOut), W(q.fees.burn), W(q.fees.leg), W(q.fees.net), W(q.priceAfter)) : out(...Array(5).fill(W(0))); }
     if (sel === S('quoteSell')) { const q = m && curve.sellQuote(m.row, ABI.u(a[2])); return q ? out(W(q.fees.gross), W(q.fees.burn), W(q.fees.leg), W(q.fees.net), W(q.priceAfter)) : out(...Array(5).fill(W(0))); }

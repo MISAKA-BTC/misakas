@@ -4798,6 +4798,20 @@ impl PalwChainStateV2 {
         (!self.model_lines.contains_key(class_id) && class.artifact_root == *root).then_some((*class_id, 1))
     }
 
+    /// ADR-0091 Decision 2: the line a root belongs to, for the reward's buyback — every version
+    /// of every line of the class, in force or not, in the registry's order (attribution was a
+    /// fact of the accepting block and does not lapse with a version); the class itself, as its
+    /// founding line, when no line row exists and the root is the class's.
+    pub fn model_line_of_root(&self, class_id: &Hash64, root: &Hash64) -> Option<Hash64> {
+        for (line_id, _) in self.model_lines.iter().filter(|(_, l)| l.class_id == *class_id) {
+            if self.model_versions.range((*line_id, 0)..=(*line_id, u32::MAX)).any(|(_, v)| v.root == *root) {
+                return Some(*line_id);
+            }
+        }
+        let class = self.classes.get(class_id)?;
+        (!self.model_lines.contains_key(class_id) && class.artifact_root == *root).then_some(*class_id)
+    }
+
     /// ADR-0088 Decision 3: the root a claim was admitted against, when the fold recorded one.
     pub fn claim_root(&self, claim_id: &Hash64) -> Option<Hash64> {
         self.claim_roots.get(claim_id).copied()
@@ -6828,8 +6842,17 @@ impl<'a> TransitionBuilder<'a> {
             // bond that still had live claims — an invariant break, not a payout policy — so this
             // errors rather than skipping: a silently unpaid producer is worse than a refused
             // block, and the refusal names the claim.
-            let bond = self.state.bonds.get(&claim.bond).ok_or(PalwStateV2Error::MissingBond(claim.bond))?;
-            self.write_payout(id, Some(PalwPayoutV2 { payload: bond.payout_payload, amount: claim.escrowed_reward }));
+            let payout_payload = self.state.bonds.get(&claim.bond).ok_or(PalwStateV2Error::MissingBond(claim.bond))?.payout_payload;
+            // ADR-0091 Decisions 1–3: five percent of the escrow buys from the pair of the line
+            // the claim ran, where that pair exists and is open; the miner is named the rest.
+            // Where no pair takes it the whole escrow is the miner's — nothing is burned for a
+            // model. Either way the number the accepting block withheld is the number that leaves
+            // here: as a payout, as reserve, never as a mint (Decision 8).
+            let slice = self.model_buyback_at_final(&id, claim);
+            let amount = claim.escrowed_reward - slice;
+            if amount > 0 {
+                self.write_payout(id, Some(PalwPayoutV2 { payload: payout_payload, amount }));
+            }
         }
         let mut finalized = claim.clone();
         finalized.phase = PalwClaimPhaseV2::Final { final_daa };
@@ -10803,6 +10826,25 @@ impl<'a> TransitionBuilder<'a> {
         after.burned_sompi = after.burned_sompi.saturating_add(burned_owner).saturating_add(burned_contributor);
         after.registrant_paid_sompi = after.registrant_paid_sompi.saturating_add(to_owner - burned_owner);
         after.contributor_paid_sompi = after.contributor_paid_sompi.saturating_add(to_contributor - burned_contributor);
+    }
+
+    /// **ADR-0091 Decision 2: the chain's own move at a claim's `Final`.** The slice of the escrow
+    /// buys from the pair of the line the claim was attributed to (`claim_roots`, written at
+    /// accept where the lines fence was armed); the positions the curve gives up are retired.
+    /// Returns the slice taken — `0` where no pair takes it (no root recorded, no line, no market,
+    /// a closed market: Decision 3), so a reward that finds no pair is a reward paid in full.
+    /// Never fails and never touches a holder: the row is the only thing written.
+    fn model_buyback_at_final(&mut self, claim_id: &Hash64, claim: &PalwClaimStateV2) -> u64 {
+        use crate::palw_model_market_v1::{palw_model_buyback_quote_v1, palw_model_buyback_slice_v1};
+        let Some(root) = self.state.claim_roots.get(claim_id).copied() else { return 0 };
+        let Some(line_id) = self.state.model_line_of_root(&claim.class_id, &root) else { return 0 };
+        let Some(market) = self.state.model_markets.get(&line_id).copied() else { return 0 };
+        let Some(quote) = palw_model_buyback_quote_v1(&market, palw_model_buyback_slice_v1(claim.escrowed_reward)) else {
+            return 0;
+        };
+        self.write_model_market(line_id, Some(quote.after));
+        self.model_moves += 1;
+        quote.slice
     }
 
     /// ADR-0088 Decision 4: attribute an accepted claim to the version whose root it named, and
@@ -22497,14 +22539,14 @@ pub(crate) mod tests {
         fn invariants(state: &PalwChainStateV2, class: Hash64, paid_in: u64) {
             let m = state.model_market(&class).expect("a market row");
             assert_eq!(
-                m.position_units as u128 + state.model_units_held(&class),
+                m.position_units as u128 + state.model_units_held(&class) + m.retired_units as u128,
                 PALW_MODEL_SUPPLY_UNITS_V1 as u128,
-                "M1: the curve's units plus every holder's are the supply"
+                "M1: the curve's units plus every holder's plus the retired are the supply"
             );
             assert_eq!(
-                paid_in + m.seed_sompi,
+                paid_in + m.seed_sompi + m.buyback_sompi,
                 m.msk_reserve + paid(state) + m.burned_sompi,
-                "M2: what went in (the seed included) is where the ADR says it is"
+                "M2: what went in (the seed and the reward's slices included) is where the ADR says it is"
             );
             assert!(m.msk_reserve >= m.seed_sompi, "ADR-0090 P1: the reserve never falls under the seed");
         }
@@ -22724,6 +22766,161 @@ pub(crate) mod tests {
                 "a legacy reader refuses the tailed carriage rather than misreading it"
             );
             assert_ne!(s3.state_root(), s1.state_root());
+        }
+
+        // ---- ADR-0091 — the reward buys the pair, and no holder is paid: B1–B5 at the fold ------
+
+        /// The registry fence armed, so an accepted attempt is attributed to the line it ran
+        /// (ADR-0088 Decision 4) and the reward can find its pair.
+        fn apply_armed_delta(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+            att: Option<&PalwAttemptEnvelopeV2>,
+        ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+            let extras = PalwTransitionExtrasV1 { model_lines_active: true, ..Default::default() };
+            let (state, delta) = apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, &extras)
+                .expect("transition applies");
+            state.assert_internal_consistency(p).expect("internal consistency after apply");
+            (state, delta)
+        }
+
+        fn apply_armed(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+            att: Option<&PalwAttemptEnvelopeV2>,
+        ) -> PalwChainStateV2 {
+            apply_armed_delta(parent, p, c, objects, att).0
+        }
+
+        /// The lattice `palw_v2_escrow_is_carved_once_and_paid_once` walks, with `seed_first`
+        /// deciding whether the founding line has a pair before the claim is accepted: the class,
+        /// the bond, (the seed), the attempt at a subsidy of `subsidy`, the panel, the licence, the
+        /// sweep that makes it `Final`. Returns the state at `Final` and the claim id.
+        fn finalized_claim(subsidy: u64, seed_first: bool) -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+            let p = params().with_worker_carve_permille(620).unwrap();
+            let class = h64(1);
+            let s1 = apply_armed(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let s1 = if seed_first { apply_armed(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None) } else { s1 };
+            let env = attempt(40, 1);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let s2 = apply_armed(&s1, &p, &PalwBlockContextV2 { subsidy, ..ctx(3, 102, 3) }, &[], Some(&env));
+            assert_eq!(s2.claim_root(&claim_id), Some(h64(11)), "the claim is attributed to the root it named");
+            let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+            let s3 = apply_armed(
+                &s2,
+                &p,
+                &ctx(4, 103, 4),
+                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+                None,
+            );
+            let s4 = apply_armed(
+                &s3,
+                &p,
+                &ctx(5, 104, 5),
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+                None,
+            );
+            assert!(s4.pending_payouts_iter().next().is_none(), "nothing payable while the claim is refutable");
+            if let Some(m) = s4.model_market(&class) {
+                assert_eq!((m.msk_reserve, m.buyback_sompi), (SEED, 0), "and nothing bought while it is");
+            }
+            let (s5, d5) = apply_armed_delta(&s4, &p, &PalwBlockContextV2 { subsidy: 9_999_999, ..ctx(6, 125, 6) }, &[], None);
+            assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+            // A reorg of the maturing block takes the reward's buy back with it — the move is an
+            // ordinary `ModelMarket` delta entry, so the revert restores the row byte for byte.
+            let back = revert_delta_v2(&s5, &d5, &p).expect("the maturing block reverts");
+            assert_eq!(back.state_root(), s4.state_root(), "reverting the Final undoes the buyback and the payout");
+            assert_eq!(
+                back.model_market(&h64(1)).map(|m| (m.msk_reserve, m.buyback_sompi)),
+                s4.model_market(&h64(1)).map(|m| (m.msk_reserve, m.buyback_sompi))
+            );
+            (p, s5, claim_id)
+        }
+
+        /// B1, B4: at `Final` five percent of the escrow is reserve on the line the claim ran, the
+        /// miner is named the other ninety-five, and no holder or position row moved.
+        #[test]
+        fn the_reward_buys_the_pair_at_final_and_the_miner_is_paid_the_rest() {
+            let (_, s5, claim_id) = finalized_claim(1_000, true);
+            let class = h64(1);
+            let released: Vec<_> = s5.pending_payouts_iter().map(|(id, pay)| (*id, *pay)).collect();
+            assert_eq!(
+                released,
+                vec![(claim_id, PalwPayoutV2 { payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), amount: 589 })],
+                "620 escrowed: 31 bought the pair, 589 are the miner's, one payout row, the bond's payload"
+            );
+            let m = s5.model_market(&class).expect("the pair");
+            assert_eq!(m.msk_reserve, SEED + 31, "the slice is reserve, all of it");
+            assert_eq!(
+                (m.buyback_sompi, m.retired_units, m.position_units),
+                (31, 0, PALW_MODEL_SUPPLY_UNITS_V1),
+                "31 sompi buys no whole position and retires none"
+            );
+            assert!(m.price_sompi_per_position_v1() >= SEED / 500_000, "the price did not fall");
+            assert_eq!((m.burned_sompi, m.registrant_paid_sompi, m.contributor_paid_sompi), (0, 0, 0), "no leg on the chain's move");
+            assert_eq!(s5.model_units_held(&class), 0, "no holder was handed anything");
+            assert!(
+                s5.model_positions_of(&holder(9)).is_empty()
+                    && s5.model_positions_of(&kaspa_hashes::Hash64::from_u64_word(0x9A11)).is_empty()
+            );
+            // M2 at the fold with the reward's source: nothing paid in, the seed and the slice.
+            assert_eq!(m.seed_sompi + m.buyback_sompi, m.msk_reserve + m.burned_sompi, "what went in is the reserve");
+        }
+
+        /// B3: a line without a pair pays its miner in full, and nothing is burned for a model.
+        #[test]
+        fn a_miner_of_an_unseeded_line_is_paid_in_full() {
+            let (_, s5, claim_id) = finalized_claim(1_000, false);
+            let released: Vec<_> = s5.pending_payouts_iter().map(|(id, pay)| (*id, *pay)).collect();
+            assert_eq!(released, vec![(claim_id, PalwPayoutV2 { payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), amount: 620 })]);
+            assert!(s5.model_market(&h64(1)).is_none(), "no pair was conjured");
+        }
+
+        /// B5: a slice worth positions retires exactly what the curve gave up, M1 counts them, a
+        /// holder's round trip leaves them retired, and the seed floor holds under it all.
+        #[test]
+        fn what_the_reward_buys_is_retired_and_the_supply_stays_whole() {
+            use crate::palw_model_market_v1::palw_model_buyback_quote_v1;
+            let (p, s5, _) = finalized_claim(1_000_000_000_000, true);
+            let class = h64(1);
+            let m = *s5.model_market(&class).unwrap();
+            let expect = palw_model_buyback_quote_v1(&seeded_row(101), 31_000_000_000).unwrap();
+            assert_eq!(m.buyback_sompi, 31_000_000_000, "five percent of a 620,000,000,000 escrow");
+            assert_eq!(
+                (m.msk_reserve, m.position_units, m.retired_units),
+                (expect.after.msk_reserve, expect.after.position_units, expect.retired)
+            );
+            assert_eq!(m.retired_units, 1_545, "the curve gave up 1,545 positions to the reward, and they are the chain's");
+            assert_eq!(m.price_sompi_per_position_v1(), 20_124_183);
+            assert_eq!(m.position_units + m.retired_units, PALW_MODEL_SUPPLY_UNITS_V1, "M1: nobody holds them");
+            assert_eq!(s5.model_units_held(&class), 0);
+            // A holder buys and sells everything: the retired positions stay out of reach.
+            let (s6, _) = apply(&s5, &p, &ctx(7, 126, 7), &[buy(class, holder(1), 1_000 * MSK, 0)], None);
+            let held = s6.model_position(&class, &holder(1));
+            assert!(held > 0);
+            let m6 = *s6.model_market(&class).unwrap();
+            assert_eq!(
+                m6.position_units as u128 + held as u128 + m6.retired_units as u128,
+                PALW_MODEL_SUPPLY_UNITS_V1 as u128,
+                "M1 with a holder"
+            );
+            let (s7, _) = apply(&s6, &p, &ctx(8, 127, 8), &[sell(class, holder(1), held, 0)], None);
+            let m7 = *s7.model_market(&class).unwrap();
+            assert_eq!(
+                m7.position_units + m7.retired_units,
+                PALW_MODEL_SUPPLY_UNITS_V1,
+                "sold out: the curve plus the retired is the supply"
+            );
+            assert_eq!(m7.retired_units, 1_545, "no object moved a retired position");
+            assert!(m7.msk_reserve >= m7.seed_sompi, "ADR-0090 P1 under the reward");
+            assert!(matches!(
+                apply_palw_transition_v2(&s7, &p, &ctx(9, 128, 9), &[sell(class, holder(1), 1, 0)], None),
+                Err(PalwStateV2Error::ModelSellExceedsPosition { held: 0, want: 1 })
+            ));
         }
     }
 
