@@ -94,7 +94,7 @@ lane.
 > fence at DAA 1150 (2026-09-04; the difficulty window counts only rows priced by `bits`, because the
 > heartbeat lane had priced every attempt lane off the chain — card §10b) and the DA-court/model-market
 > fences at DAA 1900 (2026-09-06; the block above). Wipe your datadir only if you joined before 5f —
-> neither flag day re-minted the genesis. Build from `main` at `b3ef2629` or later: every earlier
+> neither flag day re-minted the genesis. Build from `main` at `4fcce4b0` or later: every earlier
 > fingerprint is refused, the pre-5f ones at the handshake and the pre-flag-day ones by the fork-id
 > gate, now rather than at the height.**
 >
@@ -104,7 +104,7 @@ lane.
 > * genesis hash: **`ad30b5cb965ad305dfa1dc7516935763ea2623105581b83bb9359c7247157d36b0f8003b337cdad366e3895c8f159e99332be16e258b144dddf483bf9b33edb7`** (`PALW_RC_GENESIS`,
 >   coinbase payload marker `misaka-palw-rc`) — measured from the running node's own startup line,
 >   which is the only value your node will be judged by.
-> * build: **`main` at `b3ef2629` or later** (branch `palw-t11-da-court-market` carries the same code);
+> * build: **`main` at `4fcce4b0` or later** (branch `palw-t11-da-court-market` carries the same code);
 >   the fleet's eight nodes all run kaspad sha256 `7181cc07eb57a2f8`. Any commit whose build announces
 >   the fingerprint above will do — and that, not a commit id, is the check:
 >   `kaspad --testnet --netsuffix=11` prints it on the second line of its startup log. Everything

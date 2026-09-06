@@ -124,7 +124,7 @@ misaka-probe \
   --ip 217.76.57.217 \
   --network testnet-10 \
   --rpc 127.0.0.1:27210 \
-  --seed seeder2.misakascan.com
+  --seed seeder1.misakascan.com
 ```
 
 ### 3. local checkを飛ばして外部確認だけ行う
@@ -138,9 +138,25 @@ misaka-probe --ip 217.76.57.217 --skip-local
 ### 4. DNS seederだけを重点確認
 
 ```bash
-dig @217.76.57.217 seeder2.misakascan.com A +short
-dig +tcp @217.76.57.217 seeder2.misakascan.com A +short
+# 通常のリゾルバ経由（これが新規ノードの実際の経路）
+dig seeder1.misakascan.com A +short
+dig +tcp seeder1.misakascan.com A +short
 ```
+
+各 `seederN.misakascan.com` は `ns-seederN.misakascan.com` に**委任**されているので、権威サーバ
+(`ns1.xdomain.ne.jp` 等) に直接聞いても空が返る。委任先そのものを疑うときは、まず委任先の
+アドレスを引いてからそこに聞く。
+
+```bash
+dig @ns1.xdomain.ne.jp ns-seeder1.misakascan.com A +short   # → 委任先の IP
+dig @<その IP> seeder1.misakascan.com A +short              # → 委任先が答えるか
+```
+
+**seeder2 / seeder4 は 2026-09-06 時点で SERVFAIL。** 委任 (`ns-seeder2` → `217.76.57.217`、
+`ns-seeder4` → `217.178.101.111`) は生きているが、どちらのホストも :53 に応答しない。
+どちらも当プロジェクトが管理していないホストで、既知の状態
+(`docs/testnet11-relaunch5-runbook.md` 項目 2)。**答えるのは seeder1 / seeder3 の 2 本**で、
+新規ノードの discovery はその 2 本で足りる。
 
 `misaka-probe` の中でも同じ系統の確認をしています。
 

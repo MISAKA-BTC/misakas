@@ -61,7 +61,7 @@ Consensus params fingerprint: b511dd1e99b673c62f3023d3cc1e0f4bc48ca8888d535ed621
 (Identity as of the **second flag day, 2026-09-06** — genesis **`ad30b5cb…edb7`**
 (`PALW_RC_GENESIS`; 5f re-minted the genesis on 2026-09-03, so 5e's `08e9c8a4…` is gone), fingerprint
 **`b511dd1e…`** from the build that schedules ADR-0062's DA court, ADR-0077 D16's private prompt and
-ADR-0090's three model fences at **DAA 1900** — `main` at `b3ef2629` or later, fleet binary sha256
+ADR-0090's three model fences at **DAA 1900** — `main` at `4fcce4b0` or later, fleet binary sha256
 `7181cc07eb57a2f8`. **Rebuild now, not at 1900.** The genesis and the peering identity did not move, so
 this is not a re-mint and your appdir is fine — but the fork-id gate refuses an un-upgraded peer
 **immediately**, because that build's gate is already armed by ADR-0083's fence at 1150 and it has no

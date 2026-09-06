@@ -8,7 +8,10 @@ set -uo pipefail
 
 NETWORK="${MISAKA_NETWORK:-testnet-10}"
 RPC="${MISAKA_RPC:-127.0.0.1:27210}"
-SEED="${MISAKA_PROBE_SEED:-seeder2.misakascan.com}"
+# seeder2/seeder4 are delegated to hosts this project does not administer and have not answered
+# since at least 2026-08 (SERVFAIL: the NS delegation resolves, the nameserver does not reply).
+# seeder1/seeder3 are the two that answer. See testnet11-relaunch5-runbook.md item 2.
+SEED="${MISAKA_PROBE_SEED:-seeder1.misakascan.com}"
 P2P_PORT="${MISAKA_PROBE_P2P_PORT:-26211}"
 DNS_PORT="${MISAKA_PROBE_DNS_PORT:-53}"
 TIMEOUT="${MISAKA_PROBE_TIMEOUT:-3}"
@@ -28,7 +31,8 @@ Options:
   --ip <ipv4>              Target public IPv4. If omitted, tries api.ipify.org.
   --network <id>           Network id. Default: testnet-10.
   --rpc <host:port>        Local node wRPC Borsh endpoint. Default: 127.0.0.1:27210.
-  --seed <domain>          Seed domain to resolve. Default: seeder2.misakascan.com.
+  --seed <domain>          Seed domain to resolve. Default: seeder1.misakascan.com
+                           (seeder2/seeder4 are dead — see the note at the top of this file).
   --p2p-port <port>        P2P port. Default: 26211.
   --dns-port <port>        DNS seeder port. Default: 53.
   --stake-bond <txid:n>    Optional bond outpoint for validator registry check.

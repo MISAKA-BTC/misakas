@@ -13278,7 +13278,12 @@ mod consensus_params_id_tests {
                 // ADR-0077 D16's private prompt and ADR-0087/0088/0089's model market, all
                 // scheduled at DAA 1,900, plus the pruning horizon the court's fence drags with it
                 // (6,602 → 12,002). The identity is unchanged — `scheduling_the_da_court_moves_the_fingerprint_and_leaves_the_identity_alone`
-                // — so a seat on the previous build peers until the height and forks off at it.
+                // — so the two builds agree about every block either can produce until the height.
+                // They do NOT stay peers, and this comment used to say they would: the fork-id gate
+                // on the PREVIOUS build is already armed by ADR-0083's fence at 1150, it sees
+                // `next = 1900` on a schedule that has no 1900, and it sends the reject. Measured
+                // 2026-09-06 — nine outside addresses cut off within minutes of the first restart.
+                // See `fork_id_gate_fences_v1`. An un-upgraded seat must rebuild NOW, not by 1900.
                 // Previous: 71b35c250d01598ee8925146e66e8200945503ce2de1030bfd167e799b2498e9 (the
                 // ADR-0083 flag day, 2026-09-04).
                 "b511dd1e99b673c62f3023d3cc1e0f4bc48ca8888d535ed62190d907505de531",

@@ -75,6 +75,15 @@ measured rather than assumed.
    can reconfigure — the other pair answers from hosts it does not administer. Shipping four names
    of which two are dead is a discovery configuration decision, not a code fix; `dns_seeders` is
    deliberately outside `consensus_params_id`, so removing them is a plain edit and not a flag day.
+
+   **Re-measured 2026-09-06 — the failure mode changed, the conclusion did not.** They now return
+   **SERVFAIL**, not NXDOMAIN: each `seederN` IS delegated (`seederN.misakascan.com NS
+   ns-seederN.misakascan.com`), and the glue resolves — `ns-seeder2` → `217.76.57.217`, `ns-seeder4`
+   → `217.178.101.111` — but neither host answers on :53 (`ns-seeder1` → `169.58.232.113` and
+   `ns-seeder3` → `95.111.236.186` both do). `217.76.57.217` pings and has :22 open, so the host is
+   up and only the seeder is not running. Still not ours to restart. A newcomer reporting
+   "seeder2 SERVFAIL from both 1.1.1.1 and 8.8.8.8" is seeing this and nothing else; discovery
+   succeeds on seeder1/seeder3.
 3. ~~**`169.58.39.220` is in the seeder answer set and in no inventory here.**~~ **RESOLVED
    2026-09-02: it is `misaka-ibm` itself** — `hostname` returns `vmi3450148`, the same host the
    node0 journal is written by. It was an unknown only because the inventory recorded the ssh alias
