@@ -249,11 +249,26 @@ Items 1–5 landed the same day; item 6 is the operator's release, shared with A
   page and the leaderboard (sortable), the docs page's "Mining buys the pair" section and fee-table
   row, the add-model step 3 text, nine self-test checks against these goldens, and a mock world
   whose seeded pairs have been mined on.
-* `scripts/misaka-palw-model-market-devnet-e2e.sh` — step 1g/1h: with no trade in flight the
-  reward alone moves the pair, and the reserve is exactly `seed + buyback` with the price not
-  falling (B8). The node-agreement row now compares `traded = reserve − buyback`, which the
-  reward's own move leaves alone; the reserve, the buyback and the retired count are logged for
-  the reader.
+* `scripts/misaka-palw-model-market-devnet-e2e.sh` — step 9b/9c: with no trade in flight the
+  reward alone moves the pair, and the reserve carries the seed and the whole buyback (B8). The
+  node-agreement row now compares `traded = reserve − buyback`, which the reward's own move leaves
+  alone; the reserve, the buyback and the retired count are logged for the reader.
+
+**Run 12 (2026-09-06), 20 of 20.** Six bonded producers, the three fences armed from genesis, the
+panels seated. The founding line seeded with the least seed at 0.2 MSK a position; a carrier buy
+and an EVM buy, a refused buy refunded, an EVM sell debiting one whole position; every node on one
+row before a partition and after the heal. Then, with **nothing trading**, the reward's own buys:
+
+| | |
+|---|---|
+| bought by mining | 275.62844868 MSK |
+| reserve | 100,284.82841924 MSK (the seed, the buys' net legs and every slice) |
+| retired | 1,373 positions — the chain's, held by nobody |
+| price | 0.20114009 MSK, up 0.57 % from the seed's 0.2, with no buyer |
+| supply | 498,581 in the curve + 1,373 retired + 46 held = 500,000 (M1) |
+
+The reward slice is larger here than on testnet-11 because this devnet's subsidy is: the rule is
+the same five percent of whatever the block escrowed.
 
 **What the drill's own runs taught, which was not about the market (2026-09-06).** Two defects in
 the drill itself surfaced the moment a step depended on the reward being *paid*, and both had been
