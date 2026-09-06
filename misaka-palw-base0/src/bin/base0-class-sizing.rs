@@ -25,6 +25,10 @@ use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5
 use kaspa_consensus_core::palw_step::{
     PALW_STEP_MAX_LEAVES, PalwShapeProfileV3, step_leaf_count_capped_v1, worst_case_step_leaf_count_capped_v1,
 };
+use kaspa_consensus_core::palw_attn_court_v1::palw_attn_court_admits_row_v1;
+use kaspa_consensus_core::palw_context_ladder::palw_close_assembly_daa_v1;
+use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwCourtParamsV2};
+use kaspa_consensus_core::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4;
 use kaspa_consensus_core::palw_step_refute::catalogued_kernel_ids_v1;
 use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
 use kaspa_hashes::Hash64;
@@ -241,4 +245,113 @@ fn main() {
             found.map(|t| t.to_string()).unwrap_or_else(|| "**none up to MAX_TILE_LEN**".into())
         );
     }
+
+    // ADR-0092 §5: the wall-clock budget, from the shipped bundle rather than from this file.
+    let shipped = kaspa_consensus_core::config::params::palw_rc_shipped_params();
+    let PalwConsensusMode::ConsensusV2(bundle) = &shipped.palw_consensus_mode else {
+        panic!("the RC ships a ConsensusV2 bundle");
+    };
+    adr0092_wall_clock(&bundle.court, bundle.state.window_court());
+}
+
+/// **ADR-0092 §5 — the wall-clock question, generated.**
+///
+/// ADR-0092's finding is that the ladder is not what binds: `bisection_rounds` is
+/// `ceil(log_arity(max_step_leaf_count))`, so one doubling of the provisioned space costs ONE
+/// round, while every round costs `turn_deadline_daa` twice over and the total must fit
+/// `window_court`. This section prints that budget rather than asserting it, and the predicate it
+/// prints is the shipped one — [`palw_attn_court_admits_row_v1`] — so a ladder this table calls
+/// admissible is one class admission admits.
+///
+/// Every figure here is a generated artifact. ADR-0092 §5 says so, and says why: a worked example
+/// with no generator behind it is a number that drifts, and this repo has watched one drift twice.
+fn adr0092_wall_clock(rc: &PalwCourtParamsV2, window_court: u64) {
+    let reserve = palw_close_assembly_daa_v1(rc.max_close_chunks());
+    println!("## ADR-0092 — what the court window buys\n");
+    println!(
+        "Fixed terms, read from the shipped RC bundle: turn deadline **{} DAA**, terminal rounds \
+         **{}**, dissection arity **{}**, close chunks **{}**, close-assembly reserve **{reserve} DAA**, \
+         court window **{window_court} DAA**.\n",
+        rc.turn_deadline_daa(),
+        rc.terminal_rounds(),
+        rc.dissection_arity(),
+        rc.max_close_chunks(),
+    );
+    println!(
+        "`worst` is `(2 x (ladder rounds + history rounds) + terminal + root_claim) x turn_deadline` \
+         (`PalwCourtParamsV2::worst_case_duration_with_history_daa`); a row is admissible when \
+         `worst + reserve < window_court`.\n"
+    );
+
+    // **Decision 3's measurement, both sides of it.** The ADR refuses to assume that fewer rounds
+    // is less cost, so the sweep prints every legal arity: the round count falls as `log_arity`,
+    // and what one round CARRIES rises — `palw_attn_court_move_bytes_v1` is the other half and
+    // belongs to the close-ceiling table. What this table settles is only the wall clock.
+    let mut arities: Vec<u8> = vec![2, 4, 8, 16, 32, 64];
+    if !arities.contains(&rc.dissection_arity()) {
+        arities.push(rc.dissection_arity());
+        arities.sort_unstable();
+    }
+    // History positions: zero (the ladder alone), the widths the shipped classes actually declare,
+    // and two beyond them, so the table says where the shipped configuration sits AND where it
+    // stops. 131,072 is the figure `palw_context_ladder`'s own test uses for a wide row.
+    let histories: [u64; 5] = [0, 512, 4_096, 32_768, 131_072];
+
+    println!("### The decision table — largest admissible `max_step_leaf_count`\n");
+    println!("Rows are the history a dispute must dissect; columns are the court's arity. Each cell");
+    println!("is the widest ladder whose worst-case prosecution still fits `window_court`.\n");
+    print!("| history positions |");
+    for a in &arities {
+        print!(" arity {a}{} |", if *a == rc.dissection_arity() { " (shipped)" } else { "" });
+    }
+    println!();
+    print!("|---|");
+    for _ in &arities {
+        print!("---|");
+    }
+    println!();
+    for history in histories {
+        print!("| {history} |");
+        for arity in &arities {
+            let widest = (18u32..=44)
+                .filter_map(|exp| {
+                    let ladder = 1u64 << exp;
+                    let court = court_at(rc, ladder, *arity)?;
+                    palw_attn_court_admits_row_v1(&court, history, PALW_ATTN_HISTORY_TILE_V4, window_court).ok().map(|_| exp)
+                })
+                .max();
+            match widest {
+                Some(exp) => print!(" 2^{exp} |"),
+                None => print!(" **none** |"),
+            }
+        }
+        println!();
+    }
+    println!();
+    println!(
+        "**Read this before choosing either number.** The shipped RC pairs arity {} with a ladder of \
+         2^{} (`PALW_RC_COURT_MAX_STEP_LEAF_COUNT`). The row for zero history is what makes that pair \
+         legal; a class whose dispute must also dissect a long history is bounded by its own row, and \
+         at the shipped arity that bound falls well below the shipped ladder. ADR-0092 Decision 1 is \
+         the choice of the ladder; Decision 3 is the choice of the arity; this table is the only place \
+         they are priced against one another.\n",
+        rc.dissection_arity(),
+        kaspa_consensus_core::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES.trailing_zeros(),
+    );
+}
+
+/// The RC's court at a different ladder and arity — every other ceiling kept, so the table varies
+/// one thing at a time.
+fn court_at(rc: &PalwCourtParamsV2, ladder: u64, arity: u8) -> Option<PalwCourtParamsV2> {
+    PalwCourtParamsV2::with_cost_ceilings(
+        ladder,
+        rc.turn_deadline_daa(),
+        rc.terminal_rounds(),
+        rc.max_close_bytes(),
+        rc.max_terminal_macs(),
+        rc.max_operand_count(),
+    )
+    .ok()?
+    .with_dissection_arity(arity)
+    .ok()
 }

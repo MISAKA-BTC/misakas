@@ -1,6 +1,6 @@
 # ADR-0092 — The ladder is minted once, and the wall clock is what binds
 
-* Status: DRAFT 2026-09-06 (design first, at the operator's word; no implementation yet)
+* Status: ACCEPTED 2026-09-06 (design first, at the operator's word; §8 records the implementation)
 * Builds on: [0049](0049-palw-adjudication-contract.md) Decision C (what one round may cost),
   [0069](0069-e2e-adjudicability-is-the-price-of-weight.md) (adjudicability is the price of
   weight), [0077](0077-a-prompt-a-person-would-type-is-a-claim-the-court-can-try.md) Decision 12
@@ -187,7 +187,55 @@ What the table must answer before a mainnet card is minted:
   of `Params::palw_court_ladder`, and its schedule is an operator decision.
 * **Any number.** §5 says why.
 
-## 8. Order of work
+## 8. Implementation record (2026-09-06)
+
+Steps 1 and 2 of §9 are done, and §6's invariants are tests. What the generator then measured is
+worth reading before Decisions 1 and 3 are taken, because it changes what they are choosing
+between.
+
+**The generator.** `misaka-palw-base0 --bin base0-class-sizing` gained an ADR-0092 section that
+reads the shipped RC bundle — turn deadline, terminal rounds, arity, close chunks, close-assembly
+reserve, `window_court` — and prints, for each (history positions × arity) pair, the widest
+`max_step_leaf_count` whose worst-case prosecution still fits. The predicate is the shipped one,
+`palw_attn_court_admits_row_v1`, so a ladder the table calls admissible is one class admission
+admits. No figure is written into this document.
+
+**What it found, and it is the reason Decision 3 matters more than it looked.** At zero history the
+wall is a long way off; the ladder is bounded by the round count alone and the same ceiling is
+reached at every arity. Once a dispute must also dissect a history, the history's rounds — not the
+ladder's — are what spend the window, and at the shipped arity the admissible ladder falls steeply
+with the context. The shipped ladder and the shipped arity are a legal pair, and at the dense row's
+own context they are *exactly* a legal pair: the widest ladder that arity can prosecute at that
+context is the one the RC froze, with no headroom above it. That is pinned by
+`the_shipped_ladder_is_the_widest_the_shipped_arity_can_prosecute_at_its_own_context`, which fails
+in both directions — if the ladder is raised without the arity or the window moving with it, and if
+the pair silently gains room.
+
+So Decision 3's knob is not a refinement. On this window, raising the arity is what makes a wider
+ladder reachable *at a real context at all*, and the decision table is where the two numbers are
+priced against one another. The value stays open, as §7 says: this measures the wall clock, and the
+bytes one round carries are the close ceiling's half of the same question.
+
+**Step 2 was already done.** `mainnet_card_base_v1` arms both `palw_context_ladder` and
+`palw_court_ladder`; the second was the audit's M-15, a regression the merge of the two development
+lines had created, and it landed with the 2026-09-06 audit fixes.
+
+**§6's invariants**, in `consensus/core/tests/palw_adr0092_court_budget.rs`, four tests, each with
+its negative control run and observed red before being recorded here:
+
+| invariant | test |
+|---|---|
+| 1 — every shipped preset prosecutes its own ladder inside its own window | `every_shipped_preset_prosecutes_its_own_ladder_inside_its_own_window` |
+| the shipped pair is at the wall, not below it | `the_shipped_ladder_is_the_widest_the_shipped_arity_can_prosecute_at_its_own_context` |
+| Decision 3's knob is measured, not assumed | `a_higher_arity_buys_a_deeper_ladder_at_the_same_window` |
+| 3 — Decision 4's irreversibility | `raising_the_ladder_moves_the_rulesets_fingerprint` |
+
+Invariant 2 of §6 — every registered class against all three admission bounds — is not added here:
+`verify_class_admission_v5` already enforces it at registration and the genesis loader already runs
+it, so a separate assertion would restate the production path rather than check it. Recorded as a
+deliberate omission rather than an oversight.
+
+## 9. Order of work
 
 1. Extend the sizing binary to print duration and margin; pin its output. (No consensus change.)
 2. Arm `Params::palw_court_ladder` where U-08 requires it — audit H-4, already fenced, and a
@@ -195,7 +243,7 @@ What the table must answer before a mainnet card is minted:
 3. Fill §5's table from the generator, then take Decisions 1 and 3's values for the card.
 4. The responder, under its own ADR.
 
-## 9. Number hygiene
+## 10. Number hygiene
 
 0092 is free: 0091 is the highest in `docs/adr/` at `4fcce4b0`, and `git grep -n "ADR-0092"` finds
 no citation in code or docs. Next free number after this one is 0093.
