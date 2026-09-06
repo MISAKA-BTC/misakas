@@ -205,6 +205,46 @@ pub const QWEN35_2B: PalwQwen36GeometryV1 = PalwQwen36GeometryV1 {
     tile_len: 512,
 };
 
+/// **`Qwen3.8-27B`** — Alibaba's 2026-08-14 dense hybrid, added 2026-09-04 through the public
+/// add-a-model path as a user would (ggml-org's `Qwen3.8-27B-Q4_K_M.gguf`, 18,973,870,432 bytes),
+/// read from `Qwen/Qwen3.8-27B`'s `config.json` (`model_type qwen3_5`, `text_config`): 64 layers,
+/// full attention every fourth, hidden 5120, attention 24 heads over 4 KV heads at 256 with the
+/// family's quarter rotation (64 dims, base 1e7) and the output gate; Gated DeltaNet 16 key heads
+/// and 48 value heads at 128 with the conv-4 shortcut; a DENSE feed-forward of 17,408 — which this
+/// lineage expresses as a one-expert mixture with no shared expert, exactly as `QWEN35_2B` does
+/// (a router softmax over one logit is exactly 1). Vocabulary 248,320, `rms_norm_eps 1e-6` → 17
+/// in Qk. The vision tower and the MTP head ship as separate GGUFs and are not part of the class.
+///
+/// `n_ctx` 8 and `tile_len` 512 are the hybrid family's, for the same recurrence-replay reason
+/// `QWEN36_35B_A3B` documents: the 128-dim recurrence heads price the context identically. What
+/// differs from the 35B is only the per-token cost — 27B dense parameters against 3B active — and
+/// that is a producer's economics, not the graph's.
+pub const QWEN38_27B: PalwQwen36GeometryV1 = PalwQwen36GeometryV1 {
+    layer_count: 64,
+    full_attention_interval: 4,
+    hidden_dim: 5120,
+    attn_heads: 24,
+    attn_kv_heads: 4,
+    attn_head_dim: 256,
+    rope_dims: 64,
+    // 1e7 as f32 — the family base.
+    rope_freq_base_bits: 0x4B18_9680,
+    gdn_k_heads: 16,
+    gdn_v_heads: 48,
+    gdn_head_dim: 128,
+    gdn_conv_kernel: 4,
+    n_experts: 1,
+    experts_per_token: 1,
+    moe_dim: 17_408,
+    shared_dim: 0,
+    attn_output_gate: 1,
+    vocab_size: 248_320,
+    n_ctx: 8,
+    n_threads: 1,
+    rms_eps_q: 17,
+    tile_len: 512,
+};
+
 /// **The epsilon every artifact of this lineage executes.** The fifth finding
 /// (`misaka-palw-base0/src/qwen36_plan.rs`, the real-weights differential): the three geometries
 /// above declare `rms_eps_q: 17` while `qwen36-convert` hardcodes `eps_q = 1` into every artifact
