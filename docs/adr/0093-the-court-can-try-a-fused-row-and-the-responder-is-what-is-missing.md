@@ -91,11 +91,26 @@ Defaulted to `None`, exactly as `disclose_trace_event` is defaulted to an error,
 the 2026-09-06 audit's C-5 repair established: a family that cannot answer must be visible as one
 before a court is armed over it, not after it has been convicted.
 
-**Decision 2 — `supports_court()` means both verbs, and the consensus-visible predicate follows
-it.** The audit's C-5 landed `palw_court_responder_coverage`, a fence that refuses an assembly
-arming a court over a family that cannot answer it. That predicate must widen to this verb when
-this ADR lands. Until it does, the fence's own promise is only half true — it covers disclosure and
-not dissection — and that is stated here rather than discovered later.
+**Decision 2 — when a responder exists, the mercy that excuses its silence must be narrowed, and
+that is a second activation.** What the 2026-09-06 audit actually landed for C-2/H-5 is not an
+assembly refusal: `palw_court_responder_coverage` gates an arm in the fold (`palw_state_v2.rs:8287`)
+that, past the fence, ends a fused-terminal session which `owes_the_dissection_opening` without
+convicting or fining anybody — `rearm_after_unanswered_opening`. It is mercy for a move *no party
+in the tree can make*.
+
+The moment `attn_tile_claim` ships for a family, that sentence stops being true of it, and mercy
+that outlives its reason is indistinguishable from a court that cannot convict. So this ADR's
+landing has a second half: the arm must ask whether **this claim's class** has a responder, not
+whether the release has none. Two consequences, both deliberate:
+
+* it is a consensus-validity change in the convicting direction, so it is its own fence and its own
+  height — never a silent narrowing riding the responder's release;
+* until it is armed, a family that CAN answer is still excused if it does not, which is a worse
+  place to stop than either end. §6's order of work puts it last for that reason, and §5's
+  invariant 3 is what says the responder works before anyone relies on it.
+
+`supports_court()` must also come to mean both verbs — disclosure *and* dissection — or a family
+with one and not the other advertises a court turn it cannot take.
 
 **Decision 3 — the panel files the moves; the backend never sees a session.** The panel's court arm
 gains: on an accusation at a fused site, fold the tile claims into the root and file
@@ -134,13 +149,16 @@ operator decision and ADR-0092 §7 already records it.
 
 ## 6. Order of work
 
-1. The trait verb and its `None` default, plus Decision 2's widening of the coverage predicate —
-   small, and it makes the gap visible in consensus rather than in a comment.
+1. The trait verb and its `None` default, and `supports_court()` widened to mean both verbs — small,
+   and it makes the gap visible in the type system rather than in a comment. Decision 2's narrowing
+   of the fold's mercy arm is NOT here; it is step 5.
 2. `attn_tile_claim` for one family, with invariant 2's drill vector. The floor class first: it is
    the one whose arithmetic is integer end to end.
 3. The panel's two arms, against that family.
 4. The remaining families, each with its own drill vector.
-5. Only then, the operator decision in §4.
+5. Decision 2's narrowing — the mercy arm asks whether this claim's class has a responder — behind
+   its own fence and at its own height, once every registered family answers.
+6. Only then, the operator decision in §4.
 
 ## 7. Why this ADR ships no code
 
