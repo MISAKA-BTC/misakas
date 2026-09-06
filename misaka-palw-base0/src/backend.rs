@@ -1886,3 +1886,46 @@ mod end_to_end_tests {
         // Double-spend of a quantum is `QuantumAlreadySpent`, tested where that transition lives.
     }
 }
+
+#[cfg(test)]
+mod adr0093_responder_gap {
+    /// **ADR-0093 §6 step 1: the gap, pinned at the source.**
+    ///
+    /// No shipped family can take a fused dissection's turn, because none implements
+    /// `attn_tile_claim`. That is the whole of the 2026-09-06 audit's C-2 that the audit's own
+    /// fixes did not close — they stopped the conviction, they did not build the responder.
+    ///
+    /// Read off the source rather than off constructed backends, the way
+    /// `palw_step_ladder_tree_guard` reads the walkers: a backend needs a `ResolvedClassV1` to
+    /// exist, and the fact being pinned is "nobody overrides these", which is a property of the
+    /// files.
+    ///
+    /// It fails in BOTH directions, which is the point. It fails if a family advertises the turn
+    /// without the verb behind it, and it fails the day a family implements the verb — at which
+    /// point the reader is sent to ADR-0093 §6 step 5 (the fold's mercy arm must then be narrowed,
+    /// behind its own fence) and §5 invariant 3 (the drill that must pass before anyone relies on
+    /// the answer).
+    #[test]
+    fn no_shipped_family_can_take_a_fused_dissections_turn_yet() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let families = ["backend.rs", "qwen25_a16_backend.rs", "qwen36_backend.rs"];
+        for file in families {
+            let path = dir.join(file);
+            let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            // Production only: the guard must not trip on a future test fixture that stubs one.
+            let production: String = match src.find("\n#[cfg(test)]") {
+                Some(cut) => src[..cut].to_string(),
+                None => src,
+            };
+            for verb in ["fn attn_tile_claim", "fn supports_dissection"] {
+                assert!(
+                    !production.contains(verb),
+                    "{file} implements `{verb}`. If the fused responder now exists here, this test has \
+                     done its job — read ADR-0093 §6 step 5 and §5 invariant 3 before deleting this line, \
+                     because a family that answers a dissection changes what the fold's mercy arm may \
+                     excuse, and that is its own fence and its own height."
+                );
+            }
+        }
+    }
+}

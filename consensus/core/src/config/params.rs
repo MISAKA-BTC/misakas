@@ -9403,6 +9403,22 @@ pub const PALW_RC_PHASE1_FENCE_DAA: u64 = 5_000;
 /// peers and warns rather than partitioning early, which is what makes a rolling upgrade possible.
 pub const PALW_RC_DA_COURT_FENCE_DAA: u64 = 1_900;
 
+/// **testnet-11's third flag day: the refutation ladder** (ADR-0084 U-08, the 2026-09-06 audit's
+/// H-4, ADR-0092 §9 step 2).
+///
+/// **It has a height of its own, and the reason is measured rather than stylistic.** The ladder
+/// first rode [`PALW_RC_DA_COURT_FENCE_DAA`], and the fork-id gate cannot see that: `fork_id_v1`
+/// digests the genesis hash and the FIRED HEIGHTS (`fired_fences_digest_v1`), never the fence set,
+/// so a build carrying the ladder at 1,900 and one without it advertise the identical fork id at
+/// every DAA, peer, and then disagree about which closes are valid past the height. Measured:
+/// same fork id at 1,899, at 1,900 and at 2,500, same schedule, same identity. Adding a rule to a
+/// height the schedule already names is invisible to the gate; adding a height is not.
+///
+/// 2,150 is 1,900 plus 250 DAA — about 50 hours at the fleet's measured 4.98 DAA/h, the same shape
+/// of lead 1,900 itself was chosen with, and it lands after the second flag day rather than beside
+/// it so an operator upgrades once per height rather than once for two rules at one height.
+pub const PALW_RC_COURT_LADDER_FENCE_DAA: u64 = 2_150;
+
 /// Arm the ADR-0068 Phase 1 fences on an assembled PALW-RC ruleset: the heartbeat lane (with
 /// its width bound) and the attempt-work constant, both at [`PALW_RC_PHASE1_FENCE_DAA`]. The
 /// values are the binary's own constants by construction, so the `validate_palw_v2` locks hold
@@ -9722,6 +9738,7 @@ pub fn palw_rc_base_params() -> Params {
     params.palw_model_market = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_model_lines = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_model_evm = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
+    params.palw_court_ladder = Some(ForkActivation::new(PALW_RC_COURT_LADDER_FENCE_DAA));
     // **The EVM lane is ON from DAA 0, inherited from `TESTNET_PARAMS` and kept deliberately.**
     //
     // It was briefly turned off here on the reasoning that `MAINNET_PARAMS` never activates the
@@ -12012,6 +12029,9 @@ mod consensus_params_id_tests {
         previous.palw_model_market = None;
         previous.palw_model_lines = None;
         previous.palw_model_evm = None;
+        // Scheduled on the same flag day by the 2026-09-06 audit's H-4 (ADR-0084 U-08), so the
+        // build the fleet is running does not carry it either.
+        previous.palw_court_ladder = None;
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &previous.palw_consensus_mode else { panic!("V2") };
         previous.blockrate.pruning_depth = palw_v2_pruning_depth_v1(&previous.blockrate, bundle, None);
 
@@ -13286,7 +13306,21 @@ mod consensus_params_id_tests {
                 // See `fork_id_gate_fences_v1`. An un-upgraded seat must rebuild NOW, not by 1900.
                 // Previous: 71b35c250d01598ee8925146e66e8200945503ce2de1030bfd167e799b2498e9 (the
                 // ADR-0083 flag day, 2026-09-04).
-                "b511dd1e99b673c62f3023d3cc1e0f4bc48ca8888d535ed62190d907505de531",
+                // **Re-pinned 2026-09-06, same flag day, one more fence.** `palw_court_ladder`
+                // (ADR-0084 U-08 / the 2026-09-06 audit's H-4) joins the DAA 1,900 set: past it the
+                // refutation walkers take the ruleset's `max_step_leaf_count` instead of the
+                // executor's constant, so a dispute over the dense graph-v5 row can be tried at the
+                // width the row was admitted at. The identity does not move — a scheduled fence is
+                // normalised out of `consensus_identity_id`, which is what lets the fleet roll one
+                // host at a time — and the schedule id does, which is what names the height in the
+                // operator log. Previous: b511dd1e99b673c62f3023d3cc1e0f4bc48ca8888d535ed62190d907505de531.
+                // **Re-pinned again the same day: the ladder moved to a height of its own.** It first rode
+                // 1,900; `fork_id_v1` digests the fired HEIGHTS and never the fence set, so a build
+                // carrying the ladder at 1,900 and one without it advertised the identical fork id
+                // and would have peered and then disagreed past the height. Measured before moving
+                // it: same fork id at 1,899, 1,900 and 2,500. Previous, and not to be deployed past
+                // 1,900: ebd3b321d4ac68a719f39701af1bfa3931230f27cb77d9fd0e26a513a151ede4.
+                "060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -14503,9 +14537,28 @@ mod consensus_params_id_tests {
             court_of(&rc).max_step_leaf_count()
         );
 
-        // testnet-11: dormant, so the constant — the court every shipped close was judged under.
-        assert!(rc.palw_court_ladder.is_none(), "testnet-11 leaves the court ladder dormant: it is a live chain");
-        assert_eq!(palw_refutation_leaf_cap_v2(&court_of(&rc), false), PALW_STEP_LEG_MAX_LEAVES);
+        // **testnet-11 SCHEDULES it** (2026-09-06 audit H-4 / ADR-0084 U-08), on the same flag day
+        // as the DA court. Below the height the walkers keep the executor's constant — the court
+        // every close filed so far was judged under, which is why this cannot simply be armed — and
+        // at it they take the ruleset's own ladder. A live chain reaches a rule at a height.
+        let t11_ladder = rc.palw_court_ladder.expect("testnet-11 schedules the court ladder");
+        assert_eq!(
+            t11_ladder,
+            ForkActivation::new(PALW_RC_COURT_LADDER_FENCE_DAA),
+            "the ladder has a height of its own — the fork-id gate digests heights, not fence sets"
+        );
+        assert!(!t11_ladder.is_active(PALW_RC_COURT_LADDER_FENCE_DAA - 1), "…dormant the block before it");
+        assert!(t11_ladder.is_active(PALW_RC_COURT_LADDER_FENCE_DAA), "…in force at it");
+        assert_eq!(
+            palw_refutation_leaf_cap_v2(&court_of(&rc), t11_ladder.is_active(PALW_RC_COURT_LADDER_FENCE_DAA - 1)),
+            PALW_STEP_LEG_MAX_LEAVES,
+            "before the height the walkers take the executor's constant"
+        );
+        assert_eq!(
+            palw_refutation_leaf_cap_v2(&court_of(&rc), t11_ladder.is_active(PALW_RC_COURT_LADDER_FENCE_DAA)),
+            court_of(&rc).max_step_leaf_count(),
+            "at the height they take the ruleset's, which is what closes U-08 on this chain"
+        );
         // **devnet: the fence is DORMANT, and this pins the gap rather than papering it.** Devnet
         // arms `palw_context_ladder` from genesis and leaves `palw_court_ladder` unset, so it
         // admits the graph-v5 row at 2^26 and its court still walks at 2^22. Arming it here would
@@ -14723,7 +14776,7 @@ mod consensus_params_id_tests {
         // about it being the only one.
         assert_eq!(
             crate::fork_id_v1::fork_id_gate_fences_v1(&later),
-            vec![1150, PALW_RC_DA_COURT_FENCE_DAA, 2000],
+            vec![1150, PALW_RC_DA_COURT_FENCE_DAA, 2000, PALW_RC_COURT_LADDER_FENCE_DAA],
             "…and a schedule lists every scheduled gate fence's height"
         );
     }
@@ -15514,3 +15567,7 @@ mod fingerprint_probe {
         );
     }
 }
+
+
+
+

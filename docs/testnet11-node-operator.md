@@ -87,29 +87,39 @@ lane.
 > moves. Rebuild, restart, keep your appdir. Confirm with the startup line:
 >
 > ```
-> [INFO ] Consensus params fingerprint: b511dd1e99b673c62f3023d3cc1e0f4bc48ca8888d535ed62190d907505de531 (network testnet-11)
+> [INFO ] Consensus params fingerprint: 060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89 (network testnet-11)
 > ```
 
-> **Current identity — Relaunch 5f (genesis re-minted 2026-09-03) carrying two flag days: ADR-0083's
+> **Current identity — Relaunch 5f (genesis re-minted 2026-09-03) carrying THREE flag days: ADR-0083's
 > fence at DAA 1150 (2026-09-04; the difficulty window counts only rows priced by `bits`, because the
 > heartbeat lane had priced every attempt lane off the chain — card §10b) and the DA-court/model-market
-> fences at DAA 1900 (2026-09-06; the block above). Wipe your datadir only if you joined before 5f —
-> neither flag day re-minted the genesis. Build from `main` at `4fcce4b0` or later: every earlier
-> fingerprint is refused, the pre-5f ones at the handshake and the pre-flag-day ones by the fork-id
-> gate, now rather than at the height.**
+> fences at DAA 1900 (2026-09-06; the block above), and the refutation ladder at DAA 2150
+> (ADR-0084 U-08; ADR-0092). Wipe your datadir only if you joined before 5f — no flag day re-minted
+> the genesis. Build from `main` at `06bf5118` or later: every earlier fingerprint is refused, the
+> pre-5f ones at the handshake and the pre-flag-day ones by the fork-id gate, now rather than at the
+> height.**
 >
-> * consensus fingerprint: **`b511dd1e99b673c62f3023d3cc1e0f4bc48ca8888d535ed62190d907505de531`**
+> > **If you already rebuilt today, rebuild again.** `4fcce4b0` and `6dea4f5f` are superseded and
+> > **must not be run past DAA 1900**. They schedule the 1900 fences but not the ladder's own height,
+> > and the gate compares HEIGHTS: from 1900 a node on either will refuse a node carrying the ladder,
+> > and it is the older side that sends the reject, so the fleet cannot fix it for you. The ladder
+> > first rode 1900, where the gate could not see it at all — two builds peering and then disagreeing
+> > about which closes are valid. Moving it to 2150 is what makes the difference visible.
+>
+> * consensus fingerprint: **`060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89`**
 >   (2026-09-06 flag day; the pre-flag-day value `71b35c25…` names the same genesis and the same
 >   peering identity, and is refused by the gate as above).
 > * genesis hash: **`ad30b5cb965ad305dfa1dc7516935763ea2623105581b83bb9359c7247157d36b0f8003b337cdad366e3895c8f159e99332be16e258b144dddf483bf9b33edb7`** (`PALW_RC_GENESIS`,
 >   coinbase payload marker `misaka-palw-rc`) — measured from the running node's own startup line,
 >   which is the only value your node will be judged by.
-> * build: **`main` at `4fcce4b0` or later** (branch `palw-t11-da-court-market` carries the same code);
+> * build: **`main` at `06bf5118` or later**;
 >   the fleet's eight nodes all run kaspad sha256 `7181cc07eb57a2f8`. Any commit whose build announces
 >   the fingerprint above will do — and that, not a commit id, is the check:
 >   `kaspad --testnet --netsuffix=11` prints it on the second line of its startup log. Everything
 >   earlier — the 5f tag `testnet-11-relaunch-5f-adr0083-h1150` (`16a2f277`), the fleet's previous
->   `cef2ecdb`, and the 5f cut `2222e054…` — is on the far side of the gate **now**, not at 1900.
+>   `cef2ecdb`, and the 5f cut `2222e054…` — is on the far side of the gate **now**, not at 1900; and
+>   `4fcce4b0` / `6dea4f5f` (fingerprints `b511dd1e…` / `ebd3b321…`) are on the far side of it from
+>   **1900**, not from 2150.
 > * classes registered at genesis: BASE-0 `f1c5635c…` (the floor, no model, 22‰), PALW-QWEN25-A16
 >   graph-v5@512 `4277d84f…` (489‰, artifact root `bcf2d9eb…`), PALW-QWEN36 graph-v3 `5bd9ae3d…`
 >   (489‰, artifact root `f4aad4fd…`). Post-genesis registrations are chain data: read them from the

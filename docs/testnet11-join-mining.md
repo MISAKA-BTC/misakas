@@ -52,17 +52,31 @@ supply the default
 (fallback entry nodes: `169.58.232.113:26311`, `169.58.39.220:26311` — the two the seeders
 verify and advertise. `5.104.81.23` does not accept inbound connections and `169.58.232.114`
 was withdrawn on 2026-08-29.)
+
+> **The seeders, measured 2026-09-06 from both 1.1.1.1 and 8.8.8.8.** testnet-11 ships four
+> (`seeder1`–`seeder4`.misakascan.com). `seeder1` and `seeder3` resolve, and both return the two
+> entry nodes above. **`seeder2` and `seeder4` return SERVFAIL** — not NXDOMAIN, so the names are
+> delegated and their nameserver is failing, and a joiner sees two of four lookups fail. That is a
+> DNS-side fault and not something a node can be configured around; it costs you nothing if you use
+> `--addpeer` with the addresses above, which is the reliable path either way. `dns_seeders` sits
+> deliberately outside `consensus_params_id` — where to find peers is not a rule about blocks — so
+> the list can be corrected without a flag day.
 A node on the right chain logs
 
 ```
-Consensus params fingerprint: b511dd1e99b673c62f3023d3cc1e0f4bc48ca8888d535ed62190d907505de531 (network testnet-11)
+Consensus params fingerprint: 060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89 (network testnet-11)
 ```
 
 (Identity as of the **second flag day, 2026-09-06** — genesis **`ad30b5cb…edb7`**
 (`PALW_RC_GENESIS`; 5f re-minted the genesis on 2026-09-03, so 5e's `08e9c8a4…` is gone), fingerprint
-**`b511dd1e…`** from the build that schedules ADR-0062's DA court, ADR-0077 D16's private prompt and
-ADR-0090's three model fences at **DAA 1900** — `main` at `4fcce4b0` or later, fleet binary sha256
-`7181cc07eb57a2f8`. **Rebuild now, not at 1900.** The genesis and the peering identity did not move, so
+**`060e3597…`** from the build that schedules ADR-0062's DA court, ADR-0077 D16's private prompt and
+ADR-0090's three model fences at **DAA 1900**, and ADR-0084 U-08's refutation ladder at **DAA 2150**
+— `main` at `06bf5118` or later. **Rebuild now, not at 1900.**
+
+**If you rebuilt earlier today, rebuild again.** `4fcce4b0` (`b511dd1e…`) and `6dea4f5f`
+(`ebd3b321…`) schedule the 1900 fences but not the ladder's own height, and the gate compares
+HEIGHTS rather than rules — so from **1900**, not from 2150, a node on either refuses a node
+carrying the ladder, and the reject comes from the older side. The genesis and the peering identity did not move, so
 this is not a re-mint and your appdir is fine — but the fork-id gate refuses an un-upgraded peer
 **immediately**, because that build's gate is already armed by ADR-0083's fence at 1150 and it has no
 1900 on its schedule. It is the OLD side that sends the reject, so the fleet cannot fix it for you:
