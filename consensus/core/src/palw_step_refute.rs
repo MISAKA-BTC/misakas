@@ -4139,12 +4139,9 @@ pub fn check_execution_step_refutation_opened_v1(
     )
 }
 
-/// [`check_execution_step_refutation_opened_v1`] with the ladder the ruleset froze.
-///
-/// Every opening this walk verifies — the structural leg, the carried checkpoint anchor and each
-/// input row's range opening against `binding.step_leaf_count` — is walked against
-/// `max_step_leaf_count`. The default-ladder names pass [`crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES`]
-/// (`2^22`); the court passes what `Params::palw_context_ladder` resolves to at the block.
+/// The opened check at a named ladder: the structural pass and the operand-run openings are the
+/// only two places a step tree is walked, and both walk at `max_step_leaf_count`. Everything
+/// else — the shape pass, the recomputation, the prompt-id opening — is ladder-free.
 pub fn check_execution_step_refutation_opened_capped_v1(
     refutation: &PalwExecutionStepRefutationV1,
     weights: &dyn PalwWeightOracleV1,
@@ -5884,6 +5881,36 @@ pub(crate) mod tests {
             path: vec![leaves[1]],
         }];
         (refutation, openings, artifact_root)
+    }
+
+    /// **ADR-0084 U-08: the ladder is an ARGUMENT, and the refutation's own leaf count is its
+    /// boundary.** One leaf short and the court refuses by name — `LeafCountOutOfRange`, never an
+    /// acquittal — exactly at it the honest step is `NoFaultFound` again, and at the shipped
+    /// ladder the capped name answers what the uncapped one always did. Pinned at the boundary
+    /// so an off-by-one in the walk cannot pass as "refused for being too big".
+    #[test]
+    fn palw_v2_the_step_ladder_is_an_argument_and_the_refutations_own_space_is_its_boundary() {
+        use crate::palw_artifact::PalwProvenOperandsV1;
+        use crate::palw_step_leg::{PALW_STEP_LEG_MAX_LEAVES, PalwStepLegError};
+        let (refutation, openings, artifact_root) = base0_honest_case();
+        let operands = PalwProvenOperandsV1::from_openings_v1(&openings, artifact_root).expect("the openings prove");
+        let leaves = refutation.binding.step_leaf_count;
+        assert!(leaves > 1, "the fixture must have a space to be one short of");
+        assert_eq!(
+            check_execution_step_refutation_capped_v1(&refutation, &operands, leaves - 1),
+            Err(PalwStepRefuteError::Leg(PalwStepLegError::LeafCountOutOfRange { got: leaves, max: leaves - 1 })),
+            "one leaf short of the refutation's own space is a refusal BY NAME, not a verdict"
+        );
+        assert_eq!(
+            check_execution_step_refutation_capped_v1(&refutation, &operands, leaves),
+            Err(PalwStepRefuteError::NoFaultFound),
+            "at exactly its own space the honest step is recomputed and found correct"
+        );
+        assert_eq!(
+            check_execution_step_refutation_capped_v1(&refutation, &operands, PALW_STEP_LEG_MAX_LEAVES),
+            check_execution_step_refutation_v1(&refutation, &operands),
+            "the uncapped name is the capped one at the shipped ladder"
+        );
     }
 
     /// **P0-8's owed end-to-end conviction, at this layer.** A node holding NO model recomputes a

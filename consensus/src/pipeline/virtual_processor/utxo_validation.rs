@@ -406,7 +406,10 @@ impl VirtualStateProcessor {
             // grades a certification (see `UtxoProcessingContext::palw_v2_accepted_tx_fees`).
             // Off — and the map empty — unless the rent fence is armed, so every shipped preset
             // walks this loop exactly as it did before the field existed.
-            let collect_carrier_fees = self.palw_certification_rent_at(pov_daa_score);
+            // ADR-0088 Decision 11: the registry's three rent-priced objects burn their rent the
+            // same way, behind their own fence; the map is collected when either fence is armed.
+            let collect_carrier_fees =
+                self.palw_certification_rent_at(pov_daa_score) || self.palw_model_lines_active_at(pov_daa_score);
             let mut block_fee = 0u64;
             let mut finality_fee = 0u64;
             for (validated_tx, _) in validated_transactions.iter() {

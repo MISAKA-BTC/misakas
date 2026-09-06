@@ -695,6 +695,12 @@ pub enum PalwModeV2Error {
     /// of them is wrong.
     #[error("the genesis artifact does not load: {0}")]
     Genesis(#[from] crate::palw_genesis_v2::PalwGenesisV2Error),
+    /// ADR-0089 Decision 9: the market's EVM face was armed before the market itself.
+    #[error("palw_model_evm is armed before palw_model_market: an EVM face of a market that does not exist")]
+    ModelEvmBeforeMarket,
+    /// ADR-0089 Decision 9: the market's EVM face was armed on a network whose EVM lane is inert.
+    #[error("palw_model_evm is armed on a network whose EVM lane is not active by then")]
+    ModelEvmOnInertLane,
 }
 
 /// The whole V2 ruleset, or none of it. Field order is part of the fingerprint preimage —

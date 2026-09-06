@@ -149,16 +149,135 @@ the next cut, not this one.
 4. Block-leaves annex forms and the challenger's assembly, X6.
 5. Ceiling restated; docs; devnet Y; fleet.
 
-## 7. Implementation record
+## 7. Implementation record (2026-09-05, `palw-adr0084-served-answer`)
 
-(filled as the work lands)
+* **Landed** (`3d56b57a`, `62fec794`): the V4 form and codec; `Base0FpFoldRangeOpeningV1` with
+  the whole-block rule (a tail block counts as whole when the range reaches the tree's end);
+  both openers serve V4 and the dense opener builds its tree at the ruleset's level; the V4 seat
+  verifier over the seat's own leaves with `FaultInRange`; the panel and the seat harness carry
+  the new verdict; the challenger's replay hands ADR-0085's builder a V2 view over its own leaves;
+  `Base0FpBlockLeavesV1` with `cut_v1`, `folds_to_v1`, `name_the_leaf_v1` and
+  `base0_fp_range_with_served_block_v1` (Decision 6's library half); the seat ceiling in the
+  form's units; the RC floor's recompute kernels lifted into a backend seam so the floor holds
+  its own state like every class. X1–X7 pass; the full base0 suite is 343 green.
+* **One deviation from Decision 1's letter.** The verifier accepts any `retain_level` in
+  `[PALW_BASE0_SPARSE_RETAIN_LEVEL_V1, PALW_BASE0_SPARSE_MAX_RETAIN_LEVEL_V1]` rather than the
+  ruleset's exact level: the digests' level is the producer's retention level, which the form
+  describes, and a seat handed a different ladder than the producer (the fixture at
+  `COURT_MAX_STEP_LEAVES` against a fold made at the default) must still walk the root, which is
+  level-independent. The floor at 12 keeps the digests to one per 4,096 leaves; the ceiling keeps
+  the size. Byte-identity between the dense and the fold route (X2) holds when both are built
+  under one cap, which is what production does.
+* **What the tests taught.** The V4 dispatch was first inserted inside the V3 branch of the
+  any-form decoder by a regex that swallowed a doc comment, so every V4 opening fell to the V1
+  decoder and came back `Unverifiable` — found by a probe that decoded a served opening directly.
+  The floor backend's verifier passed no seat state at all (it had relied on carried chunks), so
+  every anchored floor interval was `Unverifiable` under Decision 2 until it learned the seam the
+  other families use. A floor free-prompt run can stop at EOG before its budget, so its binding's
+  context is not the one `fp_job_context_v1` derives from the job; the memo is keyed by the
+  binding's, and the test memoizes under it.
+* **Decision 6's transport landed (2026-09-05, with ADR-0085 items 4–5).** A block-leaves request
+  rides the interval lane under a packed index — bit 31, the interval in bits 30–16, the block in
+  bits 15–0 (`base0_fp_block_leaves_request_index_v1`; a plain interval index never has bit 31
+  set) — so the lane's solicitation, slots and byte cap apply unchanged and no message was added.
+  The executor's resolver decodes the address and answers `Base0FpBlockLeavesV1` from the same span
+  replay the opener runs (`open_fp_block_leaves`; a dense retention hashes its tiles). The seat, on
+  `FaultInRange`, asks for the block and — once held — names the leaf against its own replay
+  (`fp_name_the_leaf_v1`: the served block must fold to the digest the opening carries, else it is
+  refused by name; `None` says every served leaf is the seat's own, and the executor served a block
+  it did not commit), records the leaf for the challenger's half (ADR-0085 Decision 4) and files
+  nothing, as Decision 3 says. **Not landed:** the seed row's replacement by the seat's own
+  selection (§3, not taken); the fold opener's edge-only replay.
+* **Devnet run 9 (2026-09-05 10:15–11:02 JST, 300 tokens, the manifest fix on).** The commitment
+  landed at 10:52:10 and the drill's `WAIT` stopped the nodes at 11:02 — before the panel binding
+  (`anchor_delay` 20 DAA) at that hour's cadence of one block per ~3 minutes. Neither the run 8
+  defect (openings never arriving) nor its absence was observed; the seat never drew. The attempt
+  lane on the same run licensed every v5 claim by Decision 7's replay. Run 10 waits long enough.
+* **Devnet run 10 (2026-09-05 11:25–12:54 JST, 300 tokens, `d7c7ce06b11d6fa3`): the run 8 defect
+  reproduced and is understood.** Node-1 drew `[198, 110, 132, 72]` of 299 and asked node-0 every
+  ~100 s for 22 minutes; node-0 logged neither "opened" nor "does not open" for the claim; the
+  claim ended `Unavailable`. The cause is arithmetic, and run 7 already showed it: a fold
+  retention carries no checkpoint chunks (a per-call KV state of this class is ~34 MB, so 300 of
+  them cannot ride a 183 MB material — the bulk is the logits rows), so the executor's span
+  replay (`base0_replay_span_leaves_v1`) starts at GENESIS for every interval and captures tiles
+  as it goes; run 7 served interval 17 in 94 s, 10 in ~60 s, 4 and 0 in ~30 s — about 5 s per
+  decode call — and interval 198 costs ~18 minutes, interval 298 ~27, past the seat's 120 s
+  solicitation window many times over. The offline probe (`probe_open_interval`, release, the real
+  artifact) on run 10's material measured it: interval 0 **21 s**, interval 1 **22 s**, interval
+  57 **298 s** (≈5.2 s per call), interval 187 **1,991 s** (≈10.6 s per call — the cache grows with
+  the position, so the slope steepens), RSS past 4 GB from the captured tiles; interval 253 was
+  stopped after 55 minutes. Two things land here: refusals on the interval lane now log at the default level
+  (`[palw-interval] refused …: NoAllowance|Stale|NotBonded|NotHeld|Oversized`; a throttled re-ask
+  stays quiet), so the next run reads what node-0 answered. **The fix is the next cut, not this
+  commit:** the executor must open an interval from the anchor state it RECOMPUTES without tile
+  capture and memoizes — `base0_fp_seat_state_memoized_v1`, the seat's own machinery (Decision 2
+  for the executor's side) — and replay only the interval's call(s) with tiles; a plain forward
+  pass is ~0.15 s per call (the D7 replay licenses 64 positions in 7–10 s), so interval 198 opens
+  in ~30 s. Until then a free-prompt claim past ~20 decode tokens on a fold class cannot be
+  licensed by the interval lane, and Studio's 256-token cap is the honest limit for a different
+  reason than the manifest.
+* **The cut landed (`594015b9`, 2026-09-05 13:30 JST).** `base0_open_fp_interval_sparse_anchored_capped_v1`
+  takes an anchor-state closure (`Base0FpAnchorStateForV1`); when the retention carries no
+  checkpoint chunks the span replay resumes from the recomputed state of the span's STARTING
+  interval's anchor (the span covers whole blocks and may start in the call before), else from the
+  prompt as before. The three backends build the closure over their recompute kernels and
+  `base0_fp_seat_state_memoized_v1` — a plain forward pass, no capture, memoized under the
+  binding's context. The same probe on run 10's material: interval 0 **17 s**, 1 **17 s**, 57
+  **19 s** (was 298), 187 **69 s** (was 1,991), 253 **90 s**, 298 **54 s** — every interval inside
+  the 120 s window, the interval's own tile replay (~17 s a call) now the floor. Pinned by
+  `an_interval_opened_from_the_recomputed_anchor_is_the_interval_opened_from_genesis` on a fold
+  fixture wide enough to straddle retained blocks: byte-identical to the genesis walk, the closure
+  consulted exactly where the span's starting interval has an anchor, a seat licenses it. The
+  interval lane also refuses a re-ask for a `(claim, interval)` whose opener is still in flight:
+  a seat re-asks every ~100 s and `served_recently` covered 10 s, so each re-ask had started
+  another minute-long opener for the same pair.
+* **Devnet run 11 (2026-09-05 13:35–14:48 JST, 300 tokens, `afa75b9e`): Y6 at 300 tokens.** The
+  claim `7ed38205…` (prefill 16, decode 300) bound at 14:37; node-1 drew `[34, 105, 134, 209]` of
+  299 and node-0 opened them in **17 s, 43 s, 49 s and 65 s** (1.11 MB each), node-1 held all
+  four, "4 interval(s) replayed against this seat's own recomputed state — no history fetched",
+  and **filed a `Valid` receipt at 14:47:50** — ten minutes after the binding, where runs 8 and 10
+  had nothing after thirty. Node-2 (no artifact) filed `Incapable`, as every run.
+* **Deployed to testnet-11 (2026-09-05 04:50–05:06Z):** kaspad `56f77a3d75f376de` on seat2, the
+  .113 node / seat4 / pool slots 01–04, ibm node1 and node0 (SIGINT, respawn, 21–150 s each); the
+  pool's `palw-a16-fp-worker` `69c0e194955cc41c` (the manifest fix) on .113 with `misaka-pool-fp@04`
+  restarted. **What testnet then showed is a wall this ADR does not own:** a 300-token free-prompt
+  claim on graph-v5 is ~41 M leaves, and exposure is `pwu × slash 5` ≈ 207 M sompi — a bond may
+  hold half its collateral, so one such claim needs ≥ 414 M sompi of collateral plus whatever is
+  already in flight. The pool's slot-04 bond was sized by the class's CANONICAL job (6.6 M leaves
+  → 265 M for four claims): its gateway answered a 300-token request in 229 s and queued no
+  commitment (`bond_active false`, room 32.7 M), and the two long jobs it had submitted earlier
+  that day (03:06Z, 03:11Z) never reached the chain for the same reason. The pool now accepts a
+  caller-sized bond (`POST /pool/v1/slots {"mode":"fp","bond_collateral":…}`) and slot-05 was
+  created at 600 M sompi and funded 8.5 MSK from the faucet wallet; the 300-token proof on testnet
+  rides that slot.
+* **Devnet Y, live (run 7, 2026-09-05 07:17–08:14 JST, `62fec794`, three nodes on this Mac).** A
+  graph-v5 free-prompt claim of 40 tokens (`d9ad65d0…`) staged a **24,423,539-byte** fold
+  capture — over `PALW_MATERIAL_MAX_BYTES`, the drill's own line: "ADR-0084 Y1 is live". The
+  panel bound on every node at 08:08; node-1 (holds the artifact) drew intervals `[17, 4, 0, 10]`
+  of 39, asked node-0, and held four served V4 openings: interval 17 **1,110,705 bytes**,
+  interval 4 **1,110,513**, interval 0 **33,655**, interval 10 **1,110,449** — the seed row
+  (the vocabulary-wide logits row) is the decode intervals' whole size, as §4 said, and interval
+  0 is the prefill's digests and the binding. Then "4 interval(s) replayed against this seat's
+  own recomputed state — no history fetched" and **a `Valid` receipt** at 08:13:46, five minutes
+  after the draw. Node-2 (no artifact) filed `Incapable`. On the attempt lane the same build
+  served interval 0 of a v5 claim as **108,791 bytes** where run 5 had served 424,359,978, and
+  Decision 7's replay kept licensing (the line now reads "6630544 leaves replayed, priced 0, 7s").
+  Nothing over the cap moved on either lane.
+
+* **Found alongside, not this ADR's:** the free-prompt lane's retained-trace manifest was the
+  attempt lane's (`attempt_trace_manifest_root_v1(trace_root, 1)`, chunk count 1), so every
+  free-prompt run past 256 tokens was refused by the verifier's chunk-count rule and every shorter
+  one carried a root of the wrong lane's function; `0001f34c` gives the lane its own derivation
+  (card §10p). It bears on this ADR only in that a 300-token claim is now the devnet's check for
+  both (run 8).
 
 ## 8. What is deliberately not decided
 
 * The seed row's replacement by the seat's own selection (above).
 * Edge-only replay in the fold opener.
 * Raising `PALW_INTERVAL_OPENING_MAX_BYTES`, which nothing here needs.
-* The court's refutation walkers' ladder bound (ADR-0084 U-08), a validity rule.
+* The court's refutation walkers' ladder bound (ADR-0084 U-08) — landed behind
+  `Params::palw_court_ladder` since (ADR-0084 §7.5).
 
 ## 9. Number hygiene
 

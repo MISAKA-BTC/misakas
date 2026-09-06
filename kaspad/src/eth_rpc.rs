@@ -826,7 +826,7 @@ impl NodeEthProvider {
     /// Fetch the canonical-head EVM state snapshot + the call env (one spawn_blocking).
     async fn head_snapshot_and_env(&self) -> EthResult<(kaspa_consensus_core::evm::EvmStateSnapshot, kaspa_evm::sim::EthCallEnv)> {
         let session = self.consensus_manager.consensus().session().await;
-        let (snap, header, head_daa, fences) = session
+        let (snap, header, head_daa, fences, market) = session
             .spawn_blocking(|c| {
                 let sink = c.get_sink();
                 // The canonical HEAD L1 block's DAA score is the activation-fence
@@ -834,7 +834,7 @@ impl NodeEthProvider {
                 // (`B.header.daa_score`). `Err` if the sink header is briefly
                 // unavailable ⇒ treat as 0 (fence-inert ⇒ F003 off, fail-safe).
                 let head_daa = c.get_header(sink).map(|h| h.daa_score).unwrap_or(0);
-                (c.get_evm_state_snapshot_of(sink), c.get_evm_head_header(), head_daa, c.evm_activation_fences())
+                (c.get_evm_state_snapshot_of(sink), c.get_evm_head_header(), head_daa, c.evm_activation_fences(), c.palw_evm_view_v1())
             })
             .await;
         let snap = snap.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
@@ -870,6 +870,14 @@ impl NodeEthProvider {
             // `false` today (fence is `u64::MAX`-inert on every network), matching
             // the executor below the fence; flips with the executor when F003 ships.
             f003_active,
+            // ADR-0089 Decision 2 / Decision 9: the fold's rows at the head and the market
+            // fences at the head's DAA — the SAME view and handler set the executor registers
+            // for the block built on this head (parity). `None` off ConsensusV2 (or before the
+            // first fold) leaves the market's doors unregistered in simulation, exactly as the
+            // executor leaves them for a lane whose fold has no window to show.
+            palw_view: market.as_ref().map(|(view, _)| view.clone()),
+            market_fences: market.as_ref().map(|(_, fences)| *fences).unwrap_or_default(),
+            chain_id_for_holders: EVM_CHAIN_ID,
         };
         Ok((snap, env))
     }
@@ -947,6 +955,15 @@ impl NodeEthProvider {
                     coinbase: header.coinbase,
                     gas_limit: header.gas_limit,
                     f003_active: target_daa >= f003_mldsa_verify_fence,
+                    // ADR-0089 §7 (recorded gap): the PALW fold is kept only at the tip
+                    // (`load_tip_cached`); reconstructing the fold at a historical block
+                    // would mean a replay this RPC does not run. A historical simulation
+                    // therefore sees the market's doors CLOSED (no view ⇒ no handlers,
+                    // fences inert) — a call against 0xF010..0xF013 or a facade at a past
+                    // block returns as if the fence were dormant there, never a stale view.
+                    palw_view: None,
+                    market_fences: Default::default(),
+                    chain_id_for_holders: EVM_CHAIN_ID,
                 };
                 Ok((snapshot, env))
             })

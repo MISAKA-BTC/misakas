@@ -149,7 +149,15 @@ pub struct PalwFpRunV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwFpIntervalVerdictV1 {
     Valid,
-    Fault { leaf_index: u64 },
+    Fault {
+        leaf_index: u64,
+    },
+    /// ADR-0086 Decision 3: the seat's own leaves do not reproduce the served fold, and this is
+    /// the fault's address — a block of the fold clipped to the range, or the range's edge.
+    FaultInRange {
+        first_leaf_index: u64,
+        leaf_count: u64,
+    },
     Mismatch,
     Unverifiable,
 }
@@ -498,6 +506,71 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// answers honestly.
     fn fp_committed_output_ids(&self, _capture: &[u8]) -> Option<Vec<u32>> {
         None
+    }
+
+    /// **ADR-0085 §6 item 4, the executor's half: the interval opening WITH the close annex** for
+    /// the `disputed` step leaves an open court session names. Leaves outside the interval are
+    /// another interval's to serve and are skipped; a family with no annex to give serves the plain
+    /// opening, which is what the default does.
+    fn open_fp_interval_with_close(
+        &self,
+        capture: &[u8],
+        index: u32,
+        prompt_token_ids: &[u32],
+        disputed: &[u64],
+    ) -> Result<Vec<u8>, String> {
+        let _ = disputed;
+        self.open_fp_interval(capture, index, prompt_token_ids)
+    }
+
+    /// **ADR-0086 Decision 6, the executor's half: one block's leaf hashes** of an interval this
+    /// executor serves, `Base0FpBlockLeavesV1` bytes. A seat that found a `FaultInRange` names the
+    /// leaf from these against its own replay.
+    fn open_fp_block_leaves(
+        &self,
+        _capture: &[u8],
+        _interval_index: u32,
+        _block_index: u64,
+        _prompt_token_ids: &[u32],
+    ) -> Result<Vec<u8>, String> {
+        Err("this execution family serves no block leaves".to_string())
+    }
+
+    /// **ADR-0086 Decision 6, the seat's half: name the leaf a served block disagrees on**, from
+    /// this node's own replay of the interval. `Ok(None)`: every served leaf is this seat's own.
+    fn fp_name_the_leaf_v1(
+        &self,
+        _opening: &[u8],
+        _block_leaves: &[u8],
+        _claim: PalwClaimRootsV1,
+        _index: u32,
+        _prompt_token_ids: &[u32],
+        _generated_token_ids: &[u32],
+        _work_leaves: u64,
+    ) -> Result<Option<u64>, String> {
+        Err("this execution family names no leaf from a served block".to_string())
+    }
+
+    /// **ADR-0085 Decision 3: which interval owns step leaf `leaf`** of this context's job — the
+    /// challenger's first question when a court narrows to a step and it holds no capture.
+    fn fp_interval_of_leaf_v1(&self, _context: &PalwJobContextV2, _leaf: u64) -> Option<u32> {
+        None
+    }
+
+    /// **ADR-0085 Decision 3: the close, assembled from served intervals and this node's own
+    /// replay.** `held` are `(interval, opening bytes)` this node holds for the claim; the one
+    /// covering `leaf` must carry the annex. Byte for byte the capture path's object for the same
+    /// `(claim, leaf)` (ADR-0085 X1), or a refusal by name.
+    fn refutation_from_served_intervals(
+        &self,
+        _held: &[(u32, Vec<u8>)],
+        _claim: PalwClaimRootsV1,
+        _prompt_token_ids: &[u32],
+        _generated_token_ids: &[u32],
+        _work_leaves: u64,
+        _leaf: u64,
+    ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        Err("this execution family assembles no close from served intervals".to_string())
     }
 
     /// **The claim's `output_root`, recomputed from the answer's ids** (ADR-0084 Decision 1;

@@ -232,6 +232,7 @@ pub fn trace_accepted_tx(
     //    prefix txs, with all their tip-reroute / F002-burn accounting).
     let prefix = &all_candidates[..target_idx];
     let input_prefix = EvmBlockInput {
+        market: Default::default(),
         parent: parent_header,
         header_timestamp_ms: body.env.header_timestamp_ms,
         selected_parent_hash,
@@ -302,7 +303,7 @@ pub fn trace_accepted_tx(
             // Same precompile seam as the executor + the eth_call simulator (parity),
             // composed with the inspector handler (inspector_handle_register does not
             // override handlers — observation only).
-            .append_handler_register_box(Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active)))
+            .append_handler_register_box(Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active, None)))
             .append_handler_register(inspector_handle_register)
             .build();
         evm.context.evm.env.tx = txenv;
@@ -468,7 +469,7 @@ pub fn trace_candidate_tx(
                 b.difficulty = U256::ZERO;
                 b.prevrandao = Some(B256::ZERO);
             })
-            .append_handler_register_box(Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active)))
+            .append_handler_register_box(Box::new(move |h| crate::precompiles::register_all_misaka_precompiles(h, f003_active, None)))
             .append_handler_register(inspector_handle_register)
             .build();
         evm.context.evm.env.tx = txenv;
@@ -818,6 +819,7 @@ mod tests {
         let candidates = vec![AcceptedTxCandidate { raw: raw.clone(), payload_coinbase: EvmAddress::from_bytes(COINBASE) }];
         let payload = EvmExecutionPayload { evm_coinbase: EvmAddress::from_bytes(COINBASE), ..Default::default() };
         let input = EvmBlockInput {
+            market: Default::default(),
             parent: None,
             header_timestamp_ms: 1_000,
             selected_parent_hash: SELECTED_PARENT,
@@ -1001,6 +1003,7 @@ mod tests {
         let payload = EvmExecutionPayload { evm_coinbase: EvmAddress::from_bytes(COINBASE), ..Default::default() };
         // COMMIT under v2 (fence 0, daa_score 100): all three accepted → C is receipt 2.
         let input = EvmBlockInput {
+            market: Default::default(),
             parent: None,
             header_timestamp_ms: 1_000,
             selected_parent_hash: SELECTED_PARENT,
@@ -1093,6 +1096,7 @@ mod tests {
             coinbase: EvmAddress::from_bytes(COINBASE),
             gas_limit: 30_000_000,
             f003_active: false,
+            ..Default::default()
         }
     }
 

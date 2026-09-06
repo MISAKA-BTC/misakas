@@ -370,6 +370,35 @@ and ibm's node0 was filing Valid receipts and a ReceiptLicensed of its own eight
 its forced restart, with blocks flowing through it: the post-swap check the public node's hang
 record prescribes.
 
+### 7.5 U-08 lands behind a fence: the court walks at the ruleset's ladder (2026-09-05)
+
+§7.1 left the two consensus-side walks at `2^22` because loosening them is a fork. They are now
+loosened *behind an activation*, `Params::palw_court_ladder: Option<ForkActivation>`, with the
+`palw_da_court` contract: `None` on every shipped preset, byte-identical fingerprint while absent,
+`Some(never())` collapses to `None`, a scheduled height keeps old and new builds peers, and
+`always()` is a real rule difference. The fence is read in exactly one place,
+`palw_court_step_ladder_at(daa, court)` in the virtual processor, at the BLOCK's acceptance DAA:
+`PalwCourtParamsV2::max_step_leaf_count()` past the fence, `PALW_STEP_LEG_MAX_LEAVES` before it.
+
+The ladder is now an ARGUMENT all the way down: `adjudicate_court_close_v2` and
+`adjudicate_close_proof_v2` take `step_ladder: u64`; the `Arithmetic` arm calls
+`check_execution_step_refutation_capped_v1`, whose structural pass is
+`check_step_refutation_capped_v1` (its `open_against` walks `step_opening_root_capped_v1`) and
+whose operand-run openings walk `step_range_opening_root_capped_v1`. The uncapped names are the
+capped ones at `2^22`, and every caller outside the court still uses them. The shape pass needed
+no change — since ADR-0082 D1 it compares the leaf count at the accusation's own claim.
+
+Pinned at the boundary, per the off-by-one rule: with the base0 honest matmul fixture, a ladder one
+leaf short of the refutation's own `step_leaf_count` refuses by name
+(`Leg(LeafCountOutOfRange { got, max })`), at exactly it the step is `NoFaultFound` again, and at
+`2^22` the capped name answers what the uncapped one always did; the court test repeats the first
+two as `DoesNotAdjudicate` versus `ExecutorGuilty`. What is NOT exercised: a refutation over a
+space wider than `2^22` walking to a verdict — the fixtures are small, and the only class with
+such a space is graph-v5 on the real artifact, whose court close still needs U-07c's opening-fed
+refutation to exist at all. So on testnet-11 the fence stays `None` until (a) the close can be
+assembled from an opening and (b) an operator schedules it; arming it earlier changes nothing a
+court can reach.
+
 ## 8. What is deliberately not decided
 
 * **A close assembled from an opening (U-07c).** §4 names the stall. The refutation of a step

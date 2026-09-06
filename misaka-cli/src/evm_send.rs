@@ -523,3 +523,115 @@ pub fn parse_msk_to_wei(s: &str) -> Result<u128, CliError> {
         .and_then(|w| w.checked_add(frac_wei))
         .ok_or_else(|| CliError::new(exit::GENERIC, "amount overflow".to_string()))
 }
+
+// ---- ADR-0089 Decision 5: the market's two moves from an EVM account --------------------------
+
+fn parse_line_id(text: &str) -> Result<kaspa_consensus_core::Hash64, CliError> {
+    text.trim().trim_start_matches("0x").parse::<kaspa_consensus_core::Hash64>().map_err(|_| {
+        CliError::new(exit::GENERIC, format!("line id '{text}' is not a 128-hex Hash64 (a class's own line has the class id)"))
+    })
+}
+
+fn writer_address_hex() -> String {
+    format!("0x{}", kaspa_consensus_core::evm::model_market::MISAKA_MODEL_WRITER)
+}
+
+/// `misaka palw model-evm-buy`: the MSK is the call's value and MUST be whole sompi — the writer
+/// refuses a value that is not a multiple of `EVM_NATIVE_SCALE` (`BadValue`).
+#[allow(clippy::too_many_arguments)]
+pub fn model_evm_buy(
+    ctx: &Ctx,
+    ks: &EvmKeySource,
+    line: &str,
+    msk: &str,
+    min_positions: u64,
+    gas_limit: Option<u64>,
+    max_fee: Option<u128>,
+    nonce: Option<u64>,
+    yes: bool,
+    wait: bool,
+) -> CliResult {
+    let line = parse_line_id(line)?;
+    let wei = parse_msk_to_wei(msk)?;
+    let scale = kaspa_consensus_core::evm::EVM_NATIVE_SCALE as u128;
+    if wei == 0 || wei % scale != 0 {
+        return Err(CliError::new(exit::GENERIC, format!("--msk {msk} is not a whole number of sompi; the writer refuses it")));
+    }
+    // The writer speaks in UNITS (a position is 10^6 of them, ADR-0087 Decision 1); the flag speaks in positions.
+    let min_units_out = min_positions.saturating_mul(kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_POSITION_UNITS_V1);
+    let data = kaspa_consensus_core::evm::model_market::send_action_buy_calldata(&line, min_units_out);
+    if !ctx.quiet {
+        eprintln!(
+            "model-evm-buy: line {line} pay {} sompi min {min_positions} positions → writer {}",
+            wei / scale,
+            writer_address_hex()
+        );
+    }
+    call(ctx, ks, &writer_address_hex(), data, wei, gas_limit.or(Some(120_000)), max_fee, nonce, yes, wait)
+}
+
+/// `misaka palw model-evm-sell`: no value; the net leg is credited at settlement.
+#[allow(clippy::too_many_arguments)]
+pub fn model_evm_sell(
+    ctx: &Ctx,
+    ks: &EvmKeySource,
+    line: &str,
+    positions: u64,
+    min_msk: &str,
+    gas_limit: Option<u64>,
+    max_fee: Option<u128>,
+    nonce: Option<u64>,
+    yes: bool,
+    wait: bool,
+) -> CliResult {
+    let line = parse_line_id(line)?;
+    if positions == 0 {
+        return Err(CliError::new(exit::GENERIC, "--positions must be at least 1"));
+    }
+    let scale = kaspa_consensus_core::evm::EVM_NATIVE_SCALE as u128;
+    let min_wei = parse_msk_to_wei(min_msk)?;
+    if min_wei % scale != 0 {
+        return Err(CliError::new(exit::GENERIC, format!("--min-msk {min_msk} is not a whole number of sompi")));
+    }
+    let units_in = positions.saturating_mul(kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_POSITION_UNITS_V1);
+    let data = kaspa_consensus_core::evm::model_market::send_action_sell_calldata(&line, units_in, (min_wei / scale) as u64);
+    if !ctx.quiet {
+        eprintln!(
+            "model-evm-sell: line {line} sell {positions} positions for at least {} sompi → writer {}",
+            min_wei / scale,
+            writer_address_hex()
+        );
+    }
+    call(ctx, ks, &writer_address_hex(), data, 0, gas_limit.or(Some(120_000)), max_fee, nonce, yes, wait)
+}
+
+/// `misaka palw model-evm-seed`: the seed is the call's value — whole sompi, at least the
+/// network's least seed; the writer refuses less before it even queues (`SeedTooSmall`).
+#[allow(clippy::too_many_arguments)]
+pub fn model_evm_seed(
+    ctx: &Ctx,
+    ks: &EvmKeySource,
+    line: &str,
+    msk: &str,
+    gas_limit: Option<u64>,
+    max_fee: Option<u128>,
+    nonce: Option<u64>,
+    yes: bool,
+    wait: bool,
+) -> CliResult {
+    let line = parse_line_id(line)?;
+    let wei = parse_msk_to_wei(msk)?;
+    let scale = kaspa_consensus_core::evm::EVM_NATIVE_SCALE as u128;
+    if wei == 0 || wei % scale != 0 {
+        return Err(CliError::new(exit::GENERIC, format!("--msk {msk} is not a whole number of sompi; the writer refuses it")));
+    }
+    let least = kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1 as u128;
+    if wei / scale < least {
+        return Err(CliError::new(exit::GENERIC, format!("a seed of {} sompi is under the least seed of {least} sompi", wei / scale)));
+    }
+    let data = kaspa_consensus_core::evm::model_market::send_action_seed_calldata(&line);
+    if !ctx.quiet {
+        eprintln!("model-evm-seed: line {line} lock {} sompi for good → writer {}", wei / scale, writer_address_hex());
+    }
+    call(ctx, ks, &writer_address_hex(), data, wei, gas_limit.or(Some(120_000)), max_fee, nonce, yes, wait)
+}

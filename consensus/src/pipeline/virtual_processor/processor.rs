@@ -480,6 +480,24 @@ pub struct VirtualStateProcessor {
     /// literal `false` — which on a genesis that arms the fence would have refused every private
     /// commitment the door had admitted.
     pub(super) palw_panel_da: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0084 U-08's fence, `None` on every shipped preset.** Past it a court close is walked
+    /// at the ruleset's step ladder (`PalwCourtParamsV2::max_step_leaf_count`); before it at
+    /// `PALW_STEP_LEG_MAX_LEAVES`. Resolved in exactly one place, `palw_court_step_ladder_at`,
+    /// at the BLOCK's own DAA — the same discipline as every fence above it.
+    pub(super) palw_court_ladder: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0087 Decision 6's fence, `None` on every shipped preset.** Past it `ModelBuy` and
+    /// `ModelSell` are accepted (a sell's signature checked here, at acceptance); before it both
+    /// are refused by name and the fold never sees them. Resolved at the BLOCK's DAA.
+    pub(super) palw_model_market: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0088 Decision 11's fence, `None` on every shipped preset.** Past it the ten registry
+    /// objects are accepted (their signatures checked here, against the bond each is attributed
+    /// to) and the fold attributes claims to versions; before it all ten are refused by name.
+    /// Resolved at the BLOCK's DAA.
+    pub(super) palw_model_lines: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0089 Decision 9's fence, `None` on every shipped preset.** Past it the EVM's
+    /// window and hand exist and the block's EVM actions reach its transition. Resolved at the
+    /// BLOCK's DAA.
+    pub(super) palw_model_evm: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0077 Phase B's fence, `None` on every shipped preset.** Past it a class registration
     /// is judged against `palw_class_ladder_rules_*` — the ladder both leaf counts are enumerated
     /// against, the court the close is priced for and Decision 14's canonical floor — instead of
@@ -583,6 +601,8 @@ pub struct VirtualStateProcessor {
     // disabled (its gap items 206-seed) and reads fall back to flat-materialize / §12-reconstruct.
     // Node-local, consensus-neutral. `false` on every current network and by default.
     pub(super) evm_retire_206: bool,
+    /// `Config::evm_bridge_devnet_unpaused` — the template ignores DNS-finality staleness.
+    pub(super) evm_bridge_devnet_unpaused: bool,
     // §12: this node's EVM state-history retention mode (`--evm-history-mode`). In
     // `head` mode the per-block archive diff/checkpoint (220/221) are not written at
     // all; `recent`/`archive` write them (the pruning processor decides how long
@@ -759,6 +779,7 @@ impl VirtualStateProcessor {
         evm_shadow_state_backend: bool,
         evm_flat_authoritative: bool,
         evm_retire_206: bool,
+        evm_bridge_devnet_unpaused: bool,
     ) -> Self {
         // C-01 S9: flat-authoritative seeding needs the shadow backend (which maintains + validates
         // the flat store); without it the flag is a silent no-op (the executor keeps seeding from
@@ -901,6 +922,7 @@ impl VirtualStateProcessor {
             evm_shadow_state_backend,
             evm_flat_authoritative,
             evm_retire_206,
+            evm_bridge_devnet_unpaused,
             evm_history_mode,
             evm_activation_daa_score: params.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: params.evm_gas_pool_v2_activation_daa_score,
@@ -921,6 +943,10 @@ impl VirtualStateProcessor {
             palw_kary_court: params.palw_kary_court_fence(),
             palw_prompt_ids_merkle: params.palw_prompt_ids_merkle_fence(),
             palw_panel_da: params.palw_panel_da_fence(),
+            palw_court_ladder: params.palw_court_ladder_fence(),
+            palw_model_market: params.palw_model_market_fence(),
+            palw_model_lines: params.palw_model_lines_fence(),
+            palw_model_evm: params.palw_model_evm_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_uncertified_weightless: params.palw_uncertified_weightless,
             palw_da_court: params.palw_da_court,
@@ -1440,6 +1466,7 @@ impl VirtualStateProcessor {
                         &mut ctx,
                         &selected_parent_utxo_view,
                         evm_pipeline.as_ref(),
+                        palw_state.as_ref(),
                     ) {
                         Ok(staged) => staged,
                         Err(evm_error) => {
@@ -1623,7 +1650,7 @@ impl VirtualStateProcessor {
                                         }
                                     })
                                     .collect();
-                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v6(
+                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
                                     state,
                                     state_params,
                                     self.palw_admission_params_v2.as_ref(),
@@ -1637,6 +1664,15 @@ impl VirtualStateProcessor {
                                     // shipped preset, where the fold is byte-identical.
                                     self.palw_uncertified_weightless_at(point.daa_score),
                                     self.palw_da_court_at(point.daa_score),
+                                    // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
+                                    // DAA: the fences, and the actions this block's EVM step queued.
+                                    &{
+                                        let mut extras = self.palw_transition_extras_at(point.daa_score);
+                                        if let Some(staged) = evm_staged.as_ref() {
+                                            extras.evm_actions = staged.result.market_actions.clone();
+                                        }
+                                        extras
+                                    },
                                 ) {
                                     Ok((next, delta, merged_skips)) => {
                                         // A skipped merged work is the block standing while a
@@ -1758,6 +1794,7 @@ impl VirtualStateProcessor {
         ctx: &mut UtxoProcessingContext<'_>,
         selected_parent_utxo_view: &V,
         pipeline: Option<&crate::processes::evm::EvmPipeline>,
+        palw_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
     ) -> Result<Option<crate::processes::evm::EvmStaged>, String> {
         use crate::model::stores::evm::EvmPayloadStoreReader; // EvmHeaderStoreReader is in module scope
         use crate::processes::evm::{
@@ -1783,6 +1820,26 @@ impl VirtualStateProcessor {
             let claim_view = selected_parent_utxo_view.compose(&ctx.mergeset_diff);
             validate_evm_deposit_claims(&own_payload, &claim_view, header.daa_score)?
         };
+        // ADR-0089 Decisions 2, 6 and 9: the window (the selected parent's fold rows), the
+        // settlements this block must carry (the ones that fold decided), and the fences at
+        // this block's DAA. Below the fence the list is empty and no door is registered — and a
+        // settlement op carried below the fence is refused by the same equality.
+        let market_fences = self.palw_evm_market_fences_at(header.daa_score);
+        let expected_settlements: Vec<kaspa_consensus_core::evm::model_market::PalwEvmSettlementV1> =
+            if market_fences.evm_active { palw_state.map(|s| s.evm_settlements()).unwrap_or_default() } else { Vec::new() };
+        crate::processes::evm::validate_evm_market_settlements(&own_payload, &expected_settlements)?;
+        let market_view = match (market_fences.evm_active, palw_state, self.palw_state_params_v2.as_ref()) {
+            (true, Some(state), Some(params)) => {
+                Some(std::sync::Arc::new(state.evm_view_v1(kaspa_consensus_core::evm::EVM_CHAIN_ID, params.base_class_id())))
+            }
+            _ => None,
+        };
+        let market = kaspa_evm::EvmMarketInput {
+            palw_view: market_view,
+            fences: market_fences,
+            expected_settlements: &expected_settlements,
+            chain_id: kaspa_consensus_core::evm::EVM_CHAIN_ID,
+        };
         // C-01 S9 cutover: when flat-authoritative (and the shadow backend that maintains the flat
         // store is on), seed the executor from the flat/reconstruct parent state instead of 206 —
         // but ONLY after asserting it byte-identical to 206 (inside `validated_flat_parent_seed`,
@@ -1796,7 +1853,9 @@ impl VirtualStateProcessor {
         // O12: a pipelined run pre-executed this block's acceptance on the
         // worker (same pure function, same inputs — see EvmPipeline). Consume
         // its result; fall back to inline execution when the pipeline ended.
-        let pipelined = pipeline.and_then(|p| p.recv(current));
+        // ADR-0089: the pipeline pre-executed without the window; past the fence its result is
+        // consumed and discarded, and the block is executed inline with the market inputs.
+        let pipelined = pipeline.and_then(|p| p.recv(current)).filter(|_| !market_fences.evm_active);
         let staged = match pipelined {
             Some(Ok(staged)) => Some(staged),
             Some(Err(msg)) => return Err(msg),
@@ -1831,6 +1890,7 @@ impl VirtualStateProcessor {
                             self.evm_f002_withdraw_cap_activation_daa_score,
                             self.evm_f003_mldsa_verify_activation_daa_score,
                             self.evm_typed_receipt_root_activation_daa_score,
+                            market.clone(),
                         )
                         .map_err(map_err)?
                     }
@@ -1877,6 +1937,7 @@ impl VirtualStateProcessor {
                             self.evm_f002_withdraw_cap_activation_daa_score,
                             self.evm_f003_mldsa_verify_activation_daa_score,
                             self.evm_typed_receipt_root_activation_daa_score,
+                            market.clone(),
                         )
                         .map_err(map_err)?
                     }
@@ -1897,6 +1958,15 @@ impl VirtualStateProcessor {
             header.daa_score,
             &consumed_locks,
             &staged.result.withdrawals,
+        )?;
+        // ADR-0089 Decision 6: the settlements' sink outputs, into THIS block's diff, keyed by the
+        // block whose fold decided them (the selected parent).
+        crate::processes::evm::apply_evm_market_effects(
+            &mut ctx.mergeset_diff,
+            &mut ctx.multiset_hash,
+            header.daa_score,
+            selected_parent,
+            &expected_settlements,
         )?;
         // kaspa-pq EVM bridge observability (P0-4): a deposit lock that reaches
         // this point is being APPLIED into this accepted chain block's committed
@@ -2080,6 +2150,7 @@ impl VirtualStateProcessor {
         _ctx: &mut UtxoProcessingContext<'_>,
         _selected_parent_utxo_view: &V,
         _pipeline: Option<&crate::processes::evm::EvmPipeline>,
+        _palw_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
     ) -> Result<Option<crate::processes::evm::EvmStaged>, String> {
         if header.daa_score >= self.evm_activation_daa_score {
             panic!(
@@ -2242,6 +2313,33 @@ impl VirtualStateProcessor {
         // back to the mining manager.
         let crate::processes::evm::PreparedDepositClaims { accepted: accepted_claims, consumed_locks, stale: stale_claims } =
             prepared_claims;
+        // ADR-0089 Decisions 6 and 9 on the PRODUCER's side: the selected parent's fold decides
+        // the settlements this template must carry, and the executor is given the same window and
+        // fences validation will use — the mirror of `evm_chain_context_step`, generation caveat
+        // and all (the PALW tip is the template's selected parent for a fresh template).
+        let template_selected_parent = virtual_state.ghostdag_data.selected_parent;
+        let market_fences = self.palw_evm_market_fences_at(header.daa_score);
+        let template_palw_state = self
+            .palw_state_params_v2
+            .as_ref()
+            .filter(|_| market_fences.evm_active)
+            .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
+            .filter(|(block, _)| *block == template_selected_parent)
+            .map(|(_, state)| state);
+        let expected_settlements: Vec<kaspa_consensus_core::evm::model_market::PalwEvmSettlementV1> =
+            template_palw_state.as_ref().map(|s| s.evm_settlements()).unwrap_or_default();
+        let market_view = match (&template_palw_state, self.palw_state_params_v2.as_ref()) {
+            (Some(state), Some(params)) => {
+                Some(std::sync::Arc::new(state.evm_view_v1(kaspa_consensus_core::evm::EVM_CHAIN_ID, params.base_class_id())))
+            }
+            _ => None,
+        };
+        let market = kaspa_evm::EvmMarketInput {
+            palw_view: market_view,
+            fences: market_fences,
+            expected_settlements: &expected_settlements,
+            chain_id: kaspa_consensus_core::evm::EVM_CHAIN_ID,
+        };
         // §15 step 6: assemble the own payload from the mempool candidates.
         // Defense-in-depth re-admission (the body class-1 rule): an inadmissible
         // tx here would make our OWN block payload-block-invalid, so hard-filter
@@ -2284,6 +2382,10 @@ impl VirtualStateProcessor {
             // mining manager (`Absent` ⇒ retain + retry, `Invalid` ⇒ evict).
             for claim in accepted_claims {
                 payload.system_ops.push(kaspa_consensus_core::evm::EvmSystemOp::DepositClaim(claim));
+            }
+            // ADR-0089 Decision 6: the settlements the selected parent's fold decided, in order.
+            for settlement in &expected_settlements {
+                payload.system_ops.push(kaspa_consensus_core::evm::EvmSystemOp::MarketSettle(*settlement));
             }
             // audit #3: the tx loop above budgets ONLY the txs against the byte
             // cap; the deposit-claim system ops are appended afterwards and each
@@ -2333,6 +2435,7 @@ impl VirtualStateProcessor {
                     self.evm_f002_withdraw_cap_activation_daa_score,
                     self.evm_f003_mldsa_verify_activation_daa_score,
                     self.evm_typed_receipt_root_activation_daa_score,
+                    market.clone(),
                 )
                 .map_err(mapper)?
                 .0
@@ -2374,6 +2477,7 @@ impl VirtualStateProcessor {
                     self.evm_f002_withdraw_cap_activation_daa_score,
                     self.evm_f003_mldsa_verify_activation_daa_score,
                     self.evm_typed_receipt_root_activation_daa_score,
+                    market.clone(),
                 )
                 .map_err(mapper)?
                 .0
@@ -2386,7 +2490,7 @@ impl VirtualStateProcessor {
         // fold the identical effects into the template's commitment (the
         // template inherited the virtual multiset, which has none of them).
         // Found live: the first claim-bearing template self-disqualified.
-        if !consumed_locks.is_empty() || !result.withdrawals.is_empty() {
+        if !consumed_locks.is_empty() || !result.withdrawals.is_empty() || !expected_settlements.is_empty() {
             let mut multiset = virtual_state.multiset.clone();
             let mut scratch_diff = kaspa_consensus_core::utxo::utxo_diff::UtxoDiff::default();
             crate::processes::evm::apply_evm_bridge_effects(
@@ -2397,6 +2501,14 @@ impl VirtualStateProcessor {
                 &result.withdrawals,
             )
             .expect("template bridge effects mirror validation on already-validated inputs");
+            crate::processes::evm::apply_evm_market_effects(
+                &mut scratch_diff,
+                &mut multiset,
+                header.daa_score,
+                template_selected_parent,
+                &expected_settlements,
+            )
+            .expect("template market effects mirror validation on already-validated inputs");
             header.utxo_commitment = multiset.finalize();
             header.finalize();
         }
@@ -4419,12 +4531,11 @@ impl VirtualStateProcessor {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let court = self.palw_court_params_v2.as_ref()?;
         let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
-        // Resolved at VIRTUAL's DAA — where the close that asks this question would be accepted —
-        // for the reason `palw_v2_receipt_quorum_assemble_impl` gives.
-        let daa_score = self.lkg_virtual_state.load().daa_score;
-        let cap = self.palw_refutation_leaf_cap_at(daa_score);
+        // The tip's DAA: this is the verdict the close WOULD get if it rode the next block.
+        let daa_score = self.virtual_stores.read().state.get().ok()?.daa_score;
+        let step_ladder = self.palw_court_step_ladder_at(daa_score, court);
         let form = self.palw_prompt_ids_form_at(daa_score);
-        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_capped_v2(&state, session_id, proof, court, cap, form).ok()
+        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(&state, session_id, proof, court, step_ladder, form).ok()
     }
 
     /// The court's half of [`Self::palw_seat_duties_v2_impl`]: the open sessions this node is a
@@ -4791,7 +4902,7 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         now_daa: u64,
     ) -> std::collections::HashSet<TransactionOutpoint> {
-        let Some(bond_params) = self.palw_bond_params_v2.as_ref() else {
+        let Some(_bond_params) = self.palw_bond_params_v2.as_ref() else {
             return Default::default();
         };
         state
@@ -4800,7 +4911,7 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v2(
                     record,
                     now_daa,
-                    bond_params.withdrawal_delay_daa(),
+                    self.palw_bond_withdrawal_delay_at(now_daa),
                 )
             })
             .map(|(key, _)| key.0)
@@ -4989,7 +5100,7 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         now_daa: u64,
     ) -> std::collections::HashMap<TransactionOutpoint, u64> {
-        let Some(bond_params) = self.palw_bond_params_v2.as_ref() else {
+        let Some(_bond_params) = self.palw_bond_params_v2.as_ref() else {
             return Default::default();
         };
         state
@@ -4998,7 +5109,7 @@ impl VirtualStateProcessor {
                 !kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v2(
                     record,
                     now_daa,
-                    bond_params.withdrawal_delay_daa(),
+                    self.palw_bond_withdrawal_delay_at(now_daa),
                 )
             })
             .map(|(key, record)| (key.0, kaspa_consensus_core::palw_state_v2::palw_bond_burn_obligation_v2(record)))
@@ -5502,7 +5613,7 @@ impl VirtualStateProcessor {
                     if spends_the_court_slot {
                         court_closes_completed += 1;
                     }
-                    match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_policies(
+                    match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_extras(
                         &folded,
                         state_params,
                         &rehearsal,
@@ -5518,6 +5629,7 @@ impl VirtualStateProcessor {
                         // different state roots for the same block.
                         self.palw_uncertified_weightless_at(point.daa_score),
                         self.palw_da_court_at(point.daa_score),
+                        &self.palw_transition_extras_at(point.daa_score),
                     ) {
                         Ok((next, _)) => {
                             if completes_a_group {
@@ -5868,12 +5980,12 @@ impl VirtualStateProcessor {
                                 .palw_court_params_v2
                                 .as_ref()
                                 .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                            let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_capped_v2(
+                            let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(
                                 state,
                                 session_id,
                                 proof,
                                 court,
-                                self.palw_refutation_leaf_cap_at(point.daa_score),
+                                self.palw_court_step_ladder_at(point.daa_score, court),
                                 self.palw_prompt_ids_form_at(point.daa_score),
                             )
                             .map_err(|e| e.to_string())?;
@@ -5900,6 +6012,200 @@ impl VirtualStateProcessor {
                         },
                     )
                     .map_err(|e| e.to_string())?;
+                }
+                // ADR-0087 Decision 6: the market's two moves exist only past the fence, refused by
+                // name before it (the drop-not-invalidate shape). A sell is signed by the key whose
+                // payload is the holder (M8), checked here where the verifier lives.
+                Obj::ModelBuy { line_id, .. } => {
+                    if !self.palw_model_market_active_at(point.daa_score) {
+                        return Err(format!("a model buy of line {line_id} on a chain where the model market is not in force"));
+                    }
+                }
+                // ADR-0090: the seed is the market's third move, under the same fence; its sink
+                // binding is checked with the buy's (`palw_model_buy_binds_its_carrier_v1`).
+                Obj::ModelSeed { line_id, .. } => {
+                    if !self.palw_model_market_active_at(point.daa_score) {
+                        return Err(format!("a model seed of line {line_id} on a chain where the model market is not in force"));
+                    }
+                }
+                Obj::ModelSell { line_id, holder, units_in, min_msk_out, pubkey, signature } => {
+                    if !self.palw_model_market_active_at(point.daa_score) {
+                        return Err(format!("a model sell of line {line_id} on a chain where the model market is not in force"));
+                    }
+                    if kaspa_consensus_core::palw_model_market_v1::palw_model_holder_of_pubkey_v1(pubkey) != *holder {
+                        return Err(format!("a model sell of line {line_id} is signed by a key that is not the holder's"));
+                    }
+                    let message = kaspa_consensus_core::palw_model_market_v1::palw_model_sell_message_v1(
+                        line_id,
+                        holder,
+                        *units_in,
+                        *min_msk_out,
+                    );
+                    if !kaspa_txscript::verify_mldsa87_with_context(
+                        pubkey,
+                        &message,
+                        signature,
+                        kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SELL_MLDSA87_CONTEXT,
+                    )
+                    .unwrap_or(false)
+                    {
+                        return Err(format!("a model sell of line {line_id} carries a signature the holder's key does not verify"));
+                    }
+                }
+                // ADR-0088 Decision 11: the registry's ten objects exist only past the fence, refused
+                // by name before it. Each is attributed to a bond the fold names — the founder, the
+                // line's developer, its owner, the proposer, the evaluator — and its signature is
+                // checked HERE, against that bond's stored key, over the message the object's fields
+                // spell; the fold then enforces referential integrity and the bounds.
+                Obj::ModelLineFounded { class_id, name, founder, root, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!(
+                            "a line founding on class {class_id} on a chain where the model registry is not in force"
+                        ));
+                    }
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_line_founded_message_v1(
+                        self.palw_network_domain_v2(),
+                        class_id,
+                        name,
+                        founder,
+                        root,
+                    );
+                    self.palw_model_check_bond_signature(state, founder, &message, signature, "a line founding")?;
+                }
+                Obj::ModelVersionPublished {
+                    line_id,
+                    version,
+                    root,
+                    parent,
+                    adopted_from,
+                    runtime_hash,
+                    dataset_commitment,
+                    training_config_hash,
+                    notes_hash,
+                    preview,
+                    signature,
+                } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a version of line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let developer = self.palw_model_line_role(state, line_id, "developer")?;
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_version_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        *version,
+                        root,
+                        *parent,
+                        adopted_from.as_ref(),
+                        runtime_hash.as_ref(),
+                        dataset_commitment.as_ref(),
+                        training_config_hash.as_ref(),
+                        notes_hash.as_ref(),
+                        *preview,
+                    );
+                    self.palw_model_check_bond_signature(state, &developer, &message, signature, "a version")?;
+                }
+                Obj::ModelVersionPromoted { line_id, version, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a promotion on line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let developer = self.palw_model_line_role(state, line_id, "developer")?;
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_version_move_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        *version,
+                        b"promote",
+                    );
+                    self.palw_model_check_bond_signature(state, &developer, &message, signature, "a promotion")?;
+                }
+                Obj::ModelVersionWithdrawn { line_id, version, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a withdrawal on line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let developer = self.palw_model_line_role(state, line_id, "developer")?;
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_version_move_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        *version,
+                        b"withdraw",
+                    );
+                    self.palw_model_check_bond_signature(state, &developer, &message, signature, "a withdrawal")?;
+                }
+                Obj::ModelLineRolesSet { line_id, developer, maintainer, contributor_permille_of_leg, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a roles change on line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let owner = self.palw_model_line_role(state, line_id, "owner")?;
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_roles_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        developer.as_ref(),
+                        maintainer.as_ref(),
+                        *contributor_permille_of_leg,
+                    );
+                    self.palw_model_check_bond_signature(state, &owner, &message, signature, "a roles change")?;
+                }
+                Obj::ModelLineOwnerTransferred { line_id, new_owner, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a transfer of line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let owner = self.palw_model_line_role(state, line_id, "owner")?;
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_transfer_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        new_owner,
+                    );
+                    self.palw_model_check_bond_signature(state, &owner, &message, signature, "a transfer")?;
+                }
+                Obj::ModelLineRetired { line_id, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a retirement of line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let owner = self.palw_model_line_role(state, line_id, "owner")?;
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_retire_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                    );
+                    self.palw_model_check_bond_signature(state, &owner, &message, signature, "a retirement")?;
+                }
+                Obj::ModelProposalPosted { line_id, root, note_hash, by, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a proposal on line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_proposal_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        root,
+                        note_hash,
+                        by,
+                    );
+                    self.palw_model_check_bond_signature(state, by, &message, signature, "a proposal")?;
+                }
+                Obj::ModelProposalClosed { line_id, proposal_id, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("a proposal close on line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let developer = self.palw_model_line_role(state, line_id, "developer")?;
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_proposal_close_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        proposal_id,
+                    );
+                    self.palw_model_check_bond_signature(state, &developer, &message, signature, "a proposal close")?;
+                }
+                Obj::ModelEvaluationPosted { line_id, version, evaluator_id, score_permille, report_hash, by, signature } => {
+                    if !self.palw_model_lines_active_at(point.daa_score) {
+                        return Err(format!("an evaluation on line {line_id} on a chain where the model registry is not in force"));
+                    }
+                    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_evaluation_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        *version,
+                        evaluator_id,
+                        *score_permille,
+                        report_hash,
+                        by,
+                    );
+                    self.palw_model_check_bond_signature(state, by, &message, signature, "an evaluation")?;
                 }
                 Obj::CourtVerdictPosted { session_id, verdict, signature } => {
                     kaspa_consensus_core::palw_court_v2::check_court_verdict_acceptance_v2(
@@ -5932,12 +6238,12 @@ impl VirtualStateProcessor {
                         .palw_court_params_v2
                         .as_ref()
                         .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_capped_v2(
+                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(
                         state,
                         session_id,
                         proof,
                         court,
-                        self.palw_refutation_leaf_cap_at(point.daa_score),
+                        self.palw_court_step_ladder_at(point.daa_score, court),
                         self.palw_prompt_ids_form_at(point.daa_score),
                     )
                     .map_err(|e| e.to_string())?;
@@ -6526,6 +6832,53 @@ impl VirtualStateProcessor {
 
     /// `verify_mldsa87_with_context` as a `bool`, which is the shape every PALW verifier callback
     /// takes — one place, so two call sites cannot disagree about what an error means.
+    /// ADR-0088: the network domain every registry message is signed under — the same one a class
+    /// registration is signed under.
+    fn palw_network_domain_v2(&self) -> kaspa_hashes::Hash64 {
+        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash))
+    }
+
+    /// ADR-0088: the bond a line's `role` ("owner" or "developer") names, read from the acceptance
+    /// state — a founding line without a row answers from its class.
+    fn palw_model_line_role(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        line_id: &kaspa_hashes::Hash64,
+        role: &str,
+    ) -> Result<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, String> {
+        let line = state.model_line_or_founding(line_id).ok_or_else(|| format!("line {line_id} does not exist"))?;
+        let bond = match role {
+            "owner" => line.owner,
+            _ => line.developer_bond(),
+        };
+        bond.ok_or_else(|| format!("line {line_id} has no {role}: nobody may act on it"))
+    }
+
+    /// ADR-0088: the signature of a registry object, checked against the stored key of the bond
+    /// it is attributed to, under the registry's own ML-DSA-87 context.
+    fn palw_model_check_bond_signature(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        message: &kaspa_hashes::Hash64,
+        signature: &[u8],
+        what: &str,
+    ) -> Result<(), String> {
+        let record = state.bond(bond).ok_or_else(|| format!("{what} is attributed to a bond this chain does not have"))?;
+        if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+            return Err(format!("{what} is attributed to a bond that is not Active"));
+        }
+        if !Self::verify_mldsa87_with_context_bool(
+            &record.pubkey,
+            message.as_byte_slice(),
+            signature,
+            kaspa_consensus_core::palw_model_lines_v1::PALW_MODEL_LINE_MLDSA87_CONTEXT,
+        ) {
+            return Err(format!("{what} carries a signature the attributed bond's key does not verify"));
+        }
+        Ok(())
+    }
+
     fn verify_mldsa87_with_context_bool(key: &[u8], message: &[u8], sig: &[u8], context: &[u8]) -> bool {
         verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
     }
@@ -6591,10 +6944,69 @@ impl VirtualStateProcessor {
         self.palw_uncertified_weightless.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// **ADR-0084 U-08, resolved in exactly one place, at the BLOCK's own DAA.** The step ladder
+    /// a court close is adjudicated at: the ruleset's past the fence, `2^22` before it. Read at
+    /// the block's acceptance DAA and not the tip's for the reason the weight fences above give —
+    /// two nodes grading one close proof must read one ladder.
+    /// **ADR-0087 Decision 6, resolved in exactly one place, at the BLOCK's own DAA.**
+    fn palw_model_market_active_at(&self, daa_score: u64) -> bool {
+        self.palw_model_market.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0088 Decision 11, resolved in exactly one place, at the BLOCK's own DAA.**
+    pub(super) fn palw_model_lines_active_at(&self, daa_score: u64) -> bool {
+        self.palw_model_lines.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0089 Decision 9, resolved in exactly one place, at the BLOCK's own DAA.**
+    pub(super) fn palw_model_evm_active_at(&self, daa_score: u64) -> bool {
+        self.palw_model_evm.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// ADR-0089: the three fences the executor reads, at one DAA.
+    pub(super) fn palw_evm_market_fences_at(&self, daa_score: u64) -> kaspa_consensus_core::evm::model_market::PalwEvmMarketFencesV1 {
+        kaspa_consensus_core::evm::model_market::PalwEvmMarketFencesV1 {
+            market_active: self.palw_model_market_active_at(daa_score),
+            lines_active: self.palw_model_lines_active_at(daa_score),
+            evm_active: self.palw_model_evm_active_at(daa_score),
+        }
+    }
+
+    /// The extras every production fold and every acceptance rehearsal carry (ADR-0088 D11,
+    /// ADR-0089 D9). The action list is the EVM step's and is added by the caller that has it.
+    fn palw_transition_extras_at(&self, daa_score: u64) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+        kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+            model_lines_active: self.palw_model_lines_active_at(daa_score),
+            evm_market_active: self.palw_model_evm_active_at(daa_score),
+            ..Default::default()
+        }
+    }
+
+    fn palw_court_step_ladder_at(&self, daa_score: u64, court: &kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2) -> u64 {
+        kaspa_consensus_core::palw_court_v2::palw_refutation_leaf_cap_v2(
+            court,
+            self.palw_court_ladder.is_some_and(|fence| fence.is_active(daa_score)),
+        )
+    }
+
     /// **ADR-0062, resolved in exactly one place**, for the reason its neighbour above gives: the
     /// object-acceptance rehearsal, the fold and the state walk must agree about whether the DA
     /// court is in force at THIS block, because one admitting what another refuses is two rules
     /// wearing one name.
+    /// **How long a retiring bond stays locked at this block** (ADR-0062; the DA court's windows
+    /// ride on top past its fence). One spelling for both readers — the locked-outpoint set a
+    /// wallet is told about and the burn obligation a released bond owes — because a node that
+    /// answered them differently would offer a wallet an outpoint the fold still holds.
+    fn palw_bond_withdrawal_delay_at(&self, daa_score: u64) -> u64 {
+        match (self.palw_bond_params_v2.as_ref(), self.palw_v2_bundle.as_ref()) {
+            (Some(_), Some(bundle)) => {
+                kaspa_consensus_core::config::params::palw_v2_bond_withdrawal_delay_at_v1(bundle, self.palw_da_court, daa_score)
+            }
+            (Some(bond_params), None) => bond_params.withdrawal_delay_daa(),
+            (None, _) => 0,
+        }
+    }
+
     fn palw_da_court_at(&self, daa_score: u64) -> bool {
         self.palw_da_court.is_some_and(|fence| fence.is_active(daa_score))
     }
@@ -6725,24 +7137,6 @@ impl VirtualStateProcessor {
     /// mainnet.
     pub(super) fn palw_context_ladder_at(&self, daa_score: u64) -> bool {
         self.palw_context_ladder.is_some_and(|fence| fence.is_active(daa_score))
-    }
-
-    /// **The leaf ladder the court's refutation walkers open against at this block — resolved in
-    /// exactly one place** (ADR-0084 U-08; mainnet audit, 2026-09-05).
-    ///
-    /// The executor's constant (`2^22`) while `palw_context_ladder` is dormant — byte-identical
-    /// to the court every shipped block was judged under — and the ruleset's own
-    /// `max_step_leaf_count` past it: the number admission priced every class at, which the
-    /// walkers never honoured, so a class deeper than `2^22` leaves could be admitted and never
-    /// convicted. `None` on a network with no V2 court is unreachable at every caller (each has
-    /// already resolved `palw_court_params_v2`), and answers the constant anyway.
-    pub(super) fn palw_refutation_leaf_cap_at(&self, daa_score: u64) -> u64 {
-        match self.palw_court_params_v2.as_ref() {
-            Some(court) => {
-                kaspa_consensus_core::palw_court_v2::palw_refutation_leaf_cap_v2(court, self.palw_context_ladder_at(daa_score))
-            }
-            None => kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
-        }
     }
 
     /// **The court a session is judged under at this block** (ADR-0082 Decision 3, patch note 7).
@@ -12290,7 +12684,9 @@ impl VirtualStateProcessor {
         // Block validation deliberately does not reject by reading the current
         // dns_state_store; validity must stay determined by the candidate block and
         // its selected-parent state.
-        let bridge_finality_fresh = self.bridge_finality_is_fresh(virtual_state.daa_score);
+        // `evm_bridge_devnet_unpaused` (private devnets only) waives the staleness gate: a drill
+        // with no VLT overlay would otherwise never carry an EVM payload.
+        let bridge_finality_fresh = self.evm_bridge_devnet_unpaused || self.bridge_finality_is_fresh(virtual_state.daa_score);
         let evm_template_data = if bridge_finality_fresh {
             evm_template_data
         } else {
@@ -13725,6 +14121,19 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
     use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as O;
     match object {
         O::BondRegistered { .. } => "BondRegistered",
+        O::ModelBuy { .. } => "ModelBuy",
+        O::ModelSeed { .. } => "ModelSeed",
+        O::ModelSell { .. } => "ModelSell",
+        O::ModelLineFounded { .. } => "ModelLineFounded",
+        O::ModelVersionPublished { .. } => "ModelVersionPublished",
+        O::ModelVersionPromoted { .. } => "ModelVersionPromoted",
+        O::ModelVersionWithdrawn { .. } => "ModelVersionWithdrawn",
+        O::ModelLineRolesSet { .. } => "ModelLineRolesSet",
+        O::ModelLineOwnerTransferred { .. } => "ModelLineOwnerTransferred",
+        O::ModelLineRetired { .. } => "ModelLineRetired",
+        O::ModelProposalPosted { .. } => "ModelProposalPosted",
+        O::ModelProposalClosed { .. } => "ModelProposalClosed",
+        O::ModelEvaluationPosted { .. } => "ModelEvaluationPosted",
         O::BondRetireRequested { .. } => "BondRetireRequested",
         O::BondCapabilityDeclared { .. } => "BondCapabilityDeclared",
         O::ClassRegistered { .. } => "ClassRegistered",

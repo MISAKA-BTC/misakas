@@ -33,6 +33,9 @@ mod palw_court;
 mod palw_da;
 mod palw_derived;
 mod palw_fp;
+/// ADR-0088 Decision 12: `palw line-… / version-… / proposal-… / evaluate` — the model registry.
+mod palw_line;
+mod palw_model;
 #[cfg(feature = "evm-send")]
 mod prea;
 /// ADR-0079 Decision 13: `node security-report` — the host posture, printed from live state.
@@ -310,6 +313,10 @@ impl KeyArgs {
     fn source(&self) -> keys::KeySource {
         keys::KeySource { key_file: self.key_file.clone(), key_stdin: self.key_stdin }
     }
+    /// `None` when no key was named — for commands that can read without one.
+    fn source_opt(&self) -> Option<keys::KeySource> {
+        (self.key_file.is_some() || self.key_stdin).then(|| self.source())
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -474,6 +481,394 @@ enum PalwCmd {
         /// JSON output (`--output json` does the same).
         #[arg(long)]
         json: bool,
+    },
+    /// **ADR-0087: a line's model market** as the tip holds it — reserve, positions in the curve,
+    /// price, sold, burned, paid, status — and a quote for a buy (`--quote-msk`). Nothing signs.
+    /// Keyed by LINE (ADR-0088 Decision 9): a class id names the class's founding line.
+    ModelShow {
+        /// 128-hex line id (a class id names the class's founding line).
+        line_id: String,
+        /// Quote a buy of this many MSK (e.g. `12.5`, or `1250000000sompi`).
+        #[arg(long)]
+        quote_msk: Option<String>,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0087: every position a holder has**, by line. The holder is its payout payload —
+    /// name it, or name the key it is derived from.
+    ModelPositions {
+        /// 128-hex holder (the BLAKE2b-512 of an ML-DSA-87 public key).
+        #[arg(long)]
+        holder: Option<String>,
+        #[command(flatten)]
+        key: KeyArgs,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// ADR-0089 Decision 5: buy a position FROM THE EVM — a signed call to the ModelWriter
+    /// (0x…F013) carrying `sendAction(buy)` with the MSK as the call's value; the fold applies it
+    /// after the block and the next chain block settles it. [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    ModelEvmBuy {
+        #[command(flatten)]
+        key: EvmKeyArgs,
+        /// The line (128 hex; a class's own line has the class id).
+        #[arg(long)]
+        line: String,
+        /// MSK to pay, whole sompi (e.g. "5" or "0.25").
+        #[arg(long)]
+        msk: String,
+        #[arg(long, default_value_t = 0)]
+        min_positions: u64,
+        #[arg(long)]
+        gas_limit: Option<u64>,
+        #[arg(long)]
+        max_fee: Option<u128>,
+        #[arg(long)]
+        nonce: Option<u64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        wait: bool,
+    },
+    /// ADR-0089 Decision 5: sell positions FROM THE EVM — `sendAction(sell)` with no value; the
+    /// net MSK is credited to the signing account when the next chain block settles it.
+    #[cfg(feature = "evm-send")]
+    ModelEvmSell {
+        #[command(flatten)]
+        key: EvmKeyArgs,
+        #[arg(long)]
+        line: String,
+        #[arg(long)]
+        positions: u64,
+        /// The least MSK (whole sompi) the sell may net, else the fold refuses it.
+        #[arg(long, default_value = "0")]
+        min_msk: String,
+        #[arg(long)]
+        gas_limit: Option<u64>,
+        #[arg(long)]
+        max_fee: Option<u128>,
+        #[arg(long)]
+        nonce: Option<u64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        wait: bool,
+    },
+    /// ADR-0089 Decision 7: the units an EVM account holds on a line, read through the position
+    /// window (0x…F012) over the node's eth JSON-RPC.
+    ModelEvmPosition {
+        #[arg(long)]
+        line: String,
+        #[arg(long)]
+        address: String,
+    },
+    /// **ADR-0090: seed a line's market** — lock at least the network's least seed (100,000 MSK)
+    /// in the line's sink; the whole of it becomes the curve's reserve and nothing ever pays it
+    /// back. Five hundred thousand whole positions open in the curve at `seed / 500,000` each.
+    ModelSeed {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id (a class id names the class's founding line)
+        #[arg(long)]
+        line: String,
+        /// MSK to lock (e.g. `100000`, or `10000000000000sompi`)
+        #[arg(long)]
+        msk: String,
+        /// Actually broadcast (otherwise a dry-run preview)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// ADR-0090 from the EVM: seed a line's market with the call's value (at least 100,000 MSK)
+    /// through the ModelWriter; settled in the next chain block. [needs --features evm-send]
+    #[cfg(feature = "evm-send")]
+    ModelEvmSeed {
+        #[command(flatten)]
+        key: EvmKeyArgs,
+        #[arg(long)]
+        line: String,
+        /// MSK to lock, whole sompi (e.g. "100000")
+        #[arg(long)]
+        msk: String,
+        #[arg(long)]
+        gas_limit: Option<u64>,
+        #[arg(long)]
+        max_fee: Option<u128>,
+        #[arg(long)]
+        nonce: Option<u64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        wait: bool,
+    },
+    /// **ADR-0087: buy positions of a line from its curve.** The carrier pays `--msk` into the
+    /// line's sink; the fold credits 94 % to the curve (5 % burned, 1 % to the line's owner) and
+    /// the curve's positions to the key's payout payload. Refused on chain when fewer than
+    /// `--min-positions` would be released.
+    ModelBuy {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id (a class id names the class's founding line).
+        #[arg(long)]
+        line: String,
+        /// MSK to pay (e.g. `12.5`, or `1250000000sompi`).
+        #[arg(long)]
+        msk: String,
+        /// The fewest positions to accept; the move is refused, never partially filled, below it.
+        #[arg(long, default_value_t = 0)]
+        min_positions: u64,
+        /// Actually broadcast (otherwise a dry-run preview with the quote).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0087: sell positions back to the curve.** Signed by the key whose payout payload
+    /// holds them; the net leg (94 % of what the curve pays) reaches the same payload through the
+    /// coinbase. Refused on chain when the net would be under `--min-msk`.
+    ModelSell {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id (a class id names the class's founding line).
+        #[arg(long)]
+        line: String,
+        /// Positions to sell.
+        #[arg(long)]
+        positions: u64,
+        /// The least MSK to accept for them (e.g. `12.5`).
+        #[arg(long)]
+        min_msk: Option<String>,
+        /// Actually broadcast (otherwise a dry-run preview with the quote).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: a line** as the tip holds it — owner, developer, maintainer (and their payout
+    /// payloads), the current and preview versions, the roots in force for its class. A class id
+    /// names the class's founding line. Nothing signs.
+    LineShow {
+        /// 128-hex line id.
+        line_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0088: every version of a line the node holds**, oldest first, with status and usage.
+    /// The last 64 stay in state; older ones are named as evicted (the explorer holds them).
+    LineLog {
+        /// 128-hex line id.
+        line_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0088: every line of a class**, the founding line included.
+    LineList {
+        /// 128-hex class id.
+        class_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0088: the proposals attached to a line** — root, note, proposer, adoption.
+    Proposals {
+        /// 128-hex line id.
+        line_id: String,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
+    /// **ADR-0088: found a further line on a class.** `--bond` becomes its owner, developer and
+    /// maintainer and signs; V1 is `--root`. Rent-priced (1 MSK of the fee is burned).
+    LineFound {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex class id.
+        #[arg(long)]
+        class: String,
+        /// The line's name (1..=64 bytes); shared, never squatted — the founder is in the line id.
+        #[arg(long)]
+        name: String,
+        /// 128-hex artifact root of V1.
+        #[arg(long)]
+        root: String,
+        /// The founding bond, `<txid>:<index>`; the key must be its registered key.
+        #[arg(long)]
+        bond: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: publish a version.** Signed by the line's developer bond; the version number is
+    /// read off the chain (`versions_published + 1`). Without `--preview` it becomes current at
+    /// once and the previous current keeps its root in force for the grace. Re-publishing an
+    /// older root is a rollback; the current root again is refused.
+    VersionPublish {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// 128-hex artifact root of the new version.
+        #[arg(long)]
+        root: String,
+        /// The version this one continues from (omit for none).
+        #[arg(long)]
+        parent: Option<u32>,
+        /// 128-hex proposal id this version adopts; the proposer is paid the contributor share.
+        #[arg(long)]
+        adopted_from: Option<String>,
+        /// Declared, recorded, never checked: 128-hex each.
+        #[arg(long)]
+        runtime_hash: Option<String>,
+        #[arg(long)]
+        dataset_commitment: Option<String>,
+        #[arg(long)]
+        training_config_hash: Option<String>,
+        #[arg(long)]
+        notes_hash: Option<String>,
+        /// Put the root in force without making it current (at most 2 previews at once).
+        #[arg(long)]
+        preview: bool,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: promote a preview to current** (developer).
+    VersionPromote {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        #[arg(long)]
+        version: u32,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: withdraw a preview, or a superseded version before its grace ends**
+    /// (developer). A current version is succeeded, never withdrawn.
+    VersionWithdraw {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        #[arg(long)]
+        version: u32,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: set a line's developer, maintainer and contributor share** (owner). A flag
+    /// omitted keeps the row's value; `owner` resets a role to the owner.
+    LineRoles {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// `<txid>:<index>`, or `owner`.
+        #[arg(long)]
+        developer: Option<String>,
+        /// `<txid>:<index>`, or `owner`.
+        #[arg(long)]
+        maintainer: Option<String>,
+        /// The share of the owner's 1 % leg an adopted contributor takes while its version is
+        /// current, in permille (0..=1000).
+        #[arg(long)]
+        contributor_permille: Option<u16>,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: hand a line to a new owner bond** (owner). Developer and maintainer reset to
+    /// the new owner; positions do not move.
+    LineTransfer {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// `<txid>:<index>` of an Active bond.
+        #[arg(long)]
+        new_owner: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: retire a line** (owner): the market closes to buys, the roots leave force
+    /// after the grace, the history stays.
+    LineRetire {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: post a proposal on a line** — a root and a note — from any Active bond.
+    /// Rent-priced (1 MSK of the fee is burned). Paid when a version adopts it.
+    ProposalPost {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// 128-hex artifact root proposed.
+        #[arg(long)]
+        root: String,
+        /// 128-hex hash of the note.
+        #[arg(long)]
+        note_hash: String,
+        /// The proposing bond, `<txid>:<index>`; the key must be its registered key.
+        #[arg(long)]
+        bond: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: close a proposal** (developer), to make room.
+    ProposalClose {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// 128-hex proposal id.
+        #[arg(long)]
+        proposal: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **ADR-0088: post an evaluation of a version** — a declaration from any Active bond, at
+    /// most 16 per version, one per bond. Rent-priced (1 MSK of the fee is burned).
+    Evaluate {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        #[arg(long)]
+        version: u32,
+        /// 128-hex id of the evaluator (a benchmark, a suite, a person's key hash).
+        #[arg(long)]
+        evaluator_id: String,
+        /// The score, in permille (0..=1000).
+        #[arg(long)]
+        score_permille: u32,
+        /// 128-hex hash of the report.
+        #[arg(long)]
+        report_hash: String,
+        /// The evaluating bond, `<txid>:<index>`; the key must be its registered key.
+        #[arg(long)]
+        bond: String,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
     },
     /// ADR-0078 Decision 5: read what the chain holds about a free-prompt claim's DERIVATIONS —
     /// the grammar, the transformer, the DSL and artifact hashes, and the claim's own output_root.
@@ -818,6 +1213,13 @@ enum EvmCmd {
         data: Option<String>,
     },
     /// EVM transaction lifecycle (`misaka_getEvmTxStatus`).
+    /// A read-only eth_call at latest (ADR-0089's doors answer any caller): --to <addr> --data <hex>.
+    View {
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        data: String,
+    },
     #[command(subcommand)]
     Tx(EvmTxCmd),
     /// EVM HD wallet — create / import / address. [needs --features evm-send]
@@ -1014,6 +1416,7 @@ async fn main() -> std::process::ExitCode {
         Command::Bootstrap(BootstrapCmd::Seeds) => bootstrap::seeds(ctx.output, &ctx.network),
         Command::Bootstrap(BootstrapCmd::Resolve) => bootstrap::resolve(ctx.output, &ctx.network),
         Command::Setup(cmd) => setup::run(&ctx, cmd).await,
+        Command::Evm(EvmCmd::View { to, data }) => eth::view(&ctx, &to, &data),
         Command::Evm(EvmCmd::Balance { address }) => eth::balance(&ctx, &address),
         Command::Evm(EvmCmd::Nonce { address }) => eth::nonce(&ctx, &address),
         Command::Evm(EvmCmd::EstimateGas { from, to, value, data }) => {
@@ -1047,6 +1450,89 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Palw(PalwCmd::Certified { class_id, json }) => palw_fp::certified(&ctx, &class_id, json).await,
         Command::Palw(PalwCmd::Derived { claim_id, json }) => palw_derived::show(&ctx, &claim_id, json).await,
+        Command::Palw(PalwCmd::ModelShow { line_id, quote_msk, json }) => palw_model::show(&ctx, &line_id, quote_msk, json).await,
+        Command::Palw(PalwCmd::ModelPositions { holder, key, json }) => {
+            let source = key.source_opt();
+            palw_model::positions(&ctx, holder, source.as_ref(), json).await
+        }
+        #[cfg(feature = "evm-send")]
+        Command::Palw(PalwCmd::ModelEvmBuy { key, line, msk, min_positions, gas_limit, max_fee, nonce, yes, wait }) => {
+            evm_send::model_evm_buy(&ctx, &key.source(), &line, &msk, min_positions, gas_limit, max_fee, nonce, yes, wait)
+        }
+        #[cfg(feature = "evm-send")]
+        Command::Palw(PalwCmd::ModelEvmSell { key, line, positions, min_msk, gas_limit, max_fee, nonce, yes, wait }) => {
+            evm_send::model_evm_sell(&ctx, &key.source(), &line, positions, &min_msk, gas_limit, max_fee, nonce, yes, wait)
+        }
+        Command::Palw(PalwCmd::ModelEvmPosition { line, address }) => eth::model_evm_position(&ctx, &line, &address),
+        Command::Palw(PalwCmd::ModelSeed { key, line, msk, yes }) => palw_model::seed(&ctx, &key.source(), &line, &msk, yes).await,
+        #[cfg(feature = "evm-send")]
+        Command::Palw(PalwCmd::ModelEvmSeed { key, line, msk, gas_limit, max_fee, nonce, yes, wait }) => {
+            evm_send::model_evm_seed(&ctx, &key.source(), &line, &msk, gas_limit, max_fee, nonce, yes, wait)
+        }
+        Command::Palw(PalwCmd::ModelBuy { key, line, msk, min_positions, yes }) => {
+            palw_model::buy(&ctx, &key.source(), &line, &msk, min_positions, yes).await
+        }
+        Command::Palw(PalwCmd::ModelSell { key, line, positions, min_msk, yes }) => {
+            palw_model::sell(&ctx, &key.source(), &line, positions, min_msk, yes).await
+        }
+        Command::Palw(PalwCmd::LineShow { line_id, json }) => palw_line::line_show(&ctx, &line_id, json).await,
+        Command::Palw(PalwCmd::LineLog { line_id, json }) => palw_line::line_log(&ctx, &line_id, json).await,
+        Command::Palw(PalwCmd::LineList { class_id, json }) => palw_line::line_list(&ctx, &class_id, json).await,
+        Command::Palw(PalwCmd::Proposals { line_id, json }) => palw_line::proposals(&ctx, &line_id, json).await,
+        Command::Palw(PalwCmd::LineFound { key, class, name, root, bond, yes }) => {
+            palw_line::line_found(&ctx, &key.source(), &class, &name, &root, &bond, yes).await
+        }
+        Command::Palw(PalwCmd::VersionPublish {
+            key,
+            line,
+            root,
+            parent,
+            adopted_from,
+            runtime_hash,
+            dataset_commitment,
+            training_config_hash,
+            notes_hash,
+            preview,
+            yes,
+        }) => {
+            palw_line::version_publish(
+                &ctx,
+                &key.source(),
+                &line,
+                &root,
+                parent,
+                adopted_from,
+                runtime_hash,
+                dataset_commitment,
+                training_config_hash,
+                notes_hash,
+                preview,
+                yes,
+            )
+            .await
+        }
+        Command::Palw(PalwCmd::VersionPromote { key, line, version, yes }) => {
+            palw_line::version_move(&ctx, &key.source(), &line, version, true, yes).await
+        }
+        Command::Palw(PalwCmd::VersionWithdraw { key, line, version, yes }) => {
+            palw_line::version_move(&ctx, &key.source(), &line, version, false, yes).await
+        }
+        Command::Palw(PalwCmd::LineRoles { key, line, developer, maintainer, contributor_permille, yes }) => {
+            palw_line::line_roles(&ctx, &key.source(), &line, developer, maintainer, contributor_permille, yes).await
+        }
+        Command::Palw(PalwCmd::LineTransfer { key, line, new_owner, yes }) => {
+            palw_line::line_transfer(&ctx, &key.source(), &line, &new_owner, yes).await
+        }
+        Command::Palw(PalwCmd::LineRetire { key, line, yes }) => palw_line::line_retire(&ctx, &key.source(), &line, yes).await,
+        Command::Palw(PalwCmd::ProposalPost { key, line, root, note_hash, bond, yes }) => {
+            palw_line::proposal_post(&ctx, &key.source(), &line, &root, &note_hash, &bond, yes).await
+        }
+        Command::Palw(PalwCmd::ProposalClose { key, line, proposal, yes }) => {
+            palw_line::proposal_close(&ctx, &key.source(), &line, &proposal, yes).await
+        }
+        Command::Palw(PalwCmd::Evaluate { key, line, version, evaluator_id, score_permille, report_hash, bond, yes }) => {
+            palw_line::evaluate(&ctx, &key.source(), &line, version, &evaluator_id, score_permille, &report_hash, &bond, yes).await
+        }
         Command::Palw(PalwCmd::DerivedVerify { claim_id, answer, dsl, job_context, tokenizer, job_context_hash, family, json }) => {
             palw_derived::verify(
                 &ctx,

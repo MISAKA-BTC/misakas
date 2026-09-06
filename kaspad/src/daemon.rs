@@ -1312,8 +1312,14 @@ Do you confirm? (y/n)";
         let palw_court = palw_bundle.as_ref().map(|b| b.court);
         let base_class_id = match &config.params.palw_consensus_mode {
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.base_class_id),
+            // ^ named in the log below: the base class is also the id of the class's own model LINE
+            // (ADR-0088 Decision 1), the key every market and registry reader takes — an operator
+            // running a drill should not have to derive it from the artifact.
             _ => None,
         };
+        if let Some(id) = base_class_id {
+            info!("PALW base class (and its founding model line): {id}");
+        }
         // **The floor is the default, not the only choice.** A class registered on a running
         // chain is unusable until a producer asks for it, and this is where the asking happens. An
         // unparseable id is fatal rather than ignored: a node told to produce for a class, that

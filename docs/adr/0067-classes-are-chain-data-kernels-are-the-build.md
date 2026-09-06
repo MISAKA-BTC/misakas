@@ -693,3 +693,10 @@ eviction (which drops the holdings and clears the marks in one move); it was nev
 its only stake is its bond, and ADR-0065 measured what a post-genesis bond costs (400,000 sompi).
 Arming chain-registered classes for weight before seats are paid leaves the panel as the cheapest
 thing on the chain to buy.
+
+## Record (2026-09-05) — the fourth item
+
+The Qwen3.6 geometry disposition this section left open was overtaken: the class was
+re-registered as graph-v3 with a profile that describes the engine (id `5bd9ae3d…`), which is the
+disposition the paragraph above said it could still adopt. Nothing remains to build under this
+heading.

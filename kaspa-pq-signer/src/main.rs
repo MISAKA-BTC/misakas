@@ -130,7 +130,11 @@ mod unix_daemon {
             assert_eq!(names.len(), ALL_SIGNING_PURPOSES.len(), "no two purposes share a name");
             let mut discriminants: Vec<u8> = ALL_SIGNING_PURPOSES.iter().map(|p| *p as u8).collect();
             discriminants.sort_unstable();
-            assert_eq!(discriminants, (0u8..8).collect::<Vec<_>>(), "the array is the whole enum: every discriminant present, none twice");
+            assert_eq!(
+                discriminants,
+                (0u8..8).collect::<Vec<_>>(),
+                "the array is the whole enum: every discriminant present, none twice"
+            );
             // The four the audit found, named individually.
             for name in ["palw-attempt", "palw-fp-commitment", "palw-fp-spend", "palw-derived"] {
                 assert!(parse_purpose(name).is_ok(), "{name} must be deniable");

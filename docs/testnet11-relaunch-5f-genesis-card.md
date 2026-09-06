@@ -6298,3 +6298,93 @@ for this chain: no material over 16 MiB is pushed (D3); seats license v5 attempt
 instead of from a 784 MB push; a served `.answer` envelope beside every material; the ladder fix for any pulled dense
 material. What it does NOT change: v5 FREE-PROMPT claims still void (no a16 interval opening fits the 4 MiB lane — ADR-0084
 §7.2, user decision pending), and the court still cannot refute a class above 2^22 leaves (U-08, activation needed).
+
+### 10o. ADR-0086 — the opening carries the fold, not the leaves (2026-09-05, `palw-adr0084-served-answer`)
+
+The operator chose ADR-0084 §7.2's first option on 2026-09-05; ADR-0086 designs it and `3d56b57a`/`62fec794` land it: the
+interval opening carries the fold's digests and the Merkle frontier, the named checkpoint claim for every class, the seed row —
+and no leaf hash and no state chunk; the seat replays and supplies its own leaves. **Measured on the devnet (run 7):** a
+24,423,539-byte free-prompt capture (over the 16 MiB cap) was licensed `Valid` by a seat that fetched four openings of
+1,110,705 / 1,110,513 / 33,655 / 1,110,449 bytes and "no history"; the attempt lane's interval 0 opening fell from
+424,359,978 to 108,791 bytes. The fleet binary is rebuilt from `62fec794` (sha `7a67157217379f87`) and staged on all three
+hosts; the restart follows the same order as §10n (seat2 → .113 → ibm → verify; node0 may need SIGKILL after a stuck
+shutdown). What this closes on the public chain: v5 free-prompt claims can be licensed without moving their material. What
+it does not: the court's refutation walkers (U-08) and the annex's P2P wiring (ADR-0085 items 4–5, ADR-0086 D6's transport).
+
+### 10p. The free-prompt manifest was another lane's (2026-09-05, `0001f34c`)
+
+The operator's Studio measured the edge: a free-prompt run of 256 tokens is accepted and one of 257 is refused as "the
+retained-trace chunk count is not the executed shape's". The producer's `Base0ExecutionV1` carried the ATTEMPT lane's
+manifest — `attempt_trace_manifest_root_v1(trace_root, 1)` and a chunk count fixed at 1, which admission pins attempts to
+by equality — while the free-prompt verifier requires `chunk_count == ⌈events / 256⌉` and only checks the root for being
+non-zero; every free-prompt claim on this chain so far carried a root derived by the wrong lane's function, unnoticed
+because nothing recomputes it and every fixture was exactly one chunk. `0001f34c` gives the free-prompt lane its own
+derivation in `produce.rs` (events = the trace's selecting-row roots, the leaves `rows_root` is the Merkle root of;
+binding = the job id; `fp_trace_manifest_v3`) and routes the three backends' free-prompt outcomes through it. The Studio's
+256-token cap (their `02c5bb0`) can be lifted once the gateway host's `palw-a16-fp-worker` carries this build; the fleet's
+kaspad does not verify the root, so the fleet needs nothing for it. Devnet run 8 (`MAX_TOKENS=300`, two chunks and over
+the material cap) is the check.
+
+### 10q. The court reaches an over-cap class: the ruleset's ladder behind a fence, the close from served intervals, the block's leaf (2026-09-05, `palw-adr0084-served-answer`)
+
+Three pieces the 0084/0085/0086 lane had left as "not landed", now in the tree. **ADR-0084 U-08:** the court's two
+refutation walkers were pinned at `2^22` leaves by validity rules with no ruleset in scope, so no node could adjudicate a
+close against a graph-v5 class (6.6 M leaves). `Params::palw_court_ladder: Option<ForkActivation>` (the `palw_da_court`
+contract — `None` on every preset, absent is byte-identical, `never()` collapses, a scheduled height keeps old and new
+builds peers) is read in one place at the block's own DAA and threads `step_ladder` through `adjudicate_court_close_v2`
+to the leg; the tests pin the boundary at the refutation's own leaf count (one short refuses by name, at it `NoFaultFound`,
+at `2^22` the uncapped answer). Arming it on testnet-11 waits for the close path below to exist live and for an operator's
+height. **ADR-0085 §6 items 4–5:** the executor fills the close annex from the open court sessions on the claim (read off
+the chain under its own bond, never off the request) with the accused's own tiles — replayed for the interval from a fold —
+and the capture path's anchoring rule; the closer, holding no capture, asks for the interval owning the terminal leaf and
+the one before it, and assembles the close from the served openings and its own replay (`refutation_from_served_intervals`,
+byte-identical to the capture path's on the floor fixture under one pin). A seat's fault is remembered and the challenger's
+half prosecutes that claim without `--palw-challenge` challenging everything. **ADR-0086 Decision 6:** a block-leaves
+request rides the interval lane under a packed index (bit 31 | interval | block); the executor answers the block's 4,096
+leaf hashes from the same span replay; the seat checks they fold to the digest it holds and names the first leaf that
+differs from its own. Nothing here has been walked to a live verdict — that needs a producer that lies on a devnet.
+Devnet run 9 (300 tokens) ended at the drill's `WAIT` before the panel binding at that hour's ~3-minute cadence. **Run 10
+(WAIT 1800) reproduced run 8 and named it:** the seat asked node-0 for intervals 198/110/132/72 of 299 for 22 minutes and
+node-0 never answered, because a fold retention carries no checkpoint state and the executor's opener replays from GENESIS
+with tile capture — the offline probe on run 10's material measured interval 0 in 21 s, 57 in 298 s and 187 in 1,991 s
+(5→10 s per call as the cache grows), against a 120 s solicitation window. Interval-lane refusals now log at INFO. The fix (ADR-0086 §7): the executor opens from the anchor
+state it recomputes without capture and memoizes, as the seat does; not in this tree yet, so free-prompt claims past ~20
+decode tokens on graph-v5 cannot be licensed by the interval lane — Studio's 256-token cap stands, for this reason now.
+
+### 10s. The 300-token free-prompt claim licenses again: the opener resumes from a recomputed anchor (2026-09-05, `594015b9`, fleet `56f77a3d`)
+
+Run 10 named the cause (§10q addendum): a fold holds no checkpoint state, so the executor's opener replayed every
+interval from genesis with tiles captured — 5–10 s a decode call, 1,991 s for interval 187. `594015b9` hands the fold
+opener an anchor-state closure: the three backends recompute the span's starting anchor with their recompute kernels
+(a plain forward, memoized as the seat's own state is) and replay only the interval's calls with tiles; the lane also
+refuses a re-ask while an opener for that `(claim, interval)` is in flight. Offline on run 10's material: interval 0
+17 s, 57 19 s, 187 69 s, 253 90 s, 298 54 s. **Devnet run 11 (300 tokens): node-0 opened `[34, 105, 134, 209]` in
+17–65 s, node-1 replayed all four against its own state and filed `Valid` ten minutes after the binding.** The
+fleet runs it: kaspad `56f77a3d75f376de` on seat2, .113 (node, seat4, slots 01–04), ibm (node1, node0); the pool's
+`palw-a16-fp-worker` `69c0e194955cc41c` on .113. **Testnet's next wall is economics, not code:** a 300-token
+free-prompt claim is ~41 M leaves, exposure `pwu × 5` ≈ 207 M sompi, and a bond may hold half its collateral — the
+pool's slot-04 bond (265 M, sized for the class's canonical 6.6 M-leaf job) cannot carry one, which is also why the
+257/300-token jobs it submitted at 03:06Z/03:11Z never reached the chain. The pool now accepts a caller-sized bond;
+slot-05 (600 M sompi, token `78ffd436…`, gateway port 18795) was funded 8.5 MSK from the faucet wallet, registered its
+bond `8c52206c…:0` at 06:12Z (its panel gives a carrier ten minutes and testnet-11 mines a block about every ten, so the
+first attempt timed out and the second found the bond already there), and answered a 300-token request in 222 s
+(42,272,640 leaves, claim `019efe78…`, submitted as tx `0415254c…`). **A second pool defect surfaced there:** the
+autosubmitter called the rail without `--capture`, so it staged the question-only `FPM1` — 3,372 bytes of retention
+beside a 183 MB capture sitting in the gateway's own traces — and no seat could have opened an interval. The capture is
+now staged for the live claim (`FPC1` is the `FPM1` body plus the capture as a borsh `Vec<u8>`, so it assembles from the
+two files) and `fp-autosubmit.py` passes `--capture` from now on (`/opt/misaka-minerpool/`, backups `.pre-capture`,
+`.pre-anchor`). Studio needs the slot token and the 256-token clamp lifted (`backend/gateway.rs`) to use this lane.
+
+### 10r. ADR-0087 implemented: a position is bought from the curve and sold back to it (2026-09-05)
+
+The model market is in the tree behind `Params::palw_model_market` (`None` everywhere): a class's
+market is a constant-product curve over its reserve plus a 1,000 MSK virtual reserve, opened by the
+first `ModelBuy` (a carrier paying into the class's `OP_RETURN "MSKMDL01" <class>` sink), drained by
+`ModelSell` (signed by the holder's key, paid through the coinbase like every escrowed reward), 5 %
+burned and 1 % to the registrant on every leg, no transfer object of any kind. The state root takes
+the two collections only once a move exists — the root rides in headers, so a dormant chain commits
+byte-identical roots — and the served carriage grows a tagged tail rather than a field. Two RPCs and
+four CLI verbs read and move; 12 tests pin the ADR's invariants, and the design's worked table was
+corrected by them (the second buy releases 16,824 positions, not 12,846; a full sell returns the
+1,880 MSK reserve, not 3,014). Not done: the explorer page, the devnet buy/sell/retire/drain drill,
+and the activation height on testnet-11.

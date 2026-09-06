@@ -284,10 +284,11 @@ impl Consensus {
             notification_root.clone(),
             counters.clone(),
             mining_rules,
-            config.evm_history_mode,         // §12: gate the archive diff/checkpoint writer
-            config.evm_shadow_state_backend, // C-01 S4: node-local shadow dual-write + differential
-            config.evm_flat_authoritative,   // C-01 S9: flat-authoritative executor seed
-            config.evm_retire_206,           // C-01 S9b: stop persisting the per-block 206 snapshot
+            config.evm_history_mode,           // §12: gate the archive diff/checkpoint writer
+            config.evm_shadow_state_backend,   // C-01 S4: node-local shadow dual-write + differential
+            config.evm_flat_authoritative,     // C-01 S9: flat-authoritative executor seed
+            config.evm_retire_206,             // C-01 S9b: stop persisting the per-block 206 snapshot
+            config.evm_bridge_devnet_unpaused, // private devnets: no DNS-finality gate on the EVM template
         ));
 
         let pruning_processor = Arc::new(PruningProcessor::new(
@@ -1100,6 +1101,40 @@ impl Consensus {
             message,
         }
     }
+
+    /// The PALW V2 state at the tip, through the shared materialization (audit M-7) — the one
+    /// snapshot every `palw_model_*` reader answers from. `None` off ConsensusV2 or before the
+    /// first state was written.
+    fn palw_state_v2_tip(&self) -> Option<Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>> {
+        let state_params = match &self.config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => &bundle.state,
+            _ => return None,
+        };
+        let (_chain_point, state) = self.storage.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        Some(state)
+    }
+
+    /// ADR-0088 Decision 12: one line's row for a reader — written or synthesised — with the
+    /// payout payloads of the bonds its roles name, each read from the bond registry at the same
+    /// tip. A role naming a bond the registry no longer holds reads as no payload, never as an
+    /// error: the row is the chain's, the lookup is the reader's convenience.
+    fn palw_model_line_row_read_v1(
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        line_id: kaspa_hashes::Hash64,
+    ) -> Option<kaspa_consensus_core::api::PalwModelLineRowReadV1> {
+        let line = state.model_line_or_founding(&line_id)?;
+        let payload = |bond: Option<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>| {
+            bond.and_then(|b| state.bond(&b)).map(|record| record.payout_payload)
+        };
+        Some(kaspa_consensus_core::api::PalwModelLineRowReadV1 {
+            line_id,
+            has_row: state.model_line(&line_id).is_some(),
+            owner_payout_payload: payload(line.owner),
+            developer_payout_payload: payload(line.developer),
+            maintainer_payout_payload: payload(line.maintainer),
+            line,
+        })
+    }
 }
 
 impl ConsensusApi for Consensus {
@@ -1257,6 +1292,107 @@ impl ConsensusApi for Consensus {
 
     /// ADR-0080 design A, on the node: the materialized tip, then the row itself. The tip read is
     /// the same snapshot every other `palw_*` answer here takes.
+    fn palw_model_market_v1(
+        &self,
+        line_id: kaspa_hashes::Hash64,
+    ) -> Option<(
+        kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1,
+        bool,
+        kaspa_consensus_core::palw_state_v2::PalwClassStatusV2,
+    )> {
+        let state = self.palw_state_v2_tip()?;
+        // ADR-0088 Decision 9: the market is keyed by line; a founding line IS its class until a
+        // row is written, so a class id resolves through the same reader the fold uses.
+        let line = state.model_line_or_founding(&line_id)?;
+        let class = state.class(&line.class_id)?;
+        let daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
+        let closed_line = !line.is_active();
+        match state.model_market(&line_id) {
+            Some(market) => {
+                let mut market = *market;
+                market.closed_to_buys |= closed_line;
+                Some((market, true, class.status.clone()))
+            }
+            None => {
+                let mut market = kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1::seed_v1(
+                    daa,
+                    0,
+                    kaspa_consensus_core::Hash64::default(),
+                );
+                market.closed_to_buys = closed_line;
+                Some((market, false, class.status.clone()))
+            }
+        }
+    }
+
+    fn palw_model_positions_v1(&self, holder: kaspa_hashes::Hash64) -> Vec<(kaspa_hashes::Hash64, u64)> {
+        let Some(state) = self.palw_state_v2_tip() else {
+            return Vec::new();
+        };
+        state.model_positions_of(&holder)
+    }
+
+    /// ADR-0088 Decision 12: the tip as every registry reader takes it — the same cached snapshot
+    /// the market reads, `None` off ConsensusV2 or before the first state was written.
+    fn palw_model_line_v1(&self, line_id: kaspa_hashes::Hash64) -> Option<kaspa_consensus_core::api::PalwModelLineReadV1> {
+        let state = self.palw_state_v2_tip()?;
+        let row = Self::palw_model_line_row_read_v1(&state, line_id)?;
+        let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
+        let current_root = state.model_version(&line_id, row.line.current).map(|v| v.root);
+        let roots_in_force = state.class_roots_in_force(&row.line.class_id, tip_daa);
+        Some(kaspa_consensus_core::api::PalwModelLineReadV1 { row, current_root, roots_in_force, tip_daa })
+    }
+
+    fn palw_model_version_v1(
+        &self,
+        line_id: kaspa_hashes::Hash64,
+        version: u32,
+    ) -> Option<kaspa_consensus_core::api::PalwModelVersionReadV1> {
+        let state = self.palw_state_v2_tip()?;
+        let row = state.model_version(&line_id, version)?;
+        let evaluations = state.model_evaluations_of(&line_id, version).into_iter().map(|(b, e)| (*b, e.clone())).collect();
+        let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
+        Some(kaspa_consensus_core::api::PalwModelVersionReadV1 { version: row, evaluations, tip_daa })
+    }
+
+    fn palw_evm_view_v1(
+        &self,
+    ) -> Option<(
+        Arc<kaspa_consensus_core::evm::model_market::PalwEvmViewV1>,
+        kaspa_consensus_core::evm::model_market::PalwEvmMarketFencesV1,
+    )> {
+        let base_class_id = match &self.config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.state.base_class_id(),
+            _ => return None,
+        };
+        let state = self.palw_state_v2_tip()?;
+        // The fences the executor resolves for the block built on this tip use THAT block's
+        // DAA score; the tip's own score is the closest the simulator can read without a
+        // template. They differ only in the one block that crosses an activation.
+        let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
+        let fences = self.config.params.palw_evm_market_fences_at(tip_daa);
+        Some((Arc::new(state.evm_view_v1(kaspa_consensus_core::evm::EVM_CHAIN_ID, base_class_id)), fences))
+    }
+
+    fn palw_model_lines_v1(&self, class_id: kaspa_hashes::Hash64) -> Option<Vec<kaspa_consensus_core::api::PalwModelLineRowReadV1>> {
+        let state = self.palw_state_v2_tip()?;
+        state.class(&class_id)?;
+        // The founding line first (its id is the class id, written or synthesised), then every
+        // other row of the class in id order — the order `class_line_rows` walks them in.
+        let mut ids: Vec<kaspa_hashes::Hash64> = vec![class_id];
+        ids.extend(state.class_line_rows(&class_id).into_iter().map(|(id, _)| *id).filter(|id| *id != class_id));
+        Some(ids.into_iter().filter_map(|id| Self::palw_model_line_row_read_v1(&state, id)).collect())
+    }
+
+    fn palw_model_proposals_v1(
+        &self,
+        line_id: kaspa_hashes::Hash64,
+    ) -> Option<Vec<(kaspa_hashes::Hash64, kaspa_consensus_core::palw_model_lines_v1::PalwModelProposalV1)>> {
+        let state = self.palw_state_v2_tip()?;
+        state.model_line_or_founding(&line_id)?;
+        Some(state.model_proposals_of(&line_id).into_iter().map(|(id, p)| (*id, p.clone())).collect())
+    }
+
     fn palw_court_close_group_v1(
         &self,
         session_id: kaspa_hashes::Hash64,

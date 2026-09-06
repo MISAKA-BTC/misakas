@@ -817,6 +817,28 @@ impl Qwen25A16Backend {
 
     /// The dense tiles either retention can answer with: the ones it kept, or the ones a
     /// re-execution reproduces.
+    /// **ADR-0086 Decision 2, the executor's side.** The anchor state a fold interval resumes from,
+    /// recomputed with this family's recompute kernels (a plain forward pass, no capture) and
+    /// memoized under the binding's context — the same state a seat recomputes for the checkpoint
+    /// check. Before this the span replay started at genesis with tiles captured (5–10 s a call).
+    fn fold_anchor_state_v1(
+        &self,
+        material: &crate::produce::Base0FpMaterialV2,
+        prompt_token_ids: &[u32],
+        covered: u32,
+    ) -> Option<crate::fp_recompute::Base0FpSeatStateV1> {
+        let mut kernels = crate::fp_recompute::A16RecomputeKernelsV1::new(&self.artifact, self.plan.as_ref()).ok()?;
+        crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+            &material.binding.shape_profile,
+            &material.binding.job_context,
+            prompt_token_ids,
+            &material.generated_token_ids,
+            covered,
+            &mut kernels,
+        )
+        .ok()
+    }
+
     fn tiles_from_material_v1(&self, retention: &crate::produce::Base0RetentionV1) -> Result<crate::legs::Base0StepTilesV1, String> {
         match retention {
             crate::produce::Base0RetentionV1::Dense((binding, tiles, ..)) => {
@@ -1214,13 +1236,17 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // what `palw_fp_execution_root_v3` recomputes.
         let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
         let material = crate::produce::base0_fp_material_encode_v2(&run, &prompt_ids).map_err(|e| e.to_string())?;
+        // The free-prompt lane's own manifest (palw_freeprompt_v3), not the attempt lane's the run carries.
+        let (fp_trace_manifest_root, fp_trace_chunk_count) =
+            crate::produce::base0_fp_trace_manifest_v3(&run.binding.job_context, &run.logits_rows)
+                .ok_or_else(|| "the run's rows build no retained-trace manifest".to_string())?;
         Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
             outcome: PalwExecutionOutcomeV1 {
                 trace_root: run.trace_root,
                 output_root: run.output_root,
                 execution_root: run.execution_root,
-                trace_manifest_root: run.trace_manifest_root,
-                trace_chunk_count: run.trace_chunk_count,
+                trace_manifest_root: fp_trace_manifest_root,
+                trace_chunk_count: fp_trace_chunk_count,
                 material,
             },
             facts: PalwFpRunFactsV3 {
@@ -1382,16 +1408,19 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // state), because the class's own declaration decides, not this executor's preference.
         let chunked =
             match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
-                crate::produce::Base0RetentionV1::Folded(material) => crate::fp_interval::base0_open_fp_interval_sparse_capped_v1(
-                    &material,
-                    index,
-                    prompt_token_ids,
-                    self.checkpoint_interval(),
-                    self.step_ladder_cap,
-                    &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
-                    self.prompt_ids_form,
-                )
-                .map_err(|e| e.to_string())?,
+                crate::produce::Base0RetentionV1::Folded(material) => {
+                    crate::fp_interval::base0_open_fp_interval_sparse_anchored_capped_v1(
+                        &material,
+                        index,
+                        prompt_token_ids,
+                        self.checkpoint_interval(),
+                        self.step_ladder_cap,
+                        &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+                        &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
+                        self.prompt_ids_form,
+                    )
+                    .map_err(|e| e.to_string())?
+                }
                 crate::produce::Base0RetentionV1::Dense(material) => crate::fp_interval::base0_open_fp_interval_capped_v1(
                     &material,
                     index,
@@ -1475,6 +1504,177 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     /// **The committed answer's ids, read by the family that wrote the capture** (ADR-0084
     /// Decision 6): the fold and the dense tuple alike, through `base0_material_decode_any_v1`.
     /// `None` when the bytes are not this family's, and never an empty answer.
+    fn open_fp_interval_with_close(
+        &self,
+        capture: &[u8],
+        index: u32,
+        prompt_token_ids: &[u32],
+        disputed: &[u64],
+    ) -> Result<Vec<u8>, String> {
+        use crate::fp_interval::{Base0FpIntervalOpeningV4, base0_fp_close_annex_v1, base0_fp_interval_opening_with_close_v1};
+        let opening = self.open_fp_interval(capture, index, prompt_token_ids)?;
+        if disputed.is_empty() {
+            return Ok(opening);
+        }
+        let v4 = Base0FpIntervalOpeningV4::decode_v1(&opening).map_err(|e| format!("the served opening is not V4: {e:?}"))?;
+        let range = (v4.range.first_leaf_index, v4.range.first_leaf_index.saturating_add(v4.range.leaf_count));
+        if !disputed.iter().any(|l| *l >= range.0 && *l < range.1) {
+            return Ok(opening);
+        }
+        let retention =
+            crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+        // The interval's own tiles (replayed from a fold, held by a dense retention), plus the seed
+        // row — the anchor call's logits tiles — which the opening itself carries.
+        let mut by_index: std::collections::HashMap<u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1> = match &retention {
+            crate::produce::Base0RetentionV1::Dense((_, tiles, ..)) => tiles.iter().cloned().collect(),
+            crate::produce::Base0RetentionV1::Folded(material) => crate::fp_interval::base0_fp_interval_tiles_from_fold_capped_v1(
+                material,
+                index,
+                prompt_token_ids,
+                self.checkpoint_interval(),
+                self.step_ladder_cap,
+                &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+                &|covered| self.fold_anchor_state_v1(material, prompt_token_ids, covered),
+                self.prompt_ids_form,
+            )
+            .map_err(|e| format!("{e:?}"))?
+            .tiles
+            .into_iter()
+            .collect(),
+        };
+        for (k, tile) in v4.seed_row_tiles.iter().enumerate() {
+            by_index.entry(range.0 + k as u64).or_insert_with(|| tile.clone());
+        }
+        let annex = base0_fp_close_annex_v1(
+            retention.binding(),
+            retention.logits_rows(),
+            retention.checkpoint_chunks(),
+            &|leaf| by_index.get(&leaf).cloned(),
+            disputed,
+            range,
+        )?;
+        base0_fp_interval_opening_with_close_v1(&opening, annex).map_err(|e| format!("{e:?}"))
+    }
+
+    fn open_fp_block_leaves(
+        &self,
+        capture: &[u8],
+        interval_index: u32,
+        block_index: u64,
+        prompt_token_ids: &[u32],
+    ) -> Result<Vec<u8>, String> {
+        let opening = self.open_fp_interval(capture, interval_index, prompt_token_ids)?;
+        match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
+            crate::produce::Base0RetentionV1::Folded(material) => crate::fp_interval::base0_fp_block_leaves_from_fold_capped_v1(
+                &material,
+                &opening,
+                block_index,
+                prompt_token_ids,
+                self.checkpoint_interval(),
+                self.step_ladder_cap,
+                &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+                &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
+            ),
+            crate::produce::Base0RetentionV1::Dense((_, tiles, ..)) => {
+                crate::fp_interval::base0_fp_block_leaves_from_tiles_v1(&opening, &tiles, block_index)
+            }
+        }
+        .map_err(|e| format!("{e:?}"))
+    }
+
+    fn fp_name_the_leaf_v1(
+        &self,
+        opening: &[u8],
+        block_leaves: &[u8],
+        claim: PalwClaimRootsV1,
+        index: u32,
+        prompt_token_ids: &[u32],
+        generated_token_ids: &[u32],
+        work_leaves: u64,
+    ) -> Result<Option<u64>, String> {
+        if let Ok(v4) = crate::fp_interval::Base0FpIntervalOpeningV4::decode_v1(opening)
+            && let Some(anchor) = v4.anchor.as_ref()
+        {
+            let _ = self.checkpoint_root_for_context_v1(
+                &v4.binding.job_context,
+                prompt_token_ids,
+                generated_token_ids,
+                anchor.leaf.covered_decode_call,
+            );
+        }
+        crate::fp_interval::base0_fp_name_the_leaf_capped_v1(
+            opening,
+            block_leaves,
+            claim,
+            index,
+            prompt_token_ids,
+            work_leaves,
+            self.checkpoint_interval(),
+            self.step_ladder_cap,
+            &|bytes| {
+                crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+                    bytes,
+                    prompt_token_ids,
+                    self.checkpoint_interval(),
+                    self.step_ladder_cap,
+                )
+            },
+            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+            self.prompt_ids_form,
+        )
+    }
+
+    fn fp_interval_of_leaf_v1(&self, context: &PalwJobContextV2, leaf: u64) -> Option<u32> {
+        let interval = self.checkpoint_interval();
+        crate::fp_interval::base0_fp_interval_of_leaf_v1(&self.profile, context, interval, leaf)
+    }
+
+    fn refutation_from_served_intervals(
+        &self,
+        held: &[(u32, Vec<u8>)],
+        claim: PalwClaimRootsV1,
+        prompt_token_ids: &[u32],
+        generated_token_ids: &[u32],
+        work_leaves: u64,
+        leaf: u64,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        // The replay of a served interval resumes from the state this node recomputed for the
+        // interval's named anchor (ADR-0086 Decision 2) — warm that memo the way the seat's own
+        // row check would have, for every held interval, before assembling.
+        for (_, bytes) in held {
+            if let Ok(v4) = crate::fp_interval::Base0FpIntervalOpeningV4::decode_v1(bytes)
+                && let Some(anchor) = v4.anchor.as_ref()
+            {
+                let _ = self.checkpoint_root_for_context_v1(
+                    &v4.binding.job_context,
+                    prompt_token_ids,
+                    generated_token_ids,
+                    anchor.leaf.covered_decode_call,
+                );
+            }
+        }
+        crate::fp_interval::base0_refutation_from_served_intervals_capped_v1(
+            held,
+            claim,
+            prompt_token_ids,
+            generated_token_ids,
+            work_leaves,
+            leaf,
+            self.checkpoint_interval(),
+            self.step_ladder_cap,
+            &|bytes| {
+                crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+                    bytes,
+                    prompt_token_ids,
+                    self.checkpoint_interval(),
+                    self.step_ladder_cap,
+                )
+            },
+            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+            self.prompt_ids_form,
+        )
+    }
+
     fn fp_committed_output_ids(&self, capture: &[u8]) -> Option<Vec<u32>> {
         let retention = crate::produce::base0_material_decode_any_v1(capture).ok()?;
         let ids = retention.generated_token_ids().to_vec();
@@ -2232,7 +2432,22 @@ mod free_prompt_tests {
             .interval_count;
         assert!(count >= 2, "a one-interval job cannot show that a replayed anchor is the committed one");
         let claim = PalwClaimRootsV1 { execution_root: dense.execution_root, trace_root: dense.trace_root, anchor: ctx.job_id };
+        let geometry = crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&dense.binding, interval).expect("a geometry");
         for index in 0..count {
+            // ADR-0086 Decision 2: the anchor is named; the seat holds the state it recomputed.
+            crate::fp_recompute::base0_fp_seat_state_forget_v1();
+            if let Some(covered) = geometry.anchor_covered_call(index) {
+                let mut kernels = crate::fp_recompute::A16RecomputeKernelsV1::new(&artifact, None).expect("recompute kernels");
+                crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+                    &profile,
+                    &ctx,
+                    &ids,
+                    &dense.generated_token_ids,
+                    covered,
+                    &mut kernels,
+                )
+                .expect("this seat can recompute its own state");
+            }
             let from_tiles = crate::fp_interval::base0_open_fp_interval_v1(
                 &dense_material,
                 index,
@@ -2814,5 +3029,66 @@ mod free_prompt_tests {
         // not the file.
         Qwen25A16Backend::check_tokenizer_declared_v1(&seeded, ArtifactSourceV1::Derived(0x5A16))
             .expect("the derived floor declares no tokenizer and may");
+    }
+}
+
+/// A diagnostic, never part of the suite: open intervals of a staged free-prompt capture
+/// (`MISAKA_PROBE_MATERIAL`, FPC1) with the real artifact (`MISAKA_PALW_ARTIFACT`) and report
+/// what the opener says, interval by interval (`MISAKA_PROBE_INTERVALS`, comma-separated).
+#[cfg(test)]
+mod probe_open_interval {
+    #[test]
+    #[ignore]
+    fn open_intervals_of_a_staged_capture() {
+        use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+        let Ok(material_path) = std::env::var("MISAKA_PROBE_MATERIAL") else { return };
+        let artifact_path = std::env::var("MISAKA_PALW_ARTIFACT").expect("MISAKA_PALW_ARTIFACT");
+        let indices: Vec<u32> = std::env::var("MISAKA_PROBE_INTERVALS")
+            .unwrap_or_else(|_| "0".into())
+            .split(',')
+            .map(|s| s.trim().parse().expect("an interval index"))
+            .collect();
+        let started = std::time::Instant::now();
+        let bytes = std::fs::read(&material_path).expect("the material reads");
+        let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(
+            &bytes,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect("an FPC1 capture");
+        eprintln!(
+            "material {} bytes, capture {} bytes, prompt ids {}, class {} ({:.0?})",
+            bytes.len(),
+            payload.capture.len(),
+            payload.material.prompt_token_ids.len(),
+            payload.material.job.class_id,
+            started.elapsed()
+        );
+        let retention = crate::produce::base0_material_decode_any_v1(&payload.capture).expect("the capture decodes");
+        let binding = match &retention {
+            crate::produce::Base0RetentionV1::Folded(m) => m.binding.clone(),
+            crate::produce::Base0RetentionV1::Dense(m) => m.0.clone(),
+        };
+        eprintln!(
+            "binding: leaves {} checkpoints {} ctx prefill {} decode {} ({:.0?})",
+            binding.step_leaf_count,
+            binding.checkpoint_count,
+            binding.job_context.declared_prefill_tokens,
+            binding.job_context.exact_decode_tokens,
+            started.elapsed()
+        );
+        let file = std::fs::read(&artifact_path).expect("the artifact reads");
+        let artifact = crate::artifact::decode_artifact_file_v1(&file).expect("the artifact decodes");
+        eprintln!("artifact decoded ({:.0?})", started.elapsed());
+        let backend =
+            super::Qwen25A16Backend::new(std::sync::Arc::new(artifact), b"devnet".to_vec(), binding.shape_profile.clone(), (63, 2))
+                .expect("the backend builds")
+                .with_step_ladder_cap(1 << 26);
+        for index in indices {
+            let t = std::time::Instant::now();
+            match backend.open_fp_interval(&payload.capture, index, &payload.material.prompt_token_ids) {
+                Ok(opening) => eprintln!("interval {index}: opened, {} bytes ({:.0?})", opening.len(), t.elapsed()),
+                Err(e) => eprintln!("interval {index}: does not open ({:.0?}): {e}", t.elapsed()),
+            }
+        }
     }
 }

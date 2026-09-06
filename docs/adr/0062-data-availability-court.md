@@ -6,7 +6,7 @@
 > original branch commit (`554ca77c`) carries the old number in its message; this file is the
 > authority.
 
-Status: **Proposed** (2026-08-30). Supersedes nothing; completes ADR-0042 Decision 7.
+Status: **Implemented behind `Params::palw_da_court`, dormant** (the amended form landed 2026-09-02; SA-7 widened the same fence 2026-09-03 — see the implementation sections below). The "Proposed, not landed" reading that stood in this line and in the README until 2026-09-05 was stale. Supersedes nothing; completes ADR-0042 Decision 7.
 
 > **Standing (index reconciliation, 2026-09-02).** Still Proposed, not landed. The harm it was
 > written to stop — an `Unavailable` quorum voiding a claim and slashing the producer's bond with no
@@ -535,3 +535,43 @@ past `liability + accuse + disclose` (`palw_v2_bond_outlasting_da_court`; `valid
 a delay inside that sum wherever the court is armed). testnet-11 and devnet stay dormant; arming
 them requires the state-version move this ADR asks for, and a test now says so. Design record:
 `docs/palw-private-prompts-design-2026-09-05.md`.
+
+## Arming on testnet-11, 2026-09-06 — a scheduled fence, and what the state version really means
+
+Scheduled at **DAA 1,900** on testnet-11 (`PALW_RC_DA_COURT_FENCE_DAA`), together with ADR-0077
+Decision 16's `palw_panel_da` and ADR-0087/0088/0089's three model fences. The chain is live and
+carries value, so this is ADR-0083's path (a) — a height — and not the re-mint this ADR's
+Consensus-impact section assumed.
+
+**The state version does not move, and the sentence that said it must was written for a re-mint.**
+`PALW_STATE_V2_VERSION` is hashed into `state_root`, and every header commits `palw_state_root`, so
+moving it invalidates the chain from block one: on a live network the bump IS the re-mint rather
+than a step towards one. What the bump was for — an old build must not fold under new rules and
+call the result the same state — is bought here by the fence itself: below 1,900 the fold is
+byte-identical (`the_da_court_fence_off_is_byte_identical`), and past it an un-upgraded node forks
+VISIBLY, because `palw_da_court` now arms the fork-id gate (`fork_id_gate_fences_v1`), which
+refuses a peer whose schedule is not this node's. The rule as it now stands, pinned by
+`a_scheduled_da_court_needs_no_state_version_move_and_a_genesis_one_would`: a court armed at
+genesis on a preset that carries history needs the version move (it is a re-mint); a scheduled one
+does not, and must arm the gate instead.
+
+**Two values ride with the fence, and neither is in the ruleset.**
+
+* *The withdrawal delay.* A defaulted claim adds `accuse + disclose` to the path from acceptance to
+  a verdict, so past the fence a retiring bond stays locked for the bundle's delay plus that
+  lattice (`palw_v2_bond_withdrawal_delay_at_v1`, resolved at each block by the fold). Rewriting the
+  bundle's own `withdrawal_delay` would have moved `palw_ruleset_id_v2` — every fingerprint and
+  identity with it — and a live fleet cannot upgrade one host at a time through an identity change.
+  This closes the mainnet audit's "should fix" at `palw_mode_v2.rs:938`.
+* *The pruning horizon.* SA-6's lattice grows by the same term, so the depth goes 6,602 → 12,002.
+  The depth is not a fence and is hashed into `consensus_params_id` directly, so
+  `consensus_identity_id` normalises it back with the fence: two builds that differ only about a
+  future height announce one identity and stay peers, which is the whole rollout. Proven by
+  `scheduling_the_da_court_moves_the_fingerprint_and_leaves_the_identity_alone`, which reconstructs
+  the running fleet's ruleset and pins its fingerprint to the one testnet-11's nodes print.
+
+The horizon change is invisible in substance until blue score 6,602 — a depth this chain has never
+reached (tip 1,619 at 6.2 DAA/h) — so no header's pruning point differs under either build.
+
+testnet-11 keeps the FLAT prompt commitment: `palw_prompt_ids_merkle` is genesis-only
+(`validate_palw_v2`), because no reader of a `prompt_token_ids_hash` holds a job's anchor height.

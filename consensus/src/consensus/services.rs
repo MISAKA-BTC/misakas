@@ -158,6 +158,7 @@ impl ConsensusServices {
             params.pq_activation_daa_score,
             params.palw_panel_da_admissible(),
             params.palw_prompt_ids_form_v1(),
+            params.palw_model_market.is_some(),
         );
 
         let pruning_point_manager = PruningPointManager::new(

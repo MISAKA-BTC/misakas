@@ -216,19 +216,26 @@ pub fn fork_id_gate_armed_v1(params: &Params) -> bool {
 /// `consensus_identity_id`'s business and never "crossed", and `never()` is not a height.
 ///
 /// Today: ADR-0072's `palw_attempt_activation`, ADR-0083's `palw_difficulty_priced_rows` (the
-/// difficulty window counts only bits-priced rows; scheduled at DAA 1150 on testnet-11), and its
+/// difficulty window counts only bits-priced rows; scheduled at DAA 1150 on testnet-11), its
 /// second half `palw_receipt_rows_unpriced` (the receipt lane leaves the count; mainnet audit
-/// 2026-09-05, dormant on testnet-11 until the operator schedules it). A fence
+/// 2026-09-05, dormant on testnet-11 until the operator schedules it), and ADR-0062's
+/// `palw_da_court` (testnet-11's second flag day, scheduled at DAA 1900): past it a node folds two
+/// consensus objects an un-upgraded peer refuses, locks a retiring bond for the court's own
+/// windows, and keeps a wider pruning horizon — three rules whose crossing an un-upgraded peer
+/// cannot follow, which is exactly what this gate is for. `palw_panel_da` and the three model
+/// fences ride the same height and are NOT listed separately: the gate keys on heights, and
+/// listing one fence per rule at the same height would only repeat it. A fence
 /// that is scheduled on a preset is that operator's opt-in — there is no second field to set,
 /// because the schedule entry already says everything the gate needs: the height, and that this
 /// build carries the rule. Sorted and deduplicated so the list reads as a schedule.
 pub fn fork_id_gate_fences_v1(params: &Params) -> Vec<u64> {
-    let mut fences: Vec<u64> = [params.palw_attempt_activation, params.palw_difficulty_priced_rows, params.palw_receipt_rows_unpriced]
-        .into_iter()
-        .flatten()
-        .map(|fence| fence.daa_score())
-        .filter(|&score| score != 0 && score != u64::MAX)
-        .collect();
+    let mut fences: Vec<u64> =
+        [params.palw_attempt_activation, params.palw_difficulty_priced_rows, params.palw_receipt_rows_unpriced, params.palw_da_court]
+            .into_iter()
+            .flatten()
+            .map(|fence| fence.daa_score())
+            .filter(|&score| score != 0 && score != u64::MAX)
+            .collect();
     fences.sort_unstable();
     fences.dedup();
     fences
@@ -397,7 +404,9 @@ mod tests {
                 // path (a)). On the schedule AND on the gate — the first shipped preset whose gate is
                 // armed; see the module doc's "What armed on a shipped preset means" and
                 // `the_gate_is_armed_only_where_a_shipped_preset_schedules_a_gate_fence`.
-                ("testnet-11", vec![1150, 2_125_000]),
+                // ADR-0062's court, `PanelDa` and the model market, scheduled at 1900 (2026-09-06,
+                // the second flag day). One height, five fences; the schedule lists heights.
+                ("testnet-11", vec![1150, 1900, 2_125_000]),
                 ("devnet", vec![]),
                 ("simnet", vec![]),
             ],
@@ -420,10 +429,15 @@ mod tests {
     #[test]
     fn the_gate_is_armed_only_where_a_shipped_preset_schedules_a_gate_fence() {
         const ADR_0083: u64 = 1150;
+        const ADR_0062: u64 = 1900;
         const CRESCENDO_T11: u64 = 2_125_000;
         for (name, params) in shipped() {
             if name == "testnet-11" {
-                assert_eq!(fork_id_gate_fences_v1(&params), vec![ADR_0083], "{name}: armed by ADR-0083's fence and nothing else");
+                assert_eq!(
+                    fork_id_gate_fences_v1(&params),
+                    vec![ADR_0083, ADR_0062],
+                    "{name}: armed by ADR-0083's fence and ADR-0062's, and nothing else"
+                );
                 assert!(fork_id_gate_armed_v1(&params));
                 continue;
             }
@@ -439,7 +453,7 @@ mod tests {
         }
 
         let t11 = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
-        assert_eq!(t11.fence_schedule_v1(), vec![ADR_0083, CRESCENDO_T11]);
+        assert_eq!(t11.fence_schedule_v1(), vec![ADR_0083, ADR_0062, CRESCENDO_T11]);
         let genesis = t11.genesis.hash;
         // The un-upgraded build: same genesis, schedule [2_125_000] — it has crossed nothing and names
         // crescendo as its next fence, which is exactly what its digest and next look like on the wire.

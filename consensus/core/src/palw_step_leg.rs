@@ -1541,16 +1541,14 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
     check_step_refutation_capped_v1(refutation, PALW_STEP_LEG_MAX_LEAVES)
 }
 
-/// [`check_step_refutation_v1`] against the ruleset's `max_step_leaf_count` — **the wiring ADR-0084
-/// U-08 was about** (mainnet audit, 2026-09-05).
+/// **The same adjudication at a NAMED step ladder** (ADR-0084 U-08).
 ///
-/// The capped opening walkers below existed and the court did not call them: every arm here opened
-/// through the default-ladder names, so a class the ruleset admitted at `2^26` leaves — the dense
-/// graph-v5@512 row, 52,778,128 worst case — met `LeafCountOutOfRange` before its first leaf was
-/// read, and no dispute of it could reach a verdict. The cap is now a parameter the court resolves
-/// from `Params::palw_context_ladder` at the block's own DAA (`palw_refutation_leaf_cap_at`, the
-/// ONE place), so under a dormant fence this is byte-identical to the default form and under an
-/// armed one the walkers honour what the ruleset froze.
+/// `max_step_leaf_count` bounds only the two Merkle walks (`open_against`); the shape pass is
+/// already an equality at the accusation's own claim and needs no ladder. The uncapped name is
+/// this function at [`PALW_STEP_LEG_MAX_LEAVES`], which is what every caller outside the court
+/// wants; the court passes the ruleset's ladder past `Params::palw_court_ladder` and `2^22`
+/// before it, so a close proof against a graph-v5 class is refused by name
+/// (`LeafCountOutOfRange`) rather than acquitted or convicted, until the fence says otherwise.
 pub fn check_step_refutation_capped_v1(
     refutation: &PalwStepRefutationV1,
     max_step_leaf_count: u64,

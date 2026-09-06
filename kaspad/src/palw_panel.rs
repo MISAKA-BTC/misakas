@@ -156,6 +156,13 @@ fn pool_sweep_material_v1(
 /// The family capture inside a pool payload: an `FPC1` payload's inner tuple (ADR-0073 Decision
 /// 1a), or the bytes themselves for an attempt's raw capture. What `verify_material` and the
 /// provers take — the pool and the retention keep the payload as it travelled.
+/// What `close_source_from_served_intervals_v1` answers when it cannot hand back a source.
+enum CloseFromServedV1 {
+    Missing(Vec<u32>),
+    NotThisLane,
+    Refused(String),
+}
+
 fn fp_capture_view(
     bytes: &[u8],
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
@@ -318,6 +325,10 @@ pub struct PalwPanelService {
     /// When `retention/foreign/` was last swept. The sweep is a full directory walk, so it runs on
     /// a cadence rather than inside every write (audit M2-2).
     foreign_prune_at: std::sync::Mutex<std::time::Instant>,
+    /// **ADR-0085 Decision 4: the faults this seat found, by claim** — `(first leaf, count)`, a
+    /// single leaf once named (ADR-0086 Decision 6). The challenger's half prosecutes a claim in
+    /// here whether or not `--palw-challenge` challenges everything; bounded, newest refused.
+    seat_faults: std::sync::Mutex<HashMap<Hash64, (u64, u64)>>,
     /// Fired by `signal_exit` so this service's `start` future can finish. Both panel loops are
     /// `loop { sleep; work }` with nothing else that a shutdown could cancel, so without it the
     /// AsyncRuntime's shutdown join waits on a future that never completes. Measured on
@@ -447,6 +458,7 @@ impl PalwPanelService {
             bond,
             class_holdings,
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
+            seat_faults: std::sync::Mutex::new(HashMap::new()),
             shutdown: SingleTrigger::default(),
         }
     }
@@ -1728,6 +1740,8 @@ impl PalwPanelService {
         // When this seat last pulled for a claim it holds no material for, so a slow answer is
         // not re-asked every 2-second tick.
         let mut requested: HashMap<Hash64, u64> = HashMap::new();
+        // ADR-0085 Decision 3: `(claim, interval)` pairs asked for a close, with the DAA of the ask.
+        let mut requested_intervals: HashMap<(Hash64, u32), u64> = HashMap::new();
         // **The DAA a claim's license was last handed to the mempool — a debounce, not a receipt.**
         //
         // This was a `HashSet` written on mempool acceptance and never cleared, so "the mempool
@@ -1938,9 +1952,15 @@ impl PalwPanelService {
             //
             // Opening costs this bond the claim's own stake, so it is done on a mismatch and never
             // on a suspicion.
-            if self.config.challenge {
+            // ADR-0085 Decision 4: a claim a seat found faulty is prosecuted whether or not this node
+            // challenges everything; the faults are the seat's, the court is the challenger's.
+            let seat_faulted: HashSet<Hash64> = self.seat_faults.lock().unwrap().keys().copied().collect();
+            if self.config.challenge || !seat_faulted.is_empty() {
                 for target in session.palw_disputable_claims_v2(vec![bond_key]) {
                     if challenged.contains(&target.claim_id) {
+                        continue;
+                    }
+                    if !self.config.challenge && !seat_faulted.contains(&target.claim_id) {
                         continue;
                     }
                     let Ok(backend) = self.resolve_backend(&session, target.class_id, target.artifact_root) else {
@@ -2080,6 +2100,8 @@ impl PalwPanelService {
             // rather than awaited inline: the request borrows `self.flow_context` while the loop
             // still holds a borrow of `materials` (audit3 S-01).
             let mut pull_for_close: Vec<Hash64> = Vec::new();
+            // ADR-0085 Decision 3: the intervals a close needs and this node does not hold, asked after the loop.
+            let mut intervals_for_close: Vec<(Hash64, Vec<u32>)> = Vec::new();
             let court_duties = session.palw_court_duties_v2(vec![bond_key]);
             let mut court_stalls: BTreeMap<&'static str, usize> = BTreeMap::new();
             for duty in &court_duties {
@@ -2387,35 +2409,95 @@ impl PalwPanelService {
                         // disagreement possible at all. The close does not: it is an assertion
                         // about the accused's step, so it is assembled from the accused's bytes by
                         // whichever party is making it (audit3 S-01).
-                        let Some(accused) = accused_capture.as_deref() else {
-                            // **And ASK for it.** The pull lived only in the receipt-duty loop, so
-                            // a challenger that never needed the accused's bytes to open its case
-                            // — it compares roots, not material — had no way to obtain them for
-                            // the close. Without this the repair above would trade a court that
-                            // convicts nobody for a court that stalls, which the same backstop
-                            // punishes the same way. Same 25-DAA throttle and the same
-                            // solicited-answer registration the receipt path uses.
-                            if requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(25)) {
-                                requested.insert(duty.claim_id, current_daa);
-                                pull_for_close.push(duty.claim_id);
+                        // **The close's source: the accused capture when held, else the served
+                        // intervals** (ADR-0085 Decision 3). A free-prompt claim whose capture the
+                        // transport refuses (ADR-0084) is closed from the interval carrying the
+                        // step — served with its close annex, because the executor reads this
+                        // session's terminal index off the chain (§6 item 4) — and the interval
+                        // before it, whose tiles a step at an interval's first call reads.
+                        enum CloseSource {
+                            Capture(Vec<u8>),
+                            Served { held: Vec<(u32, Vec<u8>)>, prompt_ids: Vec<u32>, output_ids: Vec<u32>, work_leaves: u64 },
+                        }
+                        let source = match accused_capture.as_deref() {
+                            Some(accused) => CloseSource::Capture(accused.to_vec()),
+                            None => {
+                                let served = self.close_source_from_served_intervals_v1(
+                                    backend.as_ref(),
+                                    &duty.claim_id,
+                                    fp_job.as_ref(),
+                                    materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]),
+                                    &interval_openings,
+                                    index,
+                                );
+                                match served {
+                                    Ok((held, prompt_ids, output_ids, work_leaves)) => {
+                                        CloseSource::Served { held, prompt_ids, output_ids, work_leaves }
+                                    }
+                                    Err(CloseFromServedV1::Missing(wanted)) => {
+                                        let fresh: Vec<u32> = wanted
+                                            .into_iter()
+                                            .filter(|i| {
+                                                requested_intervals
+                                                    .get(&(duty.claim_id, *i))
+                                                    .is_none_or(|at| current_daa >= at.saturating_add(25))
+                                            })
+                                            .collect();
+                                        if !fresh.is_empty() {
+                                            for i in &fresh {
+                                                requested_intervals.insert((duty.claim_id, *i), current_daa);
+                                            }
+                                            intervals_for_close.push((duty.claim_id, fresh));
+                                        }
+                                        *court_stalls.entry("waiting for the interval's close annex").or_default() += 1;
+                                        continue;
+                                    }
+                                    Err(CloseFromServedV1::NotThisLane) => {
+                                        // **And ASK for it.** The pull lived only in the receipt-duty
+                                        // loop, so a challenger that never needed the accused's bytes
+                                        // to open its case — it compares roots, not material — had no
+                                        // way to obtain them for the close. Same 25-DAA throttle and
+                                        // the same solicited-answer registration the receipt path uses.
+                                        if requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(25)) {
+                                            requested.insert(duty.claim_id, current_daa);
+                                            pull_for_close.push(duty.claim_id);
+                                        }
+                                        *court_stalls
+                                            .entry("the close needs the ACCUSED capture and this node holds none — pulling")
+                                            .or_default() += 1;
+                                        trace!(
+                                            "[{PALW_PANEL}] session {} has narrowed to a step but this node holds no capture matching the claim's roots",
+                                            duty.session_id
+                                        );
+                                        continue;
+                                    }
+                                    Err(CloseFromServedV1::Refused(why)) => {
+                                        *court_stalls.entry("the served intervals do not assemble a close").or_default() += 1;
+                                        warn!("[{PALW_PANEL}] session {}: {why}", duty.session_id);
+                                        continue;
+                                    }
+                                }
                             }
-                            *court_stalls
-                                .entry("the close needs the ACCUSED capture and this node holds none — pulling")
-                                .or_default() += 1;
-                            trace!(
-                                "[{PALW_PANEL}] session {} has narrowed to a step but this node holds no capture matching the claim's roots",
-                                duty.session_id
-                            );
-                            continue;
                         };
                         // The user's prompt, hash-bound to the binding (ADR-0073 Decision 1c) — carried
                         // into the blocking task with a copy of the accused capture.
                         let carried_prompt: Option<Vec<u32>> = fp_job.as_ref().map(|job| job.prompt_token_ids.clone());
-                        let accused_bytes: Vec<u8> = accused.to_vec();
+                        let roots_for_close = roots;
                         let Ok((_backend, assembled)) = offload(backend, move |b| {
-                            let refutation = match &carried_prompt {
-                                Some(ids) => b.refutation_for_free_prompt_index(&accused_bytes, index, ids),
-                                None => b.refutation_for_index(&accused_bytes, index),
+                            let refutation = match &source {
+                                CloseSource::Capture(accused_bytes) => match &carried_prompt {
+                                    Some(ids) => b.refutation_for_free_prompt_index(accused_bytes, index, ids),
+                                    None => b.refutation_for_index(accused_bytes, index),
+                                },
+                                CloseSource::Served { held, prompt_ids, output_ids, work_leaves } => b
+                                    .refutation_from_served_intervals(
+                                        held,
+                                        roots_for_close,
+                                        prompt_ids,
+                                        output_ids,
+                                        *work_leaves,
+                                        index,
+                                    ),
                             }
                             .map_err(|e| ("the close does not assemble from this capture", e))?;
                             let openings = b
@@ -2507,6 +2589,12 @@ impl PalwPanelService {
                 // answered — and the court arm would lose its close for want of bytes somebody was
                 // willing to serve.
                 self.request_material_signed(network_domain, claim, current_daa).await;
+            }
+            for (claim, intervals) in intervals_for_close.drain(..) {
+                let asked = self.request_fp_interval_openings(network_domain, claim, &intervals, current_daa).await;
+                info!(
+                    "[{PALW_PANEL}] claim {claim}: asked the executor for interval(s) {intervals:?} for a close ({asked} signed request(s))"
+                );
             }
             if !court_stalls.is_empty() {
                 let responder_of = court_duties.iter().filter(|d| d.i_am_responder).count();
@@ -3553,6 +3641,8 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ReceiptLicensed { .. } => "ReceiptLicensed",
         PalwConsensusObjectV2::ProducerDefaulted { .. } => "ProducerDefaulted",
         PalwConsensusObjectV2::BondRegistered { .. } => "BondRegistered",
+        PalwConsensusObjectV2::ModelBuy { .. } => "ModelBuy",
+        PalwConsensusObjectV2::ModelSell { .. } => "ModelSell",
         PalwConsensusObjectV2::BondRetireRequested { .. } => "BondRetireRequested",
         PalwConsensusObjectV2::BondCapabilityDeclared { .. } => "BondCapabilityDeclared",
         PalwConsensusObjectV2::ClassRegistered { .. } => "ClassRegistered",
@@ -3576,6 +3666,21 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::CourtAttnRootClaimed { .. } => "CourtAttnRootClaimed",
         PalwConsensusObjectV2::CourtAttnDissected { .. } => "CourtAttnDissected",
         PalwConsensusObjectV2::CourtAttnChildChosen { .. } => "CourtAttnChildChosen",
+        // ADR-0088 — the registry's ten moves (a line is founded, a version published and
+        // moved, roles set, the owner seat transferred, the line retired, a proposal posted and
+        // closed, an evaluation posted).
+        PalwConsensusObjectV2::ModelLineFounded { .. } => "ModelLineFounded",
+        PalwConsensusObjectV2::ModelVersionPublished { .. } => "ModelVersionPublished",
+        PalwConsensusObjectV2::ModelVersionPromoted { .. } => "ModelVersionPromoted",
+        PalwConsensusObjectV2::ModelVersionWithdrawn { .. } => "ModelVersionWithdrawn",
+        PalwConsensusObjectV2::ModelLineRolesSet { .. } => "ModelLineRolesSet",
+        PalwConsensusObjectV2::ModelLineOwnerTransferred { .. } => "ModelLineOwnerTransferred",
+        PalwConsensusObjectV2::ModelLineRetired { .. } => "ModelLineRetired",
+        PalwConsensusObjectV2::ModelProposalPosted { .. } => "ModelProposalPosted",
+        PalwConsensusObjectV2::ModelProposalClosed { .. } => "ModelProposalClosed",
+        PalwConsensusObjectV2::ModelEvaluationPosted { .. } => "ModelEvaluationPosted",
+        // ADR-0090 — the seed that opens a line's market.
+        PalwConsensusObjectV2::ModelSeed { .. } => "ModelSeed",
     }
 }
 
@@ -3734,40 +3839,83 @@ impl PalwPanelService {
     /// Runs on a blocking thread (the transport arranges that): it reads a file and runs the
     /// family's opening arithmetic.
     fn open_retained_interval(&self, claim: Hash64, interval_index: u32) -> Option<Vec<u8>> {
+        use misaka_palw_base0::fp_interval::base0_fp_block_leaves_request_decode_v1;
         let bytes = self
             .retained_capture(&claim)
             .or_else(|| std::fs::read(self.config.retention_dir.join("foreign").join(format!("{claim}.material"))).ok())?;
         let session = self.consensus_manager.consensus().unguarded_session();
+        // ADR-0086 Decision 6: a block-leaves request rides the same lane under a high-bit index.
+        let block_request = base0_fp_block_leaves_request_decode_v1(interval_index);
+        // ADR-0085 §6 item 4: the step leaves the open court sessions on this claim have narrowed
+        // to, which the served interval's annex carries when they fall inside it. Read off the
+        // CHAIN, never off the request: an asker names nothing here, and a leaf no session names
+        // is served no tile.
+        let disputed: Vec<u64> = match (block_request, self.bond) {
+            (None, Some(bond)) => session
+                .palw_court_duties_v2(vec![PalwBondKeyV2(bond)])
+                .into_iter()
+                .filter(|d| d.claim_id == claim)
+                .filter_map(|d| d.terminal_index)
+                .collect(),
+            _ => Vec::new(),
+        };
+        let serve = |backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+                     capture: &[u8],
+                     prompt_ids: &[u32],
+                     what: &str|
+         -> Option<Vec<u8>> {
+            let started = std::time::Instant::now();
+            let answer = match block_request {
+                Some((interval, block)) => backend
+                    .open_fp_block_leaves(capture, interval, block, prompt_ids)
+                    .map(|b| (b, format!("block {block} of interval {interval}"))),
+                None => backend.open_fp_interval_with_close(capture, interval_index, prompt_ids, &disputed).map(|b| {
+                    let named = if disputed.is_empty() {
+                        format!("interval {interval_index}")
+                    } else {
+                        format!("interval {interval_index} with the close annex for leaves {disputed:?}")
+                    };
+                    (b, named)
+                }),
+            };
+            match answer {
+                Ok((bytes, named)) => {
+                    info!(
+                        "[{PALW_PANEL}] claim {claim}: opened {named} of the {what} ({} bytes served, {:.0?})",
+                        bytes.len(),
+                        started.elapsed()
+                    );
+                    Some(bytes)
+                }
+                Err(e) => {
+                    // A silent refusal here left a 300-token claim unanswered for 35 minutes on the
+                    // devnet with no line on either side; the reason is the operator's to read.
+                    info!(
+                        "[{PALW_PANEL}] claim {claim}: request {interval_index:#x} on the {what} does not open ({:.0?}): {e}",
+                        started.elapsed()
+                    );
+                    None
+                }
+            }
+        };
         if let Some(payload) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes, self.config.prompt_ids_form)
         {
             let facts = session.palw_producer_facts_v2(payload.material.job.class_id, None)?;
             let backend = self.resolve_backend(&session, payload.material.job.class_id, facts.artifact_root).ok()?;
             // The ids the interval consumed: the user's own, hash-bound to the job by
             // `palw_fp_capture_decode_v1` before this line is reached. Never logged (SA-7).
-            return backend.open_fp_interval(&payload.capture, interval_index, &payload.material.prompt_token_ids).ok();
+            return serve(backend.as_ref(), &payload.capture, &payload.material.prompt_token_ids, "free-prompt capture");
         }
         // A raw family capture — the attempt lane's retention (ADR-0084 Decision 4). The prompt is
         // the anchor's derivation, which the asking seat re-derives on its own; an opening over
         // any other prompt binds to nothing there.
         let Some((backend, shape)) = self.backend_for_raw_capture_v1(&session, &bytes) else {
-            info!("[{PALW_PANEL}] claim {claim}: no held class reads its retained capture — interval {interval_index} not opened");
+            info!("[{PALW_PANEL}] claim {claim}: no held class reads its retained capture — request {interval_index:#x} not opened");
             return None;
         };
         let (_, prompt) = backend.job_for_anchor(shape.job_context.job_id).ok()?;
         let prompt_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
-        match backend.open_fp_interval(&bytes, interval_index, &prompt_ids) {
-            Ok(opening) => {
-                info!(
-                    "[{PALW_PANEL}] claim {claim}: opened interval {interval_index} of the retained capture ({} bytes served)",
-                    opening.len()
-                );
-                Some(opening)
-            }
-            Err(e) => {
-                info!("[{PALW_PANEL}] claim {claim}: interval {interval_index} does not open: {e}");
-                None
-            }
-        }
+        serve(backend.as_ref(), &bytes, &prompt_ids, "retained capture")
     }
 
     /// Register both halves of the serving side with the gossip center. Called once, from the
@@ -3789,6 +3937,79 @@ impl PalwPanelService {
     /// hard-coded `PublicDa` test was not the safe choice it looked like.
     fn fp_privacy_mode_judgeable(&self, privacy_mode: u8) -> bool {
         crate::palw_fp_seat::palw_fp_seat_may_judge_mode_v1(privacy_mode, self.consensus_config.params.palw_panel_da_admissible())
+    }
+
+    /// **ADR-0085 Decision 3: what the served intervals give a close, or what is missing.**
+    /// `Ok((held, prompt ids, output ids, work leaves))` when the interval owning `leaf` is held
+    /// WITH an annex naming the leaf (and the interval before it, when there is one);
+    /// `Missing(intervals)` names what to ask for; `NotThisLane` says the pull is the path (an
+    /// attempt-lane claim, or a class that cannot place a leaf); `Refused` is a reason to log.
+    fn close_source_from_served_intervals_v1(
+        &self,
+        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        claim: &Hash64,
+        fp_job: Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFpMaterialV1>,
+        pooled: &[Vec<u8>],
+        openings: &HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+        leaf: u64,
+    ) -> Result<(Vec<(u32, Vec<u8>)>, Vec<u32>, Vec<u32>, u64), CloseFromServedV1> {
+        use kaspa_consensus_core::palw_freeprompt_v3::{palw_fp_committed_output_ids_decode_v1, palw_fp_job_material_decode_v1};
+        use misaka_palw_base0::fp_interval::{Base0FpIntervalOpeningV4, base0_fp_interval_close_annex_any_v1};
+        let Some(job) = fp_job else { return Err(CloseFromServedV1::NotThisLane) };
+        let Some(ctx) = backend.fp_job_context_v1(&job.job) else { return Err(CloseFromServedV1::NotThisLane) };
+        let Some(wanted) = backend.fp_interval_of_leaf_v1(&ctx, leaf) else { return Err(CloseFromServedV1::NotThisLane) };
+        let Some(prompt_ids) = Self::fp_prompt_for_job(backend, job, self.config.prompt_ids_form) else {
+            return Err(CloseFromServedV1::Refused("a canonical claim whose material is not its own prompt".to_string()));
+        };
+        // The answer's ids, off the same payloads the seat reads them from (ADR-0084 Decision 1).
+        let disk = self.fp_retained_payload_paths(claim).into_iter().filter_map(|path| std::fs::read(path).ok());
+        let Some(output_ids) = pooled.iter().cloned().chain(disk).find_map(|bytes| {
+            palw_fp_job_material_decode_v1(&bytes, self.config.prompt_ids_form)?;
+            palw_fp_committed_output_ids_decode_v1(
+                &bytes,
+                |capture| backend.fp_committed_output_ids(capture),
+                self.config.prompt_ids_form,
+            )
+        }) else {
+            return Err(CloseFromServedV1::Refused("no served answer carries this claim's ids".to_string()));
+        };
+        let primary = openings.get(&(*claim, wanted)).into_iter().flatten().find(|bytes| {
+            base0_fp_interval_close_annex_any_v1(bytes).is_some_and(|annex| annex.disputed.iter().any(|d| d.leaf_index == leaf))
+        });
+        let previous = wanted
+            .checked_sub(1)
+            .and_then(|i| openings.get(&(*claim, i)).into_iter().flatten().find(|b| Base0FpIntervalOpeningV4::decode_v1(b).is_ok()));
+        let mut missing = Vec::new();
+        if primary.is_none() {
+            missing.push(wanted);
+        }
+        if wanted > 0 && previous.is_none() {
+            missing.push(wanted - 1);
+        }
+        if !missing.is_empty() {
+            return Err(CloseFromServedV1::Missing(missing));
+        }
+        let primary = primary.expect("checked above").clone();
+        let work_leaves = Base0FpIntervalOpeningV4::decode_v1(&primary)
+            .map_err(|e| CloseFromServedV1::Refused(format!("the held opening is not V4: {e:?}")))?
+            .binding
+            .step_leaf_count;
+        let mut held = vec![(wanted, primary)];
+        if let Some(prev) = previous {
+            held.push((wanted - 1, prev.clone()));
+        }
+        Ok((held, prompt_ids, output_ids, work_leaves))
+    }
+
+    /// ADR-0085 Decision 4: remember a fault this seat found, for the challenger's half. A leaf
+    /// once named replaces the block it was found in.
+    fn note_seat_fault_v1(&self, claim: Hash64, first_leaf_index: u64, leaf_count: u64) {
+        const CLAIMS: usize = 256;
+        let mut faults = self.seat_faults.lock().unwrap();
+        if faults.len() >= CLAIMS && !faults.contains_key(&claim) {
+            return;
+        }
+        faults.insert(claim, (first_leaf_index, leaf_count));
     }
 
     /// **Hold one served opening, bounded** (ADR-0077 Decision 8).
@@ -4206,6 +4427,74 @@ impl PalwPanelService {
                              sampled verdict never slashes and the court's bisection is what convicts",
                             duty.claim_id
                         );
+                        self.note_seat_fault_v1(duty.claim_id, leaf_index, 1);
+                        return None;
+                    }
+                    PalwFpIntervalVerdictV1::FaultInRange { first_leaf_index, leaf_count } => {
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: interval {index} does not replay in leaves [{first_leaf_index}, +{leaf_count}) — \
+                             filing nothing; a sampled verdict never slashes, and the block is the court's address (ADR-0086 D3)",
+                            duty.claim_id
+                        );
+                        self.note_seat_fault_v1(duty.claim_id, first_leaf_index, leaf_count);
+                        // ADR-0086 Decision 6: ask for the block's leaves on the same lane, and name
+                        // the leaf from them once they are held — the fault at leaf granularity is
+                        // what a court narrows to.
+                        let retain_level =
+                            misaka_palw_base0::fp_capture::palw_base0_sparse_retain_level_v1(self.config.court.max_step_leaf_count());
+                        let block = first_leaf_index >> retain_level;
+                        if let Some(packed) = misaka_palw_base0::fp_interval::base0_fp_block_leaves_request_index_v1(interval, block) {
+                            let served_block = openings.get(&(duty.claim_id, packed)).and_then(|v| v.first().cloned());
+                            match served_block {
+                                Some(block_bytes) => {
+                                    let (candidate_for_naming, prompt_owned, output_owned) =
+                                        (bytes.clone(), prompt_ids.to_vec(), output_ids.to_vec());
+                                    let Ok((_returned, named)) = offload(backend, move |b| {
+                                        b.fp_name_the_leaf_v1(
+                                            &candidate_for_naming,
+                                            &block_bytes,
+                                            roots,
+                                            interval,
+                                            &prompt_owned,
+                                            &output_owned,
+                                            work_leaves,
+                                        )
+                                    })
+                                    .await
+                                    else {
+                                        return None;
+                                    };
+                                    match named {
+                                        Ok(Some(leaf)) => {
+                                            warn!(
+                                                "[{PALW_PANEL}] claim {}: the served block {block} of interval {index} names leaf {leaf} — the \
+                                                 court's address (ADR-0086 D6)",
+                                                duty.claim_id
+                                            );
+                                            self.note_seat_fault_v1(duty.claim_id, leaf, 1);
+                                        }
+                                        Ok(None) => warn!(
+                                            "[{PALW_PANEL}] claim {}: every leaf of the served block {block} of interval {index} is this \
+                                             seat's own — the executor served a block it did not commit; the address stays the block",
+                                            duty.claim_id
+                                        ),
+                                        Err(e) => warn!(
+                                            "[{PALW_PANEL}] claim {}: the served block {block} of interval {index} names no leaf: {e}",
+                                            duty.claim_id
+                                        ),
+                                    }
+                                }
+                                None => {
+                                    let asked =
+                                        self.request_fp_interval_openings(network_domain, duty.claim_id, &[packed], current_daa).await;
+                                    info!(
+                                        "[{PALW_PANEL}] claim {}: asked the executor for block {block} of interval {index} ({asked} signed \
+                                         request(s), index {packed:#x})",
+                                        duty.claim_id
+                                    );
+                                }
+                            }
+                        }
                         return None;
                     }
                     PalwFpIntervalVerdictV1::Mismatch | PalwFpIntervalVerdictV1::Unverifiable => continue,

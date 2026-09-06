@@ -1532,3 +1532,161 @@ message GetPalwPendingChunkGroupResponseMessage {
   uint64 deposit = 13;
   RPCError error = 1000;
 }
+
+// ADR-0087 Decision 8: a line's model market as the tip holds it (ADR-0088 Decision 9: keyed by
+// line; a class id names the class's founding line).
+message GetPalwModelMarketRequestMessage {
+  string lineId = 1;
+}
+
+message GetPalwModelMarketResponseMessage {
+  bool found = 1;
+  string lineId = 2;
+  bool opened = 3;
+  uint64 openedDaa = 4;
+  uint64 mskReserve = 5;
+  uint64 positionUnits = 6;
+  uint64 soldUnits = 7;
+  uint64 burnedSompi = 8;
+  uint64 registrantPaidSompi = 9;
+  bool closedToBuys = 10;
+  uint64 priceSompiPerPosition = 11;
+  uint64 supplyUnits = 12;
+  uint64 virtualSompi = 13;
+  string classStatus = 14;
+  uint64 contributorPaidSompi = 15;
+  uint64 seedSompi = 16;
+  string seededBy = 17;
+  uint64 seedMinSompi = 18;
+  RPCError error = 1000;
+}
+
+message RpcPalwModelPosition {
+  string lineId = 1;
+  uint64 units = 2;
+}
+
+// ADR-0087 Decision 8: every position a holder (its payout payload) has, by line.
+message GetPalwModelPositionsRequestMessage {
+  string holder = 1;
+}
+
+message GetPalwModelPositionsResponseMessage {
+  string holder = 1;
+  repeated RpcPalwModelPosition positions = 2;
+  RPCError error = 1000;
+}
+
+// ADR-0088 Decision 12: the model registry.
+message RpcPalwModelLine {
+  string lineId = 1;
+  string classId = 2;
+  bool hasRow = 3;
+  RpcOutpoint owner = 4;
+  optional string ownerPayoutPayload = 5;
+  RpcOutpoint developer = 6;
+  optional string developerPayoutPayload = 7;
+  RpcOutpoint maintainer = 8;
+  optional string maintainerPayoutPayload = 9;
+  string name = 10;
+  string nameHex = 11;
+  uint64 foundedDaa = 12;
+  uint32 current = 13;
+  repeated uint32 previews = 14;
+  uint32 versionsPublished = 15;
+  uint32 contributorPermilleOfLeg = 16;
+  string status = 17;
+  optional uint64 retiredDaa = 18;
+}
+
+message GetPalwModelLineRequestMessage {
+  string lineId = 1;
+}
+
+message GetPalwModelLineResponseMessage {
+  bool exists = 1;
+  string lineId = 2;
+  RpcPalwModelLine line = 3;
+  optional string currentRoot = 4;
+  repeated string rootsInForce = 5;
+  uint64 tipDaa = 6;
+  RPCError error = 1000;
+}
+
+message RpcPalwModelVersion {
+  string lineId = 1;
+  uint32 version = 2;
+  string root = 3;
+  optional uint32 parent = 4;
+  optional string adoptedFrom = 5;
+  optional string runtimeHash = 6;
+  optional string datasetCommitment = 7;
+  optional string trainingConfigHash = 8;
+  optional string notesHash = 9;
+  uint64 publishedDaa = 10;
+  RpcOutpoint publishedBy = 11;
+  string status = 12;
+  optional uint64 untilDaa = 13;
+  bool inForce = 14;
+  uint64 attemptClaims = 15;
+  uint64 fpClaims = 16;
+  string workLeaves = 17;
+  optional uint64 firstUsedDaa = 18;
+  optional uint64 lastUsedDaa = 19;
+}
+
+message RpcPalwModelEvaluation {
+  string evaluatorId = 1;
+  uint32 scorePermille = 2;
+  string reportHash = 3;
+  uint64 postedDaa = 4;
+  RpcOutpoint by = 5;
+  bool isLinesOwn = 6;
+}
+
+message GetPalwModelVersionRequestMessage {
+  string lineId = 1;
+  uint32 version = 2;
+}
+
+message GetPalwModelVersionResponseMessage {
+  bool exists = 1;
+  string lineId = 2;
+  uint32 versionNumber = 3;
+  RpcPalwModelVersion version = 4;
+  repeated RpcPalwModelEvaluation evaluations = 5;
+  uint64 tipDaa = 6;
+  RPCError error = 1000;
+}
+
+message GetPalwModelLinesRequestMessage {
+  string classId = 1;
+}
+
+message GetPalwModelLinesResponseMessage {
+  bool exists = 1;
+  string classId = 2;
+  repeated RpcPalwModelLine lines = 3;
+  RPCError error = 1000;
+}
+
+message RpcPalwModelProposal {
+  string proposalId = 1;
+  string lineId = 2;
+  string root = 3;
+  string noteHash = 4;
+  RpcOutpoint by = 5;
+  uint64 postedDaa = 6;
+  optional uint32 adoptedIn = 7;
+}
+
+message GetPalwModelProposalsRequestMessage {
+  string lineId = 1;
+}
+
+message GetPalwModelProposalsResponseMessage {
+  bool exists = 1;
+  string lineId = 2;
+  repeated RpcPalwModelProposal proposals = 3;
+  RPCError error = 1000;
+}

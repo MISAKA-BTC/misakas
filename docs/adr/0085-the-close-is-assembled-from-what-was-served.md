@@ -1,6 +1,6 @@
 # ADR-0085: The close is assembled from what the executor served — a disputed tile, not a capture
 
-**Status:** PROPOSED (2026-09-04). Design complete; implementation NOT started (see §7). Consensus-inert
+**Status:** PROPOSED (2026-09-04). §6 items 1–3 LANDED 2026-09-04 (see §7); items 4–5 are being built under the 2026-09-05 goal, with ADR-0086 Decision 6's transport (the block-leaves annex) riding the same lane. Consensus-inert
 by construction: the refutation object (`PalwExecutionStepRefutationV1`), the adjudicator
 (`check_execution_step_refutation_v1`) and every court object are unchanged; what changes is how a
 party that holds no capture ASSEMBLES the close, and what the executor serves it.
@@ -144,12 +144,34 @@ X4  The annex is served only for a leaf an open court session names; a request f
   the executor applies the same rule when it fills the annex, and the closer anchors exactly when an
   anchor was served.
 
-**Not landed — §6 items 4–5:** the executor filling the annex from open court sessions
-(`open_retained_interval`, X4) and the panel's terminal arm taking the opening path before the pull
-(Decision 3), plus Decision 4's seat-opened court. Both are node work on `kaspad/src/palw_panel.rs`.
+**Landed — §6 items 4–5 (2026-09-05, node wiring on `kaspad/src/palw_panel.rs`, base0 seams in
+`fp_interval.rs`, four backend methods):**
+
+| item | where | what |
+|---|---|---|
+| 4 | `open_retained_interval` → `PalwExecutionBackendV1::open_fp_interval_with_close` | The executor reads the open court sessions on the claim off the CHAIN (`palw_court_duties_v2` under its own bond, `terminal_index`), never off the request, and serves the interval with `Base0FpCloseAnnexV1` for the named leaves inside it. `base0_fp_close_annex_v1` builds the annex from the accused's own tiles — replayed for the interval from a fold (`base0_fp_interval_tiles_from_fold_capped_v1`), held by a dense retention, the seed row off the opening itself — with the capture path's anchoring rule (a cache-reading step past call 0 carries the checkpoint before it); `base0_fp_interval_opening_with_close_v1` attaches it to the V4 (or V3) bytes. A leaf outside the interval is another interval's; a leaf no session names is served no tile. |
+| 5 (D3) | the terminal arm → `close_source_from_served_intervals_v1` → `refutation_from_served_intervals` | When the closer holds no capture matching the claim's roots and the claim is free-prompt: the interval owning the terminal leaf (`fp_interval_of_leaf_v1`) and the one before it are looked up in the held openings; the primary must carry an annex naming the leaf. Missing ones are asked for on the interval lane (25-DAA throttle per pair, `intervals_for_close`, after the loop like the pull) and the stall reads "waiting for the interval's close annex". Held, `base0_refutation_from_served_intervals_capped_v1` replays each with the family's kernels from the seat state (memo warmed as the row check warms it), hands ADR-0085's builder the V2 views and tiles, the annex, the tiled pin (`rows_root` from the annex, the answer's ids off the served payload), and the primary interval's anchor chunks. Attempt-lane claims keep the pull. |
+| 5 (D4) | `interval_seat_outcome_v1` → `seat_faults` → the challenger's half | A seat's `Fault { leaf }` / `FaultInRange` is remembered per claim (bounded); the challenger's loop prosecutes a remembered claim whether or not `--palw-challenge` challenges everything (the disputable-claims list is still the chain's, the fault only selects). With ADR-0086 Decision 6 the block is refined to a leaf first. |
+
+Pinned at the base0 layer (`a_close_from_served_intervals_is_the_close_from_the_capture_and_the_annex_changes_no_verdict`):
+on the floor fixture, for every main-step leaf of every interval, the served path's close equals
+the capture path's byte for byte under the same tiled pin; the annexed V4 verifies exactly as the
+plain one (X3 on V4); an annex naming another leaf does not close this one. What is NOT
+exercised: a live court reaching a close through this path — that still needs a faulty producer
+on a devnet (the two-node court harness §7's first paragraph names does not exist).
+
+**What the implementation taught.** The chunks a served-interval close hands the builder are the
+primary interval's anchor state — the checkpoint before the interval's first call — which on a
+per-call class at checkpoint interval 1 (graph-v5) is the checkpoint before every step in the
+interval. On a wider cadence a mid-interval step's anchor is a state the seat's replay passes
+through and does not keep; the builder's anchor check refuses it by name rather than closing
+wrongly. Recorded in §8.
 
 ## 8. What is deliberately not decided
 
+* A served-interval close for a mid-interval step on a class whose checkpoint cadence is wider
+  than one call: the seat state the builder needs is transient in the replay; keeping it is a
+  recompute-kernel change, taken when such a class exists.
 * Whether the annex should ride the answer envelope instead (`rows_root` could; the disputed tile
   cannot, because it is not known until a court names a leaf).
 * The attention dissection's bottom (`PalwAttnDissectBottomV1`) already opens tiles on chain for a

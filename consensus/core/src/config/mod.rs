@@ -122,6 +122,12 @@ pub struct Config {
     /// `evm_flat_authoritative`.
     pub evm_retire_206: bool,
 
+    /// PRIVATE devnets only: run the EVM bridge without the DNS-finality freshness gate — deposit
+    /// claims are queued and the template carries the EVM payload even when no validator has ever
+    /// confirmed an anchor. A drill of the EVM lane on a bonded PALW devnet has no VLT overlay to
+    /// confirm one. Node policy, not consensus; refused by `kaspad` anywhere but devnet/simnet.
+    pub evm_bridge_devnet_unpaused: bool,
+
     /// kaspa-pq C-01 (slice S9b-prune): ONE-SHOT, IRREVERSIBLE bulk reclamation of the LEGACY per-block
     /// 206 state snapshot store that accumulated BEFORE `evm_retire_206` stopped writing it. The existing
     /// per-block pruner already reclaims 206 for blocks as they fall below the pruning point, so this only
@@ -177,6 +183,7 @@ impl Config {
             evm_shadow_state_backend: false,
             evm_flat_authoritative: false,
             evm_retire_206: false,
+            evm_bridge_devnet_unpaused: false,
             evm_prune_legacy_206: false,
             evm_materialize_pp_anchor: false,
         }

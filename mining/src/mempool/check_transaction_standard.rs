@@ -150,10 +150,18 @@ impl Mempool {
             // below. The lock parses strictly (108-byte fixed form with an embedded standard
             // ML-DSA-87 refund P2PKH), so this admits no free-form script.
             let output_class = ScriptClass::from_script(&output.script_public_key);
+            // ADR-0087 Decision 3: a model market's sink (`OP_RETURN "MSKMDL01" <line id>`) is the
+            // consensus-legal home of the MSK a buy pays into the curve — unspendable by design and
+            // carved out of the output-class rule the same way the deposit lock is. Recognised by
+            // its exact script (`palw_model_sink_class_v1`), never by its shape. Found by the
+            // devnet drill: the dust carve-out below was reached by no sink, because this check
+            // refused the form first, and a carrier buy could never relay.
+            let is_model_sink =
+                kaspa_consensus_core::palw_model_market_v1::palw_model_sink_class_v1(&output.script_public_key).is_some();
             let output_rejected = if self.config.pq_only {
-                !output_class.is_pq_standard() && output_class != ScriptClass::EvmDepositLock
+                !output_class.is_pq_standard() && output_class != ScriptClass::EvmDepositLock && !is_model_sink
             } else {
-                output_class == ScriptClass::NonStandard
+                output_class == ScriptClass::NonStandard && !is_model_sink
             };
             if output_rejected {
                 return Err(NonStandardError::RejectOutputScriptClass(transaction_id, i));
@@ -177,6 +185,12 @@ impl Mempool {
     ///
     /// It is exposed by [MiningManager] for use by transaction generators and wallets.
     pub(crate) fn is_transaction_output_dust(&self, transaction_output: &TransactionOutput) -> bool {
+        // ADR-0087 Decision 3: a model market's sink is unspendable BY DESIGN and carries the MSK a
+        // buy pays into the curve; it is the one unspendable output that is not dust, and it is
+        // recognised by its exact script, never by its shape.
+        if kaspa_consensus_core::palw_model_market_v1::palw_model_sink_class_v1(&transaction_output.script_public_key).is_some() {
+            return false;
+        }
         // Unspendable outputs are considered dust.
         if is_unspendable::<PopulatedTransaction, SigHashReusedValuesUnsync>(transaction_output.script_public_key.script()) {
             return true;

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="MISAKA Options: seed a model's pair with locked MSK and trade whole positions on the MISAKA chain's protocol curve.">
+<title>MISAKA Options</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1417'/%3E%3Cpath d='M7 23V9l9 9 9-9v14' fill='none' stroke='%2350d2c1' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="nav" id="nav" role="banner">
+  <a class="brand" href="#/trade" aria-label="MISAKA Options home">
+    <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#132228"/><path d="M7 23V9l9 9 9-9v14" fill="none" stroke="#50d2c1" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>MISAKA <b>Options</b></span>
+  </a>
+  <button class="nav-toggle" id="navToggle" aria-label="Toggle menu" aria-expanded="false">Menu</button>
+  <nav class="nav-links" id="navLinks" aria-label="Primary">
+    <a href="#/trade" data-page="trade">Trade</a>
+    <a href="#/portfolio" data-page="portfolio">Portfolio</a>
+    <a href="#/lines" data-page="lines">Models</a>
+    <a href="#/leaderboard" data-page="leaderboard">Leaderboard</a>
+    <a href="#/add" data-page="add">Add model</a>
+    <a href="#/docs" data-page="docs">Docs</a>
+    <div class="more">
+      <button class="more-btn" id="moreBtn" aria-haspopup="true" aria-expanded="false">More</button>
+      <div class="more-menu" id="moreMenu" hidden>
+        <a id="lnkExplorer" href="https://misakascan.com" target="_blank" rel="noopener">Explorer</a>
+        <a id="lnkAdr" href="https://github.com/MISAKA-BTC/misakas/tree/main/docs/adr" target="_blank" rel="noopener">ADRs on GitHub</a>
+        <a href="#/docs">How it works</a>
+        <a href="?selftest=1#/docs">Run self-test</a>
+      </div>
+    </div>
+  </nav>
+  <div class="nav-right">
+    <div class="pill" id="netPill" title="Network status">
+      <span class="dot" id="netDot" aria-hidden="true"></span>
+      <span id="netText">connecting</span>
+    </div>
+    <button class="btn btn-accent" id="connectBtn">Connect</button>
+  </div>
+</header>
+<div id="banner" class="banner" role="status" hidden></div>
+<main id="main" class="main" tabindex="-1"></main>
+<footer class="foot">
+  <span id="footStatus">wRPC: idle. EVM RPC: idle.</span>
+  <span class="foot-right">Every figure on this site is read from a node or computed with the chain's own curve arithmetic; a dash means the value is not available.</span>
+</footer>
+<div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -2969,6 +2969,737 @@ impl Deserializer for GetPalwPendingChunkGroupResponse {
     }
 }
 
+/// ADR-0087 Decision 8: the market of one line (ADR-0088 Decision 9: keyed by line; a class's
+/// founding line has the class id as its line id).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelMarketRequest {
+    /// 128-hex line id — a class id names the class's founding line.
+    pub line_id: String,
+}
+
+impl Serializer for GetPalwModelMarketRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.line_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelMarketRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let line_id = load!(String, reader)?;
+        Ok(Self { line_id })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelMarketResponse {
+    /// False when the line (or its class) does not exist on this chain (or the chain is not
+    /// ConsensusV2).
+    pub found: bool,
+    pub line_id: String,
+    /// False until the first buy folded a row; the numbers below are then the unopened market's.
+    pub opened: bool,
+    pub opened_daa: u64,
+    pub msk_reserve: u64,
+    pub position_units: u64,
+    pub sold_units: u64,
+    pub burned_sompi: u64,
+    /// The owner's total of the 1 % leg (ADR-0088 Decision 8: the field keeps its name and now
+    /// means the owner's).
+    pub registrant_paid_sompi: u64,
+    pub closed_to_buys: bool,
+    /// `(reserve + V) / positions`, in sompi per position, rounded down.
+    pub price_sompi_per_position: u64,
+    pub supply_units: u64,
+    pub virtual_sompi: u64,
+    /// The class's status as the registry names it (`Active`, `Frozen {..}`, `Registered {..}`).
+    pub class_status: String,
+    /// ADR-0088 Decision 8: the part of the leg paid to an adopted contributor.
+    pub contributor_paid_sompi: u64,
+    /// ADR-0090: the seed the market opened with — locked for good (0 while unseeded).
+    pub seed_sompi: u64,
+    /// ADR-0090: who seeded it, as a payout payload (128 hex; empty while unseeded).
+    pub seeded_by: String,
+    /// ADR-0090: the least seed this network takes, in sompi.
+    pub seed_min_sompi: u64,
+}
+
+impl Serializer for GetPalwModelMarketResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &3, writer)?;
+        store!(bool, &self.found, writer)?;
+        store!(String, &self.line_id, writer)?;
+        store!(bool, &self.opened, writer)?;
+        store!(u64, &self.opened_daa, writer)?;
+        store!(u64, &self.msk_reserve, writer)?;
+        store!(u64, &self.position_units, writer)?;
+        store!(u64, &self.sold_units, writer)?;
+        store!(u64, &self.burned_sompi, writer)?;
+        store!(u64, &self.registrant_paid_sompi, writer)?;
+        store!(bool, &self.closed_to_buys, writer)?;
+        store!(u64, &self.price_sompi_per_position, writer)?;
+        store!(u64, &self.supply_units, writer)?;
+        store!(u64, &self.virtual_sompi, writer)?;
+        store!(String, &self.class_status, writer)?;
+        store!(u64, &self.contributor_paid_sompi, writer)?;
+        // Version 3 (ADR-0090): the seed, its payer and the network's least seed.
+        store!(u64, &self.seed_sompi, writer)?;
+        store!(String, &self.seeded_by, writer)?;
+        store!(u64, &self.seed_min_sompi, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelMarketResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let version = load!(u16, reader)?;
+        let found = load!(bool, reader)?;
+        let line_id = load!(String, reader)?;
+        let opened = load!(bool, reader)?;
+        let opened_daa = load!(u64, reader)?;
+        let msk_reserve = load!(u64, reader)?;
+        let position_units = load!(u64, reader)?;
+        let sold_units = load!(u64, reader)?;
+        let burned_sompi = load!(u64, reader)?;
+        let registrant_paid_sompi = load!(u64, reader)?;
+        let closed_to_buys = load!(bool, reader)?;
+        let price_sompi_per_position = load!(u64, reader)?;
+        let supply_units = load!(u64, reader)?;
+        let virtual_sompi = load!(u64, reader)?;
+        let class_status = load!(String, reader)?;
+        // Version 2 (ADR-0088) appended the contributor's leg; a version-1 peer sent none.
+        let contributor_paid_sompi = if version >= 2 { load!(u64, reader)? } else { 0 };
+        // Version 3 (ADR-0090): the seed, its payer and the network's least seed.
+        let (seed_sompi, seeded_by, seed_min_sompi) =
+            if version >= 3 { (load!(u64, reader)?, load!(String, reader)?, load!(u64, reader)?) } else { (0, String::new(), 0) };
+        Ok(Self {
+            found,
+            line_id,
+            opened,
+            opened_daa,
+            msk_reserve,
+            position_units,
+            sold_units,
+            burned_sompi,
+            registrant_paid_sompi,
+            closed_to_buys,
+            price_sompi_per_position,
+            supply_units,
+            virtual_sompi,
+            class_status,
+            contributor_paid_sompi,
+            seed_sompi,
+            seeded_by,
+            seed_min_sompi,
+        })
+    }
+}
+
+/// ADR-0087 Decision 8: a holder's positions.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelPositionsRequest {
+    /// 128-hex holder — the payout payload (the BLAKE2b-512 of the ML-DSA-87 public key).
+    pub holder: String,
+}
+
+impl Serializer for GetPalwModelPositionsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.holder, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelPositionsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let holder = load!(String, reader)?;
+        Ok(Self { holder })
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwModelPosition {
+    /// 128-hex line id (ADR-0088 Decision 9).
+    pub line_id: String,
+    pub units: u64,
+}
+
+impl Serializer for RpcPalwModelPosition {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.line_id, writer)?;
+        store!(u64, &self.units, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwModelPosition {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let line_id = load!(String, reader)?;
+        let units = load!(u64, reader)?;
+        Ok(Self { line_id, units })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelPositionsResponse {
+    pub holder: String,
+    pub positions: Vec<RpcPalwModelPosition>,
+}
+
+impl Serializer for GetPalwModelPositionsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.holder, writer)?;
+        serialize!(Vec<RpcPalwModelPosition>, &self.positions, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelPositionsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let holder = load!(String, reader)?;
+        let positions = deserialize!(Vec<RpcPalwModelPosition>, reader)?;
+        Ok(Self { holder, positions })
+    }
+}
+
+// ---- ADR-0088 Decision 12: the model registry -------------------------------------------------
+
+/// ADR-0088 Decision 1: one line's row as the tip holds it. A founding line nothing touched is
+/// synthesised from its class (`has_row: false`). `developer` / `maintainer` are the row's own
+/// fields — `None` means "the owner" (Decision 6). The payout payloads are the bonds' as the
+/// registry holds them at the same tip, `None` when the role names no bond or a bond the
+/// registry no longer has.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwModelLine {
+    /// 128-hex line id; the founding line's is its class id.
+    pub line_id: String,
+    pub class_id: String,
+    pub has_row: bool,
+    pub owner: Option<RpcTransactionOutpoint>,
+    pub owner_payout_payload: Option<String>,
+    pub developer: Option<RpcTransactionOutpoint>,
+    pub developer_payout_payload: Option<String>,
+    pub maintainer: Option<RpcTransactionOutpoint>,
+    pub maintainer_payout_payload: Option<String>,
+    /// The name as UTF-8 (lossy); `name_hex` is the exact bytes the chain holds.
+    pub name: String,
+    pub name_hex: String,
+    pub founded_daa: u64,
+    /// The current version's number.
+    pub current: u32,
+    /// Versions published as previews and not yet promoted or withdrawn.
+    pub previews: Vec<u32>,
+    /// The commit count: versions are dense and monotone, and the next one is this plus one.
+    pub versions_published: u32,
+    pub contributor_permille_of_leg: u32,
+    /// `Active` or `Retired`.
+    pub status: String,
+    pub retired_daa: Option<u64>,
+}
+
+impl Serializer for RpcPalwModelLine {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.line_id, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(bool, &self.has_row, writer)?;
+        serialize!(Option<RpcTransactionOutpoint>, &self.owner, writer)?;
+        store!(Option<String>, &self.owner_payout_payload, writer)?;
+        serialize!(Option<RpcTransactionOutpoint>, &self.developer, writer)?;
+        store!(Option<String>, &self.developer_payout_payload, writer)?;
+        serialize!(Option<RpcTransactionOutpoint>, &self.maintainer, writer)?;
+        store!(Option<String>, &self.maintainer_payout_payload, writer)?;
+        store!(String, &self.name, writer)?;
+        store!(String, &self.name_hex, writer)?;
+        store!(u64, &self.founded_daa, writer)?;
+        store!(u32, &self.current, writer)?;
+        store!(Vec<u32>, &self.previews, writer)?;
+        store!(u32, &self.versions_published, writer)?;
+        store!(u32, &self.contributor_permille_of_leg, writer)?;
+        store!(String, &self.status, writer)?;
+        store!(Option<u64>, &self.retired_daa, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwModelLine {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let line_id = load!(String, reader)?;
+        let class_id = load!(String, reader)?;
+        let has_row = load!(bool, reader)?;
+        let owner = deserialize!(Option<RpcTransactionOutpoint>, reader)?;
+        let owner_payout_payload = load!(Option<String>, reader)?;
+        let developer = deserialize!(Option<RpcTransactionOutpoint>, reader)?;
+        let developer_payout_payload = load!(Option<String>, reader)?;
+        let maintainer = deserialize!(Option<RpcTransactionOutpoint>, reader)?;
+        let maintainer_payout_payload = load!(Option<String>, reader)?;
+        let name = load!(String, reader)?;
+        let name_hex = load!(String, reader)?;
+        let founded_daa = load!(u64, reader)?;
+        let current = load!(u32, reader)?;
+        let previews = load!(Vec<u32>, reader)?;
+        let versions_published = load!(u32, reader)?;
+        let contributor_permille_of_leg = load!(u32, reader)?;
+        let status = load!(String, reader)?;
+        let retired_daa = load!(Option<u64>, reader)?;
+        Ok(Self {
+            line_id,
+            class_id,
+            has_row,
+            owner,
+            owner_payout_payload,
+            developer,
+            developer_payout_payload,
+            maintainer,
+            maintainer_payout_payload,
+            name,
+            name_hex,
+            founded_daa,
+            current,
+            previews,
+            versions_published,
+            contributor_permille_of_leg,
+            status,
+            retired_daa,
+        })
+    }
+}
+
+/// ADR-0088 Decision 12: `getPalwModelLine(line_id)`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelLineRequest {
+    /// 128-hex line id — a class id names the class's founding line.
+    pub line_id: String,
+}
+
+impl Serializer for GetPalwModelLineRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.line_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelLineRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let line_id = load!(String, reader)?;
+        Ok(Self { line_id })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelLineResponse {
+    /// False when neither a line row nor a class of that id exists (or the chain is not
+    /// ConsensusV2); `line` is then `None`.
+    pub exists: bool,
+    pub line_id: String,
+    pub line: Option<RpcPalwModelLine>,
+    /// The current version's root, when the node holds that version.
+    pub current_root: Option<String>,
+    /// Decision 3: the roots in force for the line's CLASS at `tip_daa` — every line's.
+    pub roots_in_force: Vec<String>,
+    pub tip_daa: u64,
+}
+
+impl Serializer for GetPalwModelLineResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.exists, writer)?;
+        store!(String, &self.line_id, writer)?;
+        serialize!(Option<RpcPalwModelLine>, &self.line, writer)?;
+        store!(Option<String>, &self.current_root, writer)?;
+        store!(Vec<String>, &self.roots_in_force, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelLineResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let exists = load!(bool, reader)?;
+        let line_id = load!(String, reader)?;
+        let line = deserialize!(Option<RpcPalwModelLine>, reader)?;
+        let current_root = load!(Option<String>, reader)?;
+        let roots_in_force = load!(Vec<String>, reader)?;
+        let tip_daa = load!(u64, reader)?;
+        Ok(Self { exists, line_id, line, current_root, roots_in_force, tip_daa })
+    }
+}
+
+/// ADR-0088 Decision 2: one version's row. The four hashes are DECLARATIONS the chain recorded
+/// and never read (Decision 2); the usage is what the fold counted (Decision 4).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwModelVersion {
+    pub line_id: String,
+    pub version: u32,
+    pub root: String,
+    pub parent: Option<u32>,
+    /// The proposal this version adopted, if any.
+    pub adopted_from: Option<String>,
+    pub runtime_hash: Option<String>,
+    pub dataset_commitment: Option<String>,
+    pub training_config_hash: Option<String>,
+    pub notes_hash: Option<String>,
+    pub published_daa: u64,
+    pub published_by: Option<RpcTransactionOutpoint>,
+    /// `Current`, `Preview`, `Superseded` or `Withdrawn`.
+    pub status: String,
+    /// A superseded version's grace end: its root is in force while the DAA is below it.
+    pub until_daa: Option<u64>,
+    /// Whether the root was in force at the tip DAA the answer was read at.
+    pub in_force: bool,
+    pub attempt_claims: u64,
+    pub fp_claims: u64,
+    /// A decimal string: the fold counts leaves in a u128.
+    pub work_leaves: String,
+    pub first_used_daa: Option<u64>,
+    pub last_used_daa: Option<u64>,
+}
+
+impl Serializer for RpcPalwModelVersion {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.line_id, writer)?;
+        store!(u32, &self.version, writer)?;
+        store!(String, &self.root, writer)?;
+        store!(Option<u32>, &self.parent, writer)?;
+        store!(Option<String>, &self.adopted_from, writer)?;
+        store!(Option<String>, &self.runtime_hash, writer)?;
+        store!(Option<String>, &self.dataset_commitment, writer)?;
+        store!(Option<String>, &self.training_config_hash, writer)?;
+        store!(Option<String>, &self.notes_hash, writer)?;
+        store!(u64, &self.published_daa, writer)?;
+        serialize!(Option<RpcTransactionOutpoint>, &self.published_by, writer)?;
+        store!(String, &self.status, writer)?;
+        store!(Option<u64>, &self.until_daa, writer)?;
+        store!(bool, &self.in_force, writer)?;
+        store!(u64, &self.attempt_claims, writer)?;
+        store!(u64, &self.fp_claims, writer)?;
+        store!(String, &self.work_leaves, writer)?;
+        store!(Option<u64>, &self.first_used_daa, writer)?;
+        store!(Option<u64>, &self.last_used_daa, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwModelVersion {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let line_id = load!(String, reader)?;
+        let version = load!(u32, reader)?;
+        let root = load!(String, reader)?;
+        let parent = load!(Option<u32>, reader)?;
+        let adopted_from = load!(Option<String>, reader)?;
+        let runtime_hash = load!(Option<String>, reader)?;
+        let dataset_commitment = load!(Option<String>, reader)?;
+        let training_config_hash = load!(Option<String>, reader)?;
+        let notes_hash = load!(Option<String>, reader)?;
+        let published_daa = load!(u64, reader)?;
+        let published_by = deserialize!(Option<RpcTransactionOutpoint>, reader)?;
+        let status = load!(String, reader)?;
+        let until_daa = load!(Option<u64>, reader)?;
+        let in_force = load!(bool, reader)?;
+        let attempt_claims = load!(u64, reader)?;
+        let fp_claims = load!(u64, reader)?;
+        let work_leaves = load!(String, reader)?;
+        let first_used_daa = load!(Option<u64>, reader)?;
+        let last_used_daa = load!(Option<u64>, reader)?;
+        Ok(Self {
+            line_id,
+            version,
+            root,
+            parent,
+            adopted_from,
+            runtime_hash,
+            dataset_commitment,
+            training_config_hash,
+            notes_hash,
+            published_daa,
+            published_by,
+            status,
+            until_daa,
+            in_force,
+            attempt_claims,
+            fp_claims,
+            work_leaves,
+            first_used_daa,
+            last_used_daa,
+        })
+    }
+}
+
+/// ADR-0088 Decision 5: one evaluation — a declaration, saying who declared it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwModelEvaluation {
+    pub evaluator_id: String,
+    pub score_permille: u32,
+    pub report_hash: String,
+    pub posted_daa: u64,
+    /// The bond that posted it.
+    pub by: RpcTransactionOutpoint,
+    /// Posted by the line's developer or maintainer — the line's own word.
+    pub is_lines_own: bool,
+}
+
+impl Serializer for RpcPalwModelEvaluation {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.evaluator_id, writer)?;
+        store!(u32, &self.score_permille, writer)?;
+        store!(String, &self.report_hash, writer)?;
+        store!(u64, &self.posted_daa, writer)?;
+        serialize!(RpcTransactionOutpoint, &self.by, writer)?;
+        store!(bool, &self.is_lines_own, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwModelEvaluation {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let evaluator_id = load!(String, reader)?;
+        let score_permille = load!(u32, reader)?;
+        let report_hash = load!(String, reader)?;
+        let posted_daa = load!(u64, reader)?;
+        let by = deserialize!(RpcTransactionOutpoint, reader)?;
+        let is_lines_own = load!(bool, reader)?;
+        Ok(Self { evaluator_id, score_permille, report_hash, posted_daa, by, is_lines_own })
+    }
+}
+
+/// ADR-0088 Decision 12: `getPalwModelVersion(line_id, version)`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelVersionRequest {
+    pub line_id: String,
+    pub version: u32,
+}
+
+impl Serializer for GetPalwModelVersionRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.line_id, writer)?;
+        store!(u32, &self.version, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelVersionRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let line_id = load!(String, reader)?;
+        let version = load!(u32, reader)?;
+        Ok(Self { line_id, version })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelVersionResponse {
+    /// False when the node holds no such row — never published, or evicted past the history
+    /// window (the explorer keeps the whole history); `version` is then `None`.
+    pub exists: bool,
+    pub line_id: String,
+    pub version_number: u32,
+    pub version: Option<RpcPalwModelVersion>,
+    pub evaluations: Vec<RpcPalwModelEvaluation>,
+    pub tip_daa: u64,
+}
+
+impl Serializer for GetPalwModelVersionResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.exists, writer)?;
+        store!(String, &self.line_id, writer)?;
+        store!(u32, &self.version_number, writer)?;
+        serialize!(Option<RpcPalwModelVersion>, &self.version, writer)?;
+        serialize!(Vec<RpcPalwModelEvaluation>, &self.evaluations, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelVersionResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let exists = load!(bool, reader)?;
+        let line_id = load!(String, reader)?;
+        let version_number = load!(u32, reader)?;
+        let version = deserialize!(Option<RpcPalwModelVersion>, reader)?;
+        let evaluations = deserialize!(Vec<RpcPalwModelEvaluation>, reader)?;
+        let tip_daa = load!(u64, reader)?;
+        Ok(Self { exists, line_id, version_number, version, evaluations, tip_daa })
+    }
+}
+
+/// ADR-0088 Decision 12: `getPalwModelLines(class_id)`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelLinesRequest {
+    /// 128-hex class id.
+    pub class_id: String,
+}
+
+impl Serializer for GetPalwModelLinesRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelLinesRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let class_id = load!(String, reader)?;
+        Ok(Self { class_id })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelLinesResponse {
+    /// False when the class is not registered (or the chain is not ConsensusV2).
+    pub exists: bool,
+    pub class_id: String,
+    /// The founding line first (synthesised when it has no row), then the others in id order.
+    pub lines: Vec<RpcPalwModelLine>,
+}
+
+impl Serializer for GetPalwModelLinesResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.exists, writer)?;
+        store!(String, &self.class_id, writer)?;
+        serialize!(Vec<RpcPalwModelLine>, &self.lines, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelLinesResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let exists = load!(bool, reader)?;
+        let class_id = load!(String, reader)?;
+        let lines = deserialize!(Vec<RpcPalwModelLine>, reader)?;
+        Ok(Self { exists, class_id, lines })
+    }
+}
+
+/// ADR-0088 Decision 7: one proposal — a root and a note from any bond, adopted or not.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwModelProposal {
+    pub proposal_id: String,
+    pub line_id: String,
+    pub root: String,
+    pub note_hash: String,
+    pub by: RpcTransactionOutpoint,
+    pub posted_daa: u64,
+    /// The version that adopted it, once one did.
+    pub adopted_in: Option<u32>,
+}
+
+impl Serializer for RpcPalwModelProposal {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.proposal_id, writer)?;
+        store!(String, &self.line_id, writer)?;
+        store!(String, &self.root, writer)?;
+        store!(String, &self.note_hash, writer)?;
+        serialize!(RpcTransactionOutpoint, &self.by, writer)?;
+        store!(u64, &self.posted_daa, writer)?;
+        store!(Option<u32>, &self.adopted_in, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwModelProposal {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let proposal_id = load!(String, reader)?;
+        let line_id = load!(String, reader)?;
+        let root = load!(String, reader)?;
+        let note_hash = load!(String, reader)?;
+        let by = deserialize!(RpcTransactionOutpoint, reader)?;
+        let posted_daa = load!(u64, reader)?;
+        let adopted_in = load!(Option<u32>, reader)?;
+        Ok(Self { proposal_id, line_id, root, note_hash, by, posted_daa, adopted_in })
+    }
+}
+
+/// ADR-0088 Decision 12: `getPalwModelProposals(line_id)`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelProposalsRequest {
+    pub line_id: String,
+}
+
+impl Serializer for GetPalwModelProposalsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.line_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelProposalsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let line_id = load!(String, reader)?;
+        Ok(Self { line_id })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelProposalsResponse {
+    /// False when the line does not exist (or the chain is not ConsensusV2).
+    pub exists: bool,
+    pub line_id: String,
+    pub proposals: Vec<RpcPalwModelProposal>,
+}
+
+impl Serializer for GetPalwModelProposalsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.exists, writer)?;
+        store!(String, &self.line_id, writer)?;
+        serialize!(Vec<RpcPalwModelProposal>, &self.proposals, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelProposalsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let exists = load!(bool, reader)?;
+        let line_id = load!(String, reader)?;
+        let proposals = deserialize!(Vec<RpcPalwModelProposal>, reader)?;
+        Ok(Self { exists, line_id, proposals })
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetTokenSupplyRequest {

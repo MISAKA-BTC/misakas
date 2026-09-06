@@ -434,9 +434,7 @@ pub enum PalwCourtVerdictProofV2 {
     /// variant anywhere else would re-number every close testnet-11 has accepted. Admissible only
     /// where `Params::palw_prompt_ids_form_v1()` is `MerkleV1` — on a flat network it is refused by
     /// name before its opening is read (`check_close_speaks_the_networks_prompt_form`), and the
-    /// same gate refuses an `Arithmetic` that carries a whole id list on a Merkle network. The
-    /// gate names the refusal; the arithmetic is what makes it sound (a flat digest is not a value
-    /// any Merkle derivation produces, and vice versa).
+    /// same gate refuses an `Arithmetic` that carries a whole id list on a Merkle network.
     ArithmeticOpened {
         refutation: PalwExecutionStepRefutationV1,
         operand_openings: Vec<PalwArtifactOpeningV1>,
@@ -809,26 +807,6 @@ pub fn adjudicate_court_close_v2(
     state: &PalwChainStateV2,
     session_id: &Hash64,
     proof: &PalwCourtVerdictProofV2,
-    court: &crate::palw_mode_v2::PalwCourtParamsV2,
-    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
-    adjudicate_court_close_capped_v2(state, session_id, proof, court, crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES, prompt_ids_form)
-}
-
-/// [`adjudicate_court_close_v2`] with the leaf ladder the refutation walkers may open against —
-/// **the court's entry point** (ADR-0084 U-08; mainnet audit, 2026-09-05).
-///
-/// `court.max_step_leaf_count()` is what the ruleset FROZE and what admission priced the class at;
-/// the walkers opened against the executor's constant, so a class deeper than `2^22` leaves was
-/// admitted at one ladder and prosecuted at another — and at the second it was un-prosecutable.
-/// The cap is passed rather than read off `court`, because which ladder the walkers honour is a
-/// consensus rule a running chain acquires at a height: the acceptance pipeline resolves it from
-/// `Params::palw_context_ladder` at the block's own DAA (`palw_refutation_leaf_cap_at`, the ONE
-/// place) and hands it here. The default-ladder name above is the dormant form, byte for byte.
-pub fn adjudicate_court_close_capped_v2(
-    state: &PalwChainStateV2,
-    session_id: &Hash64,
-    proof: &PalwCourtVerdictProofV2,
     // **ADR-0049 Decision C's bounds, applied to the OBJECT** (audit H-03).
     //
     // The four cost bounds live in `PalwCourtParamsV2` and are inside `palw_ruleset_id_v2`, and
@@ -841,7 +819,13 @@ pub fn adjudicate_court_close_capped_v2(
     // Checked FIRST, before a single path is walked, because the whole point of a cost bound is
     // that exceeding it costs nothing to detect.
     court: &crate::palw_mode_v2::PalwCourtParamsV2,
-    max_step_leaf_count: u64,
+    // **ADR-0084 U-08: the step ladder this adjudication walks at.** `PALW_STEP_LEG_MAX_LEAVES`
+    // before `Params::palw_court_ladder`, the ruleset's `max_step_leaf_count()` past it — decided
+    // by the caller at the BLOCK's DAA (`palw_court_step_ladder_at`), never read here from a
+    // constant, so two nodes grading one close proof read one ladder.
+    step_ladder: u64,
+    // ADR-0081 Decision 3: which spelling of "here is the prompt" this network admits — decided by
+    // the caller at the block's DAA (`palw_prompt_ids_form_at`), genesis-only so it cannot differ.
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     // The cost gate runs before ANY state is read, which is the cheapest-first ordering a cost
@@ -952,7 +936,7 @@ pub fn adjudicate_court_close_capped_v2(
             });
         }
     }
-    adjudicate_close_proof_capped_v2(state, claim, proof, court, max_step_leaf_count, prompt_ids_form)
+    adjudicate_close_proof_v2(state, claim, proof, court, step_ladder, prompt_ids_form)
 }
 
 /// The arithmetic half of a close: given the CLAIM the dispute is about, what verdict does this
@@ -967,19 +951,13 @@ pub fn adjudicate_close_proof_v2(
     claim: &crate::palw_state_v2::PalwClaimStateV2,
     proof: &PalwCourtVerdictProofV2,
     court: &crate::palw_mode_v2::PalwCourtParamsV2,
-    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
-    adjudicate_close_proof_capped_v2(state, claim, proof, court, crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES, prompt_ids_form)
-}
-
-/// [`adjudicate_close_proof_v2`] with the leaf ladder the walkers may open against — see
-/// [`adjudicate_court_close_capped_v2`].
-pub fn adjudicate_close_proof_capped_v2(
-    state: &PalwChainStateV2,
-    claim: &crate::palw_state_v2::PalwClaimStateV2,
-    proof: &PalwCourtVerdictProofV2,
-    court: &crate::palw_mode_v2::PalwCourtParamsV2,
-    max_step_leaf_count: u64,
+    // **ADR-0084 U-08: the step ladder this adjudication walks at.** `PALW_STEP_LEG_MAX_LEAVES`
+    // before `Params::palw_court_ladder`, the ruleset's `max_step_leaf_count()` past it — decided
+    // by the caller at the BLOCK's DAA (`palw_court_step_ladder_at`), never read here from a
+    // constant, so two nodes grading one close proof read one ladder.
+    step_ladder: u64,
+    // ADR-0081 Decision 3: which spelling of "here is the prompt" this network admits — decided by
+    // the caller at the block's DAA (`palw_prompt_ids_form_at`), genesis-only so it cannot differ.
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     check_close_cost_v2(proof, court)?;
@@ -994,7 +972,7 @@ pub fn adjudicate_close_proof_capped_v2(
             let class = state.class(&claim.class_id).ok_or(PalwCourtV2Error::MissingClass(claim.class_id))?;
             let operands = PalwProvenOperandsV1::from_openings_v1(operand_openings, class.artifact_root)
                 .map_err(|e| PalwCourtV2Error::OperandProofInvalid(e.to_string()))?;
-            map_refutation_outcome(check_execution_step_refutation_capped_v1(refutation, &operands, max_step_leaf_count))
+            map_refutation_outcome(check_execution_step_refutation_capped_v1(refutation, &operands, step_ladder))
         }
         // The same close with the prompt tile opened instead of carried (ADR-0081 Decision 3):
         // the same two pins, the same operand proofs, and the checker's opened entry, which
@@ -1010,7 +988,7 @@ pub fn adjudicate_close_proof_capped_v2(
                 refutation,
                 &operands,
                 Some(prompt_ids_opening),
-                max_step_leaf_count,
+                step_ladder,
             ))
         }
         PalwCourtVerdictProofV2::DecodeToken { binding, pin, position } => {
@@ -1027,11 +1005,7 @@ pub fn adjudicate_close_proof_capped_v2(
             // tiled pin against a class that registered the flat commitment.
             check_arithmetic_close_binding(claim.trace_root, binding_logits_root_of(binding))?;
             check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
-            map_refutation_outcome(crate::palw_step_refute::check_tiled_decode_token_refutation_capped_v1(
-                binding,
-                pin,
-                max_step_leaf_count,
-            ))
+            map_refutation_outcome(crate::palw_step_refute::check_tiled_decode_token_refutation_v1(binding, pin))
         }
         // The one arm that cannot be graded from the claim alone — see `adjudicate_court_close_v2`,
         // which returns before reaching here. Refused rather than silently acquitted, because an
@@ -1100,15 +1074,16 @@ pub fn palw_attn_widest_registered_site_v2(bundle: &crate::palw_mode_v2::PalwCon
     (history, lanes)
 }
 
-/// **The leaf ladder the refutation walkers open against, as a function of the fence** — the
-/// one spelling the acceptance pipeline resolves at a block's DAA and the shipped-preset tests
-/// read directly (ADR-0084 U-08; mainnet audit, 2026-09-05).
+/// **The leaf ladder the refutation walkers open against, as a function of the fence** — the one
+/// spelling `Params` and the acceptance pipeline share (ADR-0084 U-08).
 ///
 /// Dormant: [`crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES`], the executor's constant every
 /// shipped block has been judged under. Armed: the ruleset's own `max_step_leaf_count` — what
-/// admission priced the class at, so a class is prosecuted at the ladder it was admitted at.
-pub fn palw_refutation_leaf_cap_v2(court: &crate::palw_mode_v2::PalwCourtParamsV2, context_ladder_active: bool) -> u64 {
-    if context_ladder_active { court.max_step_leaf_count() } else { crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES }
+/// admission priced the class at, so a class is prosecuted at the ladder it was admitted at. The
+/// processor's `palw_court_step_ladder_at` is this function at the block's own DAA; nothing else
+/// may spell the choice.
+pub fn palw_refutation_leaf_cap_v2(court: &crate::palw_mode_v2::PalwCourtParamsV2, court_ladder_active: bool) -> u64 {
+    if court_ladder_active { court.max_step_leaf_count() } else { crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES }
 }
 
 /// **ADR-0082 Decision 3 at activation: the court a session is judged under.**
@@ -1642,6 +1617,8 @@ pub fn map_refutation_outcome(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// ADR-0084 U-08: every test that predates the fence adjudicates at the shipped ladder.
+    const LADDER: u64 = crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES;
     use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2, challenge_v2};
     use crate::palw_state_v2::{PalwConsensusObjectV2, PalwPanelSeatV2, PalwPwuRuleV2, apply_palw_transition_v2};
     use crate::palw_step_leg::PalwStepLegError;
@@ -2115,121 +2092,6 @@ mod tests {
         );
     }
 
-    /// **ADR-0081 Decision 3: a close speaks the network's prompt-commitment form or it is not a
-    /// move** (private-prompts design, 2026-09-05).
-    ///
-    /// Four cases, two per network. On a flat network an `ArithmeticOpened` is refused by name
-    /// before its opening is read; on a Merkle network an `Arithmetic` that carries a whole id
-    /// list is refused the same way, and one that carries none is a move on either (it addresses
-    /// no gather). The gate names the refusal; the arithmetic is what makes it sound — a flat
-    /// digest is no Merkle root — and the cost bound charges the opening like the operand paths.
-    #[test]
-    fn a_close_speaks_the_networks_prompt_form_or_it_is_not_a_move() {
-        use crate::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_ids_opening_v1};
-        let (refutation, openings, _) = crate::palw_step_refute::tests::base0_matmul_fraud();
-        let opening = prompt_ids_opening_v1(&[7u32, 8], 0).expect("opens");
-
-        let mut listed = refutation.clone();
-        listed.prompt_token_ids = vec![7, 8];
-        let bare = PalwCourtVerdictProofV2::Arithmetic { refutation: refutation.clone(), operand_openings: openings.clone() };
-        let listed = PalwCourtVerdictProofV2::Arithmetic { refutation: listed, operand_openings: openings.clone() };
-        let opened = PalwCourtVerdictProofV2::ArithmeticOpened {
-            refutation: refutation.clone(),
-            operand_openings: openings.clone(),
-            prompt_ids_opening: opening.clone(),
-        };
-
-        assert!(check_close_speaks_the_networks_prompt_form(&bare, PalwPromptIdsFormV1::Flat).is_ok());
-        assert!(check_close_speaks_the_networks_prompt_form(&listed, PalwPromptIdsFormV1::Flat).is_ok());
-        assert!(matches!(
-            check_close_speaks_the_networks_prompt_form(&opened, PalwPromptIdsFormV1::Flat),
-            Err(PalwCourtV2Error::CloseFormIsNotTheNetworks { close: "ArithmeticOpened", .. })
-        ));
-        assert!(check_close_speaks_the_networks_prompt_form(&bare, PalwPromptIdsFormV1::MerkleV1).is_ok());
-        assert!(matches!(
-            check_close_speaks_the_networks_prompt_form(&listed, PalwPromptIdsFormV1::MerkleV1),
-            Err(PalwCourtV2Error::CloseFormIsNotTheNetworks { close: "whole-id-list Arithmetic", .. })
-        ));
-        assert!(check_close_speaks_the_networks_prompt_form(&opened, PalwPromptIdsFormV1::MerkleV1).is_ok());
-
-        // The opened close is priced as the bare one plus its opening — and nothing else moved.
-        let bare_bytes = arithmetic_close_bytes_v2(&bare).expect("an arithmetic close measures");
-        let opened_bytes = arithmetic_close_bytes_v2(&opened).expect("an opened close measures");
-        assert_eq!(opened_bytes, bare_bytes + crate::palw_prompt_ids_v1::prompt_ids_opening_bytes_v1(&opening));
-        assert_eq!(binding_of(&opened), binding_of(&bare), "the opened close carries the same binding");
-    }
-
-    /// **The opened arm adjudicates a claim whose prompt commitment is a Merkle root** — the
-    /// routing half of ADR-0081 Decision 3, on a real claim state: the same two pins the flat
-    /// arm runs, then the opened checker with the tile. The opening is verified against the job
-    /// context's root before the step is judged (the step layer's own test shows a lying tile
-    /// refused); here the honest one lets an honest step be judged on its merits, which is
-    /// `ChallengerDefeated`, and the SAME close is refused by name on a flat network, as the
-    /// whole-list form is on this one.
-    #[test]
-    fn an_opened_arithmetic_close_adjudicates_on_a_merkle_network_and_nowhere_else() {
-        use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
-        let (refutation, opening) = crate::palw_step_refute::tests::base0_merkle_prompt_honest();
-        let trace_root = refutation.binding.full_logits_trace_root;
-        let execution_root = refutation.binding.committed_execution_root;
-        let cid = refutation.binding.shape_profile.shape_profile_id();
-        let p = params_for(cid);
-        let artifact_root = h64(0xA7);
-        let objects = vec![
-            PalwConsensusObjectV2::ClassRegistered {
-                class_id: cid,
-                artifact_root,
-                slash_value_per_pwu: 5,
-                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
-                initial_target: u128::MAX / 2,
-                share_permille: 1000,
-                activation_daa: 0,
-                admission: None,
-            },
-            PalwConsensusObjectV2::BondRegistered {
-                bond: bond_key(1),
-                pubkey: vec![7; 4],
-                operator_pubkey: op_key(0x21),
-                collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-                capable_classes: Default::default(),
-                signature: Vec::new(),
-            },
-        ];
-        let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
-        let mut env = attempt(40, 1);
-        env.attempt.class_id = cid;
-        env.attempt.artifact_root = artifact_root;
-        env.attempt.trace_root = trace_root;
-        env.attempt.execution_root = execution_root;
-        env.attempt.challenge = challenge_v2(h64(999), h64(5), 1_700, 1, cid, &bond_key(1).0);
-        let claim_id = attempt_id_v2(&env.attempt);
-        let (s2, _) = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[], Some(&env)).unwrap();
-        let claim_rec = s2.claim(&claim_id).expect("the claim exists");
-
-        let opened = PalwCourtVerdictProofV2::ArithmeticOpened {
-            refutation: refutation.clone(),
-            operand_openings: Vec::new(),
-            prompt_ids_opening: opening,
-        };
-        assert_eq!(
-            adjudicate_close_proof_v2(&s2, claim_rec, &opened, &court(), PalwPromptIdsFormV1::MerkleV1),
-            Ok(PalwCourtVerdictV2::ChallengerDefeated),
-            "an honest step, judged on its merits through the opened arm"
-        );
-        assert!(matches!(
-            adjudicate_close_proof_v2(&s2, claim_rec, &opened, &court(), PalwPromptIdsFormV1::Flat),
-            Err(PalwCourtV2Error::CloseFormIsNotTheNetworks { .. })
-        ));
-        let mut listed = refutation;
-        listed.prompt_token_ids = vec![7, 8];
-        let listed = PalwCourtVerdictProofV2::Arithmetic { refutation: listed, operand_openings: Vec::new() };
-        assert!(matches!(
-            adjudicate_close_proof_v2(&s2, claim_rec, &listed, &court(), PalwPromptIdsFormV1::MerkleV1),
-            Err(PalwCourtV2Error::CloseFormIsNotTheNetworks { .. })
-        ));
-    }
-
     /// **P0-8's owed end-to-end: a MatMul fraud convicts through the WHOLE path, with no model.**
     ///
     /// The register asks for exactly this and said no test anywhere did it: "give a full node with
@@ -2339,10 +2201,50 @@ mod tests {
         // The arithmetic half: what the evidence says about this claim. Whether the close is a
         // legal move in the session is `a_close_must_be_the_step_the_ladder_narrowed_to`.
         let claim_rec = in_court.claim(&claim_id).expect("the claim is in state");
-        let verdict =
-            adjudicate_close_proof_v2(&in_court, claim_rec, &proof, &court(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
-                .expect("a recomputable step adjudicates");
+        let verdict = adjudicate_close_proof_v2(
+            &in_court,
+            claim_rec,
+            &proof,
+            &court(),
+            LADDER,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect("a recomputable step adjudicates");
         assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "a wrong MatMul is a conviction, not an Unadjudicable");
+
+        // ADR-0084 U-08: the ladder the court walks at is an ARGUMENT, and this refutation's own
+        // leaf count is its boundary — one short and the court does not adjudicate, by name and
+        // in neither direction; at it, the conviction above.
+        let leaves = match &proof {
+            PalwCourtVerdictProofV2::Arithmetic { refutation, .. } => refutation.binding.step_leaf_count,
+            _ => unreachable!("the proof built above is Arithmetic"),
+        };
+        assert!(
+            matches!(
+                adjudicate_close_proof_v2(
+                    &in_court,
+                    claim_rec,
+                    &proof,
+                    &court(),
+                    leaves - 1,
+                    crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+                ),
+                Err(PalwCourtV2Error::DoesNotAdjudicate(_))
+            ),
+            "a ladder one leaf short of the refutation's space refuses rather than acquits or convicts"
+        );
+        assert_eq!(
+            adjudicate_close_proof_v2(
+                &in_court,
+                claim_rec,
+                &proof,
+                &court(),
+                leaves,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            )
+            .expect("at its own space it adjudicates"),
+            PalwCourtVerdictV2::ExecutorGuilty
+        );
 
         // …and the chain acts on it: the claim is void as CourtFraud and the bond is debited.
         let (closed, _) = apply_palw_transition_v2(
@@ -2468,6 +2370,7 @@ mod tests {
                 claim_rec,
                 &proof,
                 &court(),
+                LADDER,
                 crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             )
             .expect("a carried pin adjudicates");
@@ -2634,9 +2537,15 @@ mod tests {
         // check, which is a different and much weaker kind of safety.
         let proof = PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings: openings };
         let claim_rec = in_court.claim(&claim_id).expect("the claim is in state");
-        let verdict =
-            adjudicate_close_proof_v2(&in_court, claim_rec, &proof, &court(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
-                .expect("an honest step adjudicates");
+        let verdict = adjudicate_close_proof_v2(
+            &in_court,
+            claim_rec,
+            &proof,
+            &court(),
+            LADDER,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect("an honest step adjudicates");
         assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest producer wins on the merits");
 
         let (closed, _) = apply_palw_transition_v2(
@@ -2708,8 +2617,14 @@ mod tests {
         // procedure. The full close refuses this even earlier now — the ladder has not narrowed —
         // and that is asserted separately below.
         let claim_rec = in_court.claim(&claim_id).expect("the claim is in state");
-        let outcome =
-            adjudicate_close_proof_v2(&in_court, claim_rec, &bogus, &court(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat);
+        let outcome = adjudicate_close_proof_v2(
+            &in_court,
+            claim_rec,
+            &bogus,
+            &court(),
+            LADDER,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
         // **Refused, and now for a sharper reason than when this test was written.**
         //
         // It used to land on `TraceRootMismatch`: the skeleton's roots are not the claim's. The
@@ -2724,7 +2639,7 @@ mod tests {
             "a proof about another execution must not produce a verdict at all, got {outcome:?}"
         );
         let procedural =
-            adjudicate_court_close_v2(&in_court, &sid, &bogus, &court(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat);
+            adjudicate_court_close_v2(&in_court, &sid, &bogus, &court(), LADDER, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat);
         assert!(
             matches!(procedural, Err(PalwCourtV2Error::LadderNotTerminal)),
             "and the full close refuses it before the evidence, because no step was narrowed to, got {procedural:?}"
@@ -2737,7 +2652,14 @@ mod tests {
 
         // A close naming a session that does not exist never reaches arithmetic either.
         assert!(matches!(
-            adjudicate_court_close_v2(&in_court, &h64(0xDEAD), &bogus, &court(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            adjudicate_court_close_v2(
+                &in_court,
+                &h64(0xDEAD),
+                &bogus,
+                &court(),
+                LADDER,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            ),
             Err(PalwCourtV2Error::MissingSession(_))
         ));
     }
@@ -2802,7 +2724,7 @@ mod tests {
         let many = proof(vec![opening(1, 0), opening(1, 0), opening(1, 0)]);
         assert!(
             matches!(
-                adjudicate_court_close_v2(&state, &sid, &many, &tight, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+                adjudicate_court_close_v2(&state, &sid, &many, &tight, LADDER, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
                 Err(PalwCourtV2Error::TooManyOperands { got: 3, ceiling: 2 })
             ),
             "three openings against a ceiling of two"
@@ -2812,7 +2734,7 @@ mod tests {
         let fat = proof(vec![opening(2_048, 0)]);
         assert!(
             matches!(
-                adjudicate_court_close_v2(&state, &sid, &fat, &tight, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+                adjudicate_court_close_v2(&state, &sid, &fat, &tight, LADDER, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
                 Err(PalwCourtV2Error::CloseTooLarge { .. })
             ),
             "2 KiB against a 1 KiB ceiling"
@@ -2823,7 +2745,14 @@ mod tests {
         let long_path = proof(vec![opening(1, 17)]);
         assert!(
             matches!(
-                adjudicate_court_close_v2(&state, &sid, &long_path, &tight, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+                adjudicate_court_close_v2(
+                    &state,
+                    &sid,
+                    &long_path,
+                    &tight,
+                    LADDER,
+                    crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+                ),
                 Err(PalwCourtV2Error::CloseTooLarge { .. })
             ),
             "a long path is an opening someone still has to walk"
@@ -2835,7 +2764,7 @@ mod tests {
         let small = proof(vec![opening(4, 0)]);
         assert!(
             matches!(
-                adjudicate_court_close_v2(&state, &sid, &small, &tight, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+                adjudicate_court_close_v2(&state, &sid, &small, &tight, LADDER, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
                 Err(PalwCourtV2Error::MissingSession(_))
             ),
             "a proof inside the ceilings must reach the state questions"
@@ -2844,7 +2773,7 @@ mod tests {
         // The gate is cheapest-first: an oversized object is refused without the session lookup
         // that would otherwise report first. `state` here holds no session at all.
         assert!(matches!(
-            adjudicate_court_close_v2(&state, &sid, &many, &tight, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            adjudicate_court_close_v2(&state, &sid, &many, &tight, LADDER, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
             Err(PalwCourtV2Error::TooManyOperands { .. })
         ));
     }

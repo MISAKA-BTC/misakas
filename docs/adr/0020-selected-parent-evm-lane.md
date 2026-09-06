@@ -12,6 +12,13 @@ re-genesis cutover — the testnet genesis hash is unchanged (`cf4c48fe…`), an
 headers carry `EVM_HEADER_VERSION` (v2), so pre-EVM nodes and the old chain are version-isolated
 in both directions. Devnet is likewise genesis-active; **mainnet/simnet stay inert (`u64::MAX`)**.
 
+> **Tree reconciliation (2026-09-05, recorded by [ADR-0089](0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md) §2).** "The node binary remains
+> secp-free by default; EVM is an opt-in (`--features evm`) build" no longer describes the tree:
+> `kaspad/Cargo.toml:93` is `default = ["evm"]` since 2026-08-21 and a non-`evm` build refuses an
+> EVM-active network (`EvmLaneRequiresEvmBuild`). F001 WMISAKA is declared and never deployed; F002
+> is a call-frame intercept (`kaspa-evm/src/withdraw.rs`), not a stateless precompile. Everything
+> else below stands. Map: [`README.md`](README.md).
+
 > **Design superseded by v0.4** — the unified design doc
 > [`docs/misaka-evm-design-v0.4.md`](../misaka-evm-design-v0.4.md) replaces the v0.3 immediate-execution
 > model with **mergeset delayed acceptance** (B's own payload is executed by its selected child), adds

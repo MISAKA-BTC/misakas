@@ -218,3 +218,12 @@ object with no constructor and leaves "who may freeze a class" undecided. Decide
 constructor appears: a class is frozen only by the transition on a court outcome (`Unadjudicable`,
 ADR-0037 I10 as carried by ADR-0038), never by an operator-signed object. An operator freeze is a
 governance key on a chain that has none.
+
+## Record (2026-09-05)
+
+* **D1's BIP39 half is not built, by the ADR's own condition.** `--mnemonic-stdin` exists "if and
+  only if a derivation from BIP39 to this tree's ML-DSA-87 seed is specified and shared with the
+  web wallet", and no such derivation is specified in this tree or shared by the wallet as of this
+  date. It is not an implementation gap here; it is a specification the wallet must publish first.
+* **D4 is closed by deletion.** `misaka miner` is gone (SA-4), and `misaka-cli/src/main.rs` pins
+  its absence with a test ("`misaka miner` is back — SA-4 deleted it").

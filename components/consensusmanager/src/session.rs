@@ -366,6 +366,63 @@ impl ConsensusSessionOwned {
         self.consensus.palw_court_close_group_v1(session_id, side)
     }
 
+    /// ADR-0087 Decision 8: a class's model market at the tip, whether a row exists, and the class's
+    /// status. `None` for an unregistered class or off ConsensusV2.
+    pub fn palw_model_market_v1(
+        &self,
+        class_id: kaspa_consensus_core::Hash64,
+    ) -> Option<(
+        kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1,
+        bool,
+        kaspa_consensus_core::palw_state_v2::PalwClassStatusV2,
+    )> {
+        self.consensus.palw_model_market_v1(class_id)
+    }
+
+    /// ADR-0087 Decision 8: every position a holder has at the tip, by line.
+    pub fn palw_model_positions_v1(&self, holder: kaspa_consensus_core::Hash64) -> Vec<(kaspa_consensus_core::Hash64, u64)> {
+        self.consensus.palw_model_positions_v1(holder)
+    }
+
+    /// ADR-0088 Decision 12: a line at the tip — the row, the current root, the roots in force.
+    pub fn palw_model_line_v1(&self, line_id: kaspa_consensus_core::Hash64) -> Option<kaspa_consensus_core::api::PalwModelLineReadV1> {
+        self.consensus.palw_model_line_v1(line_id)
+    }
+
+    /// ADR-0088 Decision 12: one version of a line, with its usage and evaluations.
+    pub fn palw_model_version_v1(
+        &self,
+        line_id: kaspa_consensus_core::Hash64,
+        version: u32,
+    ) -> Option<kaspa_consensus_core::api::PalwModelVersionReadV1> {
+        self.consensus.palw_model_version_v1(line_id, version)
+    }
+
+    /// ADR-0088 Decision 12: every line of a class, the founding line included.
+    pub fn palw_evm_view_v1(
+        &self,
+    ) -> Option<(
+        std::sync::Arc<kaspa_consensus_core::evm::model_market::PalwEvmViewV1>,
+        kaspa_consensus_core::evm::model_market::PalwEvmMarketFencesV1,
+    )> {
+        self.consensus.palw_evm_view_v1()
+    }
+
+    pub fn palw_model_lines_v1(
+        &self,
+        class_id: kaspa_consensus_core::Hash64,
+    ) -> Option<Vec<kaspa_consensus_core::api::PalwModelLineRowReadV1>> {
+        self.consensus.palw_model_lines_v1(class_id)
+    }
+
+    /// ADR-0088 Decision 12: the proposals attached to a line.
+    pub fn palw_model_proposals_v1(
+        &self,
+        line_id: kaspa_consensus_core::Hash64,
+    ) -> Option<Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_model_lines_v1::PalwModelProposalV1)>> {
+        self.consensus.palw_model_proposals_v1(line_id)
+    }
+
     /// The PALW-RC producer contract (ADR-0042). Reads the state store's tip, which is a lock-free
     /// snapshot read like the virtual fields above.
     pub fn palw_producer_facts_v2(

@@ -206,35 +206,38 @@ pub fn palw_fp_seat_draw_v1(
 // W10: the bytes a seat fetches per claim, bounded
 // ---------------------------------------------------------------------------------------------
 
-/// **The bytes ONE opening may occupy** — `O(interval × row + log₂ leaves)`, ADR-0077 R1.
+/// **The bytes ONE opening may occupy** — `O(row + interval/2^12 + 2·log₂ leaves)`, ADR-0086
+/// Decision 7 restating ADR-0077 R1 in the fold form's own units.
 ///
-/// The three terms are the three things an opening carries: the checkpoint chunk and the committed
-/// rows of the interval (`interval_positions × row_bytes`), the Merkle paths that bind them to the
-/// claim's leg roots (`64 × ⌈log₂ leaves⌉`, one 64-byte digest per level), and a fixed header of
-/// roots, indices and the interval's own ids.
+/// The terms are the things a V4 opening carries: the seed row (one committed logits row,
+/// `row_bytes`, bounded by the vocabulary), the fold's digests for the interval's whole blocks
+/// (one 64-byte digest per 2^12 leaves of the interval), the Merkle frontier (at most two 64-byte
+/// siblings per level, `2 × ⌈log₂ leaves⌉`), and a fixed header of the binding, the checkpoint
+/// claim, indices and lengths. No chunk and no leaf hash rides (ADR-0086 Decisions 1 and 2).
 ///
 /// **`step_leaf_count` enters only through a logarithm**, which is the whole of W10: doubling
-/// `decode_tokens_executed` doubles the number of intervals and adds ONE digest to each opening's
-/// path. It never widens an opening, because an opening is one interval and an interval is a class
-/// constant.
-pub fn palw_fp_interval_opening_ceiling_v1(interval_positions: u32, row_bytes: u32, step_leaf_count: u64) -> usize {
-    /// Roots, indices, lengths and the interval's consumed/produced ids. Fixed, and generous:
-    /// a ceiling that a real opening exceeds is a seat that refuses honest evidence, and this
-    /// number costs nothing to over-state by a kilobyte.
-    const OPENING_HEADER_BYTES: usize = 4 << 10;
+/// `decode_tokens_executed` doubles the number of intervals and adds ONE sibling pair to each
+/// opening's frontier. It never widens an opening, because an opening is one interval and an
+/// interval is a class constant — `interval_leaves` is that constant.
+pub fn palw_fp_interval_opening_ceiling_v1(interval_leaves: u64, row_bytes: u32, step_leaf_count: u64) -> usize {
+    /// The binding, the checkpoint claim, roots, indices and lengths. Fixed, and generous: a
+    /// ceiling that a real opening exceeds is a seat that refuses honest evidence, and this
+    /// number costs nothing to over-state by a few kilobytes.
+    const OPENING_HEADER_BYTES: usize = 16 << 10;
     const DIGEST_BYTES: usize = 64;
     let depth = 64 - step_leaf_count.max(1).leading_zeros() as usize;
-    (interval_positions as usize)
-        .saturating_mul(row_bytes as usize)
-        .saturating_add(DIGEST_BYTES.saturating_mul(depth))
+    let digests = interval_leaves.div_ceil(1 << misaka_palw_base0::fp_capture::PALW_BASE0_SPARSE_RETAIN_LEVEL_V1) as usize + 1;
+    (row_bytes as usize)
+        .saturating_add(DIGEST_BYTES.saturating_mul(digests))
+        .saturating_add(DIGEST_BYTES.saturating_mul(2 * depth))
         .saturating_add(OPENING_HEADER_BYTES)
 }
 
 /// **The bytes a seat fetches for one CLAIM** — `k` openings and nothing else. The whole-capture
 /// pull is not in this number because Decision 8 retires it on this lane.
-pub fn palw_fp_seat_claim_byte_ceiling_v1(interval_positions: u32, row_bytes: u32, step_leaf_count: u64) -> usize {
+pub fn palw_fp_seat_claim_byte_ceiling_v1(interval_leaves: u64, row_bytes: u32, step_leaf_count: u64) -> usize {
     (PALW_FP_SEAT_INTERVAL_SAMPLES_V1 as usize).saturating_mul(palw_fp_interval_opening_ceiling_v1(
-        interval_positions,
+        interval_leaves,
         row_bytes,
         step_leaf_count,
     ))
@@ -253,6 +256,8 @@ pub enum PalwFpSeatOutcomeV1 {
     /// bonded challenger may — it already holds the refutation's inputs. It does not accuse
     /// through a receipt, because a receipt is a quorum vote and a quorum is not a court.
     Fault { interval_index: u32, leaf_index: u64 },
+    /// ADR-0086 Decision 3: a V4 opening's fault has a range for an address, not a leaf.
+    FaultInRange { interval_index: u32, first_leaf_index: u64, leaf_count: u64 },
     /// Nothing that binds to this claim arrived for at least one drawn interval. Not an
     /// accusation: the seat has simply not verified the claim, and the caller's existing tail
     /// (re-ask, then the half-window `Unavailable`) applies unchanged.
@@ -318,6 +323,9 @@ pub fn palw_fp_seat_verify_openings_v1(
                 }
                 PalwFpIntervalVerdictV1::Fault { leaf_index } => {
                     return PalwFpSeatOutcomeV1::Fault { interval_index: *index, leaf_index };
+                }
+                PalwFpIntervalVerdictV1::FaultInRange { first_leaf_index, leaf_count } => {
+                    return PalwFpSeatOutcomeV1::FaultInRange { interval_index: *index, first_leaf_index, leaf_count };
                 }
                 PalwFpIntervalVerdictV1::Mismatch => on_rejection(*index, PalwFpOpeningRejectionV1::Mismatch),
                 PalwFpIntervalVerdictV1::Unverifiable => on_rejection(*index, PalwFpOpeningRejectionV1::Unverifiable),
@@ -687,6 +695,8 @@ mod tests {
     #[test]
     fn the_bytes_a_seat_fetches_do_not_grow_with_the_decode_count() {
         const POSITIONS_PER_INTERVAL: u32 = 32;
+        const LEAVES_PER_POSITION: u64 = 64;
+        const INTERVAL_LEAVES: u64 = POSITIONS_PER_INTERVAL as u64 * LEAVES_PER_POSITION;
         const ROW_BYTES: u32 = 2 << 10;
         let backend = StubBackend::new(POSITIONS_PER_INTERVAL);
         let mut measured = Vec::new();
@@ -695,7 +705,7 @@ mod tests {
             let draw = palw_fp_seat_draw_v1(&backend, h(0x11), &duty(2, 0x33, 0x22), counts).unwrap();
             // The leaf count is the whole run's; the OPENING's path depth is its logarithm.
             let leaves = (14 + decode as u64) * 64;
-            let per_claim = palw_fp_seat_claim_byte_ceiling_v1(POSITIONS_PER_INTERVAL, ROW_BYTES, leaves);
+            let per_claim = palw_fp_seat_claim_byte_ceiling_v1(INTERVAL_LEAVES, ROW_BYTES, leaves);
             measured.push((decode, draw.interval_count, draw.intervals.len(), per_claim, leaves));
         }
         let (_, count_1, drawn_1, bytes_1, _) = measured[0];
@@ -708,11 +718,11 @@ mod tests {
 
         // The measured numbers, so a change to the formula shows up as a number and not as a
         // silently different bound: 4 × (32 × 2048 + 64 × depth + 4096).
-        assert_eq!(bytes_1, 4 * (32 * 2048 + 64 * 10 + 4096), "decode = 1");
-        assert_eq!(measured[1].3, 4 * (32 * 2048 + 64 * 13 + 4096), "decode = 100");
-        assert_eq!(bytes_10k, 4 * (32 * 2048 + 64 * 20 + 4096), "decode = 10,000");
+        assert_eq!(bytes_1, 4 * (2048 + 64 * 2 + 64 * 2 * 10 + 16_384), "decode = 1");
+        assert_eq!(measured[1].3, 4 * (2048 + 64 * 2 + 64 * 2 * 13 + 16_384), "decode = 100");
+        assert_eq!(bytes_10k, 4 * (2048 + 64 * 2 + 64 * 2 * 20 + 16_384), "decode = 10,000");
         assert!(
-            bytes_10k - bytes_1 == 4 * 64 * 10,
+            bytes_10k - bytes_1 == 4 * 64 * 2 * 10,
             "ten thousand times the job costs ten more digests per opening, and nothing else: {bytes_1} -> {bytes_10k}"
         );
         // And the ceiling is a ceiling: it never approaches the whole capture, which at these

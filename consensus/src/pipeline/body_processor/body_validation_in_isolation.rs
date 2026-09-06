@@ -80,8 +80,23 @@ impl BlockBodyProcessor {
         if block.header.evm_payload_hash != kaspa_consensus_core::evm::payload_hash_of_bytes(&bytes) {
             return Err(RuleError::EvmPayloadHashMismatch);
         }
-        if block.evm_payload.system_ops.len() > MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK {
-            return Err(RuleError::TooManyEvmSystemOps(block.evm_payload.system_ops.len(), MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK));
+        // ADR-0089: deposit claims and market settlements are two budgets — each op kind is
+        // counted against its own cap, so a settlement never spends a claim's slot or vice versa.
+        let claims = block
+            .evm_payload
+            .system_ops
+            .iter()
+            .filter(|op| matches!(op, kaspa_consensus_core::evm::EvmSystemOp::DepositClaim(_)))
+            .count();
+        if claims > MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK {
+            return Err(RuleError::TooManyEvmSystemOps(claims, MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK));
+        }
+        let settlements = block.evm_payload.system_ops.len() - claims;
+        if settlements > kaspa_consensus_core::evm::model_market::MAX_MARKET_ACTIONS_PER_EVM_BLOCK {
+            return Err(RuleError::TooManyEvmSystemOps(
+                settlements,
+                kaspa_consensus_core::evm::model_market::MAX_MARKET_ACTIONS_PER_EVM_BLOCK,
+            ));
         }
         crate::processes::evm::admit_evm_payload_txs(&block.evm_payload)
             .map_err(|(i, reason)| RuleError::EvmPayloadTxInadmissible(i, reason))?;

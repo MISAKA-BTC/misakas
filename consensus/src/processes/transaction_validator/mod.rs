@@ -40,6 +40,10 @@ pub struct TransactionValidator {
     /// must hash to (ADR-0081 Decision 3). Genesis-only by `validate_palw_v2`, so height-free here
     /// is exact, not an approximation.
     palw_prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    /// ADR-0087 Decision 3: whether a model market's sink output (`OP_RETURN "MSKMDL01" <line id>`)
+    /// is a consensus-legal output class here — `true` iff the network declares `palw_model_market`
+    /// at all; a dormant (`None`) network keeps the PQ-only rule byte-for-byte.
+    model_sink_outputs_allowed: bool,
 }
 
 impl TransactionValidator {
@@ -58,6 +62,7 @@ impl TransactionValidator {
         pq_activation_daa_score: u64,
         palw_panel_da_admissible: bool,
         palw_prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        model_sink_outputs_allowed: bool,
     ) -> Self {
         Self {
             max_tx_inputs,
@@ -73,6 +78,7 @@ impl TransactionValidator {
             pq_activation_daa_score,
             palw_panel_da_admissible,
             palw_prompt_ids_form,
+            model_sink_outputs_allowed,
         }
     }
 
@@ -103,6 +109,7 @@ impl TransactionValidator {
             // Every shipped preset's door: no mode-2 shape, flat prompt digests.
             palw_panel_da_admissible: false,
             palw_prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            model_sink_outputs_allowed: false,
         }
     }
 

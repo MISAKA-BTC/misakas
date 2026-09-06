@@ -18,12 +18,12 @@
 //! decoding.
 
 use crate::{flow_context::FlowContext, flow_trait::Flow};
-use kaspa_core::debug;
+use kaspa_core::{debug, info};
 use kaspa_hashes::Hash64;
 use kaspa_p2p_lib::{IncomingRoute, Router, common::ProtocolError, make_message, pb::kaspad_message::Payload};
 use std::sync::Arc;
 
-use crate::palw_gossip::PalwOpeningRequestV1;
+use crate::palw_gossip::{PalwOpeningRequestV1, PalwServeRefusalV1};
 
 pub struct PalwIntervalFlow {
     ctx: FlowContext,
@@ -79,7 +79,15 @@ impl PalwIntervalFlow {
                         // Named, and only here. The claim id is a public chain fact; nothing about
                         // the prompt, its ids or its text is in this line (ADR-0077 SA-5,
                         // ADR-0079 SA-7).
-                        Err(refusal) => debug!(
+                        // A refusal used to be a `debug!` line, which on a node run at the default
+                        // level is no line: a seat asked node-0 for four intervals of a 300-token
+                        // claim every 100 s for half an hour and node-0's log had nothing to say
+                        // (devnet runs 8 and 10). A throttled re-ask is the seat's own cadence and
+                        // stays quiet; every other refusal is the operator's to read.
+                        Err(PalwServeRefusalV1::Throttled) => {
+                            debug!("[palw-interval] throttled a re-ask for claim {claim} interval {}", inner.interval_index)
+                        }
+                        Err(refusal) => info!(
                             "[palw-interval] refused an opening request for claim {claim} interval {}: {}",
                             inner.interval_index,
                             refusal.name()

@@ -72,6 +72,12 @@ pub mod kaspad_request_convert {
     impl_into_kaspad_request!(GetPalwDerivedArtifacts);
     impl_into_kaspad_request!(GetPalwFreePromptClaim);
     impl_into_kaspad_request!(GetPalwPendingChunkGroup);
+    impl_into_kaspad_request!(GetPalwModelMarket);
+    impl_into_kaspad_request!(GetPalwModelPositions);
+    impl_into_kaspad_request!(GetPalwModelLine);
+    impl_into_kaspad_request!(GetPalwModelVersion);
+    impl_into_kaspad_request!(GetPalwModelLines);
+    impl_into_kaspad_request!(GetPalwModelProposals);
     impl_into_kaspad_request!(GetTokenSupply);
     impl_into_kaspad_request!(GetTokenEmissionInfo);
     impl_into_kaspad_request!(GetValidatorStatus);
@@ -225,6 +231,12 @@ pub mod kaspad_response_convert {
     impl_into_kaspad_response!(GetPalwDerivedArtifacts);
     impl_into_kaspad_response!(GetPalwFreePromptClaim);
     impl_into_kaspad_response!(GetPalwPendingChunkGroup);
+    impl_into_kaspad_response!(GetPalwModelMarket);
+    impl_into_kaspad_response!(GetPalwModelPositions);
+    impl_into_kaspad_response!(GetPalwModelLine);
+    impl_into_kaspad_response!(GetPalwModelVersion);
+    impl_into_kaspad_response!(GetPalwModelLines);
+    impl_into_kaspad_response!(GetPalwModelProposals);
     impl_into_kaspad_response!(GetTokenSupply);
     impl_into_kaspad_response!(GetTokenEmissionInfo);
     impl_into_kaspad_response!(GetValidatorStatus);

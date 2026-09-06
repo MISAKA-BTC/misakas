@@ -468,6 +468,9 @@ pub const PALW_STATE_V2_DOMAIN_CAPABILITY_FACT: &[u8] = b"misaka-palw/state-v2/c
 /// "is this the part the declaration already named at this index". A digest that could be read
 /// as either is a digest a mover could re-present under the other rule.
 pub const PALW_STATE_V2_DOMAIN_COURT_CLOSE_CHUNK: &[u8] = b"misaka-palw/state-v2/court-close-chunk/v1";
+/// ADR-0087: the key of a model-market payout in `pending_payouts` — a function of the move, so
+/// two moves in one block cannot share a row.
+pub const PALW_STATE_V2_DOMAIN_MODEL_PAYOUT: &[u8] = b"misaka-palw/state-v2/model-payout/v1";
 
 /// Every domain this module keys, so the cross-family uniqueness test can see them.
 pub const PALW_STATE_V2_ALL_DOMAINS: &[&[u8]] = &[
@@ -2942,6 +2945,133 @@ pub enum PalwConsensusObjectV2 {
         /// challenger's moves would steer the dissection away from its own divergence.
         signature: Vec<u8>,
     },
+    /// **ADR-0087 Decision 3: a buy.** The carrier's output `sink_index` pays `msk_in` to the
+    /// class's sink (`palw_model_sink_spk_v1`), bound at extraction; the fold credits the net leg
+    /// to the reserve and the curve's units to `holder`, refusing when fewer than `min_units_out`.
+    /// Refused below `Params::palw_model_market`.
+    ModelBuy {
+        /// ADR-0088 Decision 9: a LINE id; a class's founding line has the class id.
+        line_id: Hash64,
+        /// The holder's payout payload — the identity a bond pays (M8).
+        holder: Hash64,
+        msk_in: u64,
+        min_units_out: u64,
+        sink_index: u32,
+    },
+    /// **ADR-0087 Decision 3: a sell**, signed by the key whose payload is `holder` over
+    /// `palw_model_sell_message_v1` under `PALW_MODEL_SELL_MLDSA87_CONTEXT`. The fold debits
+    /// `units_in`, pays the net leg to `holder` through the coinbase, refusing when under
+    /// `min_msk_out`. Refused below `Params::palw_model_market`.
+    ModelSell {
+        /// ADR-0088 Decision 9: a LINE id; a class's founding line has the class id.
+        line_id: Hash64,
+        holder: Hash64,
+        units_in: u64,
+        min_msk_out: u64,
+        pubkey: Vec<u8>,
+        signature: Vec<u8>,
+    },
+    /// **ADR-0088 Decision 1: a further line is founded on a class** by any Active bond, which
+    /// becomes its owner, developer and maintainer; version 1 is `root`. Signed by `founder`
+    /// over `palw_model_line_founded_message_v1`. Rent-priced. Refused below
+    /// `Params::palw_model_lines`.
+    ModelLineFounded {
+        class_id: Hash64,
+        name: Vec<u8>,
+        founder: PalwBondKeyV2,
+        root: Hash64,
+        signature: Vec<u8>,
+    },
+    /// **ADR-0088 Decision 2: a version**, signed by the line's developer over
+    /// `palw_model_version_message_v1`. `version` must be the next number; `preview` keeps the
+    /// current where it is. The four hashes are declarations.
+    ModelVersionPublished {
+        line_id: Hash64,
+        version: u32,
+        root: Hash64,
+        parent: Option<u32>,
+        adopted_from: Option<Hash64>,
+        runtime_hash: Option<Hash64>,
+        dataset_commitment: Option<Hash64>,
+        training_config_hash: Option<Hash64>,
+        notes_hash: Option<Hash64>,
+        preview: bool,
+        signature: Vec<u8>,
+    },
+    /// **ADR-0088 Decision 2: a preview becomes current**, signed by the developer over
+    /// `palw_model_version_move_message_v1(.., b"promote")`.
+    ModelVersionPromoted {
+        line_id: Hash64,
+        version: u32,
+        signature: Vec<u8>,
+    },
+    /// **ADR-0088 Decision 2: a preview or a superseded version leaves force**, signed by the
+    /// developer over `palw_model_version_move_message_v1(.., b"withdraw")`.
+    ModelVersionWithdrawn {
+        line_id: Hash64,
+        version: u32,
+        signature: Vec<u8>,
+    },
+    /// **ADR-0088 Decision 6: the owner sets the roles and the contributor share**, signed over
+    /// `palw_model_roles_message_v1`. `None` means the owner.
+    ModelLineRolesSet {
+        line_id: Hash64,
+        developer: Option<PalwBondKeyV2>,
+        maintainer: Option<PalwBondKeyV2>,
+        contributor_permille_of_leg: u16,
+        signature: Vec<u8>,
+    },
+    /// **ADR-0088 Decision 6: the owner hands the line over**, signed over
+    /// `palw_model_transfer_message_v1`; the roles reset to the new owner.
+    ModelLineOwnerTransferred {
+        line_id: Hash64,
+        new_owner: PalwBondKeyV2,
+        signature: Vec<u8>,
+    },
+    /// **ADR-0088 Decision 6: the owner retires the line**, signed over
+    /// `palw_model_retire_message_v1`.
+    ModelLineRetired {
+        line_id: Hash64,
+        signature: Vec<u8>,
+    },
+    /// **ADR-0088 Decision 7: a proposal from any Active bond**, signed by `by` over
+    /// `palw_model_proposal_message_v1`. Rent-priced.
+    ModelProposalPosted {
+        line_id: Hash64,
+        root: Hash64,
+        note_hash: Hash64,
+        by: PalwBondKeyV2,
+        signature: Vec<u8>,
+    },
+    /// **ADR-0088 Decision 7: the developer closes a proposal**, signed over
+    /// `palw_model_proposal_close_message_v1`.
+    ModelProposalClosed {
+        line_id: Hash64,
+        proposal_id: Hash64,
+        signature: Vec<u8>,
+    },
+    /// **ADR-0088 Decision 5: an evaluation from any Active bond**, signed by `by` over
+    /// `palw_model_evaluation_message_v1`. A declaration. Rent-priced.
+    ModelEvaluationPosted {
+        line_id: Hash64,
+        version: u32,
+        evaluator_id: Hash64,
+        score_permille: u32,
+        report_hash: Hash64,
+        by: PalwBondKeyV2,
+        signature: Vec<u8>,
+    },
+    /// **ADR-0090 Decision 3: the seed that opens a line's market.** Its carrier pays `msk_seed`
+    /// (at least `PALW_MODEL_SEED_MIN_SOMPI_V1`) into the line's sink at `sink_index`; the whole of
+    /// it becomes the reserve, fee-free, and no object ever pays it out. `seeder` is a payout
+    /// payload kept for the record — the seeder holds no position. Unsigned like a buy: the sink
+    /// output is the proof (`palw_model_buy_binds_its_carrier_v1`).
+    ModelSeed {
+        line_id: Hash64,
+        seeder: Hash64,
+        msk_seed: u64,
+        sink_index: u32,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -3214,6 +3344,11 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
         // only the honest carrier that completes — the sentence the `ObjectChunk` arm's own doc
         // makes about extending chunks, which is the identical situation.
         PalwConsensusObjectV2::CourtCloseChunk { .. } => 0,
+        // ADR-0088 Decision 11: the three objects that fill a bounded table pay a burned rent;
+        // a version, a promotion, a role change, a transfer and a retire pay carriage only.
+        PalwConsensusObjectV2::ModelLineFounded { .. }
+        | PalwConsensusObjectV2::ModelProposalPosted { .. }
+        | PalwConsensusObjectV2::ModelEvaluationPosted { .. } => crate::palw_model_lines_v1::PALW_MODEL_OBJECT_RENT_SOMPI_V1,
         _ => 0,
     }
 }
@@ -4098,6 +4233,77 @@ pub enum PalwStateV2Error {
     DaDisclosureIndexMismatch { want: u32, got: u32 },
     #[error("the disclosure's opening does not reconstruct claim {claim}'s committed trace root: {why}")]
     DaOpeningRefused { claim: Hash64, why: String },
+    // ADR-0087, the model market.
+    #[error("a model move names no holder")]
+    ModelHolderUnset,
+    #[error("class {0} is not Active, so its market takes no buys")]
+    ModelClassNotActive(Hash64),
+    #[error("line {0} has no seeded market")]
+    ModelMarketMissing(Hash64),
+    #[error("the buy releases no units of class {0}")]
+    ModelBuyReleasesNothing(Hash64),
+    #[error("the buy would release {got} units, under its floor of {want}")]
+    ModelBuyBelowFloor { want: u64, got: u64 },
+    #[error("the sell names {want} units and the holder holds {held}")]
+    ModelSellExceedsPosition { held: u64, want: u64 },
+    #[error("the curve pays nothing for the sell of class {0}")]
+    ModelSellPaysNothing(Hash64),
+    #[error("the sell would pay {got} sompi, under its floor of {want}")]
+    ModelSellBelowFloor { want: u64, got: u64 },
+    // ADR-0090, the seed.
+    #[error("line {0} already has a seeded market")]
+    ModelMarketAlreadySeeded(Hash64),
+    #[error("the seed of {got} sompi is under the least seed of {want}")]
+    ModelSeedTooSmall { want: u64, got: u64 },
+    #[error("class {0} is frozen, so its line takes no seed")]
+    ModelClassClosed(Hash64),
+    // ADR-0088, the model registry.
+    #[error("the model registry is not in force on this chain")]
+    ModelLinesNotArmed,
+    #[error("line {0} does not exist")]
+    ModelLineMissing(Hash64),
+    #[error("line {0} is not Active")]
+    ModelLineNotActive(Hash64),
+    #[error("line {0} has no owner, so nobody may act on it")]
+    ModelLineUnowned(Hash64),
+    #[error("line {0} already exists")]
+    ModelLineExists(Hash64),
+    #[error("class {0} holds the most lines it may")]
+    ModelLinesFull(Hash64),
+    #[error("a line's name must be 1..={1} bytes, not {0}")]
+    ModelLineNameLength(usize, usize),
+    #[error("the floor has no artifact and no line")]
+    ModelLineOnFloor,
+    #[error("version {got} of line {line} is not the next one ({want})")]
+    ModelVersionNotNext { line: Hash64, want: u32, got: u32 },
+    #[error("version {1} of line {0} does not exist")]
+    ModelVersionMissing(Hash64, u32),
+    #[error("the root is already the current root of line {0}")]
+    ModelVersionSameRoot(Hash64),
+    #[error("line {0} holds the most previews it may")]
+    ModelPreviewsFull(Hash64),
+    #[error("version {1} of line {0} is not a preview")]
+    ModelVersionNotPreview(Hash64, u32),
+    #[error("version {1} of line {0} is current and cannot be withdrawn, only succeeded")]
+    ModelVersionIsCurrent(Hash64, u32),
+    #[error("version {1} of line {0} is not in force")]
+    ModelVersionNotInForce(Hash64, u32),
+    #[error("proposal {0} does not exist on this line")]
+    ModelProposalMissing(Hash64),
+    #[error("proposal {0} already exists")]
+    ModelProposalExists(Hash64),
+    #[error("line {0} holds the most open proposals it may")]
+    ModelProposalsFull(Hash64),
+    #[error("version {1} of line {0} holds the most evaluations it may")]
+    ModelEvaluationsFull(Hash64, u32),
+    #[error("this bond already evaluated version {1} of line {0}")]
+    ModelEvaluationExists(Hash64, u32),
+    #[error("the bond is not the one this move requires")]
+    ModelWrongBond,
+    #[error("bond {0:?} is not Active")]
+    ModelBondNotActive(PalwBondKeyV2),
+    #[error("proposal {0} was adopted and cannot be closed")]
+    ModelProposalAdopted(Hash64),
     // There is deliberately NO size error here. A disclosure's ceiling is a wire bound, and it is
     // already applied on the only path into this fold: `palw_lifecycle_objects_from_accepted_txs_v2`
     // runs `palw_lifecycle_object_may_ride_v2` on every extracted object and SKIPS the ones that
@@ -4150,6 +4356,32 @@ pub struct PalwChainStateV2 {
     /// Receipt-lane production census per class (spent quanta as blocks/pwu), feeding the
     /// receipt-lane retarget exactly as `epoch_counters` feeds the attempt lane's.
     receipt_epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
+    /// **ADR-0087 Decision 1: one market row per class**, opened by the first buy past the
+    /// activation. Enters the state root only when non-empty, so a chain on which the rule is
+    /// dormant commits byte-identical roots to a build without the field (M7).
+    model_markets: BTreeMap<Hash64, crate::palw_model_market_v1::PalwModelMarketV1>,
+    /// ADR-0087 Decision 1: units held, by `(line, holder)`; a row is removed at zero. (ADR-0088
+    /// Decision 9: the key is a LINE id; a class's founding line has the class id.)
+    model_positions: BTreeMap<(Hash64, Hash64), u64>,
+    /// **ADR-0088 Decision 1: a line row**, present only once something about a line changed — a
+    /// founded line, a version, a role, a retire. A class's founding line has no row until then
+    /// and is synthesised from the class (`model_line_or_founding`). Enters the state root only
+    /// when non-empty (Decision 10).
+    model_lines: BTreeMap<Hash64, crate::palw_model_lines_v1::PalwModelLineV1>,
+    /// ADR-0088 Decision 2: versions by `(line, n)`; the last `PALW_MODEL_VERSION_HISTORY_V1` per
+    /// line stay, older rows are evicted at the next publish.
+    model_versions: BTreeMap<(Hash64, u32), crate::palw_model_lines_v1::PalwModelVersionV1>,
+    /// ADR-0088 Decision 7: open and adopted proposals, by proposal id.
+    model_proposals: BTreeMap<Hash64, crate::palw_model_lines_v1::PalwModelProposalV1>,
+    /// ADR-0088 Decision 5: evaluations by `(line, version, by)`.
+    model_evaluations: BTreeMap<(Hash64, u32, PalwBondKeyV2), crate::palw_model_lines_v1::PalwModelEvaluationV1>,
+    /// ADR-0088 Decision 3: the root a claim was admitted against, for claims of a class that has
+    /// line rows — the court replays against it. Absent means the class's founding root.
+    claim_roots: BTreeMap<Hash64, Hash64>,
+    /// **ADR-0089 Decision 6: what this block's fold decided about the EVM's actions**, by
+    /// sequence — the list the selected child carries as `MarketSettle` system ops and validates
+    /// equal to this. Drained by the child's fold; enters the state root only when non-empty.
+    evm_settlements: BTreeMap<u32, crate::evm::model_market::PalwEvmSettlementV1>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -4260,6 +4492,14 @@ impl PalwChainStateV2 {
             court_sessions: BTreeMap::new(),
             epoch_counters: BTreeMap::new(),
             receipt_epoch_counters: BTreeMap::new(),
+            model_markets: BTreeMap::new(),
+            model_positions: BTreeMap::new(),
+            model_lines: BTreeMap::new(),
+            model_versions: BTreeMap::new(),
+            model_proposals: BTreeMap::new(),
+            model_evaluations: BTreeMap::new(),
+            claim_roots: BTreeMap::new(),
+            evm_settlements: BTreeMap::new(),
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
             certified_families: BTreeMap::new(),
@@ -4423,6 +4663,281 @@ impl PalwChainStateV2 {
     /// whole claim set rather than of one id).
     pub fn claims_iter(&self) -> impl Iterator<Item = (&Hash64, &PalwClaimStateV2)> {
         self.claims.iter()
+    }
+
+    /// ADR-0087: a class's market row, `None` before its first move.
+    pub fn model_market(&self, class_id: &Hash64) -> Option<&crate::palw_model_market_v1::PalwModelMarketV1> {
+        self.model_markets.get(class_id)
+    }
+
+    pub fn model_markets_iter(&self) -> impl Iterator<Item = (&Hash64, &crate::palw_model_market_v1::PalwModelMarketV1)> {
+        self.model_markets.iter()
+    }
+
+    /// ADR-0087: units `holder` holds in `class_id`, zero when no row exists.
+    pub fn model_position(&self, class_id: &Hash64, holder: &Hash64) -> u64 {
+        self.model_positions.get(&(*class_id, *holder)).copied().unwrap_or(0)
+    }
+
+    /// ADR-0087 Decision 8: every position a holder has, by class.
+    pub fn model_positions_of(&self, holder: &Hash64) -> Vec<(Hash64, u64)> {
+        self.model_positions.iter().filter(|((_, h), _)| h == holder).map(|((c, _), units)| (*c, *units)).collect()
+    }
+
+    /// ADR-0087 M1: units held in a class across every holder.
+    pub fn model_units_held(&self, class_id: &Hash64) -> u128 {
+        self.model_positions.iter().filter(|((c, _), _)| c == class_id).map(|(_, u)| *u as u128).sum()
+    }
+
+    // ---- ADR-0088: lines, versions, roots in force -------------------------------------------
+
+    /// ADR-0088 Decision 1: a line's row as written, `None` for a founding line nothing touched.
+    pub fn model_line(&self, line_id: &Hash64) -> Option<&crate::palw_model_lines_v1::PalwModelLineV1> {
+        self.model_lines.get(line_id)
+    }
+
+    /// ADR-0088 Decision 1: a line as the fold sees it — the row, or the class's founding line
+    /// synthesised from the class row (its id IS the class id). `None` when neither exists.
+    pub fn model_line_or_founding(&self, line_id: &Hash64) -> Option<crate::palw_model_lines_v1::PalwModelLineV1> {
+        if let Some(row) = self.model_lines.get(line_id) {
+            return Some(row.clone());
+        }
+        let class = self.classes.get(line_id)?;
+        Some(crate::palw_model_lines_v1::founding_line_v1(*line_id, class.registrant_bond, Vec::new(), class.registered_daa))
+    }
+
+    /// ADR-0088 Decision 2: a version row; version 1 of a founding line with no rows is the
+    /// class's registration, synthesised.
+    pub fn model_version(&self, line_id: &Hash64, version: u32) -> Option<crate::palw_model_lines_v1::PalwModelVersionV1> {
+        if let Some(row) = self.model_versions.get(&(*line_id, version)) {
+            return Some(row.clone());
+        }
+        if version != 1 || self.model_lines.contains_key(line_id) {
+            return None;
+        }
+        let class = self.classes.get(line_id)?;
+        Some(crate::palw_model_lines_v1::PalwModelVersionV1 {
+            root: class.artifact_root,
+            parent: None,
+            adopted_from: None,
+            runtime_hash: None,
+            dataset_commitment: None,
+            training_config_hash: None,
+            notes_hash: None,
+            published_daa: class.registered_daa,
+            published_by: class.registrant_bond,
+            status: crate::palw_model_lines_v1::PalwVersionStatusV1::Current,
+            usage: Default::default(),
+        })
+    }
+
+    pub fn model_lines_iter(&self) -> impl Iterator<Item = (&Hash64, &crate::palw_model_lines_v1::PalwModelLineV1)> {
+        self.model_lines.iter()
+    }
+
+    pub fn model_versions_of(&self, line_id: &Hash64) -> Vec<(u32, &crate::palw_model_lines_v1::PalwModelVersionV1)> {
+        self.model_versions.range((*line_id, 0)..=(*line_id, u32::MAX)).map(|((_, n), v)| (*n, v)).collect()
+    }
+
+    pub fn model_proposals_of(&self, line_id: &Hash64) -> Vec<(&Hash64, &crate::palw_model_lines_v1::PalwModelProposalV1)> {
+        self.model_proposals.iter().filter(|(_, p)| p.line_id == *line_id).collect()
+    }
+
+    pub fn model_evaluations_of(
+        &self,
+        line_id: &Hash64,
+        version: u32,
+    ) -> Vec<(&PalwBondKeyV2, &crate::palw_model_lines_v1::PalwModelEvaluationV1)> {
+        self.model_evaluations.iter().filter(|((l, v, _), _)| l == line_id && *v == version).map(|((_, _, b), e)| (b, e)).collect()
+    }
+
+    /// The line rows of a class (the founding line included only when it has a row).
+    pub fn class_line_rows(&self, class_id: &Hash64) -> Vec<(&Hash64, &crate::palw_model_lines_v1::PalwModelLineV1)> {
+        self.model_lines.iter().filter(|(_, l)| l.class_id == *class_id).collect()
+    }
+
+    /// **ADR-0088 Decision 3: the roots in force for a class at `daa`.** The founding root when
+    /// the class has no line rows; otherwise, over every Active line of the class, the versions
+    /// in force (current, previews, superseded inside their grace), plus the founding root while
+    /// the founding line has no row of its own.
+    pub fn class_roots_in_force(&self, class_id: &Hash64, daa: u64) -> Vec<Hash64> {
+        let Some(class) = self.classes.get(class_id) else { return Vec::new() };
+        let mut roots: Vec<Hash64> = Vec::new();
+        if !self.model_lines.contains_key(class_id) {
+            roots.push(class.artifact_root);
+        }
+        for (line_id, line) in self.model_lines.iter().filter(|(_, l)| l.class_id == *class_id) {
+            let retired_out = line.retired_daa.is_some_and(|d| daa >= d);
+            if retired_out {
+                continue;
+            }
+            for ((_, _), version) in self.model_versions.range((*line_id, 0)..=(*line_id, u32::MAX)) {
+                if version.in_force_at(daa) && !roots.contains(&version.root) {
+                    roots.push(version.root);
+                }
+            }
+        }
+        roots
+    }
+
+    /// ADR-0088 Decision 4: the `(line, version)` a root belongs to, for attribution — the first
+    /// line of the class whose version in force has this root; the founding line's version 1 when
+    /// no rows exist.
+    pub fn model_version_of_root(&self, class_id: &Hash64, root: &Hash64, daa: u64) -> Option<(Hash64, u32)> {
+        for (line_id, line) in self.model_lines.iter().filter(|(_, l)| l.class_id == *class_id) {
+            if line.retired_daa.is_some_and(|d| daa >= d) {
+                continue;
+            }
+            for ((_, n), version) in self.model_versions.range((*line_id, 0)..=(*line_id, u32::MAX)) {
+                if version.root == *root && version.in_force_at(daa) {
+                    return Some((*line_id, *n));
+                }
+            }
+        }
+        let class = self.classes.get(class_id)?;
+        (!self.model_lines.contains_key(class_id) && class.artifact_root == *root).then_some((*class_id, 1))
+    }
+
+    /// ADR-0088 Decision 3: the root a claim was admitted against, when the fold recorded one.
+    pub fn claim_root(&self, claim_id: &Hash64) -> Option<Hash64> {
+        self.claim_roots.get(claim_id).copied()
+    }
+
+    /// ADR-0089 Decision 6: the settlements this state's block decided, in sequence order — what
+    /// the selected child must carry as `MarketSettle` ops.
+    pub fn evm_settlements(&self) -> Vec<crate::evm::model_market::PalwEvmSettlementV1> {
+        self.evm_settlements.values().copied().collect()
+    }
+
+    /// **ADR-0089 Decision 2: the window** — every row a read precompile may serve, flattened,
+    /// at this state's own point (the EVM block's selected parent). Bond keys are resolved to
+    /// their payout payloads, statuses to codes, and every line of every class is present
+    /// (founding lines synthesised), so the executor needs no PALW type but the view's.
+    pub fn evm_view_v1(&self, chain_id: u64, base_class_id: Hash64) -> crate::evm::model_market::PalwEvmViewV1 {
+        use crate::evm::model_market::*;
+        use crate::palw_model_lines_v1::{PalwModelLineStatusV1, PalwVersionStatusV1};
+        let daa = self.last_point().map(|p| p.daa_score).unwrap_or(0);
+        let payload_of = |bond: Option<PalwBondKeyV2>| bond.and_then(|b| self.bonds.get(&b)).map(|b| b.payout_payload);
+        let classes: Vec<(Hash64, PalwEvmClassRowV1)> = self
+            .classes
+            .iter()
+            .map(|(id, class)| {
+                let status = match class.status {
+                    PalwClassStatusV2::Active => 0,
+                    PalwClassStatusV2::Frozen { .. } => 1,
+                    PalwClassStatusV2::Registered { .. } => 2,
+                    PalwClassStatusV2::Dormant { .. } => 3,
+                };
+                let row = PalwEvmClassRowV1 {
+                    status,
+                    share_permille: self.class_shares.get(id).copied().unwrap_or(0),
+                    budget_blocks: self.epoch_budgets.as_ref().and_then(|b| b.budget_blocks.get(id).copied()).unwrap_or(0),
+                    canonical_leaves: class.pwu_rule.canonical_leaves_v1(),
+                    is_base: *id == base_class_id,
+                    registrant_payload: payload_of(class.registrant_bond),
+                    registered_daa: class.registered_daa,
+                    certified_attempt: self.class_shares.contains_key(id),
+                    certified_fp: self.fp_certified_classes.contains_key(id),
+                    roots_in_force: self.class_roots_in_force(id, daa),
+                };
+                (*id, row)
+            })
+            .collect();
+        let mut lines: BTreeMap<Hash64, PalwEvmLineRowV1> = BTreeMap::new();
+        let mut versions: BTreeMap<(Hash64, u32), PalwEvmVersionRowV1> = BTreeMap::new();
+        let line_row = |line: &crate::palw_model_lines_v1::PalwModelLineV1| PalwEvmLineRowV1 {
+            class_id: line.class_id,
+            owner_payload: payload_of(line.owner),
+            developer_payload: payload_of(line.developer_bond()),
+            maintainer_payload: payload_of(line.maintainer_bond()),
+            name: line.name.clone(),
+            founded_daa: line.founded_daa,
+            current: line.current,
+            versions_published: line.versions_published,
+            preview_count: line.previews.len() as u32,
+            contributor_permille_of_leg: line.contributor_permille_of_leg,
+            status: match line.status {
+                PalwModelLineStatusV1::Active => 0,
+                PalwModelLineStatusV1::Retired => 1,
+            },
+        };
+        let version_row = |v: &crate::palw_model_lines_v1::PalwModelVersionV1| {
+            let (status, until_daa) = match v.status {
+                PalwVersionStatusV1::Current => (0, 0),
+                PalwVersionStatusV1::Preview => (1, 0),
+                PalwVersionStatusV1::Superseded { until_daa } => (2, until_daa),
+                PalwVersionStatusV1::Withdrawn => (3, 0),
+            };
+            PalwEvmVersionRowV1 {
+                root: v.root,
+                parent: v.parent,
+                adopted_from: v.adopted_from,
+                runtime_hash: v.runtime_hash,
+                dataset_commitment: v.dataset_commitment,
+                training_config_hash: v.training_config_hash,
+                notes_hash: v.notes_hash,
+                published_daa: v.published_daa,
+                published_by_payload: payload_of(v.published_by),
+                status,
+                until_daa,
+                attempt_claims: v.usage.attempt_claims,
+                fp_claims: v.usage.fp_claims,
+                work_leaves: v.usage.work_leaves,
+                first_used_daa: v.usage.first_used_daa,
+                last_used_daa: v.usage.last_used_daa,
+            }
+        };
+        for id in self.classes.keys() {
+            if *id == base_class_id {
+                continue;
+            }
+            if !self.model_lines.contains_key(id)
+                && let Some(line) = self.model_line_or_founding(id)
+                && let Some(v1) = self.model_version(id, 1)
+            {
+                lines.insert(*id, line_row(&line));
+                versions.insert((*id, 1), version_row(&v1));
+            }
+        }
+        for (id, line) in self.model_lines.iter() {
+            lines.insert(*id, line_row(line));
+            for ((_, n), v) in self.model_versions.range((*id, 0)..=(*id, u32::MAX)) {
+                versions.insert((*id, *n), version_row(v));
+            }
+        }
+        let mut proposals: BTreeMap<Hash64, Vec<PalwEvmProposalRowV1>> = BTreeMap::new();
+        for (pid, p) in self.model_proposals.iter() {
+            proposals.entry(p.line_id).or_default().push(PalwEvmProposalRowV1 {
+                proposal_id: *pid,
+                root: p.root,
+                note_hash: p.note_hash,
+                by_payload: payload_of(Some(p.by)),
+                posted_daa: p.posted_daa,
+                adopted_in: p.adopted_in,
+            });
+        }
+        let mut evaluations: BTreeMap<(Hash64, u32), Vec<PalwEvmEvaluationRowV1>> = BTreeMap::new();
+        for ((l, n, by), e) in self.model_evaluations.iter() {
+            evaluations.entry((*l, *n)).or_default().push(PalwEvmEvaluationRowV1 {
+                evaluator_id: e.evaluator_id,
+                score_permille: e.score_permille,
+                report_hash: e.report_hash,
+                by_payload: payload_of(Some(*by)),
+                posted_daa: e.posted_daa,
+                is_lines_own: e.is_lines_own,
+            });
+        }
+        PalwEvmViewV1 {
+            chain_daa: daa,
+            chain_id,
+            classes,
+            lines: lines.into_iter().collect(),
+            versions,
+            proposals,
+            evaluations,
+            markets: self.model_markets.clone(),
+            positions: self.model_positions.clone(),
+        }
     }
 
     pub fn claim(&self, id: &Hash64) -> Option<&PalwClaimStateV2> {
@@ -4604,6 +5119,33 @@ impl PalwChainStateV2 {
         state.update(collection_root(b"court_sessions", &self.court_sessions).as_byte_slice());
         state.update(collection_root(b"epoch_counters", &self.epoch_counters).as_byte_slice());
         state.update(collection_root(b"receipt_epoch_counters", &self.receipt_epoch_counters).as_byte_slice());
+        // ADR-0087 M7: the market collections enter the root only once a move has been folded,
+        // which cannot happen below `Params::palw_model_market`; before that the root is the one a
+        // build without the fields computes, header for header.
+        if !self.model_markets.is_empty() || !self.model_positions.is_empty() {
+            state.update(collection_root(b"model_markets", &self.model_markets).as_byte_slice());
+            state.update(collection_root(b"model_positions", &self.model_positions).as_byte_slice());
+        }
+        // ADR-0088 Decision 10: the registry's collections enter the root only once a line row,
+        // a version, a proposal, an evaluation or a claim root has been written, which cannot
+        // happen below `Params::palw_model_lines`.
+        if !self.model_lines.is_empty()
+            || !self.model_versions.is_empty()
+            || !self.model_proposals.is_empty()
+            || !self.model_evaluations.is_empty()
+            || !self.claim_roots.is_empty()
+        {
+            state.update(collection_root(b"model_lines", &self.model_lines).as_byte_slice());
+            state.update(collection_root(b"model_versions", &self.model_versions).as_byte_slice());
+            state.update(collection_root(b"model_proposals", &self.model_proposals).as_byte_slice());
+            state.update(collection_root(b"model_evaluations", &self.model_evaluations).as_byte_slice());
+            state.update(collection_root(b"claim_roots", &self.claim_roots).as_byte_slice());
+        }
+        // ADR-0089 Decision 6: the settlement list is in the root while it waits for the child,
+        // and only then.
+        if !self.evm_settlements.is_empty() {
+            state.update(collection_root(b"evm_settlements", &self.evm_settlements).as_byte_slice());
+        }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
         state.update(&self.bounded_immature.to_le_bytes());
@@ -5340,6 +5882,54 @@ pub enum PalwDeltaEntryV2 {
         index: u8,
         bytes: Vec<u8>,
     },
+    /// ADR-0087: a class's market row moved.
+    ModelMarket {
+        key: Hash64,
+        old: Option<crate::palw_model_market_v1::PalwModelMarketV1>,
+        new: Option<crate::palw_model_market_v1::PalwModelMarketV1>,
+    },
+    /// ADR-0087: a holder's units in a class moved; `None` is no row.
+    ModelPosition {
+        key: (Hash64, Hash64),
+        old: Option<u64>,
+        new: Option<u64>,
+    },
+    /// ADR-0088: a line row moved.
+    ModelLine {
+        key: Hash64,
+        old: Option<crate::palw_model_lines_v1::PalwModelLineV1>,
+        new: Option<crate::palw_model_lines_v1::PalwModelLineV1>,
+    },
+    /// ADR-0088: a version row moved.
+    ModelVersion {
+        key: (Hash64, u32),
+        old: Option<crate::palw_model_lines_v1::PalwModelVersionV1>,
+        new: Option<crate::palw_model_lines_v1::PalwModelVersionV1>,
+    },
+    /// ADR-0088: a proposal row moved.
+    ModelProposal {
+        key: Hash64,
+        old: Option<crate::palw_model_lines_v1::PalwModelProposalV1>,
+        new: Option<crate::palw_model_lines_v1::PalwModelProposalV1>,
+    },
+    /// ADR-0088: an evaluation row moved.
+    ModelEvaluation {
+        key: (Hash64, u32, PalwBondKeyV2),
+        old: Option<crate::palw_model_lines_v1::PalwModelEvaluationV1>,
+        new: Option<crate::palw_model_lines_v1::PalwModelEvaluationV1>,
+    },
+    /// ADR-0088: the root a claim was admitted against.
+    ClaimRoot {
+        key: Hash64,
+        old: Option<Hash64>,
+        new: Option<Hash64>,
+    },
+    /// ADR-0089: a settlement row decided or drained.
+    EvmSettlement {
+        key: u32,
+        old: Option<crate::evm::model_market::PalwEvmSettlementV1>,
+        new: Option<crate::evm::model_market::PalwEvmSettlementV1>,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -5396,6 +5986,8 @@ struct TransitionBuilder<'a> {
     /// about the BLOCK, constant for the whole fold, and threading it through every object arm
     /// would give a future arm the chance to forget it.
     unavailable_abstains: bool,
+    /// ADR-0087: moves folded in this block, the disambiguator of their payout keys.
+    model_moves: u32,
     /// ADR-0071 SA-1..SA-4, resolved by the caller from `Params::palw_capability_bound` at this
     /// block's DAA. It rides the builder for the reason `unavailable_abstains` does: it is a fact
     /// about the BLOCK, constant for the whole fold, and threading it through every object arm
@@ -5412,6 +6004,8 @@ struct TransitionBuilder<'a> {
     /// forgets. `false` — every shipped preset — refuses both DA objects outright, so the fold is
     /// byte-identical to the transition before they existed.
     da_court: bool,
+    /// ADR-0088 / ADR-0089: the block's extras (fences and EVM inputs), constant for the fold.
+    extras: &'a PalwTransitionExtrasV1,
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -5422,15 +6016,18 @@ impl<'a> TransitionBuilder<'a> {
         capability_bound: bool,
         uncertified_weightless: bool,
         da_court: bool,
+        extras: &'a PalwTransitionExtrasV1,
     ) -> Self {
         Self {
             params,
             state: parent.clone(),
             entries: Vec::new(),
             unavailable_abstains,
+            model_moves: 0,
             capability_bound,
             uncertified_weightless,
             da_court,
+            extras,
         }
     }
 
@@ -5652,6 +6249,10 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     fn write_claim(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) {
+        // ADR-0088 Decision 3: the claim's root goes with the claim.
+        if new.is_none() && self.state.claim_roots.contains_key(&key) {
+            self.write_claim_root(key, None);
+        }
         let old = match &new {
             Some(record) => self.state.claims.insert(key, record.clone()),
             None => self.state.claims.remove(&key),
@@ -5715,6 +6316,115 @@ impl<'a> TransitionBuilder<'a> {
             None => self.state.pending_payouts.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::Payout { key, old, new });
+    }
+
+    fn write_model_market(&mut self, key: Hash64, new: Option<crate::palw_model_market_v1::PalwModelMarketV1>) {
+        let old = match new {
+            Some(record) => self.state.model_markets.insert(key, record),
+            None => self.state.model_markets.remove(&key),
+        };
+        self.entries.push(PalwDeltaEntryV2::ModelMarket { key, old, new });
+    }
+
+    fn write_model_position(&mut self, key: (Hash64, Hash64), units: u64) {
+        let new = (units > 0).then_some(units);
+        let old = match new {
+            Some(record) => self.state.model_positions.insert(key, record),
+            None => self.state.model_positions.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ModelPosition { key, old, new });
+        }
+    }
+
+    fn write_model_line(&mut self, key: Hash64, new: Option<crate::palw_model_lines_v1::PalwModelLineV1>) {
+        let old = match &new {
+            Some(record) => self.state.model_lines.insert(key, record.clone()),
+            None => self.state.model_lines.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ModelLine { key, old, new });
+        }
+    }
+
+    fn write_model_version(&mut self, key: (Hash64, u32), new: Option<crate::palw_model_lines_v1::PalwModelVersionV1>) {
+        let old = match &new {
+            Some(record) => self.state.model_versions.insert(key, record.clone()),
+            None => self.state.model_versions.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ModelVersion { key, old, new });
+        }
+    }
+
+    fn write_model_proposal(&mut self, key: Hash64, new: Option<crate::palw_model_lines_v1::PalwModelProposalV1>) {
+        let old = match &new {
+            Some(record) => self.state.model_proposals.insert(key, record.clone()),
+            None => self.state.model_proposals.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ModelProposal { key, old, new });
+        }
+    }
+
+    fn write_model_evaluation(
+        &mut self,
+        key: (Hash64, u32, PalwBondKeyV2),
+        new: Option<crate::palw_model_lines_v1::PalwModelEvaluationV1>,
+    ) {
+        let old = match &new {
+            Some(record) => self.state.model_evaluations.insert(key, record.clone()),
+            None => self.state.model_evaluations.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ModelEvaluation { key, old, new });
+        }
+    }
+
+    fn write_evm_settlement(&mut self, key: u32, new: Option<crate::evm::model_market::PalwEvmSettlementV1>) {
+        let old = match new {
+            Some(row) => self.state.evm_settlements.insert(key, row),
+            None => self.state.evm_settlements.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::EvmSettlement { key, old, new });
+        }
+    }
+
+    fn write_claim_root(&mut self, key: Hash64, new: Option<Hash64>) {
+        let old = match new {
+            Some(root) => self.state.claim_roots.insert(key, root),
+            None => self.state.claim_roots.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ClaimRoot { key, old, new });
+        }
+    }
+
+    /// ADR-0087 Decision 4: a fee leg leaves the move as a payout to `payload`, keyed by the move
+    /// so two moves in one block cannot share a row; `None` burns it (a class with no registrant).
+    fn write_model_fee(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        class_id: &Hash64,
+        holder: &Hash64,
+        leg: &[u8],
+        payload: Option<Hash64>,
+        amount: u64,
+    ) -> u64 {
+        if amount == 0 {
+            return 0;
+        }
+        let Some(payload) = payload else { return amount };
+        let mut h = keyed(PALW_STATE_V2_DOMAIN_MODEL_PAYOUT);
+        h.update(class_id.as_byte_slice());
+        h.update(holder.as_byte_slice());
+        h.update(&ctx.daa_score.to_le_bytes());
+        h.update(&self.model_moves.to_le_bytes());
+        h.update(leg);
+        let key = finish(h);
+        self.write_payout(key, Some(PalwPayoutV2 { payload, amount }));
+        0
     }
 
     fn write_panel(&mut self, key: Hash64, new: Option<PalwPanelStateV2>) {
@@ -6138,6 +6848,8 @@ impl<'a> TransitionBuilder<'a> {
     ) -> Result<(), PalwStateV2Error> {
         let mut voided = claim.clone();
         voided.phase = PalwClaimPhaseV2::Voided { voided_daa, reason };
+        // ADR-0088 Decision 4: a voided claim is subtracted where it was counted.
+        self.uncount_claim_usage(&id, claim);
         // Audit C5, free-prompt half: an abandoned commitment holds its reservation for the
         // configured span instead of releasing it here, so a redraw costs collateral rather than
         // a transaction fee. The hold is a DELAY, never a confiscation — `release_abandon_hold`
@@ -6384,11 +7096,41 @@ pub fn apply_palw_transition_v2_with_policies(
     uncertified_weightless: bool,
     da_court: bool,
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+    apply_palw_transition_v2_with_extras(
+        parent,
+        params,
+        ctx,
+        accepted_objects,
+        current_attempt,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        &PalwTransitionExtrasV1::default(),
+    )
+}
+
+/// [`apply_palw_transition_v2_with_policies`] with [`PalwTransitionExtrasV1`] — the face the
+/// acceptance rehearsal uses, so an object the fence admits is not refused `ModelLinesNotArmed`
+/// by a rehearsal that forgot the fence.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_palw_transition_v2_with_extras(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    current_attempt: Option<&PalwAttemptEnvelopeV2>,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
     let work = match current_attempt {
         Some(envelope) => PalwBlockWorkV3::Attempt(envelope),
         None => PalwBlockWorkV3::None,
     };
-    apply_palw_transition_v6(
+    apply_palw_transition_v7(
         parent,
         params,
         None,
@@ -6400,6 +7142,7 @@ pub fn apply_palw_transition_v2_with_policies(
         capability_bound,
         uncertified_weightless,
         da_court,
+        extras,
     )
     .map(|(state, delta, _)| (state, delta))
 }
@@ -6510,6 +7253,41 @@ pub fn apply_palw_transition_v6(
     uncertified_weightless: bool,
     da_court: bool,
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
+    apply_palw_transition_v7(
+        parent,
+        params,
+        admission,
+        ctx,
+        accepted_objects,
+        block_work,
+        merged_work,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        &PalwTransitionExtrasV1::default(),
+    )
+}
+
+/// [`apply_palw_transition_v6`] with **ADR-0088's registry fence** (and, later, ADR-0089's EVM
+/// actions) carried in [`PalwTransitionExtrasV1`]. `Default` extras are byte-identical to v6,
+/// state root included; **every production caller must reach this one**, for the reason v6's doc
+/// gives about the fences it carries.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_palw_transition_v7(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    admission: Option<&crate::palw_admission_v2::PalwAdmissionParamsV2>,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
+    merged_work: &[PalwMergedWorkV1<'_>],
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
     // 1. Context monotonicity: blue score strictly increases along a chain, DAA never decreases.
     if let Some(last) = &parent.last_point {
         if ctx.blue_score <= last.blue_score {
@@ -6520,7 +7298,8 @@ pub fn apply_palw_transition_v6(
         }
     }
 
-    let mut builder = TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court);
+    let mut builder =
+        TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
 
     // 1b. Drain the payout queue THIS block's coinbase paid. It must happen before the sweeps,
     //     because the sweeps are what refill it: a claim finalized by this block is paid by the
@@ -6541,6 +7320,11 @@ pub fn apply_palw_transition_v6(
     //     at most one new claim per block, so the queue cannot grow.
     for claim_id in builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>() {
         builder.write_payout(claim_id, None);
+    }
+    // 1c′. ADR-0089 Decision 6: the settlement list the parent decided was carried and settled
+    //      by THIS block's EVM step; it leaves the state here, before this block's own is written.
+    for seq in builder.state.evm_settlements.keys().copied().collect::<Vec<_>>() {
+        builder.write_evm_settlement(seq, None);
     }
 
     // 2. Deadline sweeps — everything strictly past is resolved before this block says anything.
@@ -6577,6 +7361,10 @@ pub fn apply_palw_transition_v6(
     for object in accepted_objects {
         apply_object(&mut builder, ctx, object)?;
     }
+    // 3c. ADR-0089 Decision 6: the EVM's actions, after every carrier-borne object, in sequence
+    //     order — each quoted on the row as it then stands, refused rather than failing the block,
+    //     and each answered with a settlement the selected child will carry.
+    apply_evm_market_actions(&mut builder, ctx)?;
 
     // 3a. Condition 12/13: any class whose activation score this block reaches becomes `Active`
     //     and takes its share. A CLOCK, not an object — nobody submits it, so there is nothing to
@@ -8247,6 +9035,79 @@ fn apply_object(
                 )),
             );
         }
+        PalwConsensusObjectV2::ModelBuy { line_id, holder, msk_in, min_units_out, sink_index: _ } => {
+            model_buy_v1(builder, ctx, line_id, holder, *msk_in, *min_units_out)?;
+        }
+        PalwConsensusObjectV2::ModelSell { line_id, holder, units_in, min_msk_out, .. } => {
+            model_sell_v1(builder, ctx, line_id, holder, *units_in, *min_msk_out, true)?;
+        }
+        PalwConsensusObjectV2::ModelSeed { line_id, seeder, msk_seed, sink_index: _ } => {
+            model_seed_v1(builder, ctx, line_id, seeder, *msk_seed)?;
+        }
+        // ---- ADR-0088: the model registry ---------------------------------------------------
+        PalwConsensusObjectV2::ModelLineFounded { class_id, name, founder, root, signature: _ } => {
+            apply_model_line_founded(builder, ctx, class_id, name, founder, root)?;
+        }
+        PalwConsensusObjectV2::ModelVersionPublished {
+            line_id,
+            version,
+            root,
+            parent,
+            adopted_from,
+            runtime_hash,
+            dataset_commitment,
+            training_config_hash,
+            notes_hash,
+            preview,
+            signature: _,
+        } => {
+            let declared = crate::palw_model_lines_v1::PalwModelVersionV1 {
+                root: *root,
+                parent: *parent,
+                adopted_from: *adopted_from,
+                runtime_hash: *runtime_hash,
+                dataset_commitment: *dataset_commitment,
+                training_config_hash: *training_config_hash,
+                notes_hash: *notes_hash,
+                published_daa: ctx.daa_score,
+                published_by: None,
+                status: crate::palw_model_lines_v1::PalwVersionStatusV1::Current,
+                usage: Default::default(),
+            };
+            apply_model_version_published(builder, ctx, line_id, *version, declared, *preview)?;
+        }
+        PalwConsensusObjectV2::ModelVersionPromoted { line_id, version, signature: _ } => {
+            apply_model_version_promoted(builder, ctx, line_id, *version)?;
+        }
+        PalwConsensusObjectV2::ModelVersionWithdrawn { line_id, version, signature: _ } => {
+            apply_model_version_withdrawn(builder, line_id, *version)?;
+        }
+        PalwConsensusObjectV2::ModelLineRolesSet { line_id, developer, maintainer, contributor_permille_of_leg, signature: _ } => {
+            apply_model_line_roles(builder, line_id, *developer, *maintainer, *contributor_permille_of_leg)?;
+        }
+        PalwConsensusObjectV2::ModelLineOwnerTransferred { line_id, new_owner, signature: _ } => {
+            apply_model_line_transfer(builder, line_id, new_owner)?;
+        }
+        PalwConsensusObjectV2::ModelLineRetired { line_id, signature: _ } => {
+            apply_model_line_retired(builder, ctx, line_id)?;
+        }
+        PalwConsensusObjectV2::ModelProposalPosted { line_id, root, note_hash, by, signature: _ } => {
+            apply_model_proposal_posted(builder, ctx, line_id, root, note_hash, by)?;
+        }
+        PalwConsensusObjectV2::ModelProposalClosed { line_id, proposal_id, signature: _ } => {
+            apply_model_proposal_closed(builder, line_id, proposal_id)?;
+        }
+        PalwConsensusObjectV2::ModelEvaluationPosted {
+            line_id,
+            version,
+            evaluator_id,
+            score_permille,
+            report_hash,
+            by,
+            signature: _,
+        } => {
+            apply_model_evaluation_posted(builder, ctx, line_id, *version, evaluator_id, *score_permille, report_hash, by)?;
+        }
         PalwConsensusObjectV2::BondCapabilityDeclared { bond, capable_classes, .. } => {
             let record = builder.state.bonds.get(bond).ok_or(PalwStateV2Error::MissingBond(*bond))?.clone();
             // **Only classes this chain has actually registered.** A declaration naming an
@@ -9335,7 +10196,10 @@ fn apply_object(
             let narrowed = session.ladder.terminal_index().ok_or(PalwStateV2Error::LadderNotTerminal(*session_id))?;
             let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
             let class = builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.clone();
-            let operands = crate::palw_artifact::PalwProvenOperandsV1::from_openings_v1(operand_openings, class.artifact_root)
+            // ADR-0088 Decision 3: the openings prove against the root the claim was admitted
+            // against, when the fold recorded one — a line's version, not the class's founding root.
+            let proven_root = builder.state.claim_roots.get(&session.claim).copied().unwrap_or(class.artifact_root);
+            let operands = crate::palw_artifact::PalwProvenOperandsV1::from_openings_v1(operand_openings, proven_root)
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
             // The site is the CLASS's description of the leaf the ladder terminated on — derived
             // from the coordinate and the registered profile, never supplied by the mover.
@@ -9758,7 +10622,15 @@ fn apply_object(
                 phase: PalwClaimPhaseV2::Provisional,
             };
             builder.reserve_for_claim(&claim)?;
+            let fp_pwu = claim.pwu;
             builder.write_claim(*claim_id, Some(claim));
+            // ADR-0088 Decision 3's recorded gap: a free-prompt claim names no root, so it is
+            // attributed to the class's founding line's current root until the job's v6.
+            if let Some(line) = builder.state.model_line_or_founding(class_id)
+                && let Some(current) = builder.state.model_version(class_id, line.current)
+            {
+                builder.note_claim_usage(*claim_id, class_id, current.root, fp_pwu, false, ctx.daa_score);
+            }
             let deadline = ctx.daa_score.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
             builder.arm_deadline(deadline, *claim_id);
             // No production census here: commitments are not blocks. The receipt lane's counters
@@ -9854,6 +10726,693 @@ fn worker_carve_v2(params: &PalwStateParamsV2, subsidy: u64) -> u64 {
     .worker
 }
 
+// ---------------------------------------------------------------------------------------------
+// ADR-0088 — the model registry: lines, versions, roles, proposals, evaluations, usage
+// ---------------------------------------------------------------------------------------------
+
+/// **ADR-0088 / ADR-0089: what a block's transition is told beyond its objects and its work.**
+/// `Default` is every shipped preset — every fence dormant — and is byte-identical to the
+/// transition before the struct existed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwTransitionExtrasV1 {
+    /// `Params::palw_model_lines` resolved at the block's DAA (ADR-0088 Decision 11). Below it
+    /// the ten registry objects are refused and no claim is attributed.
+    pub model_lines_active: bool,
+    /// `Params::palw_model_evm` resolved at the block's DAA (ADR-0089 Decision 9). Below it the
+    /// action list is empty by construction and no settlement is written.
+    pub evm_market_active: bool,
+    /// ADR-0089 Decision 6: the actions the block's EVM execution queued, in sequence order —
+    /// applied after every carrier-borne object, each quoted on the row as it then stands.
+    pub evm_actions: Vec<crate::evm::model_market::PalwEvmMarketActionV1>,
+}
+
+impl<'a> TransitionBuilder<'a> {
+    fn require_model_lines(&self) -> Result<(), PalwStateV2Error> {
+        if self.extras.model_lines_active { Ok(()) } else { Err(PalwStateV2Error::ModelLinesNotArmed) }
+    }
+
+    fn require_active_bond(&self, bond: &PalwBondKeyV2) -> Result<PalwBondStateV2, PalwStateV2Error> {
+        let record = self.state.bonds.get(bond).ok_or(PalwStateV2Error::MissingBond(*bond))?;
+        if !matches!(record.status, PalwBondStatusV2::Active) {
+            return Err(PalwStateV2Error::ModelBondNotActive(*bond));
+        }
+        Ok(record.clone())
+    }
+
+    /// The line, with its founding row and version 1 materialised when it had none — the first
+    /// write to a founding line is what puts it in the state root (ADR-0088 Decision 1).
+    fn model_line_for_write(&mut self, line_id: &Hash64) -> Result<crate::palw_model_lines_v1::PalwModelLineV1, PalwStateV2Error> {
+        if let Some(row) = self.state.model_lines.get(line_id) {
+            return Ok(row.clone());
+        }
+        let line = self.state.model_line_or_founding(line_id).ok_or(PalwStateV2Error::ModelLineMissing(*line_id))?;
+        let v1 = self.state.model_version(line_id, 1).ok_or(PalwStateV2Error::ModelVersionMissing(*line_id, 1))?;
+        self.write_model_line(*line_id, Some(line.clone()));
+        self.write_model_version((*line_id, 1), Some(v1));
+        Ok(line)
+    }
+
+    /// ADR-0088 Decision 8: the leg to the owner and, when a proposal was adopted and the owner
+    /// shares, to the contributor; burned where a payee has no bond.
+    fn pay_model_leg(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        line_id: &Hash64,
+        holder: &Hash64,
+        tag: &[u8],
+        line: &crate::palw_model_lines_v1::PalwModelLineV1,
+        leg: u64,
+        after: &mut crate::palw_model_market_v1::PalwModelMarketV1,
+    ) {
+        let owner = line.owner.and_then(|b| self.state.bonds.get(&b)).map(|b| b.payout_payload);
+        let contributor = self
+            .state
+            .model_version(line_id, line.current)
+            .and_then(|v| v.adopted_from)
+            .and_then(|p| self.state.model_proposals.get(&p).map(|p| p.by))
+            .and_then(|b| self.state.bonds.get(&b))
+            .map(|b| b.payout_payload);
+        let (to_contributor, to_owner) =
+            crate::palw_model_lines_v1::split_owner_leg_v1(leg, line.contributor_permille_of_leg, contributor.is_some());
+        let mut owner_tag = tag.to_vec();
+        owner_tag.extend_from_slice(b"-owner");
+        let burned_owner = self.write_model_fee(ctx, line_id, holder, &owner_tag, owner, to_owner);
+        let mut contributor_tag = tag.to_vec();
+        contributor_tag.extend_from_slice(b"-contributor");
+        let burned_contributor = self.write_model_fee(ctx, line_id, holder, &contributor_tag, contributor, to_contributor);
+        after.burned_sompi = after.burned_sompi.saturating_add(burned_owner).saturating_add(burned_contributor);
+        after.registrant_paid_sompi = after.registrant_paid_sompi.saturating_add(to_owner - burned_owner);
+        after.contributor_paid_sompi = after.contributor_paid_sompi.saturating_add(to_contributor - burned_contributor);
+    }
+
+    /// ADR-0088 Decision 4: attribute an accepted claim to the version whose root it named, and
+    /// remember the root for the court (Decision 3). Nothing below the fence.
+    fn note_claim_usage(&mut self, claim_id: Hash64, class_id: &Hash64, root: Hash64, pwu: u64, attempt: bool, daa: u64) {
+        if !self.extras.model_lines_active {
+            return;
+        }
+        let Some((line_id, version)) = self.state.model_version_of_root(class_id, &root, daa) else { return };
+        if self.model_line_for_write(&line_id).is_err() {
+            return;
+        }
+        let Some(mut row) = self.state.model_versions.get(&(line_id, version)).cloned() else { return };
+        row.usage.count(attempt, pwu, daa);
+        self.write_model_version((line_id, version), Some(row));
+        self.write_claim_root(claim_id, Some(root));
+    }
+
+    /// ADR-0088 Decision 4: a voided claim is subtracted where it was counted.
+    fn uncount_claim_usage(&mut self, claim_id: &Hash64, claim: &PalwClaimStateV2) {
+        let Some(root) = self.state.claim_roots.get(claim_id).copied() else { return };
+        let attempt = matches!(claim.source, PalwClaimSourceV2::Attempt);
+        let hit = self
+            .state
+            .model_lines
+            .iter()
+            .filter(|(_, l)| l.class_id == claim.class_id)
+            .flat_map(|(line_id, _)| {
+                self.state.model_versions.range((*line_id, 0)..=(*line_id, u32::MAX)).map(|((l, n), v)| ((*l, *n), v.root))
+            })
+            .find(|(_, r)| *r == root)
+            .map(|(key, _)| key);
+        if let Some(key) = hit
+            && let Some(mut row) = self.state.model_versions.get(&key).cloned()
+        {
+            row.usage.uncount(attempt, claim.pwu);
+            self.write_model_version(key, Some(row));
+        }
+    }
+
+    /// Decision 2's promotion, shared by a non-preview publish and `ModelVersionPromoted`: the
+    /// previous current is superseded with a grace, the line's current moves.
+    fn make_model_version_current(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        line_id: &Hash64,
+        line: &mut crate::palw_model_lines_v1::PalwModelLineV1,
+        version: u32,
+    ) {
+        use crate::palw_model_lines_v1::{PALW_VERSION_GRACE_DAA_V1, PalwVersionStatusV1};
+        if let Some(mut previous) = self.state.model_versions.get(&(*line_id, line.current)).cloned() {
+            previous.status = PalwVersionStatusV1::Superseded { until_daa: ctx.daa_score.saturating_add(PALW_VERSION_GRACE_DAA_V1) };
+            self.write_model_version((*line_id, line.current), Some(previous));
+        }
+        line.current = version;
+        line.previews.retain(|v| *v != version);
+    }
+}
+
+/// **ADR-0090 Decision 2's seed, as one function** the carrier arm and the EVM path both call:
+/// the line must exist (a class's founding line IS the class) on a class that is not frozen —
+/// a class still waiting for its activation may be seeded, so the pair exists when approval
+/// lands; the market must not exist yet; the seed must reach the least seed. The whole seed
+/// becomes the reserve: no leg is taken, no position is minted to anyone, and the seeder holds
+/// nothing. The MSK arrived by a sink output (a carrier) or sits in the writer's escrow (the
+/// EVM); the fold's books are the same.
+fn model_seed_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    line_id: &Hash64,
+    seeder: &Hash64,
+    msk_seed: u64,
+) -> Result<crate::palw_model_market_v1::PalwModelMarketV1, PalwStateV2Error> {
+    use crate::palw_model_market_v1::{PALW_MODEL_SEED_MIN_SOMPI_V1, PalwModelMarketV1};
+    if *seeder == Hash64::default() {
+        return Err(PalwStateV2Error::ModelHolderUnset);
+    }
+    let line = builder.state.model_line_or_founding(line_id).ok_or(PalwStateV2Error::ModelLineMissing(*line_id))?;
+    let class = builder.state.classes.get(&line.class_id).ok_or(PalwStateV2Error::MissingClass(line.class_id))?.clone();
+    if matches!(class.status, PalwClassStatusV2::Frozen { .. }) {
+        return Err(PalwStateV2Error::ModelClassClosed(line.class_id));
+    }
+    if !line.is_active() {
+        return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
+    }
+    if builder.state.model_markets.contains_key(line_id) {
+        return Err(PalwStateV2Error::ModelMarketAlreadySeeded(*line_id));
+    }
+    if msk_seed < PALW_MODEL_SEED_MIN_SOMPI_V1 {
+        return Err(PalwStateV2Error::ModelSeedTooSmall { want: PALW_MODEL_SEED_MIN_SOMPI_V1, got: msk_seed });
+    }
+    let market = PalwModelMarketV1::seed_v1(ctx.daa_score, msk_seed, *seeder);
+    builder.write_model_market(*line_id, Some(market));
+    builder.model_moves += 1;
+    Ok(market)
+}
+
+/// **ADR-0087 Decision 3's buy, as one function** the carrier arm and the EVM path both call:
+/// the line (a class's founding line IS the class), the quote on the row as it stands, the floor,
+/// the legs (ADR-0088 Decision 8), the reserve and the holder's units. The MSK arrived by a sink
+/// output (a carrier) or sits in the writer's escrow (the EVM); the fold's books are the same.
+fn model_buy_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    line_id: &Hash64,
+    holder: &Hash64,
+    msk_in: u64,
+    min_units_out: u64,
+) -> Result<crate::palw_model_market_v1::PalwModelBuyQuoteV1, PalwStateV2Error> {
+    use crate::palw_model_market_v1::palw_model_buy_quote_v1;
+    if *holder == Hash64::default() {
+        return Err(PalwStateV2Error::ModelHolderUnset);
+    }
+    let line = builder.state.model_line_or_founding(line_id).ok_or(PalwStateV2Error::ModelLineMissing(*line_id))?;
+    let class = builder.state.classes.get(&line.class_id).ok_or(PalwStateV2Error::MissingClass(line.class_id))?.clone();
+    if !matches!(class.status, PalwClassStatusV2::Active) {
+        return Err(PalwStateV2Error::ModelClassNotActive(line.class_id));
+    }
+    if !line.is_active() {
+        return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
+    }
+    // ADR-0090 Decision 2: no market opens by a buy; it opens by a seed or not at all.
+    let market = *builder.state.model_markets.get(line_id).ok_or(PalwStateV2Error::ModelMarketMissing(*line_id))?;
+    let quote = palw_model_buy_quote_v1(&market, msk_in).ok_or(PalwStateV2Error::ModelBuyReleasesNothing(*line_id))?;
+    if quote.units_out < min_units_out {
+        return Err(PalwStateV2Error::ModelBuyBelowFloor { want: min_units_out, got: quote.units_out });
+    }
+    let mut after = quote.after;
+    builder.pay_model_leg(ctx, line_id, holder, b"buy", &line, quote.fees.registrant, &mut after);
+    builder.write_model_market(*line_id, Some(after));
+    let held = builder.state.model_position(line_id, holder);
+    builder.write_model_position((*line_id, *holder), held.saturating_add(quote.units_out));
+    builder.model_moves += 1;
+    Ok(crate::palw_model_market_v1::PalwModelBuyQuoteV1 { after, ..quote })
+}
+
+/// **ADR-0087 Decision 3's sell, as one function.** `pay_net_via_coinbase` is the carrier's
+/// way (a `PalwPayoutV2` the coinbase honours); the EVM path passes `false` and credits the net
+/// leg through its settlement instead (ADR-0089 Decision 6).
+fn model_sell_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    line_id: &Hash64,
+    holder: &Hash64,
+    units_in: u64,
+    min_msk_out: u64,
+    pay_net_via_coinbase: bool,
+) -> Result<crate::palw_model_market_v1::PalwModelSellQuoteV1, PalwStateV2Error> {
+    use crate::palw_model_market_v1::palw_model_sell_quote_v1;
+    let market = *builder.state.model_markets.get(line_id).ok_or(PalwStateV2Error::ModelMarketMissing(*line_id))?;
+    let held = builder.state.model_position(line_id, holder);
+    if units_in == 0 || units_in > held {
+        return Err(PalwStateV2Error::ModelSellExceedsPosition { held, want: units_in });
+    }
+    let quote = palw_model_sell_quote_v1(&market, units_in).ok_or(PalwStateV2Error::ModelSellPaysNothing(*line_id))?;
+    if quote.fees.net < min_msk_out {
+        return Err(PalwStateV2Error::ModelSellBelowFloor { want: min_msk_out, got: quote.fees.net });
+    }
+    let line = builder.state.model_line_or_founding(line_id);
+    let class_active = line
+        .as_ref()
+        .and_then(|l| builder.state.classes.get(&l.class_id))
+        .is_some_and(|c| matches!(c.status, PalwClassStatusV2::Active));
+    let mut after = quote.after;
+    match &line {
+        Some(line) => builder.pay_model_leg(ctx, line_id, holder, b"sell", line, quote.fees.registrant, &mut after),
+        None => {
+            // A line whose class is gone: the leg is burned, the net leg is still paid.
+            after.burned_sompi = after.burned_sompi.saturating_add(quote.fees.registrant);
+        }
+    }
+    if pay_net_via_coinbase {
+        builder.write_model_fee(ctx, line_id, holder, b"sell-net", Some(*holder), quote.fees.net);
+    }
+    after.closed_to_buys = !(class_active && line.as_ref().is_some_and(|l| l.is_active()));
+    builder.write_model_market(*line_id, Some(after));
+    builder.write_model_position((*line_id, *holder), held - units_in);
+    builder.model_moves += 1;
+    Ok(crate::palw_model_market_v1::PalwModelSellQuoteV1 { after, ..quote })
+}
+
+/// ADR-0089 Decision 6: why the fold refused an action, as the facade's `reason` byte.
+fn evm_refusal_reason(error: &PalwStateV2Error) -> u8 {
+    use crate::evm::model_market::refusal::*;
+    match error {
+        PalwStateV2Error::ModelLineMissing(_) | PalwStateV2Error::MissingClass(_) => LINE_MISSING,
+        PalwStateV2Error::ModelClassNotActive(_) | PalwStateV2Error::ModelLineNotActive(_) => NOT_ACTIVE,
+        PalwStateV2Error::ModelBuyReleasesNothing(_) => RELEASES_NOTHING,
+        PalwStateV2Error::ModelBuyBelowFloor { .. } | PalwStateV2Error::ModelSellBelowFloor { .. } => BELOW_FLOOR,
+        PalwStateV2Error::ModelMarketMissing(_) => MARKET_MISSING,
+        PalwStateV2Error::ModelSellExceedsPosition { .. } => EXCEEDS_POSITION,
+        PalwStateV2Error::ModelSellPaysNothing(_) => PAYS_NOTHING,
+        PalwStateV2Error::ModelMarketAlreadySeeded(_) => ALREADY_SEEDED,
+        PalwStateV2Error::ModelSeedTooSmall { .. } => SEED_TOO_SMALL,
+        PalwStateV2Error::ModelClassClosed(_) => CLASS_CLOSED,
+        _ => OTHER,
+    }
+}
+
+/// **ADR-0089 Decision 6 — the hand moves after the block, in the fold.** Each action is quoted
+/// on the row as it stands after the block's carrier-borne objects and the actions before it;
+/// `min` protections refuse, never partially fill; a refusal is a settlement, not a fault of the
+/// block. Below the fence the list is empty by construction and nothing is written.
+fn apply_evm_market_actions(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    use crate::evm::model_market::{PalwEvmMarketActionKindV1, PalwEvmSettlementOutcomeV1, PalwEvmSettlementV1, evm_holder_v1};
+    if !builder.extras.evm_market_active {
+        return Ok(());
+    }
+    let actions = builder.extras.evm_actions.clone();
+    for action in actions {
+        let holder = evm_holder_v1(crate::evm::EVM_CHAIN_ID, &action.account);
+        let (escrow_sompi, outcome) = match action.kind {
+            PalwEvmMarketActionKindV1::Buy { min_units_out } => {
+                match model_buy_v1(builder, ctx, &action.line_id, &holder, action.gross_sompi, min_units_out) {
+                    Ok(quote) => (
+                        action.gross_sompi,
+                        PalwEvmSettlementOutcomeV1::Filled {
+                            units: quote.units_out,
+                            gross_sompi: quote.fees.gross,
+                            net_sompi: quote.fees.net,
+                            price_after_sompi: quote.after.price_sompi_per_position_v1(),
+                        },
+                    ),
+                    Err(e) => (action.gross_sompi, PalwEvmSettlementOutcomeV1::Refused { reason: evm_refusal_reason(&e) }),
+                }
+            }
+            PalwEvmMarketActionKindV1::Sell { units_in, min_msk_out_sompi } => {
+                match model_sell_v1(builder, ctx, &action.line_id, &holder, units_in, min_msk_out_sompi, false) {
+                    Ok(quote) => (
+                        0,
+                        PalwEvmSettlementOutcomeV1::Filled {
+                            units: units_in,
+                            gross_sompi: quote.fees.gross,
+                            net_sompi: quote.fees.net,
+                            price_after_sompi: quote.after.price_sompi_per_position_v1(),
+                        },
+                    ),
+                    Err(e) => (0, PalwEvmSettlementOutcomeV1::Refused { reason: evm_refusal_reason(&e) }),
+                }
+            }
+            // ADR-0090: the seed — the whole value becomes the reserve; a filled seed mints no
+            // position (units 0) and takes no leg (net = gross).
+            PalwEvmMarketActionKindV1::Seed => match model_seed_v1(builder, ctx, &action.line_id, &holder, action.gross_sompi) {
+                Ok(market) => (
+                    action.gross_sompi,
+                    PalwEvmSettlementOutcomeV1::Filled {
+                        units: 0,
+                        gross_sompi: action.gross_sompi,
+                        net_sompi: action.gross_sompi,
+                        price_after_sompi: market.price_sompi_per_position_v1(),
+                    },
+                ),
+                Err(e) => (action.gross_sompi, PalwEvmSettlementOutcomeV1::Refused { reason: evm_refusal_reason(&e) }),
+            },
+        };
+        builder.write_evm_settlement(
+            action.seq,
+            Some(PalwEvmSettlementV1 {
+                seq: action.seq,
+                account: action.account,
+                line_id: action.line_id,
+                action: action.kind.action_id(),
+                escrow_sompi,
+                outcome,
+            }),
+        );
+    }
+    Ok(())
+}
+
+fn apply_model_line_founded(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    class_id: &Hash64,
+    name: &[u8],
+    founder: &PalwBondKeyV2,
+    root: &Hash64,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_model_lines_v1::*;
+    builder.require_model_lines()?;
+    let class = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?.clone();
+    if *class_id == builder.params.base_class_id() {
+        return Err(PalwStateV2Error::ModelLineOnFloor);
+    }
+    if !matches!(class.status, PalwClassStatusV2::Active) {
+        return Err(PalwStateV2Error::ModelClassNotActive(*class_id));
+    }
+    if name.is_empty() || name.len() > PALW_MODEL_LINE_NAME_MAX_BYTES {
+        return Err(PalwStateV2Error::ModelLineNameLength(name.len(), PALW_MODEL_LINE_NAME_MAX_BYTES));
+    }
+    builder.require_active_bond(founder)?;
+    let line_id = model_line_id_v1(class_id, founder, name);
+    if builder.state.model_lines.contains_key(&line_id) {
+        return Err(PalwStateV2Error::ModelLineExists(line_id));
+    }
+    // The founding line counts whether or not it has a row.
+    let rows = builder.state.model_lines.values().filter(|l| l.class_id == *class_id).count();
+    let founding_unwritten = usize::from(!builder.state.model_lines.contains_key(class_id));
+    if rows + founding_unwritten >= PALW_MODEL_LINES_PER_CLASS_V1 {
+        return Err(PalwStateV2Error::ModelLinesFull(*class_id));
+    }
+    let line = founding_line_v1(*class_id, Some(*founder), name.to_vec(), ctx.daa_score);
+    builder.write_model_line(line_id, Some(line));
+    builder.write_model_version(
+        (line_id, 1),
+        Some(PalwModelVersionV1 {
+            root: *root,
+            parent: None,
+            adopted_from: None,
+            runtime_hash: None,
+            dataset_commitment: None,
+            training_config_hash: None,
+            notes_hash: None,
+            published_daa: ctx.daa_score,
+            published_by: Some(*founder),
+            status: PalwVersionStatusV1::Current,
+            usage: Default::default(),
+        }),
+    );
+    Ok(())
+}
+
+fn apply_model_version_published(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    line_id: &Hash64,
+    version: u32,
+    mut declared: crate::palw_model_lines_v1::PalwModelVersionV1,
+    preview: bool,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_model_lines_v1::*;
+    builder.require_model_lines()?;
+    let mut line = builder.model_line_for_write(line_id)?;
+    if !line.is_active() {
+        return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
+    }
+    let developer = line.developer_bond().ok_or(PalwStateV2Error::ModelLineUnowned(*line_id))?;
+    builder.require_active_bond(&developer)?;
+    let want = line.versions_published + 1;
+    if version != want {
+        return Err(PalwStateV2Error::ModelVersionNotNext { line: *line_id, want, got: version });
+    }
+    if let Some(parent) = declared.parent
+        && (parent == 0 || parent > line.versions_published)
+    {
+        return Err(PalwStateV2Error::ModelVersionMissing(*line_id, parent));
+    }
+    let current_root = builder.state.model_versions.get(&(*line_id, line.current)).map(|v| v.root);
+    if current_root == Some(declared.root) {
+        return Err(PalwStateV2Error::ModelVersionSameRoot(*line_id));
+    }
+    if preview && line.previews.len() >= PALW_MODEL_PREVIEWS_V1 {
+        return Err(PalwStateV2Error::ModelPreviewsFull(*line_id));
+    }
+    if let Some(proposal_id) = declared.adopted_from {
+        let mut proposal =
+            builder.state.model_proposals.get(&proposal_id).cloned().ok_or(PalwStateV2Error::ModelProposalMissing(proposal_id))?;
+        if proposal.line_id != *line_id || proposal.adopted_in.is_some() {
+            return Err(PalwStateV2Error::ModelProposalMissing(proposal_id));
+        }
+        proposal.adopted_in = Some(version);
+        builder.write_model_proposal(proposal_id, Some(proposal));
+    }
+    declared.published_by = Some(developer);
+    declared.published_daa = ctx.daa_score;
+    declared.status = if preview { PalwVersionStatusV1::Preview } else { PalwVersionStatusV1::Current };
+    if preview {
+        line.previews.push(version);
+    } else {
+        builder.make_model_version_current(ctx, line_id, &mut line, version);
+    }
+    line.versions_published = version;
+    builder.write_model_version((*line_id, version), Some(declared));
+    // Decision 10: the history window — rows older than the last 64 and out of force are evicted.
+    if version > PALW_MODEL_VERSION_HISTORY_V1 {
+        let floor = version - PALW_MODEL_VERSION_HISTORY_V1;
+        let stale: Vec<u32> = builder
+            .state
+            .model_versions
+            .range((*line_id, 0)..=(*line_id, floor))
+            .filter(|(_, v)| !v.in_force_at(ctx.daa_score))
+            .map(|((_, n), _)| *n)
+            .collect();
+        for n in stale {
+            builder.write_model_version((*line_id, n), None);
+        }
+    }
+    builder.write_model_line(*line_id, Some(line));
+    Ok(())
+}
+
+fn apply_model_version_promoted(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    line_id: &Hash64,
+    version: u32,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_model_lines_v1::PalwVersionStatusV1;
+    builder.require_model_lines()?;
+    let mut line = builder.model_line_for_write(line_id)?;
+    if !line.is_active() {
+        return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
+    }
+    let developer = line.developer_bond().ok_or(PalwStateV2Error::ModelLineUnowned(*line_id))?;
+    builder.require_active_bond(&developer)?;
+    let mut row = builder
+        .state
+        .model_versions
+        .get(&(*line_id, version))
+        .cloned()
+        .ok_or(PalwStateV2Error::ModelVersionMissing(*line_id, version))?;
+    if row.status != PalwVersionStatusV1::Preview {
+        return Err(PalwStateV2Error::ModelVersionNotPreview(*line_id, version));
+    }
+    builder.make_model_version_current(ctx, line_id, &mut line, version);
+    row.status = PalwVersionStatusV1::Current;
+    builder.write_model_version((*line_id, version), Some(row));
+    builder.write_model_line(*line_id, Some(line));
+    Ok(())
+}
+
+fn apply_model_version_withdrawn(builder: &mut TransitionBuilder<'_>, line_id: &Hash64, version: u32) -> Result<(), PalwStateV2Error> {
+    use crate::palw_model_lines_v1::PalwVersionStatusV1;
+    builder.require_model_lines()?;
+    let mut line = builder.model_line_for_write(line_id)?;
+    let developer = line.developer_bond().ok_or(PalwStateV2Error::ModelLineUnowned(*line_id))?;
+    builder.require_active_bond(&developer)?;
+    let mut row = builder
+        .state
+        .model_versions
+        .get(&(*line_id, version))
+        .cloned()
+        .ok_or(PalwStateV2Error::ModelVersionMissing(*line_id, version))?;
+    match row.status {
+        PalwVersionStatusV1::Current => return Err(PalwStateV2Error::ModelVersionIsCurrent(*line_id, version)),
+        PalwVersionStatusV1::Withdrawn => return Err(PalwStateV2Error::ModelVersionNotInForce(*line_id, version)),
+        PalwVersionStatusV1::Preview => line.previews.retain(|v| *v != version),
+        PalwVersionStatusV1::Superseded { .. } => {}
+    }
+    row.status = PalwVersionStatusV1::Withdrawn;
+    builder.write_model_version((*line_id, version), Some(row));
+    builder.write_model_line(*line_id, Some(line));
+    Ok(())
+}
+
+fn apply_model_line_roles(
+    builder: &mut TransitionBuilder<'_>,
+    line_id: &Hash64,
+    developer: Option<PalwBondKeyV2>,
+    maintainer: Option<PalwBondKeyV2>,
+    contributor_permille_of_leg: u16,
+) -> Result<(), PalwStateV2Error> {
+    builder.require_model_lines()?;
+    let mut line = builder.model_line_for_write(line_id)?;
+    if !line.is_active() {
+        return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
+    }
+    let owner = line.owner.ok_or(PalwStateV2Error::ModelLineUnowned(*line_id))?;
+    builder.require_active_bond(&owner)?;
+    for bond in [developer, maintainer].into_iter().flatten() {
+        builder.require_active_bond(&bond)?;
+    }
+    line.developer = developer.filter(|b| *b != owner);
+    line.maintainer = maintainer.filter(|b| *b != owner);
+    line.contributor_permille_of_leg = contributor_permille_of_leg.min(1000);
+    builder.write_model_line(*line_id, Some(line));
+    Ok(())
+}
+
+fn apply_model_line_transfer(
+    builder: &mut TransitionBuilder<'_>,
+    line_id: &Hash64,
+    new_owner: &PalwBondKeyV2,
+) -> Result<(), PalwStateV2Error> {
+    builder.require_model_lines()?;
+    let mut line = builder.model_line_for_write(line_id)?;
+    if !line.is_active() {
+        return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
+    }
+    let owner = line.owner.ok_or(PalwStateV2Error::ModelLineUnowned(*line_id))?;
+    builder.require_active_bond(&owner)?;
+    builder.require_active_bond(new_owner)?;
+    line.owner = Some(*new_owner);
+    line.developer = None;
+    line.maintainer = None;
+    builder.write_model_line(*line_id, Some(line));
+    Ok(())
+}
+
+fn apply_model_line_retired(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    line_id: &Hash64,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_model_lines_v1::{PALW_VERSION_GRACE_DAA_V1, PalwModelLineStatusV1};
+    builder.require_model_lines()?;
+    let mut line = builder.model_line_for_write(line_id)?;
+    if !line.is_active() {
+        return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
+    }
+    let owner = line.owner.ok_or(PalwStateV2Error::ModelLineUnowned(*line_id))?;
+    builder.require_active_bond(&owner)?;
+    line.status = PalwModelLineStatusV1::Retired;
+    line.retired_daa = Some(ctx.daa_score.saturating_add(PALW_VERSION_GRACE_DAA_V1));
+    builder.write_model_line(*line_id, Some(line));
+    if let Some(mut market) = builder.state.model_markets.get(line_id).copied() {
+        market.closed_to_buys = true;
+        builder.write_model_market(*line_id, Some(market));
+    }
+    Ok(())
+}
+
+fn apply_model_proposal_posted(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    line_id: &Hash64,
+    root: &Hash64,
+    note_hash: &Hash64,
+    by: &PalwBondKeyV2,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_model_lines_v1::*;
+    builder.require_model_lines()?;
+    let line = builder.state.model_line_or_founding(line_id).ok_or(PalwStateV2Error::ModelLineMissing(*line_id))?;
+    if !line.is_active() {
+        return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
+    }
+    builder.require_active_bond(by)?;
+    let proposal_id = model_proposal_id_v1(line_id, root, by);
+    if builder.state.model_proposals.contains_key(&proposal_id) {
+        return Err(PalwStateV2Error::ModelProposalExists(proposal_id));
+    }
+    let open = builder.state.model_proposals.values().filter(|p| p.line_id == *line_id && p.adopted_in.is_none()).count();
+    if open >= PALW_MODEL_PROPOSALS_PER_LINE_V1 {
+        return Err(PalwStateV2Error::ModelProposalsFull(*line_id));
+    }
+    builder.write_model_proposal(
+        proposal_id,
+        Some(PalwModelProposalV1 {
+            line_id: *line_id,
+            root: *root,
+            note_hash: *note_hash,
+            by: *by,
+            posted_daa: ctx.daa_score,
+            adopted_in: None,
+        }),
+    );
+    Ok(())
+}
+
+fn apply_model_proposal_closed(
+    builder: &mut TransitionBuilder<'_>,
+    line_id: &Hash64,
+    proposal_id: &Hash64,
+) -> Result<(), PalwStateV2Error> {
+    builder.require_model_lines()?;
+    let line = builder.state.model_line_or_founding(line_id).ok_or(PalwStateV2Error::ModelLineMissing(*line_id))?;
+    let developer = line.developer_bond().ok_or(PalwStateV2Error::ModelLineUnowned(*line_id))?;
+    builder.require_active_bond(&developer)?;
+    let proposal =
+        builder.state.model_proposals.get(proposal_id).cloned().ok_or(PalwStateV2Error::ModelProposalMissing(*proposal_id))?;
+    if proposal.line_id != *line_id {
+        return Err(PalwStateV2Error::ModelProposalMissing(*proposal_id));
+    }
+    if proposal.adopted_in.is_some() {
+        return Err(PalwStateV2Error::ModelProposalAdopted(*proposal_id));
+    }
+    builder.write_model_proposal(*proposal_id, None);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_model_evaluation_posted(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    line_id: &Hash64,
+    version: u32,
+    evaluator_id: &Hash64,
+    score_permille: u32,
+    report_hash: &Hash64,
+    by: &PalwBondKeyV2,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_model_lines_v1::*;
+    builder.require_model_lines()?;
+    let line = builder.state.model_line_or_founding(line_id).ok_or(PalwStateV2Error::ModelLineMissing(*line_id))?;
+    if version == 0 || version > line.versions_published {
+        return Err(PalwStateV2Error::ModelVersionMissing(*line_id, version));
+    }
+    builder.require_active_bond(by)?;
+    let key = (*line_id, version, *by);
+    if builder.state.model_evaluations.contains_key(&key) {
+        return Err(PalwStateV2Error::ModelEvaluationExists(*line_id, version));
+    }
+    let count = builder.state.model_evaluations_of(line_id, version).len();
+    if count >= PALW_MODEL_EVALUATIONS_PER_VERSION_V1 {
+        return Err(PalwStateV2Error::ModelEvaluationsFull(*line_id, version));
+    }
+    let is_lines_own = line.owner == Some(*by) || line.developer_bond() == Some(*by) || line.maintainer_bond() == Some(*by);
+    builder.write_model_evaluation(
+        key,
+        Some(PalwModelEvaluationV1 {
+            evaluator_id: *evaluator_id,
+            score_permille: score_permille.min(1000),
+            report_hash: *report_hash,
+            posted_daa: ctx.daa_score,
+            is_lines_own,
+        }),
+    );
+    Ok(())
+}
+
 fn apply_attempt(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -9926,6 +11485,8 @@ fn apply_attempt(
     };
     builder.reserve_for_claim(&claim)?;
     builder.write_claim(claim_id, Some(claim));
+    // ADR-0088 Decision 4: the claim is paid work on the version whose root it named.
+    builder.note_claim_usage(claim_id, &attempt.class_id, attempt.artifact_root, attempt.pwu, true, ctx.daa_score);
     let deadline = ctx.daa_score.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
     builder.arm_deadline(deadline, claim_id);
 
@@ -10099,6 +11660,14 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             }
             state.last_point = *install;
         }
+        PalwDeltaEntryV2::ModelMarket { key, old, new } => swap_write!(state.model_markets, key, old, new),
+        PalwDeltaEntryV2::ModelPosition { key, old, new } => swap_write!(state.model_positions, key, old, new),
+        PalwDeltaEntryV2::ModelLine { key, old, new } => swap_write!(state.model_lines, key, old, new),
+        PalwDeltaEntryV2::ModelVersion { key, old, new } => swap_write!(state.model_versions, key, old, new),
+        PalwDeltaEntryV2::ModelProposal { key, old, new } => swap_write!(state.model_proposals, key, old, new),
+        PalwDeltaEntryV2::ModelEvaluation { key, old, new } => swap_write!(state.model_evaluations, key, old, new),
+        PalwDeltaEntryV2::ClaimRoot { key, old, new } => swap_write!(state.claim_roots, key, old, new),
+        PalwDeltaEntryV2::EvmSettlement { key, old, new } => swap_write!(state.evm_settlements, key, old, new),
     }
     Ok(())
 }
@@ -10212,7 +11781,7 @@ fn rebuild_deadline_index_v2(state: &mut PalwChainStateV2, params: &PalwStatePar
 /// (Decision 5) so a pruned node can continue exactly where an archival node stands. Indices are
 /// never serialized: [`PalwStateCarriageV2::into_state`] rebuilds them and refuses a snapshot
 /// whose derivable facts disagree with its claims.
-#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwStateCarriageV2 {
     pub version: u16,
     pub bonds: BTreeMap<PalwBondKeyV2, PalwBondStateV2>,
@@ -10264,6 +11833,215 @@ pub struct PalwStateCarriageV2 {
     /// merged work started creating claims.
     pub safe_frontier: BlockHash,
     pub last_point: Option<PalwBlockContextV2>,
+    /// ADR-0087. **Encoded only when non-empty**, as a tail after `last_point`: a carriage of a
+    /// chain on which no move was ever folded is byte-identical to the layout every shipped build
+    /// serves and stores, so a peer without the rule decodes it and a digest is unchanged. Past
+    /// the first move the tail is present, and a build without the rule is on another chain
+    /// anyway (its state root differs from the header's).
+    pub model_markets: BTreeMap<Hash64, crate::palw_model_market_v1::PalwModelMarketV1>,
+    pub model_positions: BTreeMap<(Hash64, Hash64), u64>,
+    /// ADR-0088 Decision 10. A second tagged tail after ADR-0087's, encoded only when non-empty,
+    /// for the same reason.
+    pub model_lines: BTreeMap<Hash64, crate::palw_model_lines_v1::PalwModelLineV1>,
+    pub model_versions: BTreeMap<(Hash64, u32), crate::palw_model_lines_v1::PalwModelVersionV1>,
+    pub model_proposals: BTreeMap<Hash64, crate::palw_model_lines_v1::PalwModelProposalV1>,
+    pub model_evaluations: BTreeMap<(Hash64, u32, PalwBondKeyV2), crate::palw_model_lines_v1::PalwModelEvaluationV1>,
+    pub claim_roots: BTreeMap<Hash64, Hash64>,
+    /// ADR-0089 Decision 6. A third tagged tail (`0x89`), encoded only when non-empty.
+    pub evm_settlements: BTreeMap<u32, crate::evm::model_market::PalwEvmSettlementV1>,
+}
+
+/// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
+/// the field order once and the manual codec below cannot drift from it.
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+struct PalwStateCarriageV2Legacy<'a> {
+    version: u16,
+    bonds: std::borrow::Cow<'a, BTreeMap<PalwBondKeyV2, PalwBondStateV2>>,
+    reserved_exposure: std::borrow::Cow<'a, BTreeMap<PalwBondKeyV2, u128>>,
+    classes: std::borrow::Cow<'a, BTreeMap<Hash64, PalwClassStateV2>>,
+    class_targets: std::borrow::Cow<'a, BTreeMap<Hash64, PalwClassTargetV2>>,
+    class_shares: std::borrow::Cow<'a, BTreeMap<Hash64, u16>>,
+    registration_exposure: std::borrow::Cow<'a, BTreeMap<PalwBondKeyV2, u128>>,
+    class_walks: std::borrow::Cow<'a, BTreeMap<Hash64, PalwClassWalkV2>>,
+    epoch_budgets: std::borrow::Cow<'a, Option<PalwEpochBudgetsV2>>,
+    receipt_targets: std::borrow::Cow<'a, BTreeMap<Hash64, PalwClassTargetV2>>,
+    capabilities: std::borrow::Cow<'a, BTreeMap<Hash64, PalwCapabilityStateV2>>,
+    claims: std::borrow::Cow<'a, BTreeMap<Hash64, PalwClaimStateV2>>,
+    pending_payouts: std::borrow::Cow<'a, BTreeMap<Hash64, PalwPayoutV2>>,
+    certified_families: std::borrow::Cow<'a, BTreeMap<Hash64, PalwCertifiedFamilyStateV2>>,
+    fp_certified_families: std::borrow::Cow<'a, BTreeMap<Hash64, PalwCertifiedFamilyStateV2>>,
+    fp_certified_classes: std::borrow::Cow<'a, BTreeMap<Hash64, PalwClassLaneCertificationV2>>,
+    pending_chunks: std::borrow::Cow<'a, BTreeMap<Hash64, PalwPendingChunksV2>>,
+    court_close_groups: std::borrow::Cow<'a, BTreeMap<(Hash64, PalwCourtSideV1), PalwCourtCloseGroupV2>>,
+    derived_artifacts:
+        std::borrow::Cow<'a, BTreeMap<crate::palw_derived_v1::PalwDerivedKeyV1, crate::palw_derived_v1::PalwDerivedRowV1>>,
+    panels: std::borrow::Cow<'a, BTreeMap<Hash64, PalwPanelStateV2>>,
+    court_sessions: std::borrow::Cow<'a, BTreeMap<Hash64, PalwCourtSessionStateV2>>,
+    epoch_counters: std::borrow::Cow<'a, BTreeMap<Hash64, PalwEpochCounterV2>>,
+    receipt_epoch_counters: std::borrow::Cow<'a, BTreeMap<Hash64, PalwEpochCounterV2>>,
+    safe_weight: u128,
+    retired_safe_weight: u128,
+    bounded_immature: u128,
+    safe_frontier_blue_score: u64,
+    safe_frontier: BlockHash,
+    last_point: Option<PalwBlockContextV2>,
+}
+
+/// The tail byte that says the ADR-0087 collections follow.
+const PALW_CARRIAGE_MODEL_TAIL_V1: u8 = 0x87;
+/// The tail byte that says the ADR-0088 collections follow (after ADR-0087's tail when both).
+const PALW_CARRIAGE_LINES_TAIL_V1: u8 = 0x88;
+/// The tail byte that says the ADR-0089 settlement list follows (last of the three).
+const PALW_CARRIAGE_SETTLEMENTS_TAIL_V1: u8 = 0x89;
+
+impl borsh::BorshSerialize for PalwStateCarriageV2 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        use std::borrow::Cow;
+        PalwStateCarriageV2Legacy {
+            version: self.version,
+            bonds: Cow::Borrowed(&self.bonds),
+            reserved_exposure: Cow::Borrowed(&self.reserved_exposure),
+            classes: Cow::Borrowed(&self.classes),
+            class_targets: Cow::Borrowed(&self.class_targets),
+            class_shares: Cow::Borrowed(&self.class_shares),
+            registration_exposure: Cow::Borrowed(&self.registration_exposure),
+            class_walks: Cow::Borrowed(&self.class_walks),
+            epoch_budgets: Cow::Borrowed(&self.epoch_budgets),
+            receipt_targets: Cow::Borrowed(&self.receipt_targets),
+            capabilities: Cow::Borrowed(&self.capabilities),
+            claims: Cow::Borrowed(&self.claims),
+            pending_payouts: Cow::Borrowed(&self.pending_payouts),
+            certified_families: Cow::Borrowed(&self.certified_families),
+            fp_certified_families: Cow::Borrowed(&self.fp_certified_families),
+            fp_certified_classes: Cow::Borrowed(&self.fp_certified_classes),
+            pending_chunks: Cow::Borrowed(&self.pending_chunks),
+            court_close_groups: Cow::Borrowed(&self.court_close_groups),
+            derived_artifacts: Cow::Borrowed(&self.derived_artifacts),
+            panels: Cow::Borrowed(&self.panels),
+            court_sessions: Cow::Borrowed(&self.court_sessions),
+            epoch_counters: Cow::Borrowed(&self.epoch_counters),
+            receipt_epoch_counters: Cow::Borrowed(&self.receipt_epoch_counters),
+            safe_weight: self.safe_weight,
+            retired_safe_weight: self.retired_safe_weight,
+            bounded_immature: self.bounded_immature,
+            safe_frontier_blue_score: self.safe_frontier_blue_score,
+            safe_frontier: self.safe_frontier,
+            last_point: self.last_point,
+        }
+        .serialize(writer)?;
+        if !self.model_markets.is_empty() || !self.model_positions.is_empty() {
+            PALW_CARRIAGE_MODEL_TAIL_V1.serialize(writer)?;
+            self.model_markets.serialize(writer)?;
+            self.model_positions.serialize(writer)?;
+        }
+        if self.has_lines_tail() {
+            PALW_CARRIAGE_LINES_TAIL_V1.serialize(writer)?;
+            self.model_lines.serialize(writer)?;
+            self.model_versions.serialize(writer)?;
+            self.model_proposals.serialize(writer)?;
+            self.model_evaluations.serialize(writer)?;
+            self.claim_roots.serialize(writer)?;
+        }
+        if !self.evm_settlements.is_empty() {
+            PALW_CARRIAGE_SETTLEMENTS_TAIL_V1.serialize(writer)?;
+            self.evm_settlements.serialize(writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl PalwStateCarriageV2 {
+    fn has_lines_tail(&self) -> bool {
+        !self.model_lines.is_empty()
+            || !self.model_versions.is_empty()
+            || !self.model_proposals.is_empty()
+            || !self.model_evaluations.is_empty()
+            || !self.claim_roots.is_empty()
+    }
+}
+
+impl borsh::BorshDeserialize for PalwStateCarriageV2 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let legacy = PalwStateCarriageV2Legacy::deserialize_reader(reader)?;
+        // The tails, in order: ADR-0087's (`0x87`) then ADR-0088's (`0x88`), each optional. A
+        // tag out of order or unknown is refused rather than misread.
+        let mut model_markets = BTreeMap::new();
+        let mut model_positions = BTreeMap::new();
+        let mut model_lines = BTreeMap::new();
+        let mut model_versions = BTreeMap::new();
+        let mut model_proposals = BTreeMap::new();
+        let mut model_evaluations = BTreeMap::new();
+        let mut claim_roots = BTreeMap::new();
+        let mut evm_settlements = BTreeMap::new();
+        let mut seen_model = false;
+        let mut seen_lines = false;
+        let mut seen_settlements = false;
+        loop {
+            let mut tail = [0u8; 1];
+            if reader.read(&mut tail)? == 0 {
+                break;
+            }
+            match tail[0] {
+                PALW_CARRIAGE_MODEL_TAIL_V1 if !seen_model && !seen_lines => {
+                    seen_model = true;
+                    model_markets = BTreeMap::deserialize_reader(reader)?;
+                    model_positions = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_LINES_TAIL_V1 if !seen_lines && !seen_settlements => {
+                    seen_lines = true;
+                    model_lines = BTreeMap::deserialize_reader(reader)?;
+                    model_versions = BTreeMap::deserialize_reader(reader)?;
+                    model_proposals = BTreeMap::deserialize_reader(reader)?;
+                    model_evaluations = BTreeMap::deserialize_reader(reader)?;
+                    claim_roots = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_SETTLEMENTS_TAIL_V1 if !seen_settlements => {
+                    seen_settlements = true;
+                    evm_settlements = BTreeMap::deserialize_reader(reader)?;
+                }
+                _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "an unknown tail follows the state carriage")),
+            }
+        }
+        Ok(Self {
+            version: legacy.version,
+            bonds: legacy.bonds.into_owned(),
+            reserved_exposure: legacy.reserved_exposure.into_owned(),
+            classes: legacy.classes.into_owned(),
+            class_targets: legacy.class_targets.into_owned(),
+            class_shares: legacy.class_shares.into_owned(),
+            registration_exposure: legacy.registration_exposure.into_owned(),
+            class_walks: legacy.class_walks.into_owned(),
+            epoch_budgets: legacy.epoch_budgets.into_owned(),
+            receipt_targets: legacy.receipt_targets.into_owned(),
+            capabilities: legacy.capabilities.into_owned(),
+            claims: legacy.claims.into_owned(),
+            pending_payouts: legacy.pending_payouts.into_owned(),
+            certified_families: legacy.certified_families.into_owned(),
+            fp_certified_families: legacy.fp_certified_families.into_owned(),
+            fp_certified_classes: legacy.fp_certified_classes.into_owned(),
+            pending_chunks: legacy.pending_chunks.into_owned(),
+            court_close_groups: legacy.court_close_groups.into_owned(),
+            derived_artifacts: legacy.derived_artifacts.into_owned(),
+            panels: legacy.panels.into_owned(),
+            court_sessions: legacy.court_sessions.into_owned(),
+            epoch_counters: legacy.epoch_counters.into_owned(),
+            receipt_epoch_counters: legacy.receipt_epoch_counters.into_owned(),
+            safe_weight: legacy.safe_weight,
+            retired_safe_weight: legacy.retired_safe_weight,
+            bounded_immature: legacy.bounded_immature,
+            safe_frontier_blue_score: legacy.safe_frontier_blue_score,
+            safe_frontier: legacy.safe_frontier,
+            last_point: legacy.last_point,
+            model_markets,
+            model_positions,
+            model_lines,
+            model_versions,
+            model_proposals,
+            model_evaluations,
+            claim_roots,
+            evm_settlements,
+        })
+    }
 }
 
 impl PalwStateCarriageV2 {
@@ -10292,6 +12070,14 @@ impl PalwStateCarriageV2 {
             court_sessions: state.court_sessions.clone(),
             epoch_counters: state.epoch_counters.clone(),
             receipt_epoch_counters: state.receipt_epoch_counters.clone(),
+            model_markets: state.model_markets.clone(),
+            model_positions: state.model_positions.clone(),
+            model_lines: state.model_lines.clone(),
+            model_versions: state.model_versions.clone(),
+            model_proposals: state.model_proposals.clone(),
+            model_evaluations: state.model_evaluations.clone(),
+            claim_roots: state.claim_roots.clone(),
+            evm_settlements: state.evm_settlements.clone(),
             safe_weight: state.safe_weight,
             retired_safe_weight: state.retired_safe_weight,
             bounded_immature: state.bounded_immature,
@@ -10365,6 +12151,14 @@ impl PalwStateCarriageV2 {
             court_sessions: self.court_sessions,
             epoch_counters: self.epoch_counters,
             receipt_epoch_counters: self.receipt_epoch_counters,
+            model_markets: self.model_markets,
+            model_positions: self.model_positions,
+            model_lines: self.model_lines,
+            model_versions: self.model_versions,
+            model_proposals: self.model_proposals,
+            model_evaluations: self.model_evaluations,
+            claim_roots: self.claim_roots,
+            evm_settlements: self.evm_settlements,
             safe_weight: self.safe_weight,
             retired_safe_weight: self.retired_safe_weight,
             bounded_immature: self.bounded_immature,
@@ -12986,7 +14780,14 @@ pub(crate) mod tests {
         };
         assert!(
             matches!(
-                adjudicate_court_close_v2(&s5, &sid, &proof, &court_params(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+                adjudicate_court_close_v2(
+                    &s5,
+                    &sid,
+                    &proof,
+                    &court_params(),
+                    crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+                    crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+                ),
                 Err(PalwCourtV2Error::LadderNotTerminal)
             ),
             "a close before the ladder terminates must be refused"
@@ -13010,8 +14811,14 @@ pub(crate) mod tests {
             _ => unreachable!(),
         };
         assert_ne!(opened, 4, "the fixture must open a leaf other than the narrowed one");
-        let outcome =
-            adjudicate_court_close_v2(&s13, &sid, &proof, &court_params(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat);
+        let outcome = adjudicate_court_close_v2(
+            &s13,
+            &sid,
+            &proof,
+            &court_params(),
+            crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
         assert!(
             matches!(outcome, Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: o, narrowed: 4 }) if o == opened),
             "a close about another step must be refused, got {outcome:?}"
@@ -13027,8 +14834,14 @@ pub(crate) mod tests {
             pin: crate::palw_step_refute::PalwBase0DecodeTokensV1 { logits_rows: vec![vec![1, 2]], generated_token_ids: vec![0] },
             position: 7,
         };
-        let outcome =
-            adjudicate_court_close_v2(&s13, &sid, &decode, &court_params(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat);
+        let outcome = adjudicate_court_close_v2(
+            &s13,
+            &sid,
+            &decode,
+            &court_params(),
+            crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
         assert!(
             matches!(outcome, Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: 7, narrowed: 4 })),
             "a decode-token close at a position the ladder did not narrow to must be refused, got {outcome:?}"
@@ -17763,6 +19576,14 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::CourtCloseGroup { .. } => "court_close_group",
                     PalwDeltaEntryV2::DerivedArtifact { .. } => "derived_artifact",
                     PalwDeltaEntryV2::CourtCloseChunkArrived { .. } => "court_close_chunk_arrived",
+                    PalwDeltaEntryV2::ModelMarket { .. } => "model_market",
+                    PalwDeltaEntryV2::ModelPosition { .. } => "model_position",
+                    PalwDeltaEntryV2::ModelLine { .. } => "model_line",
+                    PalwDeltaEntryV2::ModelVersion { .. } => "model_version",
+                    PalwDeltaEntryV2::ModelProposal { .. } => "model_proposal",
+                    PalwDeltaEntryV2::ModelEvaluation { .. } => "model_evaluation",
+                    PalwDeltaEntryV2::ClaimRoot { .. } => "claim_root",
+                    PalwDeltaEntryV2::EvmSettlement { .. } => "evm_settlement",
                 });
             }
         }
@@ -18268,6 +20089,14 @@ pub(crate) mod tests {
             court_sessions: _,
             epoch_counters: _,
             receipt_epoch_counters: _,
+            model_markets: _,
+            model_positions: _,
+            model_lines: _,
+            model_versions: _,
+            model_proposals: _,
+            model_evaluations: _,
+            claim_roots: _,
+            evm_settlements: _,
             safe_weight: _,
             retired_safe_weight: _,
             bounded_immature: _,
@@ -20235,6 +22064,7 @@ pub(crate) mod tests {
                 &sid,
                 &dissection_close(drill, bottom),
                 &court,
+                crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
                 crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             )
         }
@@ -20624,6 +22454,884 @@ pub(crate) mod tests {
                 let (lo, hi) = ladder.interval();
                 lo + (hi - lo) / 2
             })
+        }
+    }
+
+    // ---- ADR-0087 — the model market: M1–M8 at the fold ----------------------------------------
+    mod model_market {
+        use super::*;
+        use crate::palw_model_market_v1::{
+            PALW_MODEL_SUPPLY_UNITS_V1, PalwModelMarketV1, palw_model_buy_quote_v1, palw_model_sell_quote_v1,
+        };
+
+        const MSK: u64 = 100_000_000;
+        /// ADR-0090: the least seed, which every market here opens with.
+        const SEED: u64 = crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1;
+        fn holder(v: u64) -> Hash64 {
+            Hash64::from_u64_word(0xB0_0000 + v)
+        }
+        fn seed(class: Hash64, who: Hash64, msk_seed: u64) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::ModelSeed { line_id: class, seeder: who, msk_seed, sink_index: 1 }
+        }
+        fn seeded_row(daa: u64) -> PalwModelMarketV1 {
+            PalwModelMarketV1::seed_v1(daa, SEED, holder(9))
+        }
+        fn buy(class: Hash64, who: Hash64, msk_in: u64, min_units_out: u64) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::ModelBuy { line_id: class, holder: who, msk_in, min_units_out, sink_index: 1 }
+        }
+        fn sell(class: Hash64, who: Hash64, units_in: u64, min_msk_out: u64) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::ModelSell {
+                line_id: class,
+                holder: who,
+                units_in,
+                min_msk_out,
+                pubkey: vec![1],
+                signature: vec![1],
+            }
+        }
+        /// Σ pending payouts, which in these fixtures are the market's alone.
+        fn paid(state: &PalwChainStateV2) -> u64 {
+            state.pending_payouts_iter().map(|(_, p)| p.amount).sum()
+        }
+        /// M1 and M2, checked wherever a state is reached.
+        fn invariants(state: &PalwChainStateV2, class: Hash64, paid_in: u64) {
+            let m = state.model_market(&class).expect("a market row");
+            assert_eq!(
+                m.position_units as u128 + state.model_units_held(&class),
+                PALW_MODEL_SUPPLY_UNITS_V1 as u128,
+                "M1: the curve's units plus every holder's are the supply"
+            );
+            assert_eq!(
+                paid_in + m.seed_sompi,
+                m.msk_reserve + paid(state) + m.burned_sompi,
+                "M2: what went in (the seed included) is where the ADR says it is"
+            );
+            assert!(m.msk_reserve >= m.seed_sompi, "ADR-0090 P1: the reserve never falls under the seed");
+        }
+
+        /// The happy path: a class with no registrant (the genesis case), two buyers, a sell, the
+        /// invariants at every stop, the curve's direction, and the fee legs where Decision 4 puts
+        /// them.
+        #[test]
+        fn a_seed_opens_the_market_and_buys_and_sells_move_the_curve_with_the_invariants_held() {
+            let p = params();
+            let class = h64(1);
+            let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            assert!(s1.model_market(&class).is_none(), "no market before the seed");
+            assert!(
+                matches!(
+                    apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[buy(class, holder(1), 1_000 * MSK, 0)], None),
+                    Err(PalwStateV2Error::ModelMarketMissing(_))
+                ),
+                "ADR-0090: a buy opens nothing"
+            );
+            let (s1b, d1b) = apply(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None);
+            let m1 = *s1b.model_market(&class).expect("the seed opened the market");
+            assert_eq!((m1.msk_reserve, m1.seed_sompi, m1.seeded_by), (SEED, SEED, holder(9)), "the whole seed is the reserve");
+            assert_eq!(m1.position_units, PALW_MODEL_SUPPLY_UNITS_V1, "five hundred thousand positions in the curve");
+            assert_eq!(s1b.model_position(&class, &holder(9)), 0, "the seeder holds nothing");
+            assert_eq!((paid(&s1b), m1.burned_sompi), (0, 0), "no leg on a seed");
+            assert!(d1b.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ModelMarket { .. })), "the delta carries the market");
+            invariants(&s1b, class, 0);
+
+            let (s2, d2) = apply(&s1b, &p, &ctx(3, 102, 3), &[buy(class, holder(1), 1_000 * MSK, 0)], None);
+            let m2 = *s2.model_market(&class).unwrap();
+            let q = palw_model_buy_quote_v1(&seeded_row(101), 1_000 * MSK).unwrap();
+            assert_eq!(s2.model_position(&class, &holder(1)), q.units_out, "the holder holds what the curve released");
+            assert_eq!(q.units_out, 4_656, "whole positions");
+            assert_eq!(m2.msk_reserve, SEED + 940 * MSK, "the net leg joins the reserve");
+            assert_eq!(m2.burned_sompi, 60 * MSK, "5 % burned, and the registrant's 1 % burned too — this class has none (M6)");
+            assert_eq!(paid(&s2), 0, "nothing is paid on a buy of a registrant-less class");
+            invariants(&s2, class, 1_000 * MSK);
+            assert!(d2.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ModelPosition { .. })), "the delta carries the position");
+
+            let (s3, _) = apply(&s2, &p, &ctx(4, 103, 4), &[buy(class, holder(2), 1_000 * MSK, 0)], None);
+            let m3 = *s3.model_market(&class).unwrap();
+            assert!(m3.price_sompi_per_position_v1() > m2.price_sompi_per_position_v1(), "M4: buying raises the price");
+            assert!(s3.model_position(&class, &holder(2)) < s3.model_position(&class, &holder(1)), "the second buyer gets fewer");
+            invariants(&s3, class, 2_000 * MSK);
+
+            let held = s3.model_position(&class, &holder(1));
+            let (s4, _) = apply(&s3, &p, &ctx(5, 104, 5), &[sell(class, holder(1), held, 0)], None);
+            let m4 = *s4.model_market(&class).unwrap();
+            let sq = palw_model_sell_quote_v1(&m3, held).unwrap();
+            assert_eq!(s4.model_position(&class, &holder(1)), 0, "sold out");
+            assert_eq!(s4.model_positions_of(&holder(1)), Vec::<(Hash64, u64)>::new(), "and the row is gone");
+            assert_eq!(paid(&s4), sq.fees.net, "the net leg is a payout to the holder");
+            assert!(s4.pending_payouts_iter().all(|(_, p)| p.payload == holder(1)), "…to the holder's own payload (M8)");
+            assert!(m4.price_sompi_per_position_v1() < m3.price_sompi_per_position_v1(), "M4: selling lowers the price");
+            invariants(&s4, class, 2_000 * MSK);
+        }
+
+        /// ADR-0090: one seed a line, at least the floor, and never a leg; the seeder cannot get
+        /// it back — no object pays a reserve out but a holder's sell, and the seeder holds nothing.
+        #[test]
+        fn a_seed_is_once_at_least_the_floor_and_takes_no_leg() {
+            let p = params();
+            let class = h64(1);
+            let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            assert!(matches!(
+                apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED - 1)], None),
+                Err(PalwStateV2Error::ModelSeedTooSmall { got, .. }) if got == SEED - 1
+            ));
+            assert!(matches!(
+                apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[seed(h64(0xDEAD), holder(9), SEED)], None),
+                Err(PalwStateV2Error::ModelLineMissing(_))
+            ));
+            let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), 3 * SEED)], None);
+            assert_eq!(s2.model_market(&class).unwrap().msk_reserve, 3 * SEED, "a larger seed is a larger reserve, all of it");
+            assert_eq!(
+                s2.model_market(&class).unwrap().price_sompi_per_position_v1(),
+                3 * SEED / 500_000,
+                "…and a higher first price"
+            );
+            assert!(matches!(
+                apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[seed(class, holder(8), SEED)], None),
+                Err(PalwStateV2Error::ModelMarketAlreadySeeded(_))
+            ));
+            assert!(
+                matches!(
+                    apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(9), 1, 0)], None),
+                    Err(PalwStateV2Error::ModelSellExceedsPosition { held: 0, want: 1 })
+                ),
+                "the seeder holds no position to sell"
+            );
+            invariants(&s2, class, 0);
+        }
+
+        /// M5: a floor refuses, never partially fills — the whole block's transition fails and the
+        /// state is untouched; at the floor exactly, it fills.
+        #[test]
+        fn a_floor_refuses_rather_than_partially_filling() {
+            let p = params();
+            let class = h64(1);
+            let (s0, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let (s1, _) = apply(&s0, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None);
+            let q = palw_model_buy_quote_v1(&seeded_row(101), 10 * MSK).unwrap();
+            assert!(matches!(
+                apply_palw_transition_v2(&s1, &p, &ctx(3, 102, 3), &[buy(class, holder(1), 10 * MSK, q.units_out + 1)], None),
+                Err(PalwStateV2Error::ModelBuyBelowFloor { .. })
+            ));
+            let (s2, _) = apply(&s1, &p, &ctx(3, 102, 3), &[buy(class, holder(1), 10 * MSK, q.units_out)], None);
+            let held = s2.model_position(&class, &holder(1));
+            let sq = palw_model_sell_quote_v1(s2.model_market(&class).unwrap(), held).unwrap();
+            assert!(matches!(
+                apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), held, sq.fees.net + 1)], None),
+                Err(PalwStateV2Error::ModelSellBelowFloor { .. })
+            ));
+            assert!(matches!(
+                apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), held + 1, 0)], None),
+                Err(PalwStateV2Error::ModelSellExceedsPosition { .. })
+            ));
+            assert!(
+                matches!(
+                    apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(2), 1, 0)], None),
+                    Err(PalwStateV2Error::ModelSellExceedsPosition { held: 0, want: 1 })
+                ),
+                "another holder cannot sell what it does not hold"
+            );
+            let (s3, _) = apply(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), held, sq.fees.net)], None);
+            invariants(&s3, class, 10 * MSK);
+        }
+
+        /// M3: no object moves units between two holders. Each move changes at most ONE holder's
+        /// row of the class, and every other object kind in the fixture leaves the positions alone.
+        #[test]
+        fn no_move_changes_two_holders_in_one_class() {
+            let p = params();
+            let class = h64(1);
+            let (s0, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let (s1, _) = apply(&s0, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None);
+            assert!(s1.model_positions_of(&holder(1)).is_empty() && s1.model_positions_of(&holder(2)).is_empty());
+            let (s2, _) =
+                apply(&s1, &p, &ctx(3, 102, 3), &[buy(class, holder(1), 5 * MSK, 0), buy(class, holder(2), 5 * MSK, 0)], None);
+            let (s3, d3) = apply(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), 1, 0)], None);
+            let changed: BTreeSet<(Hash64, Hash64)> = d3
+                .entries
+                .iter()
+                .filter_map(|e| match e {
+                    PalwDeltaEntryV2::ModelPosition { key, .. } => Some(*key),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(changed.len(), 1, "one move, one holder's row");
+            assert_eq!(s3.model_position(&class, &holder(2)), s2.model_position(&class, &holder(2)), "the other holder is untouched");
+        }
+
+        /// M6: a class that is not Active refuses buys and honours sells; a genesis class burns
+        /// the registrant's leg (above); a registered class pays it to the registrant's payload.
+        #[test]
+        fn a_registered_class_takes_its_seed_before_activation_but_no_buys_and_a_registrant_is_paid() {
+            let p = economy_params();
+            let class = h64(2);
+            let mut objects = register_class_and_bond();
+            let mut future = registration(class, 100, Some(bond_key(1)));
+            if let PalwConsensusObjectV2::ClassRegistered { activation_daa, slash_value_per_pwu, .. } = &mut future {
+                *activation_daa = 200;
+                *slash_value_per_pwu = 5;
+            }
+            objects.push(future);
+            let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+            // ADR-0090: the pair is made when the model is added, before approval — so a class still
+            // waiting for its activation takes its seed…
+            let (s1b, _) = apply(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None);
+            assert_eq!(s1b.model_market(&class).unwrap().msk_reserve, SEED);
+            // …and no buy until it is Active.
+            assert!(
+                matches!(
+                    apply_palw_transition_v2(&s1b, &p, &ctx(3, 102, 3), &[buy(class, holder(1), MSK, 0)], None),
+                    Err(PalwStateV2Error::ModelClassNotActive(_))
+                ),
+                "not yet Active: no buys"
+            );
+            let (s2, _) = apply(&s1b, &p, &ctx(3, 250, 3), &[], None);
+            let (s3, _) = apply(&s2, &p, &ctx(4, 251, 4), &[buy(class, holder(1), 100 * MSK, 0)], None);
+            let m3 = *s3.model_market(&class).unwrap();
+            assert_eq!(m3.registrant_paid_sompi, MSK, "1 % to the registrant");
+            assert_eq!(m3.burned_sompi, 5 * MSK, "5 % burned");
+            let registrant_payload = s3.bond(&bond_key(1)).unwrap().payout_payload;
+            assert_eq!(paid(&s3), MSK);
+            assert!(s3.pending_payouts_iter().all(|(_, p)| p.payload == registrant_payload), "paid to the registrant's payload");
+            invariants(&s3, class, 100 * MSK);
+        }
+
+        /// M7: replaying the deltas reproduces the state root; and a carriage of a chain with no
+        /// move is byte-identical to the legacy layout, while one with a move carries the tail.
+        #[test]
+        fn the_deltas_replay_and_the_carriage_stays_legacy_until_the_first_move() {
+            let p = params();
+            let class = h64(1);
+            let g = PalwChainStateV2::genesis();
+            let (s1, d1) = apply(&g, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let legacy_bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s1)).unwrap();
+            let twin: PalwStateCarriageV2Legacy<'static> =
+                borsh::from_slice(&legacy_bytes).expect("a build without ADR-0087 decodes it");
+            assert_eq!(twin.version, PALW_STATE_V2_VERSION);
+            let (s2, d2) = apply(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED), buy(class, holder(1), 3 * MSK, 0)], None);
+            let (s3, d3) = apply(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(1), 1, 0)], None);
+            let r1 = apply_delta_v2(&g, &d1, &p).unwrap();
+            let r2 = apply_delta_v2(&r1, &d2, &p).unwrap();
+            let r3 = apply_delta_v2(&r2, &d3, &p).unwrap();
+            assert_eq!(r3.state_root(), s3.state_root(), "the deltas replay to the same root");
+            assert_eq!(revert_delta_v2(&r3, &d3, &p).unwrap().state_root(), s2.state_root(), "and revert");
+            let moved = PalwStateCarriageV2::from_state(&s3);
+            let bytes = borsh::to_vec(&moved).unwrap();
+            assert!(bytes.len() > legacy_bytes.len(), "the tail rides once a move was folded");
+            let back: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(back, moved, "and round-trips");
+            assert!(
+                borsh::from_slice::<PalwStateCarriageV2Legacy<'static>>(&bytes).is_err(),
+                "a legacy reader refuses the tailed carriage rather than misreading it"
+            );
+            assert_ne!(s3.state_root(), s1.state_root());
+        }
+    }
+
+    // ---- ADR-0088 — the model registry: L1–L8 at the fold ------------------------------------
+    mod model_lines {
+        use super::*;
+        use crate::palw_model_lines_v1::*;
+
+        const MSK: u64 = 100_000_000;
+
+        fn extras() -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 { model_lines_active: true, ..Default::default() }
+        }
+
+        fn try_lines(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+            att: Option<&PalwAttemptEnvelopeV2>,
+        ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+            apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, &extras())
+        }
+
+        fn apply_lines(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+            att: Option<&PalwAttemptEnvelopeV2>,
+        ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+            let (state, delta) = try_lines(parent, p, c, objects, att).expect("transition applies");
+            state.assert_internal_consistency(p).expect("internal consistency after apply");
+            state.assert_deadline_consistency(p).expect("deadline consistency after apply");
+            (state, delta)
+        }
+
+        /// A chain with the floor (class 1, registrant-less), a class registered by bond 1 that has
+        /// activated (class 2, root `0xA1`), and a second Active bond (bond 2).
+        fn owned_class_chain() -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+            let p = economy_params();
+            let class = h64(2);
+            let mut objects = register_class_and_bond();
+            let mut future = registration(class, 100, Some(bond_key(1)));
+            if let PalwConsensusObjectV2::ClassRegistered { activation_daa, slash_value_per_pwu, .. } = &mut future {
+                *activation_daa = 200;
+                *slash_value_per_pwu = 5;
+            }
+            objects.push(future);
+            objects.push(bond_registration_with_collateral(2, 8, 22, 1_000_000));
+            let (s1, _) = apply_lines(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+            let (s2, _) = apply_lines(&s1, &p, &ctx(2, 250, 2), &[], None);
+            assert!(matches!(s2.class(&class).unwrap().status, PalwClassStatusV2::Active));
+            (p, s2, class)
+        }
+
+        fn publish(line: Hash64, version: u32, root: Hash64, preview: bool) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::ModelVersionPublished {
+                line_id: line,
+                version,
+                root,
+                parent: Some(version - 1),
+                adopted_from: None,
+                runtime_hash: Some(h64(0xF0)),
+                dataset_commitment: None,
+                training_config_hash: None,
+                notes_hash: None,
+                preview,
+                signature: vec![1],
+            }
+        }
+
+        fn roots(state: &PalwChainStateV2, class: Hash64, daa: u64) -> BTreeSet<Hash64> {
+            state.class_roots_in_force(&class, daa).into_iter().collect()
+        }
+
+        #[test]
+        fn the_founding_line_is_the_registrants_and_a_publish_moves_the_root_with_a_grace() {
+            let (p, s, class) = owned_class_chain();
+            let founding = s.model_line_or_founding(&class).expect("a founding line from the class row");
+            assert_eq!(founding.owner, Some(bond_key(1)), "L1: the founding line's owner is the registrant");
+            assert_eq!((founding.current, founding.versions_published), (1, 1));
+            assert!(s.model_line(&class).is_none(), "no row until something changes");
+            assert_eq!(roots(&s, class, 250), [h64(0xA1)].into_iter().collect(), "the registration's root is the one in force");
+            assert!(
+                matches!(
+                    apply_palw_transition_v2(&s, &p, &ctx(3, 251, 3), &[publish(class, 2, h64(0xB2), false)], None),
+                    Err(PalwStateV2Error::ModelLinesNotArmed)
+                ),
+                "L9: below the fence the object is refused"
+            );
+            let (s3, d3) = apply_lines(&s, &p, &ctx(3, 251, 3), &[publish(class, 2, h64(0xB2), false)], None);
+            let line = s3.model_line(&class).expect("the first publish materialises the founding row");
+            assert_eq!((line.current, line.versions_published), (2, 2), "L2: dense versions");
+            assert_eq!(
+                s3.model_version(&class, 1).unwrap().status,
+                PalwVersionStatusV1::Superseded { until_daa: 251 + PALW_VERSION_GRACE_DAA_V1 }
+            );
+            assert_eq!(s3.model_version(&class, 2).unwrap().published_by, Some(bond_key(1)));
+            assert_eq!(roots(&s3, class, 251), [h64(0xA1), h64(0xB2)].into_iter().collect(), "L3: both roots during the grace");
+            assert_eq!(roots(&s3, class, 251 + PALW_VERSION_GRACE_DAA_V1), [h64(0xB2)].into_iter().collect(), "…and one after it");
+            assert_ne!(s.state_root(), s3.state_root(), "a line row is in the root");
+            assert!(d3.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ModelLine { .. })));
+            assert!(d3.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ModelVersion { .. })));
+            assert!(matches!(
+                try_lines(&s3, &p, &ctx(4, 252, 4), &[publish(class, 4, h64(0xB4), false)], None),
+                Err(PalwStateV2Error::ModelVersionNotNext { want: 3, got: 4, .. })
+            ));
+            assert!(matches!(
+                try_lines(&s3, &p, &ctx(4, 252, 4), &[publish(class, 3, h64(0xB2), false)], None),
+                Err(PalwStateV2Error::ModelVersionSameRoot(_))
+            ));
+            let mut bad_parent = publish(class, 3, h64(0xB3), false);
+            if let PalwConsensusObjectV2::ModelVersionPublished { parent, .. } = &mut bad_parent {
+                *parent = Some(9);
+            }
+            assert!(matches!(
+                try_lines(&s3, &p, &ctx(4, 252, 4), &[bad_parent], None),
+                Err(PalwStateV2Error::ModelVersionMissing(_, 9))
+            ));
+            // Rollback is a publish: the old root comes back as version 3.
+            let (s4, _) = apply_lines(&s3, &p, &ctx(4, 252, 4), &[publish(class, 3, h64(0xA1), false)], None);
+            assert_eq!(s4.model_line(&class).unwrap().current, 3);
+            assert_eq!(s4.model_version(&class, 3).unwrap().root, h64(0xA1));
+        }
+
+        #[test]
+        fn a_preview_is_in_force_but_not_current_until_promoted_and_a_withdrawal_takes_it_out() {
+            let (p, s, class) = owned_class_chain();
+            let (s3, _) = apply_lines(&s, &p, &ctx(3, 251, 3), &[publish(class, 2, h64(0xB2), false)], None);
+            let (s4, _) = apply_lines(&s3, &p, &ctx(4, 252, 4), &[publish(class, 3, h64(0xB3), true)], None);
+            let line = s4.model_line(&class).unwrap();
+            assert_eq!((line.current, line.previews.clone()), (2, vec![3]), "a preview is not the current");
+            assert!(roots(&s4, class, 252).contains(&h64(0xB3)), "…but it is in force");
+            let promote = PalwConsensusObjectV2::ModelVersionPromoted { line_id: class, version: 3, signature: vec![1] };
+            let (s5, _) = apply_lines(&s4, &p, &ctx(5, 253, 5), &[promote], None);
+            let line = s5.model_line(&class).unwrap();
+            assert_eq!((line.current, line.previews.clone()), (3, vec![]));
+            assert!(matches!(s5.model_version(&class, 2).unwrap().status, PalwVersionStatusV1::Superseded { .. }));
+            assert_eq!(s5.model_version(&class, 3).unwrap().status, PalwVersionStatusV1::Current);
+            let (s6, _) =
+                apply_lines(&s5, &p, &ctx(6, 254, 6), &[publish(class, 4, h64(0xB4), true), publish(class, 5, h64(0xB5), true)], None);
+            assert!(matches!(
+                try_lines(&s6, &p, &ctx(7, 255, 7), &[publish(class, 6, h64(0xB6), true)], None),
+                Err(PalwStateV2Error::ModelPreviewsFull(_))
+            ));
+            let withdraw = |v: u32| PalwConsensusObjectV2::ModelVersionWithdrawn { line_id: class, version: v, signature: vec![1] };
+            let (s7, _) = apply_lines(&s6, &p, &ctx(7, 255, 7), &[withdraw(4)], None);
+            assert_eq!(s7.model_version(&class, 4).unwrap().status, PalwVersionStatusV1::Withdrawn);
+            assert_eq!(s7.model_line(&class).unwrap().previews, vec![5]);
+            assert!(!roots(&s7, class, 255).contains(&h64(0xB4)));
+            assert!(matches!(
+                try_lines(&s7, &p, &ctx(8, 256, 8), &[withdraw(3)], None),
+                Err(PalwStateV2Error::ModelVersionIsCurrent(_, 3))
+            ));
+            assert!(matches!(
+                try_lines(&s7, &p, &ctx(8, 256, 8), &[withdraw(4)], None),
+                Err(PalwStateV2Error::ModelVersionNotInForce(_, 4))
+            ));
+            let (s8, _) = apply_lines(&s7, &p, &ctx(8, 256, 8), &[withdraw(2)], None);
+            assert!(!roots(&s8, class, 256).contains(&h64(0xB2)), "a superseded root can leave force before its grace ends");
+        }
+
+        #[test]
+        fn roles_are_the_owners_to_set_a_transfer_resets_them_and_a_genesis_line_has_nobody() {
+            let (p, s, class) = owned_class_chain();
+            let roles = |developer: Option<PalwBondKeyV2>, maintainer: Option<PalwBondKeyV2>, share: u16| {
+                PalwConsensusObjectV2::ModelLineRolesSet {
+                    line_id: class,
+                    developer,
+                    maintainer,
+                    contributor_permille_of_leg: share,
+                    signature: vec![1],
+                }
+            };
+            let (s3, _) = apply_lines(&s, &p, &ctx(3, 251, 3), &[roles(Some(bond_key(2)), None, 250)], None);
+            let line = s3.model_line(&class).unwrap();
+            assert_eq!(line.developer_bond(), Some(bond_key(2)));
+            assert_eq!(line.maintainer_bond(), Some(bond_key(1)), "a maintainer left unset is the owner");
+            assert_eq!(line.contributor_permille_of_leg, 250);
+            let (s4, _) = apply_lines(&s3, &p, &ctx(4, 252, 4), &[roles(Some(bond_key(1)), Some(bond_key(1)), 0)], None);
+            assert_eq!(s4.model_line(&class).unwrap().developer, None, "naming the owner is the same as leaving it unset");
+            assert!(matches!(
+                try_lines(&s4, &p, &ctx(5, 253, 5), &[roles(Some(bond_key(3)), None, 0)], None),
+                Err(PalwStateV2Error::MissingBond(_))
+            ));
+            let transfer =
+                PalwConsensusObjectV2::ModelLineOwnerTransferred { line_id: class, new_owner: bond_key(2), signature: vec![1] };
+            let (s5, _) = apply_lines(&s4, &p, &ctx(5, 253, 5), &[transfer], None);
+            let line = s5.model_line(&class).unwrap();
+            assert_eq!(
+                (line.owner, line.developer, line.maintainer),
+                (Some(bond_key(2)), None, None),
+                "L1: a transfer resets the roles"
+            );
+            let retire = PalwConsensusObjectV2::ModelLineRetired { line_id: class, signature: vec![1] };
+            let (s6, _) = apply_lines(&s5, &p, &ctx(6, 254, 6), &[retire], None);
+            let line = s6.model_line(&class).unwrap();
+            assert_eq!(line.status, PalwModelLineStatusV1::Retired);
+            assert_eq!(line.retired_daa, Some(254 + PALW_VERSION_GRACE_DAA_V1));
+            assert!(matches!(
+                try_lines(&s6, &p, &ctx(7, 255, 7), &[publish(class, 2, h64(0xB2), false)], None),
+                Err(PalwStateV2Error::ModelLineNotActive(_))
+            ));
+            assert!(
+                !roots(&s6, class, 254 + PALW_VERSION_GRACE_DAA_V1).contains(&h64(0xA1)),
+                "a retired line's roots leave force after the grace"
+            );
+            // The floor (class 1) was registered by nobody: an unowned line, nobody publishes.
+            assert!(matches!(
+                try_lines(&s, &p, &ctx(3, 251, 3), &[publish(h64(1), 2, h64(0xB2), false)], None),
+                Err(PalwStateV2Error::ModelLineUnowned(_))
+            ));
+        }
+
+        #[test]
+        fn a_proposal_is_adopted_by_a_version_and_the_owner_shares_the_leg() {
+            let (p, s, class) = owned_class_chain();
+            let proposal = PalwConsensusObjectV2::ModelProposalPosted {
+                line_id: class,
+                root: h64(0xC1),
+                note_hash: h64(0xC2),
+                by: bond_key(2),
+                signature: vec![1],
+            };
+            let id = model_proposal_id_v1(&class, &h64(0xC1), &bond_key(2));
+            let (s3, _) = apply_lines(&s, &p, &ctx(3, 251, 3), std::slice::from_ref(&proposal), None);
+            assert_eq!(s3.model_proposals_of(&class).len(), 1);
+            assert!(matches!(try_lines(&s3, &p, &ctx(4, 252, 4), &[proposal], None), Err(PalwStateV2Error::ModelProposalExists(_))));
+            let share = PalwConsensusObjectV2::ModelLineRolesSet {
+                line_id: class,
+                developer: None,
+                maintainer: None,
+                contributor_permille_of_leg: 250,
+                signature: vec![1],
+            };
+            let mut adopting = publish(class, 2, h64(0xC1), false);
+            if let PalwConsensusObjectV2::ModelVersionPublished { adopted_from, .. } = &mut adopting {
+                *adopted_from = Some(id);
+            }
+            let (s4, _) = apply_lines(&s3, &p, &ctx(4, 252, 4), &[share, adopting], None);
+            assert_eq!(s4.model_proposals_of(&class)[0].1.adopted_in, Some(2), "the proposal says which version took it");
+            assert_eq!(s4.model_version(&class, 2).unwrap().adopted_from, Some(id));
+            let close = PalwConsensusObjectV2::ModelProposalClosed { line_id: class, proposal_id: id, signature: vec![1] };
+            assert!(matches!(try_lines(&s4, &p, &ctx(5, 253, 5), &[close], None), Err(PalwStateV2Error::ModelProposalAdopted(_))));
+            // A buy on the line: the leg is 1 MSK, split 25 % to the contributor and 75 % to the owner.
+            let buy = PalwConsensusObjectV2::ModelBuy {
+                line_id: class,
+                holder: h64(0xB0_0001),
+                msk_in: 100 * MSK,
+                min_units_out: 0,
+                sink_index: 1,
+            };
+            let seed = PalwConsensusObjectV2::ModelSeed {
+                line_id: class,
+                seeder: h64(0xB0_0009),
+                msk_seed: crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1,
+                sink_index: 1,
+            };
+            let (s5, _) = apply_lines(&s4, &p, &ctx(5, 253, 5), &[seed, buy], None);
+            let market = s5.model_market(&class).expect("a market on the line");
+            assert_eq!(market.registrant_paid_sompi, 75 * MSK / 100, "L5: the owner's part of the leg");
+            assert_eq!(market.contributor_paid_sompi, 25 * MSK / 100, "L5: the contributor's part");
+            assert_eq!(market.burned_sompi, 5 * MSK);
+            let mut amounts: Vec<u64> = s5.pending_payouts_iter().map(|(_, p)| p.amount).collect();
+            amounts.sort();
+            assert_eq!(amounts, vec![25 * MSK / 100, 75 * MSK / 100]);
+            assert_eq!(
+                100 * MSK + market.seed_sompi,
+                market.msk_reserve + market.burned_sompi + market.registrant_paid_sompi + market.contributor_paid_sompi,
+                "ADR-0087 M2 with the split (and ADR-0090's seed in the reserve)"
+            );
+        }
+
+        #[test]
+        fn usage_is_counted_on_the_version_a_claim_named_and_admission_reads_the_roots_in_force() {
+            let (p, s, class) = owned_class_chain();
+            let (s3, _) = apply_lines(&s, &p, &ctx(3, 251, 3), &[publish(class, 2, h64(0xB2), false)], None);
+            let env = attempt_for_class(10, 1, class, bond_key(1), vec![7; 4], op_id(21), h64(0xB2));
+            let (s4, _) = apply_lines(&s3, &p, &ctx(4, 252, 4), &[], Some(&env));
+            let claim_id = attempt_id_v2(&env.attempt);
+            let v2 = s4.model_version(&class, 2).unwrap();
+            assert_eq!((v2.usage.attempt_claims, v2.usage.work_leaves), (1, 10), "L4: the claim is counted on the version it named");
+            assert_eq!((v2.usage.first_used_daa, v2.usage.last_used_daa), (Some(252), Some(252)));
+            assert_eq!(s4.claim_root(&claim_id), Some(h64(0xB2)), "L4: the root is remembered for the court");
+            assert_eq!(s4.model_version(&class, 1).unwrap().usage.attempt_claims, 0);
+            // Admission after the grace: the old root is refused, the current one is not.
+            let (s5, _) = apply_lines(&s4, &p, &ctx(5, 251 + PALW_VERSION_GRACE_DAA_V1, 5), &[], None);
+            let stale = attempt_for_class(10, 2, class, bond_key(1), vec![7; 4], op_id(21), h64(0xA1));
+            assert!(matches!(
+                crate::palw_admission_v2::check_palw_producer_entitlement_v2_with_bootstrap(&s5, &stale.attempt, None),
+                Err(crate::palw_admission_v2::PalwAdmissionV2Error::ArtifactRootMismatch)
+            ));
+            let fresh = attempt_for_class(10, 3, class, bond_key(1), vec![7; 4], op_id(21), h64(0xB2));
+            assert!(!matches!(
+                crate::palw_admission_v2::check_palw_producer_entitlement_v2_with_bootstrap(&s5, &fresh.attempt, None),
+                Err(crate::palw_admission_v2::PalwAdmissionV2Error::ArtifactRootMismatch)
+            ));
+        }
+
+        #[test]
+        fn a_founded_line_shares_the_class_and_the_roots_are_the_union() {
+            let (p, s, class) = owned_class_chain();
+            let found = |name: &[u8], class_id: Hash64| PalwConsensusObjectV2::ModelLineFounded {
+                class_id,
+                name: name.to_vec(),
+                founder: bond_key(2),
+                root: h64(0xD1),
+                signature: vec![1],
+            };
+            let (s3, _) = apply_lines(&s, &p, &ctx(3, 251, 3), &[found(b"QWEN-B", class)], None);
+            let id = model_line_id_v1(&class, &bond_key(2), b"QWEN-B");
+            let line = s3.model_line(&id).expect("the founded line");
+            assert_eq!((line.owner, line.class_id, line.current), (Some(bond_key(2)), class, 1));
+            assert_eq!(s3.model_version(&id, 1).unwrap().root, h64(0xD1));
+            assert_eq!(roots(&s3, class, 251), [h64(0xA1), h64(0xD1)].into_iter().collect(), "L3: the union over the class's lines");
+            assert_eq!(s3.class_line_rows(&class).len(), 1, "the founding line still has no row");
+            assert!(matches!(
+                try_lines(&s3, &p, &ctx(4, 252, 4), &[found(b"QWEN-B", class)], None),
+                Err(PalwStateV2Error::ModelLineExists(_))
+            ));
+            assert!(matches!(
+                try_lines(&s3, &p, &ctx(4, 252, 4), &[found(&[b'x'; 65], class)], None),
+                Err(PalwStateV2Error::ModelLineNameLength(65, 64))
+            ));
+            assert!(matches!(
+                try_lines(&s3, &p, &ctx(4, 252, 4), &[found(b"floor", h64(1))], None),
+                Err(PalwStateV2Error::ModelLineOnFloor)
+            ));
+            // Each line publishes on its own: the founded line's developer is bond 2.
+            let (s4, _) = apply_lines(&s3, &p, &ctx(4, 252, 4), &[publish(id, 2, h64(0xD2), false)], None);
+            assert_eq!(s4.model_line(&id).unwrap().current, 2);
+            assert_eq!(s4.model_line_or_founding(&class).unwrap().current, 1, "the founding line is untouched");
+        }
+
+        #[test]
+        fn evaluations_are_declarations_from_anyone_and_say_whose_they_are() {
+            let (p, s, class) = owned_class_chain();
+            let eval = |by: PalwBondKeyV2, version: u32| PalwConsensusObjectV2::ModelEvaluationPosted {
+                line_id: class,
+                version,
+                evaluator_id: h64(0xE1),
+                score_permille: 720,
+                report_hash: h64(0xE2),
+                by,
+                signature: vec![1],
+            };
+            let (s3, _) = apply_lines(&s, &p, &ctx(3, 251, 3), &[eval(bond_key(2), 1), eval(bond_key(1), 1)], None);
+            let rows = s3.model_evaluations_of(&class, 1);
+            assert_eq!(rows.len(), 2);
+            let own = rows.iter().find(|(b, _)| **b == bond_key(1)).unwrap().1;
+            let stranger = rows.iter().find(|(b, _)| **b == bond_key(2)).unwrap().1;
+            assert!(own.is_lines_own && !stranger.is_lines_own, "L6: who declared it is recorded; nothing reads the score");
+            assert!(matches!(
+                try_lines(&s3, &p, &ctx(4, 252, 4), &[eval(bond_key(2), 1)], None),
+                Err(PalwStateV2Error::ModelEvaluationExists(_, 1))
+            ));
+            assert!(matches!(
+                try_lines(&s3, &p, &ctx(4, 252, 4), &[eval(bond_key(2), 9)], None),
+                Err(PalwStateV2Error::ModelVersionMissing(_, 9))
+            ));
+            assert_eq!(s3.model_line_or_founding(&class).unwrap().current, 1, "an evaluation changes nothing about the line");
+        }
+
+        #[test]
+        fn the_carriage_stays_legacy_until_a_line_row_exists_and_the_deltas_replay_and_revert() {
+            let (p, s, class) = owned_class_chain();
+            let before = borsh::to_vec(&PalwStateCarriageV2::from_state(&s)).unwrap();
+            let twin: PalwStateCarriageV2Legacy<'static> = borsh::from_slice(&before).expect("a build without ADR-0088 decodes it");
+            assert_eq!(twin.version, PALW_STATE_V2_VERSION);
+            let (s3, d3) = apply_lines(&s, &p, &ctx(3, 251, 3), &[publish(class, 2, h64(0xB2), false)], None);
+            let after = borsh::to_vec(&PalwStateCarriageV2::from_state(&s3)).unwrap();
+            assert!(after.len() > before.len(), "the 0x88 tail is present");
+            let decoded: PalwStateCarriageV2 = borsh::from_slice(&after).expect("a build with ADR-0088 decodes it");
+            assert_eq!(decoded.model_lines.len(), 1);
+            assert_eq!(decoded.model_versions.len(), 2);
+            assert!(borsh::from_slice::<PalwStateCarriageV2Legacy<'static>>(&after).is_err(), "L8: a legacy reader refuses the tail");
+            let replayed = apply_delta_v2(&s, &d3, &p).unwrap();
+            assert_eq!(replayed.state_root(), s3.state_root(), "the delta replays to the same root");
+            assert_eq!(revert_delta_v2(&replayed, &d3, &p).unwrap().state_root(), s.state_root(), "…and reverts");
+        }
+    }
+
+    // ---- ADR-0089 — the EVM's actions at the fold ---------------------------------------------
+    mod evm_market {
+        use super::*;
+        use crate::evm::model_market::*;
+
+        const MSK: u64 = 100_000_000;
+
+        fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 { model_lines_active: true, evm_market_active: true, evm_actions: actions }
+        }
+
+        fn apply_evm(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+            actions: Vec<PalwEvmMarketActionV1>,
+        ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+            let (state, delta) =
+                apply_palw_transition_v2_with_extras(parent, p, c, objects, None, false, false, false, false, &extras(actions))
+                    .expect("transition applies");
+            state.assert_internal_consistency(p).expect("internal consistency after apply");
+            (state, delta)
+        }
+
+        fn account(v: u8) -> crate::evm::EvmAddress {
+            crate::evm::EvmAddress::from_bytes([v; 20])
+        }
+
+        fn buy(seq: u32, who: u8, line: Hash64, sompi: u64, min_units_out: u64) -> PalwEvmMarketActionV1 {
+            PalwEvmMarketActionV1 {
+                seq,
+                account: account(who),
+                line_id: line,
+                kind: PalwEvmMarketActionKindV1::Buy { min_units_out },
+                gross_sompi: sompi,
+            }
+        }
+
+        fn sell(seq: u32, who: u8, line: Hash64, units_in: u64, min_msk_out_sompi: u64) -> PalwEvmMarketActionV1 {
+            PalwEvmMarketActionV1 {
+                seq,
+                account: account(who),
+                line_id: line,
+                kind: PalwEvmMarketActionKindV1::Sell { units_in, min_msk_out_sompi },
+                gross_sompi: 0,
+            }
+        }
+
+        /// A chain with an Active class registered by bond 1 (class 2, the founding line).
+        const SEED: u64 = crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1;
+
+        fn seed_action(seq: u32, who: u8, line: Hash64, sompi: u64) -> PalwEvmMarketActionV1 {
+            PalwEvmMarketActionV1 {
+                seq,
+                account: account(who),
+                line_id: line,
+                kind: PalwEvmMarketActionKindV1::Seed,
+                gross_sompi: sompi,
+            }
+        }
+
+        /// An Active class, its founding line's market seeded by a carrier in block 2 when `seeded`
+        /// (ADR-0090) and unopened otherwise.
+        fn chain_with(seeded: bool) -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+            let p = economy_params();
+            let class = h64(2);
+            let mut objects = register_class_and_bond();
+            let mut future = registration(class, 100, Some(bond_key(1)));
+            if let PalwConsensusObjectV2::ClassRegistered { activation_daa, slash_value_per_pwu, .. } = &mut future {
+                *activation_daa = 200;
+                *slash_value_per_pwu = 5;
+            }
+            objects.push(future);
+            let (s1, _) = apply_evm(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, vec![]);
+            let block2: Vec<PalwConsensusObjectV2> = if seeded {
+                vec![PalwConsensusObjectV2::ModelSeed { line_id: class, seeder: h64(0xB0_0009), msk_seed: SEED, sink_index: 1 }]
+            } else {
+                vec![]
+            };
+            let (s2, _) = apply_evm(&s1, &p, &ctx(2, 250, 2), &block2, vec![]);
+            (p, s2, class)
+        }
+        fn chain_unseeded() -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+            chain_with(false)
+        }
+        fn chain() -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+            chain_with(true)
+        }
+
+        /// ADR-0090 from the EVM: a seed action of the least seed opens the market with the whole
+        /// value as the reserve and no position for anyone; a second seed and a small one are
+        /// refused as settlements whose escrow the child refunds.
+        #[test]
+        fn a_seed_from_the_evm_opens_the_market_and_is_once_and_at_least_the_floor() {
+            let (p, s, class) = chain_unseeded();
+            let (s3, _) = apply_evm(
+                &s,
+                &p,
+                &ctx(3, 251, 3),
+                &[],
+                vec![seed_action(0, 1, class, SEED - 1), seed_action(1, 1, class, SEED), seed_action(2, 2, class, SEED)],
+            );
+            let st = s3.evm_settlements();
+            assert_eq!(st.len(), 3);
+            assert!(matches!(st[0].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::SEED_TOO_SMALL }));
+            assert_eq!((st[0].action, st[0].escrow_sompi), (PALW_EVM_ACTION_SEED, SEED - 1), "the refund is the whole escrow");
+            let PalwEvmSettlementOutcomeV1::Filled { units, gross_sompi, net_sompi, price_after_sompi } = st[1].outcome else {
+                panic!("the seed filled")
+            };
+            assert_eq!((units, gross_sompi, net_sompi), (0, SEED, SEED), "a seed mints nothing and takes no leg");
+            assert_eq!(price_after_sompi, SEED / 500_000, "0.2 MSK a position");
+            assert!(matches!(st[2].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::ALREADY_SEEDED }));
+            let market = s3.model_market(&class).expect("opened");
+            assert_eq!((market.msk_reserve, market.seed_sompi), (SEED, SEED));
+            assert_eq!(market.seeded_by, evm_holder_v1(crate::evm::EVM_CHAIN_ID, &account(1)), "the seeder is the EVM account's id");
+            assert_eq!(s3.model_position(&class, &market.seeded_by), 0, "and holds nothing");
+            assert_eq!(s3.pending_payouts_iter().count(), 0, "no leg on a seed");
+        }
+
+        #[test]
+        fn a_buy_from_the_evm_is_a_position_in_the_evm_namespace_and_a_settlement_the_child_carries() {
+            let (p, s, class) = chain();
+            let holder = evm_holder_v1(crate::evm::EVM_CHAIN_ID, &account(1));
+            let (s3, d3) = apply_evm(&s, &p, &ctx(3, 251, 3), &[], vec![buy(0, 1, class, 100 * MSK, 0)]);
+            let market = s3.model_market(&class).expect("the market is seeded");
+            assert_eq!(market.msk_reserve, SEED + 94 * MSK, "the net leg joins the reserve, as for a carrier's buy");
+            assert!(s3.model_position(&class, &holder) > 0, "E7: the holder is the EVM account's id");
+            let settlements = s3.evm_settlements();
+            assert_eq!(settlements.len(), 1);
+            let st = settlements[0];
+            assert_eq!(
+                (st.seq, st.account, st.line_id, st.action, st.escrow_sompi),
+                (0, account(1), class, PALW_EVM_ACTION_BUY, 100 * MSK)
+            );
+            match st.outcome {
+                PalwEvmSettlementOutcomeV1::Filled { units, gross_sompi, net_sompi, price_after_sompi } => {
+                    assert_eq!(units, s3.model_position(&class, &holder));
+                    assert_eq!((gross_sompi, net_sompi), (100 * MSK, 94 * MSK));
+                    assert_eq!(price_after_sompi, market.price_sompi_per_position_v1());
+                }
+                other => panic!("a filled buy, not {other:?}"),
+            }
+            assert!(d3.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::EvmSettlement { .. })));
+            assert_eq!(s3.pending_payouts_iter().count(), 1, "the owner's leg is a coinbase payout, as always");
+            // The child drains the list before writing its own.
+            let (s4, _) = apply_evm(&s3, &p, &ctx(4, 252, 4), &[], vec![]);
+            assert!(s4.evm_settlements().is_empty(), "E5: the settlement left the state with the block that settled it");
+            assert_eq!(s4.model_position(&class, &holder), s3.model_position(&class, &holder));
+        }
+
+        #[test]
+        fn a_sell_from_the_evm_credits_through_its_settlement_and_never_the_coinbase() {
+            let (p, s, class) = chain();
+            let holder = evm_holder_v1(crate::evm::EVM_CHAIN_ID, &account(1));
+            let (s3, _) = apply_evm(&s, &p, &ctx(3, 251, 3), &[], vec![buy(0, 1, class, 100 * MSK, 0)]);
+            let held = s3.model_position(&class, &holder);
+            let (s4, _) = apply_evm(&s3, &p, &ctx(4, 252, 4), &[], vec![sell(0, 1, class, held, 0)]);
+            assert_eq!(s4.model_position(&class, &holder), 0);
+            let st = s4.evm_settlements()[0];
+            let PalwEvmSettlementOutcomeV1::Filled { units, net_sompi, gross_sompi, .. } = st.outcome else { panic!("filled") };
+            assert_eq!(units, held);
+            assert!(net_sompi > 0 && net_sompi < gross_sompi);
+            // No `sell-net` payout: the net leg rides the settlement to the EVM (E5).
+            let payouts: Vec<u64> = s4.pending_payouts_iter().map(|(_, p)| p.amount).collect();
+            assert!(!payouts.contains(&net_sompi), "the coinbase never pays an EVM holder");
+            let market = s4.model_market(&class).unwrap();
+            assert_eq!(
+                market.position_units,
+                crate::palw_model_market_v1::PALW_MODEL_SUPPLY_UNITS_V1,
+                "everything is back in the curve"
+            );
+        }
+
+        #[test]
+        fn a_refused_action_is_a_settlement_and_not_a_fault_of_the_block() {
+            let (p, s, class) = chain();
+            let (s3, _) = apply_evm(
+                &s,
+                &p,
+                &ctx(3, 251, 3),
+                &[],
+                vec![
+                    buy(0, 1, class, 10 * MSK, u64::MAX), // floor too high
+                    sell(1, 2, class, 1, 0),              // nothing held
+                    buy(2, 1, h64(0xDEAD), 10 * MSK, 0),  // no such line
+                    buy(3, 1, class, 10 * MSK, 0),        // fills
+                    buy(4, 1, h64(1), 10 * MSK, 0),       // an Active class with no seeded market (ADR-0090)
+                ],
+            );
+            let st = s3.evm_settlements();
+            assert_eq!(st.len(), 5, "every action is answered, in sequence");
+            assert!(matches!(st[4].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::MARKET_MISSING }));
+            assert!(matches!(st[0].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::BELOW_FLOOR }));
+            assert!(matches!(st[1].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::EXCEEDS_POSITION }));
+            assert!(matches!(st[2].outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::LINE_MISSING }));
+            assert!(matches!(st[3].outcome, PalwEvmSettlementOutcomeV1::Filled { .. }));
+            assert_eq!(st[0].escrow_sompi, 10 * MSK, "a refused buy's escrow is the refund the child pays");
+            // Below the fence the same actions write nothing.
+            let dormant = PalwTransitionExtrasV1 {
+                model_lines_active: true,
+                evm_market_active: false,
+                evm_actions: vec![buy(0, 1, class, MSK, 0)],
+            };
+            let (s_off, _) =
+                apply_palw_transition_v2_with_extras(&s, &p, &ctx(3, 251, 3), &[], None, false, false, false, false, &dormant)
+                    .unwrap();
+            assert!(s_off.evm_settlements().is_empty());
+            let (s_empty, _) = apply_evm(&s, &p, &ctx(3, 251, 3), &[], vec![]);
+            assert_eq!(s_off.state_root(), s_empty.state_root(), "E9: nothing moves while the fence is down");
+        }
+
+        #[test]
+        fn the_settlement_tail_rides_the_carriage_only_while_a_list_waits() {
+            let (p, s, class) = chain();
+            let (s3, d3) = apply_evm(&s, &p, &ctx(3, 251, 3), &[], vec![buy(0, 1, class, MSK, 0)]);
+            let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s3)).unwrap();
+            let decoded: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(decoded.evm_settlements.len(), 1);
+            let (s4, _) = apply_evm(&s3, &p, &ctx(4, 252, 4), &[], vec![]);
+            let bytes4 = borsh::to_vec(&PalwStateCarriageV2::from_state(&s4)).unwrap();
+            let decoded4: PalwStateCarriageV2 = borsh::from_slice(&bytes4).unwrap();
+            assert!(decoded4.evm_settlements.is_empty());
+            assert_eq!(apply_delta_v2(&s, &d3, &p).unwrap().state_root(), s3.state_root());
+            assert_eq!(revert_delta_v2(&s3, &d3, &p).unwrap().state_root(), s.state_root());
         }
     }
 }

@@ -130,6 +130,8 @@ pub struct Args {
     /// which keeps no §12 history for the pruning-point export / historical reads).
     #[serde(default)]
     pub evm_retire_206: bool,
+    /// PRIVATE devnets only: waive the EVM bridge's DNS-finality freshness gate (see `Config`).
+    pub evm_bridge_devnet_unpaused: bool,
     /// C-01 S9b-prune: ONE-SHOT, IRREVERSIBLE bulk reclamation of the legacy per-block 206 EVM state
     /// snapshot store that accumulated before `--evm-retire-206`. Runs once at startup, then a no-op.
     /// Effective only when `--evm-retire-206` is itself effective (requires `--evm-flat-authoritative`
@@ -296,6 +298,15 @@ pub struct Args {
     /// The 8/5/3/2/2 weight-plan devnet needs job counts to map to weights EXACTLY — under decay,
     /// validators that finish their quotas across different epochs drift off the plan's ratios.
     pub vlt_devnet_flat_decay: bool,
+    /// ADR-0087/0088/0089 on a PRIVATE devnet: arm `palw_model_market`, `palw_model_lines` and
+    /// `palw_model_evm` at this DAA score. Refused anywhere but devnet/simnet (the same rule as the
+    /// VLT and token fences above — a fence is a release decision on a public network).
+    pub palw_model_devnet_daa: Option<u64>,
+    /// PALW on a PRIVATE devnet: run the floor-only ruleset (the base class alone, seeded by
+    /// ADR-0076 with the whole share, `MAX/278`) instead of the shipped devnet's testnet-11 class
+    /// set, whose floor holds a sliver of the share and prices a fixture block at minutes per
+    /// producer. Devnet only.
+    pub palw_devnet_floor_only: bool,
 
     // MISAKA Compute Token Program devnet fences + fixture ops, PRIVATE devnets only —
     // same refusal rule as the VLT fences above.
@@ -430,6 +441,8 @@ impl Default for Args {
             vlt_devnet_credit_window_epochs: 8,
             vlt_shadow_only: false,
             vlt_devnet_flat_decay: false,
+            palw_model_devnet_daa: None,
+            palw_devnet_floor_only: false,
             tkn_devnet_active_daa: None,
             tkn_devnet_shadow_span: 300,
             tkn_devnet_epoch_budget_tok: 1_000,
@@ -448,6 +461,7 @@ impl Default for Args {
             evm_shadow_state_backend: false,
             evm_flat_authoritative: false,
             evm_retire_206: false,
+            evm_bridge_devnet_unpaused: false,
             evm_prune_legacy_206: false,
             evm_materialize_pp_anchor: false,
             wrpc_verbose: false,
@@ -507,6 +521,18 @@ impl Args {
         config.evm_shadow_state_backend = self.evm_shadow_state_backend; // C-01 S4: shadow dual-write
         config.evm_flat_authoritative = self.evm_flat_authoritative; // C-01 S9: flat-authoritative executor seed
         config.evm_retire_206 = self.evm_retire_206; // C-01 S9b: stop persisting the per-block 206 snapshot
+        // The EVM bridge's DNS-finality gate is a public-network safety: a deposit is credited only
+        // behind confirmed finality. A private devnet with no VLT overlay never confirms one, so a
+        // drill of the lane must waive it — and only there; anywhere else the node refuses to start.
+        if self.evm_bridge_devnet_unpaused {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--evm-bridge-devnet-unpaused is devnet/simnet only (got {net:?}): the bridge's finality gate is not a node operator's to waive on a public network."
+                );
+            }
+            config.evm_bridge_devnet_unpaused = true;
+        }
         config.evm_prune_legacy_206 = self.evm_prune_legacy_206; // C-01 S9b-prune: one-shot bulk reclamation of legacy 206
         config.evm_materialize_pp_anchor = self.evm_materialize_pp_anchor; // F2c: one-shot pp EVM anchor backfill
 
@@ -553,6 +579,51 @@ impl Args {
             panic!("--vlt-shadow-only only means something together with --vlt-devnet");
         } else if self.vlt_devnet_flat_decay {
             panic!("--vlt-devnet-flat-decay only means something together with --vlt-devnet");
+        }
+
+        // The floor-only devnet ruleset: the shipped devnet carries testnet-11's class set, so its
+        // floor holds a sliver of the share and ADR-0076 seeds it at ~MAX/12,663 — a fixture
+        // producer then prices a block at minutes. A drill of the market wants the floor's
+        // cadence, not the model tiers; this swaps in the assembly with the floor alone (MAX/278).
+        // Devnet only (the base is the devnet base), before the fences below are armed on it.
+        if self.palw_devnet_floor_only {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet) {
+                panic!(
+                    "--palw-devnet-floor-only is devnet only (got {net:?}): it swaps the ruleset for the devnet base's floor-only assembly."
+                );
+            }
+            use kaspa_consensus_core::config::params::{
+                DEVNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, palw_devnet_genesis_bonds_v1, palw_v2_params_from_artifacts_on_base,
+            };
+            config.params = palw_v2_params_from_artifacts_on_base(
+                DEVNET_PARAMS.clone(),
+                PALW_RC_GENESIS_ARTIFACT_ROOT,
+                palw_devnet_genesis_bonds_v1(),
+            )
+            .unwrap_or_else(|e| panic!("the floor-only devnet ruleset does not assemble: {e}"));
+        }
+
+        // ADR-0087/0088/0089 model-market fences on a PRIVATE devnet — the same refusal rule as
+        // the VLT block above. The three are armed together at one score: the registry needs the
+        // market and the EVM hand needs both (`validate_palw_v2` says so), and a drill wants the
+        // whole surface. They enter `consensus_params_id`, so every node of the drill must carry
+        // the same flag — a node without it fingerprints differently and refuses the others.
+        if let Some(daa) = self.palw_model_devnet_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-model-devnet is devnet/simnet only (got {net:?}). Arming a model-market fence is a consensus \
+                     change and must ship in a release, not a command line."
+                );
+            }
+            let fence = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
+            config.params.palw_model_market = fence;
+            config.params.palw_model_lines = fence;
+            config.params.palw_model_evm = fence;
+            if let Err(e) = config.params.validate_palw_v2() {
+                panic!("--palw-model-devnet={daa} produced a ruleset the node refuses: {e:?}");
+            }
         }
 
         // MISAKA Compute Token Program devnet fences — same refusal rules as the VLT block above:
@@ -1277,6 +1348,32 @@ pub fn cli() -> Command {
                  each validator finished its quota in. Devnet calibration only — production keeps real decay.")
                 .env("KASPAD_VLT_DEVNET_FLAT_DECAY"),
         )
+        .arg(
+            Arg::new("palw-model-devnet")
+                .long("palw-model-devnet")
+                .value_name("daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "MISAKA model market (ADR-0087/0088/0089) on a PRIVATE devnet: arm the market, the model registry and \
+                     the EVM window-and-hand together at this DAA score. DEVNET/SIMNET ONLY — on a public network the \
+                     fences are a release decision, not a node-operator one, and the node refuses to start. Every node of \
+                     the drill must carry the same value (it is in the consensus fingerprint).",
+                )
+                .env("KASPAD_PALW_MODEL_DEVNET"),
+        )
+        .arg(
+            arg!(--"palw-devnet-floor-only" "MISAKA PALW on a PRIVATE devnet: run the floor-only ruleset (the base class alone, seeded \
+                 at MAX/278 by ADR-0076) instead of the shipped devnet's testnet-11 class set, whose floor share prices a fixture \
+                 block at minutes per producer. DEVNET ONLY; every node of a drill must carry it (it is in the consensus fingerprint).")
+                .env("KASPAD_PALW_DEVNET_FLOOR_ONLY"),
+        )
+        .arg(
+            arg!(--"evm-bridge-devnet-unpaused" "MISAKA EVM lane on a PRIVATE devnet: waive the bridge's DNS-finality freshness gate so deposit \
+                 claims queue and the template carries the EVM payload without a VLT overlay confirming an anchor. \
+                 DEVNET/SIMNET ONLY; on a public network the node refuses to start.")
+                .env("KASPAD_EVM_BRIDGE_DEVNET_UNPAUSED"),
+        )
         .arg(arg!(--utxoindex "Enable the UTXO index").env("KASPAD_UTXOINDEX"))
         .arg(
             Arg::new("max-tracked-addresses")
@@ -1487,6 +1584,11 @@ impl Args {
             evm_shadow_state_backend: arg_match_unwrap_or::<bool>(&m, "evm-shadow-state-backend", defaults.evm_shadow_state_backend),
             evm_flat_authoritative: arg_match_unwrap_or::<bool>(&m, "evm-flat-authoritative", defaults.evm_flat_authoritative),
             evm_retire_206: arg_match_unwrap_or::<bool>(&m, "evm-retire-206", defaults.evm_retire_206),
+            evm_bridge_devnet_unpaused: arg_match_unwrap_or::<bool>(
+                &m,
+                "evm-bridge-devnet-unpaused",
+                defaults.evm_bridge_devnet_unpaused,
+            ),
             evm_prune_legacy_206: arg_match_unwrap_or::<bool>(&m, "evm-prune-legacy-206", defaults.evm_prune_legacy_206),
             evm_materialize_pp_anchor: arg_match_unwrap_or::<bool>(
                 &m,
@@ -1578,6 +1680,8 @@ impl Args {
             ),
             vlt_shadow_only: arg_match_unwrap_or::<bool>(&m, "vlt-shadow-only", defaults.vlt_shadow_only),
             vlt_devnet_flat_decay: arg_match_unwrap_or::<bool>(&m, "vlt-devnet-flat-decay", defaults.vlt_devnet_flat_decay),
+            palw_model_devnet_daa: m.get_one::<u64>("palw-model-devnet").copied().or(defaults.palw_model_devnet_daa),
+            palw_devnet_floor_only: arg_match_unwrap_or::<bool>(&m, "palw-devnet-floor-only", defaults.palw_devnet_floor_only),
             tkn_devnet_active_daa: m.get_one::<u64>("tkn-devnet").copied(),
             tkn_devnet_shadow_span: arg_match_unwrap_or::<u64>(&m, "tkn-devnet-shadow-span", defaults.tkn_devnet_shadow_span),
             tkn_devnet_epoch_budget_tok: arg_match_unwrap_or::<u64>(

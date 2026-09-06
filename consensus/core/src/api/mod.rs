@@ -39,6 +39,41 @@ use crate::BlockHash;
 
 pub use self::stats::{BlockCount, ConsensusStats};
 
+/// ADR-0088 Decision 12: one line's row as a reader sees it, with what the row alone does not say
+/// — whether it is a written row or the founding line synthesised from its class, and the payout
+/// payloads of the bonds its roles name (looked up from the bond registry at the same tip).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwModelLineRowReadV1 {
+    pub line_id: kaspa_hashes::Hash64,
+    pub line: crate::palw_model_lines_v1::PalwModelLineV1,
+    /// False for a founding line nothing has touched (Decision 1: no row until something changes).
+    pub has_row: bool,
+    pub owner_payout_payload: Option<kaspa_hashes::Hash64>,
+    pub developer_payout_payload: Option<kaspa_hashes::Hash64>,
+    pub maintainer_payout_payload: Option<kaspa_hashes::Hash64>,
+}
+
+/// ADR-0088 Decision 12: `getPalwModelLine`'s answer — the row, the current root, the roots in
+/// force for the class at the tip.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwModelLineReadV1 {
+    pub row: PalwModelLineRowReadV1,
+    /// The current version's root, when the node holds that version.
+    pub current_root: Option<kaspa_hashes::Hash64>,
+    /// Decision 3's set for the line's CLASS at `tip_daa`.
+    pub roots_in_force: Vec<kaspa_hashes::Hash64>,
+    pub tip_daa: u64,
+}
+
+/// ADR-0088 Decision 12: `getPalwModelVersion`'s answer — the row and its evaluations, each
+/// with the bond that posted it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwModelVersionReadV1 {
+    pub version: crate::palw_model_lines_v1::PalwModelVersionV1,
+    pub evaluations: Vec<(crate::palw_state_v2::PalwBondKeyV2, crate::palw_model_lines_v1::PalwModelEvaluationV1)>,
+    pub tip_daa: u64,
+}
+
 pub mod args;
 pub mod counters;
 pub mod stats;
@@ -253,6 +288,64 @@ pub trait ConsensusApi: Send + Sync {
         _session_id: kaspa_hashes::Hash64,
         _side: crate::palw_state_v2::PalwCourtSideV1,
     ) -> Option<crate::palw_state_v2::PalwCourtCloseGroupV2> {
+        None
+    }
+
+    /// **ADR-0087 Decision 8: a line's market as the tip holds it.** Keyed by LINE (ADR-0088
+    /// Decision 9): a class's founding line has the class id as its line id, so a class-keyed
+    /// reader still reads what ADR-0087 wrote. `None` when the line (or its class) does not exist;
+    /// a line with no market row yet reads as an unopened market (the whole supply in the curve,
+    /// no MSK) beside its class's status, so a reader can quote before the first move. The `bool`
+    /// says whether a row exists.
+    fn palw_model_market_v1(
+        &self,
+        _line_id: kaspa_hashes::Hash64,
+    ) -> Option<(crate::palw_model_market_v1::PalwModelMarketV1, bool, crate::palw_state_v2::PalwClassStatusV2)> {
+        None
+    }
+
+    /// ADR-0087 Decision 8: every position a holder has at the tip, by line.
+    fn palw_model_positions_v1(&self, _holder: kaspa_hashes::Hash64) -> Vec<(kaspa_hashes::Hash64, u64)> {
+        Vec::new()
+    }
+
+    /// **ADR-0088 Decision 12: a line as the tip holds it** — the row (synthesised for a founding
+    /// line nothing touched), the current version's root, and the roots in force for its class at
+    /// the tip DAA. `None` when neither a row nor a class of that id exists.
+    fn palw_model_line_v1(&self, _line_id: kaspa_hashes::Hash64) -> Option<PalwModelLineReadV1> {
+        None
+    }
+
+    /// ADR-0088 Decision 12: one version of a line, with its usage and its evaluations. `None`
+    /// when the node holds no such row (never published, or evicted past the history window).
+    fn palw_model_version_v1(&self, _line_id: kaspa_hashes::Hash64, _version: u32) -> Option<PalwModelVersionReadV1> {
+        None
+    }
+
+    /// ADR-0088 Decision 12: every line of a class, the founding line included (synthesised when
+    /// it has no row). `None` when the class is not registered.
+    fn palw_model_lines_v1(&self, _class_id: kaspa_hashes::Hash64) -> Option<Vec<PalwModelLineRowReadV1>> {
+        None
+    }
+
+    /// **ADR-0089 Decision 2 / Decision 9 — the window at the tip.** The fold's rows at the
+    /// tip flattened for the EVM's read precompiles (`PalwChainStateV2::evm_view_v1`) together
+    /// with the three market fences resolved at the tip's DAA score, so `eth_call` /
+    /// `eth_estimateGas` register the SAME handler set the executor registers for the block
+    /// built on this tip (parity). `None` off `ConsensusV2` or before the first fold was
+    /// written — the simulator then leaves the market's doors unregistered.
+    fn palw_evm_view_v1(
+        &self,
+    ) -> Option<(Arc<crate::evm::model_market::PalwEvmViewV1>, crate::evm::model_market::PalwEvmMarketFencesV1)> {
+        None
+    }
+
+    /// ADR-0088 Decision 12: the proposals attached to a line, keyed by proposal id. `None` when
+    /// the line does not exist.
+    fn palw_model_proposals_v1(
+        &self,
+        _line_id: kaspa_hashes::Hash64,
+    ) -> Option<Vec<(kaspa_hashes::Hash64, crate::palw_model_lines_v1::PalwModelProposalV1)>> {
         None
     }
 

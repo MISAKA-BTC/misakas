@@ -564,6 +564,40 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
     }
 }
 
+/// **The floor's recompute kernels** (ADR-0086 Decision 2): the RC floor recomputes a checkpoint's
+/// state like every other class, so a seat holds its own state for the named anchor an opening
+/// carries. Lifted from the tests that had it; the engine is the floor's own.
+pub struct Base0RecomputeKernelsV1<'a> {
+    engine: crate::engine::Base0Engine<'a>,
+    cache: crate::engine::KvCache,
+}
+
+impl<'a> Base0RecomputeKernelsV1<'a> {
+    pub fn new(artifact: &'a crate::artifact::Base0ArtifactV1) -> Self {
+        Self { engine: crate::engine::Base0Engine::new(artifact), cache: crate::engine::KvCache::new(artifact) }
+    }
+}
+
+impl Base0FpRecomputeKernelsV1 for Base0RecomputeKernelsV1<'_> {
+    fn forward_no_capture(&mut self, token: usize, position: usize) -> Result<(), Base0FpRecomputeError> {
+        self.engine
+            .forward_token(&mut self.cache, token, position)
+            .map(|_| ())
+            .map_err(|e| Base0FpRecomputeError::Engine(format!("{e:?}")))
+    }
+    fn state_chunks(&self, profile: &PalwShapeProfileV3, positions: u32) -> Result<Vec<Vec<u8>>, Base0FpRecomputeError> {
+        let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions)
+            .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")))?;
+        let mut chunks = Vec::with_capacity(geometry.chunk_count() as usize);
+        for index in 0..geometry.chunk_count() {
+            let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
+                .ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?;
+            chunks.push(self.cache.state_chunk_bytes(&entry).ok_or(Base0FpRecomputeError::StateIsNotTheMaps { chunk_index: index })?);
+        }
+        Ok(chunks)
+    }
+}
+
 // =================================================================================================
 // One forward pass, not two
 // =================================================================================================
