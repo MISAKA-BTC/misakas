@@ -1300,6 +1300,19 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         })
     }
 
+    /// **ADR-0062 D3's responder, for the hybrid tier** — the twin of the dense tier's, and for the
+    /// same reason (mainnet audit 2026-09-06, C-5). `supports_court()` above is true exactly when
+    /// this backend holds the registered graph and its plan; the method that answer promises was
+    /// the trait's refusal until this line.
+    fn disclose_trace_event(
+        &self,
+        material: &[u8],
+        row: u32,
+        tile: u8,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1, String> {
+        crate::produce::base0_disclose_trace_event_v1(material, row, tile)
+    }
+
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
         let retention = crate::produce::base0_material_decode_any_v1(material).ok()?;
         let binding = retention.binding().clone();

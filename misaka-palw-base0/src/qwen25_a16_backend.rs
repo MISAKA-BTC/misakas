@@ -1343,6 +1343,24 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         })
     }
 
+    /// **ADR-0062 D3's responder, for the dense tier** (mainnet audit 2026-09-06, C-5).
+    ///
+    /// This impl block declared `supports_court() == true` — whose contract is exactly this method
+    /// and `bisect_prefix_state` — while taking the trait's
+    /// `Err("this family has no data-availability responder")`, so on a network that arms
+    /// `palw_da_court` (testnet-11 at DAA 1,900; a card from block one) every accusation against a
+    /// dense-tier claim won by silence for the price of one bond. The body is the shared one: it
+    /// reads the scheme, the vocabulary and the decode count off the capture's own binding, which
+    /// is why this is a delegation and not a second implementation.
+    fn disclose_trace_event(
+        &self,
+        material: &[u8],
+        row: u32,
+        tile: u8,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1, String> {
+        crate::produce::base0_disclose_trace_event_v1(material, row, tile)
+    }
+
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
         let retention = crate::produce::base0_material_decode_any_v1(material).ok()?;
         let binding = retention.binding().clone();
