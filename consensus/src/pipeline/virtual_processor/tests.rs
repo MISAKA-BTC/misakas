@@ -11654,7 +11654,8 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
     let one_carriage = vp.palw_state_v2_store.read().tip_record().unwrap().unwrap().carriage_borsh.len() as u64;
     let grew = vp.palw_state_v2_store.read().tip_bytes_decoded() - baseline;
     assert_eq!(
-        grew, 0,
+        grew,
+        0,
         "the read-side impls decoded {grew} B of carriage ({} materializations of {one_carriage} B) for one unmoved tip",
         grew / one_carriage.max(1)
     );
@@ -11759,4 +11760,43 @@ async fn palw_v2_the_producer_facts_read_paths_materialize_the_tip_once_per_tip(
         grew / one_carriage.max(1)
     );
     assert!(!first_outpoints.is_empty(), "the fixture must actually have locked collateral, or the measurement is vacuous");
+}
+
+/// **An exhausted sink search HOLDS; it does not kill the node.**
+///
+/// `sink_search_algorithm` seeds its heap from `tips` and grows it only by parents at or above the
+/// finality point, so the heap empties exactly when the walk reached the finality frontier with no
+/// UTXO-valid candidate. That used to end in `expect("valid sink must exist")` — the process died
+/// and the log named nothing, which is how a 2026-09-07 field report of three identical crashes on
+/// `testnet-main-65e6a80e` arrived with no way to tell which wall the search hit.
+///
+/// The empty-tips call is the smallest instance of that shape: nothing to pop on the first
+/// iteration. Virtual must come back sitting on the previous sink, with no candidates and with the
+/// diff walked back to it, so the caller's `pick_virtual_parents(prev_sink, [])` and
+/// `utxo_multisets_store.get(prev_sink)` still find what they need.
+#[tokio::test]
+async fn an_exhausted_sink_search_holds_at_the_previous_sink() {
+    use crate::model::stores::{
+        pruning::PruningStoreReader, utxo_multisets::UtxoMultisetsStoreReader, virtual_state::VirtualStateStoreReader,
+    };
+    let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    ctx.build_block_template_row(0..3).validate_and_insert_row().await.assert_valid_utxo_tip();
+
+    let vp = ctx.consensus.virtual_processor();
+    let pruning_point = vp.pruning_point_store.read().pruning_point().unwrap();
+    let virtual_read = vp.virtual_stores.upgradable_read();
+    let prev_state = virtual_read.state.get().unwrap();
+    let prev_sink = prev_state.ghostdag_data.selected_parent;
+    let finality_point = vp.virtual_finality_point(&prev_state.ghostdag_data, pruning_point);
+    let mut diff = prev_state.utxo_diff.clone().to_reversed();
+    let mut bond_view = vp.initial_active_bond_view();
+
+    // No tips at all: the heap is empty before the first pop, which is the exhaustion path.
+    let (sink, candidates) =
+        vp.sink_search_algorithm(&virtual_read, &mut diff, &mut bond_view, prev_sink, vec![], finality_point, pruning_point);
+
+    assert_eq!(sink, prev_sink, "an exhausted search must hold virtual where it was");
+    assert!(candidates.is_empty(), "and merge nothing while it holds");
+    assert!(vp.utxo_multisets_store.get(sink).is_ok(), "the held sink must still be one the caller can read a multiset for");
 }

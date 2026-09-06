@@ -11967,12 +11967,57 @@ impl VirtualStateProcessor {
         // is the heaviest. Reported once per search when virtual settles lower than it.
         let mut gate_rejected: Option<(BlockHash, DnsReorgOutcome, BlueWorkType)> = None;
 
+        // **Why the search failed, counted while it fails.** An exhausted search used to end in
+        // `expect("valid sink must exist")`, which killed the process and named nothing: the three
+        // ways a candidate leaves this loop unaccepted are told apart only by `debug!` lines, so an
+        // operator whose node died at default log level had no way to say WHICH wall it hit. A
+        // field report of three identical crashes (2026-09-07, `testnet-main-65e6a80e`) is what
+        // this counts for. Cheap: three counters and one hash on a path that ends the search.
+        let tips_searched = heap.len();
+        let (mut rejected_utxo, mut rejected_finality, mut rejected_gate) = (0usize, 0usize, 0usize);
+        let mut first_utxo_invalid: Option<BlockHash> = None;
+
         // We maintain the following invariant: `heap` is an antichain.
         // It holds at step 0 since tips are an antichain, and remains through the loop
         // since we check that every pushed block is not in the past of current heap
         // (and it can't be in the future by induction)
         loop {
-            let candidate = heap.pop().expect("valid sink must exist").block.hash;
+            // **An exhausted heap is a diagnosis, not a reason to die.**
+            //
+            // The heap is seeded from `tips` and grows only by a candidate's parents that are AT OR
+            // ABOVE the finality point, so it empties exactly when the walk reached the finality
+            // frontier without finding one block whose UTXO state this node can compute. That is a
+            // real and reachable condition — a node whose ruleset disagrees with the chain it is
+            // following finds every block invalid, and an unorphaned block can put a tip on a branch
+            // that does not contain `prev_sink` — and the answer to it is to stay where we are and
+            // SAY SO, not to kill the process and leave a `RUST_BACKTRACE` where the reason should
+            // be. Virtual holds at the previous sink; the next block re-runs the search.
+            //
+            // `prev_sink` is UTXO-valid by construction (it is the previous virtual's selected
+            // parent, whose state was committed), so walking the diff back to it restores exactly
+            // the state this function was entered with — which is what the caller's
+            // `pick_virtual_parents(prev_sink, [])` and `utxo_multisets_store.get(prev_sink)` need.
+            let Some(popped) = heap.pop() else {
+                error!(
+                    "sink search exhausted every candidate: virtual HOLDS at {prev_sink}. \
+                     Searched {tips_searched} tip(s) down to finality {finality_point} (pruning {pruning_point}) and rejected \
+                     {rejected_utxo} for invalid UTXO state{}, {rejected_finality} for violating finality, {rejected_gate} at the DNS reorg gate. \
+                     A node that rejects every block down to finality is not following the same rules as the chain it is fed: \
+                     compare the `Consensus params fingerprint` this node printed at startup against the network's, and check \
+                     whether this data directory was synced by a different build.",
+                    match first_utxo_invalid {
+                        Some(h) => format!(" (first {h})"),
+                        None => String::new(),
+                    }
+                );
+                let restored = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, prev_sink);
+                assert_eq!(
+                    restored, prev_sink,
+                    "the previous sink {prev_sink} is not UTXO-valid — virtual cannot hold anywhere, which is a corrupted store rather than a rejected chain"
+                );
+                return (prev_sink, VecDeque::new());
+            };
+            let candidate = popped.block.hash;
             // QR reachability hardening: skip a candidate whose reachability is missing (half-pruned)
             // instead of panicking; it is below finality and recovery will complete the prune. Consensus-neutral.
             let candidate_at_or_above_finality = match self.reachability_service.try_is_chain_ancestor_of(finality_point, candidate) {
@@ -12072,16 +12117,24 @@ impl VirtualStateProcessor {
                         gate_rejected =
                             Some((candidate, dns_outcome, self.ghostdag_store.get_blue_work(candidate).unwrap_or_default()));
                     }
+                    rejected_gate += 1;
                     debug!(
                         "Block candidate {} rejected by the DNS finality reorg gate ({:?}); ignored from Virtual chain.",
                         candidate, dns_outcome
                     );
                 } else {
+                    rejected_utxo += 1;
+                    first_utxo_invalid.get_or_insert(candidate);
                     debug!("Block candidate {} has invalid UTXO state and is ignored from Virtual chain.", candidate)
                 }
             } else if finality_point != pruning_point {
+                rejected_finality += 1;
                 // `finality_point == pruning_point` indicates we are at IBD start hence no warning required
                 warn!("Finality Violation Detected. Block {} violates finality and is ignored from Virtual chain.", candidate);
+            } else {
+                // IBD start (`finality_point == pruning_point`): no warning, but it is still a
+                // rejection, and the exhaustion report is the only place it is ever counted.
+                rejected_finality += 1;
             }
             // PRUNE SAFETY: see comment within [`resolve_virtual`]
             let prune_guard = self.pruning_lock.blocking_read();
