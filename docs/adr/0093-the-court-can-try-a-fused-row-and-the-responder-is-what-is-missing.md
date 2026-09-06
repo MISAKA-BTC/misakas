@@ -109,8 +109,14 @@ whether the release has none. Two consequences, both deliberate:
   place to stop than either end. §6's order of work puts it last for that reason, and §5's
   invariant 3 is what says the responder works before anyone relies on it.
 
-`supports_court()` must also come to mean both verbs — disclosure *and* dissection — or a family
-with one and not the other advertises a court turn it cannot take.
+**And `supports_court()` must be SPLIT, not widened.** A first draft of this ADR said it should
+come to mean both verbs. It must not: it is one boolean over two unrelated turns, it already means
+"this family can disclose and take an arithmetic turn" after the C-5 repair gave all three families
+`disclose_trace_event`, and `kaspad/src/palw_producer.rs:735` and `palw_panel.rs:2675` branch on it.
+Widening it before any family implements `attn_tile_claim` would flip every family to `false` and
+report a disclosure gap that does not exist. So the dissection turn gets its own predicate,
+`supports_dissection()`, defaulted `false` and true exactly where `attn_tile_claim` is implemented.
+Two turns, two answers.
 
 **Decision 3 — the panel files the moves; the backend never sees a session.** The panel's court arm
 gains: on an accusation at a fused site, fold the tile claims into the root and file
@@ -149,9 +155,10 @@ operator decision and ADR-0092 §7 already records it.
 
 ## 6. Order of work
 
-1. The trait verb and its `None` default, and `supports_court()` widened to mean both verbs — small,
-   and it makes the gap visible in the type system rather than in a comment. Decision 2's narrowing
-   of the fold's mercy arm is NOT here; it is step 5.
+1. The trait verb and its `None` default, plus `supports_dissection()` beside `supports_court()` and
+   a test that pins every shipped family at `false` today — small, behaviour-neutral, and it makes
+   the gap visible in the type system rather than in a comment. Decision 2's narrowing of the fold's
+   mercy arm is NOT here; it is step 5.
 2. `attn_tile_claim` for one family, with invariant 2's drill vector. The floor class first: it is
    the one whose arithmetic is integer end to end.
 3. The panel's two arms, against that family.

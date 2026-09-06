@@ -292,6 +292,47 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         false
     }
 
+    /// **ADR-0093 Decision 1: the fused-attention responder's whole backend obligation.**
+    ///
+    /// The online-softmax statistics this family's attention formed over `[first, first + count)`
+    /// of the disputed site's key positions — `(m*, S*, V*)`, the triple
+    /// [`crate::palw_attn_dissect::palw_attn_fold_v1`] composes. Because the fold composes, a
+    /// family that can answer for ONE history tile can answer every rung of a dissection: the
+    /// panel folds tiles into children, children into parents, and parents into the root claim.
+    /// A backend therefore never sees a session and never implements a court.
+    ///
+    /// `None` by default, the shape `disclose_trace_event` uses: a family that has not implemented
+    /// it cannot take a dissection's turn, and [`Self::supports_dissection`] is where it says so
+    /// before a court is armed over it rather than after it has been convicted.
+    ///
+    /// **Exact or absent, never approximate.** `palw_attn_fold_check_v1` is integer arithmetic and
+    /// does not care why two numbers disagree, so a family that answers with statistics that are
+    /// close but not exact convicts itself while holding the claim's collateral (ADR-0093
+    /// Decision 4). Returning `None` is always safe; returning a rounded triple is not.
+    fn attn_tile_claim(
+        &self,
+        _material: &[u8],
+        _site: &crate::palw_attn_court_v1::PalwAttnBottomSiteV1,
+        _first: u64,
+        _count: u64,
+    ) -> Option<crate::palw_attn_dissect::PalwAttnRangeClaimV1> {
+        None
+    }
+
+    /// **Can this backend take a FUSED dissection's turn?** — deliberately not
+    /// [`Self::supports_court`], which is a different turn.
+    ///
+    /// ADR-0093 Decision 2: `supports_court` means "this family discloses and can take an
+    /// arithmetic turn", which all three shipped families do since the 2026-09-06 audit's C-5
+    /// repair, and two call sites branch on it. One boolean cannot answer for two unrelated turns,
+    /// so widening it would report a disclosure gap that does not exist. This is the second answer.
+    ///
+    /// `false` until [`Self::attn_tile_claim`] is implemented, and a family that overrides one
+    /// without the other is advertising a turn it cannot take.
+    fn supports_dissection(&self) -> bool {
+        false
+    }
+
     /// **The terminal move's evidence: everything the court needs to recompute step `index`.**
     ///
     /// Returned by BOTH sides, and deliberately the same call for both: an honest executor closing
