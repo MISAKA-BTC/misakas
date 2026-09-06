@@ -353,6 +353,13 @@ jobs:
         run: cargo nextest run
         env:
           MISAKA_PALW_POW_FIXTURE: "1"
+          # This step runs the WHOLE workspace, `misaka-palw-derive` included, so it needs the
+          # same declaration the dedicated step below makes: CI holds no Qwen checkpoint, and
+          # `tests/corpus_width.rs` fails by name rather than passing quietly when it cannot
+          # measure. Without this the suite went red on a host fact — and only after the ADR-0069
+          # failure ahead of it was fixed, because nextest stops at the first failure and this one
+          # had never been reached.
+          MISAKA_PALW_WIDTH_NO_TOKENIZER: "1"
 
       # **`--lib` is absent on purpose. Do not add it.**
       #
