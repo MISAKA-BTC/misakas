@@ -491,6 +491,12 @@ pub struct VirtualStateProcessor {
     /// for; before it, it convicts exactly as it does today. Resolved in exactly one place,
     /// `palw_court_responder_coverage_at`, at the BLOCK's own DAA.
     pub(super) palw_court_responder_coverage: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0072 Decision 8's free-prompt half, `None` on every shipped preset** (mainnet audit
+    /// 2026-09-06, M-3). Past it the transition DERIVES a free-prompt claim's retention obligation
+    /// from this block's DAA and its chunk count from the run's own shape; before it both are the
+    /// numbers the producer wrote, one of which bought permanent immunity from the DA court.
+    /// Resolved in exactly one place, [`Self::palw_fp_da_pins_at`], at the BLOCK's own DAA.
+    pub(super) palw_fp_da_pins: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0087 Decision 6's fence, `None` on every shipped preset.** Past it `ModelBuy` and
     /// `ModelSell` are accepted (a sell's signature checked here, at acceptance); before it both
     /// are refused by name and the fold never sees them. Resolved at the BLOCK's DAA.
@@ -951,6 +957,7 @@ impl VirtualStateProcessor {
             palw_panel_da: params.palw_panel_da_fence(),
             palw_court_ladder: params.palw_court_ladder_fence(),
             palw_court_responder_coverage: params.palw_court_responder_coverage_fence(),
+            palw_fp_da_pins: params.palw_fp_da_pins_fence(),
             palw_model_market: params.palw_model_market_fence(),
             palw_model_lines: params.palw_model_lines_fence(),
             palw_model_evm: params.palw_model_evm_fence(),
@@ -7078,8 +7085,20 @@ impl VirtualStateProcessor {
             // a struct the fold reads is the one fault no golden can see, and this field decides
             // whether a producer's collateral is destroyed.
             court_responder_coverage_active: self.palw_court_responder_coverage_at(daa_score),
+            // Written explicitly for the same reason as the line above: this one decides how long a
+            // producer owes its retained trace, and an unwritten default would silently give every
+            // claim the producer's own number back.
+            fp_da_pins_active: self.palw_fp_da_pins_at(daa_score),
             evm_actions: Vec::new(),
         }
+    }
+
+    /// **ADR-0072 Decision 8's free-prompt half, resolved in exactly one place, at the BLOCK's own
+    /// DAA.** The retention obligation a free-prompt claim records is a function of the block that
+    /// accepted it, so two nodes folding one block must read one answer — the reason every fence
+    /// beside this one reads the block's score and not the tip's.
+    fn palw_fp_da_pins_at(&self, daa_score: u64) -> bool {
+        self.palw_fp_da_pins.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **The fused terminal's responder-coverage rule, resolved in exactly one place** — the reason

@@ -10637,8 +10637,10 @@ fn apply_object(
             work_leaves,
             prompt_token_ids_hash,
             // Audit H-4: the committed length is a field of the JOB and therefore of the claim id;
-            // it is no longer part of the work identity, because a prefix of a run is that run.
-            decode_tokens_executed: _,
+            // it is no longer part of the WORK IDENTITY, because a prefix of a run is that run.
+            // Past `Params::palw_fp_da_pins` it is read for one other thing — the run's retained
+            // chunk shape, which is what bounds an accusation's row range (ADR-0072 Decision 8).
+            decode_tokens_executed,
             trace_root,
             output_root,
             execution_root,
@@ -10765,8 +10767,37 @@ fn apply_object(
                 trace_root: *trace_root,
                 output_root: *output_root,
                 execution_root: *execution_root,
-                trace_chunk_count: *trace_chunk_count,
-                trace_retention_daa: *trace_retention_daa,
+                // **The DA obligation is the CHAIN's, not the producer's** (ADR-0072 Decision 8,
+                // free-prompt half; mainnet audit 2026-09-06 M-3).
+                //
+                // Both were carried verbatim, and `trace_retention_daa` is the only bound on when
+                // a `DefaultAccused` may be filed (`DaOutsideRetention`, this file's accusation
+                // arm). A producer writing `0` was permanently immune to the DA court for free —
+                // and so was an honest one, who is *also* better off writing `0` because it
+                // immunises against griefing accusations that pause the claim. A field with that
+                // shape does not need an attacker; it drifts to `0` on its own, and the court the
+                // card arms becomes decorative.
+                //
+                // The attempt lane pins these by EQUALITY at admission, because an attempt rides
+                // its block's header and knows the DAA. A commitment rides an ordinary transaction
+                // built before anyone knows which block accepts it, so equality is unsatisfiable
+                // and the chain DERIVES instead — the same decision at the only layer holding the
+                // input. `ctx.daa_score` is the same value this record's `accepted_daa` takes,
+                // which is what the accusation arm anchors on.
+                //
+                // The chunk count is the run's own shape: `⌈decode_tokens_executed / 256⌉`, the
+                // formula `PalwFpWorkerResultV3::validate_against_request` already enforces on the
+                // worker. It bounds `palw_da_max_accusable_rows_v1` and nothing else.
+                trace_chunk_count: if builder.extras.fp_da_pins_active {
+                    decode_tokens_executed.div_ceil(crate::palw_freeprompt_v3::PALW_FP_TRACE_CHUNK_EVENTS_V3).max(1)
+                } else {
+                    *trace_chunk_count
+                },
+                trace_retention_daa: if builder.extras.fp_da_pins_active {
+                    ctx.daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(builder.params))
+                } else {
+                    *trace_retention_daa
+                },
                 reserved,
                 // Zero, deliberately (ADR-0044): a commitment riding a transaction is not a
                 // block's work — β credit here would let commitment-stuffing pump a chain's live
@@ -10914,6 +10945,12 @@ pub struct PalwTransitionExtrasV1 {
     /// "Three lanes wrote three faces of this shape in one batch and a fourth would have been
     /// written next; separate faces let a policy be added to one and forgotten in the other."
     pub court_responder_coverage_active: bool,
+    /// `Params::palw_fp_da_pins` resolved at the block's DAA (ADR-0072 Decision 8, free-prompt
+    /// half; mainnet audit 2026-09-06 M-3). Below it a free-prompt claim's DA obligation is the two
+    /// numbers its own producer wrote; past it the transition derives the retention window from
+    /// this block's DAA and pins the chunk count to the run's own shape. `false` by `Default`, so
+    /// every existing caller and every dormant network is byte-identical.
+    pub fp_da_pins_active: bool,
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -20718,6 +20755,129 @@ pub(crate) mod tests {
         PalwConsensusObjectV2::MaterialDisclosed { claim, event_index: index, disclosure, signature: vec![5; 8] }
     }
 
+    /// **ADR-0072 Decision 8's free-prompt half: the DA obligation is the chain's, and a zero no
+    /// longer buys immunity** (mainnet audit 2026-09-06 M-3).
+    ///
+    /// Both halves, which is what makes this a rule rather than an agreement with the patch. The
+    /// DORMANT half pins the defect — a producer writing `trace_retention_daa = 0` is refused
+    /// every accusation forever, at zero cost, and an HONEST producer is weakly better off writing
+    /// it too because it also immunises against griefing accusations that pause the claim, so the
+    /// field drifts to zero with no adversary at all. The ARMED half pins the repair, and its last
+    /// assertion pins that the repair does not turn the retention window into an unbounded
+    /// accusation window: SA-1's rule that the whole disclose window must fit inside the
+    /// obligation still closes it.
+    #[test]
+    fn a_free_prompt_claims_retention_is_the_chains_obligation_and_a_zero_no_longer_buys_immunity() {
+        let p = params();
+        let obligation = crate::palw_producer_v2::palw_min_trace_retention_daa_v1(&p);
+        assert_eq!(obligation, 10 + 10 + 20 + 500, "this fixture's windows are the ones the arithmetic below assumes");
+
+        // The producer writes the hostile value: no retention at all, and one chunk.
+        let mut commit = fp_commit(0xFC, 60, 3);
+        let PalwConsensusObjectV2::FreePromptCommitted {
+            executor_pubkey,
+            decode_tokens_executed,
+            trace_chunk_count,
+            trace_retention_daa,
+            ..
+        } = &mut commit
+        else {
+            unreachable!("fp_commit builds a commitment")
+        };
+        *executor_pubkey = fp_executor_key();
+        *decode_tokens_executed = 300;
+        *trace_chunk_count = 1;
+        *trace_retention_daa = 0;
+
+        // Both worlds are folded from the same parent and the same object; only the fence moves.
+        let seats = vec![
+            PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) },
+            PalwPanelSeatV2 { bond: bond_key(2), operator_id: h64(91) },
+        ];
+        let bind = PalwConsensusObjectV2::PanelBound { claim: h64(0xFC), anchor: h64(77), seats };
+        let fold = |armed: bool| -> (PalwChainStateV2, PalwStateParamsV2) {
+            let mut objects = register_class_and_bond();
+            for object in objects.iter_mut() {
+                if let PalwConsensusObjectV2::BondRegistered { pubkey, .. } = object {
+                    *pubkey = fp_executor_key();
+                }
+            }
+            objects.push(PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(2),
+                pubkey: vec![8; 4],
+                operator_pubkey: op_key(22),
+                collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A22),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            });
+            let extras = PalwTransitionExtrasV1 { fp_da_pins_active: armed, ..Default::default() };
+            let apply = |parent: &PalwChainStateV2, c: &PalwBlockContextV2, objects: &[PalwConsensusObjectV2]| {
+                apply_palw_transition_v2_with_extras(parent, &p, c, objects, None, false, false, false, true, &extras)
+                    .expect("transition applies")
+                    .0
+            };
+            let s1 = apply(&PalwChainStateV2::genesis(), &ctx(1, 100, 1), &objects);
+            let s2 = apply(&s1, &ctx(2, 500, 2), std::slice::from_ref(&commit));
+            (apply(&s2, &ctx(3, 501, 3), std::slice::from_ref(&bind)), p.clone())
+        };
+        let accuse = |state: &PalwChainStateV2, at: u64| {
+            let extras = PalwTransitionExtrasV1::default();
+            apply_palw_transition_v2_with_extras(
+                state,
+                &p,
+                &ctx(4, at, 4),
+                &[da_accuse(h64(0xFC), 0)],
+                None,
+                false,
+                false,
+                false,
+                true,
+                &extras,
+            )
+            .map(|(s, _)| s)
+        };
+
+        // DORMANT: byte-identical to today. The record keeps the producer's zero…
+        let (dormant, _) = fold(false);
+        let claim = dormant.claim(&h64(0xFC)).expect("the claim was recorded");
+        assert_eq!(claim.trace_retention_daa, 0, "dormant, the field is still the producer's");
+        assert_eq!(claim.trace_chunk_count, 1, "…and so is the chunk count");
+        // …and every accusation against it refuses forever, which IS the defect, pinned.
+        assert!(
+            matches!(accuse(&dormant, 502), Err(PalwStateV2Error::DaOutsideRetention { .. })),
+            "dormant, a producer that wrote 0 is immune to the DA court"
+        );
+
+        // ARMED: the record carries the chain's obligation…
+        let (armed, _) = fold(true);
+        let claim = armed.claim(&h64(0xFC)).expect("the claim was recorded");
+        assert_eq!(claim.accepted_daa, 500, "the anchor the obligation is measured from");
+        assert_eq!(
+            claim.trace_retention_daa,
+            500 + obligation,
+            "armed, the obligation is accepted_daa + the chain's minimum — the attempt lane's own function"
+        );
+        assert_eq!(
+            claim.trace_chunk_count,
+            300u32.div_ceil(crate::palw_freeprompt_v3::PALW_FP_TRACE_CHUNK_EVENTS_V3),
+            "armed, the chunk count is the run's own shape"
+        );
+        // …and an accusation inside it is admitted on its merits rather than refused by arithmetic.
+        assert!(
+            !matches!(accuse(&armed, 502), Err(PalwStateV2Error::DaOutsideRetention { .. })),
+            "armed, writing 0 buys nothing: {:?}",
+            accuse(&armed, 502).err()
+        );
+        // The window still CLOSES: an accusation whose disclose window runs past the obligation is
+        // refused, armed or not — SA-1's own rule, which this must not weaken.
+        let late = 500 + obligation;
+        assert!(
+            matches!(accuse(&armed, late), Err(PalwStateV2Error::DaOutsideRetention { .. })),
+            "the retention window is still a window"
+        );
+    }
+
     /// **DA-1: an accusation outside the claim's retention window is refused.**
     ///
     /// Both edges, because "inside the window" is two statements: not before the claim exists, and
@@ -23955,6 +24115,7 @@ pub(crate) mod tests {
                 evm_market_active: true,
                 evm_actions: actions,
                 court_responder_coverage_active: false,
+                fp_da_pins_active: false,
             }
         }
 
@@ -24151,6 +24312,7 @@ pub(crate) mod tests {
                 evm_market_active: false,
                 evm_actions: vec![buy(0, 1, class, MSK, 0)],
                 court_responder_coverage_active: false,
+                fp_da_pins_active: false,
             };
             let (s_off, _) =
                 apply_palw_transition_v2_with_extras(&s, &p, &ctx(3, 251, 3), &[], None, false, false, false, false, &dormant)

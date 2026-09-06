@@ -1087,6 +1087,21 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         if c.trace_chunk_count == 0 {
             return Err(PalwFpV3Error::ZeroTraceChunks);
         }
+        // **`trace_manifest_root` is asked NOTHING here, and that is recorded rather than repaired**
+        // (ADR-0072 Decision 8; mainnet audit 2026-09-06 M-3).
+        //
+        // The attempt lane pins its manifest root to a function of a value the panel replays. This
+        // lane cannot: `fp_trace_manifest_root_v3` hashes the per-chunk EVENT digests, which the
+        // chain does not hold and cannot recompute — and `palw_fp_objects_v3`'s extraction does not
+        // carry the field onto the consensus object at all, so no court, no seat and no transition
+        // ever reads it. A refusal here would be a stateless-admission change on a live chain (a
+        // commitment testnet-11 accepts today), so it belongs behind the same `palw_fp_da_pins`
+        // question the transition's derivation sits behind, and it buys nothing while the field
+        // carries no obligation. The state of affairs is pinned instead, by
+        // `palw_fp_objects_v3::tests::the_free_prompt_lanes_trace_manifest_root_is_carried_by_nothing`,
+        // so it can neither widen nor close silently. The worker-side refusal of a zero manifest
+        // (`PalwFpWorkerResultV3::validate_against_request`) is unchanged and is where a producer
+        // still learns it retained nothing.
         Ok(())
     }
 

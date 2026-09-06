@@ -1042,6 +1042,52 @@ pub struct Params {
     /// this is a fence and not a bug fix: nodes on either side would grade the same proof
     /// differently. Read it through `palw_court_ladder_fence` only.
     pub palw_court_ladder: Option<ForkActivation>,
+    /// **ADR-0072 Decision 8 on the FREE-PROMPT lane: the DA obligation is the chain's, not the
+    /// producer's** (mainnet audit, 2026-09-06, M-3). `None` on every shipped preset, so a build
+    /// carrying this field and one predating it are one network.
+    ///
+    /// Decision 8 pinned the three DA fields on the attempt lane by equality
+    /// (`palw_admission_v2::check_palw_attempt_da_pins_v1`, and the header stage above through
+    /// [`Self::palw_attempt_header_pins`]) and the free-prompt lane never got it. Two of the three
+    /// consequences are real:
+    ///
+    /// * `trace_retention_daa` is stored verbatim and is the ONLY bound on when a `DefaultAccused`
+    ///   may be filed (`palw_state_v2`'s `DaOutsideRetention` arm). A producer writing `0` is
+    ///   permanently immune to the DA court at zero cost — and writing `0` is **weakly dominant
+    ///   for an honest producer too**, because it also immunises against griefing accusations that
+    ///   pause the claim, so the field drifts to zero network-wide with no adversary at all and the
+    ///   court a card arms becomes decorative.
+    /// * `trace_chunk_count` is bounded only by `!= 0` while it decides
+    ///   `palw_da_max_accusable_rows_v1`. It is honest at `1` for every run inside
+    ///   `PALW_FP_TRACE_CHUNK_EVENTS_V3`, so this half is inert at shipped budgets and is pinned
+    ///   for the reason Decision 8 gives rather than for a live consequence.
+    ///
+    /// **Why a DERIVATION and not an equality, unlike the attempt lane.** An attempt rides its
+    /// block's header and knows that block's DAA score, so Decision 8 can ask for equality. A
+    /// free-prompt commitment rides an ordinary transaction built before anyone knows which block
+    /// will accept it, so an equality would be unsatisfiable. Past this fence the transition WRITES
+    /// the obligation — `accepted_daa + palw_min_trace_retention_daa_v1` — onto the claim record
+    /// and the carried value decides nothing. Same decision, at the only layer holding the input.
+    ///
+    /// **`trace_manifest_root` is deliberately NOT in scope.** On this lane it is
+    /// `fp_trace_manifest_root_v3` over the per-chunk EVENT digests, which the chain does not hold
+    /// and cannot recompute — and nothing in consensus reads the field on either lane, because the
+    /// extraction walk does not carry it onto `PalwConsensusObjectV2` at all. Pinning it would mean
+    /// carrying it there and giving the DA court something to bind a disclosure to, which is a
+    /// `PALW_STATE_V2_VERSION` move belonging to the record's owner. Recorded, and pinned by test
+    /// (`the_free_prompt_lanes_trace_manifest_root_is_carried_by_nothing`) so the gap can neither
+    /// widen nor close silently.
+    ///
+    /// **A bare fence with no companion value, deliberately** — the [`Self::palw_context_ladder`]
+    /// rule for its reason: the retention length is `palw_min_trace_retention_daa_v1` of the
+    /// bundle's own windows and the chunk size is a module constant, so there is no duration beside
+    /// this height for [`Self::consensus_identity_id`] to normalise away (the `palw_bond_maturity`
+    /// hazard).
+    ///
+    /// **TOP LEVEL rather than in the V2 bundle**, for the `palw_unavailable_abstains` reason: a
+    /// fence inside the bundle moves `palw_ruleset_id_v2`, which `for_each_fence` never descends
+    /// into, so every old/new pair would fail the handshake outright instead of peering.
+    pub palw_fp_da_pins: Option<ForkActivation>,
     /// **ADR-0087 Decision 6 — the model market is a consensus rule armed by activation.** `None`
     /// on every shipped preset: below it `ModelBuy`/`ModelSell` are refused by name at acceptance
     /// and no market exists; past it the fold opens a class's market on its first buy. The
@@ -1710,6 +1756,20 @@ impl Params {
             return Err(PalwModeV2Error::Invalid(
                 "palw_attempt_header_pins is armed on a network that is not ConsensusV2: the DA pins it enforces are fields \
                  of a V2 attempt envelope and their derivation is the bundle's state params (ADR-0072 Decision 8)",
+            ));
+        }
+        // **The free-prompt DA pin is a V2-lane rule too, and it must not be armable without a
+        // lane** (mainnet audit, 2026-09-06 — M-3). The obligation it derives is written onto a
+        // `PalwClaimStateV2` record by the V2 transition, and its length comes from the bundle's own
+        // state params; armed on a network with no bundle it names a rule with nothing to apply it
+        // to while `consensus_params_id` says the network armed something.
+        if let Some(pins) = self.palw_fp_da_pins
+            && pins != ForkActivation::never()
+            && !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_))
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_fp_da_pins is armed on a network that is not ConsensusV2: the retention obligation it derives is \
+                 written onto a V2 claim record and its length is the bundle's state params (ADR-0072 Decision 8)",
             ));
         }
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
@@ -2558,6 +2618,10 @@ impl Params {
         if self.palw_attempt_header_pins == Some(ForkActivation::never()) {
             self.palw_attempt_header_pins = None;
         }
+        // ADR-0072 D8 on the free-prompt lane, a bare fence: the same collapse for the same reason.
+        if self.palw_fp_da_pins == Some(ForkActivation::never()) {
+            self.palw_fp_da_pins = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -2729,6 +2793,17 @@ impl Params {
     /// Is ADR-0084 U-08's court ladder in force at `daa_score`? `false` on every shipped preset.
     pub fn palw_court_ladder_active_at(&self, daa_score: u64) -> bool {
         matches!(self.palw_court_ladder_fence(), Some(fence) if fence.is_active(daa_score))
+    }
+
+    /// **ADR-0072 Decision 8 on the free-prompt lane, read in ONE place** — `Some` only on a
+    /// `ConsensusV2` network that has armed it, for [`Self::palw_court_ladder_fence`]'s reason. The
+    /// transition derives the claim's retention obligation past this fence and takes the producer's
+    /// number before it.
+    pub fn palw_fp_da_pins_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_fp_da_pins) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
     }
 
     /// ADR-0087 Decision 6's fence with the mode condition folded in — `Some` only on a
@@ -3018,6 +3093,11 @@ impl Params {
             h.write(b"palw_attempt_header_pins");
             h.write(pins.daa_score().to_le_bytes());
         }
+        // ADR-0072 D8 on the free-prompt lane. Some-only, for the reason above it.
+        if let Some(pins) = self.palw_fp_da_pins {
+            h.write(b"palw_fp_da_pins");
+            h.write(pins.daa_score().to_le_bytes());
+        }
         h.finalize()
     }
 
@@ -3114,6 +3194,7 @@ impl Params {
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
+            palw_fp_da_pins,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -3392,6 +3473,12 @@ impl Params {
         if let Some(activation) = palw_attempt_header_pins.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0072 D8 on the free-prompt lane. Some-only and appended AFTER its siblings, for the
+        // reason `palw_chunk_cap_charge` states: the schedule id hashes these in sequence, and a
+        // `u64::MAX`-for-absence arm would put eight bytes into every preset that leaves it `None`.
+        if let Some(activation) = palw_fp_da_pins.as_mut() {
+            fork(activation, visit);
+        }
 
         let Some(dns) = dns_params.as_mut() else {
             absent = u64::MAX;
@@ -3595,6 +3682,7 @@ impl Params {
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
+            palw_fp_da_pins,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -3900,6 +3988,11 @@ impl Params {
             h.write(b"palw_attempt_header_pins");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0072 D8 on the free-prompt lane. Some-only, and both ids gain it together.
+        if let Some(activation) = palw_fp_da_pins {
+            h.write(b"palw_fp_da_pins");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
         // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
         // is the same value the V2 handshake exchanges (two commitments cannot drift when one is
@@ -4199,6 +4292,7 @@ impl Params {
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
+            palw_fp_da_pins: self.palw_fp_da_pins,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -5133,6 +5227,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
+    palw_fp_da_pins: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -5291,6 +5386,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
+    palw_fp_da_pins: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -5431,6 +5527,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
+    palw_fp_da_pins: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -8667,6 +8764,15 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     base.palw_prompt_ids_merkle = Some(ForkActivation::always());
     base.palw_panel_da = Some(ForkActivation::always());
     base.palw_da_court = Some(ForkActivation::always());
+    // **A court is only armable over a lane whose obligation the chain defines** (ADR-0072
+    // Decision 8; mainnet audit 2026-09-06 M-3). `palw_da_court` above convicts a producer that
+    // will not open an accused event inside `claim.trace_retention_daa` — and on the free-prompt
+    // lane that number is written by the accused, so a producer that writes `0` is immune and an
+    // honest one is weakly better off writing `0` too. Past this fence the transition derives the
+    // obligation from the accepting block's DAA, exactly as the attempt lane's admission pins it.
+    // Armed together with the court, from block one, because a fresh card has no history for
+    // either to be retroactive about.
+    base.palw_fp_da_pins = Some(ForkActivation::always());
     base
 }
 
@@ -9364,6 +9470,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
+    palw_fp_da_pins: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -12988,6 +13095,7 @@ mod consensus_params_id_tests {
             ("palw_difficulty_priced_rows", p.palw_difficulty_priced_rows.is_some()),
             ("palw_receipt_rows_unpriced", p.palw_receipt_rows_unpriced.is_some()),
             ("palw_attempt_header_pins", p.palw_attempt_header_pins.is_some()),
+            ("palw_fp_da_pins", p.palw_fp_da_pins.is_some()),
         ]
     }
 
@@ -13038,6 +13146,7 @@ mod consensus_params_id_tests {
             ("palw_context_ladder", carded.palw_context_ladder),
             ("palw_receipt_rows_unpriced", carded.palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", carded.palw_attempt_header_pins),
+            ("palw_fp_da_pins", carded.palw_fp_da_pins),
             ("palw_certification_rent", carded.palw_certification_rent),
             ("palw_chunk_cap_charge", carded.palw_chunk_cap_charge),
             ("palw_prompt_ids_merkle", carded.palw_prompt_ids_merkle),
@@ -13518,6 +13627,67 @@ mod consensus_params_id_tests {
             palw_v2_params_from_artifacts_on_base(base, PALW_RC_GENESIS_ARTIFACT_ROOT, vec![]).expect("a zero-seat card assembles"),
         );
         assert_eq!(carded.palw_attempt_header_pins, Some(ForkActivation::always()));
+    }
+
+    /// **The free-prompt DA pin is dormant on every shipped preset and visible the moment it is
+    /// not** (ADR-0072 Decision 8, free-prompt half; mainnet audit 2026-09-06 — M-3).
+    ///
+    /// The same four claims the header-stage fence above is held to, because a bare fence can fail
+    /// any one of them alone: `None` everywhere shipped, so no live chain's fingerprint moves and
+    /// no claim it already recorded is re-derived; `Some(never())` is absence; arming it separates
+    /// identities; and it is refused on a network with no V2 lane to write a claim record on.
+    #[test]
+    fn the_free_prompt_da_pin_fence_is_dormant_on_every_shipped_preset_and_visible_the_moment_it_is_not() {
+        for p in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS] {
+            assert!(p.palw_fp_da_pins.is_none(), "{}: a shipped preset states no free-prompt DA pin fence", p.net);
+        }
+        let rc = palw_rc_shipped_params();
+        assert!(
+            rc.palw_fp_da_pins.is_none(),
+            "testnet-11's stored claims recorded the retention their own producers wrote; deriving it there is a decision \
+             and a flag day, not an inheritance"
+        );
+        assert!(devnet_shipped_params().palw_fp_da_pins.is_none(), "devnet inherits the dormant state too");
+        // Dormant means the fence reader says so as well, which is what the transition asks.
+        assert!(rc.palw_fp_da_pins_fence().is_none(), "the reader is the one place the rule is decided");
+
+        let mut spelled_out = rc.clone();
+        spelled_out.palw_fp_da_pins = Some(ForkActivation::never());
+        assert_eq!(spelled_out.consensus_identity_id(), rc.consensus_identity_id(), "Some(never()) is absence");
+
+        let mut scheduled = rc.clone();
+        scheduled.palw_fp_da_pins = Some(ForkActivation::new(9_000_000));
+        assert_eq!(
+            scheduled.consensus_identity_id(),
+            rc.consensus_identity_id(),
+            "an armed and an un-armed build must peer until the height fires"
+        );
+        assert_ne!(scheduled.consensus_params_id(), rc.consensus_params_id(), "…while the ruleset id still names the rule");
+        assert_ne!(scheduled.consensus_schedule_id(), rc.consensus_schedule_id(), "…and the operator log names the height");
+
+        let mut armed = rc.clone();
+        armed.palw_fp_da_pins = Some(ForkActivation::always());
+        assert_ne!(armed.consensus_params_id(), rc.consensus_params_id(), "arming a state-root fence moves the ruleset id");
+        assert_ne!(armed.consensus_identity_id(), rc.consensus_identity_id(), "…and at genesis the handshake must see it");
+        armed.validate_palw_v2().expect("the RC is ConsensusV2, so the fence has a lane to apply to");
+        assert_eq!(armed.palw_fp_da_pins_fence(), Some(ForkActivation::always()));
+
+        // Fail-closed: no V2 bundle, no claim record to write an obligation onto.
+        let mut laneless = TESTNET_PARAMS;
+        laneless.palw_fp_da_pins = Some(ForkActivation::always());
+        let e = laneless.validate_palw_v2().expect_err("a fence that hashes and cannot fire is refused at assembly");
+        assert!(format!("{e:?}").contains("palw_fp_da_pins"), "{e:?}");
+        let mut laneless_dormant = TESTNET_PARAMS;
+        laneless_dormant.palw_fp_da_pins = Some(ForkActivation::never());
+        laneless_dormant.validate_palw_v2().expect("never() names no rule on any network");
+
+        // A card states it from genesis, beside the `palw_da_court` it is what makes meaningful.
+        let base = mainnet_card_base_v1(mainnet_v2_mint_base(), false);
+        let carded = palw_rc_arm_phase1(
+            palw_v2_params_from_artifacts_on_base(base, PALW_RC_GENESIS_ARTIFACT_ROOT, vec![]).expect("a zero-seat card assembles"),
+        );
+        assert_eq!(carded.palw_fp_da_pins, Some(ForkActivation::always()));
+        assert_eq!(carded.palw_da_court, Some(ForkActivation::always()), "the court it makes meaningful is armed with it");
     }
 
     /// **A card certifies the free-prompt lane of the classes it registers; the RC's pinned set

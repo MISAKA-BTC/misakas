@@ -188,8 +188,20 @@ where
                 decode_tokens_executed: commitment.decode_tokens_executed,
                 trace_root: commitment.trace_root,
                 output_root: commitment.output_root,
-                // The DA trio and the court binding travel WITH the claim: they are the
-                // producer's obligations, and the panel/court read them off the state record.
+                // The DA obligations and the court binding travel WITH the claim: the panel and
+                // the court read them off the state record.
+                //
+                // **TWO of the three DA fields, and the third is carried by nothing** (mainnet
+                // audit 2026-09-06 M-3). `trace_manifest_root` is not among these fields and is
+                // not on `PalwClaimStateV2` either, so no court, no seat and no transition on this
+                // lane ever reads it — the attempt lane pins it to a value the panel replays, and
+                // this lane's is `fp_trace_manifest_root_v3` over the per-chunk EVENT digests,
+                // which the chain does not hold and cannot recompute. Giving it an obligation
+                // means carrying it here and giving the DA court something to bind a disclosure
+                // to, which is a `PALW_STATE_V2_VERSION` move belonging to the record's owner.
+                // Recorded rather than repaired, and pinned by
+                // `the_free_prompt_lanes_trace_manifest_root_is_carried_by_nothing` below so the
+                // gap can neither widen nor close silently.
                 execution_root: commitment.execution_root,
                 trace_chunk_count: commitment.trace_chunk_count,
                 trace_retention_daa: commitment.trace_retention_daa,
@@ -393,6 +405,59 @@ mod tests {
             }
             other => panic!("expected a free-prompt object, got {other:?}"),
         }
+    }
+
+    /// **The third DA field is carried by nothing, and that is pinned rather than repaired**
+    /// (ADR-0072 Decision 8; mainnet audit 2026-09-06 M-3).
+    ///
+    /// `trace_retention_daa` and `trace_chunk_count` reach the state record and are given the
+    /// chain's own values past `Params::palw_fp_da_pins`. `trace_manifest_root` reaches nothing:
+    /// it is inside `fp_claim_id_v3`, so moving it renames the claim, and it is inside NOTHING
+    /// else — the extracted object is otherwise byte-identical. This is the "pin the limitation,
+    /// not just the behaviour" form: it PASSES today, because today the field carries no
+    /// obligation, and it fails the day someone carries it, forcing them to decide what obligation
+    /// it then bears.
+    #[test]
+    fn the_free_prompt_lanes_trace_manifest_root_is_carried_by_nothing() {
+        let fp = freeprompt();
+        let extract = |p: &PalwFpCommitmentTxPayloadV3| {
+            palw_fp_objects_from_accepted_txs_v3(
+                &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(p).unwrap())],
+                net(),
+                &fp,
+                h64(1),
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                |_, _, _, _| true,
+            )
+        };
+        let honest = payload(96, 256);
+        let mut substituted = honest.clone();
+        substituted.commitment.trace_manifest_root = h64(0xDEAD);
+        assert_ne!(
+            substituted.commitment.trace_manifest_root, honest.commitment.trace_manifest_root,
+            "the fixture must actually move the field"
+        );
+
+        let a = extract(&honest);
+        let b = extract(&substituted);
+        assert_eq!((a.objects.len(), b.objects.len()), (1, 1), "both are admissible commitments");
+        // The claim id DOES move, because the field is inside `fp_claim_id_v3` — which is the only
+        // thing on this lane that reads it.
+        let (mut object_a, mut object_b) = (a.objects[0].object.clone(), b.objects[0].object.clone());
+        let (PalwConsensusObjectV2::FreePromptCommitted { claim: claim_a, .. }, PalwConsensusObjectV2::FreePromptCommitted { claim: claim_b, .. }) =
+            (&mut object_a, &mut object_b)
+        else {
+            panic!("both extractions produce a free-prompt commitment");
+        };
+        assert_ne!(claim_a, claim_b, "the manifest root is inside the claim id, so it names the claim");
+        // …and with the name normalised away, nothing else differs: no field of the consensus
+        // object carries the manifest root, so no rule downstream can be about it.
+        *claim_b = *claim_a;
+        assert_eq!(
+            object_a, object_b,
+            "no field of the extracted object carries `trace_manifest_root` — if this fails, the field now travels and \
+             something must decide what obligation it bears (ADR-0072 Decision 8)"
+        );
     }
 
     /// A leaf count above the ladder is refused outright by the stateless rule, so it never
