@@ -6351,6 +6351,35 @@ with tile capture — the offline probe on run 10's material measured interval 0
 state it recomputes without capture and memoizes, as the seat does; not in this tree yet, so free-prompt claims past ~20
 decode tokens on graph-v5 cannot be licensed by the interval lane — Studio's 256-token cap stands, for this reason now.
 
+### 10t. What testnet-11 added to the devnet's proof: four operator defects between an honest answer and a receipt (2026-09-05)
+
+The devnet licensed a 300-token claim ten minutes after the binding (§10s). Taking the same claim through testnet-11 found
+four things the devnet could not, because on the devnet one process is executor, seat and producer at once:
+
+1. **A bond sized for the canonical job cannot carry a long one.** Exposure is `pwu × slash 5`; a 300-token graph-v5 claim
+   is ~42 M leaves ≈ 211 M sompi, and a bond may hold half its collateral. slot-04 (265 M, sized from the class's 6.6 M-leaf
+   canonical job) had every long commitment dropped by the chain with `FreePromptExposureCeiling`. slot-05 was created at
+   600 M (`POST /pool/v1/slots {"mode":"fp","bond_collateral":…}`, new) and carries exactly one such claim at a time.
+2. **The pool's submitter staged the question, not the answer.** `fp-autosubmit.py` called the rail without `--capture`, so
+   the node retained a 3,372-byte `FPM1` beside a 183 MB capture in the gateway's traces — no seat could ever have been
+   served an interval. Fixed; the live claim's `FPC1` was assembled by hand (it is the `FPM1` body plus the capture as a
+   borsh `Vec<u8>`).
+3. **A free-prompt slot's node could not open what it retained.** `run-slot.sh` passed no `--palw-class-artifact`, so
+   `resolve_backend` failed and every interval request was answered "not held". Fixed for `mode=fp` slots.
+4. **Two artifacts of one class, and the seats resolved the wrong one.** `qwen25-1.5b-a16.palwart` and
+   `bound-candidate.palwart` differ only in the tokenizer commitment; the node's holding map keeps the FIRST file loaded for
+   the family, so every seat resolved the unbound one, recomputed a different job context, and refused the executor's honest
+   answer: "a served answer's ids recompute output root 91cfcdaa… and the claim committed 0658d893…". The probe
+   `probe_output_root` (new, ignored) recomputed `0658d893…` from the served envelope with the bound artifact and
+   `91cfcdaa…` with the unbound one, which named the defect in one run. The seats now list only the bound artifact, and the
+   first seat to do so drew `[212, 189, 130, 195]` of 299 and asked the executor.
+
+**And one bound that was simply too small.** An interval opening is computed, not fetched: on .113 (eight shared cores)
+interval 212 took 398 s where the devnet's quiet machine takes 17–90 s, so every answer arrived after the seat's 120 s
+solicited window and was dropped as unsolicited. `PULL_SOLICITED_TTL` is now 900 s (`85e44275`), and the fleet runs
+`c71613157fd396d6`. The first claim (`019efe78…`) still ran out its receipt window during the diagnosis and voids
+unanswered; the retry fires as soon as the bond's exposure is released.
+
 ### 10s. The 300-token free-prompt claim licenses again: the opener resumes from a recomputed anchor (2026-09-05, `594015b9`, fleet `56f77a3d`)
 
 Run 10 named the cause (§10q addendum): a fold holds no checkpoint state, so the executor's opener replayed every
@@ -6388,3 +6417,59 @@ four CLI verbs read and move; 12 tests pin the ADR's invariants, and the design'
 corrected by them (the second buy releases 16,824 positions, not 12,846; a full sell returns the
 1,880 MSK reserve, not 3,014). Not done: the explorer page, the devnet buy/sell/retire/drain drill,
 and the activation height on testnet-11.
+
+### 10u. The first 300-token free-prompt receipt on the public chain — and the two defects between it and a quorum (2026-09-05)
+
+**`ibm-node0` filed a `Valid` receipt for claim `019efe78…` at 16:06:39+02:00**: four drawn intervals
+(187, 101, 62, 11 of 299) replayed against state the seat recomputed for itself, no history fetched.
+That is the devnet's proof repeated on the public chain — the fold opener of `594015b9` works where
+the 1,991 s genesis walk could not. Two things stood between that receipt and the panel's quorum of
+three, and both were found by reading the seats rather than the executor.
+
+**One class, two artifacts — the fifth instance, on the seat that never drew.** `seat2` warned every
+three minutes that "a served answer's ids recompute output root `91cfcdaa…` and the claim committed
+`0658d893…`", and refused the answer before any replay. Nothing was wrong with the answer: the seat
+loaded `/root/palw-class/qwen25-1.5b-a16.palwart` where every other seat loads
+`bound-candidate.palwart`, holdings deduplicate per family so the unbound file won, and the class
+facts that go into `palw_fp_job_context_v3` were a different model's. The two files are the same
+size and differ in sha256 (`a8c4e53e…` vs `3f8fc506…`) — a difference nothing on the host printed.
+Copied and swapped (`c-seat2.sh.pre-bound`), the seat drew intervals on its first tick.
+
+**Nothing bounded the number of intervals one executor opens at once.** The gossip lane refuses a
+second asker for a pair already being opened, but three seats × four drawn intervals are twelve
+DISTINCT pairs, and the executor ran six to eight fold replays concurrently. On a 24 GB host that is
+12 GB of swap: openings went from ~30 s to 137–398 s, the same interval was recomputed for each
+asker (187 twice, 101 twice, 11 three times), and twice the node stopped answering for forty minutes
+with no line in its log and would not take SIGINT — SIGKILL both times. `1d81feec` gives the panel a
+`served_openings` cache keyed by the request as served and an `opening_gate` that puts one opening
+at a time on a node; the same work then costs the same CPU and the first answer arrives in a
+fraction of the time. **Fleet load is a live variable, not a constant:** four hosted producer slots
+sharing the executor's box is what put it into swap in the first place.
+
+### 10v. LICENSED: the 300-token free-prompt claim carries a panel quorum on the public chain (2026-09-05 16:59Z)
+
+Claim `019efe78…` — 300 decode tokens, 299 intervals, class `4277d84f…` (`qwen25-a16`), executor bond
+`8c52206c…:0` on pool slot-05 — is **`receipt_licensed`**. Three seats replayed four drawn intervals
+each against state they recomputed for themselves, and **not one of them fetched a capture**:
+
+| seat | drew | `Valid` filed |
+|---|---|---|
+| ibm node0 | 187, 101, 62, 11 | 14:06:39Z |
+| .113 node (seat 6) | 90, 218, 287, 206 | 15:21:26Z |
+| seat2 (5.104.81.23) | 278, 222, 159, 47 | 16:52Z |
+
+The answer the gateway returned at 06:22Z recomputes the root the chain licensed —
+`output_root 0658d893…` on both sides, `job_context_hash acf9093d…`, 300 ids. `derived-verify`
+declines it by design (ADR-0078 X4: a prose answer carries no derivation and still certifies), so
+the check is the root, not the DSL.
+
+**A third serving defect, and the one that explains the silence.** `serve_interval_opening` marked a
+pair in flight, awaited the blocking opener, and cleared the mark on the NEXT LINE — which never
+runs when the future is dropped. Two of seat2's intervals were computed, not delivered, and then
+permanently unaskable: every later ask was refused as `Throttled`, which is logged at debug, so the
+lane went silent rather than wrong. The fact that named it was **zero cache hits** while a seat
+asked every minute for bytes the executor was holding. `16df8d7e` makes the mark an RAII guard;
+the blocking task is not cancellable, so the opening still lands in the cache — and the moment
+seat2 asked again, `request 0x9f` and `request 0x2f` were answered from cache in milliseconds and
+the seat held four. **A slow answer is a lost answer on this lane; the cache is what makes the
+second ask cheap enough to win.**

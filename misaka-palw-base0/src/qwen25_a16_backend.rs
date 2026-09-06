@@ -3035,6 +3035,70 @@ mod free_prompt_tests {
 /// A diagnostic, never part of the suite: open intervals of a staged free-prompt capture
 /// (`MISAKA_PROBE_MATERIAL`, FPC1) with the real artifact (`MISAKA_PALW_ARTIFACT`) and report
 /// what the opener says, interval by interval (`MISAKA_PROBE_INTERVALS`, comma-separated).
+/// A diagnostic, never part of the suite: recompute a free-prompt claim's output root from a
+/// served `FPA1` answer envelope (`MISAKA_ANSWER_FILE`) with a named artifact
+/// (`MISAKA_PALW_ARTIFACT`), so the number a seat computes can be compared with the number the
+/// chain committed without waiting for a seat's next duty tick.
+#[cfg(test)]
+mod probe_output_root {
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+
+    /// A diagnostic, never part of the suite: recompute a free-prompt claim's output root from a
+    /// served `FPA1` answer envelope (`MISAKA_ANSWER_FILE`) with a named artifact
+    /// (`MISAKA_PALW_ARTIFACT`), so the number a seat computes can be compared with the number the
+    /// chain committed without waiting for a seat's next duty tick.
+    #[test]
+    #[ignore]
+    fn recompute_the_output_root_of_a_served_answer() {
+        let Ok(answer_path) = std::env::var("MISAKA_ANSWER_FILE") else { return };
+        let Ok(artifact_path) = std::env::var("MISAKA_PALW_ARTIFACT") else { return };
+        let network = std::env::var("MISAKA_NETWORK_ID").unwrap_or_else(|_| "testnet-11".to_string());
+        let bytes = std::fs::read(&answer_path).expect("the answer file reads");
+        let answer = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(&bytes).expect("an FPA1 envelope");
+        let job = &answer.material.job;
+        eprintln!(
+            "job: class {} decode_limit {} prompt_ids {} output_ids {}",
+            job.class_id,
+            job.decode_token_limit,
+            answer.material.prompt_token_ids.len(),
+            answer.output_token_ids.len()
+        );
+        eprintln!("job id: {}", kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job));
+        let file = std::fs::read(&artifact_path).expect("the artifact reads");
+        let artifact = std::sync::Arc::new(crate::artifact::decode_artifact_file_v1(&file).expect("the artifact decodes"));
+        let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(1 << 26, 20, 2).expect("court params");
+        for row in crate::classes::canonical_classes_v1(&court) {
+            let Ok(backend) = super::Qwen25A16Backend::from_registered_profile_in_lane_v1(
+                artifact.clone(),
+                network.as_bytes().to_vec(),
+                row.profile.clone(),
+                row.canonical_job,
+                row.source,
+            ) else {
+                continue;
+            };
+            let root: Option<kaspa_hashes::Hash64> = backend.fp_output_root_v1(job, &answer.output_token_ids);
+            let ctx = backend.fp_job_context_v1(job);
+            let intervals = backend.fp_interval_count_for(
+                ctx.as_ref().map(|c| c.declared_prefill_tokens).unwrap_or(0),
+                ctx.as_ref().map(|c| c.exact_decode_tokens).unwrap_or(0),
+            );
+            let covered = ctx.as_ref().map(|c| backend.checkpoint_covered_bound_for_context_v1(c));
+            eprintln!(
+                "  {:<34} profile {}  ctx {}  output_root {}  intervals {:?}  covered_bound {:?}  prefill {:?} decode {:?}",
+                row.model_id,
+                &row.profile.shape_profile_id().to_string()[..16],
+                ctx.as_ref().map(|c| c.context_hash().to_string()[..16].to_string()).unwrap_or_else(|| "-".into()),
+                root.map(|r| r.to_string()).unwrap_or_else(|| "-".into()),
+                intervals,
+                covered,
+                ctx.as_ref().map(|c| c.declared_prefill_tokens),
+                ctx.as_ref().map(|c| c.exact_decode_tokens)
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod probe_open_interval {
     #[test]

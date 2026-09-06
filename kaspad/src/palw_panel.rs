@@ -329,6 +329,28 @@ pub struct PalwPanelService {
     /// single leaf once named (ADR-0086 Decision 6). The challenger's half prosecutes a claim in
     /// here whether or not `--palw-challenge` challenges everything; bounded, newest refused.
     seat_faults: std::sync::Mutex<HashMap<Hash64, (u64, u64)>>,
+    /// **What this node has already opened, so a second ask is not a second replay.**
+    ///
+    /// Keyed by the request as it was served — the claim, the request index, and the disputed
+    /// leaves the annex was built for, which are read off the CHAIN and move as court sessions
+    /// open. Everything else that shapes an opening (the retained capture, the class, the prompt)
+    /// is fixed for the life of a claim, so a hit is the same bytes the work would have produced.
+    ///
+    /// Measured on testnet-11: one interval of a 300-token claim costs 137–398 s of fold, a seat
+    /// draws four, and a panel needs three seats. Without this the executor recomputed each
+    /// opening for every asker and every re-ask — it served interval 187 twice, 101 twice, 11
+    /// three times — and the node had no CPU left to mine, so the chain fell to a block an hour
+    /// while it re-derived answers it had just thrown away.
+    served_openings: std::sync::Mutex<Vec<(Hash64, u32, Vec<u64>, Vec<u8>)>>,
+    /// **One opening at a time on this node.** The gossip lane already refuses a SECOND asker for
+    /// a pair being opened, but a seat draws four intervals and asks for all four at once, and two
+    /// seats draw eight — every one of them a fold replay wanting gigabytes. Measured on
+    /// testnet-11: eight at once put a 24 GB box 12 GB into swap, every opening slowed from ~30 s
+    /// to 137–398 s, and the executor stopped answering entirely for forty minutes with no line in
+    /// its log — a wedge that took SIGKILL. Queued, the same eight cost the same total CPU and the
+    /// FIRST answer arrives in a fraction of the time. Taken on a blocking thread, never on the
+    /// runtime's.
+    opening_gate: std::sync::Mutex<()>,
     /// Fired by `signal_exit` so this service's `start` future can finish. Both panel loops are
     /// `loop { sleep; work }` with nothing else that a shutdown could cancel, so without it the
     /// AsyncRuntime's shutdown join waits on a future that never completes. Measured on
@@ -458,6 +480,8 @@ impl PalwPanelService {
             bond,
             class_holdings,
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
+            served_openings: std::sync::Mutex::new(Vec::new()),
+            opening_gate: std::sync::Mutex::new(()),
             seat_faults: std::sync::Mutex::new(HashMap::new()),
             shutdown: SingleTrigger::default(),
         }
@@ -3859,6 +3883,28 @@ impl PalwPanelService {
                 .collect(),
             _ => Vec::new(),
         };
+        if let Some(hit) = self.cached_opening_v1(&claim, interval_index, &disputed) {
+            info!(
+                "[{PALW_PANEL}] claim {claim}: request {interval_index:#x} answered from this node's own opening cache ({} bytes)",
+                hit.len()
+            );
+            return Some(hit);
+        }
+        let _gate = self.opening_gate.lock().unwrap_or_else(|e| e.into_inner());
+        // Somebody ahead in the queue may have opened exactly this request while we waited.
+        if let Some(hit) = self.cached_opening_v1(&claim, interval_index, &disputed) {
+            info!(
+                "[{PALW_PANEL}] claim {claim}: request {interval_index:#x} was opened while this one queued ({} bytes)",
+                hit.len()
+            );
+            return Some(hit);
+        }
+        let remember = |opened: Option<Vec<u8>>| -> Option<Vec<u8>> {
+            if let Some(bytes) = opened.as_deref() {
+                self.remember_opening_v1(claim, interval_index, &disputed, bytes);
+            }
+            opened
+        };
         let serve = |backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
                      capture: &[u8],
                      prompt_ids: &[u32],
@@ -3904,7 +3950,7 @@ impl PalwPanelService {
             let backend = self.resolve_backend(&session, payload.material.job.class_id, facts.artifact_root).ok()?;
             // The ids the interval consumed: the user's own, hash-bound to the job by
             // `palw_fp_capture_decode_v1` before this line is reached. Never logged (SA-7).
-            return serve(backend.as_ref(), &payload.capture, &payload.material.prompt_token_ids, "free-prompt capture");
+            return remember(serve(backend.as_ref(), &payload.capture, &payload.material.prompt_token_ids, "free-prompt capture"));
         }
         // A raw family capture — the attempt lane's retention (ADR-0084 Decision 4). The prompt is
         // the anchor's derivation, which the asking seat re-derives on its own; an opening over
@@ -3915,7 +3961,30 @@ impl PalwPanelService {
         };
         let (_, prompt) = backend.job_for_anchor(shape.job_context.job_id).ok()?;
         let prompt_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
-        serve(backend.as_ref(), &bytes, &prompt_ids, "retained capture")
+        remember(serve(backend.as_ref(), &bytes, &prompt_ids, "retained capture"))
+    }
+
+    /// The opening this node already computed for exactly this request, while it still holds it.
+    fn cached_opening_v1(&self, claim: &Hash64, index: u32, disputed: &[u64]) -> Option<Vec<u8>> {
+        let cache = self.served_openings.lock().unwrap();
+        cache.iter().find(|(c, i, d, _)| c == claim && *i == index && d.as_slice() == disputed).map(|(_, _, _, bytes)| bytes.clone())
+    }
+
+    /// Keep a served opening for the next asker; oldest out first under a byte ceiling. Sized so a
+    /// whole panel's draws over a couple of live claims fit — four seats × four intervals × the
+    /// ~1.1 MB a 300-token interval opens to is under 20 MB.
+    fn remember_opening_v1(&self, claim: Hash64, index: u32, disputed: &[u64], bytes: &[u8]) {
+        const OPENING_CACHE_BYTES: usize = 64 << 20;
+        if bytes.len() > OPENING_CACHE_BYTES {
+            return;
+        }
+        let mut cache = self.served_openings.lock().unwrap();
+        cache.retain(|(c, i, d, _)| !(*c == claim && *i == index && d.as_slice() == disputed));
+        cache.push((claim, index, disputed.to_vec(), bytes.to_vec()));
+        let mut total: usize = cache.iter().map(|(_, _, _, b)| b.len()).sum();
+        while total > OPENING_CACHE_BYTES && cache.len() > 1 {
+            total -= cache.remove(0).3.len();
+        }
     }
 
     /// Register both halves of the serving side with the gossip center. Called once, from the

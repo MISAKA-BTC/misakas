@@ -166,7 +166,16 @@ const SERVE_BUDGET_BYTES_PER_PEER: u64 = 48 << 20;
 /// How long one claim stays un-servable after a serve is ATTEMPTED for it.
 const SERVE_THROTTLE: std::time::Duration = std::time::Duration::from_secs(10);
 /// A pull's answer is exempt from the per-claim budget for this long after asking.
-const PULL_SOLICITED_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+///
+/// **Long enough for the answer to be COMPUTED, not just sent.** An interval opening of a folded
+/// class is work: the executor recomputes the interval's anchor state and replays its calls, and
+/// on testnet-11 a 300-token claim's interval 212 took 398 s on a shared eight-core host (the
+/// devnet's 17–90 s is a quiet machine). At 120 s every such answer arrived after its own window
+/// had closed and was dropped as unsolicited — the seat asked for ever and the executor served
+/// for ever, and neither log said the other had been heard. The other bounds are what keep this
+/// safe: one opener in flight per `(claim, interval)`, four slots per pair, the byte cap, and the
+/// per-peer serve budget; the window's only job is to say "this node asked for this".
+const PULL_SOLICITED_TTL: std::time::Duration = std::time::Duration::from_secs(900);
 /// Never track more outstanding pulls than a panel could plausibly have open at once.
 const OUTSTANDING_PULL_CAP: usize = 512;
 
@@ -992,6 +1001,25 @@ struct PalwOpeningLane {
     in_flight: Mutex<std::collections::HashSet<(Hash64, u32)>>,
 }
 
+/// **The in-flight mark is cleared whatever happens to the serving future.**
+///
+/// It used to be cleared on the line after the `.await`, which never runs when the flow is dropped
+/// — the asking peer disconnects, or its request flow gives up while the opener is still folding.
+/// Measured on testnet-11: two `(claim, interval)` pairs leaked that way, every later ask for them
+/// was refused as `Throttled` — which is logged at debug, so the lane went silent rather than
+/// wrong — and a seat asked into it for forty minutes. Nothing but a restart could clear it, and a
+/// restart also threw away the openings the node had already computed.
+struct InFlightMark<'a> {
+    lane: &'a PalwOpeningLane,
+    key: (Hash64, u32),
+}
+
+impl Drop for InFlightMark<'_> {
+    fn drop(&mut self) {
+        self.lane.in_flight.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.key);
+    }
+}
+
 impl Default for PalwOpeningLane {
     fn default() -> Self {
         Self {
@@ -1191,8 +1219,10 @@ impl PalwGossipCenter {
             self.refund_serve_budget(peer, reservation);
             return Err(PalwServeRefusalV1::Throttled);
         }
+        // Cleared however this future ends — see `InFlightMark`. The blocking task itself is not
+        // cancellable, so the opening still finishes and still reaches the panel's own cache.
+        let _mark = InFlightMark { lane: &self.openings, key: (claim, interval_index) };
         let opened = tokio::task::spawn_blocking(move || resolver(claim, interval_index)).await;
-        self.openings.in_flight.lock().unwrap().remove(&(claim, interval_index));
         let Some(bytes) = opened.ok().flatten() else {
             self.refund_serve_budget(peer, reservation);
             return Err(PalwServeRefusalV1::NotHeld);
