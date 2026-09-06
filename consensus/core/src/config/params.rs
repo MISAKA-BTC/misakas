@@ -8840,7 +8840,7 @@ pub fn mainnet_shipped_params() -> Params {
 ///   the object is validated, and eight unsigned chunks squat every pending-chunk slot: a
 ///   block-cheap way to keep an honest class weightless for the life of the chain.
 ///
-/// testnet-11 arms none of these five from genesis; each is a scheduled height or a re-mint
+/// testnet-11 arms none of these six from genesis; each is a scheduled height or a re-mint
 /// there, which is the operator's call and not this function's. Devnet arms the ladder.
 fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     if dense_tier_pinned {
@@ -13259,8 +13259,8 @@ mod consensus_params_id_tests {
         .expect("a mainnet-equivalent genesis assembles");
         let carded = palw_rc_arm_phase1(mainnet_certify_registered_classes_v1(assembled));
 
-        // The ten the card STATES on its base (`mainnet_card_base_v1`), individually: nine armed
-        // from genesis on every card, the k-ary court only when the dense tier is pinned.
+        // What the card STATES on its base (`mainnet_card_base_v1`), individually: the ten below
+        // armed from genesis on every card, the k-ary court only when the dense tier is pinned.
         for (name, armed) in [
             ("palw_context_ladder", carded.palw_context_ladder),
             ("palw_receipt_rows_unpriced", carded.palw_receipt_rows_unpriced),
