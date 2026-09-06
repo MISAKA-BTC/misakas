@@ -411,7 +411,7 @@ pub fn execute_block_evm(
         for (txenv, cand, cand_idx) in planned {
             // ADR-0089 Decision 5: the writer's running count is the COMMITTED count.
             if let Some(m) = &market {
-                m.set_queued(market_actions.len());
+                m.set_committed(&market_actions);
             }
             // Effective gas price (EIP-1559): legacy txs carry no priority field —
             // their tip is gas_price − basefee; typed txs tip min(max_fee, basefee
@@ -527,7 +527,7 @@ pub fn execute_block_evm(
         for (cand_idx, cand) in input.accepted_txs.iter().enumerate() {
             // ADR-0089 Decision 5: the writer's running count is the COMMITTED count.
             if let Some(m) = &market {
-                m.set_queued(market_actions.len());
+                m.set_committed(&market_actions);
             }
             let evm_tx_hash = crate::tx::tx_hash(&cand.raw);
             if accepted_hashes.contains(&evm_tx_hash) {
@@ -1664,6 +1664,74 @@ mod tests {
     /// value into escrow and commits an `ActionQueued` log that the block lists, in order; a
     /// sell carries no value; a buy whose value is not whole sompi reverts and lists nothing;
     /// and with the `palw_model_evm` fence dormant the SAME calls find an empty account.
+    /// **ADR-0089 Decision 5's action budget is per account as well as per block** (mainnet audit
+    /// 2026-09-06, M-16/L-6).
+    ///
+    /// The per-block 128 is first-come, and ordering across payload blocks is consensus-determined
+    /// (`processor.rs` takes the executed set from `consensus_ordered_mergeset`), so an attacker who
+    /// mines occupies the whole budget without outbidding anyone — the mempool's per-sender cap and
+    /// its effective-tip auction do not reach that. A refused sell costs only gas, by Decision 6's
+    /// deliberate choice to put the position check in the fold, so the budget was cheap to fill.
+    ///
+    /// The rule asserted is that the bound is PER ACCOUNT: the same block that refuses account A's
+    /// seventeenth action accepts account B's first. A patch that merely lowered
+    /// `MAX_MARKET_ACTIONS_PER_EVM_BLOCK` to sixteen would fail here.
+    #[test]
+    fn one_account_cannot_take_the_whole_action_budget() {
+        use crate::model_market::{send_action_sell_calldata, writer_address};
+        use kaspa_consensus_core::evm::model_market::MAX_MARKET_ACTIONS_PER_EVM_BLOCK_PER_ACCOUNT as PER_ACCOUNT;
+        let basefee = EVM_INITIAL_BASE_FEE as u128;
+        let line = kaspa_consensus_core::Hash64::from_u64_word(7);
+        let writer = writer_address();
+
+        // Account A sends one more sell than its own share of the block's budget..
+        let mut raws: Vec<(Address, Vec<u8>)> = (0..=PER_ACCOUNT as u64)
+            .map(|nonce| signed_call(0x11, nonce, writer, 0, 100_000, basefee, send_action_sell_calldata(&line, 5, 0)))
+            .collect();
+        // ..and account B sends two: one that Decision 5 already reverts (a sell of zero units),
+        // then a real one. The reverted tx must count against nobody's share.
+        raws.push(signed_call(0x22, 0, writer, 0, 100_000, basefee, send_action_sell_calldata(&line, 0, 0)));
+        raws.push(signed_call(0x22, 1, writer, 0, 100_000, basefee, send_action_sell_calldata(&line, 5, 0)));
+        let a = raws[0].0;
+        let b = raws[PER_ACCOUNT + 1].0;
+        assert_ne!(a, b, "two accounts, or this test asserts nothing");
+
+        let accepted: Vec<_> = raws.iter().map(|(_, raw)| cand(raw.clone(), 0xAA)).collect();
+        let payload = EvmExecutionPayload { evm_coinbase: EvmAddress::from_bytes([0xFE; 20]), ..Default::default() };
+        let view = line_view(line);
+        let mut seed = funded_seed(a, HUGE_SEED);
+        seed.insert_account_info(b, AccountInfo { balance: U256::from(HUGE_SEED), nonce: 0, code_hash: KECCAK_EMPTY, code: None });
+        let input = EvmBlockInput { market: market_input(&view, true, &[]), ..input_v2(&payload, &accepted) };
+        let (res, _) = execute_block_evm(seed, &input).unwrap();
+
+        assert_eq!(res.header.accepted_tx_count as usize, PER_ACCOUNT + 3, "every tx executes; the refusal is a revert, not a skip");
+        for (i, receipt) in res.receipts.iter().take(PER_ACCOUNT).enumerate() {
+            assert!(receipt.succeeded, "A's action {i} is within its share");
+        }
+        assert!(!res.receipts[PER_ACCOUNT].succeeded, "A's seventeenth action reverts at the call");
+        assert!(!res.receipts[PER_ACCOUNT + 1].succeeded, "B's sell of zero units reverts, as Decision 5 already said");
+        assert!(res.receipts[PER_ACCOUNT + 2].succeeded, "…and B's real action is not refused by A's spending, nor by its own revert");
+
+        let a_holder = EvmAddress::from_bytes(a.into_array());
+        let b_holder = EvmAddress::from_bytes(b.into_array());
+        assert_eq!(
+            res.market_actions.iter().filter(|action| action.account == a_holder).count(),
+            PER_ACCOUNT,
+            "A queued exactly its share and no more"
+        );
+        assert_eq!(
+            res.market_actions.iter().filter(|action| action.account == b_holder).count(),
+            1,
+            "B queued its own, and the tx that reverted for another reason counted against neither counter — \
+             `set_committed` re-syncs the total and the per-account map from the COMMITTED list, in one call"
+        );
+        assert_eq!(res.market_actions.len(), PER_ACCOUNT + 1, "the block's list is what the two accounts queued between them");
+        assert!(
+            res.market_actions.len() < kaspa_consensus_core::evm::model_market::MAX_MARKET_ACTIONS_PER_EVM_BLOCK,
+            "and the BLOCK bound is untouched — this is a second, finer bound, not a lowered one"
+        );
+    }
+
     #[test]
     fn adr0089_the_writer_escrows_and_the_block_lists_its_actions_in_order() {
         use crate::model_market::{send_action_buy_calldata, send_action_sell_calldata, writer_address};
