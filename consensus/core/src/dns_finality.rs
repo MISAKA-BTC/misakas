@@ -2951,10 +2951,17 @@ pub struct SignerRequest {
     /// request selects via this field.
     pub validator_id: Hash64,
     pub purpose: SigningPurpose,
-    /// libcrux ML-DSA-87 `sign_ctx` ctx parameter. Caller
-    /// provides; the signer does not infer the context from
-    /// the purpose tag because future protocol extensions may
-    /// need a non-standard context for the same purpose.
+    /// libcrux ML-DSA-87 `sign_ctx` ctx parameter. The caller provides it, and the signer
+    /// VALIDATES it against the purpose tag — it does not infer it, and it does not accept an
+    /// arbitrary one either.
+    ///
+    /// Every purpose but `Transaction` is pinned to exactly one context (audit C-02), and
+    /// `Transaction` may carry only a transaction-domain context (mainnet audit L-5,
+    /// 2026-09-06): every ConsensusV2 acceptance-layer object signs a `Hash64` under its own
+    /// context, and a `Transaction` digest is a `Hash64`, so an unvalidated `Transaction` request
+    /// mints any of them bit-identically. This paragraph replaces "future protocol extensions may
+    /// need a non-standard context for the same purpose": a protocol extension that needs a new
+    /// context adds a `SigningPurpose`, which is the wire-visible change it should be.
     pub context: Vec<u8>,
     /// The digest to sign, typed by purpose (audit H-03). Must agree with `purpose` — see
     /// [`SignerRequest::purpose_matches_digest`]. A `Transaction` request carries a 64-byte sighash;

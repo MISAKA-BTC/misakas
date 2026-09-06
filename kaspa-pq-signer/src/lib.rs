@@ -449,6 +449,18 @@ impl SignerState {
         if !req.purpose_matches_digest() {
             return Err(SignerError::PolicyViolation("purpose tag does not match message_digest variant".into()));
         }
+        // (1a) The ML-DSA-87 signing context is bounded to 255 bytes (FIPS 204). Reject an over-long
+        //      context in-band here rather than letting it reach the `assert!` in
+        //      `ValidatorKey::sign_with_context`, which would panic — and, under the shared state
+        //      mutex, poison it and wedge every subsequent request (remote DoS).
+        //
+        //      **BEFORE the context policy below, not after** (mainnet audit L-5, 2026-09-06).
+        //      Under the allowlist an over-long context is refused as "not a transaction context"
+        //      first, which would leave this guard unreachable and
+        //      `rejects_oversized_context_without_panicking` green while testing a different rule.
+        if req.context.len() > 255 {
+            return Err(SignerError::PolicyViolation(format!("signing context exceeds 255 bytes (got {})", req.context.len())));
+        }
         // (1-C02) Bind the ML-DSA-87 signing CONTEXT to the purpose (audit C-02, Critical).
         // The context is the cryptographic domain separator that makes a signature
         // verify as a SPECIFIC operation. Without this binding a caller could submit
@@ -457,17 +469,26 @@ impl SignerState {
         // tag == Unbond digest), the Attestation-only equivocation guard below is
         // SKIPPED (purpose != Attestation), and the produced signature nonetheless
         // verifies as a canonical attestation — a double-sign from an isolated key
-        // that defeats the whole point of the strict signer. So the three overlay
-        // contexts are RESERVED to their matching purpose, and a Transaction may not
-        // borrow any of them (it carries its own tx-domain context).
-        const RESERVED_CONTEXTS: [&[u8]; 6] = [
-            ATTESTATION_MLDSA87_CONTEXT,
-            UNBOND_REQUEST_CONTEXT,
-            TAKEOVER_TOKEN_CONTEXT,
-            PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
-            PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
-            PALW_FP_V3_MLDSA87_SPEND_CONTEXT,
-        ];
+        // that defeats the whole point of the strict signer.
+        //
+        // **The model is an ALLOWLIST, not a reserved list** (mainnet audit L-5, 2026-09-06).
+        // It used to be a hand-maintained `RESERVED_CONTEXTS` of six, beside a `required_ctx`
+        // match of seven — the derived-artifact context was missing from the array while the
+        // comment beside it said it was reserved — and anything NOT on that list was mintable
+        // under `purpose = Transaction`. Every ConsensusV2 acceptance-layer object signs a
+        // `Hash64` under its own context, and a `Transaction` digest is a `Hash64`, so the six
+        // that were listed were the minority: bond registration, bond retirement, bond
+        // capability, class registration, DA accusation, DA disclosure, the V2 seat receipt, all
+        // six court moves and the carriage commitment were all mintable bit-identically, and
+        // `--deny-purpose Transaction` is not available to a signer that must sign spends.
+        //
+        // A denylist is fail-OPEN for everything it does not enumerate; ADR-0015 says this daemon
+        // is fail-closed and "never [returns] an unintended signature". So there is now exactly
+        // ONE list per direction and no set that can drift: `required_ctx` pins each non-
+        // transaction purpose to its own context, and `TRANSACTION_CONTEXTS` says what a
+        // transaction may carry. A context that is neither is refused. A future purpose adds one
+        // match arm and nothing else; adding a purpose can no longer forget a second list.
+        const TRANSACTION_CONTEXTS: [&[u8]; 1] = [kaspa_txscript::MLDSA87_TX_CONTEXT];
         let required_ctx: Option<&[u8]> = match req.purpose {
             SigningPurpose::Attestation => Some(ATTESTATION_MLDSA87_CONTEXT),
             SigningPurpose::Unbond => Some(UNBOND_REQUEST_CONTEXT),
@@ -495,23 +516,16 @@ impl SignerState {
                     req.purpose
                 )));
             }
-            None if RESERVED_CONTEXTS.contains(&req.context.as_slice()) => {
+            None if !TRANSACTION_CONTEXTS.contains(&req.context.as_slice()) => {
                 return Err(SignerError::PolicyViolation(
-                    "Transaction purpose may not borrow a reserved signing context (audit C-02)".into(),
+                    "Transaction purpose may carry only a transaction-domain signing context (audit L-5)".into(),
                 ));
             }
             _ => {}
         }
-        // (1a) Optional purpose denylist (e.g. a validator-only signer that refuses Transaction).
+        // (1b) Optional purpose denylist (e.g. a validator-only signer that refuses Transaction).
         if self.denied_purposes.contains(&req.purpose) {
             return Err(SignerError::PolicyViolation(format!("signing purpose {:?} is denied by policy", req.purpose)));
-        }
-        // (1b) The ML-DSA-87 signing context is bounded to 255 bytes (FIPS 204). Reject an over-long
-        //      context in-band here rather than letting it reach the `assert!` in
-        //      `ValidatorKey::sign_with_context`, which would panic — and, under the shared state
-        //      mutex, poison it and wedge every subsequent request (remote DoS).
-        if req.context.len() > 255 {
-            return Err(SignerError::PolicyViolation(format!("signing context exceeds 255 bytes (got {})", req.context.len())));
         }
         // (2) The signer must hold this validator's key.
         if !self.keys.contains_key(&req.validator_id) {
@@ -827,10 +841,12 @@ mod tests {
     use kaspa_consensus_core::dns_finality::{ATTESTATION_MLDSA87_CONTEXT, stake_attestation_message};
     use kaspa_hashes::Hash;
     use kaspa_pq_validator_core::VALIDATOR_SEED_LEN;
-
-    // The tx-signing context lives in kaspa_txscript; the signer signs with whatever context it is
-    // handed (it does not infer/validate it, per ADR-0015), so the test uses the literal value.
-    const MLDSA87_TX_CONTEXT: &[u8] = b"kaspa-pq-v2/tx/mldsa87";
+    // **The value, not a copy of it** (mainnet audit L-5, 2026-09-06). This used to re-type the
+    // literal under a comment saying the signer "signs with whatever context it is handed (it does
+    // not infer/validate it, per ADR-0015)" — false since the C-02 fix pinned each non-transaction
+    // purpose to one context, and doubly false now that `Transaction` is allowlisted. A test that
+    // spells a constant a second time cannot notice the constant moving.
+    use kaspa_txscript::MLDSA87_TX_CONTEXT;
 
     fn tmp_dir(tag: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
@@ -1173,7 +1189,53 @@ mod tests {
             message_digest: SignerMessageDigest::Transaction(Hash64::from_bytes([0xcd; 64])),
             metadata: SignerMetadata::None,
         };
-        assert!(matches!(s.handle_request(&req, Hash::default(), 1).result, Err(SignerError::PolicyViolation(_))));
+        // **The REASON, not just the refusal** (mainnet audit L-5, 2026-09-06). Once `Transaction`
+        // is allowlisted, an over-long context is also "not a transaction context", so a bare
+        // `PolicyViolation(_)` would keep this test green while it stopped testing the FIPS-204
+        // bound it is named for. The length guard runs first; this asserts that it did.
+        let Err(SignerError::PolicyViolation(reason)) = s.handle_request(&req, Hash::default(), 1).result else {
+            panic!("an over-long context must be refused as a policy violation");
+        };
+        assert!(reason.contains("exceeds 255 bytes"), "the FIPS-204 length guard must be the refusal, got: {reason}");
+
+        // **The allowlist itself.** A `Transaction` request may carry only a transaction-domain
+        // context. Every ConsensusV2 acceptance-layer object signs a `Hash64` under its own
+        // context and a `Transaction` digest is a `Hash64`, so anything accepted here is a
+        // consensus object minted from a signer that was told to sign a spend. The five below are
+        // representative, not exhaustive: four that the old `RESERVED_CONTEXTS` array never
+        // listed, and one it did.
+        for ctx in [
+            kaspa_consensus_core::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+            kaspa_consensus_core::palw_state_v2::PALW_DA_DISCLOSURE_V2_MLDSA87_CONTEXT,
+            kaspa_consensus_core::palw_court_v2::PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
+            kaspa_consensus_core::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT,
+            ATTESTATION_MLDSA87_CONTEXT,
+        ] {
+            let borrowed = SignerRequest {
+                request_id: 3,
+                validator_id: vid,
+                purpose: SigningPurpose::Transaction,
+                context: ctx.to_vec(),
+                message_digest: SignerMessageDigest::Transaction(Hash64::from_bytes([0xcf; 64])),
+                metadata: SignerMetadata::None,
+            };
+            assert!(
+                matches!(s.handle_request(&borrowed, Hash::default(), 3).result, Err(SignerError::PolicyViolation(_))),
+                "a Transaction request minted a signature under {}",
+                String::from_utf8_lossy(ctx)
+            );
+        }
+        // …and an unrecognised context is refused too, which a denylist could never do.
+        let unknown = SignerRequest {
+            request_id: 4,
+            validator_id: vid,
+            purpose: SigningPurpose::Transaction,
+            context: b"misaka-palw/some-context-invented-tomorrow/mldsa87/v1".to_vec(),
+            message_digest: SignerMessageDigest::Transaction(Hash64::from_bytes([0xd0; 64])),
+            metadata: SignerMetadata::None,
+        };
+        assert!(matches!(s.handle_request(&unknown, Hash::default(), 4).result, Err(SignerError::PolicyViolation(_))));
+
         // The engine still signs a subsequent well-formed request (no poisoning / lasting damage).
         let ok = SignerRequest {
             request_id: 2,
