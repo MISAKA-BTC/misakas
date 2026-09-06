@@ -231,6 +231,11 @@ mod tests {
         assert_eq!(b1.fees.net, 940 * MSK);
         assert_eq!(b1.units_out / PALW_MODEL_POSITION_UNITS_V1, 48_453, "≈48,454 positions less the ceiling's rounding");
         assert_eq!(b1.after.msk_reserve, 940 * MSK);
+        // **The price column, exactly** (issue #98). This assertion used to be an ORDERING — that
+        // buying raises the price — and an ordering cannot tell 0.0829 from 0.0576. §4's table
+        // carried the wrong figure through a correction made against this very test, because this
+        // was the one column the golden table did not pin. `(940 + 1,000) MSK / 51,546.391753`.
+        assert_eq!(b1.after.price_sompi_per_position_v1(), 3_763_599, "0.037636 MSK a position — §4 row 1's 0.0376");
         let b2 = palw_model_buy_quote_v1(&b1.after, 1_000 * MSK).expect("a second buy");
         // The ADR's §4 table said 12,846 here and 3,014 MSK on the sell below; both were the
         // author's arithmetic slips, corrected in §7: the curve is `(x + V) × u = K`, so the second
@@ -239,6 +244,8 @@ mod tests {
         // than what came in.
         assert_eq!(b2.units_out / PALW_MODEL_POSITION_UNITS_V1, 16_824);
         assert_eq!(b2.after.msk_reserve, 1_880 * MSK);
+        // `(1,880 + 1,000) MSK / 34,722.222223` — §4 row 2, the figure that was wrong.
+        assert_eq!(b2.after.price_sompi_per_position_v1(), 8_294_399, "0.082944 MSK a position — §4 row 2's 0.0829");
         assert!(b2.after.price_sompi_per_position_v1() > b1.after.price_sompi_per_position_v1(), "buying raises the price");
         let held = b1.units_out + b2.units_out;
         let s = palw_model_sell_quote_v1(&b2.after, held).expect("the sell");
@@ -248,6 +255,9 @@ mod tests {
         assert_eq!(s.fees.burn + s.fees.registrant + s.fees.net, s.fees.gross, "the split is exact");
         assert_eq!(s.after.position_units, PALW_MODEL_SUPPLY_UNITS_V1, "everything bought is back in the curve");
         assert_eq!(s.after.msk_reserve, 0, "and the reserve is empty");
+        // §4 row 3's 0.0100: every unit back in the curve puts `x` at `V`, so the price returns to
+        // the opening one exactly.
+        assert_eq!(s.after.price_sompi_per_position_v1(), MSK / 100, "0.01 MSK a position — back to the opening price");
         assert!(s.after.price_sompi_per_position_v1() < b2.after.price_sompi_per_position_v1(), "selling lowers the price");
         // M2 at the arithmetic layer: what went in is where the ADR says it is.
         let paid_in = 2_000 * MSK;
