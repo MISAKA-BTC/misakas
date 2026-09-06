@@ -464,14 +464,58 @@ impl PalwPanelService {
         {
             candidates.push(outpoint);
         }
-        // Every candidate is off-limits to a wallet, whether or not this tick picks it (audit3 H12).
+        // **A remembered outpoint has to be one this node can SIGN for, and nothing checked that.**
+        //
+        // The scan below rejects every output whose script is not ours; the two remembered
+        // outpoints went straight to the signer. Both can name someone else's money. The
+        // CONFIGURED one is whatever the operator typed. The PERSISTED one is worse, because it is
+        // written by a previous run and survives a change of `--palw-producer-key`: a node that
+        // registered a bond under one key, and is now registering under another, reads its
+        // predecessor's change outpoint out of the state dir and tries to spend it.
+        //
+        // Signing it produces a carrier whose signature is over the right transaction with the
+        // wrong key, and the only word the script engine has for that is
+        // `script ran, but verification failed` — the mempool's generic verdict, which names a
+        // signature and points every reader at `--palw-producer-key` and
+        // `--palw-producer-pay-address`, the two things that are NOT wrong. Nothing recovers,
+        // because the entry stays unspent, stays resolvable, and is chosen again on the next tick:
+        // measured as 82 identical refusals over 82 minutes on testnet-11 Relaunch 5f (issue #96,
+        // #97), ending only when an unrelated `wallet send` spent the output and the scan took
+        // over.
+        //
+        // So ask the same question of a remembered outpoint that the scan asks of every other one.
+        // A candidate that fails it is skipped rather than deleted: the scan's own
+        // `persist_fee_outpoint` overwrites the file as soon as it finds real money, so the wedge
+        // clears itself without this path removing state it did not write.
+        let script = self.fee_script(session);
+        // Only ours are off-limits to a wallet (audit3 H12): the reservation exists because this
+        // panel might spend the outpoint, and one it cannot sign for it will never spend.
+        let mut foreign: Vec<TransactionOutpoint> = Vec::new();
         for outpoint in candidates.iter() {
             self.flow_context.palw_reserve_outpoint(*outpoint);
         }
         for outpoint in candidates.iter().filter(|o| is_free(o)) {
             if let Some(entry) = session.get_virtual_utxo_entry(*outpoint) {
+                // Unknown script — no bond payout to read yet — is not evidence against the
+                // candidate, so only a script we positively know and that positively differs
+                // rejects one.
+                if funding_is_foreign(script.as_ref(), &entry.script_public_key) {
+                    foreign.push(*outpoint);
+                    continue;
+                }
                 return Some((*outpoint, entry));
             }
+        }
+        if !foreign.is_empty() {
+            warn!(
+                "[{PALW_PANEL}] ignoring {} remembered funding outpoint(s) that pay to a script this node cannot sign for: {}. \
+                 This is money belonging to another key — spending it would build a carrier the mempool refuses with \
+                 \"script ran, but verification failed\", which reads like a bad key or pay address and is neither. \
+                 A state dir carried over from a run with a different --palw-producer-key is the usual source; \
+                 looking for this node's own funding instead.",
+                foreign.len(),
+                foreign.iter().map(|o| format!("{}:{}", o.transaction_id, o.index)).collect::<Vec<_>>().join(", ")
+            );
         }
         // **Neither remembered outpoint exists, so find the money instead of remembering it.**
         //
@@ -491,7 +535,7 @@ impl PalwPanelService {
         //
         // A scan, so it runs only here: the two remembered outpoints are the hot path and this is
         // the path back from having none.
-        let script = self.fee_script(session)?;
+        let script = script?;
         let mut cursor: Option<TransactionOutpoint> = None;
         // What the scan SAW, so a failure can say which of its three reasons it was.
         let (mut scanned, mut under_script, mut busy) = (0usize, 0usize, 0usize);
@@ -881,6 +925,34 @@ impl PalwPanelService {
         extra_outputs: &[kaspa_consensus_core::tx::TransactionOutput],
     ) -> Result<Transaction, String> {
         let kp = self.keypair.as_ref().ok_or("no signing key")?;
+        // **Refuse before signing, and name the field.**
+        //
+        // The one input is signed with this node's key, so a funding output that does not pay to
+        // this key's own script produces a carrier that cannot be spent by anybody who could have
+        // built it. The mempool's word for that is `script ran, but verification failed` — the
+        // script engine's generic verdict, which names a signature and so sends every reader to
+        // `--palw-producer-key` and `--palw-producer-pay-address`, the two things a first
+        // registration has already got right. Checking it here is free, it happens before the
+        // ML-DSA-87 signature is computed, and it can say WHICH of the two scripts it is holding.
+        //
+        // It sits in the shared builder rather than in the registration path because every
+        // carrier — receipt, class, court — spends the same way and fails the same way.
+        let signable = signable_script(kp.verification_key.as_ref());
+        if funding.script_public_key != signable {
+            let addr = |spk: &kaspa_consensus_core::tx::ScriptPublicKey| {
+                kaspa_txscript::extract_script_pub_key_address(spk, self.consensus_config.prefix())
+                    .map(|a| a.to_string())
+                    .unwrap_or_else(|_| "an address this node cannot render".to_string())
+            };
+            return Err(format!(
+                "the funding output pays to {} and --palw-producer-key signs for {} — this node cannot spend it. \
+                 Nothing was signed. Fund the key's own address, or point --palw-producer-key at the key that owns \
+                 this output; a state dir carried over from a run with a different key is the usual source of a \
+                 remembered outpoint belonging to neither.",
+                addr(&funding.script_public_key),
+                addr(&signable)
+            ));
+        }
         let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() })
             .map_err(|e| format!("the lifecycle payload does not serialize: {e}"))?;
         let params = &self.consensus_config.params;
@@ -1458,13 +1530,50 @@ impl PalwPanelService {
                 .unwrap_or_else(|_| "this node's pay address".to_string())
         );
 
-        let mut last_complaint: Option<(String, std::time::Instant)> = None;
-        let mut complain = |why: String| {
-            let fresh =
-                last_complaint.as_ref().is_none_or(|(prev, at)| prev != &why || at.elapsed() >= std::time::Duration::from_secs(60));
-            if fresh {
+        // **An unchanged refusal is a different fact from a fresh one, and reprinting it verbatim
+        // hides which of the two an operator is reading.**
+        //
+        // This loop retries every five seconds and the reason usually does not move. The throttle
+        // this replaces let one line through per minute, forever, at identical wording: on
+        // testnet-11 Relaunch 5f that produced 82 copies of the same refusal over 82 minutes
+        // (issue #97). Eighty-two identical lines read as "still trying". They meant "nothing
+        // about the retry differs, so this will never clear on its own" — and on that reading the
+        // operator generated a fresh ML-DSA-87 key and re-funded an address, neither of which was
+        // the problem.
+        //
+        // So a repeat SAYS it is a repeat, carries how long the reason has stood and how many
+        // attempts it has survived, and backs off geometrically to a fifteen-minute ceiling. A
+        // reason that CHANGES prints at once and in full, because that is the event worth reading.
+        struct Standing {
+            why: String,
+            since: std::time::Instant,
+            printed_at: std::time::Instant,
+            gap: std::time::Duration,
+            attempts: u32,
+        }
+        const FIRST_GAP: std::time::Duration = std::time::Duration::from_secs(60);
+        const MAX_GAP: std::time::Duration = std::time::Duration::from_secs(900);
+        let mut standing: Option<Standing> = None;
+        let mut complain = |why: String| match standing.as_mut() {
+            Some(prev) if prev.why == why => {
+                prev.attempts += 1;
+                if prev.printed_at.elapsed() < prev.gap {
+                    return;
+                }
+                warn!(
+                    "[{PALW_PANEL}] still cannot register a bond — the same refusal, unchanged for {} across {} \
+                     attempts. Nothing about the retry differs, so it will not clear until the funding, the flags or \
+                     the chain do: {why}",
+                    brief_duration(prev.since.elapsed()),
+                    prev.attempts
+                );
+                prev.printed_at = std::time::Instant::now();
+                prev.gap = (prev.gap * 2).min(MAX_GAP);
+            }
+            _ => {
                 warn!("[{PALW_PANEL}] cannot register a bond yet: {why}");
-                last_complaint = Some((why, std::time::Instant::now()));
+                let now = std::time::Instant::now();
+                standing = Some(Standing { why, since: now, printed_at: now, gap: FIRST_GAP, attempts: 1 });
             }
         };
 
@@ -1520,6 +1629,20 @@ impl PalwPanelService {
             let txid = tx.id();
             match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
                 Ok(()) => {
+                    // **"Accepted" is a local fact, so say whose.** `submit_rpc_transaction`
+                    // returns `Ok` when THIS node's mempool admitted the carrier and queued it for
+                    // broadcast; no peer has acknowledged anything at this point. An operator
+                    // reading "accepted" and then "no bond appeared" reasonably concludes the
+                    // network saw it and refused the object, which is one of three possibilities
+                    // and not the likeliest (issue #96). Naming the input as well, because the
+                    // carrier is rebuilt from it on every retry and it is the one outpoint the
+                    // operator can check for themselves.
+                    info!(
+                        "[{PALW_PANEL}] carrier {txid} admitted to this node's mempool and queued for relay, \
+                         spending {}:{} for {collateral} sompi of collateral. That is a local acceptance, not a \
+                         network one — waiting up to 10 minutes for a block to carry it and a bond to appear.",
+                        funding_outpoint.transaction_id, funding_outpoint.index
+                    );
                     // The change is last, so the rolling fee outpoint is the final output.
                     // One extra output (the collateral) ahead of the change, so the change is 1.
                     self.persist_fee_outpoint(TransactionOutpoint::new(txid, 1));
@@ -1557,12 +1680,69 @@ impl PalwPanelService {
                             return;
                         }
                         if std::time::Instant::now() >= deadline {
-                            warn!(
-                                "[{PALW_PANEL}] carrier {txid} was accepted but no bond appeared within 10 minutes. \
-                                 The collateral output {txid}:0 is yours and spendable; no bond was created. The \
-                                 usual cause is a network still running a build that predates the index-and-zero-id \
-                                 carrier naming, which drops this registration on extraction."
-                            );
+                            // **"No bond appeared" collapses three different failures into one
+                            // sentence, and the node can tell them apart.**
+                            //
+                            // The message this replaces asserted the third — a network that drops
+                            // the registration on extraction — and asserted, without looking, that
+                            // the collateral output exists and is spendable. On testnet-11
+                            // Relaunch 5f the carrier had never reached a block at all: the
+                            // funding output was still unspent, `{txid}:0` did not exist, and the
+                            // named cause was contradicted by other operators' `BondRegistered`
+                            // extracting normally in the same minutes (issue #96). An operator
+                            // cannot distinguish these from outside the node. This one can, from
+                            // facts it already holds, so it reports what it finds rather than the
+                            // likeliest story.
+                            let collateral_outpoint = TransactionOutpoint::new(txid, 0);
+                            let mined = session.get_virtual_utxo_entry(collateral_outpoint).is_some()
+                                || session.get_virtual_utxo_entry(TransactionOutpoint::new(txid, 1)).is_some();
+                            let in_mempool = self
+                                .flow_context
+                                .mining_manager()
+                                .clone()
+                                .has_transaction(txid, kaspa_mining::model::tx_query::TransactionQuery::All)
+                                .await;
+                            let funding_unspent = session.get_virtual_utxo_entry(funding_outpoint).is_some();
+                            let funding = format!("{}:{}", funding_outpoint.transaction_id, funding_outpoint.index);
+                            match carrier_fate(mined, in_mempool, funding_unspent) {
+                                // The carrier is on chain and its object did not become a bond.
+                                // This — and only this — is the extraction failure.
+                                CarrierFate::Extracted => warn!(
+                                    "[{PALW_PANEL}] carrier {txid} was MINED and produced no bond within 10 minutes. \
+                                     Its outputs are in the UTXO set, so the transaction was relayed, accepted and \
+                                     included; the registration object inside it was dropped on extraction. The \
+                                     collateral output {txid}:0 pays this node's own address and is \
+                                     spendable. The usual cause is a network still running a build that predates the \
+                                     index-and-zero-id carrier naming."
+                                ),
+                                // Still queued. Nothing is lost; the chain has not included it.
+                                CarrierFate::Queued => warn!(
+                                    "[{PALW_PANEL}] carrier {txid} is NOT in any block after 10 minutes — it is still \
+                                     sitting in this node's mempool, and {funding} {}. No bond was created and \
+                                     nothing was spent. This is not the network refusing the registration: no block \
+                                     has carried it yet. Check that this node's transactions reach a miner — peers \
+                                     that reset shortly after connecting will admit a transaction locally and relay \
+                                     it nowhere — and leave the node running, because a carrier already in the \
+                                     mempool can still be mined.",
+                                    if funding_unspent { "is still unspent" } else { "has been spent" }
+                                ),
+                                // Gone from the mempool and never mined: dropped or evicted.
+                                CarrierFate::Dropped => warn!(
+                                    "[{PALW_PANEL}] carrier {txid} reached NO block and is no longer in this node's \
+                                     mempool, and its funding output {funding} is still unspent — so nothing was \
+                                     spent, no fee was paid and no bond exists. The carrier was dropped or evicted \
+                                     before any block, which is a relay or connectivity problem rather than a \
+                                     rejected registration: the network never judged the object. Re-running \
+                                     --palw-register-bond rebuilds the same carrier from the same input; \
+                                     `getMempoolEntry {txid}` on a peer's RPC says whether it ever travelled."
+                                ),
+                                CarrierFate::Stranded => warn!(
+                                    "[{PALW_PANEL}] carrier {txid} reached no block, is not in this node's mempool, \
+                                     and its funding output {funding} has been spent by something else — so this \
+                                     carrier can never be mined as built. No bond exists and no collateral is \
+                                     locked. Fund this node's pay address again and re-run --palw-register-bond."
+                                ),
+                            }
                             return;
                         }
                     }
@@ -3208,6 +3388,70 @@ fn min_carryable_collateral(
     Some(hi)
 }
 
+/// **The script an ML-DSA-87 key can satisfy**, ADR-0019 §8: P2PKH over BLAKE2b-512 of the
+/// verification key — the same derivation `misaka key address` prints and the same one the
+/// `OP_BLAKE2B_512` opcode recomputes at spend time.
+///
+/// One spelling because two places ask it — the funding filter in `resolve_fee_funding` and the
+/// pre-sign guard in `build_lifecycle_tx_with_outputs` — and a rule spelled twice is a rule that
+/// drifts in one of its copies.
+fn signable_script(verification_key: &[u8]) -> kaspa_consensus_core::tx::ScriptPublicKey {
+    kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(verification_key).as_bytes())
+}
+
+/// Whether a REMEMBERED funding outpoint — the persisted one or `--palw-fee-outpoint` — belongs
+/// to a key other than the one that would sign it.
+///
+/// `ours` is `None` when this node cannot yet read its own payout script, and that is "cannot
+/// tell", not "reject": answering `true` there would strand a funded node that is merely early.
+fn funding_is_foreign(
+    ours: Option<&kaspa_consensus_core::tx::ScriptPublicKey>,
+    entry: &kaspa_consensus_core::tx::ScriptPublicKey,
+) -> bool {
+    ours.is_some_and(|ours| entry != ours)
+}
+
+/// What became of a carrier this node's mempool accepted, once the deadline passes with no bond.
+///
+/// Three outcomes the old warning collapsed into one sentence, and only the first is the
+/// extraction failure it named (issue #96).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CarrierFate {
+    /// On chain — its outputs are in the UTXO set — and no bond came of it: the registration
+    /// object was dropped on extraction. The one case the old message described.
+    Extracted,
+    /// In no block, still queued in this node's mempool. Nothing is lost; nothing has judged it.
+    Queued,
+    /// In no block and no longer queued, with the funding untouched: dropped or evicted before
+    /// any block, so no fee was paid and rebuilding it is free.
+    Dropped,
+    /// In no block, not queued, and the funding is spent — this carrier can never be mined as
+    /// built.
+    Stranded,
+}
+
+/// The verdict, from the three facts the node already holds.
+fn carrier_fate(mined: bool, in_mempool: bool, funding_unspent: bool) -> CarrierFate {
+    match (mined, in_mempool, funding_unspent) {
+        // Mined wins: a mempool copy alongside a mined transaction is incidental.
+        (true, _, _) => CarrierFate::Extracted,
+        (false, true, _) => CarrierFate::Queued,
+        (false, false, true) => CarrierFate::Dropped,
+        (false, false, false) => CarrierFate::Stranded,
+    }
+}
+
+/// `1h02m`, `7m30s`, `45s` — how long a standing refusal has stood, for a log line an operator
+/// reads to decide whether to keep waiting.
+fn brief_duration(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    match (secs / 3600, (secs % 3600) / 60, secs % 60) {
+        (0, 0, s) => format!("{s}s"),
+        (0, m, s) => format!("{m}m{s:02}s"),
+        (h, m, _) => format!("{h}h{m:02}m"),
+    }
+}
+
 fn verdict_name(verdict: &PalwReceiptVerdictV2) -> &'static str {
     match verdict {
         PalwReceiptVerdictV2::Valid => "Valid",
@@ -3972,5 +4216,112 @@ mod tests {
         // The change of that carrier is a DIFFERENT outpoint, which is why the panel is not left
         // with nothing: the money moves, it does not vanish.
         assert!(!spent.contains(&op(2)), "the change outpoint is free to spend next");
+    }
+
+    /// **A remembered funding outpoint must pay to a script this node can sign for** (issue #97).
+    ///
+    /// The scan filters on the script; the two REMEMBERED outpoints — the persisted one and
+    /// `--palw-fee-outpoint` — went straight to the signer without it. The persisted one is
+    /// written by a previous run and survives a change of `--palw-producer-key`, so a state dir
+    /// carried across a key change hands the panel its predecessor's money. Signing it builds a
+    /// carrier the mempool refuses with `script ran, but verification failed` — a verdict that
+    /// names a signature and so points at the key and the pay address, the two things that are
+    /// right — and nothing recovers, because the entry stays unspent, stays resolvable, and is
+    /// chosen again on the next tick. Measured live as 82 identical refusals over 82 minutes.
+    ///
+    /// The predicate is the fix: reject only when the script is KNOWN and DIFFERS, so a node that
+    /// cannot yet read its bond's payout script is not left unable to fund anything.
+    #[test]
+    fn a_remembered_outpoint_paying_elsewhere_is_not_funding() {
+        let ours = mldsa_script(0x11);
+        let theirs = mldsa_script(0x22);
+
+        assert!(funding_is_foreign(Some(&ours), &theirs), "a remembered outpoint under another key is skipped, not signed");
+        assert!(!funding_is_foreign(Some(&ours), &ours), "our own remembered outpoint is still the hot path");
+        assert!(
+            !funding_is_foreign(None, &theirs),
+            "an unreadable payout script rejects nothing — that would strand a funded node that is merely early"
+        );
+
+        // And the guard the signer itself applies is the same question asked of the same script,
+        // so the two cannot disagree about whose money this is.
+        assert_eq!(signable_script(b"a key"), signable_script(b"a key"), "the derivation is a function of the key");
+        assert_ne!(signable_script(b"a key"), signable_script(b"another key"), "and different keys sign different scripts");
+    }
+
+    /// **The address the join docs tell an operator to pass IS the script the pre-sign guard
+    /// requires** — the property that makes that guard safe to add.
+    ///
+    /// `--palw-producer-pay-address` is documented as `misaka key address --key-file <seed>`,
+    /// which is `ValidatorKey::funding_address`. The guard refuses any funding output whose script
+    /// is not `signable_script` of the node's own verification key. If those two derivations ever
+    /// disagreed, the guard would refuse every carrier on every correctly configured seat — a far
+    /// worse failure than the one it fixes — so the equivalence is pinned rather than assumed, and
+    /// pinned through the real function on both sides rather than restated here.
+    #[test]
+    fn the_documented_pay_address_is_the_script_this_node_signs_for() {
+        let key = kaspa_pq_validator_core::ValidatorKey::from_seed([7u8; kaspa_pq_validator_core::VALIDATOR_SEED_LEN]);
+        let address = key.funding_address(kaspa_addresses::Prefix::Testnet);
+        assert_eq!(address.version, kaspa_addresses::Version::PubKeyHashMlDsa87, "the docs' address is an ML-DSA-87 P2PKH one");
+        let payload: [u8; 64] = address.payload.as_ref().try_into().expect("an ML-DSA-87 address carries 64 payload bytes");
+
+        // `pay_payee` builds the script from exactly these payload bytes; the guard builds it from
+        // the key. The two must be one script.
+        assert_eq!(
+            kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&payload),
+            signable_script(key.public_key()),
+            "a seat funded at its own documented pay address must not be refused before signing"
+        );
+
+        // And a different key is a different script, or the guard would pass everything.
+        let other = kaspa_pq_validator_core::ValidatorKey::from_seed([8u8; kaspa_pq_validator_core::VALIDATOR_SEED_LEN]);
+        assert_ne!(
+            signable_script(key.public_key()),
+            signable_script(other.public_key()),
+            "another operator's funding output is still refused, which is the whole point"
+        );
+    }
+
+    /// **A repeat says it is a repeat** (issue #97): 82 identical lines read as "still trying"
+    /// when they meant "nothing about the retry differs". The duration is what carries that,
+    /// so it has to be legible at every scale a stuck registration reaches.
+    #[test]
+    fn a_standing_refusal_reports_how_long_it_has_stood() {
+        use std::time::Duration;
+        assert_eq!(brief_duration(Duration::from_secs(0)), "0s");
+        assert_eq!(brief_duration(Duration::from_secs(45)), "45s");
+        assert_eq!(brief_duration(Duration::from_secs(60)), "1m00s", "the minute boundary keeps its seconds padded");
+        assert_eq!(brief_duration(Duration::from_secs(450)), "7m30s");
+        assert_eq!(brief_duration(Duration::from_secs(3600)), "1h00m");
+        assert_eq!(brief_duration(Duration::from_secs(3720)), "1h02m", "82 minutes is the case that was reported");
+        assert_eq!(brief_duration(Duration::from_secs(4920)), "1h22m");
+    }
+
+    /// **The three fates of an accepted carrier are distinguishable, and the deadline verdict has
+    /// to distinguish them** (issue #96).
+    ///
+    /// The message this replaces asserted one of the three — a network that drops the object on
+    /// extraction — and asserted, without looking, that the collateral output exists. On the
+    /// reported run the carrier had never reached a block: the funding was still unspent and
+    /// `txid:0` did not exist, while other operators' `BondRegistered` extracted normally in the
+    /// same minutes. The two facts that separate the cases are the ones pinned here.
+    #[test]
+    fn the_deadline_verdict_names_which_failure_it_is() {
+        // mined, in_mempool, funding_unspent
+        assert_eq!(carrier_fate(true, false, false), CarrierFate::Extracted, "on chain and no bond IS the extraction failure");
+        assert_eq!(carrier_fate(true, true, true), CarrierFate::Extracted, "mined wins: a mempool copy beside it is incidental");
+        assert_eq!(carrier_fate(false, true, true), CarrierFate::Queued, "still queued is not a refusal, and not a loss");
+
+        // The reported case (#96): admitted locally, never mined, funding untouched. The old
+        // message called this an extraction failure and told the operator their collateral output
+        // existed. Neither was true, and the difference is what decides whether they wait, re-fund
+        // or go looking at their peers.
+        assert_eq!(
+            carrier_fate(false, false, true),
+            CarrierFate::Dropped,
+            "an unspent funding output is the proof that no fee was paid and the rebuild is free"
+        );
+        assert_ne!(carrier_fate(false, false, true), CarrierFate::Extracted, "and it is NOT the cause the old line named");
+        assert_eq!(carrier_fate(false, false, false), CarrierFate::Stranded, "this carrier can never be mined as built");
     }
 }
