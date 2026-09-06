@@ -165,6 +165,10 @@ impl ConsensusServices {
             // genesis. `palw_model_market_fence()` folds in the ConsensusV2 mode condition and is
             // the one place the market is decided (`params.rs:2592`).
             params.palw_model_market_fence(),
+            // **ADR-0018 §E's payout bounds, height-free** (mainnet audit 2026-09-06, H-3). The
+            // isolation cap is context-free by contract; the builders ask the height-indexed
+            // question at the block's own DAA, which is strictly stronger.
+            params.palw_validator_payout_bounds_declared(),
         );
 
         let pruning_point_manager = PruningPointManager::new(

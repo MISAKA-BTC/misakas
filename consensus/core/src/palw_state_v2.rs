@@ -308,6 +308,57 @@ pub const PALW_V2_COINBASE_EXTRA_OUTPUTS: u64 = PALW_V2_MAX_PAYOUTS_PER_BLOCK as
 /// pays them, or bonding a validator would stop the chain the same way the first `Final` did.
 pub const PALW_V2_MAX_VALIDATOR_PAYOUTS: u64 = 16;
 
+/// **The §E deferred quality-bonus payouts one coinbase may carry** (mainnet audit, 2026-09-06,
+/// H-3), per BLOCK and not per finalized epoch.
+///
+/// [`PALW_V2_MAX_VALIDATOR_PAYOUTS`] bounds the PARTICIPATION fan-out, which is one output per
+/// attesting validator per block. The deferred bonus is one output per included validator per
+/// EPOCH THE BLOCK FINALIZES, and `epochs_finalized_at` returns one epoch per
+/// `epoch_length_blocks` of DAA the block advanced — which `at_two_minute_cadence` sets to 2 on
+/// every ConsensusV2 network. At mainnet's own `min_active_validators = 12` a mergeset of 26
+/// therefore emits 156 outputs on top of the mergeset payout, against a cap of 206, and the block
+/// that would merge the wide tips away is itself unbuildable. The participation cap's own comment
+/// already names the shape: "the chain would halt for the offence of being popular."
+///
+/// The dropped tail is NOT minted — §E's "Unspent → rollover" — but unlike the participation
+/// queue it is never re-offered, because each epoch's threshold is crossed by exactly one block.
+/// Raising this number costs exactly its own count in reserved coinbase slots.
+pub const PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS: u64 = 16;
+
+/// **The §F reserve-drip payouts one coinbase may carry**, per block and not per finalized epoch,
+/// for [`PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS`]' reason and out of the same crossing loop. Sized
+/// equal to it because it fans out over the same set.
+pub const PALW_V2_MAX_RESERVE_DRIP_PAYOUTS: u64 = 16;
+
+/// **What [`PALW_V2_COINBASE_EXTRA_OUTPUTS`] becomes once every appended kind is COUNTED** (mainnet
+/// audit, 2026-09-06, H-3), enforced past `palw_validator_payout_bounds`.
+///
+/// The old constant names three kinds; `expected_coinbase_transaction` plus
+/// `validator_reward_outputs_for_block` append six. At `mergeset_size_limit = 180` the cap was 206
+/// and the pinned worst case was 206 — zero slack — so the first output of a fourth kind made a
+/// node refuse the coinbase it had just built itself. Every kind, in append order, with the
+/// constant that bounds it:
+///
+/// | kind | bound |
+/// |---|---|
+/// | mergeset payout (per blue, per ADR-0058 entitled red) | `mergeset_size_limit` — outside this constant |
+/// | unentitled-red aggregate | 1 — outside this constant, the `+ 1` at the cap |
+/// | §E participation | [`PALW_V2_MAX_VALIDATOR_PAYOUTS`] |
+/// | VLT §6 audit fee | 0 — `vlt: VltParams::INERT` on every preset a card assembles from |
+/// | §E deferred quality bonus | [`PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS`] |
+/// | §F reserve drip | [`PALW_V2_MAX_RESERVE_DRIP_PAYOUTS`] |
+/// | ADR-0033 B14 credit | 0 — `palw_credit: None` on every preset |
+/// | §D inclusion bounty | 1 |
+/// | ADR-0042 D10 escrow releases | [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] |
+///
+/// The two zeros are DORMANT, not absent: `the_coinbase_cap_counts_every_kind_the_builder_appends`
+/// fails on a preset that arms either of them without a bound beside it.
+pub const PALW_V2_COINBASE_EXTRA_OUTPUTS_BOUNDED: u64 = PALW_V2_MAX_PAYOUTS_PER_BLOCK as u64
+    + 1
+    + PALW_V2_MAX_VALIDATOR_PAYOUTS
+    + PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS
+    + PALW_V2_MAX_RESERVE_DRIP_PAYOUTS;
+
 /// `H(operator_pubkey)` — the operator identity panel dedup runs on.
 ///
 /// Domain-separated so an operator id can never collide with a class id, a claim id or any other

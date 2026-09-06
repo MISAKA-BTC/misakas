@@ -540,6 +540,12 @@ pub struct VirtualStateProcessor {
     /// ADR-0065 D2's fence, `None` on every shipped preset. See
     /// [`Self::palw_frontier_provenance_outcome`].
     pub(super) palw_frontier_provenance: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// **ADR-0018 §E's payout bounds** (mainnet audit 2026-09-06 — H-2/H-3/M-1), mode folded in.
+    /// `None` on testnet-11, devnet and simnet; `always()` on a card. Resolved at the BLOCK's DAA
+    /// on both the coinbase construction and the validation path — they must agree, or every node
+    /// builds a different coinbase.
+    pub(super) palw_validator_payout_bounds: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0066: the heartbeat lane's fence, mode folded in.
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset, so
@@ -965,6 +971,7 @@ impl VirtualStateProcessor {
             palw_uncertified_weightless: params.palw_uncertified_weightless,
             palw_da_court: params.palw_da_court,
             palw_frontier_provenance: params.palw_frontier_provenance,
+            palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             finality_depth: params.blockrate.finality_depth,
             palw_credit_params: params.palw_credit.clone(),
             palw_schedule: params.palw_schedule,

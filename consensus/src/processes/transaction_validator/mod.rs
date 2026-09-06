@@ -58,6 +58,15 @@ pub struct TransactionValidator {
     /// the sink rule reads THIS; the isolation half reads `model_sink_outputs_allowed`, which is
     /// `self.palw_model_market_fence.is_some()`.
     palw_model_market_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// **`Params::palw_validator_payout_bounds_declared()`** — whether this ruleset carries
+    /// ADR-0018 §E's payout bounds at all (mainnet audit, 2026-09-06, H-3). The coinbase isolation
+    /// guard is context-free by contract and holds no DAA score, so it asks the height-free
+    /// question; the two builders (`deferred_quality_bonus_outputs`, `reserve_drip_outputs`) ask
+    /// the height-indexed one, which is strictly stronger. That is the correct direction for a
+    /// SIZE guard: too wide only declines to reject a coinbase the exact-hash rule rejects anyway,
+    /// while too narrow refuses a coinbase this node itself built — the 112-block halt.
+    palw_validator_payout_bounds_declared: bool,
 }
 
 impl TransactionValidator {
@@ -81,6 +90,9 @@ impl TransactionValidator {
         // context-bearing door asks the height-indexed one. Passing only the boolean was the
         // defect: it made a scheduled fence relax a consensus rule from genesis.
         palw_model_market_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+        // **ADR-0018 §E's payout bounds, height-free** (mainnet audit 2026-09-06, H-3): the
+        // isolation cap has no DAA score, and a size guard must fail wide.
+        palw_validator_payout_bounds_declared: bool,
     ) -> Self {
         Self {
             max_tx_inputs,
@@ -98,6 +110,7 @@ impl TransactionValidator {
             palw_prompt_ids_form,
             model_sink_outputs_allowed: palw_model_market_fence.is_some(),
             palw_model_market_fence,
+            palw_validator_payout_bounds_declared,
         }
     }
 
@@ -131,7 +144,17 @@ impl TransactionValidator {
             // Every shipped preset's door: the market is dormant, so both halves are shut.
             model_sink_outputs_allowed: false,
             palw_model_market_fence: None,
+            // Every shipped preset's door: ADR-0018 §E's payout bounds are dormant, so the
+            // isolation cap is the one testnet-11 enforces.
+            palw_validator_payout_bounds_declared: false,
         }
+    }
+
+    /// Test-only: flip the height-free payout-bounds door on a validator built by
+    /// [`Self::new_for_tests`]. Production reads it from `Params` in `services.rs`.
+    pub fn with_validator_payout_bounds_for_tests(mut self, declared: bool) -> Self {
+        self.palw_validator_payout_bounds_declared = declared;
+        self
     }
 
     /// kaspa-pq: resolve the [`ScriptPolicy`] to apply at `pov_daa_score`.

@@ -1088,6 +1088,45 @@ pub struct Params {
     /// fence inside the bundle moves `palw_ruleset_id_v2`, which `for_each_fence` never descends
     /// into, so every old/new pair would fail the handshake outright instead of peering.
     pub palw_fp_da_pins: Option<ForkActivation>,
+
+    /// **ADR-0018 §E's payout paths obey their own stated bounds** (mainnet audit, 2026-09-06 —
+    /// H-2, H-3, M-1).
+    ///
+    /// Five rules, ONE fence, because they are one decision surface: §E states every one of them
+    /// and the code stated none. Every one changes the bytes `validate_coinbase_transaction`
+    /// compares by exact hash, so splitting them across fences would only make four extra ways to
+    /// arm half a rule.
+    ///
+    /// 1. `validator_quality_bonus_outputs` stops at the pool — the whole-output cap its sibling
+    ///    `validator_participation_reward_outputs` has carried since the 112-block halt, and §E's
+    ///    own "Unspent → rollover … never the whole pool".
+    /// 2. …and refuses an epoch whose `Σ included stake` exceeds its `expected_stake`. That is the
+    ///    precondition the function's own doc ASSERTS and nothing enforced;
+    ///    `epoch_meets_quality_floor` fails OPEN in the same direction, because a fraction above 1
+    ///    is above any floor.
+    /// 3. …and emits at most [`crate::palw_state_v2::PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS`]
+    ///    outputs per BLOCK, across every epoch that block finalizes — the fan-out is
+    ///    (epochs) × (included), not (included).
+    /// 4. The reserve drip emits at most [`crate::palw_state_v2::PALW_V2_MAX_RESERVE_DRIP_PAYOUTS`]
+    ///    per block, and spends `reserve_drip_per_epoch_cap_sompi` per BLOCK rather than per
+    ///    crossing: a rate limiter whose rate must not depend on how many thresholds one wide
+    ///    mergeset happens to cross.
+    /// 5. The coinbase isolation cap counts every kind the builder appends
+    ///    ([`crate::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS_BOUNDED`]) instead of three of
+    ///    six.
+    ///
+    /// Rules 1-4 TIGHTEN what a coinbase may contain; rule 5 RELAXES the size guard ahead of it.
+    /// `None` on testnet-11, devnet and simnet — every coinbase they build stays byte-identical,
+    /// and a `None` writes nothing into `consensus_params_id` or `consensus_schedule_id`, so their
+    /// fingerprints do not move. `always()` on a card, which has no history to fork.
+    ///
+    /// **TOP LEVEL rather than on `DnsParams`**, for the `palw_fp_da_pins` reason and one more:
+    /// [`Self::consensus_params_id`] hashes `dns_params` as one length-prefixed borsh blob, so a
+    /// new `DnsParams` field would move every preset's fingerprint, testnet-11's included.
+    ///
+    /// Read through [`Self::palw_validator_payout_bounds_fence`] only.
+    pub palw_validator_payout_bounds: Option<ForkActivation>,
+
     /// **ADR-0087 Decision 6 — the model market is a consensus rule armed by activation.** `None`
     /// on every shipped preset: below it `ModelBuy`/`ModelSell` are refused by name at acceptance
     /// and no market exists; past it the fold opens a class's market on its first buy. The
@@ -2622,6 +2661,11 @@ impl Params {
         if self.palw_fp_da_pins == Some(ForkActivation::never()) {
             self.palw_fp_da_pins = None;
         }
+        // ADR-0018 §E's payout bounds (mainnet audit 2026-09-06), the same shape: a bare fence,
+        // `never()` is absence.
+        if self.palw_validator_payout_bounds == Some(ForkActivation::never()) {
+            self.palw_validator_payout_bounds = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -2804,6 +2848,30 @@ impl Params {
             (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
             _ => None,
         }
+    }
+
+    /// **ADR-0018 §E's payout bounds at `daa_score`**, mode folded in — the ONE place this is
+    /// resolved, for [`Self::palw_fp_da_pins_fence`]'s reason and one that is sharper here: the
+    /// coinbase CONSTRUCTION path and the VALIDATION path must get the same answer for the same
+    /// block, or every node computes a different coinbase and the chain stops.
+    pub fn palw_validator_payout_bounds_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_validator_payout_bounds) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// **Does this build's ruleset carry the payout bounds at all?** — the coinbase isolation
+    /// guard's question, and the only one it can ask: `check_coinbase_in_isolation` is context-free
+    /// by contract and holds no DAA score.
+    ///
+    /// Height-free, and therefore strictly WIDER than the height-indexed answer at every height —
+    /// which is the direction a SIZE guard must fail in, and the opposite of the free-prompt door's
+    /// direction. A guard that is too wide declines to reject a coinbase the exact-hash rule then
+    /// rejects anyway; one that is too narrow refuses a coinbase this node itself built, which is
+    /// the 112-block halt this rule exists to prevent.
+    pub fn palw_validator_payout_bounds_declared(&self) -> bool {
+        self.palw_validator_payout_bounds_fence().is_some()
     }
 
     /// ADR-0087 Decision 6's fence with the mode condition folded in — `Some` only on a
@@ -3098,6 +3166,13 @@ impl Params {
             h.write(b"palw_fp_da_pins");
             h.write(pins.daa_score().to_le_bytes());
         }
+        // ADR-0018 §E's payout bounds (mainnet audit 2026-09-06). NAMED for the same reason: they
+        // change the coinbase every block past them must carry, in both directions, so an operator
+        // reading the schedule must see the height.
+        if let Some(bounds) = self.palw_validator_payout_bounds {
+            h.write(b"palw_validator_payout_bounds");
+            h.write(bounds.daa_score().to_le_bytes());
+        }
         h.finalize()
     }
 
@@ -3195,6 +3270,7 @@ impl Params {
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
             palw_fp_da_pins,
+            palw_validator_payout_bounds,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -3479,6 +3555,12 @@ impl Params {
         if let Some(activation) = palw_fp_da_pins.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0018 §E's payout bounds (mainnet audit 2026-09-06). Some-only, like its siblings:
+        // an unset fence puts no bytes into `consensus_schedule_id`, so a build carrying the field
+        // prints the schedule id of a build without it.
+        if let Some(activation) = palw_validator_payout_bounds.as_mut() {
+            fork(activation, visit);
+        }
 
         let Some(dns) = dns_params.as_mut() else {
             absent = u64::MAX;
@@ -3683,6 +3765,7 @@ impl Params {
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
             palw_fp_da_pins,
+            palw_validator_payout_bounds,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -3993,6 +4076,13 @@ impl Params {
             h.write(b"palw_fp_da_pins");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0018 §E's payout bounds (mainnet audit 2026-09-06). Some-only, at the tail, for the
+        // ADR-0065 D4 reason: every shipped preset leaves it `None` and fingerprints
+        // byte-identically to a build from before the field existed.
+        if let Some(activation) = palw_validator_payout_bounds {
+            h.write(b"palw_validator_payout_bounds");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
         // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
         // is the same value the V2 handshake exchanges (two commitments cannot drift when one is
@@ -4293,6 +4383,7 @@ impl Params {
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
             palw_fp_da_pins: self.palw_fp_da_pins,
+            palw_validator_payout_bounds: self.palw_validator_payout_bounds,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -4491,7 +4582,13 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
         // forces reserve/victim to 0 below the fence, degenerating to the byte-identical pre-v2 2-way
         // (reporter + burn). Calibratable economic defaults. The reserve **drip** (Phase 4) releases
         // at most `reserve_drip_per_epoch_cap_sompi` from the security reserve into the participation
-        // pool per finalized epoch. All inert via the v2 fence.
+        // pool per BLOCK past `palw_validator_payout_bounds`, and per finalized EPOCH below it. The
+        // field name still says "per_epoch" and the unit past the fence is the block:
+        // `at_two_minute_cadence` set `epoch_length_blocks` to 2 without moving this number, so a
+        // block that merges 180 crosses ~90 thresholds and released ~90 caps (mainnet audit,
+        // 2026-09-06, M-1). Renaming the field is fingerprint-neutral (borsh encodes positions, not
+        // names) but it is a rename of an economic parameter and is left to the operator. All inert
+        // via the v2 fence.
         security_reserve_bps: 4000,
         victim_epoch_pool_bps: 4000,
         reserve_drip_per_epoch_cap_sompi: 1000 * SOMPI_PER_KASPA,
@@ -4720,7 +4817,13 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
         // forces reserve/victim to 0 below the fence, degenerating to the byte-identical pre-v2 2-way
         // (reporter + burn). Calibratable economic defaults. The reserve **drip** (Phase 4) releases
         // at most `reserve_drip_per_epoch_cap_sompi` from the security reserve into the participation
-        // pool per finalized epoch. All inert via the v2 fence.
+        // pool per BLOCK past `palw_validator_payout_bounds`, and per finalized EPOCH below it. The
+        // field name still says "per_epoch" and the unit past the fence is the block:
+        // `at_two_minute_cadence` set `epoch_length_blocks` to 2 without moving this number, so a
+        // block that merges 180 crosses ~90 thresholds and released ~90 caps (mainnet audit,
+        // 2026-09-06, M-1). Renaming the field is fingerprint-neutral (borsh encodes positions, not
+        // names) but it is a rename of an economic parameter and is left to the operator. All inert
+        // via the v2 fence.
         security_reserve_bps: 4000,
         victim_epoch_pool_bps: 4000,
         reserve_drip_per_epoch_cap_sompi: 1000 * SOMPI_PER_KASPA,
@@ -5228,6 +5331,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
     palw_fp_da_pins: None,
+    palw_validator_payout_bounds: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -5387,6 +5491,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
     palw_fp_da_pins: None,
+    palw_validator_payout_bounds: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -5528,6 +5633,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
     palw_fp_da_pins: None,
+    palw_validator_payout_bounds: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -8724,6 +8830,11 @@ pub fn mainnet_shipped_params() -> Params {
 /// * `palw_attempt_header_pins` (ADR-0072 D8) — the three DA pins and ADR-0071 D2's bucket ceiling
 ///   are asked on the relay path, not only at the composed admission entry point a disqualified
 ///   block never reaches.
+/// * `palw_validator_payout_bounds` (ADR-0018 §E; mainnet audit 2026-09-06 H-2/H-3/M-1) — the §E
+///   quality bonus stops at its pool and refuses an epoch it cannot price, the deferred fan-out and
+///   the reserve drip are bounded per BLOCK rather than per epoch crossing, and the coinbase's own
+///   size guard counts every kind the builder appends. A live chain reaches these as a flag day;
+///   a card has no coinbase history to fork.
 /// * `palw_certification_rent` (ADR-0075 SA-1/SA-2) and `palw_chunk_cap_charge` (ADR-0075 D14) —
 ///   without them two ~60-byte `ObjectChunk`s a block spend the certification grading slots before
 ///   the object is validated, and eight unsigned chunks squat every pending-chunk slot: a
@@ -8773,6 +8884,12 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     // Armed together with the court, from block one, because a fresh card has no history for
     // either to be retroactive about.
     base.palw_fp_da_pins = Some(ForkActivation::always());
+    // **ADR-0018 §E's payout bounds** (mainnet audit, 2026-09-06 — H-2, H-3, M-1). A card is the
+    // only network that can take these from block one: they change the coinbase in both directions
+    // — four tightenings of what the builder emits and one relaxation of the size guard ahead of
+    // it — so a live chain reaches them as a flag day and that is its operator's call. testnet-11
+    // leaves them dormant and every coinbase it builds is byte-identical to today's.
+    base.palw_validator_payout_bounds = Some(ForkActivation::always());
     base
 }
 
@@ -9471,6 +9588,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
     palw_fp_da_pins: None,
+    palw_validator_payout_bounds: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -13096,6 +13214,7 @@ mod consensus_params_id_tests {
             ("palw_receipt_rows_unpriced", p.palw_receipt_rows_unpriced.is_some()),
             ("palw_attempt_header_pins", p.palw_attempt_header_pins.is_some()),
             ("palw_fp_da_pins", p.palw_fp_da_pins.is_some()),
+            ("palw_validator_payout_bounds", p.palw_validator_payout_bounds.is_some()),
         ]
     }
 
@@ -13140,13 +13259,14 @@ mod consensus_params_id_tests {
         .expect("a mainnet-equivalent genesis assembles");
         let carded = palw_rc_arm_phase1(mainnet_certify_registered_classes_v1(assembled));
 
-        // The nine the card STATES on its base (`mainnet_card_base_v1`), individually: eight armed
+        // The ten the card STATES on its base (`mainnet_card_base_v1`), individually: nine armed
         // from genesis on every card, the k-ary court only when the dense tier is pinned.
         for (name, armed) in [
             ("palw_context_ladder", carded.palw_context_ladder),
             ("palw_receipt_rows_unpriced", carded.palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", carded.palw_attempt_header_pins),
             ("palw_fp_da_pins", carded.palw_fp_da_pins),
+            ("palw_validator_payout_bounds", carded.palw_validator_payout_bounds),
             ("palw_certification_rent", carded.palw_certification_rent),
             ("palw_chunk_cap_charge", carded.palw_chunk_cap_charge),
             ("palw_prompt_ids_merkle", carded.palw_prompt_ids_merkle),
@@ -13197,6 +13317,78 @@ mod consensus_params_id_tests {
             "ADR-0069 D7 is genesis-only: a mainnet minted without it can never acquire it"
         );
         carded.validate_palw_v2().expect("the startup gate a mainnet node runs accepts the armed card");
+    }
+
+    /// **A ruleset must be able to pay its own validator floor inside ONE coinbase** (mainnet
+    /// audit, 2026-09-06, H-3).
+    ///
+    /// The §E deferred fan-out is (epochs this block finalizes) × (validators included in each),
+    /// and `epochs_finalized_at` returns one epoch per `epoch_length_blocks` of DAA a block
+    /// advanced — up to `mergeset_size_limit / epoch_length_blocks`. A network whose own
+    /// `min_active_validators` cannot be paid inside its own coinbase cap halts permanently the
+    /// first time a wide mergeset appears, and the block that would merge the wide tips away is
+    /// itself unbuildable. This is a startup-shaped property checked at BUILD time, deliberately
+    /// NOT a `validate_palw_v2` refusal: testnet-11 is live and dormant here, and a runtime gate
+    /// would stop it booting.
+    #[test]
+    fn a_carded_mainnet_can_pay_its_own_validator_floor_inside_one_coinbase() {
+        use crate::config::premine::{bonded_genesis_utxos, premine_outpoint};
+        use crate::palw_fp_devnet_v3::{palw_devnet_bond_registry_v1, palw_v2_maturity_armable_bonds_v1};
+
+        // The same mainnet-equivalent card `a_carded_mainnet_arms_every_fence_testnet_11_arms`
+        // builds — assembled, then armed.
+        let specs: Vec<_> = palw_devnet_bond_registry_v1(palw_v2_maturity_armable_bonds_v1())
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut spec)| {
+                spec.bond = crate::palw_state_v2::PalwBondKeyV2(premine_outpoint(i as u32));
+                spec
+            })
+            .collect();
+        let money: Vec<(u32, [u8; 64])> =
+            specs.iter().enumerate().map(|(i, spec)| (i as u32, *spec.payout_payload.as_byte_slice())).collect();
+        let utxos = bonded_genesis_utxos(MAINNET_PARAMS.net, &money, std::iter::empty());
+        let assembled = palw_v2_params_from_artifacts_on_base_with_utxos(
+            mainnet_card_base_v1(mainnet_v2_mint_base(), false),
+            PALW_RC_GENESIS_ARTIFACT_ROOT,
+            specs,
+            utxos,
+        )
+        .expect("a mainnet-equivalent genesis assembles");
+        let carded = palw_rc_arm_phase1(mainnet_certify_registered_classes_v1(assembled));
+        assert_eq!(carded.palw_validator_payout_bounds, Some(ForkActivation::always()), "a card states the payout bounds");
+
+        // The premise, in this ruleset's OWN numbers: the fan-out a single block can owe.
+        let dns = carded.dns_params.as_ref().expect("the DNS overlay");
+        let epochs_per_block = carded.blockrate.mergeset_size_limit / dns.epoch_length_blocks.max(1) + 1;
+        let fanout = (dns.min_active_validators as u64).saturating_mul(epochs_per_block);
+        let reserved = crate::palw_state_v2::PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS;
+        assert!(
+            reserved > 0 && fanout > reserved,
+            "the premise: this card's own floor of {} validators over {epochs_per_block} finalizable epochs per block \
+             wants {fanout} outputs against {reserved} reserved slots, which is why the fan-out has to be BOUNDED per \
+             block rather than reserved for",
+            dns.min_active_validators,
+        );
+
+        // …and the reserved slots do fit inside the cap the isolation guard applies past the fence.
+        assert!(
+            reserved + crate::palw_state_v2::PALW_V2_MAX_RESERVE_DRIP_PAYOUTS
+                <= crate::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS_BOUNDED,
+            "the two per-block fan-outs must sit inside the widened coinbase allowance"
+        );
+
+        // testnet-11 is live and leaves the fence dormant, so its fan-out is still unbounded
+        // against a cap of `mergeset_size_limit + 1 + PALW_V2_COINBASE_EXTRA_OUTPUTS`. Pinned so
+        // the gap can neither widen nor close in silence — closing it there is a flag day and must
+        // be a decision, not a diff.
+        let rc = palw_rc_shipped_params();
+        assert!(rc.palw_validator_payout_bounds.is_none(), "testnet-11 leaves it dormant: arming it is the operator's call");
+        assert!(rc.palw_validator_payout_bounds_fence().is_none(), "the reader is the one place the rule is decided");
+        for p in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS] {
+            assert!(p.palw_validator_payout_bounds.is_none(), "{}: a shipped preset states no payout-bounds fence", p.net);
+        }
+        assert!(devnet_shipped_params().palw_validator_payout_bounds.is_none(), "devnet inherits the dormant state too");
     }
 
     /// **A data-availability court may not be armed over a class that could not answer it**

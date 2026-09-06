@@ -155,7 +155,29 @@ impl TransactionValidator {
         // it rejecting coinbases that are in fact correct.
         // One output per mergeset block (every blue, and every entitled red under ADR-0058), one
         // aggregate for the reds that are not entitled, and the appended kinds.
-        let outputs_limit = self.mergeset_size_limit + 1 + kaspa_consensus_core::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS;
+        //
+        // **"The appended kinds" was three of six** (mainnet audit, 2026-09-06, H-3).
+        // `PALW_V2_COINBASE_EXTRA_OUTPUTS` counts the §D bounty, the §E participation fan-out and
+        // the D10 escrow releases. The builder also appends the VLT audit fee, the §E deferred
+        // quality bonus, the §F reserve drip and the ADR-0033 credit outputs, and the middle two
+        // fan out per (epoch this block finalizes) × (validator included in it) — with
+        // `epoch_length_blocks = 2` that is ~mergeset/2 epochs, so at mainnet's own
+        // `min_active_validators = 12` a mergeset of 26 already puts the coinbase past this cap.
+        // The block that would merge the wide tips away is itself unbuildable, so it is a permanent
+        // halt rather than a stall.
+        //
+        // Widening cannot admit a wrong coinbase — `validate_coinbase_transaction` compares by
+        // exact hash — but it IS a relaxation, so it sits behind `palw_validator_payout_bounds`,
+        // which arms it on a card and leaves testnet-11's cap where it is. Past that fence the two
+        // fan-outs are bounded at their reserved slots, so the wider cap and the tighter builder
+        // are one change and must arm together.
+        let outputs_limit = self.mergeset_size_limit
+            + 1
+            + if self.palw_validator_payout_bounds_declared {
+                kaspa_consensus_core::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS_BOUNDED
+            } else {
+                kaspa_consensus_core::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS
+            };
         if tx.outputs.len() as u64 > outputs_limit {
             return Err(TxRuleError::CoinbaseTooManyOutputs(tx.outputs.len(), outputs_limit));
         }
@@ -1101,41 +1123,34 @@ mod pq_output_class_enforcement_tests {
         assert!(tv.check_transaction_pq_output_classes(&tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_STAKE_BOND)).is_ok());
     }
 
-    /// **The isolation cap must cover every output the ConsensusV2 coinbase builder can emit.**
+    /// **The cap must cover the BUILDER, and the builder's kinds are enumerated here rather than
+    /// re-summed from the cap's own constants** (mainnet audit, 2026-09-06, H-3).
     ///
-    /// It did not. `expected_coinbase_transaction` appends the ADR-0018 §D inclusion bounty, the
-    /// §E validator payouts and the ADR-0042 Decision 10 escrow releases on top of the mergeset
-    /// payout, while this rule still allowed `ghostdag_k + 2` — the classic mergeset-only bound.
-    /// On testnet-11 the first claim to reach `Final` released one escrowed reward, the coinbase
-    /// reached 4 outputs against a limit of 3, and the node refused 112 consecutive blocks its own
-    /// producer had built. Nothing in the suite related the two numbers, so nothing objected.
+    /// The previous form computed `worst_case` as `mergeset + 1 + 1 + MAX_VALIDATOR_PAYOUTS +
+    /// MAX_PAYOUTS_PER_BLOCK` and asserted that `outputs_limit` — the same expression, rearranged —
+    /// admits it and refuses one more. That is a tautology: it holds for every value of every
+    /// constant, including the values under which a full mergeset left exactly ZERO slots for three
+    /// appended kinds nobody had named. It is the shape this repo keeps meeting — a check shaped to
+    /// agree with its own doc — and it is why the 2026-09-05 widening looked proved and was not.
     ///
-    /// The relationship, not the constant: a coinbase carrying the mergeset AND a full block's
-    /// worth of every appended kind must pass, and one output beyond that must not.
+    /// The list below is the audit of `expected_coinbase_transaction` +
+    /// `validator_reward_outputs_for_block`, one row per site that pushes into the coinbase's
+    /// output vector, each with the constant that bounds it. A kind with no bound is `None` and
+    /// fails the test BY NAME.
     #[test]
-    fn the_coinbase_cap_admits_every_output_a_consensus_v2_block_can_pay() {
-        use kaspa_consensus_core::palw_state_v2::{
-            PALW_V2_COINBASE_EXTRA_OUTPUTS, PALW_V2_MAX_PAYOUTS_PER_BLOCK, PALW_V2_MAX_VALIDATOR_PAYOUTS,
-        };
+    fn the_coinbase_cap_counts_every_kind_the_builder_appends() {
         // This module is not the one at the top of the file and does not inherit its imports.
         use crate::params::MAINNET_PARAMS;
         use crate::processes::transaction_validator::{TransactionValidator, errors::TxRuleError};
+        use kaspa_consensus_core::palw_state_v2::{
+            PALW_V2_COINBASE_EXTRA_OUTPUTS, PALW_V2_COINBASE_EXTRA_OUTPUTS_BOUNDED, PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS,
+            PALW_V2_MAX_PAYOUTS_PER_BLOCK, PALW_V2_MAX_RESERVE_DRIP_PAYOUTS, PALW_V2_MAX_VALIDATOR_PAYOUTS,
+        };
         use kaspa_consensus_core::subnets::SUBNETWORK_ID_COINBASE;
         use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionOutput, scriptvec};
         use kaspa_core::assert_match;
 
         let params = MAINNET_PARAMS.clone();
-        let tv = TransactionValidator::new_for_tests(
-            params.max_tx_inputs,
-            params.max_tx_outputs,
-            params.max_signature_script_len,
-            params.max_script_public_key_len,
-            params.coinbase_payload_script_public_key_max_len,
-            params.coinbase_maturity(),
-            params.mergeset_size_limit(),
-            Default::default(),
-        );
-
         let coinbase_with = |n: usize| {
             Transaction::new(
                 0,
@@ -1147,28 +1162,81 @@ mod pq_output_class_enforcement_tests {
                 vec![],
             )
         };
+        let make = |declared: bool| {
+            TransactionValidator::new_for_tests(
+                params.max_tx_inputs,
+                params.max_tx_outputs,
+                params.max_signature_script_len,
+                params.max_script_public_key_len,
+                params.coinbase_payload_script_public_key_max_len,
+                params.coinbase_maturity(),
+                params.mergeset_size_limit(),
+                Default::default(),
+            )
+            .with_validator_payout_bounds_for_tests(declared)
+        };
 
-        // **What the builder can emit at its worst — one output per MERGESET block, not per blue**
-        // (mainnet audit, 2026-09-05). This used to read `k + 1` blues plus "one aggregate for the
-        // reds", which was the pre-ADR-0058 shape: since ADR-0058 an entitled in-window red is paid
-        // to its OWN script (`expected_coinbase_transaction` pushes one output per such red), and
-        // reds are bounded by the mergeset — 180 on every V2 preset — not by `ghostdag_k`. The old
-        // arithmetic put the cap at 28 and the builder could emit ~180, so a wide mergeset made the
-        // producer's own block fail its own isolation check: the 112-block halt this function's
-        // comment records, reachable again and reachable on purpose.
-        let worst_case =
-            params.mergeset_size_limit() as usize + 1 + 1 + PALW_V2_MAX_VALIDATOR_PAYOUTS as usize + PALW_V2_MAX_PAYOUTS_PER_BLOCK;
+        // Every site that pushes into the coinbase's output vector, with the constant that bounds
+        // it — `None` where nothing does. The two dormant kinds read their own preset field, so a
+        // preset that ever arms one without a bound beside it turns this row `None` and fails here.
+        let dns = params.dns_params.as_ref().expect("mainnet carries the DNS overlay");
+        let kinds: Vec<(&str, Option<u64>)> = vec![
+            ("mergeset payout (per blue, per ADR-0058 entitled red)", Some(params.mergeset_size_limit())),
+            ("unentitled-red aggregate", Some(1)),
+            ("§E participation", Some(PALW_V2_MAX_VALIDATOR_PAYOUTS)),
+            (
+                "VLT §6 audit fee",
+                (dns.vlt.vlt_shadow_activation_daa_score == u64::MAX || dns.vlt.audit_fee_sompi == 0).then_some(0),
+            ),
+            ("§E deferred quality bonus", Some(PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS)),
+            ("§F reserve drip", Some(PALW_V2_MAX_RESERVE_DRIP_PAYOUTS)),
+            ("ADR-0033 credit", params.palw_credit.is_none().then_some(0)),
+            ("§D inclusion bounty", Some(1)),
+            ("ADR-0042 D10 escrow releases", Some(PALW_V2_MAX_PAYOUTS_PER_BLOCK as u64)),
+        ];
+        let unbounded: Vec<&str> = kinds.iter().filter(|(_, b)| b.is_none()).map(|(n, _)| *n).collect();
         assert!(
-            tv.check_coinbase_in_isolation(&coinbase_with(worst_case)).is_ok(),
-            "a coinbase paying every mergeset block plus every appended kind must pass; the builder can emit {worst_case} outputs"
+            unbounded.is_empty(),
+            "every kind the coinbase builder appends must carry a bound the isolation cap reserves a slot for; \
+             these carry none: {unbounded:?}"
+        );
+        let worst_case: u64 = kinds.iter().map(|(_, b)| b.unwrap()).sum();
+
+        // Past the fence: the cap admits the enumerated worst case and refuses one more.
+        let carded = make(true);
+        assert!(
+            carded.check_coinbase_in_isolation(&coinbase_with(worst_case as usize)).is_ok(),
+            "a coinbase paying every kind at its bound must pass; the builder can emit {worst_case} outputs"
+        );
+        assert_match!(
+            carded.check_coinbase_in_isolation(&coinbase_with(worst_case as usize + 1)),
+            Err(TxRuleError::CoinbaseTooManyOutputs(_, _))
+        );
+        assert_eq!(
+            worst_case,
+            params.mergeset_size_limit() + 1 + PALW_V2_COINBASE_EXTRA_OUTPUTS_BOUNDED,
+            "the enumerated worst case and the cap are one statement — a kind added to the builder without a slot \
+             reserved for it moves them apart"
         );
 
-        // And the cap is still a cap.
-        assert_match!(tv.check_coinbase_in_isolation(&coinbase_with(worst_case + 1)), Err(TxRuleError::CoinbaseTooManyOutputs(_, _)));
+        // **And testnet-11's cap does not move.** Pinned as the number a live chain enforces, so a
+        // widening that reached it would be a red test rather than a silent relaxation.
+        let t11 = make(false);
+        let dormant_cap = params.mergeset_size_limit() + 1 + PALW_V2_COINBASE_EXTRA_OUTPUTS;
+        assert!(t11.check_coinbase_in_isolation(&coinbase_with(dormant_cap as usize)).is_ok());
+        assert_match!(
+            t11.check_coinbase_in_isolation(&coinbase_with(dormant_cap as usize + 1)),
+            Err(TxRuleError::CoinbaseTooManyOutputs(_, _))
+        );
+        assert!(
+            dormant_cap < worst_case,
+            "and the gap that is still open on testnet-11 is stated as a number: its cap is {dormant_cap} against a \
+             builder that can emit {worst_case}"
+        );
 
-        // The bound the old arithmetic gave, stated so the regression cannot come back quietly: a
-        // mergeset of 30 entitled reds is an ordinary DAG on a 180-block mergeset limit, and it is
-        // past every version of this cap that counted blues only.
+        // The bound the pre-ADR-0058 arithmetic gave, stated so THAT regression cannot come back
+        // quietly either: a cap counting blues only sits below the mergeset bound, so an ordinary
+        // wide DAG was past it.
         let old_cap = params.ghostdag_k() as usize + 2 + PALW_V2_COINBASE_EXTRA_OUTPUTS as usize;
         assert!(
             old_cap < params.mergeset_size_limit() as usize,
@@ -1177,15 +1245,8 @@ mod pq_output_class_enforcement_tests {
             params.mergeset_size_limit()
         );
         assert!(
-            tv.check_coinbase_in_isolation(&coinbase_with(old_cap + 1)).is_ok(),
-            "one output past the blues-only cap must be legal — that cap was the halt"
-        );
-
-        // The two constants are one statement, so a change to either has to move both.
-        assert_eq!(
-            PALW_V2_COINBASE_EXTRA_OUTPUTS,
-            PALW_V2_MAX_PAYOUTS_PER_BLOCK as u64 + 1 + PALW_V2_MAX_VALIDATOR_PAYOUTS,
-            "the extra allowance must be exactly the kinds the builder appends"
+            t11.check_coinbase_in_isolation(&coinbase_with(old_cap + 1)).is_ok(),
+            "one output past the blues-only cap must be legal — that cap was the 112-block halt"
         );
     }
 }
