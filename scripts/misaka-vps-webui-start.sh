@@ -35,7 +35,7 @@ Options:
   --service-user <user>     Existing service user; auto-detected from systemd
   --appdir <path>           Existing kaspad appdir; auto-detected from the running process
   --skip-apt                Do not run apt-get update/install
-  --skip-build              Reuse already-installed Web UI support binaries
+  --skip-build              Reuse already-installed Web UI companion binaries
   --run-tests               Run misaka-cli tests before installation
   --check-only              Show service, appdir, UTXO index, disk, and exit
   --enable-utxoindex        Back up and update an existing node, then exit
@@ -56,7 +56,7 @@ Environment equivalents:
   MISAKA_ENABLE_UTXO_INDEX=1
 
 When an existing systemd node is found, this script preserves its service user
-and appdir. It installs only the Web UI support binaries; it does not replace or
+and appdir. It installs only the Web UI companion binaries; it does not replace or
 restart kaspad and does not delete node data, validator keys, bonds, or setup state.
 The explicit --enable-utxoindex operation is the only exception: it backs up the
 existing unit, adds only --utxoindex, validates it, and restarts an active node once.
@@ -495,7 +495,7 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
   cargo --version
   rustc --version
 
-  log "Build Web UI support binaries without replacing kaspad"
+  log "Build Web UI companion binaries without replacing kaspad"
   cd "$REPO_DIR"
   if [[ "$RUN_TESTS" == "1" ]]; then
     cargo test -p misaka-cli
@@ -514,7 +514,7 @@ tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
 rm -f "$SETUP_DIR/web-session.json" "$SETUP_DIR/web-url.txt"
 
 if [[ "$SKIP_BUILD" != "1" ]]; then
-  log "Back up and install Web UI support binaries"
+  log "Back up and install Web UI companion binaries"
   BACKUP_SUFFIX="before-webui-$(date -u +%Y%m%dT%H%M%SZ)"
   for binary_name in misaka kaspa-pq-validator misaminer; do
     if [[ -f "/usr/local/bin/$binary_name" ]]; then
