@@ -101,6 +101,15 @@ The front-page operator banner was also three flag days stale — it named DAA 5
 `0533c8ee…`, a malformed `&nbsp;`, and the claim that "old and new builds stay peers until it
 fires", which the 2026-09-06 measurement disproves. Replaced with the current notice.
 
+**A fingerprint hand-copied onto the public page goes stale faster than the page does.** The first
+replacement named `b511dd1e…` — correct for the running fleet, and already wrong for `main`: the
+testnet-11 pin moved **three times** on 2026-09-06 (`71b35c25` → `b511dd1e` → `ebd3b321` → `060e3597`)
+as the court ladder was added at 1,900 and then moved to 2,150. It was corrected within the hour
+(`?v=ord2`). The banner now names only what a `main` build prints, never the fleet's current value:
+naming both is how a page ends up describing two chains. When the fleet and `main` disagree, the
+banner follows `main`, because the banner's reader is someone about to build — and the fleet catching
+up is the operator's job, not the joiner's.
+
 Deploy: `app.js` first, then `index.html` (the reverse order 404s the versioned asset for a moment).
 Backups on `.113`: `app.js.bak-ord-<ts>`, `index.html.bak-ord-<ts>`,
 `/root/misakascan-nginx.bak-{,h2-,rv-}<ts>`.
