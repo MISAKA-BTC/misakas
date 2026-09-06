@@ -328,7 +328,7 @@ jobs:
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2
+        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518 # v2
         with:
           tool: cargo-nextest
 
@@ -491,7 +491,7 @@ jobs:
         run: cargo clippy --tests --benches --examples -- -D warnings
 
       - name: Install cargo-deny (advisory gate)
-        uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2
+        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518 # v2
         with:
           tool: cargo-deny
 
@@ -669,7 +669,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install wasm-pack
-        uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2
+        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518 # v2
         with:
           tool: wasm-pack
 
@@ -759,7 +759,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install wasm-pack
-        uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2
+        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518 # v2
         with:
           tool: wasm-pack
 
