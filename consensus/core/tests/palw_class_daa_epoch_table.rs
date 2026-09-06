@@ -804,6 +804,32 @@ fn the_bind_window_gate_measures_the_dearest_class() {
             .ok()
             .filter(|(_, entry, _)| entry.class_id == *class_id)
         })
+        .or_else(|| {
+            // **…and the graph-v5 512 row, which is the builder the shipped assembly actually
+            // uses for the dense slot** (`palw_rc_params_with_classes`: GENESIS DECISION 8e).
+            //
+            // The `_v2` branch above answers for the graph-v2 row and the filter makes it decline
+            // this one, which is exactly the message the `expect` below prints — "registered by a
+            // builder this list does not try". Adding the builder is what that message asks for.
+            //
+            // It takes two arguments the other two do not, and both come from the ruleset rather
+            // than from the object: the BUNDLE (the row is priced against the court and the
+            // windows it is registered into) and the prompt-ids form (ADR-0081 Decision 3 prices
+            // the close's id carriage). Reading them from the assembled `bundle` and
+            // `palw_prompt_ids_form_at(0)` is what makes this a reconstruction of the shipped
+            // registration rather than a second opinion about it.
+            kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_graph_v5_registration_v1(
+                *artifact_root,
+                *share_permille,
+                *slash_value_per_pwu,
+                *initial_target,
+                bundle,
+                params.palw_prompt_ids_form_at(0),
+                kaspa_consensus_core::palw_state_v2::palw_genesis_registrant_bond_v1(),
+            )
+            .ok()
+            .filter(|(_, entry, _)| entry.class_id == *class_id)
+        })
         .unwrap_or_else(|| {
             panic!(
                 "no builder in this test reconstructs the genesis registration of class {class_id} — it is \
