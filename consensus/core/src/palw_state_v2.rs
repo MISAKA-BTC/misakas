@@ -22595,6 +22595,20 @@ pub(crate) mod tests {
 
         /// The registry fence armed, so an accepted attempt is attributed to the line it ran
         /// (ADR-0088 Decision 4) and the reward can find its pair.
+        fn apply_armed_delta(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+            att: Option<&PalwAttemptEnvelopeV2>,
+        ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+            let extras = PalwTransitionExtrasV1 { model_lines_active: true, ..Default::default() };
+            let (state, delta) = apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, &extras)
+                .expect("transition applies");
+            state.assert_internal_consistency(p).expect("internal consistency after apply");
+            (state, delta)
+        }
+
         fn apply_armed(
             parent: &PalwChainStateV2,
             p: &PalwStateParamsV2,
@@ -22602,11 +22616,7 @@ pub(crate) mod tests {
             objects: &[PalwConsensusObjectV2],
             att: Option<&PalwAttemptEnvelopeV2>,
         ) -> PalwChainStateV2 {
-            let extras = PalwTransitionExtrasV1 { model_lines_active: true, ..Default::default() };
-            let (state, _) = apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, &extras)
-                .expect("transition applies");
-            state.assert_internal_consistency(p).expect("internal consistency after apply");
-            state
+            apply_armed_delta(parent, p, c, objects, att).0
         }
 
         /// The lattice `palw_v2_escrow_is_carved_once_and_paid_once` walks, with `seed_first`
@@ -22641,8 +22651,16 @@ pub(crate) mod tests {
             if let Some(m) = s4.model_market(&class) {
                 assert_eq!((m.msk_reserve, m.buyback_sompi), (SEED, 0), "and nothing bought while it is");
             }
-            let s5 = apply_armed(&s4, &p, &PalwBlockContextV2 { subsidy: 9_999_999, ..ctx(6, 125, 6) }, &[], None);
+            let (s5, d5) = apply_armed_delta(&s4, &p, &PalwBlockContextV2 { subsidy: 9_999_999, ..ctx(6, 125, 6) }, &[], None);
             assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+            // A reorg of the maturing block takes the reward's buy back with it — the move is an
+            // ordinary `ModelMarket` delta entry, so the revert restores the row byte for byte.
+            let back = revert_delta_v2(&s5, &d5, &p).expect("the maturing block reverts");
+            assert_eq!(back.state_root(), s4.state_root(), "reverting the Final undoes the buyback and the payout");
+            assert_eq!(
+                back.model_market(&h64(1)).map(|m| (m.msk_reserve, m.buyback_sompi)),
+                s4.model_market(&h64(1)).map(|m| (m.msk_reserve, m.buyback_sompi))
+            );
             (p, s5, claim_id)
         }
 
