@@ -13,6 +13,12 @@
 //! stands (the product never falls); there is no virtual reserve. Every line opens with
 //! `PALW_MODEL_POSITION_SUPPLY_V1` positions in the curve. The price at any moment is
 //! `msk_reserve / position_units` and there is no other price.
+//!
+//! **Amended by ADR-0091 (2026-09-06).** The reward buys the pair: at a claim's `Final`,
+//! `PALW_MODEL_BUYBACK_PERMILLE_V1` of its escrowed worker reward enters the reserve as the
+//! chain's own move — no leg, no holder — and the positions the curve gives up for it are
+//! RETIRED (`retired_units`: the chain's, for good; M1 counts them). The other 95 % is the
+//! miner's. Where a line has no pair, or a closed one, the miner is paid in full.
 
 use crate::Hash64;
 use crate::tx::ScriptPublicKey;
@@ -31,6 +37,9 @@ pub const PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1: u64 = 0;
 /// ADR-0090 Decision 2: the least seed that opens a line's market — 100,000 MSK, every sompi of
 /// which enters the curve, none of which any object ever pays out.
 pub const PALW_MODEL_SEED_MIN_SOMPI_V1: u64 = 100_000 * 100_000_000;
+/// ADR-0091 Decision 1: the part of a claim's escrowed worker reward that buys from the pair of
+/// the line the claim ran, in permille — the other 950 ‰ is named for the miner at `Final`.
+pub const PALW_MODEL_BUYBACK_PERMILLE_V1: u64 = 50;
 /// Fee on the MSK leg of every move, in permille: burned.
 pub const PALW_MODEL_BURN_PERMILLE_V1: u64 = 50;
 /// Fee on the MSK leg of every move, in permille: to the class's registrant (burned when the
@@ -70,6 +79,12 @@ pub struct PalwModelMarketV1 {
     /// ADR-0090 Decision 3: who paid the seed — a payout payload kept for the record only; the
     /// seeder holds nothing and can move nothing.
     pub seeded_by: Hash64,
+    /// ADR-0091 Decision 2: MSK the mining reward has put into the curve, cumulative — five
+    /// percent of every model block's escrowed worker reward, entered at the claim's `Final`.
+    pub buyback_sompi: u64,
+    /// ADR-0091 Decision 4: the positions the reward's buys took out of the curve — the chain's,
+    /// for good; no object sells them, and `position_units + Σ holders + retired_units = supply`.
+    pub retired_units: u64,
 }
 
 impl PalwModelMarketV1 {
@@ -87,6 +102,8 @@ impl PalwModelMarketV1 {
             contributor_paid_sompi: 0,
             seed_sompi,
             seeded_by,
+            buyback_sompi: 0,
+            retired_units: 0,
         }
     }
 
@@ -171,7 +188,8 @@ pub fn palw_model_sell_quote_v1(market: &PalwModelMarketV1, units_in: u64) -> Op
     }
     let k = market.k();
     let units_after = market.position_units as u128 + units_in as u128;
-    if units_after > PALW_MODEL_SUPPLY_UNITS_V1 as u128 {
+    // ADR-0091 Decision 4: the curve can hold at most the supply less what the reward retired.
+    if units_after > (PALW_MODEL_SUPPLY_UNITS_V1 - market.retired_units) as u128 {
         return None;
     }
     let x_now = market.msk_reserve as u128;
@@ -188,6 +206,42 @@ pub fn palw_model_sell_quote_v1(market: &PalwModelMarketV1, units_in: u64) -> Op
         ..*market
     };
     Some(PalwModelSellQuoteV1 { fees, after })
+}
+
+/// ADR-0091 Decision 1: the slice of an escrowed worker reward that buys from the pair —
+/// `⌊escrow × 50 / 1000⌋`; the miner is named the rest.
+pub fn palw_model_buyback_slice_v1(escrowed_reward: u64) -> u64 {
+    ((escrowed_reward as u128 * PALW_MODEL_BUYBACK_PERMILLE_V1 as u128) / 1000) as u64
+}
+
+/// What the reward's slice does to a market (ADR-0091 Decision 2): the whole slice enters the
+/// reserve — no leg — and the curve gives up `units − ⌈K / reserve′⌉` positions, which are
+/// RETIRED, never held; a slice under one position's price gives up none and still raises the
+/// price (the product rose). `None` where no pair takes it: a closed market, an unseeded row,
+/// or nothing to add — the caller then names the whole escrow for the miner (Decision 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwModelBuybackQuoteV1 {
+    pub slice: u64,
+    pub retired: u64,
+    pub after: PalwModelMarketV1,
+}
+
+pub fn palw_model_buyback_quote_v1(market: &PalwModelMarketV1, slice: u64) -> Option<PalwModelBuybackQuoteV1> {
+    if market.closed_to_buys || slice == 0 || market.position_units == 0 || market.msk_reserve == 0 {
+        return None;
+    }
+    let k = market.k();
+    let reserve_after = market.msk_reserve.checked_add(slice)?;
+    let units_after = k.div_ceil(reserve_after as u128).min(market.position_units as u128) as u64;
+    let retired = market.position_units - units_after;
+    let after = PalwModelMarketV1 {
+        msk_reserve: reserve_after,
+        position_units: units_after,
+        buyback_sompi: market.buyback_sompi.checked_add(slice)?,
+        retired_units: market.retired_units.checked_add(retired)?,
+        ..*market
+    };
+    Some(PalwModelBuybackQuoteV1 { slice, retired, after })
 }
 
 /// The sink a buy's carrier pays into: `OP_RETURN <8-byte tag> <64-byte class id>`. Unspendable
@@ -373,5 +427,84 @@ mod tests {
         assert_ne!(m, palw_model_sell_message_v1(&c, &h, 6, 6));
         assert_ne!(m, palw_model_sell_message_v1(&h, &c, 5, 6));
         assert!(m.starts_with(PALW_MODEL_SELL_SIGN_DOMAIN_V1));
+    }
+
+    /// ADR-0091 §4's worked numbers: testnet-11's block (escrow 229,690,373 sompi) from the least
+    /// seed — the slice, the miner's rest, one block, a day of blocks — and a block big enough
+    /// to retire positions.
+    #[test]
+    fn the_reward_slice_is_worked_as_the_adr_table() {
+        let escrow = 229_690_373u64;
+        let slice = palw_model_buyback_slice_v1(escrow);
+        assert_eq!(slice, 11_484_518, "five percent of the escrow, rounded down");
+        assert_eq!(escrow - slice, 218_205_855, "the other ninety-five percent is the miner's");
+        let m0 = seeded();
+        let one = palw_model_buyback_quote_v1(&m0, slice).expect("a seeded, open market takes the slice");
+        assert_eq!(one.after.msk_reserve, 10_000_011_484_518, "the whole slice is reserve, no leg");
+        assert_eq!(
+            (one.after.position_units, one.retired, one.after.retired_units),
+            (500_000, 0, 0),
+            "under one position's price: nothing retired"
+        );
+        assert_eq!(one.after.price_sompi_per_position_v1(), 20_000_022, "and the price rose anyway");
+        assert_eq!(one.after.buyback_sompi, slice);
+        assert!(one.after.k() > m0.k(), "the product rose");
+        let mut m = m0;
+        for _ in 0..720 {
+            m = palw_model_buyback_quote_v1(&m, slice).unwrap().after;
+        }
+        assert_eq!(
+            (m.msk_reserve, m.position_units, m.price_sompi_per_position_v1()),
+            (10_008_268_852_960, 500_000, 20_016_537),
+            "a day of such blocks"
+        );
+        assert_eq!(m.buyback_sompi, 720 * slice);
+        // A network whose subsidy were 100 MSK a block: escrow 62 MSK, slice 3.1 MSK — 15 positions retire.
+        let big = palw_model_buyback_slice_v1(62 * MSK);
+        assert_eq!(big, 310_000_000);
+        let q = palw_model_buyback_quote_v1(&m0, big).unwrap();
+        assert_eq!((q.after.position_units, q.retired, q.after.retired_units), (499_985, 15, 15));
+        assert_eq!(q.after.price_sompi_per_position_v1(), 20_001_220);
+        assert_eq!(q.after.position_units + q.after.retired_units, PALW_MODEL_SUPPLY_UNITS_V1, "M1 with the retired counted");
+        // No pair takes a slice where the market is closed, or there is nothing to add.
+        assert!(palw_model_buyback_quote_v1(&PalwModelMarketV1 { closed_to_buys: true, ..m0 }, slice).is_none());
+        assert!(palw_model_buyback_quote_v1(&m0, 0).is_none());
+        assert!(
+            palw_model_buyback_quote_v1(&PalwModelMarketV1::seed_v1(1, 0, Hash64::default()), slice).is_none(),
+            "an unseeded row is not a market"
+        );
+    }
+
+    /// ADR-0091 B6 / ADR-0090 P1 over the new move: buys, buybacks and sells in any order never
+    /// lower the product, never take the reserve under the seed, and keep the supply whole with
+    /// the retired positions counted.
+    #[test]
+    fn the_product_never_falls_under_the_reward_too() {
+        let mut m = seeded();
+        let mut k = m.k();
+        let mut held = 0u64;
+        for (i, x) in [1u64, 37 * MSK, 11_484_518, 1_000 * MSK, 31_000_000_000, 999, 250 * MSK, 5 * MSK].iter().enumerate() {
+            if i % 2 == 0 {
+                let q = palw_model_buyback_quote_v1(&m, *x).expect("the pair takes every slice");
+                assert!(q.after.k() >= k, "buyback {x}: product fell");
+                assert_eq!(q.after.position_units + q.retired, m.position_units, "what left the curve was retired");
+                m = q.after;
+            } else if let Some(q) = palw_model_buy_quote_v1(&m, *x) {
+                held += q.units_out;
+                m = q.after;
+            }
+            k = m.k();
+            assert_eq!(m.position_units + held + m.retired_units, PALW_MODEL_SUPPLY_UNITS_V1, "M1 at every stop");
+        }
+        assert!(m.retired_units > 0, "the 310 MSK slice retired positions");
+        let s = palw_model_sell_quote_v1(&m, held).expect("everything held sells");
+        assert!(s.after.k() >= k);
+        assert!(s.after.msk_reserve >= s.after.seed_sompi, "the reserve stays at or above the seed");
+        assert_eq!(
+            s.after.position_units + s.after.retired_units,
+            PALW_MODEL_SUPPLY_UNITS_V1,
+            "sold out: the curve plus the retired is the supply"
+        );
+        assert!(palw_model_sell_quote_v1(&s.after, 1).is_none(), "and nothing can sell a retired position back: the curve is full");
     }
 }

@@ -70,6 +70,8 @@ fn market_from_response(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwM
         contributor_paid_sompi: r.contributor_paid_sompi,
         seed_sompi: r.seed_sompi,
         seeded_by: r.seeded_by.parse().unwrap_or_default(),
+        buyback_sompi: r.buyback_sompi,
+        retired_units: r.retired_units,
     }
 }
 
@@ -90,6 +92,9 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
         "seed_sompi": r.seed_sompi,
         "seeded_by": r.seeded_by,
         "seed_min_sompi": r.seed_min_sompi,
+        "buyback_sompi": r.buyback_sompi,
+        "retired_units": r.retired_units,
+        "retired_positions": r.retired_units / PALW_MODEL_POSITION_UNITS_V1,
         "closed_to_buys": r.closed_to_buys,
         "price_sompi_per_position": r.price_sompi_per_position,
         "supply_units": r.supply_units,
@@ -144,6 +149,11 @@ pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: boo
         println!("  burned         {}", msk(r.burned_sompi));
         println!("  owner          {} paid (the 1 % leg)", msk(r.registrant_paid_sompi));
         println!("  contributor    {} paid", msk(r.contributor_paid_sompi));
+        println!(
+            "  mining bought  {} (5 % of every block's reward on this line; {} positions retired)",
+            msk(r.buyback_sompi),
+            r.retired_units / PALW_MODEL_POSITION_UNITS_V1
+        );
         if let Some((msk_in, q)) = &quote {
             println!("quote: a buy of {} now", msk(*msk_in));
             println!("  burn 5 %       {}", msk(q.fees.burn));

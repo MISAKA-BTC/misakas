@@ -281,6 +281,11 @@ on. Nothing in mock mode is a chain fact; it exists for demos, screenshots and U
   A node of this tree answers the ADR-0090 shape and everything above applies.
 - Below the fences there is no way to enumerate classes from the chain (the registry window is
   the enumeration), hence `CLASS_IDS` in `config.js`.
+- ADR-0091: the market row carries `buybackSompi` (MSK the mining reward has bought into the pair)
+  and `retiredUnits` (positions the chain holds for good). Both travel on the wRPC row and as the
+  AMM window's two appended words, so a node from before ADR-0091 answers nine words and the site
+  shows a dash rather than a zero. The site never computes them: `curve.buyback` exists only so the
+  self-test can check the chain's arithmetic and so `mock.js` can simulate a mined pair.
 - The AMM window's `market()` does not carry the seed or the seeder; when the wRPC is down those
   two cells are a dash even for a seeded line.
 - Attempt-lane certification is served by the registry window only (`certified(class, 0)`); the

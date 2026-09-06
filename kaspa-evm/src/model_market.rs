@@ -803,8 +803,11 @@ impl MarketHandlers {
                         .u64(m.contributor_paid_sompi)
                         .bool(m.closed_to_buys)
                         .bool(exists)
+                        // ADR-0091: appended, so every word above keeps its offset.
+                        .u64(m.buyback_sompi)
+                        .u64(m.retired_units)
                         .finish(),
-                    None => Out::default().zeros(9).finish(),
+                    None => Out::default().zeros(11).finish(),
                 }
             }
             x if x == s.price_of => {
@@ -1429,6 +1432,46 @@ pub mod abi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **ADR-0091 B7: `market()`'s two new words are the row's, and every earlier word keeps its
+    /// offset.** The window is a read of the fold's row, so the check is the encoding: eleven
+    /// words, the ADR's two at the end, and an unknown line still eleven zeros.
+    #[test]
+    fn adr0091_market_words() {
+        use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_SEED_MIN_SOMPI_V1, PalwModelMarketV1};
+        let line = Hash64::from_u64_word(9);
+        let mut row = PalwModelMarketV1::seed_v1(7, PALW_MODEL_SEED_MIN_SOMPI_V1, Hash64::from_u64_word(1));
+        row.buyback_sompi = 31_000_000_000;
+        row.retired_units = 1_545;
+        row.position_units -= 1_545;
+        let mut view = PalwEvmViewV1 { chain_daa: 42, chain_id: 1, ..Default::default() };
+        view.markets.insert(line, row);
+        let m = MarketHandlers::new(
+            std::sync::Arc::new(view),
+            PalwEvmMarketFencesV1 { market_active: true, lines_active: true, evm_active: true },
+            1,
+        );
+        let mut input = sel().market.to_vec();
+        input.extend_from_slice(&line.as_byte_slice()[..32]);
+        input.extend_from_slice(&line.as_byte_slice()[32..]);
+        let Ok(out) = m.amm(&input) else { panic!("the window answers") };
+        assert_eq!(out.len(), 11 * 32, "nine words became eleven, appended");
+        let word = |i: usize| u64::from_be_bytes(out[i * 32 + 24..i * 32 + 32].try_into().unwrap());
+        assert_eq!(word(0), 7, "openedDaa");
+        assert_eq!(word(1), row.msk_reserve, "mskReserve");
+        assert_eq!(word(2), row.position_units, "positionUnits");
+        assert_eq!(word(7), 0, "closedToBuys");
+        assert_eq!(word(8), 1, "exists");
+        assert_eq!(word(9), 31_000_000_000, "buybackSompi");
+        assert_eq!(word(10), 1_545, "retiredUnits");
+        // An unknown line is the zero row, at the new width.
+        let unknown = Hash64::from_u64_word(0xDEAD);
+        let mut input = sel().market.to_vec();
+        input.extend_from_slice(&unknown.as_byte_slice()[..32]);
+        input.extend_from_slice(&unknown.as_byte_slice()[32..]);
+        let Ok(zero) = m.amm(&input) else { panic!("a zero row") };
+        assert_eq!(zero, vec![0u8; 11 * 32]);
+    }
 
     #[test]
     fn the_core_crate_spells_the_writer_selector_the_intercept_answers() {

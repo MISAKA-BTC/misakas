@@ -221,9 +221,39 @@ Attacks considered:
 6. Arming on testnet-11 with ADR-0090's release (§7 item 6 there): the same three fences, one
    fingerprint.
 
-## 8. Implementation record
+## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)
 
-To be written when the work of §7 lands on `palw-adr0088-0089-impl`.
+Items 1–5 landed the same day; item 6 is the operator's release, shared with ADR-0090's.
+
+* `consensus/core/src/palw_model_market_v1.rs` — `PALW_MODEL_BUYBACK_PERMILLE_V1 = 50`, the row's
+  `buyback_sompi` and `retired_units`, `palw_model_buyback_slice_v1`, `palw_model_buyback_quote_v1`
+  (the whole slice into the reserve, what the curve gives up retired, `None` where no pair takes
+  it), and the sell quote's new bound — the curve holds at most `supply − retired`. Two tests with
+  §4's numbers: `the_reward_slice_is_worked_as_the_adr_table` (B6),
+  `the_product_never_falls_under_the_reward_too` (B6/P1, buys and buybacks interleaved).
+* `consensus/core/src/palw_state_v2.rs` — `PalwChainStateV2::model_line_of_root` (attribution that
+  does not lapse with a version), `TransitionBuilder::model_buyback_at_final`, and `finalize_claim`
+  naming `escrow − slice` for the miner. M1 and M2 in the market tests now count the retired
+  positions and the slices. Three tests: `the_reward_buys_the_pair_at_final_and_the_miner_is_paid_the_rest`
+  (B1/B4), `a_miner_of_an_unseeded_line_is_paid_in_full` (B3),
+  `what_the_reward_buys_is_retired_and_the_supply_stays_whole` (B5).
+* RPC: `buybackSompi` / `retiredUnits` on `getPalwModelMarket` (wire version 4, backward-loading;
+  proto fields 19–20; both gRPC converters; the service reads them off the row). CLI: `model-show`
+  prints "mining bought" with the positions retired, and the JSON carries both.
+* `kaspa-evm/src/model_market.rs` — `market()` answers eleven words, the two appended so every
+  earlier offset holds; an unknown line is eleven zeros. `adr0091_market_words` (B7).
+  `contracts/misaka-model/IMisakaModelAMM.sol` and the README say the same.
+* `web/misaka-options/` — `curve.buybackSlice` / `curve.buyback` (the chain's arithmetic, for the
+  self-test and the mock only), the two words read from both lanes (a pre-ADR-0091 node serves
+  neither and the site shows a dash, never a zero), "Bought by mining" on the market bar, the line
+  page and the leaderboard (sortable), the docs page's "Mining buys the pair" section and fee-table
+  row, the add-model step 3 text, nine self-test checks against these goldens, and a mock world
+  whose seeded pairs have been mined on.
+* `scripts/misaka-palw-model-market-devnet-e2e.sh` — step 1g/1h: with no trade in flight the
+  reward alone moves the pair, and the reserve is exactly `seed + buyback` with the price not
+  falling (B8). The node-agreement row now compares `traded = reserve − buyback`, which the
+  reward's own move leaves alone; the reserve, the buyback and the retired count are logged for
+  the reader. Run 10 (2026-09-06): see below.
 
 ## 9. What is deliberately not decided
 

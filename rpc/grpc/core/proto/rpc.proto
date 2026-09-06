@@ -1555,6 +1555,8 @@ message GetPalwModelMarketResponseMessage {
   uint64 seedSompi = 16;
   string seededBy = 17;
   uint64 seedMinSompi = 18;
+  uint64 buybackSompi = 19;
+  uint64 retiredUnits = 20;
   RPCError error = 1000;
 }
 

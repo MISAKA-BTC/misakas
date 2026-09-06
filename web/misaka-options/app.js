@@ -355,6 +355,7 @@ const CURVE_DEFAULTS = {
   supplyUnits: 500000n,                       // PALW_MODEL_SUPPLY_UNITS_V1 = 500,000 whole positions a line
   seedMinSompi: 100000n * SOMPI_PER_MSK,      // PALW_MODEL_SEED_MIN_SOMPI_V1 (100,000 MSK)
   burnPermille: 50n,                          // PALW_MODEL_BURN_PERMILLE_V1
+  buybackPermille: 50n,                       // PALW_MODEL_BUYBACK_PERMILLE_V1 (ADR-0091: 5 % of a block's reward)
   legPermille: 10n,                           // PALW_MODEL_REGISTRANT_PERMILLE_V1 (the owner's leg since ADR-0088)
 };
 const curve = {
@@ -373,7 +374,7 @@ const curve = {
   // the row a seed makes: the whole supply in the curve, the seed as the reserve, fee-free
   seed(seedSompi, c, seededBy, daa) {
     c = c || CURVE_DEFAULTS; seedSompi = bi(seedSompi);
-    return { found: true, opened: seedSompi > 0n, openedDaa: bi(daa || 0), mskReserve: seedSompi, positionUnits: c.supplyUnits, soldUnits: 0n, burnedSompi: 0n, ownerPaid: 0n, contributorPaid: 0n, closedToBuys: false, seedSompi, seededBy: seededBy || null, supplyUnits: c.supplyUnits, seedMinSompi: c.seedMinSompi, classStatus: '' };
+    return { found: true, opened: seedSompi > 0n, openedDaa: bi(daa || 0), mskReserve: seedSompi, positionUnits: c.supplyUnits, soldUnits: 0n, burnedSompi: 0n, ownerPaid: 0n, contributorPaid: 0n, closedToBuys: false, seedSompi, seededBy: seededBy || null, supplyUnits: c.supplyUnits, seedMinSompi: c.seedMinSompi, buybackSompi: 0n, retiredUnits: 0n, classStatus: '' };
   },
   // the zero row of a line nobody seeded yet: no reserve, the whole supply, no price
   unseeded(c) { return curve.seed(0n, c); },
@@ -384,6 +385,19 @@ const curve = {
     const u = bi(m.positionUnits), r = bi(m.mskReserve);
     if (u === 0n || r === 0n) return null;
     return (r * c.unitsPerPosition) / u;
+  },
+  // ADR-0091 D1: the slice of an escrowed worker reward that buys from the pair
+  buybackSlice(escrow, c) { c = c || CURVE_DEFAULTS; return (bi(escrow) * c.buybackPermille) / 1000n; },
+  // ADR-0091 D2: the reward's own move — the whole slice enters the reserve (no leg, no holder)
+  // and what the curve gives up is RETIRED. null where no pair takes it (closed, unseeded, zero).
+  buyback(m, slice) {
+    slice = bi(slice);
+    if (!m || m.closedToBuys || slice === 0n || bi(m.positionUnits) === 0n || bi(m.mskReserve) === 0n) return null;
+    const k = curve.k(m), reserve = bi(m.mskReserve) + slice;
+    let units = (k + reserve - 1n) / reserve;                    // ceil(K / reserve')
+    if (units > bi(m.positionUnits)) units = bi(m.positionUnits);
+    const retired = bi(m.positionUnits) - units;
+    return { slice, retired, after: Object.assign({}, m, { mskReserve: reserve, positionUnits: units, buybackSompi: bi(m.buybackSompi || 0n) + slice, retiredUnits: bi(m.retiredUnits || 0n) + retired }) };
   },
   // burn + leg + net == gross, the remainder on the net leg
   feeSplit(gross, c) {
@@ -418,7 +432,8 @@ const curve = {
     if (unitsIn <= 0n) return null;
     const reserve = bi(m.mskReserve);
     const unitsAfter = bi(m.positionUnits) + unitsIn;
-    if (unitsAfter > c.supplyUnits) return null;
+    // ADR-0091 D4: the curve holds at most the supply less what the reward retired
+    if (unitsAfter > c.supplyUnits - bi(m.retiredUnits || 0n)) return null;
     const xAfter = divCeil(curve.k(m), unitsAfter);
     if (xAfter > reserve) return null;
     const gross = bmin(reserve - xAfter, reserve);
@@ -457,6 +472,8 @@ function normMarket(src, source) {
     // the seed and its payer travel on the wRPC only; the AMM window has no such word (null = not served)
     seedSompi: src.seedSompi != null ? bi(src.seedSompi) : null, seededBy: normId(src.seededBy) || null,
     seedMinSompi: bi(src.seedMinSompi) || (db.constsFromChain && db.constsFromChain.seedMinSompi) || CURVE_DEFAULTS.seedMinSompi,
+    // ADR-0091: both lanes serve these; a node from before it serves neither (null = not served)
+    buybackSompi: src.buybackSompi != null ? bi(src.buybackSompi) : null, retiredUnits: src.retiredUnits != null ? bi(src.retiredUnits) : null,
     classStatus: src.classStatus || '', source, at: Date.now(),
   };
   m.seeded = curve.seeded(m);        // reserve > 0: the same guard the fold's quote applies
@@ -757,11 +774,14 @@ async function discoverLines() {
 async function marketFromAmm(lineId) {
   const w = ABI.words(await evm.call(ADDR.AMM, ABI.call(SIG.market, ...ABI.idWords(lineId))));
   if (w.length < 9) return null;
+  // ADR-0091 appended two words; a node from before it answers nine and serves neither
+  const buyback = w.length >= 11 ? ABI.u(w[9]) : null, retired = w.length >= 11 ? ABI.u(w[10]) : null;
   const c = db.constsFromChain || CURVE_DEFAULTS;
   // `exists` (word 8) is false for a line nobody seeded: the window answers the zero row
   return normMarket({
     found: true, opened: ABI.bool(w[8]), openedDaa: ABI.u(w[0]), mskReserve: ABI.u(w[1]), positionUnits: ABI.u(w[2]), soldUnits: ABI.u(w[3]),
     burnedSompi: ABI.u(w[4]), ownerPaid: ABI.u(w[5]), contributorPaid: ABI.u(w[6]), closedToBuys: ABI.bool(w[7]), supplyUnits: c.supplyUnits, seedMinSompi: c.seedMinSompi,
+    buybackSompi: buyback, retiredUnits: retired,
   }, 'evm');
 }
 // the class's status and certification as the chain answers them: the wRPC's market row carries
@@ -1351,6 +1371,7 @@ async function pageTrade(arg) {
       ['Seed (locked)', m ? (m.seeded ? (m.seedSompi != null ? fmtMsk(m.seedSompi, 2) : raw('<span class="dim" title="The AMM window does not carry the seed; the wRPC does">—</span>')) : raw('<span class="dim">none</span>')) : '—', m && m.seeded ? 'The MSK the market opened with, locked for good (ADR-0090)' : 'No seed yet: at least ' + fmtMsk(seedMinFor(m), 0) + ' MSK opens the market'],
       ['Seeded by', m && m.seeded && m.seededBy ? raw(idCell(m.seededBy, 8).s) : '—', 'The seeder\'s payout payload, kept for the record; the seeder holds nothing'],
       ['Sold / Supply', m && !m.legacy ? fmtPos(held) + ' / ' + fmtPos(m.supplyUnits) : '—', m && m.legacy ? 'The node serves the pre-ADR-0090 row (units of a millionth of a position); not shown' : m ? 'Whole positions outside the curve now. Ever bought: ' + fmtPos(m.soldUnits) : null],
+      ['Bought by mining', m && m.buybackSompi != null ? fmtMsk(m.buybackSompi, 2) + (bi(m.retiredUnits || 0n) > 0n ? ' · ' + fmtPos(m.retiredUnits) + ' retired' : '') : m ? raw('<span class="dim" title="This node is from before ADR-0091 and serves no buyback">—</span>') : '—', 'ADR-0091: 5 % of every block\'s mining reward on this line buys from the pair and stays in it; what the curve gives up is retired, held by the chain for good. Nothing is paid to holders.'],
       ['Owner', owner ? owner.text : '—', owner ? owner.title : null],
       ['Current version', row && row.current ? 'v' + row.current + (row.previews && row.previews.length ? ' +' + row.previews.length + ' preview' : '') : (row ? 'v1' : '—'), row ? row.versionsPublished + ' published' : null],
       ['Roots in force', info && info.rootsInForce ? String(info.rootsInForce.length) : '—', 'Roots an attempt claim may name for this class (ADR-0088 D3)'],
@@ -1687,6 +1708,7 @@ async function pageTrade(arg) {
         <dt>Symbol</dt><dd>${rec.symbol}</dd>
         <dt>Market</dt><dd>${m ? (m.seeded ? 'seeded at DAA ' + fmtInt(m.openedDaa) : 'not seeded yet (a seed of at least ' + fmtMsk(seedMinFor(m), 0) + ' MSK opens it)') : '—'}</dd>
         <dt>Seed (locked)</dt><dd>${m && m.seeded ? (m.seedSompi != null ? fmtMsk(m.seedSompi) + ' MSK, locked for good' : raw('<span class="dim">not served by the AMM window</span>')) : m ? 'none' : '—'}</dd>
+        <dt>Bought by mining</dt><dd>${m && m.buybackSompi != null ? fmtMsk(m.buybackSompi) + ' MSK · ' + fmtPos(m.retiredUnits || 0n) + ' positions retired' : raw('<span class="dim">not served by this node</span>')}</dd>
         <dt>Seeded by</dt><dd>${m && m.seededBy ? idCell(m.seededBy, 12) : '—'}</dd>
         <dt>Reserve</dt><dd>${m ? fmtMsk(m.mskReserve) + ' MSK' : '—'}</dd>
         <dt>Positions in the curve</dt><dd>${m && !m.legacy ? fmtPos(m.positionUnits) + ' of ' + fmtPos(m.supplyUnits) : m ? raw('<span class="dim">— (the node serves the pre-ADR-0090 row: units of 10<sup>-6</sup> position, a virtual reserve)</span>') : '—'}</dd>
@@ -1796,7 +1818,7 @@ function lineRowsHtml(list, opts) {
   opts = opts || {};
   return h`<div class="tbl-wrap"><table class="tbl" id="linesTbl"><thead><tr>
     ${opts.rank ? raw('<th>#</th>') : ''}
-    <th class="l">Line</th><th class="l">Class</th><th class="sortable ${opts.sort === 'price' ? 'sorted' : ''}" data-sort="price">Price (MSK)</th><th>24h</th><th class="sortable ${opts.sort === 'reserve' ? 'sorted' : ''}" data-sort="reserve">Reserve (MSK)</th><th class="sortable ${opts.sort === 'seed' ? 'sorted' : ''}" data-sort="seed" title="The MSK the market opened with, locked for good">Seed (locked)</th><th class="sortable ${opts.sort === 'sold' ? 'sorted' : ''}" data-sort="sold">Sold / Supply</th><th class="l">Owner</th><th>Versions</th><th class="sortable ${opts.sort === 'usage' ? 'sorted' : ''}" data-sort="usage">Usage (claims)</th><th class="l">Status</th>
+    <th class="l">Line</th><th class="l">Class</th><th class="sortable ${opts.sort === 'price' ? 'sorted' : ''}" data-sort="price">Price (MSK)</th><th>24h</th><th class="sortable ${opts.sort === 'reserve' ? 'sorted' : ''}" data-sort="reserve">Reserve (MSK)</th><th class="sortable ${opts.sort === 'seed' ? 'sorted' : ''}" data-sort="seed" title="The MSK the market opened with, locked for good">Seed (locked)</th><th class="sortable ${opts.sort === 'sold' ? 'sorted' : ''}" data-sort="sold">Sold / Supply</th><th class="sortable ${opts.sort === 'buyback' ? 'sorted' : ''}" data-sort="buyback" title="MSK the mining reward has bought into the pair (ADR-0091)">Mining bought</th><th class="l">Owner</th><th>Versions</th><th class="sortable ${opts.sort === 'usage' ? 'sorted' : ''}" data-sort="usage">Usage (claims)</th><th class="l">Status</th>
   </tr></thead><tbody>
     ${list.length ? list.map((r, i) => { const m = r.market, row = r.row, o = ownerLabel(row), u = usageOf(r); const held = m ? m.supplyUnits - m.positionUnits : null; const seeded = !!(m && m.seeded); return h`<tr class="row-link" data-href="#/trade/${r.lineId}">
       ${opts.rank ? h`<td class="rank">${i + 1}</td>` : ''}
@@ -1807,6 +1829,7 @@ function lineRowsHtml(list, opts) {
       <td class="num">${seeded ? fmtMsk(m.mskReserve, 2) : m ? raw('<span class="dim">0</span>') : '—'}</td>
       <td class="num">${seeded ? (m.seedSompi != null ? fmtMsk(m.seedSompi, 0) : raw('<span class="dim" title="not served by the AMM window">—</span>')) : m ? raw('<span class="dim">none</span>') : '—'}</td>
       <td class="num" title="${m && m.legacy ? 'pre-ADR-0090 row: not shown' : m ? 'ever bought: ' + fmtPos(m.soldUnits) : ''}">${m && !m.legacy ? fmtPos(held) + ' / ' + fmtPos(m.supplyUnits) : '—'}</td>
+      <td class="num" title="${m && m.buybackSompi != null && bi(m.retiredUnits || 0n) > 0n ? fmtPos(m.retiredUnits) + ' positions retired' : '5 % of every block\'s reward on this line'}">${m && m.buybackSompi != null ? fmtMsk(m.buybackSompi, 2) : raw('<span class="dim">—</span>')}</td>
       <td class="l" title="${o ? o.title : ''}">${o ? o.text : '—'}</td>
       <td class="num">${row && row.versionsPublished != null ? row.versionsPublished + ' (v' + row.current + ')' : '—'}</td>
       <td class="num" title="attempt + free-prompt claims on the current version, counted by the fold">${u != null ? fmtInt(u) : '—'}</td>
@@ -1820,6 +1843,7 @@ function sortLines(list, key) {
     if (key === 'price') return m && m.price != null ? m.price : -1n;
     if (key === 'reserve') return m ? m.mskReserve : -1n;
     if (key === 'seed') return m ? (m.seedSompi != null ? m.seedSompi : m.seeded ? 0n : -1n) : -2n;
+    if (key === 'buyback') return m && m.buybackSompi != null ? m.buybackSompi : -1n;
     if (key === 'sold') return m ? m.supplyUnits - m.positionUnits : -1n;
     if (key === 'usage') { const u = usageOf(r); return u == null ? -1n : u; }
     return 0n;
@@ -1892,6 +1916,7 @@ async function pageLine(arg) {
         <div class="tile"><div class="k">Reserve (MSK)</div><div class="v">${m ? fmtMsk(m.mskReserve, 2) : '—'}</div><div class="s">burned ${m ? fmtMsk(m.burnedSompi, 2) : '—'} · owner paid ${m ? fmtMsk(m.ownerPaid, 2) : '—'}</div></div>
         <div class="tile"><div class="k">Seed (locked)</div><div class="v">${m && m.seeded ? (m.seedSompi != null ? fmtMsk(m.seedSompi, 2) : '—') : m ? 'none' : '—'}</div><div class="s">${m && m.seededBy ? 'by ' + shortId(m.seededBy, 10) + ' (payout payload, for the record)' : m && m.seeded ? 'seeder not served by the AMM window' : 'locked for good once paid; the seeder holds no position'}</div></div>
         <div class="tile"><div class="k">Sold / Supply</div><div class="v">${m && !m.legacy ? fmtPos(m.supplyUnits - m.positionUnits) + ' / ' + fmtPos(m.supplyUnits) : '—'}</div><div class="s">${m && m.legacy ? 'pre-ADR-0090 row from the node: not shown' : 'whole positions · ever bought ' + (m ? fmtPos(m.soldUnits) : '—')}</div></div>
+        <div class="tile"><div class="k">Bought by mining</div><div class="v">${m && m.buybackSompi != null ? fmtMsk(m.buybackSompi, 2) : m ? '—' : '—'}</div><div class="s">${m && m.buybackSompi != null ? (bi(m.retiredUnits || 0n) > 0n ? fmtPos(m.retiredUnits) + ' positions retired (the chain\'s, for good)' : 'no position retired yet: each slice is under one position\'s price') : 'this node serves no buyback (pre-ADR-0091)'}</div></div>
         <div class="tile"><div class="k">Versions</div><div class="v">${row.versionsPublished != null ? row.versionsPublished : '—'}</div><div class="s">current v${row.current || '—'}${row.previews && row.previews.length ? ' · previews ' + row.previews.join(', ') : ''}</div></div>
         <div class="tile"><div class="k">Usage (current version)</div><div class="v">${rec.usage ? fmtInt(rec.usage.attempt + rec.usage.fp) : '—'}</div><div class="s">${rec.usage ? fmtInt(rec.usage.attempt) + ' attempt · ' + fmtInt(rec.usage.fp) + ' free-prompt · ' + fmtInt(rec.usage.workLeaves) + ' leaves' : 'claims counted by the fold'}</div></div>
         <div class="tile"><div class="k">Roots in force</div><div class="v">${inForce ? inForce.length : '—'}</div><div class="s">for the class at DAA ${info && info.tipDaa != null ? fmtInt(info.tipDaa) : '—'}</div></div>
@@ -2012,12 +2037,16 @@ function pageDocs() {
     <h2>The curve</h2>
     <p>Each line's market is a constant-product curve over its real MSK reserve, with <b>no virtual reserve</b>: <code>reserve × positions = K</code>, where <code>K</code> is taken from the row as it stands at every move, so the product can only stay or grow. The price at any moment is <code>reserve / positions in the curve</code>; there is no other price. The first price is <code>seed / ${fmtPos(supply)}</code> (${fmtPrice(first)} MSK at the least seed). A buy adds its net leg to the reserve and releases <code>positions − ⌈K / reserve′⌉</code>; a sell returns positions and pays <code>reserve − ⌈K / positions′⌉</code>, never more than the reserve. Buying raises the price, selling lowers it.</p>
     <p><b>The seed floor invariant.</b> Because the product never falls, with every position back in the curve the reserve is at the seed or above: <b>the reserve never falls under the seed</b>, by any sequence of buys and sells. A holder's sell is the only thing that moves MSK out of the curve, and it cannot reach the seed.</p>
+    <h2>Mining buys the pair</h2>
+    <p>When a block does PALW work with a model, the worker reward it earns is <b>escrowed</b> and named for its miner only when the block's claim reaches <code>Final</code>. At that moment <b>5 % of that reward buys from the model's pair</b> and stays in it, and the miner is named the other <b>95 %</b> (ADR-0091). The slice takes no fee and gives nobody a position: the positions the curve gives up for it are <b>retired</b> — the chain holds them for good, no object can sell them, and <code>positions in the curve + every holder's + retired = ${fmtPos(supply)}</code>. Nothing is ever distributed to holders; what mining does for a holder is <b>raise the price</b> the curve will pay them when they sell.</p>
+    <p>A line with <b>no pair</b> (unseeded), or one closed to buys, pays its miner in full — nothing is burned for a model. Because the slice enters the reserve, the product rises and the price rises even when the slice is worth less than one position, which at the least seed is every ordinary block: on testnet-11's subsidy the escrow is 2.29690373 MSK, the slice 0.11484518 MSK and the miner's 2.18205855 MSK, which lifts a freshly seeded pair from 0.2 to 0.20000022 MSK a position, and about +2.5 % over a month of such blocks.</p>
     <h2>Fees</h2>
     <table><tr><th>on every MSK leg of a buy or a sell</th><th>share</th><th>where it goes</th></tr>
       <tr><td>burn</td><td>5 %</td><td>destroyed; supply only ever falls</td></tr>
       <tr><td>owner leg</td><td>1 %</td><td>the line's owner bond (shared with an adopted contributor when the owner says so); burned for an unowned genesis line</td></tr>
       <tr><td>net</td><td>94 %</td><td>into the reserve on a buy; paid to the seller on a sell</td></tr>
-      <tr><td>the seed</td><td>none</td><td>liquidity, not a trade: every sompi of it enters the reserve</td></tr></table>
+      <tr><td>the seed</td><td>none</td><td>liquidity, not a trade: every sompi of it enters the reserve</td></tr>
+      <tr><td>the mining slice</td><td>none</td><td>liquidity too: 5 % of a block's reward, whole, into the reserve — what it buys is retired, not held (ADR-0091)</td></tr></table>
     <p>A round trip therefore costs 12 % plus the curve's slippage. Worked from a market seeded with exactly ${fmtMsk(seedMin, 0)} MSK (first price ${fmtPrice(first)} MSK): a buy of 1,000 MSK burns 50, pays 10 to the owner, puts 940 in the reserve and releases 4,656 positions (price 0.20377757); a second 1,000 MSK buy releases 4,570 more (reserve 101,880); selling all 9,226 back pays 1,879.88976 MSK gross and 1,767.0963744 MSK net, puts 500,000 positions back and leaves the reserve at 100,000.11024 MSK, above the seed. A buy of 0.1 MSK releases nothing; 0.22 MSK releases exactly one position. The <a href="?selftest=1#/docs">self-test</a> checks this site's arithmetic against those golden numbers from the chain's own tests.</p>
     <h2>Adding a model</h2>
     <p>The <a href="#/add">Add model</a> page is the checklist: (1) register the class from a node that holds the artifact (a bond, its key and a fee; not something a browser can do), (2) seed the pair with at least ${fmtMsk(seedMin, 0)} MSK, (3) approval, which is the class reaching <code>Active</code> at its activation DAA and its lanes being certified (ADR-0054, ADR-0075; a clock and a court, not a vote), (4) the line trades: buys move the price. The seed may precede the approval; buys wait for <code>Active</code>.</p>
@@ -2036,6 +2065,7 @@ function pageDocs() {
     <p>MSK amounts in the views, quotes and events are in sompi (1 MSK = 10<sup>8</sup> sompi). A buy's or a seed's <code>msg.value</code> is in wei and must be a multiple of 10<sup>10</sup> (1 sompi). Position amounts are whole numbers (<code>decimals() = 0</code>; the market row's <code>positionUnits</code> is a count of positions).</p>
     <h2>Read the design</h2>
     <ul><li><a href="${CFG.ADR_URL}/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md" target="_blank" rel="noopener">ADR-0090: the pair is seeded with real MSK, locked for good, and a position is whole</a></li>
+      <li><a href="${CFG.ADR_URL}/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md" target="_blank" rel="noopener">ADR-0091: the reward buys the pair, and no holder is paid</a></li>
       <li><a href="${CFG.ADR_URL}/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md" target="_blank" rel="noopener">ADR-0087: a position is bought from the curve and sold back to it</a></li>
       <li><a href="${CFG.ADR_URL}/0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md" target="_blank" rel="noopener">ADR-0088: the class keeps its graph; a line keeps its owner, and the owner keeps publishing</a></li>
       <li><a href="${CFG.ADR_URL}/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md" target="_blank" rel="noopener">ADR-0089: the fold is the truth; the EVM is its window and its hand</a></li>
@@ -2129,7 +2159,7 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \\
       <li class="step">
         <div class="step-h"><span class="n">3</span><b>Approval</b> ${stepTag(...s.appr)}</div>
         <div class="step-b">
-          <p class="small">"Approved as a model that earns mining rewards" is the class reaching <b>Active</b> at its activation DAA (a clock: nobody submits it) and its lanes being <b>certified</b> by <code>ClassLaneCertified</code> objects the court grades (ADR-0075; <code>palw-certify drill</code> / <code>bind</code> and <code>misaka palw submit-object</code>, in the runbook above). Nothing on this page can do either. <b>Trading opens when Active</b>; until then a buy is refused (reason 3) and the seed stays.</p>
+          <p class="small">"Approved as a model that earns mining rewards" is the class reaching <b>Active</b> at its activation DAA (a clock: nobody submits it) and its lanes being <b>certified</b> by <code>ClassLaneCertified</code> objects the court grades (ADR-0075; <code>palw-certify drill</code> / <code>bind</code> and <code>misaka palw submit-object</code>, in the runbook above). Nothing on this page can do either. <b>Trading opens when Active</b>; until then a buy is refused (reason 3) and the seed stays. From then on the class also earns: every block it produces escrows a worker reward, and at that claim's <code>Final</code> <b>5 % of it buys from this pair</b> and stays in it (the other 95 % is the miner's) — the price rises with the model's own mining, and nothing is paid out to holders (ADR-0091).</p>
           <dl class="kv small">
             <dt>Class status</dt><dd>${cs ? cs.head + (cs.activationDaa != null ? ' (activates at DAA ' + fmtInt(cs.activationDaa) + ')' : '') + (cs.sinceDaa != null ? ' (since DAA ' + fmtInt(cs.sinceDaa) + ')' : '') : '—'}${cs ? raw(' <span class="dim tiny">' + esc(cs.raw === 'registry classRow' ? 'from the registry window' : 'from the wRPC') + '</span>') : ''}</dd>
             <dt>Chain DAA now</dt><dd>${db.chain.daa != null ? fmtInt(db.chain.daa) : '—'}${cs && cs.activationDaa != null && db.chain.daa != null && cs.activationDaa > db.chain.daa ? ' (' + fmtInt(cs.activationDaa - db.chain.daa) + ' to go)' : ''}</dd>
@@ -2255,6 +2285,20 @@ function selfTestReport() {
   eq('round trip returns at most 0.94² of the gross', rs.fees.net <= (94n * 94n * MSK) / 100n && rs.fees.net > 80n * MSK, true);
   const closed = Object.assign({}, b1.after, { closedToBuys: true });
   eq('a closed market refuses buys', curve.buyQuote(closed, 10n * MSK), null); eq('a closed market honours sells', !!curve.sellQuote(closed, b1.unitsOut), true);
+  // ADR-0091 B6: the reward's slice, the miner's rest, and the move's effect on the row.
+  eq('B1: five percent of a 229,690,373 sompi escrow is 11,484,518', curve.buybackSlice(229690373n), 11484518n);
+  eq('B1: the miner is named the other ninety-five percent', 229690373n - curve.buybackSlice(229690373n), 218205855n);
+  const bb1 = curve.buyback(m0, 11484518n);
+  eq('B1: the whole slice is reserve, no leg', bb1 && bb1.after.mskReserve, 10000011484518n);
+  eq('B1: a slice under one position retires none and still raises the price', bb1 && bb1.retired === 0n && curve.price(bb1.after) === 20000022n, true);
+  const bb2 = curve.buyback(m0, 310000000n);
+  eq('B5: a 3.1 MSK slice retires 15 positions', bb2 && bb2.retired, 15n);
+  eq('B5: M1 counts the retired', bb2 && bb2.after.positionUnits + bb2.after.retiredUnits === CURVE_DEFAULTS.supplyUnits, true);
+  eq('B3: a closed pair takes no slice', curve.buyback(Object.assign({}, m0, { closedToBuys: true }), 11484518n), null);
+  eq('B3: an unseeded row takes no slice', curve.buyback(curve.unseeded(CURVE_DEFAULTS), 11484518n), null);
+  let bbm = m0, bbk = curve.k(m0);
+  for (let i = 0; i < 720; i++) { bbm = curve.buyback(bbm, 11484518n).after; }
+  eq('B6: a day of blocks lifts the reserve and the price as the ADR says', bbm.mskReserve === 10008268852960n && curve.price(bbm) === 20016537n && curve.k(bbm) > bbk, true);
   const c1 = curve.buyCostForUnits(m0, 1n);
   eq('cost of one position from the seed is minimal', c1 && c1.quote.unitsOut >= 1n && curve.buyQuote(m0, c1.gross - 1n) === null, true);
   const c10 = curve.buyCostForUnits(b2.after, 10n);

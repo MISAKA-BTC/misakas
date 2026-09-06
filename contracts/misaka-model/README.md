@@ -37,7 +37,7 @@ A reader that wants to know the window is open checks that `chainDaa()` returns 
 |---|---|
 | `MisakaModelAddresses.sol` | a library of constants: the four system addresses, `FACADE_PREFIX = 0x4d50`, the chain id, `NATIVE_SCALE_WEI = 1e10`, the writer's encoding version / action ids / per-block cap |
 | `IMisakaModelRegistry.sol` | the registry window: `classCount/classAt/classRow/certified/rootsInForceCount/rootInForceAt`, `lineCount/lineAt/linesOfCount/lineOfClassAt/line`, `version/usage`, `evaluationCount/evaluation`, `proposalCount/proposal`, `facadeOf/lineOf`, `chainDaa` |
-| `IMisakaModelAMM.sol` | the curve window: `market`, `price`, `quoteBuy`, `quoteSell`, `constants` |
+| `IMisakaModelAMM.sol` | the curve window: `market` (ADR-0091 appended `buybackSompi` and `retiredUnits` at the end, so every earlier word keeps its offset), `price`, `quoteBuy`, `quoteSell`, `constants` |
 | `IMisakaModelPosition.sol` | the position window: `balanceOf` (64-byte holder), `balanceOfAddress`, `totalSupply`, `sold`, `holderIdOf` |
 | `IMRC20.sol` | the per-line facade: `name/symbol/decimals/totalSupply/balanceOf`, `lineId/circulating/price/quoteBuy/quoteSell`, `buy/sell/seed`, `supportsInterface`; events `Bought/Sold/Seeded/Refused`; errors `NonTransferable/NotAnAccount/ClosedToBuys/BadValue/SeedTooSmall` |
 | `IMisakaModelWriter.sol` | the hand: `sendAction(bytes) payable`, event `ActionQueued`, error `NotAnAccount`; the data layout and the settlement timing |
@@ -67,6 +67,12 @@ market exists only once someone locks at least 100,000 MSK into it (`seed()` on 
 is `seed / 500,000`, the seeder receives no position, and no object ever pays the seed out — the
 curve's product never falls, so with every position back in the curve the reserve is the seed or
 more.
+
+The pair also grows without a trade: at the `Final` of a claim a block earned with the model,
+five percent of that block's escrowed worker reward buys from the line's curve and stays in it,
+the miner is named the other ninety-five, and the positions the curve gives up are **retired** —
+the chain's, for good, counted by `retiredUnits` and by no `balanceOf`. Nothing is distributed to
+holders; the price is what mining moves (ADR-0091).
 
 Facade addresses are `0x4d50 ‖ blake2b_512("misaka-evm/model-position-facade/v1" ‖
 line_id)[..18]`. BLAKE2b is **not available in Solidity** on this lane, so a contract cannot

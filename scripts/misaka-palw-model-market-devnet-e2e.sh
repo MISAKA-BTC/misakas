@@ -11,6 +11,9 @@
 #   1b. ADR-0090: a buy before any seed is refused; an EVM account funded through EVM_DEPOSIT_LOCK +
 #      claim seeds the line with the least seed (100,000 MSK) through the writer — the market opens
 #      at 0.2 MSK a position with 500,000 whole positions in the curve; a second (carrier) seed is refused
+#   1g. ADR-0091: with NO trade in flight, the mining reward alone moves the pair — every block's
+#      escrowed worker reward gives 5 % to this line's curve at its claim's Final (the miner keeps
+#      95 %), so `buyback_sompi` rises and the reserve is exactly seed + buyback
 #   2. a CARRIER buy (ADR-0087): `misaka palw model-buy` from the premine key → every node folds it
 #   3. (the EVM account was funded in 1b)
 #   4. an EVM buy (ADR-0089 D5/D6): `misaka palw model-evm-buy` → queued in B, settled in C, the
@@ -182,7 +185,16 @@ row_of() {
   bal="$(jfind balanceWei "$WORK_DIR/out/bal-$i.json")"
   cli "$i" palw model-evm-position --line "$LINE_ID" --address "$EVM_ADDR" --output json > "$WORK_DIR/out/pos-$i.json" 2>/dev/null || echo '{}' > "$WORK_DIR/out/pos-$i.json"
   pos="$(jfind units "$WORK_DIR/out/pos-$i.json")"
-  echo "reserve=${reserve:-?} sold=${sold:-?} balanceWei=${bal:-?} positionUnits=${pos:-?}"
+  # ADR-0091: the reserve now rises with every Final on this line, so reading six nodes in
+  # sequence catches them at different DAA scores and a raw reserve would never compare equal.
+  # `traded = reserve − buyback` is what the SEED and the TRADES put in — invariant under the
+  # reward's own move, and still different the moment two nodes disagree about a trade.
+  local buyback traded
+  buyback="$(jfind buyback_sompi "$WORK_DIR/out/row-$i.json")"; buyback="${buyback:-0}"
+  traded="?"; [ -n "${reserve:-}" ] && traded=$((reserve - buyback))
+  # The reward's own numbers are for the reader, not for the comparison: they move every block.
+  log "    node-$i reserve=${reserve:-?} buyback=${buyback} retired=$(jfind retired_units "$WORK_DIR/out/row-$i.json")"
+  echo "traded=${traded} sold=${sold:-?} balanceWei=${bal:-?} positionUnits=${pos:-?}"
 }
 # Every node must print the same row; the daa of each is shown for the reader.
 all_nodes_agree() {
@@ -278,6 +290,28 @@ cli 0 evm balance --address "$EVM_ADDR" --output json > "$WORK_DIR/out/bal-seed.
 bal_seed="$(jfind balanceWei "$WORK_DIR/out/bal-seed.json")"; log "  balance after the seed ${bal_seed:-?} wei"
 log "carrier seed on the seeded line: refused (a market is seeded once)"
 if cli 0 palw model-seed --key-file "$WORK_DIR/keys/main.seed" --line "$LINE_ID" --msk 100000 --yes > "$WORK_DIR/out/carrier-seed.txt" 2>&1; then check "1f. a second seed is refused" 1; else check "1f. a second seed is refused" 0; fi
+
+# ---- 1g. ADR-0091: the mining reward alone moves the reserve, with no trade -------------------------
+# Every block these fixture producers make on the floor class escrows a worker reward; at that
+# claim's Final five percent of it buys from THIS pair (the founding line's) and the miner is named
+# the rest. Nothing here trades — the only inputs are blocks — so a rise in `buyback_sompi` (and in
+# the reserve above the seed) is the reward's move and nothing else.
+log "ADR-0091: waiting for the reward's own buys (no trade in flight)"
+if until_json "int(find(v,'buyback_sompi') or 0) > 0" cli 0 palw model-show "$LINE_ID"; then
+  bb0="$(jfind buyback_sompi "$WORK_DIR/out/last.json")"; res_bb="$(jfind msk_reserve_sompi "$WORK_DIR/out/last.json")"
+  price_bb="$(jfind price_sompi_per_position "$WORK_DIR/out/last.json")"; ret_bb="$(jfind retired_units "$WORK_DIR/out/last.json")"
+  log "  buyback ${bb0:-?} sompi; reserve ${res_bb:-?}; price ${price_bb:-?}; retired ${ret_bb:-?}"
+  check "1g. the mining reward bought from the pair with no trade in flight" 0
+  if [ "${res_bb:-0}" -eq $((10000000000000 + ${bb0:-0})) ] && [ "${price_bb:-0}" -ge "${price0:-0}" ]; then
+    check "1h. the whole slice is reserve (seed + buyback) and the price did not fall" 0
+  else
+    check "1h. the whole slice is reserve (seed + buyback) and the price did not fall" 1
+  fi
+else
+  log "  no buyback within ${STEP_WAIT}s — no claim reached Final yet on this run"
+  check "1g. the mining reward bought from the pair with no trade in flight" 1
+  check "1h. the whole slice is reserve (seed + buyback) and the price did not fall" 1
+fi
 
 # ---- 2. the carrier buy (ADR-0087) -------------------------------------------------------------------
 log "carrier buy: 5 MSK from the premine key"
