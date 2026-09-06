@@ -9713,6 +9713,16 @@ pub fn palw_rc_base_params() -> Params {
     // * `palw_model_market`, `palw_model_lines`, `palw_model_evm` — ADR-0087/0088/0089's model
     //   positions, the model registry, and the market's EVM window and hand (ADR-0090 §7 item 6's
     //   release, which says exactly these three lines).
+    // * `palw_court_ladder` — ADR-0084 U-08, the 2026-09-06 audit's H-4: the refutation walkers
+    //   take the RULESET's `max_step_leaf_count` past this height instead of the executor's
+    //   `PALW_STEP_MAX_LEAVES`. Until it fires, a dispute over the dense graph-v5 row ends
+    //   `LeafCountOutOfRange` whatever the evidence says — the class is admitted at 2^26 and
+    //   prosecuted at 2^22, so faked execution on the widest registered class is unconvictable and
+    //   an honest refutation is refused. It is a validity RELAXATION (closes the walkers refuse
+    //   today become valid), which is why it arrives at a height with the rest rather than rolling:
+    //   every node must carry it before the height or fork off at it. Riding this flag day rather
+    //   than opening a third was the operator's call, taken while the tip was DAA 1,655 at 4.98
+    //   DAA/h — about 49 hours of lead, the same shape of margin 1,900 itself was chosen with.
     //
     // `palw_prompt_ids_merkle` is deliberately NOT here: the prompt-commitment form is genesis-only
     // (`validate_palw_v2` refuses any other height), because no reader of a `prompt_token_ids_hash`
@@ -9722,6 +9732,7 @@ pub fn palw_rc_base_params() -> Params {
     params.palw_model_market = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_model_lines = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_model_evm = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
+    params.palw_court_ladder = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     // **The EVM lane is ON from DAA 0, inherited from `TESTNET_PARAMS` and kept deliberately.**
     //
     // It was briefly turned off here on the reasoning that `MAINNET_PARAMS` never activates the
@@ -12012,6 +12023,9 @@ mod consensus_params_id_tests {
         previous.palw_model_market = None;
         previous.palw_model_lines = None;
         previous.palw_model_evm = None;
+        // Scheduled on the same flag day by the 2026-09-06 audit's H-4 (ADR-0084 U-08), so the
+        // build the fleet is running does not carry it either.
+        previous.palw_court_ladder = None;
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &previous.palw_consensus_mode else { panic!("V2") };
         previous.blockrate.pruning_depth = palw_v2_pruning_depth_v1(&previous.blockrate, bundle, None);
 
@@ -13286,7 +13300,15 @@ mod consensus_params_id_tests {
                 // See `fork_id_gate_fences_v1`. An un-upgraded seat must rebuild NOW, not by 1900.
                 // Previous: 71b35c250d01598ee8925146e66e8200945503ce2de1030bfd167e799b2498e9 (the
                 // ADR-0083 flag day, 2026-09-04).
-                "b511dd1e99b673c62f3023d3cc1e0f4bc48ca8888d535ed62190d907505de531",
+                // **Re-pinned 2026-09-06, same flag day, one more fence.** `palw_court_ladder`
+                // (ADR-0084 U-08 / the 2026-09-06 audit's H-4) joins the DAA 1,900 set: past it the
+                // refutation walkers take the ruleset's `max_step_leaf_count` instead of the
+                // executor's constant, so a dispute over the dense graph-v5 row can be tried at the
+                // width the row was admitted at. The identity does not move — a scheduled fence is
+                // normalised out of `consensus_identity_id`, which is what lets the fleet roll one
+                // host at a time — and the schedule id does, which is what names the height in the
+                // operator log. Previous: b511dd1e99b673c62f3023d3cc1e0f4bc48ca8888d535ed62190d907505de531.
+                "ebd3b321d4ac68a719f39701af1bfa3931230f27cb77d9fd0e26a513a151ede4",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -14503,9 +14525,28 @@ mod consensus_params_id_tests {
             court_of(&rc).max_step_leaf_count()
         );
 
-        // testnet-11: dormant, so the constant — the court every shipped close was judged under.
-        assert!(rc.palw_court_ladder.is_none(), "testnet-11 leaves the court ladder dormant: it is a live chain");
-        assert_eq!(palw_refutation_leaf_cap_v2(&court_of(&rc), false), PALW_STEP_LEG_MAX_LEAVES);
+        // **testnet-11 SCHEDULES it** (2026-09-06 audit H-4 / ADR-0084 U-08), on the same flag day
+        // as the DA court. Below the height the walkers keep the executor's constant — the court
+        // every close filed so far was judged under, which is why this cannot simply be armed — and
+        // at it they take the ruleset's own ladder. A live chain reaches a rule at a height.
+        let t11_ladder = rc.palw_court_ladder.expect("testnet-11 schedules the court ladder");
+        assert_eq!(
+            t11_ladder,
+            ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA),
+            "the ladder rides the second flag day, not a third"
+        );
+        assert!(!t11_ladder.is_active(PALW_RC_DA_COURT_FENCE_DAA - 1), "…dormant the block before it");
+        assert!(t11_ladder.is_active(PALW_RC_DA_COURT_FENCE_DAA), "…in force at it");
+        assert_eq!(
+            palw_refutation_leaf_cap_v2(&court_of(&rc), t11_ladder.is_active(PALW_RC_DA_COURT_FENCE_DAA - 1)),
+            PALW_STEP_LEG_MAX_LEAVES,
+            "before the height the walkers take the executor's constant"
+        );
+        assert_eq!(
+            palw_refutation_leaf_cap_v2(&court_of(&rc), t11_ladder.is_active(PALW_RC_DA_COURT_FENCE_DAA)),
+            court_of(&rc).max_step_leaf_count(),
+            "at the height they take the ruleset's, which is what closes U-08 on this chain"
+        );
         // **devnet: the fence is DORMANT, and this pins the gap rather than papering it.** Devnet
         // arms `palw_context_ladder` from genesis and leaves `palw_court_ladder` unset, so it
         // admits the graph-v5 row at 2^26 and its court still walks at 2^22. Arming it here would
@@ -15514,3 +15555,4 @@ mod fingerprint_probe {
         );
     }
 }
+
