@@ -569,12 +569,26 @@ pub const PALW_STATE_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_STATE_V2_DOMAIN_OBJECT_CHUNK_GROUP,
     PALW_STATE_V2_DOMAIN_CAPABILITY_FACT,
     PALW_STATE_V2_DOMAIN_COURT_CLOSE_CHUNK,
-    // The two authorisation domains in this module. A signing domain that no sweep can see is a
+    // The authorisation domains in this module. A signing domain that no sweep can see is a
     // domain nothing stops another family from reusing, and a reused domain is a signature made
     // for one purpose accepted for another.
     PALW_CLASS_REGISTRATION_V2_DOMAIN,
     PALW_BOND_RETIREMENT_V2_DOMAIN,
     PALW_BOND_REGISTRATION_V2_DOMAIN,
+    // **And the ML-DSA-87 SIGNING CONTEXTS, which the comment above already claims for this list**
+    // (mainnet audit M-8, 2026-09-06). Every other family carries its contexts here —
+    // `palw_court_v2`, `palw_attempt_v2`, `palw_panel_v2`, `palw_carriage`, `palw_slash`,
+    // `palw_freeprompt_v3`, `palw_derived_v1` all do — and this module was the one that did not,
+    // so three of its six contexts were invisible BOTH to
+    // `derived_domains_are_unique_across_every_palw_family` and to the ruleset id. A context is a
+    // signing domain by definition; listing them here is what makes the committed context set
+    // derivable from the acceptance families instead of re-typed.
+    PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+    PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+    PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT,
+    PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT,
+    PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT,
+    PALW_DA_DISCLOSURE_V2_MLDSA87_CONTEXT,
 ];
 
 fn keyed(domain: &[u8]) -> blake2b_simd::State {
