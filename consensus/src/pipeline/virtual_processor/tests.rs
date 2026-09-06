@@ -11430,3 +11430,58 @@ async fn palw_v2_an_ungradeable_certification_does_not_starve_the_block_cap() {
     }
     assert!(MAINNET_PARAMS.palw_chunk_cap_charge.is_none(), "and every shipped preset leaves it dormant");
 }
+
+/// **The processor's refutation ladder comes from `palw_court_ladder`, and from nothing else**
+/// (ADR-0084 §7.5; mainnet audit 2026-09-06, M-15).
+///
+/// The merge of the DA-court and model-market branches left two ladder fences on `Params` —
+/// `palw_context_ladder` (ADR-0077 Phase B) and `palw_court_ladder` (ADR-0084 U-08) — arming the
+/// same idea at the same call sites on two branches. Nothing in the tree bound either to the
+/// processor that reads one of them, so a carded mainnet armed the wrong one and its court walked
+/// at `2^22` while its classes were admitted at `2^26`.
+///
+/// Three arms, and the middle one is the whole test: arming the OTHER ladder must not move this
+/// answer.
+#[test]
+fn the_processor_resolves_the_refutation_ladder_from_palw_court_ladder_alone() {
+    use kaspa_consensus_core::config::params::{ForkActivation, devnet_shipped_params};
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES;
+
+    let court_of = |p: &kaspa_consensus_core::config::params::Params| match &p.palw_consensus_mode {
+        PalwConsensusMode::ConsensusV2(b) => b.court,
+        _ => panic!("the fixture must be V2"),
+    };
+
+    let case = |mutate: fn(&mut kaspa_consensus_core::config::params::Params)| {
+        let mut params = devnet_shipped_params();
+        mutate(&mut params);
+        let court = court_of(&params);
+        let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+        let consensus = TestConsensus::new(&config);
+        let answer = consensus.virtual_processor().palw_court_step_ladder_at(0, &court);
+        (answer, court.max_step_leaf_count())
+    };
+
+    // The premise: the ruleset admits deeper than the walkers' constant.
+    let (dormant, ruleset_ladder) = case(|p| {
+        p.palw_court_ladder = None;
+        p.palw_context_ladder = None;
+    });
+    assert!(ruleset_ladder > PALW_STEP_LEG_MAX_LEAVES, "the premise: {ruleset_ladder} vs {PALW_STEP_LEG_MAX_LEAVES}");
+    assert_eq!(dormant, PALW_STEP_LEG_MAX_LEAVES, "both dormant: the walkers' constant");
+
+    // **ADR-0077 Phase B's fence is a different rule and must not answer this question.**
+    let (context_only, _) = case(|p| {
+        p.palw_court_ladder = None;
+        p.palw_context_ladder = Some(ForkActivation::always());
+    });
+    assert_eq!(
+        context_only, PALW_STEP_LEG_MAX_LEAVES,
+        "palw_context_ladder must not move the refutation ladder: it gates class admission (ADR-0077 Phase B), and the \
+         fence ADR-0084 §7.5 names for this walk is palw_court_ladder"
+    );
+
+    let (armed, ruleset_ladder) = case(|p| p.palw_court_ladder = Some(ForkActivation::always()));
+    assert_eq!(armed, ruleset_ladder, "armed: the ruleset's own ladder, which is the value a class was admitted at");
+}

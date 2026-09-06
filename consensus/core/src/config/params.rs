@@ -8883,10 +8883,21 @@ fn mainnet_card_params_v1(
 ///   dissection court can try. The operator's statement is the act of pinning
 ///   `PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT`; a fused row pinned through another slot still meets the
 ///   assembly's refusal by name, which is the fail-closed direction.
-/// * `palw_context_ladder` (ADR-0077 Phase B, ADR-0084 U-08) — the court's refutation walkers open
-///   against the ladder the ruleset froze instead of the executor's `2^22`, so a class is
-///   prosecuted at the ladder it was admitted at. Free on a fresh chain: no history was judged
-///   under the other ladder.
+/// * `palw_context_ladder` (ADR-0077 Phase B) — the class-admission ladder rules: a class that
+///   registers a state chunk map is priced over its checkpoint interval, and the court's move clock
+///   is derived from the window and the ladder rather than typed.
+/// * `palw_court_ladder` (ADR-0084 U-08) — the court's refutation walkers open against the ladder
+///   the RULESET froze instead of the executor's `2^22`, so a class is prosecuted at the ladder it
+///   was admitted at. Free on a fresh chain: no history was judged under the other ladder.
+///
+///   **These are two fences and they were one until the DA-court and model-market branches
+///   merged** (mainnet audit 2026-09-06, M-15). One branch closed U-08 on `palw_context_ladder`,
+///   the other minted `palw_court_ladder` for it, and the merge kept both fields with
+///   `palw_court_step_ladder_at` — the processor's only reader of `palw_refutation_leaf_cap_v2` —
+///   reading the second. A card that armed only the first admitted the graph-v5 dense row at `2^26`
+///   and prosecuted it at `2^22`: U-08, re-opened on the one network the fence exists for. Both are
+///   stated here, and `the_processor_resolves_the_refutation_ladder_from_palw_court_ladder_alone`
+///   binds the second to its reader.
 /// * `palw_difficulty_priced_rows` and `palw_receipt_rows_unpriced` (ADR-0083 D1, both halves) — the
 ///   window counts by lane, and a receipt row is not a priced row. The first is also what
 ///   `palw_rc_arm_phase1` would add; stated here because the assembly validates before it runs.
@@ -8925,6 +8936,7 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     }
     base.palw_capability_bound = Some(ForkActivation::always());
     base.palw_context_ladder = Some(ForkActivation::always());
+    base.palw_court_ladder = Some(ForkActivation::always());
     // Both halves of ADR-0083 Decision 1, stated together: the assembly validates before
     // `palw_rc_arm_phase1` runs, and the second half is refused on a base whose first is dormant.
     base.palw_difficulty_priced_rows = Some(ForkActivation::always());
@@ -9651,10 +9663,16 @@ pub const DEVNET_PARAMS: Params = Params {
     // first. Without the ladder the registered class cannot price a wide row, and the ladder is
     // the whole point of registering the graph-v5 512 row (`misaka_palw_base0::classes`).
     //
-    // **Arming the ladder is TWO moves, not one** (card §1): this field AND the bundle's
-    // `PalwCourtParamsV2::max_step_leaf_count`. The second is already
-    // `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` = 2^26 on this base — 2^22 admits n_ctx 39 — so setting
-    // one and not the other would produce a build that looks armed and prices the old row.
+    // **Arming the ladder is THREE moves, not two** (card §1; corrected by the mainnet audit of
+    // 2026-09-06, M-15): this field, the bundle's `PalwCourtParamsV2::max_step_leaf_count`, and —
+    // since the DA-court/model-market merge minted a second fence for it — `palw_court_ladder`
+    // below, which is what the processor's `palw_court_step_ladder_at` actually reads. The second
+    // is already `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` = 2^26 on this base (2^22 admits n_ctx 39).
+    // The THIRD is dormant here and this is a KNOWN GAP, not an oversight: devnet is a shipped
+    // preset with a pinned fingerprint, so arming it is a re-mint and the operator's call. Until
+    // then devnet admits the graph-v5 row at 2^26 and its court walks it at 2^22 — pinned by
+    // `the_refutation_ladder_is_the_rulesets_only_past_the_court_ladder_fence`, which asserts the
+    // gap so it can neither close nor widen in silence.
     palw_context_ladder: Some(ForkActivation::always()),
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -9666,6 +9684,8 @@ pub const DEVNET_PARAMS: Params = Params {
     // history it already accepted. Genesis is the only moment it can be armed.
     palw_uncertified_weightless: Some(ForkActivation::always()),
     palw_da_court: None,
+    // ADR-0084 U-08: dormant, and see the note on `palw_context_ladder` above for why devnet
+    // carries one half of the ladder and not the other.
     palw_court_ladder: None,
     palw_model_market: None,
     palw_model_lines: None,
@@ -13468,6 +13488,8 @@ mod consensus_params_id_tests {
         // armed from genesis on every card, the k-ary court only when the dense tier is pinned.
         for (name, armed) in [
             ("palw_context_ladder", carded.palw_context_ladder),
+            ("palw_court_ladder", carded.palw_court_ladder),
+            ("palw_capability_bound", carded.palw_capability_bound),
             ("palw_receipt_rows_unpriced", carded.palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", carded.palw_attempt_header_pins),
             ("palw_fp_da_pins", carded.palw_fp_da_pins),
@@ -13787,9 +13809,15 @@ mod consensus_params_id_tests {
     /// U-08; mainnet audit, 2026-09-05).
     ///
     /// On every shipped preset the bundle freezes `max_step_leaf_count = 2^26` and the walkers'
-    /// constant is `2^22`. The resolver hands the court the constant while `palw_context_ladder`
-    /// is dormant (testnet-11, whose closes were all judged under it) and the ruleset's number
-    /// past it (devnet from genesis; a carded mainnet, which states the fence on its base).
+    /// constant is `2^22`. `palw_court_ladder` is ADR-0084 §7.5's fence for that loosening — and it
+    /// is NOT `palw_context_ladder`, which after the 2026-09-06 merge is ADR-0077 Phase B's
+    /// admission-rule fence and nothing else.
+    ///
+    /// **Every arming below is READ OFF the params, never handed in.** The version this replaces
+    /// passed a literal `true` for devnet and hand-wrote the fence onto a fixture for the card, so
+    /// it asserted a property of its own arguments: with the card arming the OTHER field it still
+    /// passed, while a carded mainnet prosecuted its dense row at `2^22` (mainnet audit 2026-09-06,
+    /// M-15).
     #[test]
     fn the_refutation_ladder_is_the_rulesets_only_past_the_court_ladder_fence() {
         use crate::palw_court_v2::palw_refutation_leaf_cap_v2;
@@ -13810,22 +13838,35 @@ mod consensus_params_id_tests {
         // testnet-11: dormant, so the constant — the court every shipped close was judged under.
         assert!(rc.palw_court_ladder.is_none(), "testnet-11 leaves the court ladder dormant: it is a live chain");
         assert_eq!(palw_refutation_leaf_cap_v2(&court_of(&rc), false), PALW_STEP_LEG_MAX_LEAVES);
-        // Armed, the ruleset's own ladder — the value a class was admitted at.
+        // **devnet: the fence is DORMANT, and this pins the gap rather than papering it.** Devnet
+        // arms `palw_context_ladder` from genesis and leaves `palw_court_ladder` unset, so it
+        // admits the graph-v5 row at 2^26 and its court still walks at 2^22. Arming it here would
+        // move devnet's pinned fingerprint, which is a re-mint and the operator's call; recording
+        // it is not. If devnet is ever re-minted with the fence, this assertion is the line that
+        // says so.
+        assert!(devnet.palw_court_ladder.is_none(), "devnet leaves ADR-0084 U-08 dormant — a known, pinned gap");
+        assert_eq!(
+            palw_refutation_leaf_cap_v2(&court_of(&devnet), devnet.palw_court_ladder_active_at(0)),
+            PALW_STEP_LEG_MAX_LEAVES,
+            "devnet's court walks at the constant while its classes are admitted at {}",
+            court_of(&devnet).max_step_leaf_count()
+        );
+        // …and the fence, when a network does arm it, hands over the ruleset's own ladder.
         assert_eq!(palw_refutation_leaf_cap_v2(&court_of(&devnet), true), court_of(&devnet).max_step_leaf_count());
 
-        // A carded mainnet states the fence on its base, so its court prosecutes the dense row it
-        // registers. Through the same tail `mainnet_shipped_params` runs.
-        let mut base = mainnet_v2_mint_base();
-        base.palw_context_ladder = Some(ForkActivation::always());
-        base.palw_court_ladder = Some(ForkActivation::always());
-        let carded = palw_rc_arm_phase1(
-            palw_v2_params_from_artifacts_on_base(base, PALW_RC_GENESIS_ARTIFACT_ROOT, vec![])
-                .expect("a zero-seat mainnet card assembles (ADR-0061)"),
-        );
-        assert_eq!(carded.palw_court_ladder, Some(ForkActivation::always()), "…and the arming survives assembly");
+        // **A carded mainnet, through the card's OWN base statement** — not a fixture with the
+        // fence written onto it. `mainnet_card_fixture_v1` runs `mainnet_card_base_v1` and the same
+        // tail `mainnet_shipped_params` runs, so this measures what a mint produces.
+        let carded = mainnet_card_fixture_v1(true);
+        assert_eq!(carded.palw_court_ladder, Some(ForkActivation::always()), "a card states ADR-0084 U-08's fence");
         assert_eq!(
-            palw_refutation_leaf_cap_v2(&court_of(&carded), carded.palw_court_ladder.is_some_and(|f| f.is_active(0))),
-            court_of(&carded).max_step_leaf_count()
+            palw_refutation_leaf_cap_v2(&court_of(&carded), carded.palw_court_ladder_active_at(0)),
+            court_of(&carded).max_step_leaf_count(),
+            "a carded mainnet prosecutes the dense row at the ladder it admitted it at"
+        );
+        assert!(
+            court_of(&carded).max_step_leaf_count() > PALW_STEP_LEG_MAX_LEAVES,
+            "the premise: without the fence this card's court could not try the row it registers"
         );
     }
 

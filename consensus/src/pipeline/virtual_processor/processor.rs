@@ -7116,7 +7116,17 @@ impl VirtualStateProcessor {
         self.palw_court_responder_coverage.is_some_and(|fence| fence.is_active(daa_score))
     }
 
-    fn palw_court_step_ladder_at(&self, daa_score: u64, court: &kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2) -> u64 {
+    /// **ADR-0084 §7.5, resolved in exactly one place, at the BLOCK's acceptance DAA.**
+    ///
+    /// `pub(super)` so `tests.rs` can assert that this reads `palw_court_ladder` and not its
+    /// neighbour: the 2026-09-06 merge left two ladder fences on `Params` and
+    /// `git grep palw_refutation_leaf_cap` showed this site had no test at all, so nothing in the
+    /// tree observed which field a card had to arm (mainnet audit 2026-09-06, M-15).
+    pub(super) fn palw_court_step_ladder_at(
+        &self,
+        daa_score: u64,
+        court: &kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2,
+    ) -> u64 {
         kaspa_consensus_core::palw_court_v2::palw_refutation_leaf_cap_v2(
             court,
             self.palw_court_ladder.is_some_and(|fence| fence.is_active(daa_score)),
