@@ -1110,32 +1110,24 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // store only, so a PALW producer's collateral was invisible to the very selector that
         // exists to skip it. Anything else non-empty and unparseable is still an error, because a
         // fat-fingered class id must not read as "this chain does not have that class".
-        let session = self.consensus_manager.consensus().unguarded_session();
-        // Consensus-locked collateral AND this node's own reserved funding outpoints, in one list
-        // (audit3 H3 + H12). A wallet that reads only the first spends the panel's fee outpoint.
-        let locked_bond_outpoints: Vec<String> = session
-            .palw_locked_bond_outpoints_v2()
-            .into_iter()
-            .chain(self.flow_context.palw_reserved_outpoints())
-            .map(|o| format!("{}:{}", o.transaction_id, o.index))
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        // ADR-0084 Decision 5: where this node's panel serves from, empty on a node with no panel.
-        let palw_retention_dir = self.flow_context.palw_retention_dir().map(|d| d.display().to_string()).unwrap_or_default();
-        if request.class_id.is_empty() {
-            return Ok(GetPalwProducerFactsResponse {
-                available: !locked_bond_outpoints.is_empty(),
-                locked_bond_outpoints,
-                palw_retention_dir,
-                ..Default::default()
-            });
-        }
-        let class_id = request
-            .class_id
-            .parse::<kaspa_hashes::Hash64>()
-            .map_err(|_| RpcError::General(format!("class id '{}' is not a 128-hex Hash64", request.class_id)))?;
-        let bond = if request.with_bond {
+        // **Everything the CALLER sent is parsed before this node reads a single byte of chain
+        // state** (mainnet audit M-5). The two session reads below are full PALW-state
+        // materializations, and they used to run above the parses — so a caller who fat-fingered
+        // a class id was told '…is not a 128-hex Hash64' only after the node had decoded the
+        // whole carriage, rebuilt both indices, walked both consistency checks and recomputed the
+        // root for them. A malformed request must be free. The bond id is still parsed only when
+        // a class id was named, exactly as before: an empty class id has never reached it.
+        let class_id = if request.class_id.is_empty() {
+            None
+        } else {
+            Some(
+                request
+                    .class_id
+                    .parse::<kaspa_hashes::Hash64>()
+                    .map_err(|_| RpcError::General(format!("class id '{}' is not a 128-hex Hash64", request.class_id)))?,
+            )
+        };
+        let bond = if class_id.is_some() && request.with_bond {
             let transaction_id = request.bond_transaction_id.parse::<kaspa_consensus_core::tx::TransactionId>().map_err(|_| {
                 RpcError::General(format!("bond transaction id '{}' is not a 128-hex transaction id", request.bond_transaction_id))
             })?;
@@ -1143,7 +1135,40 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         } else {
             None
         };
-        let Some(facts) = session.palw_producer_facts_v2(class_id, bond) else {
+        // ADR-0084 Decision 5: where this node's panel serves from, empty on a node with no panel.
+        let palw_retention_dir = self.flow_context.palw_retention_dir().map(|d| d.display().to_string()).unwrap_or_default();
+        // **One blocking hop, one tip.** Two reasons this is not two calls. First, these are
+        // synchronous consensus reads and this is an `async fn`: run inline they occupy an RPC
+        // reactor thread rather than a blocking worker, which is what makes an unauthenticated
+        // caller's cost land on the runtime that also carries block relay and IBD. Second, the two
+        // answers are assembled into one response, and this file already records what an answer
+        // built from two chain points costs — see `fp_decode_rules_armed` below.
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let (locked_outpoints, facts) = session
+            .spawn_blocking(move |c| {
+                let locked = c.palw_locked_bond_outpoints_v2();
+                let facts = class_id.and_then(|class_id| c.palw_producer_facts_v2(class_id, bond));
+                (locked, facts)
+            })
+            .await;
+        // Consensus-locked collateral AND this node's own reserved funding outpoints, in one list
+        // (audit3 H3 + H12). A wallet that reads only the first spends the panel's fee outpoint.
+        let locked_bond_outpoints: Vec<String> = locked_outpoints
+            .into_iter()
+            .chain(self.flow_context.palw_reserved_outpoints())
+            .map(|o| format!("{}:{}", o.transaction_id, o.index))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if class_id.is_none() {
+            return Ok(GetPalwProducerFactsResponse {
+                available: !locked_bond_outpoints.is_empty(),
+                locked_bond_outpoints,
+                palw_retention_dir,
+                ..Default::default()
+            });
+        }
+        let Some(facts) = facts else {
             return Ok(GetPalwProducerFactsResponse::default());
         };
         // **The free-prompt lane's price comes from the bundle this node runs, not from the
