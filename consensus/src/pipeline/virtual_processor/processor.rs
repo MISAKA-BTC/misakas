@@ -4614,10 +4614,16 @@ impl VirtualStateProcessor {
             .collect()
     }
 
-    pub fn palw_bond_of_pubkey_v2_impl(&self, pubkey: &[u8]) -> Option<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
+    pub fn palw_bond_of_pubkey_v2_impl(
+        &self,
+        pubkey: &[u8],
+    ) -> Option<(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2)> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
-        state.bonds_iter().find(|(_, bond)| bond.pubkey == pubkey).map(|(key, _)| *key)
+        // One spelling, in the state that owns the registry. `PalwChainStateV2::bond_of_pubkey_v2`
+        // carries the reason this must NOT filter on status — the chain's own `DuplicateBondKey`
+        // rule does not, so a lookup that did would promise a registration the transition refuses.
+        state.bond_of_pubkey_v2(pubkey)
     }
 
     /// **The terms a class entrant must take rather than choose** (ADR-0049 Decision H).

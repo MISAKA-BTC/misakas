@@ -293,6 +293,36 @@ pub fn palw_panel_state_dir(app_dir: &std::path::Path, network: kaspa_consensus_
     app_dir.join(network.to_prefixed()).join("palw-panel")
 }
 
+/// **`--palw-producer-class`, resolved once for every service that needs it.**
+///
+/// Two services read this flag: the producer, which mines the class, and the panel, which must
+/// size a bond's collateral against the claims that class will reserve (`size_bond_collateral`).
+/// It used to be parsed in exactly one of them, so `--palw-register-bond --palw-producer-class=X`
+/// registered a bond priced for the network's FLOOR and its producer then held forever (issue
+/// #95). Resolved here rather than at each site, so a bad id is refused once, in one place, with
+/// one message — two parsers of one flag are two answers waiting to disagree.
+///
+/// `None` is "the operator named nothing", which every caller reads as the network's base class.
+///
+/// An unparseable id is fatal rather than ignored: a node told to work on a class, that then fell
+/// back to the floor because the hex was wrong, would be reporting success for work nobody asked
+/// for. **Gated on the bundle**, because the class it names is resolved against the bundle's
+/// court — on a hash-only network there is no court to resolve it against.
+fn palw_configured_producer_class(args: &Args, config: &kaspa_consensus_core::config::Config) -> Option<kaspa_consensus_core::Hash64> {
+    let hex = args.palw_producer_class.as_ref()?;
+    if !matches!(config.params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+        warn!(
+            "--palw-producer-class {hex} names a class, but {} declares no ConsensusV2 ruleset — there is no court to \
+             resolve it against",
+            config.params.net
+        );
+        return None;
+    }
+    Some(hex.parse::<kaspa_consensus_core::Hash64>().unwrap_or_else(|e| {
+        panic!("--palw-producer-class {hex} is not a 128-hex class id: {e}");
+    }))
+}
+
 /// Get the log directory from the supplied [`Args`].
 pub fn get_log_dir(args: &Args) -> Option<String> {
     let network = args.network();
@@ -1321,32 +1351,17 @@ Do you confirm? (y/n)";
             info!("PALW base class (and its founding model line): {id}");
         }
         // **The floor is the default, not the only choice.** A class registered on a running
-        // chain is unusable until a producer asks for it, and this is where the asking happens. An
-        // unparseable id is fatal rather than ignored: a node told to produce for a class, that
-        // then mined the floor because the hex was wrong, would be reporting success for work
-        // nobody asked for.
-        let base_class_id = match (&args.palw_producer_class, base_class_id) {
-            // **The override is gated on the bundle, because the class it names is resolved against
-            // the bundle's court.** It used to apply on any network, and the dispatch below keys on
-            // this very value — so on a hash-only network the flag made the tuple all-`Some`,
-            // control reached `palw_court.expect("a ConsensusV2 bundle was matched above")`, and
-            // none had been. The process died on an assertion that was false, and the arm written
-            // for exactly this case — "declares no ConsensusV2 ruleset — nothing to produce" — was
-            // unreachable whenever the flag was present. The sibling panel wiring gates on
-            // `palw_court.is_some()`, which is what makes this a lost invariant and not a style.
-            (Some(hex), Some(_)) => Some(hex.parse::<kaspa_consensus_core::Hash64>().unwrap_or_else(|e| {
-                panic!("--palw-producer-class {hex} is not a 128-hex class id: {e}");
-            })),
-            (Some(hex), None) => {
-                warn!(
-                    "--palw-producer-class {hex} names a class, but {} declares no ConsensusV2 ruleset — there is no court to \
-                     resolve it against",
-                    config.params.net
-                );
-                None
-            }
-            (None, base) => base,
-        };
+        // chain is unusable until a producer asks for it, and this is where the asking happens.
+        //
+        // The override is gated on the bundle inside `palw_configured_producer_class`, because the
+        // class it names is resolved against the bundle's court. It used to apply on any network,
+        // and the dispatch below keys on this very value — so on a hash-only network the flag made
+        // the tuple all-`Some`, control reached `palw_court.expect("a ConsensusV2 bundle was
+        // matched above")`, and none had been. The process died on an assertion that was false, and
+        // the arm written for exactly this case — "declares no ConsensusV2 ruleset — nothing to
+        // produce" — was unreachable whenever the flag was present. The sibling panel wiring gates
+        // on `palw_court.is_some()`, which is what makes this a lost invariant and not a style.
+        let base_class_id = palw_configured_producer_class(args, &config).or(base_class_id);
         match (base_class_id, &args.palw_producer_key, &args.palw_producer_bond, &palw_producer_pay_address) {
             (Some(class_id), Some(key_path), Some(bond), Some(pay_address)) => {
                 Some(Arc::new(crate::palw_producer::PalwProducerService::new(
@@ -1579,6 +1594,11 @@ Do you confirm? (y/n)";
                         register_bond: args.palw_register_bond,
                         bond_collateral: args.palw_bond_collateral,
                         pay_address: palw_producer_pay_address.clone(),
+                        // **The same resolution the producer gets**, so the bond this service
+                        // registers is priced for the class the producer will actually mine.
+                        // Without it `--palw-register-bond --palw-producer-class=<a model tier>`
+                        // sized against the network floor and the producer held forever (#95).
+                        producer_class: palw_configured_producer_class(args, &config_for_palw_panel),
                         key_path: key_path.clone(),
                         bond: bond.clone().unwrap_or_default(),
                         fee_outpoint: args.palw_fee_outpoint.clone(),
