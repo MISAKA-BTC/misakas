@@ -44,3 +44,63 @@ fence at 1,900 makes possible.
 
 then bump BOTH `?v=` tokens in `index.html` (the hash router does not reload, and a stale `app.js`
 against a fresh feed is the failure mode this bump exists for).
+
+## 2026-09-06 — "Recent blocks" was in consensus order, not time order
+
+A reader on a phone reported that the block list is sometimes not in time order. It was, routinely.
+
+`renderRecent()` painted `recent`, which `updateRecent()` keeps sorted **blueScore desc, daaScore
+desc** — a consensus order, chosen deliberately ("Mirror the official kaspa-explorer feed … stable
+under reorgs/orphaning"). In a DAG that is not time order. Measured against the live chain the same
+day: **482 of 1,723 adjacent pairs had the upper row OLDER than the row beneath it**, the worst by
+1 h 50 m. The table has an `Age` column, so the reader is right and the code was answering a
+different question than the one the column asks.
+
+The stored order could not simply change: `refreshHomeInner` reads `recent[0].blueScore` to decide
+whether the cached window has fallen behind the live sink and must be re-anchored. Sorting `recent`
+by time would have fed that check the newest *timestamp* instead of the highest *blueScore* and
+broken the self-heal that keeps the page from freezing in the past. So the display sorts a **copy**
+(`recent.slice().sort(...)`, by timestamp desc, then blueScore, then daaScore) and no control path
+moves. Verified live at a 375×812 viewport: 25 rows, 0 inversions.
+
+Patch: `2026-09-06-recent-blocks-time-order.patch`.
+
+## 2026-09-06 — the page shipped uncompressed and uncacheable, over HTTP/1.1
+
+Same report: "slow on a phone". Three separate causes, all in nginx, none in the app.
+
+| | before | after |
+|---|---|---|
+| `app.js` | 212,663 B, `no-store` | 68,689 B gzip, `max-age=300` |
+| `style.css` | 19,838 B, `no-store` | 5,479 B gzip |
+| `sha3.min.js` | 9,850 B | 3,893 B gzip |
+| `llm-jobs.json` | 213,903 B | 120,421 B gzip |
+| protocol | HTTP/1.1 | HTTP/2 |
+
+* **gzip**: `nginx.conf` ships `gzip on` with `gzip_types` **commented out** (the Debian default),
+  so only `text/html` was ever compressed. Set at `server` level here, so the other vhosts on the
+  host are untouched.
+* **HTTP/2**: the `listen 443 ssl` lines had no `http2`. At this host's ~260 ms RTT each extra
+  connection costs a TCP + TLS handshake before a byte moves; HTTP/1.1 opens one per parallel
+  asset. Added on the first block for each address:port only — nginx 1.24 takes the socket option
+  from whichever block declares it and warns if a second repeats it. `wallet.misakascan.com` shares
+  the socket and got HTTP/2 with it.
+* **caching**: `max-age=300, must-revalidate`, deliberately **not** `immutable`. `app.js` carries a
+  self-update watcher whose own comment says it works "with the no-store cache policy": it HEADs
+  `/app.js` every 60 s and reloads when the ETag moves. Under `immutable`, a reload would keep
+  serving the year-old cached copy whenever a deploy forgot to bump `?v=` in `index.html` — turning
+  a hand-maintained rule into a silent year-long staleness bug. At 300 s a revalidation costs one
+  304 with an empty body and a deploy always lands within five minutes on its own.
+
+**What is left, and is not fixable here:** nginx answers in **2 ms** locally. The ~950 ms a phone
+sees is `tcp 0.26 s → tls 0.69 s → ttfb 0.95 s`: round trips to a host that is ~260 ms away. TLS
+1.3 is already in force (1-RTT). Only moving the origin closer, or putting a CDN in front, changes
+that number.
+
+The front-page operator banner was also three flag days stale — it named DAA 5,000, fingerprint
+`0533c8ee…`, a malformed `&nbsp;`, and the claim that "old and new builds stay peers until it
+fires", which the 2026-09-06 measurement disproves. Replaced with the current notice.
+
+Deploy: `app.js` first, then `index.html` (the reverse order 404s the versioned asset for a moment).
+Backups on `.113`: `app.js.bak-ord-<ts>`, `index.html.bak-ord-<ts>`,
+`/root/misakascan-nginx.bak-{,h2-,rv-}<ts>`.
