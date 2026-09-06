@@ -55,17 +55,19 @@ was withdrawn on 2026-08-29.)
 A node on the right chain logs
 
 ```
-Consensus params fingerprint: 71b35c250d01598ee8925146e66e8200945503ce2de1030bfd167e799b2498e9 (network testnet-11)
+Consensus params fingerprint: b511dd1e99b673c62f3023d3cc1e0f4bc48ca8888d535ed62190d907505de531 (network testnet-11)
 ```
 
-(Identity as of **Relaunch 5f + the ADR-0083 flag day, 2026-09-04** — genesis **`ad30b5cb…edb7`**
+(Identity as of the **second flag day, 2026-09-06** — genesis **`ad30b5cb…edb7`**
 (`PALW_RC_GENESIS`; 5f re-minted the genesis on 2026-09-03, so 5e's `08e9c8a4…` is gone), fingerprint
-**`71b35c25…`** from the build that schedules ADR-0083's fence at **DAA 1150** (tag
-`testnet-11-relaunch-5f-adr0083-h1150`, commit `16a2f277`; the fleet's binary is from `cef2ecdb`, the same
-code). The 5f cut's own fingerprint `2222e054…` (binary `14065c93…`) names the SAME chain and peers with this
-one — with a log warning about the future fence — but **parts from it at DAA 1150**: past that height its
-blocks are refused as `UnexpectedDifficulty`. Rebuild from the tag or later; if you ran the cut past 1150,
-wipe the appdir and resync (the chain is small). **Do not read either value as a property of the chain.**
+**`b511dd1e…`** from the build that schedules ADR-0062's DA court, ADR-0077 D16's private prompt and
+ADR-0090's three model fences at **DAA 1900** — `main` at `b3ef2629` or later, fleet binary sha256
+`7181cc07eb57a2f8`. **Rebuild now, not at 1900.** The genesis and the peering identity did not move, so
+this is not a re-mint and your appdir is fine — but the fork-id gate refuses an un-upgraded peer
+**immediately**, because that build's gate is already armed by ADR-0083's fence at 1150 and it has no
+1900 on its schedule. It is the OLD side that sends the reject, so the fleet cannot fix it for you:
+a node still on `71b35c25…` (or the 5f tag `16a2f277`, or the cut `2222e054…`) sees peers drop after
+minutes and its own blocks never reach the explorer. That is the partition, not a connectivity fault. **Do not read either value as a property of the chain.**
 Both are dated facts about a relaunch: take the live ones from your own node's first log lines rather than
 from this page. Earlier values — `a7baab79…` (5e), `e2b91c16…` (5d), `d38abe44…` (5c), `f0e50f83…` and
 `accaadce…` (2026-09-02), `5ccdd684…` (2026-08-31), `f3bf86b4…` (2026-08-30), `95265934…` (2026-08-29) —

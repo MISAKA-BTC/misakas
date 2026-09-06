@@ -51,21 +51,65 @@ instructions built on them are marked where they no longer apply. If a section t
 `palw-worker`, a GGUF sha, `CPU_THREADS`, or a per-header inference cost, it is describing the old
 lane.
 
-> **Current identity — "Relaunch 5f + ADR-0083 (2026-09-04)": a re-minted genesis (2026-09-03) and,
-> from DAA 1150, the difficulty window counts only rows priced by `bits` (ADR-0083 Decision 1; the
-> heartbeat lane had priced every attempt lane off the chain — card §10b). Wipe your datadir whatever
-> you joined before 5f, and build from the tag or later: every earlier fingerprint is refused at the
-> handshake, and the 5f cut itself parts from the chain at DAA 1150.**
+> ## Second flag day, 2026-09-06 — a node built before this is ALREADY cut off
 >
-> * consensus fingerprint: **`71b35c250d01598ee8925146e66e8200945503ce2de1030bfd167e799b2498e9`**
+> **Rebuild now. Do not wait for the height.** This release schedules five fences at **DAA 1900**:
+> ADR-0062's `palw_da_court` and ADR-0077 Decision 16's `palw_panel_da`, plus ADR-0090 §7's
+> `palw_model_market`, `palw_model_lines` and `palw_model_evm`. The height is still ~2 days out at
+> the measured rate — and **the fork-id gate does not wait for it.** An un-upgraded node's gate is
+> already armed by ADR-0083's fence at 1150; the upgraded peer announces `next = 1900`; 1900 is not
+> on the old schedule; so **the old side sends the reject and closes**. The partition arrives the
+> moment the first upgraded node connects, not at 1900. On 2026-09-06 the fleet's node0 log carried
+> fork-id rejects from **nine addresses outside the fleet** (and one stray un-upgraded process of our
+> own), plus handshake refusals from two nodes still on archived genesis hashes — `8d2002cc…`
+> (Relaunch 4) and `4b619a1a…` — which no rebuild of this release will admit; those must wipe and
+> resync.
+>
+> **What it looks like from the un-upgraded side** — and every one of these is the same cause:
+>
+> * the peer count never settles (3-of-8 and falling), connections drop after minutes with
+>   `broken pipe` / `stream ended`;
+> * blocks you produce are accepted by your own node and never appear on
+>   [misakascan](https://misakascan.com), because they are on your arm of the partition;
+> * your log carries the reject, and it names both schedules:
+>
+> ```
+> [WARN ] P2P, got reject message: Fork-id mismatch on network misaka-testnet-11 at DAA 1679 -
+>         this node has crossed fence 1150; the peer agrees about every fence crossed so far but
+>         expects fence 1900 next, not 2125000.
+> ```
+>
+> Read that line from the sender: `1900` is what the **upgraded peer** expects next, `2125000` is
+> what **this build** expects. Seeing `not 2125000` means *you* are the old build. Nothing deployed
+> on the fleet can end this for you — the refusal is sent by your own binary.
+>
+> **No datadir wipe.** Genesis and the peering identity are unchanged from 5f; only the fingerprint
+> moves. Rebuild, restart, keep your appdir. Confirm with the startup line:
+>
+> ```
+> [INFO ] Consensus params fingerprint: b511dd1e99b673c62f3023d3cc1e0f4bc48ca8888d535ed62190d907505de531 (network testnet-11)
+> ```
+
+> **Current identity — Relaunch 5f (genesis re-minted 2026-09-03) carrying two flag days: ADR-0083's
+> fence at DAA 1150 (2026-09-04; the difficulty window counts only rows priced by `bits`, because the
+> heartbeat lane had priced every attempt lane off the chain — card §10b) and the DA-court/model-market
+> fences at DAA 1900 (2026-09-06; the block above). Wipe your datadir only if you joined before 5f —
+> neither flag day re-minted the genesis. Build from `main` at `b3ef2629` or later: every earlier
+> fingerprint is refused, the pre-5f ones at the handshake and the pre-flag-day ones by the fork-id
+> gate, now rather than at the height.**
+>
+> * consensus fingerprint: **`b511dd1e99b673c62f3023d3cc1e0f4bc48ca8888d535ed62190d907505de531`**
+>   (2026-09-06 flag day; the pre-flag-day value `71b35c25…` names the same genesis and the same
+>   peering identity, and is refused by the gate as above).
 > * genesis hash: **`ad30b5cb965ad305dfa1dc7516935763ea2623105581b83bb9359c7247157d36b0f8003b337cdad366e3895c8f159e99332be16e258b144dddf483bf9b33edb7`** (`PALW_RC_GENESIS`,
 >   coinbase payload marker `misaka-palw-rc`) — measured from the running node's own startup line,
 >   which is the only value your node will be judged by.
-> * build: tag **`testnet-11-relaunch-5f-adr0083-h1150`** (`16a2f277`) or any later `main`; the fleet runs
->   `cef2ecdb` (sha256 `002cee6a…`, the same code). Any commit whose build announces the fingerprint above
->   will do — and that, not a commit id, is the check: `kaspad --testnet --netsuffix=11` prints it on the
->   second line of its startup log. The 5f cut (`2222e054…`, binary `14065c93…`) peers with this build
->   until DAA 1150 and is refused after it.
+> * build: **`main` at `b3ef2629` or later** (branch `palw-t11-da-court-market` carries the same code);
+>   the fleet's eight nodes all run kaspad sha256 `7181cc07eb57a2f8`. Any commit whose build announces
+>   the fingerprint above will do — and that, not a commit id, is the check:
+>   `kaspad --testnet --netsuffix=11` prints it on the second line of its startup log. Everything
+>   earlier — the 5f tag `testnet-11-relaunch-5f-adr0083-h1150` (`16a2f277`), the fleet's previous
+>   `cef2ecdb`, and the 5f cut `2222e054…` — is on the far side of the gate **now**, not at 1900.
 > * classes registered at genesis: BASE-0 `f1c5635c…` (the floor, no model, 22‰), PALW-QWEN25-A16
 >   graph-v5@512 `4277d84f…` (489‰, artifact root `bcf2d9eb…`), PALW-QWEN36 graph-v3 `5bd9ae3d…`
 >   (489‰, artifact root `f4aad4fd…`). Post-genesis registrations are chain data: read them from the
