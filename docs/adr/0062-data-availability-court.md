@@ -575,3 +575,26 @@ reached (tip 1,619 at 6.2 DAA/h) — so no header's pruning point differs under 
 
 testnet-11 keeps the FLAT prompt commitment: `palw_prompt_ids_merkle` is genesis-only
 (`validate_palw_v2`), because no reader of a `prompt_token_ids_hash` holds a job's anchor height.
+
+### Rollout record, 2026-09-06 05:33–05:47Z
+
+Built on ibm from `9f2aad95` (`--features evm`, 14m19s), kaspad sha256 `7181cc07eb57a2f8`; the
+previous binary (`b6cf47ea3a66480b`) is kept on each host as `/root/t11/kaspad.pre-flagday-b6cf47ea`.
+Restarted in order — ibm node0, ibm node1, .113 node, .113 pool slots 02/04/05/06, 5.104 seat2 —
+each confirming `Consensus params fingerprint: b511dd1e…` before the next. After the roll: node0
+7 peers, .113 9 peers, both at DAA 1,627, no panics, no refusals inside the fleet.
+
+**What the roll measured, and it is not what the fork-id module's doc promises.** Adding `1900` to
+the schedule partitions old from new IMMEDIATELY. The new build keeps an old peer ("keeping the
+peer"); the old build does not keep the new one — its gate is already armed by ADR-0083's fence, the
+new node announces `next = 1900`, and 1900 is not on the old schedule, so the old side rejects and
+closes. Six third-party seats were cut off within four minutes of the first restart
+(164.68.119.212, 217.178.131.170, 113.155.23.105, 60.114.127.4, 207.180.230.3, 121.81.248.189).
+The height's lead time buys the FLEET an ordering; it does not buy the network a grace period, and
+anyone running a testnet-11 seat has to upgrade now rather than before DAA 1,900. Recorded at
+`fork_id_gate_fences_v1`, where the next operator will read it.
+
+One node on the old build is deliberately untouched: `/root/misakas-user/target/release/kaspad`
+on .113 (`--appdir=/root/palw-user/appdir`, `--palw-register-class=Qwen/Qwen3.8-27B/`), the manual
+node from the Qwen3.8-27B add-model walk. It is the operator's experiment, and restarting it is
+theirs to time.

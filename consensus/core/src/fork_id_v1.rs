@@ -196,6 +196,22 @@ pub fn fork_id_gate_armed_v1(params: &Params) -> bool {
     !fork_id_gate_fences_v1(params).is_empty()
 }
 
+/// **Measured on testnet-11's second flag day (2026-09-06): adding a fence to the schedule
+/// partitions old from new IMMEDIATELY, not at the height.**
+///
+/// The module doc above says two builds that differ only about a future fence "must stay peers for
+/// the whole rollout". That is what the NEW build does — it logs "keeping the peer" and carries on.
+/// It is not what the OLD build does: its gate is already armed (ADR-0083's fence at 1150), the new
+/// build announces `next = 1900`, and 1900 is not on the old schedule, so the old side sends the
+/// reject and closes. The partition is symmetric in effect and arrives the moment the first
+/// upgraded node connects.
+///
+/// So a release that adds a gate fence is a flag day for EVERY node, not only for the fleet: a seat
+/// that has not upgraded is cut off at once rather than at the height. Six third-party seats were
+/// measured being cut off within four minutes of the first restart. Whoever schedules a gate fence
+/// has to say so where node operators read it, and the height's lead time buys the fleet an
+/// ordering, not the network a grace period.
+///
 /// **The fences that ARM the gate, as heights.**
 ///
 /// The set [`fork_id_gate_armed_v1`] is derived from, and the one this module refuses on. A fence
