@@ -253,7 +253,27 @@ Items 1–5 landed the same day; item 6 is the operator's release, shared with A
   reward alone moves the pair, and the reserve is exactly `seed + buyback` with the price not
   falling (B8). The node-agreement row now compares `traded = reserve − buyback`, which the
   reward's own move leaves alone; the reserve, the buyback and the retired count are logged for
-  the reader. Run 10 (2026-09-06): see below.
+  the reader.
+
+**What the drill's own runs taught, which was not about the market (2026-09-06).** Two defects in
+the drill itself surfaced the moment a step depended on the reward being *paid*, and both had been
+there for ten runs:
+
+* **`misaka evm wallet` lives behind a non-default feature** (`--features evm-send`). A CLI built
+  without it has no such subcommand, and run 10 died three steps in — six nodes up, the founding
+  line already passed — on clap's "unrecognized subcommand", which names neither the feature nor
+  the build. The script now asks the binary for the subcommand before it starts anything, and its
+  header carries both cargo lines.
+* **The nodes never passed `--palw-panel`, so no claim had ever reached `Final`.** Nothing verified
+  material, signed a receipt or submitted a quorum; `final_claims=0` while `unresolved` climbed.
+  Every escrow this drill ever withheld was released to nobody, and ten green runs said nothing
+  about the reward path because they never walked it. With the flag on (run 11) the panels file
+  receipts within two minutes and license claims steadily.
+* **A claim is `Final` 180 DAA after it is accepted** (bind 40 + receipt 40 + challenge 100), and
+  this devnet grows about two DAA a minute — an hour and a half before the first reward is paid to
+  anyone, against every other step's few minutes. The check therefore runs LAST, after the rest of
+  the drill has grown the chain, on its own clock (`BUYBACK_WAIT`, default 5,400 s). Run 11 with
+  the check placed early failed it for exactly this reason and passed the other thirteen.
 
 ## 9. What is deliberately not decided
 

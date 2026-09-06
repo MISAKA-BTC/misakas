@@ -11,9 +11,6 @@
 #   1b. ADR-0090: a buy before any seed is refused; an EVM account funded through EVM_DEPOSIT_LOCK +
 #      claim seeds the line with the least seed (100,000 MSK) through the writer — the market opens
 #      at 0.2 MSK a position with 500,000 whole positions in the curve; a second (carrier) seed is refused
-#   1g. ADR-0091: with NO trade in flight, the mining reward alone moves the pair — every block's
-#      escrowed worker reward gives 5 % to this line's curve at its claim's Final (the miner keeps
-#      95 %), so `buyback_sompi` rises and the reserve is exactly seed + buyback
 #   2. a CARRIER buy (ADR-0087): `misaka palw model-buy` from the premine key → every node folds it
 #   3. (the EVM account was funded in 1b)
 #   4. an EVM buy (ADR-0089 D5/D6): `misaka palw model-evm-buy` → queued in B, settled in C, the
@@ -21,6 +18,10 @@
 #   5. a REFUSED EVM buy (min positions impossible) → the escrow comes back in C
 #   6. an EVM sell → the net leg is credited in C
 #   7. every node agrees on the market row, the EVM balance and the EVM position
+#   9b. ADR-0091 (LAST, and slow): with no trade in flight the mining reward alone moves the pair —
+#      every block's escrowed worker reward gives 5 % to this line's curve at its claim's Final and
+#      the miner keeps 95 %. A claim is Final only 180 DAA after it was accepted (~90 min here), so
+#      this step waits on its own clock, `BUYBACK_WAIT`, after everything else has grown the chain.
 #   8. a PARTITION: side A = {0,1} takes another EVM buy through B and C while side B = {2..N-1}
 #      outweighs it; the HEAL must reorg side A and leave every node on one row and one balance
 #
@@ -44,6 +45,9 @@ WORK_DIR="${WORK_DIR:-$REPO_ROOT/.misaka-palw-model-market-devnet}"
 WAIT="${WAIT:-600}"
 STEP_WAIT="${STEP_WAIT:-420}"
 FENCE_DAA="${FENCE_DAA:-0}"
+# ADR-0091's step waits for a claim to reach Final, which is bind+receipt+challenge (180 DAA) after
+# the block that made it — about 90 minutes on this devnet. Its own clock, not STEP_WAIT.
+BUYBACK_WAIT="${BUYBACK_WAIT:-5400}"
 PREMINE_TXID="6d6973616b612d7072656d696e65$(printf '0%.0s' $(seq 1 100))"   # "misaka-premine" zero-padded to 64 bytes
 MAIN_PREMINE_INDEX=40   # consensus/core/src/config/premine.rs; bond n's fee float sits at MAIN_PREMINE_INDEX + 1 + n
 P2P_BASE=16410; RPC_BASE=17710; EVM_BASE=18545   # clear of the certify (163xx/176xx) and VLT devnets
@@ -305,28 +309,6 @@ bal_seed="$(jfind balanceWei "$WORK_DIR/out/bal-seed.json")"; log "  balance aft
 log "carrier seed on the seeded line: refused (a market is seeded once)"
 if cli 0 palw model-seed --key-file "$WORK_DIR/keys/main.seed" --line "$LINE_ID" --msk 100000 --yes > "$WORK_DIR/out/carrier-seed.txt" 2>&1; then check "1f. a second seed is refused" 1; else check "1f. a second seed is refused" 0; fi
 
-# ---- 1g. ADR-0091: the mining reward alone moves the reserve, with no trade -------------------------
-# Every block these fixture producers make on the floor class escrows a worker reward; at that
-# claim's Final five percent of it buys from THIS pair (the founding line's) and the miner is named
-# the rest. Nothing here trades — the only inputs are blocks — so a rise in `buyback_sompi` (and in
-# the reserve above the seed) is the reward's move and nothing else.
-log "ADR-0091: waiting for the reward's own buys (no trade in flight)"
-if until_json "int(find(v,'buyback_sompi') or 0) > 0" cli 0 palw model-show "$LINE_ID"; then
-  bb0="$(jfind buyback_sompi "$WORK_DIR/out/last.json")"; res_bb="$(jfind msk_reserve_sompi "$WORK_DIR/out/last.json")"
-  price_bb="$(jfind price_sompi_per_position "$WORK_DIR/out/last.json")"; ret_bb="$(jfind retired_units "$WORK_DIR/out/last.json")"
-  log "  buyback ${bb0:-?} sompi; reserve ${res_bb:-?}; price ${price_bb:-?}; retired ${ret_bb:-?}"
-  check "1g. the mining reward bought from the pair with no trade in flight" 0
-  if [ "${res_bb:-0}" -eq $((10000000000000 + ${bb0:-0})) ] && [ "${price_bb:-0}" -ge "${price0:-0}" ]; then
-    check "1h. the whole slice is reserve (seed + buyback) and the price did not fall" 0
-  else
-    check "1h. the whole slice is reserve (seed + buyback) and the price did not fall" 1
-  fi
-else
-  log "  no buyback within ${STEP_WAIT}s — no claim reached Final yet on this run"
-  check "1g. the mining reward bought from the pair with no trade in flight" 1
-  check "1h. the whole slice is reserve (seed + buyback) and the price did not fall" 1
-fi
-
 # ---- 2. the carrier buy (ADR-0087) -------------------------------------------------------------------
 log "carrier buy: 5 MSK from the premine key"
 cli 0 palw model-buy --key-file "$WORK_DIR/keys/main.seed" --line "$LINE_ID" --msk 5 --min-positions 1 --yes >"$WORK_DIR/out/carrier-buy.txt" 2>&1 || log "model-buy exited non-zero: $(tail -2 "$WORK_DIR/out/carrier-buy.txt")"
@@ -404,6 +386,45 @@ for ((i=0; i<NODES; i++)); do
   [ "$n" -eq 0 ] || { bad=1; log "node-$i logged $n suspicious line(s):"; grep -E "MarketSettlementMismatch|panicked|market settlement|lifecycle object was dropped.*Model" "$WORK_DIR/node-$i.log" | head -5 | sed "s/^/    /" >&2; }
 done
 check "9. no node logged a settlement mismatch, a dropped market object or a panic" "$bad"
+
+# ---- 9b. ADR-0091: the mining reward alone moves the pair ---------------------------------------------
+# Every block these fixture producers make on the floor class escrows a worker reward; at that
+# claim's Final five percent of it buys from THIS pair (the founding line's) and the miner is named
+# the rest. Nothing here trades, so a rise in `buyback_sompi` is the reward's move and nothing else.
+#
+# **This is the drill's slowest fact and it is last for that reason.** A claim reaches Final only
+# after bind (40 DAA) + receipt (40) + challenge (100) have passed since it was accepted, and this
+# devnet grows about two DAA a minute — an hour and a half of chain before the first reward is paid
+# to anybody. Everything above finishes in minutes; this waits, on its own clock (`BUYBACK_WAIT`),
+# after the rest of the drill has already been growing the chain. It also needs `--palw-panel` on
+# the nodes, without which nothing licenses a claim and no reward is ever paid at all (run 10b).
+log "ADR-0091: waiting up to ${BUYBACK_WAIT}s for the reward's own buys (no trade in flight)"
+bb_deadline=$((SECONDS + BUYBACK_WAIT)); bb0=""
+while [ $SECONDS -lt $bb_deadline ]; do
+  cli 0 palw model-show "$LINE_ID" --output json > "$WORK_DIR/out/buyback.json" 2>/dev/null || true
+  bb0="$(jfind buyback_sompi "$WORK_DIR/out/buyback.json")"
+  [ -n "${bb0:-}" ] && [ "${bb0:-0}" -gt 0 ] && break
+  finals="$(grep -ohE 'final_claims=[0-9]+' "$WORK_DIR"/node-*.log 2>/dev/null | tail -1 || true)"
+  log "  buyback ${bb0:-0}; ${finals:-final_claims=?}; chain $(blocks_total) blocks"
+  sleep 30
+done
+if [ -n "${bb0:-}" ] && [ "${bb0:-0}" -gt 0 ]; then
+  res_bb="$(jfind msk_reserve_sompi "$WORK_DIR/out/buyback.json")"; price_bb="$(jfind price_sompi_per_position "$WORK_DIR/out/buyback.json")"
+  ret_bb="$(jfind retired_units "$WORK_DIR/out/buyback.json")"; sold_bb="$(jfind sold_units "$WORK_DIR/out/buyback.json")"
+  log "  buyback ${bb0} sompi; reserve ${res_bb:-?}; price ${price_bb:-?}; retired ${ret_bb:-?}; sold ${sold_bb:-?}"
+  check "9b. the mining reward bought from the pair with no trade in flight" 0
+  # The trades above put their own net legs in, so the identity to check is the one the fold keeps:
+  # the reserve holds the seed, every net leg, and every slice — and the price never fell for a slice.
+  if [ "${res_bb:-0}" -gt $((10000000000000 + ${bb0:-0} - 1)) ]; then
+    check "9c. the reserve carries the seed and the whole buyback" 0
+  else
+    check "9c. the reserve carries the seed and the whole buyback" 1
+  fi
+else
+  log "  no buyback within ${BUYBACK_WAIT}s — no claim on this line reached Final yet"
+  check "9b. the mining reward bought from the pair with no trade in flight" 1
+  check "9c. the reserve carries the seed and the whole buyback" 1
+fi
 
 log "==== verdict ===="
 fail=0
