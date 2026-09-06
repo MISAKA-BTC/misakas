@@ -4929,6 +4929,27 @@ impl VirtualStateProcessor {
     /// number withheld is the number that will be paid — by construction, from the same record.
     /// Today that is at most one claim (an attempt IS its block, and a free-prompt claim escrows
     /// nothing), but summing makes the identity hold whatever a later lane does.
+    ///
+    /// **"By construction, from the same record" is true of CLAIM rows and false of MARKET rows,
+    /// and that is deliberate** (mainnet audit 2026-09-06, M-12). ADR-0087's market also writes
+    /// `PalwPayoutV2` rows into `pending_payouts`, and `palw_v2_payout_outputs` appends the queue's
+    /// prefix verbatim, so a market payout IS minted into the coinbase with nothing withheld here.
+    /// ADR-0087 Decision 3 says so in terms — the reserve is "an accounting entry funded by sinks
+    /// and drained by coinbase payouts" — so for the market lane ADR-0042 Decision 10's "a carve,
+    /// never an addition" does not hold and is not meant to.
+    ///
+    /// What holds instead, and what makes the mint safe, is ADR-0087 M2: every sompi a market
+    /// payout mints was previously paid into a sink output that is dead by script
+    /// (`palw_model_sink_spk_v1` — an `OP_RETURN`), and `palw_model_sell_quote_v1` caps the gross
+    /// leg by `msk_reserve`, which only sinks credit. So Σ market payouts ≤ Σ MSK sunk, and
+    /// SPENDABLE supply never exceeds premine + emission — ADR-0059's 10 B cap is not breached.
+    /// The consequence a reader must carry away: **a supply figure obtained by summing the UTXO set
+    /// over-reports by the total ever sunk**, because a sink output is in the set and can never be
+    /// spent. `indexes/utxoindex` excludes them for exactly this reason.
+    ///
+    /// Nothing here needs to change for that to be safe. It needs to be WRITTEN DOWN, because the
+    /// sentence above ("the number withheld is the number that will be paid — by construction")
+    /// reads as a claim about the whole queue and is one about half of it.
     pub(super) fn palw_v2_escrow_withheld_at(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,

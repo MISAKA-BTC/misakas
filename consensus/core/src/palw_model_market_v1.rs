@@ -152,6 +152,12 @@ pub fn palw_model_buy_quote_v1(market: &PalwModelMarketV1, msk_in: u64) -> Optio
         burned_sompi: market.burned_sompi.checked_add(fees.burn)?,
         ..*market
     };
+    // ADR-0090 P1, on the buy side too (audit M-12): the product never falls. A buy raises the
+    // reserve, so the seed floor cannot be breached here — the product is the half that can, if the
+    // rounding above is ever changed. Checked, not assumed.
+    if after.k() < k {
+        return None;
+    }
     Some(PalwModelBuyQuoteV1 { fees, units_out, after })
 }
 
@@ -187,6 +193,25 @@ pub fn palw_model_sell_quote_v1(market: &PalwModelMarketV1, units_in: u64) -> Op
         burned_sompi: market.burned_sompi.checked_add(fees.burn)?,
         ..*market
     };
+    // **ADR-0090 Decision 2's floor and ADR-0087 M2, as CHECKED refusals rather than emergent
+    // properties of the rounding** (mainnet audit 2026-09-06, M-12).
+    //
+    // The coinbase mints a market payout with nothing withheld — that is ADR-0087 Decision 3's
+    // design ("an accounting entry funded by sinks and drained by coinbase payouts") — and the ONLY
+    // thing between it and a mint above the emission schedule is that the gross leg can never
+    // exceed what was sunk. Today that holds by two accidents: the `.min(msk_reserve)` above, and
+    // `div_ceil`'s rounding keeping the product from falling. Both were only ever asserted in a
+    // unit test (`the_product_never_falls_and_the_seed_never_leaves`), never enforced, so a future
+    // change to the rounding would move real money and no rule would object.
+    //
+    // `None` is a refusal, and a refusal is what ADR-0087 M5 says a protection does: "refuse, never
+    // partially fill".
+    if after.msk_reserve < market.seed_sompi {
+        return None;
+    }
+    if after.k() < k {
+        return None;
+    }
     Some(PalwModelSellQuoteV1 { fees, after })
 }
 
@@ -314,6 +339,64 @@ mod tests {
         m = q.after;
         assert_eq!(m.position_units, PALW_MODEL_SUPPLY_UNITS_V1);
         assert!(m.msk_reserve >= m.seed_sompi, "with every position back, the reserve is the seed or more: {}", m.msk_reserve);
+    }
+
+    /// **ADR-0090 Decision 2's floor is a refusal, not an observation** (mainnet audit 2026-09-06,
+    /// M-12).
+    ///
+    /// The decision says "the reserve never falls under it [the seed]", and until this repair that
+    /// was true only because `div_ceil`'s rounding and the `.min(msk_reserve)` cap happened to make
+    /// it so — asserted in a test, enforced nowhere. The coinbase mints a market payout with
+    /// nothing withheld, so a quote that pays out of the locked seed would move real money.
+    ///
+    /// The rows here are built BY HAND, at and below the floor, precisely because the curve cannot
+    /// reach them today: a test that only re-runs the curve agrees with the curve, and would go on
+    /// passing if a future rounding change let the reserve fall. The rule asserted is the ADR's
+    /// sentence — a quote whose `after` breaks the floor or lowers the product does not exist —
+    /// not the particular arithmetic that satisfies it.
+    #[test]
+    fn a_quote_that_would_break_the_floor_is_refused_not_returned() {
+        let seed_sompi = PALW_MODEL_SEED_MIN_SOMPI_V1;
+        // A row the curve DOES reach: some positions sold, the reserve above the seed. Selling them
+        // all back returns the reserve to the seed exactly, and that is legal — the floor is a
+        // ceiling on what may leave, not a margin.
+        let at_the_floor = PalwModelMarketV1 { msk_reserve: seed_sompi, ..seeded() };
+        assert_eq!(at_the_floor.msk_reserve, at_the_floor.seed_sompi);
+        // With the reserve at the floor and every position already in the curve, nothing can leave.
+        assert!(
+            palw_model_sell_quote_v1(&at_the_floor, 1).is_none(),
+            "a market holding only its seed pays nothing: units_after would exceed the supply"
+        );
+
+        // A row that HAS sold positions and sits at its floor: any sell would have to pay out of
+        // the seed, so every sell is refused — at one unit and at the whole outstanding block.
+        let outstanding = 10_000u64;
+        let sold_at_the_floor = PalwModelMarketV1 {
+            msk_reserve: seed_sompi,
+            position_units: PALW_MODEL_SUPPLY_UNITS_V1 - outstanding,
+            sold_units: outstanding,
+            ..seeded()
+        };
+        for units in [1u64, 7, outstanding / 2, outstanding] {
+            assert!(
+                palw_model_sell_quote_v1(&sold_at_the_floor, units).is_none(),
+                "sell of {units}: the reserve is the seed, so any payout comes out of the locked seed"
+            );
+        }
+
+        // A row BELOW its floor — a state the design says cannot exist. Whatever put it there, no
+        // quote may take it further down.
+        let under_the_floor = PalwModelMarketV1 { msk_reserve: seed_sompi - 1, ..sold_at_the_floor };
+        for units in [1u64, 7, outstanding] {
+            assert!(palw_model_sell_quote_v1(&under_the_floor, units).is_none(), "sell of {units} from under the floor");
+        }
+
+        // ..and the refusal is about the FLOOR, not about selling: the same row with a reserve
+        // above its seed quotes, and what it quotes still leaves the reserve at or above the seed.
+        let above = PalwModelMarketV1 { msk_reserve: seed_sompi * 2, ..sold_at_the_floor };
+        let q = palw_model_sell_quote_v1(&above, outstanding).expect("a market above its floor pays for a sell");
+        assert!(q.after.msk_reserve >= above.seed_sompi, "and what it pays leaves the seed where ADR-0090 put it");
+        assert!(q.after.k() >= above.k(), "ADR-0090 P1: the product never falls");
     }
 
     /// ADR-0090 Decision 1: a position is whole. A buy that would release less than one position
