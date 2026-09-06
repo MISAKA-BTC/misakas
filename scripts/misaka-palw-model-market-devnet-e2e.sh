@@ -24,6 +24,10 @@
 #   8. a PARTITION: side A = {0,1} takes another EVM buy through B and C while side B = {2..N-1}
 #      outweighs it; the HEAL must reorg side A and leave every node on one row and one balance
 #
+# Build (the CLI's EVM signing is behind a non-default feature):
+#   cargo build --release -p kaspad -p kaspa-pq-validator
+#   cargo build --release -p misaka-cli --features evm-send
+#
 # Env: KASPAD_BIN, CLI_BIN, PQV_BIN (defaults target/release/*), NODES (5, at least 4), WORK_DIR,
 #      WAIT (s, first blocks), STEP_WAIT (s, any one poll), FENCE_DAA (0), LINE_ID (override the
 #      founding line id if the node's log does not name it), EXTRA_NODE_ARGS.
@@ -49,6 +53,11 @@ die() { log "FATAL: $*"; exit 1; }
 [ "$NODES" -ge 4 ] || die "NODES must be at least 4 (two on side A, two or more on side B)"
 [ "$NODES" -le 6 ] || die "devnet seats six public-seed bonds; NODES must be at most 6"
 for b in "$KASPAD_BIN" "$CLI_BIN" "$PQV_BIN"; do [ -x "$b" ] || die "missing binary $b"; done
+# The EVM half of this drill signs its own transactions, which lives behind misaka-cli's
+# `evm-send` feature — NOT a default. A CLI built without it has no `evm wallet` at all, and run 10
+# discovered that by dying three steps in with clap's "unrecognized subcommand". Ask the binary.
+"$CLI_BIN" evm wallet --help >/dev/null 2>&1 || die "this misaka has no \`evm wallet\`: build it with \`cargo build --release -p misaka-cli --features evm-send\` (the EVM lane of this drill signs transactions)"
+
 
 rm -rf "$WORK_DIR"; mkdir -p "$WORK_DIR/keys" "$WORK_DIR/out"
 python3 - "$WORK_DIR/keys" "$NODES" <<'PY'
