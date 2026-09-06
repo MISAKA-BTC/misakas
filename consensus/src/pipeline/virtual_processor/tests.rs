@@ -5335,6 +5335,14 @@ async fn pos_v2_multi_slashing_in_one_block() {
 /// epoch, while `epochs_finalized_at` selects epochs by the DAA epoch (`daa_score / epoch_length_blocks`).
 /// The two numberings coincide (on a linear chain blue_score ≈ daa_score) only when those two lengths
 /// are equal — which is exactly the production reality (both = 100 in GENESIS_ACTIVE/PRODUCTION_DNS_PARAMS).
+/// That equality is a configuration this fixture AVOIDS the two-clock gap with, not a fact about the
+/// chain: the gap itself is pinned by `dns_finality::tests::the_accumulator_keys_one_map_from_two_epoch_numberings`
+/// (mainnet audit, 2026-09-06, H-2), which goes red both if it widens and if it closes.
+///
+/// It also cannot see M-1: `reserve_drip_per_epoch_cap_sompi` is `u64::MAX` here and this chain
+/// crosses one threshold a block, so the per-crossing spend has nothing to multiply. The rate limit
+/// is stated over a multi-epoch crossing by
+/// `dns_finality::tests::the_reserve_drip_rate_limit_is_spent_per_block_not_per_crossing`.
 #[tokio::test]
 async fn pos_v2_reserve_drip_pays_finalized_epoch() {
     use crate::model::stores::headers::HeaderStoreReader;
