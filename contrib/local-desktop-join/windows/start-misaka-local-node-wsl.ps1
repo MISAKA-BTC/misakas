@@ -17,6 +17,7 @@ param(
     "stop-node",
     "restart-node",
     "doctor",
+    "collect-diagnostic-log",
     "collect-support-log",
     "wait-sync",
     "keygen",

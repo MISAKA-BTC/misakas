@@ -28,11 +28,11 @@ start-misaka-local-node.command
 check-status.command
 ```
 
-エラー報告用support logを作る場合:
+状態とエラーの診断ログを作る場合:
 
 ```bash
 cd contrib/local-desktop-join
-scripts/misaka-desktop-node.sh collect-support-log
+scripts/misaka-desktop-node.sh collect-diagnostic-log
 ```
 
 HomebrewがないMacでも、buildに必要な `protoc` はscriptがローカルへ自動取得します。

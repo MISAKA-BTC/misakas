@@ -67,6 +67,7 @@ COMMANDS: dict[str, list[str]] = {
     "start-node": ["start-node"],
     "status": ["status"],
     "doctor": ["doctor"],
+    "collect-diagnostic-log": ["collect-diagnostic-log"],
     "collect-support-log": ["collect-support-log"],
     "wait-sync": ["wait-sync"],
     "auto-validator": ["auto-validator"],
