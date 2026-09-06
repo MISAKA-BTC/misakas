@@ -32,7 +32,7 @@ use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2;
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwChainStateV2, PalwConsensusObjectV2, PalwStateParamsV2, PalwStateV2Error,
-    apply_palw_transition_v2_with_policies, revert_delta_v2,
+    apply_palw_transition_v2_with_extras, revert_delta_v2,
 };
 use kaspa_database::prelude::StoreError;
 use rocksdb::WriteBatch;
@@ -91,6 +91,11 @@ pub struct PalwStateSyncV2 {
     /// folded with the pre-DA-court rule while the live path folded with the post-court one would
     /// compute a different state root for the same block and reject the chain it was syncing.
     da_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The fused terminal's responder-coverage fence (mainnet audit 2026-09-06, C-2/H-5), carried
+    /// for exactly the reason the three above it are — and named by the comment directly below,
+    /// which said a rule making the dissection's own arithmetic fence-dependent inside the
+    /// transition WOULD need threading. This is that rule.
+    court_responder_coverage: Option<kaspa_consensus_core::config::params::ForkActivation>,
     // **`palw_kary_court` is deliberately NOT carried here, and that is not the gap the three
     // fences above are** (ADR-0082 Decision 2, audit A C-5).
     //
@@ -119,9 +124,10 @@ impl PalwStateSyncV2 {
         unavailable_abstains: Option<kaspa_consensus_core::config::params::ForkActivation>,
         uncertified_weightless: Option<kaspa_consensus_core::config::params::ForkActivation>,
         da_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
+        court_responder_coverage: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> Result<Self, PalwSyncV2Error> {
         let tip = store.load_tip(&params)?;
-        Ok(Self { params, tip, unavailable_abstains, uncertified_weightless, da_court })
+        Ok(Self { params, tip, unavailable_abstains, uncertified_weightless, da_court, court_responder_coverage })
     }
 
     pub fn tip(&self) -> Option<(&BlockHash, &PalwChainStateV2)> {
@@ -166,7 +172,7 @@ impl PalwStateSyncV2 {
         };
         let mut current = tip_state.clone();
         for step in steps {
-            let (next, delta) = apply_palw_transition_v2_with_policies(
+            let (next, delta) = apply_palw_transition_v2_with_extras(
                 &current,
                 &self.params,
                 &step.ctx,
@@ -187,6 +193,17 @@ impl PalwStateSyncV2 {
                 false,
                 self.uncertified_weightless.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
                 self.da_court.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
+                &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+                    court_responder_coverage_active: self
+                        .court_responder_coverage
+                        .is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
+                    // The model-registry and EVM fences are NOT resolved here, and that is the
+                    // pre-existing behaviour rather than a decision taken with this patch: this
+                    // walk passed `PalwTransitionExtrasV1::default()` before it, and it is a REAL
+                    // gap the moment `palw_model_lines` or `palw_model_evm` is armed — the same
+                    // shape, and the same words, as the `palw_capability_bound` note above.
+                    ..Default::default()
+                },
             )
             .map_err(|source| PalwSyncV2Error::State { block: step.ctx.block, source: Box::new(source) })?;
             store.insert_delta_batch(batch, step.ctx.block, next.state_root(), &delta)?;
@@ -371,7 +388,7 @@ mod tests {
         }
 
         // The subject: sync + store + batches.
-        let mut sync = PalwStateSyncV2::load(&store, params(), None, None, None).unwrap();
+        let mut sync = PalwStateSyncV2::load(&store, params(), None, None, None, None).unwrap();
         assert!(sync.tip().is_none(), "a fresh database has no tip");
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
@@ -383,7 +400,7 @@ mod tests {
         assert_eq!(tip_state, book.state_of(&steps[1].ctx.block).unwrap(), "the sync's tip is the book's state");
 
         // A restart resumes at the same tip, root-verified.
-        let resumed = PalwStateSyncV2::load(&store, params(), None, None, None).unwrap();
+        let resumed = PalwStateSyncV2::load(&store, params(), None, None, None, None).unwrap();
         let (r_block, r_state) = resumed.tip().unwrap();
         assert_eq!((r_block, r_state), (tip_block, tip_state));
 
@@ -413,7 +430,7 @@ mod tests {
         let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
         store.reindex_if_stale().unwrap();
 
-        let mut sync = PalwStateSyncV2::load(&store, params(), None, None, None).unwrap();
+        let mut sync = PalwStateSyncV2::load(&store, params(), None, None, None, None).unwrap();
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
         db.write(batch).unwrap();
@@ -439,7 +456,7 @@ mod tests {
         // not exist durably, and the polluted write-through cache of the old handle must not be
         // what answers (the carriage store's crash-window lesson, applied to a refusal).
         let fresh = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
-        let resumed = PalwStateSyncV2::load(&fresh, params(), None, None, None).unwrap();
+        let resumed = PalwStateSyncV2::load(&fresh, params(), None, None, None, None).unwrap();
         assert_eq!(*resumed.tip().unwrap().0, genesis_block(), "and neither did the durable one");
         assert!(!fresh.has_delta(bad_steps[0].ctx.block).unwrap(), "no row of the refused walk was committed");
     }
@@ -453,7 +470,7 @@ mod tests {
         store.reindex_if_stale().unwrap();
 
         let steps = steps();
-        let mut sync = PalwStateSyncV2::load(&store, params(), None, None, None).unwrap();
+        let mut sync = PalwStateSyncV2::load(&store, params(), None, None, None, None).unwrap();
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
         sync.advance(&mut store, &mut batch, &steps).unwrap();

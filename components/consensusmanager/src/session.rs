@@ -426,8 +426,18 @@ impl ConsensusSessionOwned {
         self.consensus.palw_model_proposals_v1(line_id)
     }
 
-    /// The PALW-RC producer contract (ADR-0042). Reads the state store's tip, which is a lock-free
-    /// snapshot read like the virtual fields above.
+    /// The PALW-RC producer contract (ADR-0042).
+    ///
+    /// **NOT a lock-free snapshot read, whatever this used to say** (mainnet audit M-5). It is a
+    /// synchronous consensus read that goes to `DbPalwStateV2Store::load_tip_cached`: on a cache
+    /// hit a mutex and an `Arc` clone, and on a miss a borsh decode of the whole PALW carriage,
+    /// `rebuild_deadline_free_indices`, `rebuild_deadline_index_v2`, two consistency walks and a
+    /// full `state_root()`. The sentence it replaces is how the audit M-7 sweep came to skip this
+    /// method: a caller reading it had no reason to wrap the call, and the RPC service did not —
+    /// so an unauthenticated `getPalwProducerFacts` ran on an RPC reactor thread. **Call it from
+    /// `spawn_blocking`.** The same is true of every `palw_*` wrapper in this impl; "same store-tip
+    /// read profile as `palw_producer_facts_v2`" on the siblings above means THIS, not the
+    /// `get_virtual_*` accessors beside them.
     pub fn palw_producer_facts_v2(
         &self,
         class_id: kaspa_consensus_core::Hash64,

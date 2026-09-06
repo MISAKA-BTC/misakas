@@ -967,3 +967,15 @@ Open, each by its own name, so none of them is discovered:
 * **Two fixers were in flight when this section was written** (2026-09-04, 18:35 JST): the genesis
   registration BUILDER that mints the row's `ClassRegistered` with its admission carriage, and the
   remaining `2^22` sites on the base0 seat, replay, drill and tool paths.
+* **U-09 — the dissection responder does not exist in any shipped binary.** `CourtAttnRootClaimed`
+  is constructed nowhere outside `palw_state_v2`'s test module; `kaspad`'s panel has no arm that
+  builds one. Decision 2's clock at a fused `Terminal` therefore convicts every accused dense-tier
+  producer by silence, honest or guilty, for the price of one bond and a 42-DAA wait — and the
+  opening-rung mercy beside it cannot apply, because a converged ladder has `round() > 0` by
+  construction. Recorded as O-8 by the 2026-09-05 mainnet audit as "a passive liveness gap waiting
+  on a feature", and re-found by the 2026-09-06 pass as a funded, steerable, evidence-free attack
+  that a card ARMS (C-2/H-5). Mitigated, not closed, behind `Params::palw_court_responder_coverage`
+  (`None` on testnet-11 and devnet, so both remain exposed): past that fence the fused terminal's
+  silence ends the session without convicting or fining anyone. **The fence is a placeholder for
+  this item and is retired by activation the day the responder ships**;
+  `no_shipped_binary_files_a_court_attn_root_claimed` is the pin that goes red on that day.

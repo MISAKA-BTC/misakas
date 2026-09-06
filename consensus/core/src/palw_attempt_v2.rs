@@ -218,6 +218,39 @@ pub fn palw_nonce_bucket_v1(nonce: u64) -> u64 {
     nonce >> PALW_TICKET_NONCE_BUCKET_LOG2
 }
 
+/// **How many buckets one template may claim, as a ceiling.**
+///
+/// ADR-0071 Decision 2 says of this bound: "With the bucket in the anchor the bound is a rule",
+/// and [`PALW_TICKET_NONCE_BUCKET_LOG2`] is carried into `consensus_params_id` so "it is a number
+/// two nodes agree on before they agree on a block". Both sentences describe the bucket's WIDTH,
+/// which is real. Neither is true of the bucket's INDEX: [`palw_nonce_bucket_v1`] is `nonce >> 22`
+/// over a 64-bit nonce, so one template offers 2^42 distinct anchors, hence 2^42 distinct
+/// `execution_commitment_v3` values, hence 2^42 distinct Layer-0 candidates. For a party that runs
+/// no inference each costs one borsh and ~7 BLAKE2b. `kaspad`'s cursor (`palw_producer::produce_one`)
+/// is still the only bound anybody runs, which is exactly the node-local state ADR-0071 D2 said it
+/// was leaving.
+///
+/// 2^24 is DERIVED, not chosen. A bucket costs its producer one inference (ADR-0072 Decision 6:
+/// "one template, one inference, one draw"); the fastest registered class is the BASE-0 floor at
+/// milliseconds per inference; a template's life is bounded by the block interval. 16,777,216
+/// buckets is ~4.6 hours of floor inferences against one pre-PoW hash — two orders of magnitude
+/// past any template still worth building on, so no honest producer on any registered class can
+/// reach it, and it removes 18 of the 42 bits of free anchor space per template.
+///
+/// **This is a hardening and not the repair, and the difference must not be blurred.** The
+/// template itself is free to a fabricator: `hashing::header::pre_pow_hash_64` carries
+/// `utxo_commitment`, `accepted_id_merkle_root` and `palw_state_root`, and every one of those is
+/// checked only at the UTXO stage, whose verdict is `StatusDisqualifiedFromChain`. See the
+/// 2026-09-06 mainnet audit, C-1, and
+/// `an_unadmitted_attempt_header_is_still_a_priced_difficulty_row` below.
+pub const PALW_ATTEMPT_MAX_NONCE_BUCKET_V1: u64 = 1 << 24;
+
+/// **The ceiling as a predicate** — one spelling, so the header gate and its test cannot disagree
+/// about which nonces name a bucket a template may claim.
+pub fn palw_attempt_bucket_admits_v1(nonce: u64) -> bool {
+    palw_nonce_bucket_v1(nonce) <= PALW_ATTEMPT_MAX_NONCE_BUCKET_V1
+}
+
 /// Width of the expanded L1 tag, matching algo-4's so the finalizer's call shape is unchanged.
 pub const PALW_ATTEMPT_V2_L1_TAG_BYTES: usize = 200;
 
@@ -561,6 +594,13 @@ pub enum PalwAttemptV2Error {
     UnsupportedVersion { got: u16, expected: u16 },
     #[error("the attempt's carried challenge is not the one its header position derives")]
     ChallengeMismatch,
+    /// ADR-0071 D2 / ADR-0072 D2's template ceiling, refused by name so an operator reading a
+    /// rejection can tell a bucket walk from a bad challenge.
+    #[error(
+        "nonce bucket {bucket} is above the template ceiling {ceiling}: one template may not claim more executions than a \
+         producer can run against it (ADR-0071 Decision 2)"
+    )]
+    NonceBucketAboveCeiling { bucket: u64, ceiling: u64 },
     #[error("pwu is zero — an attempt claiming no work is not an attempt")]
     ZeroPwu,
     #[error("trace_chunk_count is zero — a trace nobody can fetch is a trace nobody can verify")]
@@ -907,7 +947,12 @@ mod tests {
         enum Pin {
             /// An equality against chain state at admission (bond record, class record, params).
             ChainEquality,
-            /// A value the panel replays and the court convicts: a wrong one is a false claim.
+            /// A value the panel replays and the court convicts — **and nothing else pins, at any
+            /// stage, for any block that never reaches a panel.** That population is not empty:
+            /// an attempt no bond backs is `StatusDisqualifiedFromChain` at the virtual processor
+            /// (`virtual_processor::processor.rs`, the PALW-admission arm), which is not an
+            /// invalidity — the header is stored, relayed, and counted by the difficulty window as
+            /// a `bits`-priced row. See `an_unadmitted_attempt_header_is_still_a_priced_difficulty_row`.
             ExecutionReplay,
             /// A pure function of pinned values, checked by equality at the composed entry point.
             Derived,
@@ -951,6 +996,21 @@ mod tests {
         ];
         assert_eq!(classified.len(), 15, "one row per field of the struct destructured above");
         assert_eq!(classified.iter().filter(|(_, p)| *p == Pin::Position).count(), 1, "exactly one position field");
+        // **The classification is a claim about WHERE each pin is charged, and this counts the one
+        // class whose pin is charged nowhere a difficulty row can see** (mainnet audit 2026-09-06,
+        // C-1). This test used to assert only that the enum had a row per field, which made
+        // `ExecutionReplay` a free pass: three fields inside the priced bytes, 3 x 512 bits of free
+        // Layer-0 candidates per execution, and a passing test saying every field was placed.
+        //
+        // The number is a PIN on an open gap, not a rule. Moving it up requires a new unpinned
+        // field, which is the defect; moving it down requires a rule that pins one of these three
+        // before the row is counted, which is C-1's repair — and either direction must be argued in
+        // this test rather than absorbed by it.
+        assert_eq!(
+            classified.iter().filter(|(_, p)| *p == Pin::ExecutionReplay).map(|(n, _)| *n).collect::<Vec<_>>(),
+            vec!["trace_root", "output_root", "execution_root"],
+            "the fields whose only pin is a panel that never convenes for an unadmitted attempt"
+        );
         assert!(classified.iter().all(|(name, _)| !name.is_empty()));
         // The derived ones derive: the fixture carries what the pin demands, so the pin and the
         // fixture cannot silently disagree.
@@ -959,6 +1019,86 @@ mod tests {
         // …and the derivation is a function of the trace root and the count, and of nothing else.
         assert_ne!(attempt_trace_manifest_root_v1(Hash64::from_u64_word(0x7B), 1), a.trace_manifest_root);
         assert_ne!(attempt_trace_manifest_root_v1(a.trace_root, 2), a.trace_manifest_root);
+    }
+
+    /// **THE GAP, PINNED — C-1 of the 2026-09-06 mainnet audit, which no patch in this repair
+    /// closes.**
+    ///
+    /// This test asserts a LIMITATION and is expected to pass. It exists because the limitation is
+    /// invisible: every rule involved is individually correct, and the only symptom is a `bits`
+    /// value nobody can attribute. What it holds is the SIZE of the free-draw space one party with
+    /// no bond, no class and no execution can reach against one template, per axis, so that the
+    /// space can neither widen without a test failing nor close without somebody rewriting this
+    /// test into the rule that closed it.
+    ///
+    /// The axes, each verified by construction below:
+    ///  * 3 execution roots x 512 bits — `Pin::ExecutionReplay`; the panel that would pin them
+    ///    never convenes, because an unadmitted attempt is `StatusDisqualifiedFromChain` and not
+    ///    invalid;
+    ///  * `pwu`, 64 bits — `Pin::ChainEquality`, and the equality is `DerivedV1` against class
+    ///    state, which no header-stage rule holds; only `pwu != 0` is stateless;
+    ///  * the nonce bucket — 2^42 before [`PALW_ATTEMPT_MAX_NONCE_BUCKET_V1`], 2^24 after; the
+    ///    ceiling is a hardening and this number says by how much;
+    ///  * the TEMPLATE itself — `hashing::header::pre_pow_hash_64` carries `utxo_commitment`,
+    ///    `accepted_id_merkle_root` and `palw_state_root`, all three checked only at the UTXO
+    ///    stage, whose verdict is again `StatusDisqualifiedFromChain`. This axis is why closing the
+    ///    first three would be theatre, and it is the reason C-1 needs a decision.
+    #[test]
+    fn an_unadmitted_attempt_header_is_still_a_priced_difficulty_row() {
+        // The lane is priced by `bits` by design (ADR-0072 Decision 3), under BOTH predicates.
+        assert!(crate::pow_layer0::algo_id_is_priced_by_bits(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2));
+        assert!(crate::pow_layer0::algo_id_is_priced_by_bits_v2(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2));
+        assert!(crate::pow_layer0::algo_id_is_priced_by_bits_v2(crate::pow_layer0::POW_ALGO_ID_PALW_EXEC_V3));
+
+        // One template, one bond, one class, ZERO executions: each mutation is a distinct priced
+        // commitment, i.e. a distinct Layer-0 candidate.
+        let base = attempt();
+        let anchor = execution_anchor_v3(net(), pph(), base.class_id, &base.executor_bond, NONCE);
+        let baseline = execution_commitment_v3(&base, anchor);
+        for (name, mutated) in [
+            ("trace_root", {
+                let mut a = base.clone();
+                a.trace_root = Hash64::from_u64_word(0xDEAD);
+                a
+            }),
+            ("output_root", {
+                let mut a = base.clone();
+                a.output_root = Hash64::from_u64_word(0xBEEF);
+                a
+            }),
+            ("execution_root", {
+                let mut a = base.clone();
+                a.execution_root = Hash64::from_u64_word(0xF00D);
+                a
+            }),
+            ("pwu", {
+                let mut a = base.clone();
+                a.pwu = a.pwu.wrapping_add(1);
+                a
+            }),
+        ] {
+            assert_ne!(
+                execution_commitment_v3(&mutated, anchor),
+                baseline,
+                "{name} is inside the priced bytes and moves the draw — with no execution behind it"
+            );
+        }
+        // The bucket axis, before and after the ceiling.
+        let buckets_without_ceiling: u128 = 1u128 << (64 - PALW_TICKET_NONCE_BUCKET_LOG2);
+        assert_eq!(buckets_without_ceiling, 1u128 << 42, "2^42 anchors per template is the un-ceilinged axis");
+        // The ceiling is INCLUSIVE (`palw_attempt_bucket_admits_v1` is `<=`), so `0..=2^24` is what
+        // a template may claim: 2^24 + 1 buckets, 18 of the 42 bits of free anchor space gone and
+        // 24 left. A hardening, not a closure — and the arithmetic is spelled out so nobody reads
+        // the ceiling as having removed the axis.
+        assert_eq!(PALW_ATTEMPT_MAX_NONCE_BUCKET_V1 as u128, 1u128 << 24, "the ceiling is 2^24");
+        let buckets_with_ceiling = PALW_ATTEMPT_MAX_NONCE_BUCKET_V1 as u128 + 1;
+        assert_eq!(buckets_with_ceiling, (1u128 << 24) + 1, "an inclusive ceiling admits one more bucket than it names");
+        assert!(buckets_with_ceiling * (1u128 << 17) < buckets_without_ceiling, "the ceiling removes ~18 bits and leaves ~24");
+        // The template axis: the three pre-PoW fields no header-stage rule constrains. Named here
+        // rather than exercised, because exercising them needs a pipeline; the pin is that they are
+        // named, so a future reader cannot conclude the first three axes were the whole list.
+        let free_template_fields = ["utxo_commitment", "accepted_id_merkle_root", "palw_state_root"];
+        assert_eq!(free_template_fields.len(), 3, "C-1: pre_pow_hash_64 carries three fields checked only at the UTXO stage");
     }
 
     /// The identity and the priced commitment are the same bytes but for the challenge, so they

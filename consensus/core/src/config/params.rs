@@ -1042,6 +1042,144 @@ pub struct Params {
     /// this is a fence and not a bug fix: nodes on either side would grade the same proof
     /// differently. Read it through `palw_court_ladder_fence` only.
     pub palw_court_ladder: Option<ForkActivation>,
+    /// **ADR-0072 Decision 8 on the FREE-PROMPT lane: the DA obligation is the chain's, not the
+    /// producer's** (mainnet audit, 2026-09-06, M-3). `None` on every shipped preset, so a build
+    /// carrying this field and one predating it are one network.
+    ///
+    /// Decision 8 pinned the three DA fields on the attempt lane by equality
+    /// (`palw_admission_v2::check_palw_attempt_da_pins_v1`, and the header stage above through
+    /// [`Self::palw_attempt_header_pins`]) and the free-prompt lane never got it. Two of the three
+    /// consequences are real:
+    ///
+    /// * `trace_retention_daa` is stored verbatim and is the ONLY bound on when a `DefaultAccused`
+    ///   may be filed (`palw_state_v2`'s `DaOutsideRetention` arm). A producer writing `0` is
+    ///   permanently immune to the DA court at zero cost — and writing `0` is **weakly dominant
+    ///   for an honest producer too**, because it also immunises against griefing accusations that
+    ///   pause the claim, so the field drifts to zero network-wide with no adversary at all and the
+    ///   court a card arms becomes decorative.
+    /// * `trace_chunk_count` is bounded only by `!= 0` while it decides
+    ///   `palw_da_max_accusable_rows_v1`. It is honest at `1` for every run inside
+    ///   `PALW_FP_TRACE_CHUNK_EVENTS_V3`, so this half is inert at shipped budgets and is pinned
+    ///   for the reason Decision 8 gives rather than for a live consequence.
+    ///
+    /// **Why a DERIVATION and not an equality, unlike the attempt lane.** An attempt rides its
+    /// block's header and knows that block's DAA score, so Decision 8 can ask for equality. A
+    /// free-prompt commitment rides an ordinary transaction built before anyone knows which block
+    /// will accept it, so an equality would be unsatisfiable. Past this fence the transition WRITES
+    /// the obligation — `accepted_daa + palw_min_trace_retention_daa_v1` — onto the claim record
+    /// and the carried value decides nothing. Same decision, at the only layer holding the input.
+    ///
+    /// **`trace_manifest_root` is deliberately NOT in scope.** On this lane it is
+    /// `fp_trace_manifest_root_v3` over the per-chunk EVENT digests, which the chain does not hold
+    /// and cannot recompute — and nothing in consensus reads the field on either lane, because the
+    /// extraction walk does not carry it onto `PalwConsensusObjectV2` at all. Pinning it would mean
+    /// carrying it there and giving the DA court something to bind a disclosure to, which is a
+    /// `PALW_STATE_V2_VERSION` move belonging to the record's owner. Recorded, and pinned by test
+    /// (`the_free_prompt_lanes_trace_manifest_root_is_carried_by_nothing`) so the gap can neither
+    /// widen nor close silently.
+    ///
+    /// **A bare fence with no companion value, deliberately** — the [`Self::palw_context_ladder`]
+    /// rule for its reason: the retention length is `palw_min_trace_retention_daa_v1` of the
+    /// bundle's own windows and the chunk size is a module constant, so there is no duration beside
+    /// this height for [`Self::consensus_identity_id`] to normalise away (the `palw_bond_maturity`
+    /// hazard).
+    ///
+    /// **TOP LEVEL rather than in the V2 bundle**, for the `palw_unavailable_abstains` reason: a
+    /// fence inside the bundle moves `palw_ruleset_id_v2`, which `for_each_fence` never descends
+    /// into, so every old/new pair would fail the handshake outright instead of peering.
+    pub palw_fp_da_pins: Option<ForkActivation>,
+
+    /// **ADR-0018 §E's payout paths obey their own stated bounds** (mainnet audit, 2026-09-06 —
+    /// H-2, H-3, M-1).
+    ///
+    /// Five rules, ONE fence, because they are one decision surface: §E states every one of them
+    /// and the code stated none. Every one changes the bytes `validate_coinbase_transaction`
+    /// compares by exact hash, so splitting them across fences would only make four extra ways to
+    /// arm half a rule.
+    ///
+    /// 1. `validator_quality_bonus_outputs` stops at the pool — the whole-output cap its sibling
+    ///    `validator_participation_reward_outputs` has carried since the 112-block halt, and §E's
+    ///    own "Unspent → rollover … never the whole pool".
+    /// 2. …and refuses an epoch whose `Σ included stake` exceeds its `expected_stake`. That is the
+    ///    precondition the function's own doc ASSERTS and nothing enforced;
+    ///    `epoch_meets_quality_floor` fails OPEN in the same direction, because a fraction above 1
+    ///    is above any floor.
+    /// 3. …and emits at most [`crate::palw_state_v2::PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS`]
+    ///    outputs per BLOCK, across every epoch that block finalizes — the fan-out is
+    ///    (epochs) × (included), not (included).
+    /// 4. The reserve drip emits at most [`crate::palw_state_v2::PALW_V2_MAX_RESERVE_DRIP_PAYOUTS`]
+    ///    per block, and spends `reserve_drip_per_epoch_cap_sompi` per BLOCK rather than per
+    ///    crossing: a rate limiter whose rate must not depend on how many thresholds one wide
+    ///    mergeset happens to cross.
+    /// 5. The coinbase isolation cap counts every kind the builder appends
+    ///    ([`crate::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS_BOUNDED`]) instead of three of
+    ///    six.
+    ///
+    /// Rules 1-4 TIGHTEN what a coinbase may contain; rule 5 RELAXES the size guard ahead of it.
+    /// `None` on testnet-11, devnet and simnet — every coinbase they build stays byte-identical,
+    /// and a `None` writes nothing into `consensus_params_id` or `consensus_schedule_id`, so their
+    /// fingerprints do not move. `always()` on a card, which has no history to fork.
+    ///
+    /// **TOP LEVEL rather than on `DnsParams`**, for the `palw_fp_da_pins` reason and one more:
+    /// [`Self::consensus_params_id`] hashes `dns_params` as one length-prefixed borsh blob, so a
+    /// new `DnsParams` field would move every preset's fingerprint, testnet-11's included.
+    ///
+    /// Read through [`Self::palw_validator_payout_bounds_fence`] only.
+    pub palw_validator_payout_bounds: Option<ForkActivation>,
+
+    /// **ADR-0045 Decision 2's boundary sentence, made real — the crossing block derives its own
+    /// epoch's budget from the parent state** (mainnet audit 2026-09-06, M-2). `None` on every
+    /// shipped preset, so the behaviour is byte-identical to not having the field at all.
+    ///
+    /// Dormant, admission reads the stored snapshot and refuses anything else by name: at every
+    /// epoch boundary the stored table is stamped with the CLOSED epoch while `ctx.daa_score` is in
+    /// the new one, so `EpochBudgetUnspecified` refuses every non-floor attempt the boundary block
+    /// carries or merges. The chain block is disqualified and — because `sink_search_algorithm`
+    /// discards it rather than deferring it — permanently orphaned, and the claims, escrow and
+    /// worker carves of every non-floor attempt it merged are gone. The floor, the heartbeat lane
+    /// and the receipt lane are exempt, so this is liveness and fairness, never a halt.
+    ///
+    /// Past the fence, admission calls [`crate::palw_state_v2::palw_epoch_budgets_for_v2`] for the
+    /// block's own epoch — the same pure function the fold's `ensure_epoch_budgets` calls — which is
+    /// the ADR's sentence verbatim: "for the crossing block itself (whose apply has not happened
+    /// yet) it derives from the parent state".
+    ///
+    /// **A bare fence with no companion value**, the [`Self::palw_frontier_provenance`] rule for its
+    /// reason: every number the derivation uses (`epoch_length`, `budget_tolerance_permille`) is
+    /// already a `PalwStateParamsV2` field and therefore already inside `palw_ruleset_id_v2`.
+    ///
+    /// **TOP LEVEL rather than in the V2 bundle**, the [`Self::palw_unavailable_abstains`] reason:
+    /// this rule has to be able to reach a LIVE network, and a fence inside the bundle moves
+    /// `palw_ruleset_id_v2`, which `for_each_fence` never descends into — every old/new pair would
+    /// fail the handshake outright instead of peering with a warning until the height.
+    ///
+    /// **The residual, stated rather than hidden.** The ADR asserts the parent-state derivation and
+    /// the stored snapshot "cannot disagree". On this tree they can: `apply_class_share_growth`
+    /// (step 2c) and `apply_class_reclamation` (step 2d) run before `ensure_epoch_budgets` (step
+    /// 3b), so with `class_growth_permille != 0` the fold's table is derived from a share table the
+    /// pre-check has not seen. The disagreement is bounded — one block's budget, at one boundary,
+    /// for one class — and is pinned by
+    /// `the_boundary_derivation_and_the_folds_snapshot_can_differ_when_growth_is_on`.
+    pub palw_epoch_boundary_budget: Option<ForkActivation>,
+
+    /// **ADR-0044 Decision 9's two advertised caps, enforced** (mainnet audit 2026-09-06, L-2).
+    /// `None` on every shipped preset, so the behaviour is byte-identical to not having the field.
+    ///
+    /// `PalwFreePromptParamsV3::max_prompt_tokens` and `max_decode_tokens` are borsh-hashed into
+    /// `palw_ruleset_id_v2` — every node advertises them in its fingerprint — and no code read
+    /// them: `validate_v3` never took the params struct, and the surviving bounds were transaction
+    /// mass and the step ladder. Past this fence the ruleset-aware validation entry point carries
+    /// them and a job above either is refused by name.
+    ///
+    /// **Dormant on testnet-11 and devnet, and that is the whole reason it is a fence.** Both have
+    /// run since genesis with these numbers unread; enforcing them retroactively would refuse jobs
+    /// those chains already accepted. Arming them there is a scheduled height and the operator's
+    /// call. A card is born with the caps it advertises meaning something.
+    ///
+    /// **A bare fence with no companion value** — the two numbers are already
+    /// `PalwFreePromptParamsV3` fields and therefore already inside `palw_ruleset_id_v2`.
+    pub palw_fp_ruleset_caps: Option<ForkActivation>,
+
     /// **ADR-0087 Decision 6 — the model market is a consensus rule armed by activation.** `None`
     /// on every shipped preset: below it `ModelBuy`/`ModelSell` are refused by name at acceptance
     /// and no market exists; past it the fold opens a class's market on its first buy. The
@@ -1162,6 +1300,35 @@ pub struct Params {
     /// ruleset whose genesis set registers a graph-v5 class while this fence is dormant.
     pub palw_kary_court: Option<ForkActivation>,
 
+    /// **ADR-0082 Decision 2's clock does not convict for a move no party in the field can make**
+    /// (mainnet audit 2026-09-06, C-2/H-5). `None` on every shipped preset, so the fold is
+    /// byte-identical to not having the field at all.
+    ///
+    /// §10.6 gave the fused terminal a clock because "silence no longer wins challenger-side", on
+    /// the premise that the responder owes a `CourtAttnRootClaimed` it can file. No binary in this
+    /// tree constructs that object outside a test module, and a converged ladder has `round() > 0`
+    /// by construction, so the opening-rung mercy beside it cannot reach the terminal: every fused
+    /// session that runs its rung clock out ends in `void_and_slash(CourtFraud)` against the
+    /// accused, whether it is honest or guilty. A verdict that is independent of the facts is not
+    /// the trial Decision 2 designed; it is a funded, evidence-free way to burn a dense-tier
+    /// producer's collateral and its escrowed reward.
+    ///
+    /// Past this fence the fused terminal's silence routes to `rearm_after_unanswered_opening` —
+    /// this fold's own third direction, which ends the session, convicts nobody and fines nobody —
+    /// instead of to the void. NOTHING ELSE MOVES: the fused remap stands, the rung clock stands,
+    /// every other silence still convicts the party that owes the move, and the challenger-side
+    /// backstop is untouched.
+    ///
+    /// **This exemption is a placeholder for a responder and must be retired the day one ships**,
+    /// by activation on a fresh card or a scheduled height on a live chain — never by a silent
+    /// edit. `no_shipped_binary_files_a_court_attn_root_claimed` is the pin that goes red on that
+    /// day.
+    ///
+    /// **TOP LEVEL for the reason on `palw_unavailable_abstains`**: it has to be able to reach a
+    /// live network, and a fence inside the V2 bundle moves `palw_ruleset_id_v2`, which
+    /// `for_each_fence` never descends into.
+    pub palw_court_responder_coverage: Option<ForkActivation>,
+
     /// **ADR-0082 Decisions 10 and 11's fence: the free-prompt lane's numerator and its sampler.**
     ///
     /// Active, two rules move together because they are one ruleset move (ADR-0082 §4,
@@ -1244,6 +1411,67 @@ pub struct Params {
     /// fresh chain arms it from genesis (a carded mainnet does); testnet-11 reaches it as a
     /// scheduled height, ADR-0083's path (a), which is the operator's call.
     pub palw_receipt_rows_unpriced: Option<ForkActivation>,
+
+    /// **ADR-0072 Decision 8, asked where the draw is actually spent** (mainnet audit, 2026-09-06
+    /// — C-1).
+    ///
+    /// D8's rule is "every field inside the priced bytes is pinned, or it is the challenge", and
+    /// D8's own evidence is a HEADER-STAGE fact: sweeping one unpinned field over one execution
+    /// "gave 4,096 distinct tickets and 4,096 distinct Layer-0 tags". A Layer-0 tag under `bits` is
+    /// a valid block, a relayed header, and — by ADR-0083 Decision 1, since
+    /// `algo_id_is_priced_by_bits_v2` says the attempt lane is priced — a counted difficulty row.
+    /// The pins that close D8 (`palw_admission_v2::check_palw_attempt_da_pins_v1`) are asked only
+    /// at the composed admission entry point, which runs in the virtual processor and only for a
+    /// candidate chain block; an attempt no bond backs is `StatusDisqualifiedFromChain` there,
+    /// which is not an invalidity and does not remove the row. Both of that function's inputs are a
+    /// network CONSTANT and the header's own DAA score, so the pin was always decidable on the
+    /// relay path and simply was not asked there.
+    ///
+    /// Past this fence, and only on a `ConsensusV2` network, `palw_carriage_stateless_v1` asks the
+    /// three DA pins beside the ML-DSA signature, and refuses a nonce whose bucket is above
+    /// [`crate::palw_attempt_v2::PALW_ATTEMPT_MAX_NONCE_BUCKET_V1`].
+    ///
+    /// **What this does NOT do, stated here so nobody reads the fence as the repair.** It closes
+    /// three free fields and 18 of the 42 bits of per-template anchor space. It does not make an
+    /// attempt row cost an execution. `trace_root`, `output_root` and `execution_root` are
+    /// classified `Pin::ExecutionReplay` — pinned by a panel that never convenes for an unadmitted
+    /// attempt — and `hashing::header::pre_pow_hash_64` carries `utxo_commitment`,
+    /// `accepted_id_merkle_root` and `palw_state_root`, none of which any header-stage rule
+    /// constrains and all of which are checked only at the UTXO stage. C-1 stays open behind this
+    /// fence; its size is pinned by
+    /// `an_unadmitted_attempt_header_is_still_a_priced_difficulty_row`.
+    ///
+    /// **TOP LEVEL and bare, for [`Self::palw_difficulty_priced_rows`]' reasons**: it decides which
+    /// headers are valid, so old and new builds must peer until the height, and there is no
+    /// companion value a normalisation could hide (the pins' derivation is the bundle's own state
+    /// params). `None` on every shipped preset — testnet-11 and devnet keep validating every header
+    /// they already hold and their fingerprints do not move. A carded mainnet states it from
+    /// genesis, where it is free: no history was judged under the looser rule.
+    pub palw_attempt_header_pins: Option<ForkActivation>,
+
+    /// **ADR-0042 Decision 11's signature-context set, complete** (mainnet audit 2026-09-06, M-8).
+    ///
+    /// Armed, the bundle's `signature_contexts_root` is
+    /// [`crate::palw_mode_v2::palw_v2_signature_contexts_root_v2`] — every ML-DSA-87 context the
+    /// acceptance layer verifies under, nineteen of them. Dormant, it is the frozen nine testnet-11
+    /// and devnet committed to, ten of which the acceptance layer verifies without the ruleset id
+    /// naming: bond capability, DA accusation, DA disclosure, the court's close declaration and
+    /// both attention moves, the free-prompt commitment and spend, the carriage commitment and the
+    /// execution attestation. Two builds that spell any of those differently share an id, and a
+    /// refused object is SKIPPED while the block stands — so they split the registry with no block
+    /// ever rejected and nothing in either log saying so.
+    ///
+    /// **Bare, TOP LEVEL and GENESIS-ONLY, for [`Self::palw_prompt_ids_merkle`]'s reasons.** A
+    /// fence inside the bundle moves `palw_ruleset_id_v2`, which `for_each_fence` never descends
+    /// into, so every old/new pair would fail the handshake outright. `validate_palw_v2` refuses
+    /// any height but `always()`: the set is what every signature ON the network means, and no
+    /// verifier of a signature holds the object's block height.
+    ///
+    /// **`None` on every shipped preset, and it must stay that way on testnet-11 and devnet.**
+    /// Arming it moves that network's `consensus_params_id`, which is a re-mint of a live chain.
+    /// A carded mainnet states it from genesis (`mainnet_card_base_v1`), which is the designed
+    /// path for a network with no history.
+    pub palw_signature_contexts_v2: Option<ForkActivation>,
 
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
@@ -1630,6 +1858,36 @@ impl Params {
                 ));
             }
         }
+        // **ADR-0072 D8's header-stage pin is a V2-lane rule, and it must not be armable without a
+        // lane** (mainnet audit, 2026-09-06 — C-1). The pins it enforces are fields of a V2 attempt
+        // envelope and their derivation is the bundle's own `PalwStateParamsV2`; armed on a network
+        // with no bundle the fence names a rule with nothing to apply it to, and the header
+        // processor would resolve it to `None` while `consensus_params_id` said the network had
+        // armed something. A fence that hashes and does not fire is the silent-fork shape this file
+        // exists to refuse.
+        if let Some(pins) = self.palw_attempt_header_pins
+            && pins != ForkActivation::never()
+            && !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_))
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_attempt_header_pins is armed on a network that is not ConsensusV2: the DA pins it enforces are fields \
+                 of a V2 attempt envelope and their derivation is the bundle's state params (ADR-0072 Decision 8)",
+            ));
+        }
+        // **The free-prompt DA pin is a V2-lane rule too, and it must not be armable without a
+        // lane** (mainnet audit, 2026-09-06 — M-3). The obligation it derives is written onto a
+        // `PalwClaimStateV2` record by the V2 transition, and its length comes from the bundle's own
+        // state params; armed on a network with no bundle it names a rule with nothing to apply it
+        // to while `consensus_params_id` says the network armed something.
+        if let Some(pins) = self.palw_fp_da_pins
+            && pins != ForkActivation::never()
+            && !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_))
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_fp_da_pins is armed on a network that is not ConsensusV2: the retention obligation it derives is \
+                 written onto a V2 claim record and its length is the bundle's state params (ADR-0072 Decision 8)",
+            ));
+        }
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             return Ok(());
         };
@@ -1775,6 +2033,33 @@ impl Params {
             return Err(PalwModeV2Error::Invalid(
                 "the bundle's trace_format_version is the Merkle-ids format (4) but palw_prompt_ids_merkle is dormant: the \
                  ruleset id claims a prompt commitment the fence does not arm",
+            ));
+        }
+        // **ADR-0042 Decision 11: the fence and the committed set are written from one fact, and
+        // neither half may stand alone** (mainnet audit 2026-09-06, M-8). Same shape and same
+        // reasons as the block above it. Genesis-only for the stronger of those reasons: a signing
+        // context is what a signature MEANS, every verifier of one holds bytes rather than a block
+        // height, and a set that changed mid-chain would make the meaning of a signature a
+        // function of a height none of them can see.
+        if let Some(activation) = self.palw_signature_contexts_v2
+            && activation != ForkActivation::never()
+        {
+            if activation != ForkActivation::always() {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_signature_contexts_v2 may only be armed at genesis: the set of contexts a ruleset commits to is \
+                     decided once per network, never per height, because no verifier of a signature holds the object's height",
+                ));
+            }
+            if bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v2() {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_signature_contexts_v2 is armed but the bundle's signature_contexts_root is not the complete set: \
+                     the ruleset id would not name every context a signature on this network is verified under",
+                ));
+            }
+        } else if bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root() {
+            return Err(PalwModeV2Error::Invalid(
+                "the bundle's signature_contexts_root is the complete set but palw_signature_contexts_v2 is dormant: the \
+                 ruleset id claims a context set the fence does not arm",
             ));
         }
         if self.palw_credit.is_some()
@@ -1954,6 +2239,59 @@ impl Params {
                     "the data-availability disclose window is narrower than twice the finality window — a reorg across \
                      the deadline could flip the verdict without a finality violation (ADR-0062 SA-3)",
                 ));
+            }
+            // **RESPONDER COVERAGE: a court may not be armed over a family that cannot answer it**
+            // (mainnet audit 2026-09-06, C-5; ADR-0062 SA-2).
+            //
+            // SA-2 says it in the ADR's own words: "a class whose event cannot be disclosed inside
+            // the budget is refused at admission rather than being undefendable afterwards." There
+            // was no door on the GENESIS route, and the fence's own doc says what that costs:
+            // armed with no responder, every accusation succeeds and every producer is slashable
+            // for the price of one bond.
+            //
+            // The fact asked here is CONSENSUS-VISIBLE and is the one
+            // `check_trace_event_disclosure_v1` itself refuses on ("this class commits under a
+            // scheme no disclosure form names"): the class's registered `logits_scheme_id`. It is
+            // deliberately NOT `PalwExecutionBackendV1::supports_court()` — that is node-local, it
+            // is a bool a family writes about itself, and `palw_e2e_adjudicability`'s own module
+            // doc records it as exactly the wrong shape for precisely this job.
+            //
+            // **A registered class this call cannot DESCRIBE is passed over, and that is a limit
+            // of this site rather than a verdict about the class.** The designed patch refused it,
+            // on the reasoning that a class nothing here can name is a class this rule has no
+            // opinion about while the court has a verdict about it. That reasoning does not survive
+            // contact with the assembly: a GENESIS class carries `admission: None` and its profile
+            // lives in the CATALOG, of which the bundle holds only `class_catalog_root` — a
+            // commitment, not a preimage. `palw_registered_class_profiles_v1` therefore answers for
+            // a genesis row only when the typed catalog in `palw_e2e_adjudicability` happens to
+            // carry it, which is true of the three rows this tree ships and false of every network
+            // `palw_rc_params` assembles from a catalog of its own. Refusing here would have
+            // stopped `the_shipped_palw_rc_network_boots_and_runs_its_genesis` from booting a
+            // ruleset that is not undefendable at all — only undescribable from this seam.
+            //
+            // So the residue is named instead of hidden: past this gate, "every registered class
+            // commits under a disclosable scheme" is proven for the rows the ruleset itself can
+            // resolve, and asserted for the rest by whoever supplied the catalog.
+            // `a_catalog_class_this_ruleset_cannot_describe_is_not_refused_here` pins that limit,
+            // so it can neither widen nor close silently.
+            //
+            // Assembly-time only: no fold reads this, no fence is added, no fingerprint field
+            // moves. Every shipped preset's registered classes declare one of the two named
+            // schemes (BASE-0 flat, both model tiers tiled), so nothing that assembles today stops
+            // assembling.
+            for (class_id, profile) in crate::palw_e2e_adjudicability::palw_registered_class_profiles_v1(bundle) {
+                let Some(profile) = profile else { continue };
+                let scheme = profile.logits_scheme_id;
+                if scheme != crate::palw_step_refute::flat_logits_scheme_id_v1()
+                    && scheme != crate::palw_step_refute::tiled_logits_scheme_id_v1()
+                {
+                    return Err(PalwModeV2Error::InvalidOwned(format!(
+                        "palw_da_court is armed and the genesis set registers class {class_id} under a logits commitment \
+                         scheme no disclosure form names: `PalwTraceEventDisclosureV1` has a Flat arm and a Tiled arm, \
+                         `check_trace_event_disclosure_v1` refuses anything else, so no `MaterialDisclosed` could ever \
+                         refute an accusation against this class and every accusation would win by silence (ADR-0062 SA-2)"
+                    )));
+                }
             }
             // **The delay in force past the fence outlasts the DA court BY CONSTRUCTION** (mainnet
             // audit 2026-09-05, "should fix" `palw_mode_v2.rs:938`).
@@ -2403,6 +2741,11 @@ impl Params {
         if self.palw_kary_court == Some(ForkActivation::never()) {
             self.palw_kary_court = None;
         }
+        // The fused-terminal responder-coverage rule, a bare fence: the same collapse for the same
+        // reason — `never()` is absence, and absence must not write a name into the schedule id.
+        if self.palw_court_responder_coverage == Some(ForkActivation::never()) {
+            self.palw_court_responder_coverage = None;
+        }
         // ADR-0082 Decisions 10/11, likewise.
         if self.palw_fp_decode_rules == Some(ForkActivation::never()) {
             self.palw_fp_decode_rules = None;
@@ -2413,6 +2756,32 @@ impl Params {
         }
         if self.palw_receipt_rows_unpriced == Some(ForkActivation::never()) {
             self.palw_receipt_rows_unpriced = None;
+        }
+        // ADR-0072 D8 at the header stage, the same shape: a bare fence, `never()` is absence.
+        if self.palw_attempt_header_pins == Some(ForkActivation::never()) {
+            self.palw_attempt_header_pins = None;
+        }
+        // ADR-0042 Decision 11's complete context set. The `palw_prompt_ids_merkle` shape: a bare
+        // fence, so the whole option collapses.
+        if self.palw_signature_contexts_v2 == Some(ForkActivation::never()) {
+            self.palw_signature_contexts_v2 = None;
+        }
+        // ADR-0072 D8 on the free-prompt lane, a bare fence: the same collapse for the same reason.
+        if self.palw_fp_da_pins == Some(ForkActivation::never()) {
+            self.palw_fp_da_pins = None;
+        }
+        // ADR-0018 §E's payout bounds (mainnet audit 2026-09-06), the same shape: a bare fence,
+        // `never()` is absence.
+        if self.palw_validator_payout_bounds == Some(ForkActivation::never()) {
+            self.palw_validator_payout_bounds = None;
+        }
+        // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps (mainnet audit
+        // 2026-09-06, M-2 and L-2): bare fences, same collapse, same reason.
+        if self.palw_epoch_boundary_budget == Some(ForkActivation::never()) {
+            self.palw_epoch_boundary_budget = None;
+        }
+        if self.palw_fp_ruleset_caps == Some(ForkActivation::never()) {
+            self.palw_fp_ruleset_caps = None;
         }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
@@ -2587,6 +2956,41 @@ impl Params {
         matches!(self.palw_court_ladder_fence(), Some(fence) if fence.is_active(daa_score))
     }
 
+    /// **ADR-0072 Decision 8 on the free-prompt lane, read in ONE place** — `Some` only on a
+    /// `ConsensusV2` network that has armed it, for [`Self::palw_court_ladder_fence`]'s reason. The
+    /// transition derives the claim's retention obligation past this fence and takes the producer's
+    /// number before it.
+    pub fn palw_fp_da_pins_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_fp_da_pins) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// **ADR-0018 §E's payout bounds at `daa_score`**, mode folded in — the ONE place this is
+    /// resolved, for [`Self::palw_fp_da_pins_fence`]'s reason and one that is sharper here: the
+    /// coinbase CONSTRUCTION path and the VALIDATION path must get the same answer for the same
+    /// block, or every node computes a different coinbase and the chain stops.
+    pub fn palw_validator_payout_bounds_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_validator_payout_bounds) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// **Does this build's ruleset carry the payout bounds at all?** — the coinbase isolation
+    /// guard's question, and the only one it can ask: `check_coinbase_in_isolation` is context-free
+    /// by contract and holds no DAA score.
+    ///
+    /// Height-free, and therefore strictly WIDER than the height-indexed answer at every height —
+    /// which is the direction a SIZE guard must fail in, and the opposite of the free-prompt door's
+    /// direction. A guard that is too wide declines to reject a coinbase the exact-hash rule then
+    /// rejects anyway; one that is too narrow refuses a coinbase this node itself built, which is
+    /// the 112-block halt this rule exists to prevent.
+    pub fn palw_validator_payout_bounds_declared(&self) -> bool {
+        self.palw_validator_payout_bounds_fence().is_some()
+    }
+
     /// ADR-0087 Decision 6's fence with the mode condition folded in — `Some` only on a
     /// `ConsensusV2` network that has armed it. The ONE place the model market is decided.
     pub fn palw_model_market_fence(&self) -> Option<ForkActivation> {
@@ -2653,6 +3057,20 @@ impl Params {
         self.palw_kary_court_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// Is the fused terminal's responder-coverage rule in force at `daa_score`? `false` on every
+    /// shipped preset. The ONE place it is decided; the fold and the sync walk both switch on this
+    /// and never on the raw field.
+    pub fn palw_court_responder_coverage_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_court_responder_coverage) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn palw_court_responder_coverage_active_at(&self, daa_score: u64) -> bool {
+        self.palw_court_responder_coverage_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// ADR-0082 Decisions 10/11's fence with the mode condition already folded in — `Some` only on
     /// a `ConsensusV2` network that has armed it. The ONE place the free-prompt lane's numerator
     /// and its sampler are decided; the transition, the admission gate and the gateway switch on
@@ -2700,6 +3118,137 @@ impl Params {
     /// version check compiled in refuses the history it is asked to sync.
     pub fn palw_attempt_lane_at(&self, daa_score: u64) -> crate::pow_layer0::PalwAttemptLaneV1 {
         crate::pow_layer0::PalwAttemptLaneV1::from_fence(self.palw_attempt_activation.map(|fence| fence.is_active(daa_score)))
+    }
+
+    /// **Every top-level PALW activation fence, named, in ONE compiler-forced spelling.**
+    ///
+    /// The destructure below is exhaustive, for [`Self::for_each_fence`]'s reason: a fence added to
+    /// `Params` will not compile until it is named here. Two hand-written lists needed it and both
+    /// had already fallen behind when the DA-court and model-market branches merged — the test-only
+    /// fence table (mainnet audit 2026-09-06, L-3) and `fork_id_v1::fork_id_gate_fences_v1` (M-6),
+    /// which the merge grew four fences without touching either.
+    ///
+    /// Some-only fences that carry a companion value (`palw_heartbeat`, `palw_attempt_work`,
+    /// `palw_bond_maturity`, `palw_inactivity_leak`, `palw_beacon_fold`) contribute their
+    /// `activation` and nothing else: a duration beside a fence is deliberately not a fence, for
+    /// the reason `for_each_fence` gives about normalisation.
+    ///
+    /// Order is the declaration order of the struct and should stay stable — a caller may hash it.
+    pub fn palw_fences_v1(&self) -> Vec<(&'static str, Option<ForkActivation>)> {
+        // Exhaustive on purpose — see the doc block. Non-fence fields are bound and ignored.
+        let Params {
+            dns_seeders: _,
+            net: _,
+            genesis: _,
+            timestamp_deviation_tolerance: _,
+            max_difficulty_target: _,
+            max_difficulty_target_f64: _,
+            past_median_time_window_size: _,
+            difficulty_window_size: _,
+            min_difficulty_window_size: _,
+            coinbase_payload_script_public_key_max_len: _,
+            max_coinbase_payload_len: _,
+            max_tx_inputs: _,
+            max_tx_outputs: _,
+            max_signature_script_len: _,
+            max_script_public_key_len: _,
+            mass_per_tx_byte: _,
+            mass_per_script_pub_key_byte: _,
+            mass_per_sig_op: _,
+            max_block_mass: _,
+            storage_mass_parameter: _,
+            deflationary_phase_daa_score: _,
+            pre_deflationary_phase_base_subsidy: _,
+            skip_proof_of_work: _,
+            max_block_level: _,
+            pruning_proof_m: _,
+            blockrate: _,
+            pre_crescendo_target_time_per_block: _,
+            crescendo_activation: _,
+            dns_params: _,
+            palw_credit: _,
+            palw_fork_choice: _,
+            palw_schedule: _,
+            palw_ramp: _,
+            palw_block_commitment: _,
+            palw_bootstrap_activation,
+            palw_unavailable_abstains,
+            palw_bond_maturity,
+            palw_frontier_provenance,
+            palw_heartbeat,
+            palw_attempt_work,
+            palw_attempt_activation,
+            palw_inactivity_leak,
+            palw_beacon_fold,
+            palw_capability_bound,
+            palw_context_ladder,
+            palw_panel_da,
+            palw_certification_rent,
+            palw_uncertified_weightless,
+            palw_da_court,
+            palw_court_ladder,
+            palw_fp_da_pins,
+            palw_validator_payout_bounds,
+            palw_epoch_boundary_budget,
+            palw_fp_ruleset_caps,
+            palw_model_market,
+            palw_model_lines,
+            palw_model_evm,
+            palw_chunk_cap_charge,
+            palw_prompt_ids_merkle,
+            palw_kary_court,
+            palw_court_responder_coverage,
+            palw_fp_decode_rules,
+            palw_difficulty_priced_rows,
+            palw_receipt_rows_unpriced,
+            palw_attempt_header_pins,
+            palw_signature_contexts_v2,
+            palw_consensus_mode: _,
+            pow_blake2b_sha3_activation: _,
+            pow_palw_activation: _,
+            pow_palw_ollama_activation: _,
+            pq_enforcement: _,
+            pq_activation_daa_score: _,
+            evm_activation_daa_score: _,
+            evm_gas_pool_v2_activation_daa_score: _,
+            evm_f002_withdraw_cap_activation_daa_score: _,
+            evm_f003_mldsa_verify_activation_daa_score: _,
+            evm_typed_receipt_root_activation_daa_score: _,
+        } = self;
+        vec![
+            ("palw_bootstrap_activation", *palw_bootstrap_activation),
+            ("palw_unavailable_abstains", *palw_unavailable_abstains),
+            ("palw_bond_maturity", palw_bond_maturity.map(|f| f.activation)),
+            ("palw_frontier_provenance", *palw_frontier_provenance),
+            ("palw_heartbeat", palw_heartbeat.map(|f| f.activation)),
+            ("palw_attempt_work", palw_attempt_work.map(|f| f.activation)),
+            ("palw_attempt_activation", *palw_attempt_activation),
+            ("palw_inactivity_leak", palw_inactivity_leak.map(|f| f.activation)),
+            ("palw_beacon_fold", palw_beacon_fold.map(|f| f.activation)),
+            ("palw_capability_bound", *palw_capability_bound),
+            ("palw_context_ladder", *palw_context_ladder),
+            ("palw_panel_da", *palw_panel_da),
+            ("palw_certification_rent", *palw_certification_rent),
+            ("palw_uncertified_weightless", *palw_uncertified_weightless),
+            ("palw_da_court", *palw_da_court),
+            ("palw_court_ladder", *palw_court_ladder),
+            ("palw_fp_da_pins", *palw_fp_da_pins),
+            ("palw_validator_payout_bounds", *palw_validator_payout_bounds),
+            ("palw_epoch_boundary_budget", *palw_epoch_boundary_budget),
+            ("palw_fp_ruleset_caps", *palw_fp_ruleset_caps),
+            ("palw_model_market", *palw_model_market),
+            ("palw_model_lines", *palw_model_lines),
+            ("palw_model_evm", *palw_model_evm),
+            ("palw_chunk_cap_charge", *palw_chunk_cap_charge),
+            ("palw_prompt_ids_merkle", *palw_prompt_ids_merkle),
+            ("palw_kary_court", *palw_kary_court),
+            ("palw_court_responder_coverage", *palw_court_responder_coverage),
+            ("palw_fp_decode_rules", *palw_fp_decode_rules),
+            ("palw_difficulty_priced_rows", *palw_difficulty_priced_rows),
+            ("palw_receipt_rows_unpriced", *palw_receipt_rows_unpriced),
+            ("palw_attempt_header_pins", *palw_attempt_header_pins),
+            ("palw_signature_contexts_v2", *palw_signature_contexts_v2),
+        ]
     }
 
     /// **Every scheduled fence height this build carries, sorted and deduped** (ADR-0072 SA-2).
@@ -2830,6 +3379,13 @@ impl Params {
             h.write(b"palw_kary_court");
             h.write(kary.daa_score().to_le_bytes());
         }
+        // The fused-terminal responder-coverage rule, NAMED for the same reason: its
+        // `for_each_fence` arm is Some-only, so the name is what keeps absence from aliasing a
+        // present value.
+        if let Some(coverage) = self.palw_court_responder_coverage {
+            h.write(b"palw_court_responder_coverage");
+            h.write(coverage.daa_score().to_le_bytes());
+        }
         // ADR-0082 Decisions 10/11's fence, NAMED for the same reason: it changes what a claim
         // earns and what a token may be, so an operator reading the schedule must see it.
         if let Some(decode) = self.palw_fp_decode_rules {
@@ -2845,6 +3401,43 @@ impl Params {
         if let Some(receipts) = self.palw_receipt_rows_unpriced {
             h.write(b"palw_receipt_rows_unpriced");
             h.write(receipts.daa_score().to_le_bytes());
+        }
+        // ADR-0072 D8 at the header stage. Some-only: arming it changes which headers are valid,
+        // so it belongs in the fingerprint, and every shipped preset leaves it `None` and hashes
+        // byte-identically to a build without the field.
+        if let Some(pins) = self.palw_attempt_header_pins {
+            h.write(b"palw_attempt_header_pins");
+            h.write(pins.daa_score().to_le_bytes());
+        }
+        // ADR-0072 D8 on the free-prompt lane. Some-only, for the reason above it.
+        if let Some(pins) = self.palw_fp_da_pins {
+            h.write(b"palw_fp_da_pins");
+            h.write(pins.daa_score().to_le_bytes());
+        }
+        // ADR-0018 §E's payout bounds (mainnet audit 2026-09-06). NAMED for the same reason: they
+        // change the coinbase every block past them must carry, in both directions, so an operator
+        // reading the schedule must see the height.
+        if let Some(bounds) = self.palw_validator_payout_bounds {
+            h.write(b"palw_validator_payout_bounds");
+            h.write(bounds.daa_score().to_le_bytes());
+        }
+        // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps. Some-only, at the
+        // tail, for the reason their siblings are: a preset that leaves them `None` prints the
+        // schedule id of a build from before the fields existed.
+        if let Some(activation) = self.palw_epoch_boundary_budget {
+            h.write(b"palw_epoch_boundary_budget");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = self.palw_fp_ruleset_caps {
+            h.write(b"palw_fp_ruleset_caps");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0042 Decision 11's complete context set (mainnet audit 2026-09-06, M-8). Some-only,
+        // at the tail, for the reason its siblings are: it is genesis-only, so an operator reading
+        // the schedule sees a rule in force from block one rather than a height to cross.
+        if let Some(activation) = self.palw_signature_contexts_v2 {
+            h.write(b"palw_signature_contexts_v2");
+            h.write(activation.daa_score().to_le_bytes());
         }
         h.finalize()
     }
@@ -2937,9 +3530,16 @@ impl Params {
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
+            palw_court_responder_coverage,
             palw_fp_decode_rules,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
+            palw_attempt_header_pins,
+            palw_signature_contexts_v2,
+            palw_fp_da_pins,
+            palw_validator_payout_bounds,
+            palw_epoch_boundary_budget,
+            palw_fp_ruleset_caps,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -3198,6 +3798,10 @@ impl Params {
         if let Some(activation) = palw_kary_court.as_mut() {
             fork(activation, visit);
         }
+        // The fused-terminal responder-coverage rule. Visited SOME-ONLY, for the reason above it.
+        if let Some(activation) = palw_court_responder_coverage.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0082 Decisions 10/11. Some-only, likewise.
         if let Some(activation) = palw_fp_decode_rules.as_mut() {
             fork(activation, visit);
@@ -3207,6 +3811,38 @@ impl Params {
             fork(activation, visit);
         }
         if let Some(activation) = palw_receipt_rows_unpriced.as_mut() {
+            fork(activation, visit);
+        }
+        // ADR-0072 D8 at the header stage. Some-only, likewise — a scheduled height must normalise
+        // so an armed and an un-armed build peer until it fires.
+        if let Some(activation) = palw_attempt_header_pins.as_mut() {
+            fork(activation, visit);
+        }
+        // ADR-0072 D8 on the free-prompt lane. Some-only and appended AFTER its siblings, for the
+        // reason `palw_chunk_cap_charge` states: the schedule id hashes these in sequence, and a
+        // `u64::MAX`-for-absence arm would put eight bytes into every preset that leaves it `None`.
+        if let Some(activation) = palw_fp_da_pins.as_mut() {
+            fork(activation, visit);
+        }
+        // ADR-0018 §E's payout bounds (mainnet audit 2026-09-06). Some-only, like its siblings:
+        // an unset fence puts no bytes into `consensus_schedule_id`, so a build carrying the field
+        // prints the schedule id of a build without it.
+        if let Some(activation) = palw_validator_payout_bounds.as_mut() {
+            fork(activation, visit);
+        }
+        // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps. Some-only and at the
+        // tail, for their siblings' reason: a `u64::MAX`-for-absence arm would put eight bytes
+        // into every preset that leaves them `None`.
+        if let Some(activation) = palw_epoch_boundary_budget.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_fp_ruleset_caps.as_mut() {
+            fork(activation, visit);
+        }
+        // ADR-0042 Decision 11's complete context set. Some-only and at the tail, for the reason
+        // `palw_chunk_cap_charge` states: the schedule id hashes these in sequence, and a
+        // `u64::MAX`-for-absence arm would put eight bytes into every preset that leaves it `None`.
+        if let Some(activation) = palw_signature_contexts_v2.as_mut() {
             fork(activation, visit);
         }
 
@@ -3407,9 +4043,16 @@ impl Params {
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
+            palw_court_responder_coverage,
             palw_fp_decode_rules,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
+            palw_attempt_header_pins,
+            palw_signature_contexts_v2,
+            palw_fp_da_pins,
+            palw_validator_payout_bounds,
+            palw_epoch_boundary_budget,
+            palw_fp_ruleset_caps,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -3682,6 +4325,14 @@ impl Params {
             h.write(b"palw_kary_court");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // The fused-terminal responder-coverage rule, Some-only like every fence above it: arming
+        // it changes which party a fused terminal's silence charges, so it belongs in the
+        // fingerprint — and every shipped preset leaves it `None` and fingerprints byte-identically
+        // to a build without the field.
+        if let Some(activation) = palw_court_responder_coverage {
+            h.write(b"palw_court_responder_coverage");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0082 Decisions 10/11, Some-only for the same reason: arming it changes what a claim
         // earns and what token a class may commit, and every shipped preset leaves it `None` and
         // fingerprints byte-identically to a build without the field.
@@ -3698,6 +4349,46 @@ impl Params {
         }
         if let Some(activation) = palw_receipt_rows_unpriced {
             h.write(b"palw_receipt_rows_unpriced");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0072 D8 at the header stage. Some-only, for the reason above — both ids gain it
+        // together: a fence in one and not the other is two builds that agree on identity and
+        // disagree on schedule.
+        if let Some(activation) = palw_attempt_header_pins {
+            h.write(b"palw_attempt_header_pins");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0072 D8 on the free-prompt lane. Some-only, and both ids gain it together.
+        if let Some(activation) = palw_fp_da_pins {
+            h.write(b"palw_fp_da_pins");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0018 §E's payout bounds (mainnet audit 2026-09-06). Some-only, at the tail, for the
+        // ADR-0065 D4 reason: every shipped preset leaves it `None` and fingerprints
+        // byte-identically to a build from before the field existed.
+        if let Some(activation) = palw_validator_payout_bounds {
+            h.write(b"palw_validator_payout_bounds");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps (mainnet audit
+        // 2026-09-06, M-2 and L-2). Some-only, at the tail, for the ADR-0065 D4 reason: every
+        // shipped preset leaves them `None` and fingerprints byte-identically to a build from
+        // before the fields existed.
+        if let Some(activation) = palw_epoch_boundary_budget {
+            h.write(b"palw_epoch_boundary_budget");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_fp_ruleset_caps {
+            h.write(b"palw_fp_ruleset_caps");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0042 Decision 11's complete context set (mainnet audit 2026-09-06, M-8). Some-only,
+        // like every fence above it: arming it changes what set of signing contexts the ruleset
+        // commits to, so it belongs in the fingerprint — and every shipped preset leaves it `None`
+        // and fingerprints byte-identically to a build without the field at all. Both ids gain it
+        // together, for the reason `palw_attempt_header_pins` states.
+        if let Some(activation) = palw_signature_contexts_v2 {
+            h.write(b"palw_signature_contexts_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
@@ -3994,9 +4685,16 @@ impl Params {
             palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
             palw_kary_court: self.palw_kary_court,
+            palw_court_responder_coverage: self.palw_court_responder_coverage,
             palw_fp_decode_rules: self.palw_fp_decode_rules,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
+            palw_attempt_header_pins: self.palw_attempt_header_pins,
+            palw_signature_contexts_v2: self.palw_signature_contexts_v2,
+            palw_fp_da_pins: self.palw_fp_da_pins,
+            palw_validator_payout_bounds: self.palw_validator_payout_bounds,
+            palw_epoch_boundary_budget: self.palw_epoch_boundary_budget,
+            palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -4195,7 +4893,13 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
         // forces reserve/victim to 0 below the fence, degenerating to the byte-identical pre-v2 2-way
         // (reporter + burn). Calibratable economic defaults. The reserve **drip** (Phase 4) releases
         // at most `reserve_drip_per_epoch_cap_sompi` from the security reserve into the participation
-        // pool per finalized epoch. All inert via the v2 fence.
+        // pool per BLOCK past `palw_validator_payout_bounds`, and per finalized EPOCH below it. The
+        // field name still says "per_epoch" and the unit past the fence is the block:
+        // `at_two_minute_cadence` set `epoch_length_blocks` to 2 without moving this number, so a
+        // block that merges 180 crosses ~90 thresholds and released ~90 caps (mainnet audit,
+        // 2026-09-06, M-1). Renaming the field is fingerprint-neutral (borsh encodes positions, not
+        // names) but it is a rename of an economic parameter and is left to the operator. All inert
+        // via the v2 fence.
         security_reserve_bps: 4000,
         victim_epoch_pool_bps: 4000,
         reserve_drip_per_epoch_cap_sompi: 1000 * SOMPI_PER_KASPA,
@@ -4424,7 +5128,13 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
         // forces reserve/victim to 0 below the fence, degenerating to the byte-identical pre-v2 2-way
         // (reporter + burn). Calibratable economic defaults. The reserve **drip** (Phase 4) releases
         // at most `reserve_drip_per_epoch_cap_sompi` from the security reserve into the participation
-        // pool per finalized epoch. All inert via the v2 fence.
+        // pool per BLOCK past `palw_validator_payout_bounds`, and per finalized EPOCH below it. The
+        // field name still says "per_epoch" and the unit past the fence is the block:
+        // `at_two_minute_cadence` set `epoch_length_blocks` to 2 without moving this number, so a
+        // block that merges 180 crosses ~90 thresholds and released ~90 caps (mainnet audit,
+        // 2026-09-06, M-1). Renaming the field is fingerprint-neutral (borsh encodes positions, not
+        // names) but it is a rename of an economic parameter and is left to the operator. All inert
+        // via the v2 fence.
         security_reserve_bps: 4000,
         victim_epoch_pool_bps: 4000,
         reserve_drip_per_epoch_cap_sompi: 1000 * SOMPI_PER_KASPA,
@@ -4926,9 +5636,16 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
+    palw_court_responder_coverage: None,
     palw_fp_decode_rules: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
+    palw_attempt_header_pins: None,
+    palw_signature_contexts_v2: None,
+    palw_fp_da_pins: None,
+    palw_validator_payout_bounds: None,
+    palw_epoch_boundary_budget: None,
+    palw_fp_ruleset_caps: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -5082,9 +5799,16 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
+    palw_court_responder_coverage: None,
     palw_fp_decode_rules: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
+    palw_attempt_header_pins: None,
+    palw_signature_contexts_v2: None,
+    palw_fp_da_pins: None,
+    palw_validator_payout_bounds: None,
+    palw_epoch_boundary_budget: None,
+    palw_fp_ruleset_caps: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -5220,9 +5944,16 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
+    palw_court_responder_coverage: None,
     palw_fp_decode_rules: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
+    palw_attempt_header_pins: None,
+    palw_signature_contexts_v2: None,
+    palw_fp_da_pins: None,
+    palw_validator_payout_bounds: None,
+    palw_epoch_boundary_budget: None,
+    palw_fp_ruleset_caps: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -5545,10 +6276,36 @@ pub fn palw_v2_params_with_classes_on_base(
     qwen25_a16_artifact_root: Option<crate::Hash64>,
     genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
 ) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
+    let genesis_utxos = crate::config::premine::genesis_premine_utxos_for(base.net);
+    palw_v2_params_with_classes_on_base_with_utxos(
+        base,
+        base0_artifact_root,
+        qwen36_artifact_root,
+        qwen25_a16_artifact_root,
+        genesis_bonds,
+        genesis_utxos,
+    )
+}
+
+/// **[`palw_v2_params_with_classes_on_base`] against a SUPPLIED genesis UTXO set** — the same
+/// seam, for the same reason, as `palw_v2_params_from_artifacts_on_base_with_utxos` above it: a
+/// network whose premine does not carry its card's bond collateral YET (mainnet, whose
+/// `PALW_MAINNET_GENESIS_BONDS` is empty) can still be assembled and gated in a test, against a
+/// premine built the way its real one would be. Without it the class-registering card — the one a
+/// real mainnet mint runs — could only be checked by shipping it (mainnet audit 2026-09-06, M-7).
+pub fn palw_v2_params_with_classes_on_base_with_utxos(
+    base: Params,
+    base0_artifact_root: crate::Hash64,
+    qwen36_artifact_root: crate::Hash64,
+    qwen25_a16_artifact_root: Option<crate::Hash64>,
+    genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
+    genesis_utxos: crate::utxo::utxo_collection::UtxoCollection,
+) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
     use crate::palw_mode_v2::PalwModeV2Error as E;
     let invalid = |what: &'static str| E::Invalid(what);
 
-    let mut params = palw_v2_params_from_artifacts_on_base(base, base0_artifact_root, genesis_bonds)?;
+    let mut params =
+        palw_v2_params_from_artifacts_on_base_with_utxos(base, base0_artifact_root, genesis_bonds, genesis_utxos.clone())?;
     // **Which prompt-id form the dense row is PRICED at, read before the bundle is borrowed.**
     //
     // ADR-0082 Decision 5's fence (`palw_prompt_ids_merkle`) is `None` on every shipped preset, so
@@ -5782,7 +6539,9 @@ pub fn palw_v2_params_with_classes_on_base(
     let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
         unreachable!("still the bundle installed above");
     };
-    let genesis_utxos = crate::config::premine::genesis_premine_utxos_for(params.net);
+    // The SUPPLIED set, so both gate runs — the base assembly's and this one's — resolve a bond's
+    // collateral against one premine. Reading `genesis_premine_utxos_for` a second time here would
+    // make the two halves of one card answer to two different UTXO sets.
     crate::palw_genesis_v2::verify_palw_genesis_v2(bundle, &catalog, &bundle.genesis_objects, |outpoint| {
         genesis_utxos.get(outpoint).map(|entry| entry.amount)
     })?;
@@ -8387,15 +9146,50 @@ pub fn mainnet_shipped_params() -> Params {
     // pinning `PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT`, which is the dense slot the RC fills with
     // ADR-0082's graph-v5@512 row. A card that instead pins a fused row through some other slot
     // still meets the assembly's refusal, by name, which is the fail-closed direction.
-    let base = mainnet_card_base_v1(MAINNET_PARAMS, palw_mainnet_qwen25_a16_is_registered());
-    let assembled = if palw_mainnet_qwen36_is_registered() {
-        let dense = palw_mainnet_qwen25_a16_is_registered().then_some(PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT);
-        palw_v2_params_with_classes_on_base(base, PALW_MAINNET_GENESIS_ARTIFACT_ROOT, PALW_MAINNET_QWEN36_ARTIFACT_ROOT, dense, bonds)
-    } else {
-        palw_v2_params_from_artifacts_on_base(base, PALW_MAINNET_GENESIS_ARTIFACT_ROOT, bonds)
+    mainnet_card_params_v1(
+        PALW_MAINNET_GENESIS_ARTIFACT_ROOT,
+        palw_mainnet_qwen36_is_registered().then_some(PALW_MAINNET_QWEN36_ARTIFACT_ROOT),
+        palw_mainnet_qwen25_a16_is_registered().then_some(PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT),
+        bonds,
+        crate::config::premine::genesis_premine_utxos_for(MAINNET_PARAMS.net),
+    )
+    .unwrap_or_else(|e| panic!("the pinned mainnet PALW genesis card does not assemble: {e}"))
+}
+
+/// **The mainnet card assembly, with its constants as ARGUMENTS** (mainnet audit 2026-09-06, M-7).
+///
+/// `mainnet_shipped_params` is a wrapper that reads five `const`s and unwraps. Everything between
+/// those two facts — which base the card states its fences on, which of the two assemblies runs,
+/// the certification re-derivation and the Phase-1 arming — used to live inside a function no test
+/// could call with a card in place, because the card is compile-time. So the assembly a mainnet
+/// mint actually runs had ZERO test coverage: it panicked on the ambient-target gate and nothing in
+/// the tree noticed, while the runbook's named verification command
+/// (`shipped_presets_have_pinned_fingerprints`) pins the bundle-FREE `MAINNET_PARAMS` and stays
+/// green with a filled card.
+///
+/// Splitting the constants out is the whole of the fix on the test axis:
+/// `every_assembled_v2_ruleset_is_minted_at_its_ambient_target` now mints a card from the RC's own
+/// artifact roots and a bonded premine and asserts it assembles. Nothing about the assembly changed.
+fn mainnet_card_params_v1(
+    artifact_root: crate::Hash64,
+    qwen36_artifact_root: Option<crate::Hash64>,
+    qwen25_a16_artifact_root: Option<crate::Hash64>,
+    bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
+    genesis_utxos: crate::utxo::utxo_collection::UtxoCollection,
+) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
+    let base = mainnet_card_base_v1(MAINNET_PARAMS, qwen25_a16_artifact_root.is_some());
+    let assembled = match qwen36_artifact_root {
+        Some(hybrid) => palw_v2_params_with_classes_on_base_with_utxos(
+            base,
+            artifact_root,
+            hybrid,
+            qwen25_a16_artifact_root,
+            bonds,
+            genesis_utxos,
+        )?,
+        None => palw_v2_params_from_artifacts_on_base_with_utxos(base, artifact_root, bonds, genesis_utxos)?,
     };
-    let assembled = assembled.unwrap_or_else(|e| panic!("the pinned mainnet PALW genesis card does not assemble: {e}"));
-    palw_rc_arm_phase1(mainnet_certify_registered_classes_v1(assembled))
+    Ok(palw_rc_arm_phase1(mainnet_certify_registered_classes_v1(assembled)))
 }
 
 /// **The fences a mainnet card STATES on its base — in one place** (mainnet audit, 2026-09-05).
@@ -8409,31 +9203,138 @@ pub fn mainnet_shipped_params() -> Params {
 ///   dissection court can try. The operator's statement is the act of pinning
 ///   `PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT`; a fused row pinned through another slot still meets the
 ///   assembly's refusal by name, which is the fail-closed direction.
-/// * `palw_context_ladder` (ADR-0077 Phase B, ADR-0084 U-08) — the court's refutation walkers open
-///   against the ladder the ruleset froze instead of the executor's `2^22`, so a class is
-///   prosecuted at the ladder it was admitted at. Free on a fresh chain: no history was judged
-///   under the other ladder.
+/// * `palw_context_ladder` (ADR-0077 Phase B) — the class-admission ladder rules: a class that
+///   registers a state chunk map is priced over its checkpoint interval, and the court's move clock
+///   is derived from the window and the ladder rather than typed.
+/// * `palw_court_ladder` (ADR-0084 U-08) — the court's refutation walkers open against the ladder
+///   the RULESET froze instead of the executor's `2^22`, so a class is prosecuted at the ladder it
+///   was admitted at. Free on a fresh chain: no history was judged under the other ladder.
+///
+///   **These are two fences and they were one until the DA-court and model-market branches
+///   merged** (mainnet audit 2026-09-06, M-15). One branch closed U-08 on `palw_context_ladder`,
+///   the other minted `palw_court_ladder` for it, and the merge kept both fields with
+///   `palw_court_step_ladder_at` — the processor's only reader of `palw_refutation_leaf_cap_v2` —
+///   reading the second. A card that armed only the first admitted the graph-v5 dense row at `2^26`
+///   and prosecuted it at `2^22`: U-08, re-opened on the one network the fence exists for. Both are
+///   stated here, and `the_processor_resolves_the_refutation_ladder_from_palw_court_ladder_alone`
+///   binds the second to its reader.
 /// * `palw_difficulty_priced_rows` and `palw_receipt_rows_unpriced` (ADR-0083 D1, both halves) — the
 ///   window counts by lane, and a receipt row is not a priced row. The first is also what
 ///   `palw_rc_arm_phase1` would add; stated here because the assembly validates before it runs.
+/// * `palw_attempt_header_pins` (ADR-0072 D8) — the three DA pins and ADR-0071 D2's bucket ceiling
+///   are asked on the relay path, not only at the composed admission entry point a disqualified
+///   block never reaches.
+/// * `palw_validator_payout_bounds` (ADR-0018 §E; mainnet audit 2026-09-06 H-2/H-3/M-1) — the §E
+///   quality bonus stops at its pool and refuses an epoch it cannot price, the deferred fan-out and
+///   the reserve drip are bounded per BLOCK rather than per epoch crossing, and the coinbase's own
+///   size guard counts every kind the builder appends. A live chain reaches these as a flag day;
+///   a card has no coinbase history to fork.
 /// * `palw_certification_rent` (ADR-0075 SA-1/SA-2) and `palw_chunk_cap_charge` (ADR-0075 D14) —
 ///   without them two ~60-byte `ObjectChunk`s a block spend the certification grading slots before
 ///   the object is validated, and eight unsigned chunks squat every pending-chunk slot: a
 ///   block-cheap way to keep an honest class weightless for the life of the chain.
+/// * `palw_epoch_boundary_budget` (ADR-0045 D2; mainnet audit 2026-09-06, M-2) — the block that
+///   crosses an epoch boundary derives its own epoch's budget from the parent state, which is the
+///   ADR's own sentence. Dormant, every non-floor attempt at a boundary is `EpochBudgetUnspecified`
+///   and the crossing block is permanently orphaned with its mergeset's claims.
+/// * `palw_fp_ruleset_caps` (ADR-0044 D9; mainnet audit 2026-09-06, L-2) — the free-prompt lane
+///   enforces the two caps its ruleset advertises. Dormant, `max_prompt_tokens` and
+///   `max_decode_tokens` are in every node's fingerprint and read by nothing.
+/// * `palw_capability_bound` (ADR-0071 SA-1/SA-2/SA-4) — a bond's `capable_classes` set is bounded
+///   at `PALW_MAX_CAPABLE_CLASSES` and priced at `PALW_CAPABILITY_EXPOSURE_SOMPI` against its own
+///   collateral, at BOTH writers (`BondRegistered` and `BondCapabilityDeclared`). Dormant it is a
+///   free, mass-priced, per-bond-lifetime state-growth lever and the SA-2 price is never charged —
+///   and the 2026-09-05 pass recorded the rule as closed while its fix sat behind a fence no preset
+///   armed and no card stated (mainnet audit 2026-09-06, M-14).
 ///
-/// testnet-11 arms none of these five from genesis; each is a scheduled height or a re-mint
-/// there, which is the operator's call and not this function's. Devnet arms the ladder.
+///   **The liveness trap it must not walk into, and the assertion that says it does not.** SA-3
+///   narrows the panel draw, and a short draw is not a smaller panel — it is
+///   `InsufficientEligibleBonds`, so the claim never binds and voids at `BindTimeout` with its
+///   escrow burned. What keeps a card drawable past the fence is the genesis-class exemption plus
+///   the fact that this assembly extends every genesis bond's `capable_classes` with the tiers it
+///   registers. `a_carded_registry_still_draws_a_full_panel_with_the_capability_fence_armed` is the
+///   assertion, over the card's own assembly, not a deployment note.
+///
+/// **What a card does NOT get from this function, and the checklist item it owes.** Every fence
+/// here is `always()`, i.e. DAA score 0, and `fork_id_gate_fences_v1` excludes 0 by design — a
+/// fence in force at block 1 is `consensus_identity_id`'s business and is never "crossed". So a
+/// carded mainnet's fork-id gate is `Unfenced` from genesis, correctly, and it BECOMES armed the
+/// moment the operator schedules any fence at a height. That is now automatic (the gate list is
+/// derived from [`Params::palw_fences_v1`]), where it used to require a per-fence edit to
+/// `fork_id_v1::fork_id_gate_fences_v1` that nobody's checklist named — see mainnet audit
+/// 2026-09-06, M-6, and `docs/mainnet-palw-certification-runbook.md` §0.
+///
+/// testnet-11 arms none of these from genesis; each is a scheduled height or a re-mint there,
+/// which is the operator's call and not this function's. Devnet arms the context ladder.
 fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     if dense_tier_pinned {
         base.palw_kary_court = Some(ForkActivation::always());
     }
+    base.palw_capability_bound = Some(ForkActivation::always());
     base.palw_context_ladder = Some(ForkActivation::always());
+    base.palw_court_ladder = Some(ForkActivation::always());
+    // **The future-time tolerance the median-time window actually models** (mainnet audit
+    // 2026-09-06, L-1).
+    //
+    // `past_median_time_window_size` is 27 samples, defined as `(2·T − 1)/10` for `T = 132 s` — a
+    // 263-second window at the hash lineage's 10-second sample interval. At the V2 cadence the
+    // sample interval is one 120-second block, so the same 27 samples span 54 minutes and the
+    // declared 132 s describes nothing: the observable band is a ~26-minute backdating window
+    // (Bitcoin-like) and a ~26-minute lag on lock-time finality, while the node's future-time bound
+    // is still 132 seconds. Two numbers, one clock, and they disagree by 12.3x.
+    //
+    // The WINDOW is not the thing to move — `AVERAGE_FRAME_SIZE` is 11, so a window short enough to
+    // model 132 s is a median any producer holding two of three recent blocks sets outright, which
+    // is a worse property than a wide band. The tolerance is the mis-sized quantity, and it is
+    // derived here from the cadence rather than typed.
+    //
+    // **A card only.** `timestamp_deviation_tolerance` is inside `consensus_params_id`, and
+    // testnet-11 and devnet are live chains running the inconsistent pair — correcting them is a
+    // fingerprint move and therefore the operator's call and a coordinated flag day.
+    // `the_v2_median_time_window_and_the_timestamp_tolerance_describe_one_clock` pins that gap so it
+    // can neither close nor widen in silence. Carding mainnet is a re-mint, so this is a value the
+    // ceremony chooses — the same argument the ambient-target mint rests on.
+    base.timestamp_deviation_tolerance = palw_v2_timestamp_deviation_tolerance_v1(
+        base.past_median_time_window_size,
+        BlockrateParams::new_two_minute_bps().past_median_time_sample_rate,
+        BlockrateParams::new_two_minute_bps().target_time_per_block,
+    );
+    // **ADR-0045 Decision 2's boundary sentence, in force from block one** (mainnet audit
+    // 2026-09-06, M-2). Free on a fresh chain: no epoch has closed, so no history was judged under
+    // the other reading, and a card is the one network that can be born obeying the ADR the tree
+    // already carries. testnet-11 reaches it by a scheduled height or not at all — it is a live
+    // chain with orphaned boundary blocks in its past, and a node on the new rule would accept
+    // history a node on the old one refuses.
+    base.palw_epoch_boundary_budget = Some(ForkActivation::always());
+    // **ADR-0044 Decision 9's two caps, enforced from block one** (mainnet audit 2026-09-06, L-2).
+    // `max_prompt_tokens` and `max_decode_tokens` are already hashed into `palw_ruleset_id_v2`, so
+    // every node advertises them; past this fence the lane's validation is given the struct it was
+    // never given and refuses a job above either by name. testnet-11 and devnet have run since
+    // genesis with them unread, so arming it there would refuse jobs those chains have accepted.
+    base.palw_fp_ruleset_caps = Some(ForkActivation::always());
     // Both halves of ADR-0083 Decision 1, stated together: the assembly validates before
     // `palw_rc_arm_phase1` runs, and the second half is refused on a base whose first is dormant.
     base.palw_difficulty_priced_rows = Some(ForkActivation::always());
     base.palw_receipt_rows_unpriced = Some(ForkActivation::always());
+    // **ADR-0072 Decision 8 at the header stage** (mainnet audit, 2026-09-06 — C-1). A card is a
+    // fresh chain: no history was judged under the rule where the DA pins ran only in the virtual
+    // processor, so stating it from genesis costs nothing, and the three fields D8 names are pinned
+    // on the path where a draw becomes a `bits`-priced difficulty row. It is a partial answer to
+    // C-1 and the field's own doc says which part; it is not a reason to consider C-1 closed.
+    base.palw_attempt_header_pins = Some(ForkActivation::always());
     base.palw_certification_rent = Some(ForkActivation::always());
     base.palw_chunk_cap_charge = Some(ForkActivation::always());
+    // **ADR-0042 Decision 11's complete signature-context set, from block one** (mainnet audit
+    // 2026-09-06, M-8). Ten contexts the acceptance layer verifies under are outside the frozen
+    // set testnet-11 committed to, and on a card the DA and court ones are consensus-live from
+    // genesis. A fresh network is the only place this can be stated — arming it on a running chain
+    // re-mints that chain's identity — which is exactly what a card is for. The assembly
+    // (`palw_v2_params_on_base`) writes the matching root into the bundle, and `validate_palw_v2`
+    // refuses either half alone.
+    //
+    // Deliberately NOT in `palw_rc_arm_phase1`: that function runs for testnet-11 too, and
+    // testnet-11 is live.
+    base.palw_signature_contexts_v2 = Some(ForkActivation::always());
     // **The private-prompt set, armed from block one** (private-prompts design, 2026-09-05):
     //
     // * `palw_prompt_ids_merkle` (ADR-0081 D3) — a job's `prompt_token_ids_hash` is a tiled Merkle
@@ -8450,6 +9351,21 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     base.palw_prompt_ids_merkle = Some(ForkActivation::always());
     base.palw_panel_da = Some(ForkActivation::always());
     base.palw_da_court = Some(ForkActivation::always());
+    // **A court is only armable over a lane whose obligation the chain defines** (ADR-0072
+    // Decision 8; mainnet audit 2026-09-06 M-3). `palw_da_court` above convicts a producer that
+    // will not open an accused event inside `claim.trace_retention_daa` — and on the free-prompt
+    // lane that number is written by the accused, so a producer that writes `0` is immune and an
+    // honest one is weakly better off writing `0` too. Past this fence the transition derives the
+    // obligation from the accepting block's DAA, exactly as the attempt lane's admission pins it.
+    // Armed together with the court, from block one, because a fresh card has no history for
+    // either to be retroactive about.
+    base.palw_fp_da_pins = Some(ForkActivation::always());
+    // **ADR-0018 §E's payout bounds** (mainnet audit, 2026-09-06 — H-2, H-3, M-1). A card is the
+    // only network that can take these from block one: they change the coinbase in both directions
+    // — four tightenings of what the builder emits and one relaxation of the size guard ahead of
+    // it — so a live chain reaches them as a flag day and that is its operator's call. testnet-11
+    // leaves them dormant and every coinbase it builds is byte-identical to today's.
+    base.palw_validator_payout_bounds = Some(ForkActivation::always());
     base
 }
 
@@ -8873,6 +9789,28 @@ pub const PALW_V2_DIFFICULTY_WINDOW_SIZE: usize = 264;
 /// fresh V2 chain runs before it has samples to retarget from (~5 h at this cadence).
 pub const PALW_V2_MIN_DIFFICULTY_WINDOW_SIZE: usize = MIN_DIFFICULTY_WINDOW_SIZE;
 
+/// **The future-time tolerance a past-median-time window of this shape MODELS** (mainnet audit
+/// 2026-09-06, L-1).
+///
+/// `MEDIAN_TIME_SAMPLED_WINDOW_SIZE` is defined as `(2·T − 1) / PAST_MEDIAN_TIME_SAMPLE_INTERVAL`
+/// rounded up — the window is sized to span twice the tolerance, at whatever wall-clock interval
+/// separates two samples. This inverts that: given a window, a sample rate and a cadence, the `T`
+/// the window is a window FOR.
+///
+/// The sample interval on a hash-lineage network is `PAST_MEDIAN_TIME_SAMPLE_INTERVAL` = 10 s. On a
+/// V2 network `past_median_time_sample_rate` is 1 and a block is 120 s, so the same 27 samples span
+/// 54 minutes and model a tolerance of 1,620 s — 12.3x the 132 s every preset declares. The window
+/// is NOT the quantity to shrink: `AVERAGE_FRAME_SIZE` is 11, so a three-sample window is a median
+/// any producer holding two of three recent blocks sets outright, which trades a wide backdating
+/// band for a settable one.
+///
+/// Read at exactly one place in consensus (`pre_ghostdag_validation`'s
+/// `unix_now() + timestamp_deviation_tolerance * 1000`), so what this corrects is the future-time
+/// bound a V2 node applies, not the median rule.
+pub fn palw_v2_timestamp_deviation_tolerance_v1(window_samples: usize, sample_rate: u64, target_time_per_block_ms: u64) -> u64 {
+    (window_samples as u64) * sample_rate * (target_time_per_block_ms / 1000) / 2
+}
+
 pub fn palw_v2_params_on_base(
     base: Params,
     base_class_id: crate::Hash64,
@@ -8905,6 +9843,15 @@ pub fn palw_v2_params_on_base(
     // format and the format without the fence, so the two are written from one fact here.
     if base.palw_prompt_ids_merkle.is_some_and(|a| a != ForkActivation::never()) {
         bundle.trace_format_version = crate::palw_mode_v2::PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS;
+    }
+    // **And the signature-context set, from the same one fact and for the same reason** (ADR-0042
+    // Decision 11; mainnet audit 2026-09-06, M-8). This is the ONE assembly both testnet-11 and a
+    // carded mainnet pass through, so it is the one place where "which set did this network commit
+    // to" can be answered once. A base that does not arm the fence keeps the frozen root the
+    // bundle builder already wrote — which is what leaves testnet-11's and devnet's ruleset ids
+    // exactly where they are.
+    if base.palw_signature_contexts_v2.is_some_and(|a| a != ForkActivation::never()) {
+        bundle.signature_contexts_root = crate::palw_mode_v2::palw_v2_signature_contexts_root_v2();
     }
     // The bond's withdrawal delay is NOT rewritten here where the DA court is armed: it is resolved
     // at each block by `palw_v2_bond_withdrawal_delay_at_v1`, so the ruleset id (and therefore every
@@ -8960,6 +9907,37 @@ pub fn palw_v2_params_on_base(
         params.difficulty_window_size = PALW_V2_DIFFICULTY_WINDOW_SIZE;
         params.min_difficulty_window_size = PALW_V2_MIN_DIFFICULTY_WINDOW_SIZE;
     }
+    // **And the MINT, because a V2 ruleset that is not minted at the ambient target cannot exist**
+    // (mainnet audit 2026-09-06, M-7; the gate is `validate_palw_v2` at the bottom of this
+    // function).
+    //
+    // ADR-0066: "a V2 network runs at MAX because the class lottery, not the hash target, is its
+    // throttle", and ADR-0083 makes the retarget answer `max_difficulty_target` for a window with
+    // no bits-priced row. Both PALW presets already mint there (`PALW_RC_GENESIS` and
+    // `DEVNET_GENESIS` carry `bits: 0x207fffff`, which is exactly
+    // `MAX_DIFFICULTY_TARGET.compact_target_bits()`), so this line is the identity on every
+    // network that has ever run V2 and moves nothing: no genesis hash, no `consensus_params_id`,
+    // no fingerprint.
+    //
+    // The one ruleset it moves is a carded mainnet's, and there it is the whole point. Carding is
+    // a re-mint — the seats' collateral enters the premine — so `bits` is a value the ceremony
+    // chooses, and left at `MAINNET_GENESIS`' hash-lineage `0x1f7fffff` it was 256x harder than a
+    // V2 network's ambient maximum: the chain would be born needing 256x the inferences per block
+    // for the whole `min_difficulty_window_size` launch window before one retarget could answer.
+    // Until this line the card could not be assembled AT ALL — `mainnet_shipped_params` panicked
+    // on this very gate — and the only write of the value in the tree was a `#[cfg(test)]` helper,
+    // so every test over the mainnet base was rehearsing a mint production could not perform.
+    //
+    // Imposed HERE, beside the cadence and the windows, for the reason they are: this is the one
+    // place a V2 ruleset is assembled, and a quantity restated per caller is a quantity that
+    // drifts on the caller nobody re-read.
+    //
+    // **The ceremony consequence, stated because nothing runs a document:** the card's genesis
+    // hash moves with this value, so `GENESIS.bits`, `GENESIS.hash` and `GENESIS.utxo_commitment`
+    // in `config/genesis.rs` must be re-pinned in the same commit that fills the card, or
+    // `set_genesis_utxo_commitment_from_config`'s M-07 assert refuses to boot. See
+    // `repin::print_repinned_mainnet_card_genesis`.
+    params.genesis.bits = params.max_difficulty_target.compact_target_bits();
     // **The depths a V2 network needs, derived from its own bundle in ONE place.** Restated by
     // hand anywhere else, they drift — which is how a params set assembled outside this function
     // ended up failing the very lattice bound this derivation exists to satisfy.
@@ -9102,10 +10080,16 @@ pub const DEVNET_PARAMS: Params = Params {
     // first. Without the ladder the registered class cannot price a wide row, and the ladder is
     // the whole point of registering the graph-v5 512 row (`misaka_palw_base0::classes`).
     //
-    // **Arming the ladder is TWO moves, not one** (card §1): this field AND the bundle's
-    // `PalwCourtParamsV2::max_step_leaf_count`. The second is already
-    // `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` = 2^26 on this base — 2^22 admits n_ctx 39 — so setting
-    // one and not the other would produce a build that looks armed and prices the old row.
+    // **Arming the ladder is THREE moves, not two** (card §1; corrected by the mainnet audit of
+    // 2026-09-06, M-15): this field, the bundle's `PalwCourtParamsV2::max_step_leaf_count`, and —
+    // since the DA-court/model-market merge minted a second fence for it — `palw_court_ladder`
+    // below, which is what the processor's `palw_court_step_ladder_at` actually reads. The second
+    // is already `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` = 2^26 on this base (2^22 admits n_ctx 39).
+    // The THIRD is dormant here and this is a KNOWN GAP, not an oversight: devnet is a shipped
+    // preset with a pinned fingerprint, so arming it is a re-mint and the operator's call. Until
+    // then devnet admits the graph-v5 row at 2^26 and its court walks it at 2^22 — pinned by
+    // `the_refutation_ladder_is_the_rulesets_only_past_the_court_ladder_fence`, which asserts the
+    // gap so it can neither close nor widen in silence.
     palw_context_ladder: Some(ForkActivation::always()),
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -9117,6 +10101,8 @@ pub const DEVNET_PARAMS: Params = Params {
     // history it already accepted. Genesis is the only moment it can be armed.
     palw_uncertified_weightless: Some(ForkActivation::always()),
     palw_da_court: None,
+    // ADR-0084 U-08: dormant, and see the note on `palw_context_ladder` above for why devnet
+    // carries one half of the ladder and not the other.
     palw_court_ladder: None,
     palw_model_market: None,
     palw_model_lines: None,
@@ -9134,6 +10120,10 @@ pub const DEVNET_PARAMS: Params = Params {
     // dormant fence by name (`FusedAttentionNeedsTheKaryCourt`), which is the guard; the property
     // is that a dispute reaches a verdict, and only the court drill asserts that.
     palw_kary_court: Some(ForkActivation::always()),
+    // **NOT armed on devnet, deliberately** (mainnet audit 2026-09-06, C-2/H-5): devnet is the
+    // drill network for the dissection court over a fused row, and the exemption would change what
+    // its fold does at a terminal. It is the network the responder will be built against.
+    palw_court_responder_coverage: None,
     // ADR-0082 stream H's (decode leaves earn, seeded argmax): NOT armed. Not a prosecutability
     // condition and not on the acceptance path, and its transition arm still refuses by name
     // (`FreePromptDecodeLeavesUnavailable`) for want of the profile-derived split quantities on
@@ -9142,6 +10132,12 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_decode_rules: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
+    palw_attempt_header_pins: None,
+    palw_signature_contexts_v2: None,
+    palw_fp_da_pins: None,
+    palw_validator_payout_bounds: None,
+    palw_epoch_boundary_budget: None,
+    palw_fp_ruleset_caps: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -10422,6 +11418,18 @@ mod consensus_params_id_tests {
             palw_rc_shipped_params().palw_capability_bound.is_none(),
             "and so must the RC assembly — SA-3 narrows the panel draw, so arming it is a measured decision and not a default"
         );
+        // **…and a CARD states it from genesis, which is the other half of "dormant" meaning
+        // something** (mainnet audit 2026-09-06, M-14). A fence every configuration leaves off is a
+        // rule that ships as a comment: the SA-1 bound and the SA-2 price are unreachable at both
+        // writers on every network this tree can build. A live chain reaches them by activation,
+        // which is the operator's call; a fresh network is born with them, which is this function's.
+        // The set-difference test below cannot see this — it compares armed sets and a fence dormant
+        // on both sides is in neither — so it is asserted here, positively.
+        assert_eq!(
+            mainnet_card_fixture_v1(true).palw_capability_bound,
+            Some(ForkActivation::always()),
+            "a carded mainnet states ADR-0071 SA-1/SA-2/SA-4 from genesis"
+        );
 
         let shipped = MAINNET_PARAMS;
         let mut armed = MAINNET_PARAMS;
@@ -11521,6 +12529,77 @@ mod consensus_params_id_tests {
             (fences.market_active, fences.lines_active, fences.evm_active),
             (scheduled.palw_model_market_active_at(1_000), false, scheduled.palw_model_evm_active_at(1_000))
         );
+    }
+
+    /// **ADR-0089 Decision 9: below the fence there is no window to build** (mainnet audit
+    /// 2026-09-06, M-13).
+    ///
+    /// Decision 9 says the four addresses and the facades are empty accounts below the fence, and
+    /// `Consensus::palw_evm_view_v1` resolved these fences and then built the whole flattening
+    /// anyway, for every `eth_call` and `eth_estimateGas`, on every ConsensusV2 network — cheap
+    /// only because the tables happen to be empty.
+    ///
+    /// The rule is `any_active()`, asserted here at the layer that decides it: on every shipped
+    /// preset, at every score, there is no window; and arming ANY ONE of the three — the market's
+    /// reads are ADR-0087's fence, the registry's F010–F012 are ADR-0088's, the facades are
+    /// ADR-0089's — is enough to need one.
+    #[test]
+    fn no_evm_window_exists_below_all_three_model_fences() {
+        for (name, params) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("devnet", DEVNET_PARAMS), ("simnet", SIMNET_PARAMS)]
+        {
+            for daa in [0u64, 1, 1_000, 9_000_000, u64::MAX] {
+                assert!(
+                    !params.palw_evm_market_fences_at(daa).any_active(),
+                    "{name} at {daa}: every shipped preset leaves all three model fences dormant, so no window is ever built"
+                );
+            }
+        }
+
+        // Each fence alone is enough — none of the three is subsumed by another. Armed on a
+        // ConsensusV2 preset, because all three accessors fold the mode condition in: on a network
+        // with no V2 bundle there is no market to have a window onto.
+        // The RC preset is the one build in the tree that SCHEDULES all three, and it is the case
+        // that matters: below its own activation it must have no window either, or a scheduled
+        // build pays for a market that does not exist yet.
+        let rc = palw_rc_shipped_params();
+        if rc.palw_model_market.is_some() {
+            let at = PALW_RC_DA_COURT_FENCE_DAA;
+            assert!(!rc.palw_evm_market_fences_at(at - 1).any_active(), "a scheduled build builds no window before its own score");
+            assert!(rc.palw_evm_market_fences_at(at).any_active(), "…and one from it");
+        }
+
+        let mut v2 = rc.clone();
+        v2.palw_model_market = None;
+        v2.palw_model_lines = None;
+        v2.palw_model_evm = None;
+        assert!(!v2.palw_evm_market_fences_at(u64::MAX).any_active(), "the dormant base of the three arms below");
+
+        let mut market = v2.clone();
+        market.palw_model_market = Some(ForkActivation::new(1_000));
+        assert!(!market.palw_evm_market_fences_at(999).any_active(), "and not one block early");
+        assert!(market.palw_evm_market_fences_at(1_000).any_active(), "the market's own reads need the window");
+
+        let mut lines = v2.clone();
+        lines.palw_model_lines = Some(ForkActivation::new(1_000));
+        assert!(!lines.palw_evm_market_fences_at(999).any_active());
+        assert!(lines.palw_evm_market_fences_at(1_000).any_active(), "the registry reads F010-F012 need it too");
+
+        let mut evm = v2.clone();
+        evm.palw_model_market = Some(ForkActivation::new(1_000));
+        evm.palw_model_evm = Some(ForkActivation::new(1_000));
+        assert!(evm.palw_evm_market_fences_at(1_000).any_active());
+
+        // `any_active` is the disjunction and nothing more — spelled once so the consensus path and
+        // the RPC path cannot answer it differently.
+        for bits in 0..8u8 {
+            let f = crate::evm::model_market::PalwEvmMarketFencesV1 {
+                market_active: bits & 1 != 0,
+                lines_active: bits & 2 != 0,
+                evm_active: bits & 4 != 0,
+            };
+            assert_eq!(f.any_active(), bits != 0, "one window iff some fence is in force");
+        }
     }
 
     /// **ADR-0062 SA-6: the lattice with the DA phase in it, at every preset that has a lattice.**
@@ -12692,39 +13771,187 @@ mod consensus_params_id_tests {
     /// hash lineage's difficulty and nothing said a word.
     #[cfg(test)]
     fn mainnet_v2_mint_base() -> Params {
-        let mut base = MAINNET_PARAMS;
-        base.genesis.bits = base.max_difficulty_target.compact_target_bits();
-        base
+        // **The write that used to be here has moved into production** (mainnet audit 2026-09-06,
+        // M-7). It performed exactly the mint `palw_v2_params_on_base` omitted, so twelve tests
+        // asserted that a mainnet-shaped card assembles while the shipped assembly panicked on
+        // the same input. The helper stays — the name says what the base is FOR at eleven call
+        // sites — but it now hands the assembly the unmodified preset, so those twelve tests
+        // exercise the production mint and fail the moment it is removed again.
+        MAINNET_PARAMS
     }
 
-    /// Every V2 fence a preset can arm, as `(name, armed)` — ONE spelling, so a fence added
-    /// tomorrow appears in every preset comparison that uses it instead of being silently absent
-    /// from the one nobody re-read.
+    /// **A mainnet card, assembled the way a ceremony assembles one.**
+    ///
+    /// The card is five `const`s a test cannot set, so this supplies the same five facts to
+    /// `mainnet_card_params_v1` — the function `mainnet_shipped_params` is now a wrapper over. The
+    /// artifact roots are the RC's, which is the ADR-0042 Decision 11 premise ("RC and mainnet
+    /// agree by hash"); the bonds are the devnet registry's fabricated cards over mainnet premine
+    /// indices, which is how `a_mainnet_equivalent_genesis_carries_the_certification_rules`
+    /// already builds a mainnet-shaped registry without inventing real operator keys.
+    #[cfg(test)]
+    fn mainnet_card_fixture_v1(dense: bool) -> Params {
+        use crate::config::premine::{bonded_genesis_utxos, premine_outpoint};
+        use crate::palw_fp_devnet_v3::{palw_devnet_bond_registry_v1, palw_v2_maturity_armable_bonds_v1};
+        let specs: Vec<_> = palw_devnet_bond_registry_v1(palw_v2_maturity_armable_bonds_v1())
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut spec)| {
+                spec.bond = crate::palw_state_v2::PalwBondKeyV2(premine_outpoint(i as u32));
+                spec
+            })
+            .collect();
+        let money: Vec<(u32, [u8; 64])> =
+            specs.iter().enumerate().map(|(i, spec)| (i as u32, *spec.payout_payload.as_byte_slice())).collect();
+        let utxos = bonded_genesis_utxos(MAINNET_PARAMS.net, &money, std::iter::empty());
+        mainnet_card_params_v1(
+            PALW_RC_GENESIS_ARTIFACT_ROOT,
+            Some(PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT),
+            dense.then_some(PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT),
+            specs,
+            utxos,
+        )
+        .expect("a mainnet card assembles")
+    }
+
+    /// **Every ConsensusV2 ruleset this tree can assemble is minted at its own ambient target.**
+    ///
+    /// The RULE, not the patch: it names no constant and no network-specific value, so it holds for
+    /// a network added tomorrow. `validate_palw_v2` refuses anything else, and until the mainnet
+    /// audit of 2026-09-06 the card assembly could not satisfy it at all — `mainnet_shipped_params()`
+    /// panicked, and no test assembled a card to find out.
+    ///
+    /// Fails on the pre-patch tree at the mainnet rows: `mainnet_card_fixture_v1` returns
+    /// `Err("a ConsensusV2 genesis is minted at a target other than this network's ambient
+    /// maximum")` and the `expect` inside it panics.
+    #[test]
+    fn every_assembled_v2_ruleset_is_minted_at_its_ambient_target() {
+        for (name, params) in [
+            ("testnet-11", palw_rc_shipped_params()),
+            ("devnet", devnet_shipped_params()),
+            ("mainnet card (floor + hybrid)", mainnet_card_fixture_v1(false)),
+            ("mainnet card (all three tiers)", mainnet_card_fixture_v1(true)),
+        ] {
+            assert!(
+                matches!(params.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)),
+                "{name}: the premise — this row must be a V2 network"
+            );
+            assert_eq!(
+                params.genesis.bits,
+                params.max_difficulty_target.compact_target_bits(),
+                "{name}: a V2 network is throttled by the class lottery, not the hash target, so its genesis is minted at \
+                 the ambient maximum (ADR-0066; the gate is validate_palw_v2)"
+            );
+            params.validate_palw_v2().expect(name);
+        }
+    }
+
+    /// **The two shipped V2 presets do not move when the mint is imposed.**
+    ///
+    /// The other half of the rule above, and the half a fingerprint pin cannot state: the write in
+    /// `palw_v2_params_on_base` is the IDENTITY on every network that has ever run V2, so no
+    /// genesis hash and no `consensus_params_id` moves. A future edit that made it conditional, or
+    /// that changed `MAX_DIFFICULTY_TARGET`, breaks this rather than silently re-genesising a live
+    /// chain.
+    #[test]
+    fn imposing_the_v2_mint_moves_no_live_preset() {
+        assert_eq!(palw_rc_shipped_params().genesis.hash, crate::config::genesis::PALW_RC_GENESIS.hash);
+        assert_eq!(devnet_shipped_params().genesis.hash, crate::config::genesis::DEVNET_GENESIS.hash);
+        assert_eq!(crate::config::genesis::PALW_RC_GENESIS.bits, 0x207fffff);
+        assert_eq!(crate::config::genesis::DEVNET_GENESIS.bits, 0x207fffff);
+    }
+
+    /// Every V2 fence a preset can arm, as `(name, armed)`.
+    ///
+    /// **Derived, not restated** (mainnet audit 2026-09-06, L-3). This was a hand-written `vec![]`
+    /// of 25 entries — the one fence list in the tree the compiler did not police — and the
+    /// model-market branch added four fences to `Params` without joining it, with zero merge
+    /// conflict here, while the audit summary claimed the property "the next fence added cannot be
+    /// armed on one shipped network and forgotten on another". It reads `Params::palw_fences_v1`
+    /// now, whose destructure is exhaustive.
     #[cfg(test)]
     fn palw_v2_fence_table(p: &Params) -> Vec<(&'static str, bool)> {
-        vec![
-            ("palw_bootstrap_activation", p.palw_bootstrap_activation.is_some()),
-            ("palw_unavailable_abstains", p.palw_unavailable_abstains.is_some()),
-            ("palw_bond_maturity", p.palw_bond_maturity.is_some()),
-            ("palw_frontier_provenance", p.palw_frontier_provenance.is_some()),
-            ("palw_heartbeat", p.palw_heartbeat.is_some()),
-            ("palw_attempt_work", p.palw_attempt_work.is_some()),
-            ("palw_attempt_activation", p.palw_attempt_activation.is_some()),
-            ("palw_inactivity_leak", p.palw_inactivity_leak.is_some()),
-            ("palw_beacon_fold", p.palw_beacon_fold.is_some()),
-            ("palw_capability_bound", p.palw_capability_bound.is_some()),
-            ("palw_context_ladder", p.palw_context_ladder.is_some()),
-            ("palw_panel_da", p.palw_panel_da.is_some()),
-            ("palw_certification_rent", p.palw_certification_rent.is_some()),
-            ("palw_uncertified_weightless", p.palw_uncertified_weightless.is_some()),
-            ("palw_da_court", p.palw_da_court.is_some()),
-            ("palw_chunk_cap_charge", p.palw_chunk_cap_charge.is_some()),
-            ("palw_prompt_ids_merkle", p.palw_prompt_ids_merkle.is_some()),
-            ("palw_kary_court", p.palw_kary_court.is_some()),
-            ("palw_fp_decode_rules", p.palw_fp_decode_rules.is_some()),
-            ("palw_difficulty_priced_rows", p.palw_difficulty_priced_rows.is_some()),
-            ("palw_receipt_rows_unpriced", p.palw_receipt_rows_unpriced.is_some()),
-        ]
+        p.palw_fences_v1().into_iter().map(|(name, fence)| (name, fence.is_some())).collect()
+    }
+
+    /// **The median-time window and the future-time tolerance describe ONE clock** (ADR-0038
+    /// Decision H; mainnet audit 2026-09-06, L-1).
+    ///
+    /// `MEDIAN_TIME_SAMPLED_WINDOW_SIZE` is `(2·T − 1)/PAST_MEDIAN_TIME_SAMPLE_INTERVAL` — a window
+    /// sized to span twice the tolerance at whatever interval separates two samples. At the V2
+    /// cadence the sample interval is one 120-second block, not 10 seconds, so the same 27 samples
+    /// span 54 minutes: the pair is a description of a clock, and the two halves disagree by 12.3x.
+    ///
+    /// Clause 1 is the identity, re-read from the params rather than from the number 1,620, so it
+    /// expresses the relation and holds for a cadence chosen tomorrow. Clause 2 is the PINNED GAP:
+    /// both live V2 presets carry the hash lineage's 132 s against a 54-minute window, and
+    /// correcting them is a fingerprint move — a flag day or a re-mint, and the operator's call.
+    #[test]
+    fn the_v2_median_time_window_and_the_timestamp_tolerance_describe_one_clock() {
+        let c = mainnet_card_fixture_v1(true);
+        let seconds_per_sample = (c.past_median_time_sample_rate() * c.target_time_per_block() / 1000) as usize;
+        assert_eq!(
+            c.past_median_time_window_size,
+            ((2 * c.timestamp_deviation_tolerance - 1) as usize).div_ceil(seconds_per_sample),
+            "a card's window is a window FOR its own tolerance — the config/constants.rs definition, at this cadence"
+        );
+
+        // The pinned gap on the two networks that have actually run V2.
+        for (name, p) in [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())] {
+            let modelled = palw_v2_timestamp_deviation_tolerance_v1(
+                p.past_median_time_window_size,
+                p.past_median_time_sample_rate(),
+                p.target_time_per_block(),
+            );
+            assert_eq!(p.timestamp_deviation_tolerance, crate::config::constants::consensus::TIMESTAMP_DEVIATION_TOLERANCE);
+            assert_eq!(modelled, 1_620, "{name}: 27 samples x 1 x 120 s / 2");
+            assert_ne!(
+                modelled, p.timestamp_deviation_tolerance,
+                "KNOWN GAP: {name} runs a 54-minute median window against a {} s future-time bound. Correcting it is a \
+                 fingerprint move and a flag day. If this starts failing, someone re-minted — update the pin deliberately.",
+                p.timestamp_deviation_tolerance
+            );
+        }
+    }
+
+    /// **The fence table names every PALW fence `Params` carries** (mainnet audit 2026-09-06, L-3).
+    ///
+    /// Deliberately NOT a hand-maintained count: a count is the defect one level up. The property
+    /// is that the table and the struct agree, and the compiler is what actually enforces it —
+    /// `palw_fences_v1`'s destructure is exhaustive, so a fence added to `Params` fails to BUILD
+    /// until it is named. This asserts the consequence, and names the four the DA-court/model-market
+    /// merge added to `Params` while the hand-written table sat unchanged with zero merge conflict.
+    #[test]
+    fn the_fence_table_names_every_palw_fence_on_params() {
+        let names: std::collections::BTreeSet<&str> =
+            palw_v2_fence_table(&MAINNET_PARAMS).into_iter().map(|(n, _)| n).collect();
+        for (name, _) in MAINNET_PARAMS.palw_fences_v1() {
+            assert!(names.contains(name), "{name} is a PALW fence on Params and the table does not name it");
+        }
+        for name in ["palw_court_ladder", "palw_model_market", "palw_model_lines", "palw_model_evm"] {
+            assert!(names.contains(name), "{name}: one of the four the 2026-09-06 merge added");
+        }
+        // …and the table is a table OF the presets, so it answers per preset rather than per build.
+        for (preset_name, preset) in [
+            ("testnet-11", palw_rc_shipped_params()),
+            ("devnet", devnet_shipped_params()),
+            ("mainnet card", mainnet_card_fixture_v1(true)),
+        ] {
+            let table = palw_v2_fence_table(&preset);
+            assert_eq!(table.len(), names.len(), "{preset_name}: one spelling, one length");
+            for (name, armed) in table {
+                assert_eq!(
+                    armed,
+                    preset.palw_fences_v1().into_iter().find(|(n, _)| *n == name).expect("named above").1.is_some(),
+                    "{preset_name}: the table's {name} must be the params' own answer"
+                );
+            }
+        }
+    }
+
+    /// The names a params set arms, as a set — one spelling for the two assertions below.
+    #[cfg(test)]
+    fn card_armed_names(p: &Params) -> std::collections::BTreeSet<&'static str> {
+        palw_v2_fence_table(p).into_iter().filter(|(_, on)| *on).map(|(n, _)| n).collect()
     }
 
     /// **A carded mainnet arms what testnet-11 arms, and the one difference is a derivation**
@@ -12768,11 +13995,16 @@ mod consensus_params_id_tests {
         .expect("a mainnet-equivalent genesis assembles");
         let carded = palw_rc_arm_phase1(mainnet_certify_registered_classes_v1(assembled));
 
-        // The eight the card STATES on its base (`mainnet_card_base_v1`), individually: seven armed
-        // from genesis on every card, the k-ary court only when the dense tier is pinned.
+        // What the card STATES on its base (`mainnet_card_base_v1`), individually: the ten below
+        // armed from genesis on every card, the k-ary court only when the dense tier is pinned.
         for (name, armed) in [
             ("palw_context_ladder", carded.palw_context_ladder),
+            ("palw_court_ladder", carded.palw_court_ladder),
+            ("palw_capability_bound", carded.palw_capability_bound),
             ("palw_receipt_rows_unpriced", carded.palw_receipt_rows_unpriced),
+            ("palw_attempt_header_pins", carded.palw_attempt_header_pins),
+            ("palw_fp_da_pins", carded.palw_fp_da_pins),
+            ("palw_validator_payout_bounds", carded.palw_validator_payout_bounds),
             ("palw_certification_rent", carded.palw_certification_rent),
             ("palw_chunk_cap_charge", carded.palw_chunk_cap_charge),
             ("palw_prompt_ids_merkle", carded.palw_prompt_ids_merkle),
@@ -12789,17 +14021,79 @@ mod consensus_params_id_tests {
             palw_v2_fence_table(&carded).into_iter().filter(|(_, on)| *on).map(|(n, _)| n).collect();
         let missing: Vec<&'static str> = rc_armed.iter().copied().filter(|n| !mainnet_armed.contains(n)).collect();
 
-        // The one legitimate difference, and it is legitimate only because it is DERIVED from the
-        // class set rather than forgotten: `palw_kary_court` is the court for a fused-attention
-        // row, this equivalent registers only the floor, and `validate_palw_v2` refuses the fence
-        // on a ruleset whose frozen arity does not match one it can derive. A carded mainnet that
-        // pins the dense tier states it on the base — see the test below.
+        // The legitimate differences, and each is legitimate for a stated reason rather than by
+        // having been forgotten:
+        //
+        // * `palw_kary_court` is DERIVED from the class set — it is the court for a fused-attention
+        //   row, this equivalent registers only the floor, and `validate_palw_v2` refuses the fence
+        //   on a ruleset whose frozen arity does not match one it can derive. A carded mainnet that
+        //   pins the dense tier states it on the base — see the test below.
+        // * The three model fences (ADR-0087 D6, ADR-0088 D11, ADR-0089 D9) are SCHEDULED on
+        //   testnet-11, at `PALW_RC_DA_COURT_FENCE_DAA`, and a card states none of them. Arming a
+        //   market, a registry and an EVM from block one on a network with value is the measured
+        //   decision ADR-0087 D6 reserves for the operator, not a default a card takes; the mainnet
+        //   row of `docs/adr/README.md`'s activation table records them as not armed. **This
+        //   difference was invisible until the 2026-09-06 audit (L-3): the fence table was
+        //   hand-written and the model branch never joined it, so a set comparison could not see a
+        //   fence the table did not name.** If a card is ever meant to arm them, this is the line
+        //   that has to be changed deliberately.
         assert_eq!(
             missing,
-            vec!["palw_kary_court"],
-            "a carded mainnet must arm every fence testnet-11 arms; the floor-only difference is the k-ary court alone \
+            vec!["palw_model_market", "palw_model_lines", "palw_model_evm", "palw_kary_court"],
+            "a carded mainnet must arm every fence testnet-11 arms except the four named above \
              (rc: {rc_armed:?}, mainnet: {mainnet_armed:?})"
         );
+        for name in ["palw_model_market", "palw_model_lines", "palw_model_evm"] {
+            assert!(
+                rc.palw_fences_v1().into_iter().any(|(n, fence)| n == name && fence.is_some_and(|f| f.daa_score() > 0)),
+                "{name}: the RC SCHEDULES it at a height — a card that does not state it is behind a decision, not an \
+                 oversight"
+            );
+        }
+        // **The card's armed set, spelled out — and the document is downstream of it** (mainnet
+        // audit 2026-09-06, L-4). Deliberately a hand-maintained list, unlike everything above it:
+        // its job is not to catch a fence the compiler already catches (`palw_fences_v1` does that),
+        // it is to make a change to what a CARD arms impossible to land without a human reading
+        // this sentence — `docs/adr/README.md`'s activation-axis table is written FROM this set, and
+        // nothing runs a document.
+        let card_armed: std::collections::BTreeSet<&str> = card_armed_names(&carded);
+        let expected: std::collections::BTreeSet<&str> = [
+            "palw_attempt_header_pins",
+            "palw_attempt_work",
+            "palw_capability_bound",
+            "palw_certification_rent",
+            "palw_chunk_cap_charge",
+            "palw_context_ladder",
+            "palw_court_ladder",
+            "palw_da_court",
+            "palw_difficulty_priced_rows",
+            "palw_epoch_boundary_budget",
+            "palw_fp_da_pins",
+            "palw_fp_ruleset_caps",
+            "palw_heartbeat",
+            "palw_panel_da",
+            "palw_prompt_ids_merkle",
+            "palw_receipt_rows_unpriced",
+            "palw_signature_contexts_v2",
+            "palw_unavailable_abstains",
+            "palw_uncertified_weightless",
+            "palw_validator_payout_bounds",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            card_armed, expected,
+            "the card's armed set changed. docs/adr/README.md's activation-axis table is written FROM this set; update it \
+             in the same commit"
+        );
+        // The dense card is this set plus the court its own pinned row needs, and nothing else.
+        let dense: std::collections::BTreeSet<&str> = card_armed_names(&mainnet_card_fixture_v1(true));
+        assert_eq!(
+            dense.difference(&expected).copied().collect::<Vec<_>>(),
+            vec!["palw_kary_court"],
+            "pinning the dense tier states the k-ary court and nothing else"
+        );
+
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &carded.palw_consensus_mode else {
             panic!("the equivalent is V2")
         };
@@ -12825,13 +14119,368 @@ mod consensus_params_id_tests {
         carded.validate_palw_v2().expect("the startup gate a mainnet node runs accepts the armed card");
     }
 
+    /// **The complete context set is a CARD's rule, and testnet-11's identity does not move for it**
+    /// (ADR-0042 Decision 11; mainnet audit 2026-09-06, M-8).
+    ///
+    /// Both halves, because either alone is a different and wrong outcome: the card must actually
+    /// commit to the complete set, and every network that already exists must be byte-identical to
+    /// a build in which this fence was never added.
+    ///
+    /// Clause (b) is the assertion `shipped_presets_have_pinned_fingerprints` cannot make — it has
+    /// no testnet-11 row, because that ruleset is a function of pinned genesis artifacts — and it is
+    /// the whole reason the complete set is fenced rather than appended to
+    /// `PALW_V2_SIGNATURE_CONTEXTS`.
+    #[test]
+    fn the_complete_context_set_is_carded_and_leaves_every_live_network_where_it_was() {
+        use crate::palw_mode_v2::{
+            PALW_V2_FROZEN_SIGNATURE_CONTEXTS_ROOT_HEX, PalwConsensusMode, palw_v2_signature_contexts_root,
+            palw_v2_signature_contexts_root_v2,
+        };
+
+        // (a) Dormant on every shipped preset, and dormant is byte-identical to absent.
+        for (name, preset) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("devnet", DEVNET_PARAMS), ("simnet", SIMNET_PARAMS)]
+        {
+            assert!(preset.palw_signature_contexts_v2.is_none(), "{name}: a shipped preset armed the complete context set");
+            let before = preset.consensus_params_id();
+            let mut probe = preset;
+            probe.palw_signature_contexts_v2 = None;
+            assert_eq!(before, probe.consensus_params_id(), "{name}: the Some-only write ran on a None");
+        }
+
+        // (b) THE LIVE NETWORKS. testnet-11 and devnet keep the frozen root, so their ruleset ids
+        //     are unmoved.
+        for (name, live) in [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())] {
+            assert!(live.palw_signature_contexts_v2.is_none(), "{name}: arming this re-mints a live chain");
+            let PalwConsensusMode::ConsensusV2(bundle) = &live.palw_consensus_mode else {
+                panic!("{name} is a ConsensusV2 network");
+            };
+            // Against the LITERAL golden, not against `palw_v2_signature_contexts_root()`: that
+            // function moves with the array, so comparing to it agrees with any append and is the
+            // shape of test M-8 was raised about. This is the value the live chains committed to.
+            assert_eq!(
+                bundle.signature_contexts_root.to_string(),
+                PALW_V2_FROZEN_SIGNATURE_CONTEXTS_ROOT_HEX,
+                "{name}'s committed context set moved: that re-mints a live chain's consensus_params_id, which is a \
+                 coordinated flag day and not an edit"
+            );
+            assert_eq!(bundle.signature_contexts_root, palw_v2_signature_contexts_root(), "{name}: and this build agrees");
+            assert_ne!(bundle.signature_contexts_root, palw_v2_signature_contexts_root_v2());
+        }
+
+        // (c) A card states it from genesis and its BUNDLE carries the complete root — the two
+        //     halves `validate_palw_v2` refuses to separate, checked together so a card that armed
+        //     the fence without the assembly writing the root could not pass.
+        let carded = mainnet_card_fixture_v1(false);
+        assert_eq!(carded.palw_signature_contexts_v2, Some(ForkActivation::always()), "a card states the complete set from genesis");
+        let PalwConsensusMode::ConsensusV2(card_bundle) = &carded.palw_consensus_mode else {
+            panic!("a carded mainnet is a ConsensusV2 network");
+        };
+        assert_eq!(card_bundle.signature_contexts_root, palw_v2_signature_contexts_root_v2(), "…and its bundle commits to it");
+        assert!(carded.validate_palw_v2().is_ok());
+
+        // (d) Neither half stands alone.
+        let mut fence_only = carded.clone();
+        if let PalwConsensusMode::ConsensusV2(b) = &mut fence_only.palw_consensus_mode {
+            b.signature_contexts_root = palw_v2_signature_contexts_root();
+        }
+        assert!(fence_only.validate_palw_v2().is_err(), "an armed fence over the frozen root must be refused");
+        let mut root_only = carded.clone();
+        root_only.palw_signature_contexts_v2 = None;
+        assert!(root_only.validate_palw_v2().is_err(), "the complete root without the fence must be refused");
+
+        // (e) …and it is genesis-only: the meaning of a signature is not a function of a height no
+        //     verifier of one holds.
+        let mut scheduled = carded.clone();
+        scheduled.palw_signature_contexts_v2 = Some(ForkActivation::new(5_000));
+        assert!(scheduled.validate_palw_v2().is_err(), "the set of contexts a ruleset commits to is not a height");
+
+        // (f) `never()` is absence, whole option and all — the collapse every bare fence keeps.
+        //     Observable through `consensus_identity_id`, which is where the normalizer runs, and
+        //     a spelled-out dormant testnet-11 is still testnet-11 to the startup gate.
+        let rc = palw_rc_shipped_params();
+        let mut spelled_out = rc.clone();
+        spelled_out.palw_signature_contexts_v2 = Some(ForkActivation::never());
+        assert_eq!(
+            spelled_out.consensus_identity_id(),
+            rc.consensus_identity_id(),
+            "never() is absence, or the collapse in normalize_values_a_scheduled_fence_drags_with_it is gone"
+        );
+        assert!(spelled_out.validate_palw_v2().is_ok(), "…and a dormant spelling is still testnet-11");
+    }
+
+    /// **The liveness proof a card's arming cannot ship without** — the card's own registry, not
+    /// the RC's (ADR-0071 SA-3; mainnet audit 2026-09-06, M-14).
+    ///
+    /// This is `palw_panel_v2::the_shipped_registry_still_draws_a_full_panel_with_the_capability_fence_armed`
+    /// asked of the network that actually arms the fence. A short draw is
+    /// `InsufficientEligibleBonds`, so every claim voids at `BindTimeout` with its escrow burned,
+    /// and a card's registry has zero slack by construction (`seat_count + 1` bonds, the executor
+    /// excluded). Arming a fence that empties the panel is worse than leaving it dormant, so the
+    /// arming and this assertion are one change.
+    #[test]
+    fn a_carded_registry_still_draws_a_full_panel_with_the_capability_fence_armed() {
+        use crate::palw_mode_v2::PalwConsensusMode;
+        use crate::palw_state_v2::{
+            PalwBlockContextV2, PalwChainStateV2, apply_palw_transition_v2, palw_bond_may_judge_class_v3,
+            palw_bond_may_take_work_v2,
+        };
+
+        let params = mainnet_card_fixture_v1(true);
+        assert_eq!(params.palw_capability_bound, Some(ForkActivation::always()), "the premise: the card arms SA-3");
+        let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("the card is V2") };
+        let sp = bundle.state.clone();
+        let genesis_ctx =
+            PalwBlockContextV2 { block: params.genesis.hash, daa_score: params.genesis.daa_score, blue_score: 0, subsidy: 0 };
+        let (booted, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &genesis_ctx, &bundle.genesis_objects, None)
+            .expect("the card's genesis applies");
+
+        let seats_needed = bundle.panel.seat_count() as usize;
+        let min_collateral = sp.min_collateral_sompi();
+        let classes: Vec<crate::Hash64> = booted.classes_iter().map(|(id, _)| *id).collect();
+        assert_eq!(classes.len(), 3, "the card registers the floor and both model tiers");
+
+        for class_id in classes {
+            let count = |proof: bool| -> usize {
+                let mut operators: Vec<crate::Hash64> = booted
+                    .bonds_iter()
+                    .filter(|(key, bond)| {
+                        palw_bond_may_take_work_v2(bond, min_collateral)
+                            && palw_bond_may_judge_class_v3(&booted, key, bond, &class_id, proof)
+                    })
+                    .map(|(_, bond)| bond.operator_id)
+                    .collect();
+                operators.sort();
+                operators.dedup();
+                operators.len()
+            };
+            assert_eq!(
+                count(false),
+                count(true),
+                "class {class_id:?}: the capability fence removed a seat from the CARD's genesis registry — every claim on \
+                 that network would void at BindTimeout"
+            );
+            assert!(count(true) > seats_needed, "class {class_id:?}: a panel of {seats_needed} needs one spare for the executor");
+        }
+
+        // **SA-2's price is affordable at genesis**, which is the other way this arming could brick
+        // a card: each bond declares the floor plus both tiers, so it reserves
+        // 3 x PALW_CAPABILITY_EXPOSURE_SOMPI against its own collateral before it has done
+        // anything. If a future card registers more tiers than a genesis bond can pay for, this is
+        // the line that says so rather than a node that will not boot.
+        for (_, bond) in booted.bonds_iter() {
+            assert!(bond.capable_classes.len() <= crate::palw_state_v2::PALW_MAX_CAPABLE_CLASSES);
+            assert!(
+                crate::palw_state_v2::palw_bond_capability_exposure_v1(bond) <= bond.collateral as u128,
+                "a genesis bond's declared capability must be affordable against its own collateral (SA-2)"
+            );
+        }
+    }
+
+    /// **A ruleset must be able to pay its own validator floor inside ONE coinbase** (mainnet
+    /// audit, 2026-09-06, H-3).
+    ///
+    /// The §E deferred fan-out is (epochs this block finalizes) × (validators included in each),
+    /// and `epochs_finalized_at` returns one epoch per `epoch_length_blocks` of DAA a block
+    /// advanced — up to `mergeset_size_limit / epoch_length_blocks`. A network whose own
+    /// `min_active_validators` cannot be paid inside its own coinbase cap halts permanently the
+    /// first time a wide mergeset appears, and the block that would merge the wide tips away is
+    /// itself unbuildable. This is a startup-shaped property checked at BUILD time, deliberately
+    /// NOT a `validate_palw_v2` refusal: testnet-11 is live and dormant here, and a runtime gate
+    /// would stop it booting.
+    #[test]
+    fn a_carded_mainnet_can_pay_its_own_validator_floor_inside_one_coinbase() {
+        use crate::config::premine::{bonded_genesis_utxos, premine_outpoint};
+        use crate::palw_fp_devnet_v3::{palw_devnet_bond_registry_v1, palw_v2_maturity_armable_bonds_v1};
+
+        // The same mainnet-equivalent card `a_carded_mainnet_arms_every_fence_testnet_11_arms`
+        // builds — assembled, then armed.
+        let specs: Vec<_> = palw_devnet_bond_registry_v1(palw_v2_maturity_armable_bonds_v1())
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut spec)| {
+                spec.bond = crate::palw_state_v2::PalwBondKeyV2(premine_outpoint(i as u32));
+                spec
+            })
+            .collect();
+        let money: Vec<(u32, [u8; 64])> =
+            specs.iter().enumerate().map(|(i, spec)| (i as u32, *spec.payout_payload.as_byte_slice())).collect();
+        let utxos = bonded_genesis_utxos(MAINNET_PARAMS.net, &money, std::iter::empty());
+        let assembled = palw_v2_params_from_artifacts_on_base_with_utxos(
+            mainnet_card_base_v1(mainnet_v2_mint_base(), false),
+            PALW_RC_GENESIS_ARTIFACT_ROOT,
+            specs,
+            utxos,
+        )
+        .expect("a mainnet-equivalent genesis assembles");
+        let carded = palw_rc_arm_phase1(mainnet_certify_registered_classes_v1(assembled));
+        assert_eq!(carded.palw_validator_payout_bounds, Some(ForkActivation::always()), "a card states the payout bounds");
+
+        // The premise, in this ruleset's OWN numbers: the fan-out a single block can owe.
+        let dns = carded.dns_params.as_ref().expect("the DNS overlay");
+        let epochs_per_block = carded.blockrate.mergeset_size_limit / dns.epoch_length_blocks.max(1) + 1;
+        let fanout = (dns.min_active_validators as u64).saturating_mul(epochs_per_block);
+        let reserved = crate::palw_state_v2::PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS;
+        assert!(
+            reserved > 0 && fanout > reserved,
+            "the premise: this card's own floor of {} validators over {epochs_per_block} finalizable epochs per block \
+             wants {fanout} outputs against {reserved} reserved slots, which is why the fan-out has to be BOUNDED per \
+             block rather than reserved for",
+            dns.min_active_validators,
+        );
+
+        // …and the reserved slots do fit inside the cap the isolation guard applies past the fence.
+        assert!(
+            reserved + crate::palw_state_v2::PALW_V2_MAX_RESERVE_DRIP_PAYOUTS
+                <= crate::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS_BOUNDED,
+            "the two per-block fan-outs must sit inside the widened coinbase allowance"
+        );
+
+        // testnet-11 is live and leaves the fence dormant, so its fan-out is still unbounded
+        // against a cap of `mergeset_size_limit + 1 + PALW_V2_COINBASE_EXTRA_OUTPUTS`. Pinned so
+        // the gap can neither widen nor close in silence — closing it there is a flag day and must
+        // be a decision, not a diff.
+        let rc = palw_rc_shipped_params();
+        assert!(rc.palw_validator_payout_bounds.is_none(), "testnet-11 leaves it dormant: arming it is the operator's call");
+        assert!(rc.palw_validator_payout_bounds_fence().is_none(), "the reader is the one place the rule is decided");
+        for p in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS] {
+            assert!(p.palw_validator_payout_bounds.is_none(), "{}: a shipped preset states no payout-bounds fence", p.net);
+        }
+        assert!(devnet_shipped_params().palw_validator_payout_bounds.is_none(), "devnet inherits the dormant state too");
+    }
+
+    /// **A data-availability court may not be armed over a class that could not answer it**
+    /// (ADR-0062 SA-2; mainnet audit 2026-09-06, C-5).
+    ///
+    /// SA-2's own sentence is "a class whose event cannot be disclosed inside the budget is refused
+    /// at admission rather than being undefendable afterwards", and the genesis route had no door:
+    /// a ruleset could arm the court over a class whose commitment scheme no disclosure form names,
+    /// which is a class every accusation defeats by silence for the price of one bond.
+    ///
+    /// The rule under test is the RULESET's, not the patch's: it is asked of the same fact
+    /// `check_trace_event_disclosure_v1` refuses on — the registered `logits_scheme_id` — so a
+    /// class this gate admits is exactly a class that checker could be handed an answer for. Both
+    /// directions are pinned, because a gate that refuses everything is as wrong as one that
+    /// refuses nothing: every shipped ruleset must still assemble.
+    #[test]
+    fn arming_the_da_court_over_an_undisclosable_class_refuses_to_assemble() {
+        use crate::Hash64;
+        use crate::palw_mode_v2::PalwConsensusMode;
+        use crate::palw_state_v2::PalwConsensusObjectV2;
+
+        // **Nothing that ships stops shipping.** testnet-11 schedules the court over a class set
+        // that is entirely flat-or-tiled, devnet arms no court at all, and a card that pins the
+        // dense tier arms it from genesis over the fused row.
+        let rc = palw_rc_shipped_params();
+        assert!(rc.palw_da_court.is_some(), "testnet-11 schedules the data-availability court, so the rule engages there");
+        rc.validate_palw_v2().expect("testnet-11 assembles");
+        devnet_shipped_params().validate_palw_v2().expect("devnet assembles");
+        let carded = palw_rc_arm_phase1(
+            palw_v2_params_with_classes_on_base(
+                mainnet_card_base_v1(mainnet_v2_mint_base(), true),
+                PALW_RC_GENESIS_ARTIFACT_ROOT,
+                PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
+                Some(PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT),
+                vec![],
+            )
+            .expect("a dense-pinned mainnet card assembles"),
+        );
+        assert_eq!(carded.palw_da_court, Some(ForkActivation::always()), "a card arms the court from genesis");
+        carded.validate_palw_v2().expect("a dense-pinned card assembles");
+
+        // **A class committing under a third scheme is refused, by name.** The mutation is the
+        // honest one: the carriage's profile IS the class, so its id moves with it.
+        let mut mutated = palw_rc_shipped_params();
+        let PalwConsensusMode::ConsensusV2(bundle) = &mut mutated.palw_consensus_mode else { panic!("V2") };
+        let mut renamed = None;
+        for object in bundle.genesis_objects.iter_mut() {
+            if let PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(carriage), .. } = object {
+                carriage.profile.logits_scheme_id = Hash64::from_u64_word(0x5CE3);
+                *class_id = carriage.profile.shape_profile_id();
+                renamed = Some(*class_id);
+                break;
+            }
+        }
+        let renamed = renamed.expect("testnet-11 registers at least one class that carries its own profile");
+        let err = mutated.validate_palw_v2().expect_err(
+            "a ruleset arming the data-availability court over a class whose commitments no disclosure form names must \
+             not assemble: every accusation against it would win by silence",
+        );
+        let text = format!("{err}");
+        assert!(text.contains(&renamed.to_string()), "the refusal names the class it is about: {text}");
+        assert!(text.contains("scheme no disclosure form names"), "…and says what is wrong with it: {text}");
+
+        // **The gate reaches every row it can resolve, and it can resolve all of testnet-11's** —
+        // otherwise the assertions above would be about a smaller set than they read as.
+        let PalwConsensusMode::ConsensusV2(bundle) = &rc.palw_consensus_mode else { panic!("V2") };
+        let resolved = crate::palw_e2e_adjudicability::palw_registered_class_profiles_v1(bundle);
+        assert!(resolved.len() >= 2, "this test proves little on a genesis registering one class: {}", resolved.len());
+        assert!(
+            resolved.iter().all(|(_, profile)| profile.is_some()),
+            "testnet-11's registered classes are all describable from the ruleset, so the rule above covers all of them"
+        );
+    }
+
+    /// **THE LIMIT, pinned so it can neither widen nor close silently** (mainnet audit 2026-09-06,
+    /// C-5): the responder-coverage gate above judges the rows this ruleset can DESCRIBE, and a
+    /// genesis class whose profile lives only in the committed catalog is not one of them.
+    ///
+    /// `validate_palw_v2` holds `class_catalog_root` — a commitment, not a preimage — so for a
+    /// genesis registration (`admission: None`) the only profile source is the typed catalog in
+    /// `palw_e2e_adjudicability`, which carries the three rows this tree ships and nothing else.
+    /// The designed repair refused such a class outright; that would have refused
+    /// `palw_rc_params` over any catalog of the caller's own, which is a real, booting network
+    /// whose classes may be perfectly disclosable. Refusing what cannot be judged is fail-closed
+    /// only where the judgment was possible.
+    ///
+    /// This test asserts the residue rather than the fix: a class the ruleset cannot describe
+    /// assembles, and it is documented as covered by whoever supplied the catalog. The day
+    /// `validate_palw_v2` can reach the catalog preimage, this test goes red — which is the
+    /// trigger to close the gap rather than to re-derive this reasoning.
+    #[test]
+    fn a_catalog_class_this_ruleset_cannot_describe_is_not_refused_here() {
+        use crate::Hash64;
+        use crate::palw_mode_v2::PalwConsensusMode;
+        use crate::palw_state_v2::PalwConsensusObjectV2;
+
+        let mut orphaned = palw_rc_shipped_params();
+        assert!(orphaned.palw_da_court.is_some(), "the gate this is a limit of is engaged on this ruleset");
+        let PalwConsensusMode::ConsensusV2(bundle) = &mut orphaned.palw_consensus_mode else { panic!("V2") };
+        let mut unknown = None;
+        for object in bundle.genesis_objects.iter_mut() {
+            if let PalwConsensusObjectV2::ClassRegistered { class_id, admission: None, .. } = object {
+                *class_id = Hash64::from_u64_word(0xDEAD_C1A5);
+                unknown = Some(*class_id);
+                break;
+            }
+        }
+        let unknown = unknown.expect("testnet-11 registers at least one catalog class");
+        let PalwConsensusMode::ConsensusV2(bundle) = &orphaned.palw_consensus_mode else { panic!("V2") };
+        assert!(
+            crate::palw_e2e_adjudicability::palw_registered_class_profiles_v1(bundle)
+                .into_iter()
+                .any(|(id, profile)| id == unknown && profile.is_none()),
+            "the premise: this ruleset now registers a class it holds no profile for"
+        );
+        assert!(
+            orphaned.validate_palw_v2().is_ok(),
+            "a class this seam cannot describe is passed over, not refused — see the gate's own comment"
+        );
+    }
+
     /// **The court prosecutes at the ladder it admitted at — where the fence says so** (ADR-0084
     /// U-08; mainnet audit, 2026-09-05).
     ///
     /// On every shipped preset the bundle freezes `max_step_leaf_count = 2^26` and the walkers'
-    /// constant is `2^22`. The resolver hands the court the constant while `palw_context_ladder`
-    /// is dormant (testnet-11, whose closes were all judged under it) and the ruleset's number
-    /// past it (devnet from genesis; a carded mainnet, which states the fence on its base).
+    /// constant is `2^22`. `palw_court_ladder` is ADR-0084 §7.5's fence for that loosening — and it
+    /// is NOT `palw_context_ladder`, which after the 2026-09-06 merge is ADR-0077 Phase B's
+    /// admission-rule fence and nothing else.
+    ///
+    /// **Every arming below is READ OFF the params, never handed in.** The version this replaces
+    /// passed a literal `true` for devnet and hand-wrote the fence onto a fixture for the card, so
+    /// it asserted a property of its own arguments: with the card arming the OTHER field it still
+    /// passed, while a carded mainnet prosecuted its dense row at `2^22` (mainnet audit 2026-09-06,
+    /// M-15).
     #[test]
     fn the_refutation_ladder_is_the_rulesets_only_past_the_court_ladder_fence() {
         use crate::palw_court_v2::palw_refutation_leaf_cap_v2;
@@ -12852,22 +14501,35 @@ mod consensus_params_id_tests {
         // testnet-11: dormant, so the constant — the court every shipped close was judged under.
         assert!(rc.palw_court_ladder.is_none(), "testnet-11 leaves the court ladder dormant: it is a live chain");
         assert_eq!(palw_refutation_leaf_cap_v2(&court_of(&rc), false), PALW_STEP_LEG_MAX_LEAVES);
-        // Armed, the ruleset's own ladder — the value a class was admitted at.
+        // **devnet: the fence is DORMANT, and this pins the gap rather than papering it.** Devnet
+        // arms `palw_context_ladder` from genesis and leaves `palw_court_ladder` unset, so it
+        // admits the graph-v5 row at 2^26 and its court still walks at 2^22. Arming it here would
+        // move devnet's pinned fingerprint, which is a re-mint and the operator's call; recording
+        // it is not. If devnet is ever re-minted with the fence, this assertion is the line that
+        // says so.
+        assert!(devnet.palw_court_ladder.is_none(), "devnet leaves ADR-0084 U-08 dormant — a known, pinned gap");
+        assert_eq!(
+            palw_refutation_leaf_cap_v2(&court_of(&devnet), devnet.palw_court_ladder_active_at(0)),
+            PALW_STEP_LEG_MAX_LEAVES,
+            "devnet's court walks at the constant while its classes are admitted at {}",
+            court_of(&devnet).max_step_leaf_count()
+        );
+        // …and the fence, when a network does arm it, hands over the ruleset's own ladder.
         assert_eq!(palw_refutation_leaf_cap_v2(&court_of(&devnet), true), court_of(&devnet).max_step_leaf_count());
 
-        // A carded mainnet states the fence on its base, so its court prosecutes the dense row it
-        // registers. Through the same tail `mainnet_shipped_params` runs.
-        let mut base = mainnet_v2_mint_base();
-        base.palw_context_ladder = Some(ForkActivation::always());
-        base.palw_court_ladder = Some(ForkActivation::always());
-        let carded = palw_rc_arm_phase1(
-            palw_v2_params_from_artifacts_on_base(base, PALW_RC_GENESIS_ARTIFACT_ROOT, vec![])
-                .expect("a zero-seat mainnet card assembles (ADR-0061)"),
-        );
-        assert_eq!(carded.palw_court_ladder, Some(ForkActivation::always()), "…and the arming survives assembly");
+        // **A carded mainnet, through the card's OWN base statement** — not a fixture with the
+        // fence written onto it. `mainnet_card_fixture_v1` runs `mainnet_card_base_v1` and the same
+        // tail `mainnet_shipped_params` runs, so this measures what a mint produces.
+        let carded = mainnet_card_fixture_v1(true);
+        assert_eq!(carded.palw_court_ladder, Some(ForkActivation::always()), "a card states ADR-0084 U-08's fence");
         assert_eq!(
-            palw_refutation_leaf_cap_v2(&court_of(&carded), carded.palw_court_ladder.is_some_and(|f| f.is_active(0))),
-            court_of(&carded).max_step_leaf_count()
+            palw_refutation_leaf_cap_v2(&court_of(&carded), carded.palw_court_ladder_active_at(0)),
+            court_of(&carded).max_step_leaf_count(),
+            "a carded mainnet prosecutes the dense row at the ladder it admitted it at"
+        );
+        assert!(
+            court_of(&carded).max_step_leaf_count() > PALW_STEP_LEG_MAX_LEAVES,
+            "the premise: without the fence this card's court could not try the row it registers"
         );
     }
 
@@ -13059,6 +14721,142 @@ mod consensus_params_id_tests {
             vec![1150, PALW_RC_DA_COURT_FENCE_DAA, 2000],
             "…and a schedule lists every scheduled gate fence's height"
         );
+    }
+
+    /// **The header-stage DA pins are stated on a card, dormant on every live chain, and cost
+    /// nothing while they are dormant** (mainnet audit, 2026-09-06 — C-1).
+    ///
+    /// Three separate claims, because a bare fence can fail any one of them on its own:
+    /// `None` everywhere shipped, so no live chain's fingerprint moves and no header it already
+    /// holds is re-judged; `Some(never())` is absence, so a build that spells the dormant state the
+    /// long way fingerprints identically to one that omits the field; and arming it moves the
+    /// identity, so an armed build and an un-armed one cannot silently believe they run one rule.
+    /// The fourth claim is the fail-closed one: the pins are fields of a V2 attempt envelope, so
+    /// the fence is refused on a network that has no V2 bundle to derive them from.
+    #[test]
+    fn the_attempt_header_pins_fence_is_dormant_on_every_shipped_preset_and_visible_the_moment_it_is_not() {
+        for p in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS] {
+            assert!(p.palw_attempt_header_pins.is_none(), "{}: a shipped preset states no header-stage pin fence", p.net);
+        }
+        let rc = palw_rc_shipped_params();
+        assert!(
+            rc.palw_attempt_header_pins.is_none(),
+            "testnet-11's stored history was judged with the DA pins asked only in the virtual processor; arming this \
+             fence there is a decision and a flag day, not an inheritance"
+        );
+        assert!(devnet_shipped_params().palw_attempt_header_pins.is_none(), "devnet inherits the dormant state too");
+
+        // `Some(never())` is absence — the D4 collapse, observable through `consensus_identity_id`,
+        // which is where the normalizer runs (`consensus_params_id` hashes the raw field and never
+        // normalizes).
+        let mut spelled_out = rc.clone();
+        spelled_out.palw_attempt_header_pins = Some(ForkActivation::never());
+        assert_eq!(
+            spelled_out.consensus_identity_id(),
+            rc.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse in normalize_values_a_scheduled_fence_drags_with_it is gone"
+        );
+
+        // A FUTURE height must not split the mesh on deploy day: `for_each_fence` visits the fence,
+        // so a scheduled height normalises away in the identity and shows up in the schedule the
+        // operator log carries. That is the whole reason the field is visited rather than only
+        // hashed.
+        let mut scheduled = rc.clone();
+        scheduled.palw_attempt_header_pins = Some(ForkActivation::new(9_000_000));
+        assert_eq!(
+            scheduled.consensus_identity_id(),
+            rc.consensus_identity_id(),
+            "an armed and an un-armed build must peer until the height fires (SA-2's deploy-day partition)"
+        );
+        assert_ne!(scheduled.consensus_params_id(), rc.consensus_params_id(), "…while the ruleset id still names the rule");
+        assert_ne!(scheduled.consensus_schedule_id(), rc.consensus_schedule_id(), "…and the operator log names the height");
+
+        // …and in force FROM GENESIS is a real rule difference, which must separate identities.
+        let mut armed = rc.clone();
+        armed.palw_attempt_header_pins = Some(ForkActivation::always());
+        assert_ne!(armed.consensus_params_id(), rc.consensus_params_id(), "arming a validity fence moves the ruleset id");
+        assert_ne!(armed.consensus_identity_id(), rc.consensus_identity_id(), "…and at genesis the handshake must see it");
+        armed.validate_palw_v2().expect("the RC is ConsensusV2, so the fence has a lane to apply to");
+
+        // Fail-closed: no V2 bundle, no pins to enforce.
+        let mut laneless = TESTNET_PARAMS;
+        laneless.palw_attempt_header_pins = Some(ForkActivation::always());
+        let e = laneless.validate_palw_v2().expect_err("a fence that hashes and cannot fire is refused at assembly");
+        assert!(format!("{e:?}").contains("palw_attempt_header_pins"), "{e:?}");
+        // …and the dormant spelling is not a rule, so it is accepted there.
+        let mut laneless_dormant = TESTNET_PARAMS;
+        laneless_dormant.palw_attempt_header_pins = Some(ForkActivation::never());
+        laneless_dormant.validate_palw_v2().expect("never() names no rule on any network");
+
+        // A card states it from genesis, where it is free: no history was judged under the looser
+        // rule. It is a PARTIAL answer to C-1 — see the field's doc and
+        // `palw_attempt_v2::tests::an_unadmitted_attempt_header_is_still_a_priced_difficulty_row`.
+        let base = mainnet_card_base_v1(mainnet_v2_mint_base(), false);
+        let carded = palw_rc_arm_phase1(
+            palw_v2_params_from_artifacts_on_base(base, PALW_RC_GENESIS_ARTIFACT_ROOT, vec![]).expect("a zero-seat card assembles"),
+        );
+        assert_eq!(carded.palw_attempt_header_pins, Some(ForkActivation::always()));
+    }
+
+    /// **The free-prompt DA pin is dormant on every shipped preset and visible the moment it is
+    /// not** (ADR-0072 Decision 8, free-prompt half; mainnet audit 2026-09-06 — M-3).
+    ///
+    /// The same four claims the header-stage fence above is held to, because a bare fence can fail
+    /// any one of them alone: `None` everywhere shipped, so no live chain's fingerprint moves and
+    /// no claim it already recorded is re-derived; `Some(never())` is absence; arming it separates
+    /// identities; and it is refused on a network with no V2 lane to write a claim record on.
+    #[test]
+    fn the_free_prompt_da_pin_fence_is_dormant_on_every_shipped_preset_and_visible_the_moment_it_is_not() {
+        for p in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS] {
+            assert!(p.palw_fp_da_pins.is_none(), "{}: a shipped preset states no free-prompt DA pin fence", p.net);
+        }
+        let rc = palw_rc_shipped_params();
+        assert!(
+            rc.palw_fp_da_pins.is_none(),
+            "testnet-11's stored claims recorded the retention their own producers wrote; deriving it there is a decision \
+             and a flag day, not an inheritance"
+        );
+        assert!(devnet_shipped_params().palw_fp_da_pins.is_none(), "devnet inherits the dormant state too");
+        // Dormant means the fence reader says so as well, which is what the transition asks.
+        assert!(rc.palw_fp_da_pins_fence().is_none(), "the reader is the one place the rule is decided");
+
+        let mut spelled_out = rc.clone();
+        spelled_out.palw_fp_da_pins = Some(ForkActivation::never());
+        assert_eq!(spelled_out.consensus_identity_id(), rc.consensus_identity_id(), "Some(never()) is absence");
+
+        let mut scheduled = rc.clone();
+        scheduled.palw_fp_da_pins = Some(ForkActivation::new(9_000_000));
+        assert_eq!(
+            scheduled.consensus_identity_id(),
+            rc.consensus_identity_id(),
+            "an armed and an un-armed build must peer until the height fires"
+        );
+        assert_ne!(scheduled.consensus_params_id(), rc.consensus_params_id(), "…while the ruleset id still names the rule");
+        assert_ne!(scheduled.consensus_schedule_id(), rc.consensus_schedule_id(), "…and the operator log names the height");
+
+        let mut armed = rc.clone();
+        armed.palw_fp_da_pins = Some(ForkActivation::always());
+        assert_ne!(armed.consensus_params_id(), rc.consensus_params_id(), "arming a state-root fence moves the ruleset id");
+        assert_ne!(armed.consensus_identity_id(), rc.consensus_identity_id(), "…and at genesis the handshake must see it");
+        armed.validate_palw_v2().expect("the RC is ConsensusV2, so the fence has a lane to apply to");
+        assert_eq!(armed.palw_fp_da_pins_fence(), Some(ForkActivation::always()));
+
+        // Fail-closed: no V2 bundle, no claim record to write an obligation onto.
+        let mut laneless = TESTNET_PARAMS;
+        laneless.palw_fp_da_pins = Some(ForkActivation::always());
+        let e = laneless.validate_palw_v2().expect_err("a fence that hashes and cannot fire is refused at assembly");
+        assert!(format!("{e:?}").contains("palw_fp_da_pins"), "{e:?}");
+        let mut laneless_dormant = TESTNET_PARAMS;
+        laneless_dormant.palw_fp_da_pins = Some(ForkActivation::never());
+        laneless_dormant.validate_palw_v2().expect("never() names no rule on any network");
+
+        // A card states it from genesis, beside the `palw_da_court` it is what makes meaningful.
+        let base = mainnet_card_base_v1(mainnet_v2_mint_base(), false);
+        let carded = palw_rc_arm_phase1(
+            palw_v2_params_from_artifacts_on_base(base, PALW_RC_GENESIS_ARTIFACT_ROOT, vec![]).expect("a zero-seat card assembles"),
+        );
+        assert_eq!(carded.palw_fp_da_pins, Some(ForkActivation::always()));
+        assert_eq!(carded.palw_da_court, Some(ForkActivation::always()), "the court it makes meaningful is armed with it");
     }
 
     /// **A card certifies the free-prompt lane of the classes it registers; the RC's pinned set

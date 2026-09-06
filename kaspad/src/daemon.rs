@@ -1116,6 +1116,10 @@ Do you confirm? (y/n)";
         // kaspa-pq PQ-only relay: every kaspa-pq network enforces PQ at genesis, so the production
         // mempool requires ML-DSA-87 P2PKH outputs/inputs (audit Finding C).
         true,
+        // ADR-0087 Decision 6 (mainnet audit 2026-09-06, M-9): the mempool's model-sink carve-outs
+        // are live only where the ruleset declares the market. `None` on every shipped preset, so
+        // this is `false` on testnet-11, devnet and a carded mainnet today.
+        config.palw_model_market.is_some(),
         evm_fee_recipient,
         attestation_policy,
     )));
@@ -1411,6 +1415,7 @@ Do you confirm? (y/n)";
                     consensus_manager.clone(),
                     mining_manager.clone(),
                     flow_context.clone(),
+                    config.clone(),
                 )))
             }
             (None, _, _, _) => {

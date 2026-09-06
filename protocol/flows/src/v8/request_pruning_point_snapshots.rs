@@ -6,6 +6,7 @@
 
 use crate::{flow_context::FlowContext, flow_trait::Flow};
 use kaspa_consensus_core::BlockHash;
+use kaspa_core::debug;
 use kaspa_p2p_lib::{
     IncomingRoute, Router,
     common::ProtocolError,
@@ -45,6 +46,16 @@ impl RequestPruningPointEvmStateFlow {
         loop {
             let msg = dequeue!(self.incoming_route, Payload::RequestPruningPointEvmState)?;
             let pp = req_pruning_point(msg.pruning_point_hash)?;
+            // **The asker is charged before the work, not after the egress** (mainnet audit H-1);
+            // see `PalwGossipCenter::reserve_sidecar_serve` for why the reservation is the attempt
+            // floor rather than the worst case.
+            let peer = self.router.key();
+            if !self.ctx.palw_gossip().reserve_sidecar_serve(peer) {
+                debug!("[palw-sidecar] {peer} is out of serve allowance this window; answering not-found for {pp}");
+                let refused = PruningPointEvmStateMessage { found: false, evm_header: vec![], evm_state_snapshot: vec![] };
+                self.router.enqueue(make_message!(Payload::PruningPointEvmState, refused)).await?;
+                continue;
+            }
             let session = self.ctx.consensus().unguarded_session();
             let evm = session.spawn_blocking(move |c| c.pruning_point_evm_state(pp)).await;
             let reply = match evm {
@@ -55,6 +66,8 @@ impl RequestPruningPointEvmStateFlow {
                 },
                 None => PruningPointEvmStateMessage { found: false, evm_header: vec![], evm_state_snapshot: vec![] },
             };
+            let served = (reply.evm_header.len() + reply.evm_state_snapshot.len()) as u64;
+            self.ctx.palw_gossip().charge_sidecar_serve(peer, served);
             self.router.enqueue(make_message!(Payload::PruningPointEvmState, reply)).await?;
         }
     }
@@ -85,6 +98,16 @@ impl RequestPruningPointOverlaySnapshotFlow {
         loop {
             let msg = dequeue!(self.incoming_route, Payload::RequestPruningPointOverlaySnapshot)?;
             let pp = req_pruning_point(msg.pruning_point_hash)?;
+            // **The asker is charged before the work, not after the egress** (mainnet audit H-1);
+            // see `PalwGossipCenter::reserve_sidecar_serve` for why the reservation is the attempt
+            // floor rather than the worst case.
+            let peer = self.router.key();
+            if !self.ctx.palw_gossip().reserve_sidecar_serve(peer) {
+                debug!("[palw-sidecar] {peer} is out of serve allowance this window; answering not-found for {pp}");
+                let refused = PruningPointOverlaySnapshotMessage { found: false, overlay_snapshot: vec![] };
+                self.router.enqueue(make_message!(Payload::PruningPointOverlaySnapshot, refused)).await?;
+                continue;
+            }
             let session = self.ctx.consensus().unguarded_session();
             // The persisted snapshot is the as-of-current-pruning-point one; only serve it when
             // it matches the requested pruning point (otherwise the requester's c==v would fail).
@@ -96,6 +119,8 @@ impl RequestPruningPointOverlaySnapshotFlow {
                 },
                 _ => PruningPointOverlaySnapshotMessage { found: false, overlay_snapshot: vec![] },
             };
+            let served = reply.overlay_snapshot.len() as u64;
+            self.ctx.palw_gossip().charge_sidecar_serve(peer, served);
             self.router.enqueue(make_message!(Payload::PruningPointOverlaySnapshot, reply)).await?;
         }
     }
@@ -136,14 +161,40 @@ impl RequestPruningPointPalwStateFlow {
         loop {
             let msg = dequeue!(self.incoming_route, Payload::RequestPruningPointPalwState)?;
             let pp = req_pruning_point(msg.pruning_point_hash)?;
+            // **The asker is charged before the work, not after the egress** (mainnet audit H-1,
+            // the same ordering audit3 H6 imposed on the material lane). This loop had no budget,
+            // no cost accounting and no rate limit of any kind, and it answered forty bytes with a
+            // full PALW-state materialization and a multi-megabyte blob — reachable by any peer
+            // that completed the handshake on the p2p port, with no `--profile public-node-rpc`
+            // and no operator opt-in. The reservation is the attempt floor, so an honest IBD's one
+            // request per window is never the one refused; see `reserve_sidecar_serve`.
+            let peer = self.router.key();
+            if !self.ctx.palw_gossip().reserve_sidecar_serve(peer) {
+                debug!("[palw-sidecar] {peer} is out of serve allowance this window; answering not-found for {pp}");
+                let refused = PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![] };
+                self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
+                continue;
+            }
             let session = self.ctx.consensus().unguarded_session();
             // The state AND the declarations its classes were registered under (ADR-0067
             // Decision 6). A pruned-syncing peer never walks the blocks whose acceptance wrote
             // those rows, so without this it holds classes it cannot serve. Collected in the same
             // blocking hop, because two hops could straddle a reorg and hand the peer a state and
             // a declaration set from different chain points.
-            let (carriage, class_carriages) =
-                session.spawn_blocking(move |c| (c.pruning_point_palw_state(pp), c.palw_class_carriages_for_sync_v1())).await;
+            //
+            // **The declarations are read only when there is a state to send them with.** They
+            // used to be collected unconditionally and then thrown away in the `None` arm below,
+            // so a peer naming a hash this node never captured bought a SECOND full tip
+            // materialization for a field that was never populated.
+            let (carriage, class_carriages) = session
+                .spawn_blocking(move |c| match c.pruning_point_palw_state(pp) {
+                    Some(state) => {
+                        let declarations = c.palw_class_carriages_for_sync_v1();
+                        (Some(state), declarations)
+                    }
+                    None => (None, Vec::new()),
+                })
+                .await;
             let reply = match carriage {
                 Some(c) => PruningPointPalwStateMessage {
                     found: true,
@@ -158,6 +209,8 @@ impl RequestPruningPointPalwStateFlow {
                 },
                 None => PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![] },
             };
+            let served = (reply.palw_state.len() + reply.class_carriages.iter().map(|e| e.carriage.len()).sum::<usize>()) as u64;
+            self.ctx.palw_gossip().charge_sidecar_serve(peer, served);
             self.router.enqueue(make_message!(Payload::PruningPointPalwState, reply)).await?;
         }
     }

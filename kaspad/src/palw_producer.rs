@@ -40,6 +40,7 @@
 use std::sync::Arc;
 
 use kaspa_consensus_core::coinbase::MinerData;
+use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::palw_attempt_v2::{
     PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PALW_TICKET_NONCE_BUCKET_LOG2, PalwAttemptEnvelopeV2,
     PalwAttemptUnsignedV2, attempt_id_v2, challenge_v2, class_ticket_v3,
@@ -134,6 +135,12 @@ pub struct PalwProducerService {
     consensus_manager: Arc<ConsensusManager>,
     mining_manager: MiningManagerProxy,
     flow_context: Arc<FlowContext>,
+    /// **The network's own ruleset, for the fences a producer's own decisions turn on.** The panel
+    /// already holds it for exactly this reason; the producer resolved none, which is why it could
+    /// not tell a chain whose data-availability court is in force from one where it is dormant
+    /// (mainnet audit 2026-09-06, C-5). Read, never reconstructed: a second spelling of a fence is
+    /// a second network.
+    consensus_config: Arc<Config>,
     /// `None` disables production and says why at startup — a producer that cannot sign is not a
     /// producer, and finding that out at the first template is finding it out too late.
     keypair: Option<Box<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>>,
@@ -163,6 +170,15 @@ pub(crate) const PALW_RETAINED_MATERIAL_SUFFIX: &str = ".material";
 /// panel and cached under this name.
 pub(crate) const PALW_RETAINED_ANSWER_SUFFIX: &str = ".answer";
 
+/// **Is this chain's data-availability court in force at `daa_score`?** (ADR-0062; mainnet audit
+/// 2026-09-06, C-5.)
+///
+/// One spelling, read straight off the ruleset, so the producer's refusal and the panel's duty
+/// scan cannot disagree about whether a claim made now is defensible.
+pub(crate) fn palw_da_court_in_force_v1(config: &Config, daa_score: u64) -> bool {
+    config.params.palw_da_court.is_some_and(|fence| fence.is_active(daa_score))
+}
+
 /// **Where a claim's retained capture lives — the one place that decides.**
 ///
 /// The producer writes these files and the panel reads them back to answer a court about its own
@@ -186,6 +202,7 @@ impl PalwProducerService {
         consensus_manager: Arc<ConsensusManager>,
         mining_manager: MiningManagerProxy,
         flow_context: Arc<FlowContext>,
+        consensus_config: Arc<Config>,
     ) -> Self {
         let (keypair, key_seed) = match kaspa_pq_validator_core::load_validator_seed(&config.key_path) {
             Ok(seed) => (Some(Box::new(libcrux_ml_dsa::ml_dsa_87::generate_key_pair(seed))), Some(seed)),
@@ -239,6 +256,7 @@ impl PalwProducerService {
             consensus_manager,
             mining_manager,
             flow_context,
+            consensus_config,
             keypair,
             key_seed,
             bond,
@@ -699,8 +717,31 @@ impl PalwProducerService {
         // party is honest. The chain no longer charges anybody for that silence, but the producer
         // should know that its claims are, in practice, unpoliceable — and so should whoever reads
         // its logs before trusting the class.
+        //
+        // **And on a chain whose data-availability court is IN FORCE it is a refusal, not a
+        // warning** (mainnet audit 2026-09-06, C-5). Past `palw_da_court` an accusation naming one
+        // trace event is admissible against any non-terminal claim, and silence past the disclose
+        // window takes `claim.reserved` and the escrowed reward. Producing a claim this build
+        // cannot answer for is therefore not "unpoliceable", it is a funded, evidence-free loss the
+        // producer chose to underwrite. Not producing costs this node a block; producing costs it
+        // collateral it can never defend, so the fail-closed direction is the one that does not
+        // destroy the operator's bond. Once every shipped family answers (this release), the arm is
+        // unreachable for the classes this tree ships and fires only for a build genuinely holding
+        // no responder — which is the case it is for.
+        //
+        // The DAA is the TEMPLATE's, the one clock this function already resolves against: it is
+        // the score `trace_retention_daa` is set from below, and the score the claim this call is
+        // about will be folded at.
         if !backend.supports_court() {
             self.warn_once_no_court(facts.class_id);
+            if palw_da_court_in_force_v1(&self.consensus_config, template.block.header.daa_score) {
+                return Err(format!(
+                    "this node will not produce for class {}: its backend declares no court responder and this chain's \
+                     data-availability court is in force, so any claim produced here could be defaulted for the price of \
+                     one accusation with nothing this build can file in answer (ADR-0062 D3)",
+                    facts.class_id
+                ));
+            }
         }
         // **Through the seam.** The backend is the class's execution path; this
         // function no longer knows which family it is producing for, which is what lets a second
@@ -916,5 +957,43 @@ mod attempt_lane_tests {
         // The receipt lane is a different producer path (`produce_one_receipt`), so this one must
         // not claim it.
         assert!(!template_declares_an_attempt_lane(POW_ALGO_ID_PALW_RECEIPT_V3));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::palw_da_court_in_force_v1;
+    use kaspa_consensus_core::config::Config;
+    use kaspa_consensus_core::config::params::{devnet_shipped_params, palw_rc_shipped_params};
+
+    /// **A producer's refusal to make an undefendable claim turns on the CHAIN's fence, at the
+    /// boundary the chain uses** (ADR-0062 D3; mainnet audit 2026-09-06, C-5).
+    ///
+    /// The refusal above is unreachable in a unit test — it needs a template, a session and a
+    /// resolved backend — so what is pinned here is the whole of its condition: the one predicate
+    /// it and the panel's duty scan both read. The rule is that this is the ruleset's own
+    /// `palw_da_court`, resolved at the block's DAA and nowhere reconstructed, so a courtless
+    /// build is refused on exactly the blocks where an accusation against it would be admissible
+    /// and on no others. The boundary is the assertion that can fail: an off-by-one here is a
+    /// producer that mines one block it cannot defend, or refuses one it could.
+    ///
+    /// It cannot pass vacuously — testnet-11 schedules the court rather than arming it, so both
+    /// answers are demanded of the same ruleset.
+    #[test]
+    fn the_da_court_is_in_force_exactly_from_the_height_the_ruleset_schedules() {
+        let rc = Config::new(palw_rc_shipped_params());
+        let scheduled = rc.params.palw_da_court.expect("testnet-11 schedules the data-availability court").daa_score();
+        assert!(scheduled > 0, "a court armed from genesis would make the boundary below untestable");
+        assert!(!palw_da_court_in_force_v1(&rc, scheduled - 1), "the last block before the flag day is not past it");
+        assert!(palw_da_court_in_force_v1(&rc, scheduled), "the flag day itself is past the flag day");
+        assert!(palw_da_court_in_force_v1(&rc, u64::MAX), "and every block after it");
+
+        // Devnet arms no data-availability court, so nothing there is refused for want of a
+        // responder — the predicate must be false at every height, not merely at low ones.
+        let devnet = Config::new(devnet_shipped_params());
+        assert!(devnet.params.palw_da_court.is_none(), "devnet's data-availability court is deliberately dormant");
+        for daa in [0u64, 1, scheduled, u64::MAX] {
+            assert!(!palw_da_court_in_force_v1(&devnet, daa), "devnet has no data-availability court at DAA {daa}");
+        }
     }
 }

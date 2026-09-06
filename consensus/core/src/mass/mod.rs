@@ -60,7 +60,29 @@ pub fn transaction_output_estimated_serialized_size(output: &TransactionOutput) 
 
 /// Returns the UTXO storage "plurality" for this script public key.
 /// i.e., how many 100-byte "storage units" it occupies.
-/// The choice of 100 bytes per unit ensures that all standard SPKs have a plurality of 1.
+///
+/// **Upstream's invariant does NOT hold on this fork and the line that asserted it has been
+/// removed** (mainnet audit C-4, 2026-09-06). Upstream reads "the choice of 100 bytes per unit
+/// ensures that all standard SPKs have a plurality of 1", which is what made `sum_ins >=
+/// ins_plurality` hold inside [`calc_storage_mass`]. ADR-0008 widened the outpoint tx id to
+/// `Hash64`, which put the fixed base at 95 of those 100 bytes, so a plurality of 1 now needs a
+/// script of at most FIVE bytes and:
+///
+/// * the sole standard PQ send template (`P2PKH-ML-DSA-87`, 69 bytes) has plurality **2**;
+/// * `EvmDepositLock` (108 bytes) has plurality **3**.
+///
+/// Two consequences that callers must not re-derive from the deleted sentence:
+///
+/// 1. `sum_ins < ins_plurality` is REACHABLE (two 1-sompi inputs), so every divisor in
+///    [`calc_storage_mass`] is checked and the function returns `None` there. It documents that
+///    return as "incomputable … can be considered too high"; the caller rejects.
+/// 2. KIP-0009's relaxed formula (`|O| = 1` or `|I| = 1` or `|O| = |I| = 2`) is stated in
+///    PLURALITY, so on this network it covers exactly one shape — one standard input, one
+///    standard output. A 1-in/2-out pay-and-change, which upstream priced on the relaxed branch,
+///    is priced here on the arithmetic branch. That is a pricing regime this fork inherited
+///    rather than chose; it is pinned by
+///    `every_standard_pq_utxo_has_plurality_two_and_bounds_the_relaxed_branch` and must not be
+///    changed without a decision, because changing it re-prices every transaction on the chain.
 pub fn utxo_plurality(spk: &ScriptPublicKey) -> u64 {
     /// A constant representing the number of bytes used by the fixed parts of a UTXO.
     const UTXO_CONST_STORAGE: usize =
@@ -73,9 +95,11 @@ pub fn utxo_plurality(spk: &ScriptPublicKey) -> u64 {
         + 8 // entry spk len
     ;
 
-    // The fixed base is now 95 bytes (64-byte Hash64 outpoint tx_id + 31 bytes of other fixed fields).
-    // kaspa-pq has no 33-byte "standard" SPKs (PQ public keys are far larger), so the plurality is
-    // effectively driven by the script length.
+    // The fixed base is 95 bytes (64-byte Hash64 outpoint tx_id + 31 bytes of other fixed fields),
+    // so a plurality of 1 requires a script of at most 5 bytes. kaspa-pq has no 33-byte "standard"
+    // SPKs (PQ public keys are far larger) and no 5-byte ones either, so EVERY standard UTXO on
+    // this network occupies at least two storage units. See the doc block above for what that
+    // costs inside `calc_storage_mass`.
     const UTXO_UNIT_SIZE: usize = 100;
 
     (UTXO_CONST_STORAGE + spk.script().len()).div_ceil(UTXO_UNIT_SIZE) as u64
@@ -338,7 +362,8 @@ impl MassCalculator {
 /// indicates that the mass is incomputable and can be considered too high.
 pub fn calc_storage_mass(
     is_coinbase: bool,
-    inputs: impl ExactSizeIterator<Item = UtxoCell> + Clone,
+    // `mut` for the checked `try_fold` on the arithmetic branch below; the signature is unchanged.
+    mut inputs: impl ExactSizeIterator<Item = UtxoCell> + Clone,
     mut outputs: impl Iterator<Item = UtxoCell>,
     storm_param: u64,
 ) -> Option<u64> {
@@ -359,8 +384,12 @@ pub fn calc_storage_mass(
         (0u64, 0u64), // (accumulated plurality, accumulated harmonic)
         |(acc_plurality, acc_harm), UtxoCell { plurality, amount }| {
             Some((
-                acc_plurality + plurality, // represents in-memory bytes, cannot overflow
-                acc_harm.checked_add(storm_param.checked_mul(plurality)?.checked_mul(plurality)? / amount)?,
+                acc_plurality.checked_add(plurality)?,
+                // `checked_div`, not `/`: a zero output value is refused on the consensus path by
+                // `check_transaction_output_value_ranges` (`TxRuleError::TxOutZero`), but this is a
+                // `pub fn` the wallet and the WASM SDK call with caller-supplied values, and the
+                // two `checked_mul`s beside it already say what the answer to an uncomputable term is.
+                acc_harm.checked_add(storm_param.checked_mul(plurality)?.checked_mul(plurality)?.checked_div(amount)?)?,
             ))
         },
     )?;
@@ -388,10 +417,19 @@ pub fn calc_storage_mass(
     };
 
     if relaxed_formula_path {
-        // Each input i contributes C · p(i)^2 / amount(i)
-        let harmonic_ins = inputs
-            .map(|UtxoCell { plurality, amount }| storm_param * plurality * plurality / amount) // we assume no overflow (see verify_utxo_plurality_limits)
-            .fold(0u64, |total, current| total.saturating_add(current));
+        // Each input i contributes C · p(i)^2 / amount(i).
+        //
+        // CHECKED for the arithmetic branch's reason, one level weaker: `verify_utxo_plurality_limits`
+        // bounds `C · p²` only for entries a SHIPPED PRESET can hold (it iterates `NetworkType`), and
+        // this is a `pub fn` whose `UtxoCell`s are also built from caller-supplied values by
+        // `wallet/core/src/wasm/tx/mass.rs` (`calculateStorageMass`), `wallet/pskt`, and the panel's
+        // carrier sizer. An `amount` of 0 divides by zero on every one of those paths, and
+        // `overflow-checks = true` makes the multiply a panic too.
+        let mut harmonic_ins = 0u64;
+        for UtxoCell { plurality, amount } in inputs {
+            let term = storm_param.checked_mul(plurality)?.checked_mul(plurality)?.checked_div(amount)?;
+            harmonic_ins = harmonic_ins.saturating_add(term);
+        }
 
         // max(0, harmonic_outs - harmonic_ins)
         return Some(harmonic_outs.saturating_sub(harmonic_ins));
@@ -399,14 +437,37 @@ pub fn calc_storage_mass(
 
     // Otherwise, we calculate the arithmetic portion for inputs:
     // (ins_plurality, sum_ins) =>  (Σ plurality, Σ amounts)
-    let (ins_plurality, sum_ins) =
-        inputs.fold((0u64, 0u64), |(acc_plur, acc_amt), UtxoCell { plurality, amount }| (acc_plur + plurality, acc_amt + amount));
+    //
+    // **CHECKED, not bare `+` and `/`** (mainnet audit C-4, 2026-09-06). `utxo_plurality` sums
+    // `UTXO_CONST_STORAGE` to 95 of the 100 bytes in a storage unit — the 64-byte `Hash64`
+    // outpoint of ADR-0008 — so every standard PQ SPK has plurality >= 2 and `sum_ins <
+    // ins_plurality` is reachable with two 1-sompi inputs. `mean_ins` then truncates to 0 and
+    // `storm_param / mean_ins` divides by zero. Rust integer division by zero panics
+    // unconditionally; `kaspa_core::panic`'s hook runs at raise time and calls `process::exit(1)`;
+    // and this function is reached from `check_mass_commitment` during UTXO validation of a block
+    // that has ALREADY passed body validation in isolation (the block-level cap sums the
+    // *committed* mass, which the attacker sets small). A bare `/` here is therefore a remote,
+    // persistent, whole-network liveness kill on the base money path.
+    //
+    // `None` is this function's own documented contract — "the mass is incomputable and can be
+    // considered too high" — and the caller maps it to `TxRuleError::MassIncomputable` and
+    // rejects. Refusing is the CONSERVATIVE direction, not a guess: in this regime the exact
+    // term the integer form approximates is `C · |I|² / Σ amounts`, and Σ outputs <= Σ inputs <
+    // |I|, so every output amount is below `|I|` and `harmonic_outs >= C / |I|` — orders of
+    // magnitude above `max_block_mass`. Computing that exact term instead would change the
+    // rounding of every arithmetic-path transaction on the network; that is a change to what is
+    // priced, i.e. a decision, and deliberately not made here.
+    let (ins_plurality, sum_ins) = inputs.try_fold((0u64, 0u64), |(acc_plur, acc_amt), UtxoCell { plurality, amount }| {
+        Some((acc_plur.checked_add(plurality)?, acc_amt.checked_add(amount)?))
+    })?;
 
-    // mean_ins = (Σ amounts) / (Σ plurality)
-    let mean_ins = sum_ins / ins_plurality;
+    // mean_ins = (Σ amounts) / (Σ plurality). `None` when a caller passed no inputs at all —
+    // consensus refuses that in isolation (`TxRuleError::NoTxInputs`), but this is a `pub fn` the
+    // wallet, the PSKT extractor and the WASM SDK also call.
+    let mean_ins = sum_ins.checked_div(ins_plurality)?;
 
     // arithmetic_ins:  C · (|I| / A(I)) = |I| · (C / mean_ins)
-    let arithmetic_ins = ins_plurality.saturating_mul(storm_param / mean_ins);
+    let arithmetic_ins = ins_plurality.saturating_mul(storm_param.checked_div(mean_ins)?);
 
     // max(0, harmonic_outs - arithmetic_ins)
     Some(harmonic_outs.saturating_sub(arithmetic_ins))
@@ -447,6 +508,66 @@ mod tests {
         // Assert the UTXO_CONST_STORAGE=95, UTXO_UNIT_SIZE=100 constants
         assert!(utxo_plurality(&ScriptPublicKey::from_vec(0, vec![1; (UTXO_UNIT_SIZE - UTXO_CONST_STORAGE) as usize])) == 1);
         assert!(utxo_plurality(&ScriptPublicKey::from_vec(0, vec![1; (UTXO_UNIT_SIZE - UTXO_CONST_STORAGE + 1) as usize])) == 2);
+    }
+
+    /// **`calc_storage_mass` may return `None`; it may not divide by zero.**
+    ///
+    /// The rule is the function's own documented contract — "a `None` return indicates that the
+    /// mass is incomputable and can be considered too high" — asserted over EVERY divisor in both
+    /// of its branches, not over the one the audit happened to reach. On this fork
+    /// `utxo_plurality` puts every standard PQ SPK at plurality >= 2, so `sum_ins <
+    /// ins_plurality` (hence `mean_ins == 0`) is reachable with two 1-sompi inputs. Before the
+    /// fix each case below panicked, and `kaspa_core::panic` turns a panic inside block
+    /// validation into `process::exit(1)` on every node that validates the block.
+    #[test]
+    fn calc_storage_mass_refuses_every_degenerate_divisor_instead_of_exiting() {
+        let c = STORAGE_MASS_PARAMETER;
+        let pq = UtxoCell::new(2, 1); // a standard PQ UTXO holding 1 sompi
+
+        // (a) THE AUDIT'S CASE. Two dust inputs (|I| = 4, Σ = 2) and one dust output: the relaxed
+        //     branch is unreachable, `harmonic_outs` computes, `mean_ins` is 0.
+        assert_eq!(calc_storage_mass(false, [pq, pq].into_iter(), [pq].into_iter(), c), None);
+        // (b) the same with a larger output, so the escape is provably the INPUT branch and not
+        //     an incidental `checked_mul` failure above it.
+        assert_eq!(calc_storage_mass(false, [pq, pq].into_iter(), [UtxoCell::new(2, 2)].into_iter(), c), None);
+        // (c) no inputs at all: `ins_plurality == 0`, the 0/0 on the same line.
+        assert_eq!(calc_storage_mass(false, std::iter::empty(), [pq].into_iter(), c), None);
+        // (d) a zero output amount, on the harmonic-outputs pass.
+        assert_eq!(calc_storage_mass(false, [pq].into_iter(), [UtxoCell::new(2, 0)].into_iter(), c), None);
+        // (e) a zero input amount, on the relaxed (harmonic-inputs) branch — 1 in, 1 out.
+        assert_eq!(calc_storage_mass(false, [UtxoCell::new(2, 0)].into_iter(), [pq].into_iter(), c), None);
+
+        // …and the non-degenerate neighbour still computes, so the guard is a floor and not a wall.
+        let funded = UtxoCell::new(2, SOMPI_PER_KASPA);
+        assert!(calc_storage_mass(false, [funded, funded].into_iter(), [funded].into_iter(), c).is_some());
+    }
+
+    /// **The plurality this fork's UTXO layout actually produces, and the KIP-0009 branch it
+    /// leaves reachable.** Pinned rather than repaired (mainnet audit C-4, 2026-09-06): the
+    /// arithmetic branch is only reachable for ordinary transactions BECAUSE of this, and
+    /// re-deriving the relaxed predicate in storage units would re-price every transaction on
+    /// the chain, which is a decision and not a repair. This test exists so the gap can neither
+    /// widen nor close silently.
+    #[test]
+    fn every_standard_pq_utxo_has_plurality_two_and_bounds_the_relaxed_branch() {
+        let spk = crate::dns_finality::p2pkh_mldsa87_spk(&[0x11u8; 64]);
+        assert_eq!(spk.script().len(), 69, "the sole standard PQ send template (ADR-0019 §8)");
+        assert_eq!(utxo_plurality(&spk), 2, "95 fixed bytes + a 69-byte script over a 100-byte unit");
+
+        // Upstream's deleted invariant, stated as the boundary it actually sits at: a plurality-1
+        // SPK needs a script of at most five bytes.
+        assert_eq!(utxo_plurality(&ScriptPublicKey::from_vec(0, vec![1u8; 5])), 1);
+        assert_eq!(utxo_plurality(&ScriptPublicKey::from_vec(0, vec![1u8; 6])), 2);
+        assert_eq!(utxo_plurality(&ScriptPublicKey::from_vec(0, vec![1u8; 108])), 3, "EvmDepositLock");
+
+        // The relaxed branch's three conditions are stated in PLURALITY (`outs_plurality == 1`,
+        // `ins_plurality == 1`, `outs_plurality == 2 && ins_plurality == 2`). At plurality 2:
+        //   * no standard output can make |O| = 1, and no standard input |I| = 1;
+        //   * TWO standard outputs already give |O| = 4, past the `|O| = |I| = 2` case.
+        // So exactly one shape — one standard input, one standard output — is relaxed here.
+        let p = utxo_plurality(&spk);
+        assert!(p > 1, "|O| = 1 and |I| = 1 are unreachable for a standard PQ UTXO");
+        assert!(2 * p > 2, "two standard outputs already exceed the |O| = |I| = 2 relaxed case");
     }
 
     #[derive(Debug)]

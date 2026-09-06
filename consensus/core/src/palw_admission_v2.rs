@@ -264,14 +264,20 @@ pub fn check_palw_producer_entitlement_v2_with_bootstrap(
 ///
 /// Returns the attempt id — the identity every accepted consumer keys on — so a caller that
 /// admits and then applies cannot recompute a different one in between.
+///
+/// `boundary_budget` is `Params::palw_epoch_boundary_budget` resolved at this block's DAA — see
+/// item 7. An explicit argument rather than a field on `PalwAdmissionParamsV2` because that struct
+/// is borsh-serialised into `palw_ruleset_id_v2`: a value beside the fence would move every
+/// fingerprint on every network, including the two the fence exists to leave alone.
 pub fn check_palw_attempt_admission_v2(
     state: &PalwChainStateV2,
     state_params: &PalwStateParamsV2,
     admission: &PalwAdmissionParamsV2,
     ctx: &PalwBlockContextV2,
     envelope: &PalwAttemptEnvelopeV2,
+    boundary_budget: bool,
 ) -> Result<Hash64, PalwAdmissionV2Error> {
-    check_palw_attempt_admission_v2_with_bootstrap(state, state_params, admission, ctx, envelope, None)
+    check_palw_attempt_admission_v2_with_bootstrap(state, state_params, admission, ctx, envelope, None, boundary_budget)
 }
 
 /// [`check_palw_attempt_admission_v2`] with ADR-0064's mergeset bond view. See
@@ -291,6 +297,7 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     ctx: &PalwBlockContextV2,
     envelope: &PalwAttemptEnvelopeV2,
     bootstrap_bond: Option<&crate::palw_state_v2::PalwBondStateV2>,
+    boundary_budget: bool,
 ) -> Result<Hash64, PalwAdmissionV2Error> {
     let attempt = &envelope.attempt;
 
@@ -359,10 +366,31 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     //    own per-class retarget, which is the instrument sized for it.
     if attempt.class_id != state_params.base_class_id() {
         let epoch_index = ctx.daa_score / state_params.epoch_length();
-        let budgets = state
-            .epoch_budgets()
-            .filter(|b| b.epoch_index == epoch_index)
-            .ok_or(PalwAdmissionV2Error::EpochBudgetUnspecified(attempt.class_id))?;
+        // **ADR-0045 Decision 2's boundary sentence** (mainnet audit 2026-09-06, M-2): "Admission
+        // reads the snapshot; for the crossing block itself (whose apply has not happened yet) it
+        // derives from the parent state — the same pure function over the same inputs."
+        //
+        // The snapshot is stamped with the epoch it caps, and at a boundary `ctx.daa_score` is in
+        // the NEXT one — the child's score against the parent's table. Without the second half of
+        // that sentence every non-floor attempt at every boundary was `EpochBudgetUnspecified`,
+        // which the processor turns into a permanently orphaned chain block and, for everything it
+        // merged, a lost claim: the fold's own `ensure_epoch_budgets` runs at step 3b and would
+        // have admitted them, so the pre-check was refusing what the transition accepts.
+        //
+        // `boundary_budget` is `Params::palw_epoch_boundary_budget` resolved at this block —
+        // `false` on every shipped preset, where the behaviour is byte-identical to before the
+        // field existed. It is a fence and not a bug fix because past it a chain accepts a block a
+        // build before it disqualifies.
+        let derived;
+        let budgets = match state.epoch_budgets().filter(|b| b.epoch_index == epoch_index) {
+            Some(stored) => stored,
+            None if boundary_budget => {
+                derived = crate::palw_state_v2::palw_epoch_budgets_for_v2(state, state_params, epoch_index)
+                    .ok_or(PalwAdmissionV2Error::EpochBudgetUnspecified(attempt.class_id))?;
+                &derived
+            }
+            None => return Err(PalwAdmissionV2Error::EpochBudgetUnspecified(attempt.class_id)),
+        };
         let budget =
             *budgets.budget_blocks.get(&attempt.class_id).ok_or(PalwAdmissionV2Error::EpochBudgetUnspecified(attempt.class_id))?;
         let produced = match state.epoch_counter(&attempt.class_id) {
@@ -587,6 +615,7 @@ pub fn check_palw_attempt_admission_full_v2<V>(
     daa_score: u64,
     envelope: &PalwAttemptEnvelopeV2,
     verify_mldsa87: V,
+    boundary_budget: bool,
 ) -> Result<Hash64, PalwAdmissionV2Error>
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
@@ -604,6 +633,7 @@ where
         envelope,
         verify_mldsa87,
         None,
+        boundary_budget,
     )
 }
 
@@ -626,6 +656,7 @@ pub fn check_palw_attempt_admission_full_v2_with_bootstrap<V>(
     envelope: &PalwAttemptEnvelopeV2,
     verify_mldsa87: V,
     bootstrap_bond: Option<&crate::palw_state_v2::PalwBondStateV2>,
+    boundary_budget: bool,
 ) -> Result<Hash64, PalwAdmissionV2Error>
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
@@ -633,7 +664,8 @@ where
     envelope.validate_stateless_v2(network_domain, pre_pow_hash, timestamp, nonce)?;
     envelope.validate_signature_v2(verify_mldsa87)?;
     check_palw_attempt_da_pins_v1(state_params, &envelope.attempt, daa_score)?;
-    let attempt_id = check_palw_attempt_admission_v2_with_bootstrap(state, state_params, admission, ctx, envelope, bootstrap_bond)?;
+    let attempt_id =
+        check_palw_attempt_admission_v2_with_bootstrap(state, state_params, admission, ctx, envelope, bootstrap_bond, boundary_budget)?;
     // The anchor is derived HERE, from the header, after the stateless list has agreed that the
     // carried domain IS this network's and the carried challenge IS this position's — so it names
     // the job this header was paid for by, and the attempt has had no say in it (ADR-0072).
@@ -688,7 +720,7 @@ mod tests {
         envelope: &PalwAttemptEnvelopeV2,
     ) -> Result<Hash64, PalwAdmissionV2Error> {
         check_palw_attempt_da_pins_v1(state_params, &envelope.attempt, ctx.daa_score)?;
-        let id = check_palw_attempt_admission_v2(state, state_params, admission, ctx, envelope)?;
+        let id = check_palw_attempt_admission_v2(state, state_params, admission, ctx, envelope, false)?;
         check_palw_class_lottery_v3(state, &envelope.attempt, anchor_of(envelope))?;
         Ok(id)
     }
@@ -842,7 +874,7 @@ mod tests {
     }
 
     fn admit(state: &PalwChainStateV2, c: &PalwBlockContextV2, env: &PalwAttemptEnvelopeV2) -> Result<Hash64, PalwAdmissionV2Error> {
-        check_palw_attempt_admission_v2(state, &state_params(), &admission_params(), c, env)
+        check_palw_attempt_admission_v2(state, &state_params(), &admission_params(), c, env, false)
     }
 
     fn apply_attempt(state: &PalwChainStateV2, c: &PalwBlockContextV2, env: &PalwAttemptEnvelopeV2) -> PalwChainStateV2 {
@@ -888,6 +920,7 @@ mod tests {
             101,
             &foreign,
             always_valid,
+            false,
         )
         .expect_err("a foreign key on someone else's bond must not admit");
         assert_eq!(err, PalwAdmissionV2Error::BondKeyMismatch);
@@ -911,6 +944,7 @@ mod tests {
             101,
             &honest,
             strict,
+            false,
         )
         .expect_err("a garbage signature must not admit");
         assert!(matches!(err, PalwAdmissionV2Error::Stateless(PalwAttemptV2Error::SignatureInvalid)));
@@ -951,7 +985,7 @@ mod tests {
 
         // FENCE OFF: this is the deadlock. Nobody can produce, so nobody can register, so nobody
         // can produce.
-        let err = check_palw_attempt_admission_v2(&classes_only, &sp, &ap, &c, &env).unwrap_err();
+        let err = check_palw_attempt_admission_v2(&classes_only, &sp, &ap, &c, &env, false).unwrap_err();
         assert!(
             matches!(err, PalwAdmissionV2Error::BondMissing(k) if k == bond_key),
             "without the fence the chain is wedged shut, which is the state ADR-0064 exists for: {err:?}"
@@ -968,7 +1002,7 @@ mod tests {
             101,
             Default::default(),
         );
-        check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &env, Some(&declared))
+        check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &env, Some(&declared), false)
             .expect("one ordinary block carrying its own registration is how a stopped chain restarts");
 
         // **The narrowing.** The bootstrap record is not a skeleton key: a bond it declares is still
@@ -978,7 +1012,7 @@ mod tests {
         wrong_class.attempt.class_id = h64(999);
         wrong_class.attempt.challenge = challenge_v2(h64(NET), h64(PPH), TS, 1, h64(999), &wrong_class.attempt.executor_bond);
         let err =
-            check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &wrong_class, Some(&declared)).unwrap_err();
+            check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &wrong_class, Some(&declared), false).unwrap_err();
         assert!(
             matches!(err, PalwAdmissionV2Error::ClassMissing(_)),
             "only the BOND lookup moves; everything else still reads the parent state: {err:?}"
@@ -994,7 +1028,7 @@ mod tests {
             101,
             Default::default(),
         );
-        let err = check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &env, Some(&impostor)).unwrap_err();
+        let err = check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &env, Some(&impostor), false).unwrap_err();
         assert!(
             matches!(err, PalwAdmissionV2Error::BondKeyMismatch),
             "a mergeset-declared bond is still the bond it says it is: {err:?}"
@@ -1653,6 +1687,7 @@ mod tests {
             101,
             &env,
             |_k, _m, _s, _c| true,
+            false,
         )
         .expect_err("a mispositioned attempt fails statelessly");
         assert!(matches!(err, PalwAdmissionV2Error::Stateless(PalwAttemptV2Error::ChallengeMismatch)));
@@ -1669,7 +1704,7 @@ mod tests {
         // be what lets this through.
         let mut context = ctx(2, 101, 2);
         context.subsidy = 1_000_000_000;
-        check_palw_attempt_admission_v2(&base_state(), &params, &admission_params(), &context, &attempt(10, 1))
+        check_palw_attempt_admission_v2(&base_state(), &params, &admission_params(), &context, &attempt(10, 1), false)
             .expect("a dormant rule refuses nothing");
     }
 
@@ -1687,7 +1722,7 @@ mod tests {
         let mut context = ctx(2, 101, 2);
         context.subsidy = 1_000; // carve = 620; 100‰ of it is 62, and the claim reserves 50.
         let entrant = attempt_for_class(h64(2), 10, 1, bond_outpoint(2), vec![8; 4], op_id(0x22));
-        let err = check_palw_attempt_admission_v2(&two_class_state(), &params, &admission_params(), &context, &entrant)
+        let err = check_palw_attempt_admission_v2(&two_class_state(), &params, &admission_params(), &context, &entrant, false)
             .expect_err("50 does not back 620");
         match err {
             PalwAdmissionV2Error::EscrowExceedsCollateralBacking { escrow, reserved, required, backing_permille } => {
@@ -1707,7 +1742,7 @@ mod tests {
         context.subsidy = 1_000;
         // 13 pwu x 5 = 65 >= 62.
         let entrant = attempt_for_class(h64(2), 13, 1, bond_outpoint(2), vec![8; 4], op_id(0x22));
-        check_palw_attempt_admission_v2(&two_class_state(), &params, &admission_params(), &context, &entrant)
+        check_palw_attempt_admission_v2(&two_class_state(), &params, &admission_params(), &context, &entrant, false)
             .expect("65 backs 620 at 100‰");
     }
 
@@ -1731,7 +1766,7 @@ mod tests {
         assert_eq!(params.base_class_id(), h64(1), "class 1 is the floor in this fixture");
         let mut context = ctx(2, 101, 2);
         context.subsidy = 1_000; // carve 620; at 1000‰ the requirement is 620 and the claim reserves 50.
-        check_palw_attempt_admission_v2(&base_state(), &params, &admission_params(), &context, &attempt(10, 1))
+        check_palw_attempt_admission_v2(&base_state(), &params, &admission_params(), &context, &attempt(10, 1), false)
             .expect("the floor produces whatever the backing is set to, or the chain has no clock");
 
         // And the same attempt on an entrant class, at the same numbers, is refused — the gate is
@@ -1739,7 +1774,7 @@ mod tests {
         let entrant = attempt_for_class(h64(2), 10, 1, bond_outpoint(2), vec![8; 4], op_id(0x22));
         assert!(
             matches!(
-                check_palw_attempt_admission_v2(&two_class_state(), &params, &admission_params(), &context, &entrant),
+                check_palw_attempt_admission_v2(&two_class_state(), &params, &admission_params(), &context, &entrant, false),
                 Err(PalwAdmissionV2Error::EscrowExceedsCollateralBacking { .. })
             ),
             "an entrant class is still priced"
@@ -1751,7 +1786,7 @@ mod tests {
     #[test]
     fn a_block_with_no_subsidy_needs_no_backing() {
         let params = state_params().with_worker_carve_permille(620).unwrap().with_min_slash_permille_of_escrow(1000).unwrap();
-        check_palw_attempt_admission_v2(&base_state(), &params, &admission_params(), &ctx(2, 101, 2), &attempt(1, 1))
+        check_palw_attempt_admission_v2(&base_state(), &params, &admission_params(), &ctx(2, 101, 2), &attempt(1, 1), false)
             .expect("no escrow, no requirement");
     }
 
@@ -1858,7 +1893,7 @@ mod tests {
             },
             signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
         };
-        check_palw_attempt_admission_v2(&booted, &sp, &bundle.admission, &context, &floor)
+        check_palw_attempt_admission_v2(&booted, &sp, &bundle.admission, &context, &floor, false)
             .expect("the liveness floor produces with the backing fully armed, or the network has no clock");
 
         // And the exemption is doing that, not a zero escrow: at these numbers the requirement is
@@ -1878,5 +1913,157 @@ mod tests {
     fn a_backing_above_the_whole_escrow_is_refused_at_construction() {
         assert!(state_params().with_min_slash_permille_of_escrow(1001).is_err(), "a claim cannot risk more than it can earn");
         assert!(state_params().with_min_slash_permille_of_escrow(1000).is_ok(), "risking exactly the reward is legal");
+    }
+
+    // ---- ADR-0045 Decision 2's boundary sentence (mainnet audit 2026-09-06, M-2) ----
+
+    /// **The crossing block, refused below the fence and admitted past it.**
+    ///
+    /// The stored snapshot is stamped with the epoch it caps; at a boundary `ctx.daa_score` is in
+    /// the NEXT one, so item 7 looked up a table that does not exist and returned
+    /// `EpochBudgetUnspecified` — the child's score against the parent's table. The fold's own
+    /// `ensure_epoch_budgets` derives that table at step 3b and would have admitted the same
+    /// attempt, so the pre-check refused what the transition accepts, and the processor turns that
+    /// refusal into a permanently orphaned block plus a lost claim for everything it merged.
+    #[test]
+    fn a_boundary_block_is_refused_below_the_fence_and_admitted_past_it() {
+        let sp = state_params();
+        let state = two_class_state();
+        let entrant = attempt_for_class(h64(2), 1, 7, bond_outpoint(2), vec![8; 4], op_id(0x22));
+
+        // The premise, read off the state rather than assumed: the parent holds epoch 0's table
+        // and the block being admitted is in epoch 1.
+        assert_eq!(state.epoch_budgets().expect("the genesis fold froze a table").epoch_index, 0);
+        let crossing = ctx(2, sp.epoch_length(), 2);
+        assert_eq!(crossing.daa_score / sp.epoch_length(), 1, "the block crosses into the next epoch");
+
+        // Inside the epoch the table caps, both readings agree — the fence changes nothing there.
+        for boundary_budget in [false, true] {
+            check_palw_attempt_admission_v2(&state, &sp, &admission_params(), &ctx(2, 101, 2), &entrant, boundary_budget)
+                .expect("a block inside the stored epoch is admitted either way");
+        }
+
+        // Below the fence: the shipped refusal, by name.
+        let err = check_palw_attempt_admission_v2(&state, &sp, &admission_params(), &crossing, &entrant, false)
+            .expect_err("dormant, the crossing block's class has no budget");
+        assert_eq!(err, PalwAdmissionV2Error::EpochBudgetUnspecified(h64(2)));
+
+        // Past it: the ADR's own sentence — derived from the parent state, admitted.
+        check_palw_attempt_admission_v2(&state, &sp, &admission_params(), &crossing, &entrant, true)
+            .expect("past the fence the crossing block derives its own epoch's budget from the parent state");
+
+        // …and the floor was never refused for this: it is exempt from item 7 entirely, which is
+        // why the defect was a fairness and liveness cost rather than a halt.
+        check_palw_attempt_admission_v2(&base_state(), &sp, &admission_params(), &ctx(2, sp.epoch_length(), 2), &attempt(10, 1), false)
+            .expect("the liveness floor crosses a boundary under either reading");
+    }
+
+    /// **The ADR's claim, asserted rather than assumed: with growth off, the crossing block's
+    /// derivation IS the table the fold freezes** (ADR-0045 D2, "the same pure function over the
+    /// same inputs").
+    ///
+    /// This is the rule the repair rests on. A future edit that made admission read a different
+    /// census — or moved the fold's derivation to different inputs — fails here rather than
+    /// admitting blocks the transition then refuses.
+    #[test]
+    fn the_crossing_blocks_admission_and_the_folds_snapshot_agree_when_growth_is_off() {
+        let sp = state_params();
+        assert_eq!(sp.class_growth_permille(), 0, "the premise of this arm");
+        let parent = two_class_state();
+        let crossing = ctx(2, sp.epoch_length(), 2);
+        let epoch_index = crossing.daa_score / sp.epoch_length();
+
+        let derived = crate::palw_state_v2::palw_epoch_budgets_for_v2(&parent, &sp, epoch_index)
+            .expect("the parent's share table is not empty");
+        let (folded, _) = apply_palw_transition_v2(&parent, &sp, &crossing, &[], None).unwrap();
+        let stored = folded.epoch_budgets().expect("the fold froze the new epoch's table");
+
+        assert_eq!(stored.epoch_index, derived.epoch_index, "one epoch, one table");
+        assert_eq!(stored.budget_blocks, derived.budget_blocks, "entry for entry: admission and the fold read one function");
+    }
+
+    /// **The residual, pinned as a fact: with growth ON they can differ** (mainnet audit
+    /// 2026-09-06, M-2).
+    ///
+    /// The fold applies `apply_class_share_growth` (step 2c) and `apply_class_reclamation` (step
+    /// 2d) BEFORE `ensure_epoch_budgets` (step 3b), so the table it freezes is derived from a share
+    /// table the parent-state derivation has not seen. ADR-0045 D2 asserts the two "cannot
+    /// disagree"; on this tree they can, and closing that means moving a fold step or re-running
+    /// admission at step 4 — an economic-parameter change and a decision this repair did not take.
+    ///
+    /// The disagreement is bounded: one block's budget, at one boundary, for the classes growth
+    /// moved. If a later change makes them agree, this test fails and someone has to decide
+    /// whether that was intended.
+    #[test]
+    fn the_boundary_derivation_and_the_folds_snapshot_can_differ_when_growth_is_on() {
+        let sp = state_params().with_class_share_growth_v1(250).expect("250‰ is a legal growth rate");
+        assert!(sp.class_growth_permille() > 0, "the premise of this arm");
+
+        // The same two-class genesis, folded under the growth-bearing params.
+        let objects = vec![
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(1),
+                artifact_root: h64(11),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(500),
+                initial_target: u128::MAX,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(2),
+                artifact_root: h64(11),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(500),
+                initial_target: u128::MAX,
+                share_permille: 500,
+                activation_daa: 0,
+                admission: None,
+            },
+            PalwConsensusObjectV2::BondRegistered {
+                bond: PalwBondKeyV2(bond_outpoint(2)),
+                pubkey: vec![8; 4],
+                operator_pubkey: op_key(0x22),
+                collateral: 2_000_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            },
+        ];
+        let (genesis, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &ctx(1, 100, 1), &objects, None).unwrap();
+
+        // One block of production in the closing epoch, by the FLOOR and not the entrant: a span
+        // nobody produced in is silent by design, and a class that produced nothing is the one
+        // ADR-0054 moves a permille away from at the boundary. That move is what steps 2c/2d do
+        // ahead of step 3b, and it is the whole subject of this test.
+        let floor_block = attempt_for_class(h64(1), 1, 7, bond_outpoint(2), vec![8; 4], op_id(0x22));
+        let produced_ctx = ctx(2, 101, 2);
+        check_palw_attempt_admission_v2(&genesis, &sp, &admission_params(), &produced_ctx, &floor_block, false)
+            .expect("the floor produces inside its own epoch");
+        let (parent, _) = apply_palw_transition_v2(&genesis, &sp, &produced_ctx, &[], Some(&floor_block)).unwrap();
+
+        let crossing = ctx(3, sp.epoch_length(), 3);
+        let epoch_index = crossing.daa_score / sp.epoch_length();
+        let derived = crate::palw_state_v2::palw_epoch_budgets_for_v2(&parent, &sp, epoch_index).expect("a non-empty table");
+        let (folded, _) = apply_palw_transition_v2(&parent, &sp, &crossing, &[], None).unwrap();
+        let stored = folded.epoch_budgets().expect("the fold froze the new epoch's table");
+
+        // The premise, stated as a fact of the fold rather than assumed: the share table the
+        // stored budgets are derived from is NOT the one the pre-check read.
+        assert_ne!(
+            folded.class_shares_iter().map(|(id, share)| (*id, *share)).collect::<Vec<_>>(),
+            parent.class_shares_iter().map(|(id, share)| (*id, *share)).collect::<Vec<_>>(),
+            "the premise: ADR-0054's growth moved a share at this boundary"
+        );
+        assert_eq!(stored.epoch_index, derived.epoch_index, "the disagreement is about the numbers, not the epoch");
+        assert_ne!(
+            stored.budget_blocks, derived.budget_blocks,
+            "KNOWN GAP (ADR-0045 D2 vs this tree): with class_growth_permille = {} the fold's steps 2c/2d move the share \
+             table before step 3b derives the budgets, so the crossing block is admitted against a table the fold does not \
+             write. Bounded to one boundary; closing it moves a fold step or re-runs admission at step 4, which is a \
+             decision this repair did not take",
+            sp.class_growth_permille()
+        );
     }
 }

@@ -1447,18 +1447,28 @@ impl PalwPanelService {
     /// court cannot read) is re-drawn, bounded — a capture that yields fewer clear samples than
     /// asked is not verified either.
     fn fp_capture_samples_clear(
-        &self,
         backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
         capture: &[u8],
         prompt_token_ids: &[u32],
         step_leaf_count: u64,
         artifact_root: Hash64,
+        ladder: u64,
         claim: &Hash64,
     ) -> bool {
-        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_capped_v1};
         use rand::Rng;
         const SAMPLES: u64 = 4;
         const DRAWS_MAX: u64 = 32;
+        // **The seat grades a sample at the RULESET's step ladder** (ADR-0084 U-08, ADR-0080 W1b).
+        //
+        // This node's backends are built at `court.max_step_leaf_count()` (the SDK, `new`), and
+        // this check was made at the executor's `2^22` — so every capture of a class the chain
+        // admits above that was refused with `LeafCountOutOfRange` before a byte of evidence was
+        // read, landed in the redraw arm below, and burned all 32 draws while the seat filed
+        // nothing. The capped and uncapped names differ by a suffix and sit ten lines apart in
+        // `palw_step_refute`; `consensus/core/tests/palw_step_ladder_tree_guard.rs` is what keeps
+        // them from being confused again. The number arrives as an argument because the caller is
+        // the one holding `self.config.court`.
         if step_leaf_count == 0 {
             return false;
         }
@@ -1482,11 +1492,27 @@ impl PalwPanelService {
                     return false;
                 }
             };
-            match check_execution_step_refutation_v1(&refutation, &proven) {
+            match check_execution_step_refutation_capped_v1(&refutation, &proven, ladder) {
                 Err(PalwStepRefuteError::NoFaultFound) => cleared += 1,
                 Ok(_) => {
                     warn!(
                         "[{PALW_PANEL}] claim {claim}: leaf {index} of the served capture does not recompute — the court's business, not a receipt's"
+                    );
+                    return false;
+                }
+                // **A limit is not a verdict, and it is not a redraw either.** A capture priced
+                // above the ladder this node was handed is one this node cannot check at ANY leaf,
+                // so redrawing it costs a full job re-execution per draw (this class's retention is
+                // a fold: `refutation_for_free_prompt_index` re-runs the job with no cache) and
+                // buys thirty-two identical refusals. Said once, and the seat falls through to the
+                // caller's tail.
+                Err(PalwStepRefuteError::Leg(kaspa_consensus_core::palw_step_leg::PalwStepLegError::LeafCountOutOfRange {
+                    got,
+                    max,
+                })) => {
+                    warn!(
+                        "[{PALW_PANEL}] claim {claim}: the served capture is priced at {got} leaves and this node's ruleset ladder is \
+                         {max} — this seat cannot check it at any leaf, and says so once rather than redrawing"
                     );
                     return false;
                 }
@@ -2925,7 +2951,11 @@ impl PalwPanelService {
             // accuses: a seat that received nothing cannot tell withholding from transport loss,
             // and an accusation against an honest producer is a charge to the accuser.
             let da_duties = session.palw_da_duties_v2(vec![bond_key]);
-            let da_armed = self.consensus_config.params.palw_da_court.is_some_and(|fence| fence.is_active(current_daa));
+            // One spelling of "is the DA court in force", shared with the producer's refusal to
+            // make a claim it could not answer for (mainnet audit 2026-09-06, C-5): the seat that
+            // answers and the producer that decides whether answering is possible must not be able
+            // to disagree about which chain they are on.
+            let da_armed = crate::palw_producer::palw_da_court_in_force_v1(&self.consensus_config, current_daa);
             for duty in &da_duties {
                 if !da_armed || current_daa > duty.disclose_deadline_daa {
                     continue;
@@ -3045,7 +3075,16 @@ impl PalwPanelService {
                             && let Some(prompt_ids) =
                                 Self::fp_prompt_for_job(resolved.as_ref(), &material, self.config.prompt_ids_form)
                             && let Some(output_ids) = self.fp_committed_output_ids_v1(resolved.as_ref(), duty, &held)
-                            && let Some(ctx) = resolved.fp_job_context_v1(&material.job)
+                            // **The seat's ONE context per claim, built from what RAN** (ADR-0084
+                            // Decision 4, ADR-0074 Decision 7). The executed count is the answer's
+                            // length, and the line above has already made the chain's
+                            // `output_root` agree with it — so this is the context the claim was
+                            // committed under, whether the run reached its ceiling or stopped
+                            // early. Built at the CEILING it excluded every `EndOfGeneration`
+                            // claim from this lane by making its surplus interval indices
+                            // unopenable by construction.
+                            && let Some(ctx) = resolved
+                                .fp_job_context_for_executed_v1(&material.job, output_ids.len().min(u32::MAX as usize) as u32)
                             && let Some(verdict) = self
                                 .interval_seat_outcome_v1(
                                     &session,
@@ -3146,14 +3185,25 @@ impl PalwPanelService {
                                     );
                                     continue;
                                 };
-                                if !self.fp_capture_samples_clear(
-                                    backend.as_ref(),
-                                    &payload.capture,
-                                    &prompt_ids,
-                                    shape.step_leaf_count,
-                                    duty.artifact_root,
-                                    &duty.claim_id,
-                                ) {
+                                // **Off the panel's loop, like every other forward pass on this
+                                // lane.** Each of these draws re-executes the whole job on a fold
+                                // class (`refutation_for_free_prompt_index` →
+                                // `tiles_from_material_v1` → `dense_capture_from_fold_v1`, no
+                                // cache), and running them inline blocked this node's every other
+                                // duty for the duration. The FPM1 arm below has always used
+                                // `offload`; this one did not.
+                                let (capture_owned, prompt_owned, claim_owned) =
+                                    (payload.capture.clone(), prompt_ids.clone(), duty.claim_id);
+                                let (leaves, artifact_root, ladder) =
+                                    (shape.step_leaf_count, duty.artifact_root, self.config.court.max_step_leaf_count());
+                                let Ok((_backend, cleared)) = offload(backend, move |b| {
+                                    Self::fp_capture_samples_clear(b, &capture_owned, &prompt_owned, leaves, artifact_root, ladder, &claim_owned)
+                                })
+                                .await
+                                else {
+                                    continue;
+                                };
+                                if !cleared {
                                     continue;
                                 }
                                 self.persist_foreign_material(&duty.claim_id, &bytes);
@@ -4390,8 +4440,6 @@ impl PalwPanelService {
         use kaspa_consensus_core::palw_freeprompt_v3::{palw_fp_committed_output_ids_decode_v1, palw_fp_job_material_decode_v1};
         use misaka_palw_base0::fp_interval::{Base0FpIntervalOpeningV4, base0_fp_interval_close_annex_any_v1};
         let Some(job) = fp_job else { return Err(CloseFromServedV1::NotThisLane) };
-        let Some(ctx) = backend.fp_job_context_v1(&job.job) else { return Err(CloseFromServedV1::NotThisLane) };
-        let Some(wanted) = backend.fp_interval_of_leaf_v1(&ctx, leaf) else { return Err(CloseFromServedV1::NotThisLane) };
         let Some(prompt_ids) = Self::fp_prompt_for_job(backend, job, self.config.prompt_ids_form) else {
             return Err(CloseFromServedV1::Refused("a canonical claim whose material is not its own prompt".to_string()));
         };
@@ -4407,6 +4455,14 @@ impl PalwPanelService {
         }) else {
             return Err(CloseFromServedV1::Refused("no served answer carries this claim's ids".to_string()));
         };
+        // **The context is the run's, so the interval that owns the disputed leaf is the one that
+        // exists** (ADR-0084 Decision 4, ADR-0074 Decision 7). Built at the job's ceiling this
+        // located the leaf in a geometry an early-stopping claim never had; the ids are fetched
+        // first now because the executed count is their length.
+        let Some(ctx) = backend.fp_job_context_for_executed_v1(&job.job, output_ids.len().min(u32::MAX as usize) as u32) else {
+            return Err(CloseFromServedV1::NotThisLane);
+        };
+        let Some(wanted) = backend.fp_interval_of_leaf_v1(&ctx, leaf) else { return Err(CloseFromServedV1::NotThisLane) };
         let primary = openings.get(&(*claim, wanted)).into_iter().flatten().find(|bytes| {
             base0_fp_interval_close_annex_any_v1(bytes).is_some_and(|annex| annex.disputed.iter().any(|d| d.leaf_index == leaf))
         });
@@ -4505,7 +4561,20 @@ impl PalwPanelService {
                 |capture| backend.fp_committed_output_ids(capture),
                 self.config.prompt_ids_form,
             )?;
-            let recomputed = backend.fp_output_root_v1(&material.job, &ids)?;
+            // **The context is built from the ANSWER's own length, and the chain says whether that
+            // was right** (ADR-0084 Decision 1, ADR-0074 Decision 7).
+            //
+            // `fp_output_root_v1` builds it at the job's CEILING. That is the producer's question,
+            // not the run's answer: a claim that stopped early (`EndOfGeneration`, chain-legal by
+            // `validate_stateless_v3`) committed its root under a context carrying the EXECUTED
+            // count, so the ceiling context reproduces nothing and the seat rejected every honest
+            // early-stopping claim's ids — which took the whole ADR-0077 D8 interval lane with it,
+            // because the arm that calls this is gated on its `Some`. The commitment's own
+            // invariant is `output_token_ids.len() == decode_tokens_executed`, so the length IS
+            // the count, and comparing the rebuilt root against `duty.output_root` is the chain
+            // confirming it. Nothing here is believed: a wrong length gives a wrong root.
+            let ctx = backend.fp_job_context_for_executed_v1(&material.job, ids.len().min(u32::MAX as usize) as u32)?;
+            let recomputed = backend.output_root_for_context_v1(&ctx, &ids)?;
             if recomputed != duty.output_root {
                 warn!(
                     "[{PALW_PANEL}] claim {}: a served answer's ids recompute output root {recomputed} and the claim committed {} — \
@@ -4767,12 +4836,35 @@ impl PalwPanelService {
         // boundary is what makes that safe: the only state this claim's row check can find is the
         // one this claim's own recompute put there, seconds earlier and from this claim's ids.
         misaka_palw_base0::fp_recompute::base0_fp_seat_state_forget_v1();
-        // Both counts are the context's own — a free-prompt job's, hash-bound to the claim through
-        // `fp_job_id_v3`, or the anchor-derived job's — never read off a capture, which is the
-        // executor's to shape.
+        // Both counts are the context's own — a free-prompt job's, built from the answer the chain
+        // committed (ADR-0084 Decision 1), or the anchor-derived job's — never read off a capture,
+        // which is the executor's to shape.
+        //
+        // **And the context itself is re-priced against the chain before a single interval is
+        // drawn** (ADR-0074 Decision 5; mainnet audit 2026-09-06 C-3). Hash-binding the context to
+        // the job through `fp_job_id_v3` was believed to be enough and is not: the job id is one
+        // field of `PalwJobContextV2` and the two token counts are two others, so a producer may
+        // commit a fifty-million-leaf execution and SERVE a two-call job carrying the same id.
+        // The seat's interval count is then 1, the draw is `[0]`, and interval 0 is the only
+        // interval such a producer ran — two forward passes for the claim's whole quanta. The
+        // price is the one number the chain does hold, so it is what the context must reproduce.
         let counts =
             PalwFpChainCountsV1 { prompt_tokens: ctx.declared_prefill_tokens, decode_tokens_executed: ctx.exact_decode_tokens };
-        let draw = crate::palw_fp_seat::palw_fp_seat_draw_v1(backend.as_ref(), network_domain, duty, counts)?;
+        let priced = backend.fp_context_work_leaves_v1(ctx);
+        let Some(draw) =
+            crate::palw_fp_seat::palw_fp_seat_draw_at_the_claims_price_v1(backend.as_ref(), network_domain, duty, counts, priced)
+        else {
+            if kaspa_consensus_core::palw_backend::palw_claim_prices_work_v1(duty.work_leaves)
+                && priced.is_some_and(|leaves| leaves != duty.work_leaves)
+            {
+                warn!(
+                    "[{PALW_PANEL}] claim {}: the served job's context prices at {:?} leaves and the chain priced this claim at {} — \
+                     this is not the claim's job, and no interval of it is drawn (ADR-0074 Decision 5)",
+                    duty.claim_id, priced, duty.work_leaves
+                );
+            }
+            return None;
+        };
         let roots = PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor };
         // **The bound is the CLASS's, in the class's own cadence unit** (audit B, C-2). A
         // checkpoint leaf's `covered_decode_call` counts decode calls on a per-call class and
@@ -4797,6 +4889,29 @@ impl PalwPanelService {
             }
             let mut answered = false;
             for bytes in candidates {
+                // **One context per claim** (ADR-0084 Decision 4), enforced rather than assumed.
+                //
+                // The family's own verification binds the opening to the claim's execution root,
+                // its trace root, the job id and the price — and none of those pins the context's
+                // two token counts, which are the numbers this seat's draw was sized by. An
+                // opening whose binding carries a DIFFERENT context is evidence about a different
+                // execution than the one this seat sampled, however honestly it walks. Refused
+                // before a forward pass, and only on the free-prompt lane, where both contexts are
+                // the same function of the same job; the attempt lane's context comes from the
+                // block and is out of scope here.
+                if duty.free_prompt {
+                    match backend.fp_opening_job_context_v1(&bytes) {
+                        Some(carried) if carried == *ctx => {}
+                        _ => {
+                            warn!(
+                                "[{PALW_PANEL}] claim {}: an opening of interval {index} binds a context that is not the one this \
+                                 seat derived from the served job — not this claim's evidence (ADR-0084 Decision 4)",
+                                duty.claim_id
+                            );
+                            continue;
+                        }
+                    }
+                }
                 // What this opening says it resumes from. Every field of it is checked by the
                 // replay below; reading it first is only how the seat learns how far to run.
                 if let Some((checkpoint_index, covered, committed)) =
@@ -5413,5 +5528,47 @@ mod replay_rule_tests {
     fn a_root_that_does_not_reproduce_is_never_licensed() {
         assert!(!replay_licenses_v1(&roots(Some(30)), Hash64::from_u64_word(0xF), Hash64::from_u64_word(0x7), 0));
         assert!(!replay_licenses_v1(&roots(Some(30)), Hash64::from_u64_word(0xE), Hash64::from_u64_word(0x8), 30));
+    }
+}
+
+#[cfg(test)]
+mod court_responder_coverage_pin {
+    /// **PIN THE LIMITATION, NOT THE BEHAVIOUR: no shipped binary files a `CourtAttnRootClaimed`**
+    /// (ADR-0082 Decision 2; mainnet audit 2026-09-06, C-2/H-5).
+    ///
+    /// §10.6 gave a fused terminal a CLOCK — the responder owes the root claim, and silence past
+    /// the rung convicts it — on the premise that the responder can file one. That premise is what
+    /// `Params::palw_court_responder_coverage` exists to suspend, and the exemption is a
+    /// placeholder for a responder rather than a rule anybody wants: the whole k-ary dissection
+    /// responder (a panel arm, plus a backend verb producing the fused site's root, its arity, its
+    /// binding, its opened output tile and its operand openings) is a FEATURE nobody has built.
+    ///
+    /// This is the trigger to retire the exemption by activation. It scans the panel's own source
+    /// — the only file where a responder could live, since `palw_da_duties_v2` and
+    /// `palw_court_duties_v2` are both read here and nowhere else in this binary — and it goes RED
+    /// the day the identifier appears anywhere but the naming table. The day it does, the fix is
+    /// not to relax this test: it is to schedule `palw_court_responder_coverage` off, on a fresh
+    /// card or at a height, so the clock the ADR designed starts meaning what it says.
+    ///
+    /// A comment that mentions the object will also turn it red. That is the intended cost: the
+    /// question "can a party in the field actually make this move" must be re-answered by hand,
+    /// and it is cheap to answer. This module's own text is excluded, or the pin would be counting
+    /// itself.
+    #[test]
+    fn no_shipped_binary_files_a_court_attn_root_claimed() {
+        const MARKER: &str = "mod court_responder_coverage_pin";
+        let whole = include_str!("palw_panel.rs");
+        let panel = &whole[..whole.find(MARKER).expect("this module is in this file")];
+        let producer = include_str!("palw_producer.rs");
+        assert_eq!(
+            panel.matches("CourtAttnRootClaimed").count(),
+            2,
+            "the panel names ADR-0082's terminal move exactly twice — the match arm and the string it maps to — and              builds one nowhere. If that count moved because a RESPONDER now exists, retire              `Params::palw_court_responder_coverage` by activation rather than editing this number: the fence is only              correct while this is true."
+        );
+        assert_eq!(
+            producer.matches("CourtAttnRootClaimed").count(),
+            0,
+            "the producer does not file court moves at all; if it now does, the exemption above is a rule nobody chose"
+        );
     }
 }

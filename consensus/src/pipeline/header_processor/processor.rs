@@ -133,6 +133,13 @@ pub struct HeaderProcessor {
     /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset,
     /// which resolves to `PalwAttemptLaneV1::Unfenced` and leaves this gate exactly as it was.
     pub(super) palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0072 Decision 8 at the header stage** (mainnet audit, 2026-09-06 — C-1): the fence and
+    /// the state params it needs, resolved TOGETHER at construction so neither can be present
+    /// without the other, and so the header path holds one value rather than re-deriving it per
+    /// header. `None` on every shipped preset and on every network that is not `ConsensusV2`, which
+    /// leaves `check_palw_carriage_stateless` byte-identical to what it was.
+    pub(super) palw_attempt_header_pins:
+        Option<(kaspa_consensus_core::config::params::ForkActivation, kaspa_consensus_core::palw_state_v2::PalwStateParamsV2)>,
     /// ADR-0039 W4′: which rule this network orders candidate tips by. `BlueWorkOnly` on every
     /// shipped preset, cloned from `Params` at construction so the seam reads one value rather
     /// than re-deriving it per header.
@@ -239,6 +246,10 @@ impl HeaderProcessor {
             palw_block_commitment: params.palw_block_commitment,
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
             palw_attempt_activation: params.palw_attempt_activation,
+            palw_attempt_header_pins: params.palw_attempt_header_pins.and_then(|fence| match &params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some((fence, bundle.state.clone())),
+                _ => None,
+            }),
             palw_tip_order: params.palw_tip_order_v1(),
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             evm_activation_daa_score: params.evm_activation_daa_score,

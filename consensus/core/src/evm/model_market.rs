@@ -64,6 +64,23 @@ pub fn is_facade_shaped(address: &EvmAddress) -> bool {
 
 /// Actions an EVM block may queue; the 129th call reverts (Decision 5).
 pub const MAX_MARKET_ACTIONS_PER_EVM_BLOCK: usize = 128;
+
+/// **Actions ONE account may queue in one EVM block** (mainnet audit 2026-09-06, M-16/L-6).
+///
+/// Decision 5's 128 is a per-block bound and was the only one, so a single account could take every
+/// slot. The mempool is not the answer here and the audit checked: `mining/src/evm_mempool.rs`
+/// caps a sender at 256 txs and orders the template by effective tip, which makes MEMPOOL
+/// competition an ordinary fee auction — but `processor.rs` sources the executed set from
+/// `consensus_ordered_mergeset` (selected parent first, then ascending blue work), so ordering
+/// ACROSS payload blocks is consensus-determined, not fee-determined. An attacker who mines, or who
+/// buys placement in the selected parent's payload, occupies the budget without outbidding anyone.
+///
+/// 16 = `MAX_MARKET_ACTIONS_PER_EVM_BLOCK / 8`: eight distinct accounts must cooperate to fill a
+/// block, and no honest trader is plausibly making seventeen market moves in one block. Enforced
+/// the same way Decision 5's own bound is — a revert at the call, `TooManyActionsForAccount()` —
+/// so it is the same "user-input fault ⇒ tx revert, block valid" class and costs the caller its
+/// gas and nothing else.
+pub const MAX_MARKET_ACTIONS_PER_EVM_BLOCK_PER_ACCOUNT: usize = MAX_MARKET_ACTIONS_PER_EVM_BLOCK / 8;
 /// System gas one `MarketSettle` op charges the settling block (§4: the deposit claim's figure).
 pub const MARKET_SETTLE_GAS: u64 = 25_000;
 /// Gas the writer burns before emitting its log (Decision 5; Hyperliquid's ~25,000 as the
@@ -224,6 +241,12 @@ pub mod refusal {
     pub const SEED_TOO_SMALL: u8 = 11;
     /// ADR-0090: the line's class is frozen.
     pub const CLASS_CLOSED: u8 = 12;
+    /// **ADR-0042 Decision 10's payout queue is full** (mainnet audit 2026-09-06, M-10): the fold
+    /// would have to write this move's fee legs into `pending_payouts` past
+    /// `PALW_V2_MAX_PENDING_PAYOUTS`. Decision 6's own mechanism — the action is refused with a
+    /// reason and the caller's escrow is refunded at the settling block — applied to the queue.
+    /// The queue drains `PALW_V2_MAX_PAYOUTS_PER_BLOCK` rows a block, so it clears on its own.
+    pub const PAYOUT_QUEUE_FULL: u8 = 13;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -286,6 +309,19 @@ pub struct PalwEvmMarketFencesV1 {
     pub lines_active: bool,
     /// `Params::palw_model_evm` (ADR-0089 D9): the four addresses and the facades exist.
     pub evm_active: bool,
+}
+
+impl PalwEvmMarketFencesV1 {
+    /// **Is there a window to build at all?** (mainnet audit 2026-09-06, M-13.)
+    ///
+    /// ADR-0089 Decision 9: "below the fence the four addresses and the facades are empty
+    /// accounts". The registry reads (F010–F012) are ADR-0088's fence and the market reads
+    /// ADR-0087's, so a window exists exactly when one of the three is in force — and below all
+    /// three, building one is work no read precompile could ever serve. Spelled once, here, so the
+    /// consensus path and the RPC path cannot answer it differently.
+    pub fn any_active(&self) -> bool {
+        self.market_active || self.lines_active || self.evm_active
+    }
 }
 
 // ---- the view (Decision 2) ---------------------------------------------------------------------

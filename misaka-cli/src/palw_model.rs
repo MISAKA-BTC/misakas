@@ -23,6 +23,12 @@ use kaspa_rpc_core::api::rpc::RpcApi;
 
 const SOMPI_PER_MSK: u64 = 100_000_000;
 
+/// **How long a sell this tool signs stays good** (mainnet audit 2026-09-06, M-11): 600 DAA, which
+/// at the frozen 120 s cadence is about twenty hours — long enough for a carrier to be mined
+/// through a quiet spell, short enough that a copied payload is not a standing authority. Well
+/// under the chain's own ceiling (`PALW_MODEL_SELL_MAX_WINDOW_DAA_V1`), which acceptance enforces.
+const PALW_MODEL_SELL_WINDOW_DAA: u64 = 600;
+
 /// A line id — a class id names the class's founding line (ADR-0088 Decision 9).
 fn parse_line(line_id: &str) -> Result<kaspa_consensus_core::Hash64, CliError> {
     line_id
@@ -397,7 +403,21 @@ pub async fn sell(
     let units_in = positions
         .checked_mul(PALW_MODEL_POSITION_UNITS_V1)
         .ok_or_else(|| CliError::new(exit::GENERIC, "too many positions".to_string()))?;
-    let min_msk_out = min_msk_text.as_deref().map(parse_msk_amount).transpose()?.unwrap_or(0);
+    // **A floor of zero is a signature authorising a sale at any price** (mainnet audit
+    // 2026-09-06, M-11). ADR-0087 M5 makes `min_msk_out` the holder's only protection and the
+    // shipped tool defaulted it away. Required now: the holder states a floor or the tool does not
+    // sign.
+    let min_msk_out = match min_msk_text.as_deref() {
+        Some(text) => parse_msk_amount(text)?,
+        None => {
+            return Err(CliError::new(
+                exit::GENERIC,
+                "--min-msk is required: it is the floor your signature authorises, and a sell signed with a floor of 0 \
+                 authorises a sale at any price the curve happens to be at"
+                    .to_string(),
+            ));
+        }
+    };
     let key = ks.load_key()?;
     let holder = palw_model_holder_of_pubkey_v1(key.public_key());
     let nv = connect(ctx).await?;
@@ -435,13 +455,28 @@ pub async fn sell(
             format!("the curve pays {} now, under your floor of {}", msk(quote.fees.net), msk(min_msk_out)),
         ));
     }
-    let message = palw_model_sell_message_v1(&line, &holder, units_in, min_msk_out);
+    // ADR-0087 M8 (audit M-11): the signature is bound to this chain, to the position it is sold
+    // out of, and to a window that ends. `held` is the number this command already read from
+    // `getPalwModelPositions` above and checked against; the window is measured from the tip the
+    // node reported when this command connected, so the holder signs the window they were shown.
+    let not_after_daa = nv.virtual_daa.saturating_add(PALW_MODEL_SELL_WINDOW_DAA);
+    let message = palw_model_sell_message_v1(
+        crate::bond::network_domain(&nv),
+        &line,
+        &holder,
+        units_in,
+        min_msk_out,
+        held,
+        not_after_daa,
+    );
     let signature = key.sign_with_context(&message, PALW_MODEL_SELL_MLDSA87_CONTEXT).to_vec();
     let object = PalwConsensusObjectV2::ModelSell {
         line_id: line,
         holder,
         units_in,
         min_msk_out,
+        held_units: held,
+        not_after_daa,
         pubkey: key.public_key().to_vec(),
         signature,
     };

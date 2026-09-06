@@ -46,6 +46,21 @@
 //! | exposure lifetime | `max_claim_exposure_daa` = 7,200 DAA (RC) | [`crate::palw_fp_devnet_v3::PalwLatticeWindowsV1::max_claim_exposure_daa`] (`palw_fp_devnet_v3.rs:82`) | the segments of one answer are CONCURRENT, so the bond must carry N reservations at once against one `fp_max_exposure_ratio_permille` ceiling |
 //! | payout queue rows | one `pending_payouts` row per finalized claim | [`crate::palw_state_v2::PalwChainStateV2`] `pending_payouts` (`palw_state_v2.rs:2866`), written by `write_payout` (`:4325`) | N rows, and unlike the four rebuildable indices this one IS hashed into `state_root` (`:3213`) |
 //! | payout drain rate | [`crate::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK`] = 8 per block | `palw_state_v2.rs:233`, drained at `palw_state_v2.rs:4616` | **the row segmentation actually breaks.** The constant is sized by an explicit premise — *"Eight against at most one new claim per block: a backlog drains eight times faster than it can be created, so this bounds latency, not throughput"* — and N claims per answer is exactly the assumption's negation. At N ≥ 8 the queue stops draining faster than it fills |
+//!
+//! **The second writer, and the argument it owed** (mainnet audit 2026-09-06, M-10). ADR-0087's
+//! model market writes fee legs into the same `pending_payouts` map — up to two rows a buy, three a
+//! carrier sell — through `write_model_fee`, and the same three move functions are reached from BOTH
+//! the carrier lane and the ADR-0089 EVM lane, whose own budget is
+//! [`crate::evm::model_market::MAX_MARKET_ACTIONS_PER_EVM_BLOCK`] = 128 actions per block. So the
+//! premise "at most one new claim per block" was negated by a design that landed after this module
+//! was written, exactly as the warning below predicted, and this file was not updated.
+//!
+//! The argument it owes, now that it has one: the queue's growth is bounded by
+//! [`crate::palw_state_v2::PALW_V2_MAX_PENDING_PAYOUTS`], which every market move is measured
+//! against and refused by; and market rows are minted in the top 1/256 of the key space
+//! ([`crate::palw_state_v2::PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX`]) so they sort AFTER claim rows,
+//! which returns the drain's latency guarantee to the claims it was sized for. Neither the drain
+//! rate nor the coinbase output cap moved; the writer was bounded instead.
 //! | epoch budget | `budget_blocks`, denominated in **blocks** | [`crate::palw_state_v2::PalwEpochBudgetsV2`] (`:1713`), derived by [`crate::palw_state_v2::derive_epoch_budgets_v2`] (`:5159`) | not a leaf quantity in either direction: the derivation is `⌊tol‰ · E · s_c / (1000 · denom_c)⌋` and takes no pwu, no leaves and no claim count — *"Blocks, never pwu"* |
 //! | court close bytes | ≤ [`crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES`] (80 KiB) per dispute | [`crate::palw_class_admission_v2::derive_court_cost_v1`] (`palw_class_admission_v2.rs:255`) | **NOT 1/N.** ADR-0080 §1 measured the binding node as `attn[23] ffn_down`, whose operand width is the MODEL's `ffn_dim` and reads no history — a segment's close is the same size as the whole claim's |
 //! | claim state rows, HASHED | `claims` (`:2841`), `panels` (`:2842`), `court_sessions` (`:2843`), `pending_payouts` (`:2866`), `derived_artifacts` (`:2878`) | the `state_root` preimage, `palw_state_v2.rs:3190` | N rows in each, and each one changes the state root every node compares |
@@ -484,6 +499,20 @@ mod tests {
         assert_eq!(PALW_DERIVED_MAX_PER_CLAIM, 4, "four derivations per claim");
         assert_eq!(STAKE_ATTESTATION_SIG_LEN, 4_627, "one ML-DSA-87 signature");
         assert_eq!(PALW_V2_MAX_PAYOUTS_PER_BLOCK, 8, "the payout queue drains eight claims per block");
+        // **The queue's ceiling and its drain are one design, and this is what keeps them tied**
+        // (mainnet audit 2026-09-06, M-10). The ceiling exists because ADR-0087's market is a
+        // second writer into `pending_payouts`; the number the operator is accepting is the
+        // market-payout latency it implies, which is the quotient below. Moving either constant
+        // without the other silently changes that latency, so both are asserted here.
+        assert!(
+            crate::palw_state_v2::PALW_V2_MAX_PENDING_PAYOUTS % PALW_V2_MAX_PAYOUTS_PER_BLOCK == 0,
+            "the queue's ceiling is a whole number of drains"
+        );
+        assert_eq!(
+            crate::palw_state_v2::PALW_V2_MAX_PENDING_PAYOUTS / PALW_V2_MAX_PAYOUTS_PER_BLOCK,
+            128,
+            "a full queue drains in 128 blocks — the market-payout latency this design accepts"
+        );
 
         // **The two numbers every band edge in this census is a function of.** Read from a
         // shipped preset, not retyped: if a network re-prices free-prompt quanta, the cap edge

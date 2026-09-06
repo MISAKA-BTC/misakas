@@ -156,8 +156,14 @@ impl Mempool {
             // its exact script (`palw_model_sink_class_v1`), never by its shape. Found by the
             // devnet drill: the dust carve-out below was reached by no sink, because this check
             // refused the form first, and a carrier buy could never relay.
-            let is_model_sink =
-                kaspa_consensus_core::palw_model_market_v1::palw_model_sink_class_v1(&output.script_public_key).is_some();
+            //
+            // **Gated on the network declaring the market** (mainnet audit 2026-09-06, M-9). The
+            // carve-out was ungated on every network, so a node on testnet-11 or a carded mainnet —
+            // where `palw_model_market` is `None` and consensus refuses the form outright — relayed
+            // a transaction it knew consensus would reject, which is the exact rule the PQ-only
+            // carve-out above this one cites as its own reason to exist.
+            let is_model_sink = self.config.model_sink_relay_allowed
+                && kaspa_consensus_core::palw_model_market_v1::palw_model_sink_class_v1(&output.script_public_key).is_some();
             let output_rejected = if self.config.pq_only {
                 !output_class.is_pq_standard() && output_class != ScriptClass::EvmDepositLock && !is_model_sink
             } else {
@@ -188,7 +194,14 @@ impl Mempool {
         // ADR-0087 Decision 3: a model market's sink is unspendable BY DESIGN and carries the MSK a
         // buy pays into the curve; it is the one unspendable output that is not dust, and it is
         // recognised by its exact script, never by its shape.
-        if kaspa_consensus_core::palw_model_market_v1::palw_model_sink_class_v1(&transaction_output.script_public_key).is_some() {
+        //
+        // **The same gate the output-class carve-out above carries** (audit M-9): on a network that
+        // does not declare the market the sink is not a legal output at all, so calling it
+        // "not dust" would exempt a form consensus refuses. Both carve-outs are one rule and must
+        // be spelled once, in one condition, or the pair drifts.
+        if self.config.model_sink_relay_allowed
+            && kaspa_consensus_core::palw_model_market_v1::palw_model_sink_class_v1(&transaction_output.script_public_key).is_some()
+        {
             return false;
         }
         // Unspendable outputs are considered dust.
@@ -683,6 +696,83 @@ mod tests {
                 }
                 assert_eq!(res.is_ok(), test.is_standard, "ensuring transaction standard-ness is as expected");
             }
+        }
+    }
+
+    /// **ADR-0087 Decision 6 (mainnet audit 2026-09-06, M-9): the mempool's two sink carve-outs are
+    /// one rule, and it is the network's — not the script's.**
+    ///
+    /// "The mempool never relays a transaction that consensus will reject" is this file's own
+    /// standing rule, cited by the PQ-only carve-out three lines above the sink's. Both sink
+    /// carve-outs read the raw script with no gate at all, so a node on a network where
+    /// `palw_model_market` is `None` — every shipped preset — relayed a form consensus refuses
+    /// outright. The rule expressed here is the pair moving TOGETHER with the network's answer:
+    /// where the market is not declared, the sink is neither a relayable output class nor exempt
+    /// from dust; where it is, it is both.
+    #[test]
+    fn a_sink_is_relayed_only_where_the_network_declares_the_market() {
+        use kaspa_consensus_core::palw_model_market_v1::palw_model_sink_spk_v1;
+
+        let params: Params = NetworkType::Testnet.into();
+        let sink_spk = palw_model_sink_spk_v1(&kaspa_consensus_core::Hash64::from_u64_word(7));
+        // The production relay policy: PQ-only, exactly as the daemon configures it.
+        let mempool_with = |model_sink_relay_allowed: bool| {
+            let mut config = Config::build_default(params.target_time_per_block(), false, params.max_block_mass);
+            config.pq_only = true;
+            config.model_sink_relay_allowed = model_sink_relay_allowed;
+            Mempool::new(Arc::new(config), Arc::new(MiningCounters::default()))
+        };
+        let sink_tx = |value: u64| {
+            let input = TransactionInput::new(
+                TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(1), 1),
+                vec![0u8; 65],
+                MAX_TX_IN_SEQUENCE_NUM,
+                1,
+            );
+            let tx = Transaction::new(
+                TX_VERSION,
+                vec![input],
+                vec![TransactionOutput::new(value, sink_spk.clone())],
+                0,
+                SUBNETWORK_ID_NATIVE,
+                0,
+                vec![],
+            );
+            let mut mtx = MutableTransaction::from_tx(tx);
+            mtx.calculated_non_contextual_masses = Some(NonContextualMasses::new(1000, 1000));
+            mtx
+        };
+        // A value low enough that the ordinary dust rule would refuse it, so the assertion below is
+        // about the carve-out and not about the amount.
+        let dusty = TransactionOutput::new(1, sink_spk.clone());
+
+        let dormant = mempool_with(false);
+        let declares = mempool_with(true);
+
+        // Where the network does not declare the market, both halves are shut..
+        assert!(
+            matches!(
+                dormant.check_transaction_standard_in_isolation(&sink_tx(SOMPI_PER_KASPA)),
+                Err(NonStandardError::RejectOutputScriptClass(_, 0))
+            ),
+            "a dormant network must not relay a sink consensus refuses"
+        );
+        assert!(dormant.is_transaction_output_dust(&dusty), "the dust exemption is the same rule and moves with it");
+
+        // ..and where it does, both are open.
+        assert!(
+            declares.check_transaction_standard_in_isolation(&sink_tx(SOMPI_PER_KASPA)).is_ok(),
+            "a carrier buy must relay on a network that has the market"
+        );
+        assert!(!declares.is_transaction_output_dust(&dusty), "the sink is the one unspendable output that is not dust");
+
+        // The gate is the NETWORK's answer, not a property of the script: a look-alike OP_RETURN is
+        // refused on both, so turning the market on does not open a general OP_RETURN relay.
+        let mut other = vec![OpReturn, kaspa_txscript::opcodes::codes::OpData8];
+        other.extend_from_slice(b"MSKMDL02");
+        let not_sink = TransactionOutput::new(SOMPI_PER_KASPA, ScriptPublicKey::new(0, other.into()));
+        for mempool in [&dormant, &declares] {
+            assert!(mempool.is_transaction_output_dust(&not_sink), "an unspendable non-sink stays dust either way");
         }
     }
 }

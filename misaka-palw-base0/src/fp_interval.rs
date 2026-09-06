@@ -989,6 +989,31 @@ pub fn base0_fp_interval_opening_anchor_v1(opening_bytes: &[u8]) -> Option<(u32,
     Some((index, covered, root))
 }
 
+/// **The job context an opening's binding carries** (ADR-0084 Decision 4; mainnet audit
+/// 2026-09-06 C-3).
+///
+/// The verification below pins the binding's `job_id` against the claim's anchor and its
+/// `step_leaf_count` against the geometry and against the chain's price — and pins NEITHER token
+/// count. `PalwJobContextV2` carries `job_id`, `declared_prefill_tokens` and `exact_decode_tokens`
+/// as independent fields, so a producer may bind a wide context to a narrow job's id: the
+/// evidence is then honestly about the wide execution while the seat's interval draw is sized by
+/// the narrow job it was served, and interval 0 — the only one that draw can ever pick — is the
+/// cheapest interval the wide job has. This is what lets a caller compare the two contexts
+/// instead of trusting that one field implies the rest.
+///
+/// `None` for bytes that are not this family's opening; it decodes and reads a header and spends
+/// no forward pass.
+pub fn base0_fp_interval_opening_job_context_v1(
+    opening_bytes: &[u8],
+) -> Option<kaspa_consensus_core::palw_v2::PalwJobContextV2> {
+    let any = base0_fp_interval_opening_decode_any_v1(opening_bytes).ok()?;
+    Some(match &any {
+        Base0FpIntervalOpeningAnyV1::WithHistory(o) => o.binding.job_context.clone(),
+        Base0FpIntervalOpeningAnyV1::Recomputed(o) => o.binding.job_context.clone(),
+        Base0FpIntervalOpeningAnyV1::Digests(o) => o.binding.job_context.clone(),
+    })
+}
+
 /// **The state this seat already recomputed for the interval this opening is of**, if it has one
 /// (ADR-0082 Decision 9).
 ///
@@ -3450,6 +3475,76 @@ mod tests {
                 "interval {index} of an honest capture replays exactly against the seat's own leaves"
             );
         }
+    }
+
+    /// **A binding that carries another context is not this claim's evidence** (ADR-0084
+    /// Decision 4; mainnet audit 2026-09-06 C-3).
+    ///
+    /// Part (b) is what makes part (a) load-bearing. The existing verification pins the binding's
+    /// `job_id` against the claim's anchor and its `step_leaf_count` against the geometry, and
+    /// pins NEITHER token count — so a producer may bind a wide context to a narrow job's id, and
+    /// the field the seat's interval draw is sized by is not one the family's own check reads. The
+    /// accessor exists precisely because that comparison has to be made by the caller holding the
+    /// seat's context, and this test shows the check below answers a different question.
+    #[test]
+    fn a_binding_that_carries_another_context_is_not_this_claims_evidence() {
+        let (material, claim, ids, artifact) = floor_material(3, 4);
+        let binding = &material.0;
+        let interval = PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
+        let geometry = Base0FpIntervalGeometryV1::from_binding_v1(binding, interval).expect("a geometry");
+        let honest = base0_open_fp_interval_v1(
+            &material,
+            0,
+            &ids,
+            interval,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect("interval 0 opens");
+
+        // (a) the accessor returns the context the fixture actually ran under.
+        let read = base0_fp_interval_opening_job_context_v1(&honest).expect("an opening of this family carries its context");
+        assert_eq!(read, binding.job_context, "the accessor reads the binding's own context, unaltered");
+
+        // Only the executed count moves — the job id, the prompt hash and the prefill are untouched.
+        let mut forged = Base0FpIntervalOpeningV4::decode_v1(&honest).expect("a V4 opening");
+        forged.binding.job_context.exact_decode_tokens += 1_000;
+        let forged_bytes = forged.encode_v1().expect("it re-encodes");
+        let carried = base0_fp_interval_opening_job_context_v1(&forged_bytes).expect("it still decodes");
+        assert_ne!(carried, binding.job_context, "the accessor sees the substitution");
+        assert_eq!(carried.job_id, binding.job_context.job_id, "and the job id does NOT — which is the whole finding");
+
+        // (b) the family's own verification refuses these bytes, but for a reason that is not a
+        // context comparison: the recomputed execution root no longer matches. It never answers
+        // "is this the context the seat drew from", so the accessor is not redundant with it.
+        let state = geometry.anchor_covered_call(0).map(|covered| seat_state(&material, &artifact, &ids, covered));
+        let verdict = base0_verify_fp_interval_opening_with_state_v1(
+            &forged_bytes,
+            claim,
+            0,
+            &ids,
+            binding.step_leaf_count,
+            interval,
+            state.as_ref(),
+            &FloorKernels(&artifact),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
+        assert_ne!(verdict, Base0FpIntervalSeatVerdictV1::Valid, "a substituted context is never Valid");
+        // …and the honest bytes still are, so the refusal above is about the substitution and not
+        // about the fixture.
+        assert_eq!(
+            base0_verify_fp_interval_opening_with_state_v1(
+                &honest,
+                claim,
+                0,
+                &ids,
+                binding.step_leaf_count,
+                interval,
+                state.as_ref(),
+                &FloorKernels(&artifact),
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            ),
+            Base0FpIntervalSeatVerdictV1::Valid
+        );
     }
 
     /// **One byte, and the opening answers for nothing.**

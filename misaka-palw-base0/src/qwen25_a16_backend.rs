@@ -1168,8 +1168,9 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         prompt_tokens: &[usize],
         on_token: &mut dyn FnMut(u32),
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
-        use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
+        use kaspa_consensus_core::palw_fp_execution_v3::{
+            PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1,
+        };
 
         // ADR-0077 SA-6: an artifact this host can no longer read is a job failure named at the
         // boundary, not a fault taken three layers into a kernel.
@@ -1202,16 +1203,10 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             cu_ruleset_id: Hash64::default(),
         };
         // A declared budget, decoded exactly: the count and the stop reason are known before the
-        // run, and the context builder enforces the pairing rather than trusting this.
-        let shape = PalwFpRunFactsV3 {
-            decode_tokens_executed: job.decode_token_limit,
-            stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
-            full_logits_trace_root: Hash64::default(),
-            activation_leg_root: Hash64::default(),
-            checkpoint_leg_root: Hash64::default(),
-            step_leg_root: Hash64::default(),
-            step_leaf_count: 0,
-        };
+        // run. The pairing is DERIVED from the count (ADR-0074 Decision 7) rather than typed here,
+        // so that a seat rebuilding this context for an early-stopping claim gets the run that
+        // happened instead of the budget that was asked for.
+        let shape = palw_fp_run_facts_for_executed_v1(job, job.decode_token_limit);
         // Built BEFORE the run and run under: `palw_fp_execution_root_v3` recomputes the court's
         // root from this context, so an execution carried out under any other one commits a root
         // nobody can reproduce.
@@ -1341,6 +1336,24 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             job_context: binding.job_context.clone(),
             step_leaf_count: binding.step_leaf_count,
         })
+    }
+
+    /// **ADR-0062 D3's responder, for the dense tier** (mainnet audit 2026-09-06, C-5).
+    ///
+    /// This impl block declared `supports_court() == true` — whose contract is exactly this method
+    /// and `bisect_prefix_state` — while taking the trait's
+    /// `Err("this family has no data-availability responder")`, so on a network that arms
+    /// `palw_da_court` (testnet-11 at DAA 1,900; a card from block one) every accusation against a
+    /// dense-tier claim won by silence for the price of one bond. The body is the shared one: it
+    /// reads the scheme, the vocabulary and the decode count off the capture's own binding, which
+    /// is why this is a delegation and not a second implementation.
+    fn disclose_trace_event(
+        &self,
+        material: &[u8],
+        row: u32,
+        tile: u8,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1, String> {
+        crate::produce::base0_disclose_trace_event_v1(material, row, tile)
     }
 
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
@@ -1697,12 +1710,17 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     }
 
     /// **The one context this family runs a free-prompt job under** (ADR-0084 Decision 4): the
-    /// class facts this backend holds, the budget decoded exactly with `ExactBudgetReached` (the
-    /// one shape this lane's runs have — `execute_free_prompt` builds the same value), and the
-    /// network id. `fp_recompute_checkpoint_root`, `fp_checkpoint_covered_bound_v1` and
-    /// `fp_output_root_v1` all go through here, so there is one spelling of "which job is this".
-    fn fp_job_context_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3) -> Option<PalwJobContextV2> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
+    /// class facts this backend holds, the budget THAT RAN — the caller's `decode_tokens_executed`,
+    /// which is the ceiling for a run that reached it and less for an `EndOfGeneration` one
+    /// (ADR-0074 Decision 7) — and the network id. `fp_recompute_checkpoint_root`,
+    /// `fp_checkpoint_covered_bound_v1` and `fp_output_root_v1` all go through here, so there is
+    /// one spelling of "which job is this".
+    fn fp_job_context_for_executed_v1(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        decode_tokens_executed: u32,
+    ) -> Option<PalwJobContextV2> {
+        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1};
         let class = PalwFpClassFactsV3 {
             model_profile_id: self.shape_id,
             runtime_manifest_hash: Hash64::default(),
@@ -1710,16 +1728,19 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             shape_profile_id: self.class_profile_id,
             cu_ruleset_id: Hash64::default(),
         };
-        let shape = PalwFpRunFactsV3 {
-            decode_tokens_executed: job.decode_token_limit,
-            stop_reason: kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached,
-            full_logits_trace_root: Hash64::default(),
-            activation_leg_root: Hash64::default(),
-            checkpoint_leg_root: Hash64::default(),
-            step_leg_root: Hash64::default(),
-            step_leaf_count: 0,
-        };
+        let shape = palw_fp_run_facts_for_executed_v1(job, decode_tokens_executed);
         palw_fp_job_context_v3(job, &class, &shape, &self.network_id).ok()
+    }
+
+    /// This class's price for a context (ADR-0074 Decision 5), at the ruleset ladder this backend
+    /// was built with — the same function `base0_fp_binding_step_space_v1` re-derives an
+    /// opening's binding with.
+    fn fp_context_work_leaves_v1(&self, context: &PalwJobContextV2) -> Option<u64> {
+        kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&self.profile, context, self.step_ladder_cap).ok()
+    }
+
+    fn fp_opening_job_context_v1(&self, opening: &[u8]) -> Option<PalwJobContextV2> {
+        crate::fp_interval::base0_fp_interval_opening_job_context_v1(opening)
     }
 
     /// **ADR-0082 Decision 9, keyed on the context** (ADR-0084 Decision 4): the prefix,
@@ -1780,7 +1801,11 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         let recorder = kaspa_consensus_core::palw_artifact::PalwRecordingOracleV1::new(inventory.operands());
         // The verdict is not ours to read here — this runs the adjudicator only to learn WHICH
         // rows it resolves, and it resolves the same rows whichever way the step reads.
-        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_v1(refutation, &recorder);
+        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_capped_v1(
+            refutation,
+            &recorder,
+            self.step_ladder_cap,
+        );
         recorder.openings().ok_or_else(|| "the inventory could not open a recorded row".to_string())
     }
 

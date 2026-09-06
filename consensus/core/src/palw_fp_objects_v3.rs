@@ -115,6 +115,9 @@ where
         accepted_block,
         panel_da_armed,
         crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+        // No bundle-resolved fence either, and the caps are a RULESET rule: a caller with no
+        // height cannot be stricter than the walk (ADR-0044 D9; mainnet audit 2026-09-06, L-2).
+        false,
         prompt_ids_form,
         verify_mldsa87,
     )
@@ -132,19 +135,30 @@ where
 /// A separate entry rather than a parameter on the old one, for the reason the `_under_v3` split
 /// gives: a caller that has not switched keeps the weaker structural bound rather than silently
 /// acquiring a stricter rule it did not ask for.
+///
+/// `ruleset_caps_armed` is `Params::palw_fp_ruleset_caps` resolved at the accepting block's DAA
+/// (ADR-0044 Decision 9; mainnet audit 2026-09-06, L-2). Past it the two caps the ruleset
+/// ADVERTISES — `max_prompt_tokens` and `max_decode_tokens`, already hashed into
+/// `palw_ruleset_id_v2` — are read off the bundle this walk already holds and a carrier above
+/// either is SKIPPED like every other refusal here. `false` on every shipped preset, where the
+/// walk behaves byte for byte as it did before the fence existed.
 pub fn palw_fp_objects_from_accepted_txs_under_ruleset_v3<V>(
     txs: &[Transaction],
     network_domain: Hash64,
-    _freeprompt: &PalwFreePromptParamsV3,
+    freeprompt: &PalwFreePromptParamsV3,
     _accepted_block: BlockHash,
     panel_da_armed: bool,
     max_step_leaf_count: u64,
+    ruleset_caps_armed: bool,
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     verify_mldsa87: V,
 ) -> PalwFpExtractionV3
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
+    // The ruleset's own numbers, off the bundle rather than typed — the same rule the ladder
+    // beside them follows.
+    let ruleset_caps = ruleset_caps_armed.then(|| (freeprompt.max_prompt_tokens(), freeprompt.max_decode_tokens()));
     let mut out = PalwFpExtractionV3::default();
     for tx in txs {
         if tx.subnetwork_id != SUBNETWORK_ID_PALW_FP_COMMITMENT {
@@ -160,7 +174,10 @@ where
         };
         // The same stateless rules a peer applies — re-run here rather than assumed, because this
         // walk must be total over whatever was accepted.
-        if payload.validate_stateless_under_ruleset_v3(network_domain, panel_da_armed, max_step_leaf_count, prompt_ids_form).is_err() {
+        if payload
+            .validate_stateless_under_ruleset_v3(network_domain, panel_da_armed, max_step_leaf_count, ruleset_caps, prompt_ids_form)
+            .is_err()
+        {
             out.skipped.push((id, "payload is not stateless-admissible"));
             continue;
         }
@@ -188,8 +205,20 @@ where
                 decode_tokens_executed: commitment.decode_tokens_executed,
                 trace_root: commitment.trace_root,
                 output_root: commitment.output_root,
-                // The DA trio and the court binding travel WITH the claim: they are the
-                // producer's obligations, and the panel/court read them off the state record.
+                // The DA obligations and the court binding travel WITH the claim: the panel and
+                // the court read them off the state record.
+                //
+                // **TWO of the three DA fields, and the third is carried by nothing** (mainnet
+                // audit 2026-09-06 M-3). `trace_manifest_root` is not among these fields and is
+                // not on `PalwClaimStateV2` either, so no court, no seat and no transition on this
+                // lane ever reads it — the attempt lane pins it to a value the panel replays, and
+                // this lane's is `fp_trace_manifest_root_v3` over the per-chunk EVENT digests,
+                // which the chain does not hold and cannot recompute. Giving it an obligation
+                // means carrying it here and giving the DA court something to bind a disclosure
+                // to, which is a `PALW_STATE_V2_VERSION` move belonging to the record's owner.
+                // Recorded rather than repaired, and pinned by
+                // `the_free_prompt_lanes_trace_manifest_root_is_carried_by_nothing` below so the
+                // gap can neither widen nor close silently.
                 execution_root: commitment.execution_root,
                 trace_chunk_count: commitment.trace_chunk_count,
                 trace_retention_daa: commitment.trace_retention_daa,
@@ -393,6 +422,59 @@ mod tests {
             }
             other => panic!("expected a free-prompt object, got {other:?}"),
         }
+    }
+
+    /// **The third DA field is carried by nothing, and that is pinned rather than repaired**
+    /// (ADR-0072 Decision 8; mainnet audit 2026-09-06 M-3).
+    ///
+    /// `trace_retention_daa` and `trace_chunk_count` reach the state record and are given the
+    /// chain's own values past `Params::palw_fp_da_pins`. `trace_manifest_root` reaches nothing:
+    /// it is inside `fp_claim_id_v3`, so moving it renames the claim, and it is inside NOTHING
+    /// else — the extracted object is otherwise byte-identical. This is the "pin the limitation,
+    /// not just the behaviour" form: it PASSES today, because today the field carries no
+    /// obligation, and it fails the day someone carries it, forcing them to decide what obligation
+    /// it then bears.
+    #[test]
+    fn the_free_prompt_lanes_trace_manifest_root_is_carried_by_nothing() {
+        let fp = freeprompt();
+        let extract = |p: &PalwFpCommitmentTxPayloadV3| {
+            palw_fp_objects_from_accepted_txs_v3(
+                &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(p).unwrap())],
+                net(),
+                &fp,
+                h64(1),
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                |_, _, _, _| true,
+            )
+        };
+        let honest = payload(96, 256);
+        let mut substituted = honest.clone();
+        substituted.commitment.trace_manifest_root = h64(0xDEAD);
+        assert_ne!(
+            substituted.commitment.trace_manifest_root, honest.commitment.trace_manifest_root,
+            "the fixture must actually move the field"
+        );
+
+        let a = extract(&honest);
+        let b = extract(&substituted);
+        assert_eq!((a.objects.len(), b.objects.len()), (1, 1), "both are admissible commitments");
+        // The claim id DOES move, because the field is inside `fp_claim_id_v3` — which is the only
+        // thing on this lane that reads it.
+        let (mut object_a, mut object_b) = (a.objects[0].object.clone(), b.objects[0].object.clone());
+        let (PalwConsensusObjectV2::FreePromptCommitted { claim: claim_a, .. }, PalwConsensusObjectV2::FreePromptCommitted { claim: claim_b, .. }) =
+            (&mut object_a, &mut object_b)
+        else {
+            panic!("both extractions produce a free-prompt commitment");
+        };
+        assert_ne!(claim_a, claim_b, "the manifest root is inside the claim id, so it names the claim");
+        // …and with the name normalised away, nothing else differs: no field of the consensus
+        // object carries the manifest root, so no rule downstream can be about it.
+        *claim_b = *claim_a;
+        assert_eq!(
+            object_a, object_b,
+            "no field of the extracted object carries `trace_manifest_root` — if this fails, the field now travels and \
+             something must decide what obligation it bears (ADR-0072 Decision 8)"
+        );
     }
 
     /// A leaf count above the ladder is refused outright by the stateless rule, so it never
@@ -614,6 +696,7 @@ mod tests {
             h64(1),
             false,
             crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES,
+            false,
             crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             |_, _, _, _| true,
         );
@@ -625,6 +708,7 @@ mod tests {
             h64(1),
             false,
             crate::palw_step::PALW_STEP_MAX_LEAVES,
+            false,
             crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             |_, _, _, _| true,
         );

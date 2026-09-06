@@ -2951,10 +2951,17 @@ pub struct SignerRequest {
     /// request selects via this field.
     pub validator_id: Hash64,
     pub purpose: SigningPurpose,
-    /// libcrux ML-DSA-87 `sign_ctx` ctx parameter. Caller
-    /// provides; the signer does not infer the context from
-    /// the purpose tag because future protocol extensions may
-    /// need a non-standard context for the same purpose.
+    /// libcrux ML-DSA-87 `sign_ctx` ctx parameter. The caller provides it, and the signer
+    /// VALIDATES it against the purpose tag — it does not infer it, and it does not accept an
+    /// arbitrary one either.
+    ///
+    /// Every purpose but `Transaction` is pinned to exactly one context (audit C-02), and
+    /// `Transaction` may carry only a transaction-domain context (mainnet audit L-5,
+    /// 2026-09-06): every ConsensusV2 acceptance-layer object signs a `Hash64` under its own
+    /// context, and a `Transaction` digest is a `Hash64`, so an unvalidated `Transaction` request
+    /// mints any of them bit-identically. This paragraph replaces "future protocol extensions may
+    /// need a non-standard context for the same purpose": a protocol extension that needs a new
+    /// context adds a `SigningPurpose`, which is the wire-visible change it should be.
     pub context: Vec<u8>,
     /// The digest to sign, typed by purpose (audit H-03). Must agree with `purpose` — see
     /// [`SignerRequest::purpose_matches_digest`]. A `Transaction` request carries a 64-byte sighash;
@@ -3141,6 +3148,92 @@ fn proportional_share(pool: u128, stake: u128, expected_stake: u128) -> u128 {
         return 0;
     }
     pool.saturating_mul(stake.min(expected_stake)) / expected_stake
+}
+
+/// **§F's reserve drip for ONE BLOCK — the epochs it finalizes, spent against ONE budget**
+/// (mainnet audit, 2026-09-06, M-1/H-3).
+///
+/// Pure so the rate limiter can be stated over the input a real block produces — a LIST of
+/// finalized epochs — rather than over the one-epoch case a linear-chain fixture happens to make.
+/// `finalized` is the tallies already filtered to `[e_min, e_max]`, in canonical order.
+///
+/// `bounds == None` is the pre-fence arm, byte-for-byte what testnet-11 runs: `min(remaining, cap)`
+/// is evaluated for EACH crossed epoch, so a block that crosses `n` thresholds may release `n · cap`
+/// and the only stop is an empty reserve. `bounds == Some(max_outputs)` is the arm past
+/// `palw_validator_payout_bounds`: `cap` is the BLOCK's budget, spent down across the epochs, and
+/// `max_outputs` is the block's coinbase slot budget for this kind. Returns the outputs and the
+/// total minted (the reserve's recurrence subtracts exactly that).
+pub fn reserve_drip_outputs_for_block(
+    parent_balance: u64,
+    per_epoch_cap_sompi: u64,
+    bounds: Option<u64>,
+    finalized: &[(u64, EpochTally)],
+) -> (Vec<TransactionOutput>, u64) {
+    let cap = per_epoch_cap_sompi;
+    let mut outputs = Vec::new();
+    let mut remaining = parent_balance;
+    let mut total_drip = 0u64;
+    let bounded = bounds.is_some();
+    let mut block_budget = cap;
+    let mut slots = bounds;
+    for (_epoch, tally) in finalized {
+        if remaining == 0 {
+            continue;
+        }
+        // H-3: one coinbase carries every epoch this block finalizes, so the OUTPUT budget is the
+        // block's too.
+        if slots == Some(0) {
+            break;
+        }
+        let budget = if bounded { remaining.min(block_budget) } else { remaining.min(cap) };
+        if budget == 0 {
+            continue;
+        }
+        // Stake-proportional distribution to the epoch's included validators (meets=true ⇒ pays).
+        let drip = validator_quality_bonus_outputs(budget as u128, &tally.included, tally.expected_stake, true, slots);
+        let minted: u64 = drip.iter().fold(0u64, |acc, o| acc.saturating_add(o.value));
+        if let Some(left) = slots.as_mut() {
+            *left = left.saturating_sub(drip.len() as u64);
+        }
+        outputs.extend(drip);
+        remaining = remaining.saturating_sub(minted);
+        block_budget = block_budget.saturating_sub(minted);
+        total_drip = total_drip.saturating_add(minted);
+    }
+    (outputs, total_drip)
+}
+
+/// **§E's deferred quality bonus for ONE BLOCK — every epoch it finalizes, against ONE slot
+/// budget** (mainnet audit, 2026-09-06, H-3).
+///
+/// Pure for [`reserve_drip_outputs_for_block`]'s reason: the fan-out this rule has to bound is
+/// (epochs the block finalizes) × (validators included in each), and a fixture that finalizes one
+/// epoch cannot see the product. `finalized` is the tallies already filtered to `[e_min, e_max]`.
+///
+/// `bounds == None` is the pre-fence arm — one output per included validator, per epoch, unbounded.
+/// `bounds == Some(n)` spends `n` coinbase slots across the whole loop; the dropped tail is NOT
+/// minted (§E "Unspent → rollover"), and unlike the participation queue it is not re-offered,
+/// because each epoch's threshold is crossed by exactly one block.
+pub fn deferred_quality_bonus_outputs_for_block(
+    quality_floor_bps: u16,
+    bounds: Option<u64>,
+    finalized: &[(u64, EpochTally)],
+) -> Vec<TransactionOutput> {
+    let mut slots = bounds;
+    let mut outputs = Vec::new();
+    for (_epoch, tally) in finalized {
+        if slots == Some(0) {
+            break;
+        }
+        let included_sum: u128 = tally.included.iter().map(|(_, s)| *s as u128).sum();
+        let meets = epoch_meets_quality_floor(included_sum, tally.expected_stake, quality_floor_bps);
+        let paid = validator_quality_bonus_outputs(tally.quality_pool_accrued, &tally.included, tally.expected_stake, meets, slots);
+        if let Some(left) = slots.as_mut() {
+            *left = left.saturating_sub(paid.len() as u64);
+        }
+        outputs.extend(paid);
+    }
+    outputs
 }
 
 /// ADR-0018 §D — the Worker inclusion bounty for one block.
@@ -3481,25 +3574,81 @@ pub fn mandatory_attestation_mass_capacity(
 ///
 /// `included` is the finalized [`EpochTally::included`] — `(owner_reward_spk_payload, stake)` per
 /// rewarded validator, in its stored (chain-deterministic) order, with the 64-byte payload as a
-/// [`Hash64`]. The outputs sum to **≤ `quality_pool`** (Σ included stake ≤ `expected_stake`); the
-/// unspent remainder is **not minted** (anti-capture rollover). Pure and DAG-free → the coinbase
-/// construction and validation paths build byte-identical outputs from the same finalized tally.
+/// [`Hash64`]. Pure and DAG-free → the coinbase construction and validation paths build
+/// byte-identical outputs from the same finalized tally.
+///
+/// **"The outputs sum to ≤ `quality_pool` (Σ included stake ≤ `expected_stake`)" was an
+/// ASSUMPTION, and it is false** (mainnet audit, 2026-09-06 — H-2). `recompute_epoch_tallies` fills
+/// `included` from the ATTESTATION epoch (blue-score denominated) and evaluates `expected_stake` at
+/// a DAA-denominated anchor, so the parenthesis is not a fact about the caller. `proportional_share`
+/// clamps each SHARE at the pool, never the sum, and `epoch_meets_quality_floor` fails OPEN in the
+/// same direction — a fraction above 1 clears any floor. Past `palw_validator_payout_bounds`
+/// (`max_outputs = Some(..)`) the parenthesis is CHECKED and the sum is CAPPED, so the sentence is
+/// true because the code makes it true. Below the fence (`None`) the body is what it always was,
+/// byte for byte, because testnet-11 judged blocks under it; the unspent remainder is **not
+/// minted** there either (anti-capture rollover), but nothing bounds the paid total.
 pub fn validator_quality_bonus_outputs(
     quality_pool: u128,
     included: &[(Hash64, u64)],
     expected_stake: u128,
     meets_floor: bool,
+    // **ADR-0018 §E's own bounds, or the pre-fence behaviour** (mainnet audit, 2026-09-06 H-2/H-3).
+    //
+    // `None` is byte-for-byte what this function did before `palw_validator_payout_bounds` existed:
+    // one output per included validator, each a `proportional_share` of the whole pool, with
+    // nothing checking the sum and nothing checking the count. testnet-11 and devnet pass `None`.
+    //
+    // `Some(n)` applies the two bounds §E states and the count bound the coinbase's isolation rule
+    // reserves, and emits at most `n` outputs. `n` is the BLOCK's REMAINING slot budget, not this
+    // epoch's: one coinbase pays every epoch the block finalizes, so the budget has to be carried
+    // across the caller's epoch loop or the bound is per-epoch and bounds nothing.
+    max_outputs: Option<u64>,
 ) -> Vec<TransactionOutput> {
     if !meets_floor {
         return Vec::new();
     }
-    included
-        .iter()
-        .filter_map(|(payload, stake)| {
-            let reward = validator_quality_bonus(quality_pool, *stake as u128, expected_stake, true).min(u64::MAX as u128) as u64;
-            (reward > 0).then(|| TransactionOutput::new(reward, p2pkh_mldsa87_spk(&payload.as_bytes())))
-        })
-        .collect()
+    let Some(max_outputs) = max_outputs else {
+        return included
+            .iter()
+            .filter_map(|(payload, stake)| {
+                let reward = validator_quality_bonus(quality_pool, *stake as u128, expected_stake, true).min(u64::MAX as u128) as u64;
+                (reward > 0).then(|| TransactionOutput::new(reward, p2pkh_mldsa87_spk(&payload.as_bytes())))
+            })
+            .collect();
+    };
+    // **The precondition this function's doc ASSERTS, made a check.**
+    //
+    // An epoch whose numerator is not drawn from its own denominator is not an epoch this rule can
+    // price. It pays nothing and its pool rolls over — which is §E's own disposition for an unpaid
+    // pool ("Unspent → rollover"), the same disposition a below-φS epoch gets, and NOT a new one.
+    let included_sum: u128 = included.iter().map(|(_, stake)| *stake as u128).sum();
+    if included_sum > expected_stake {
+        return Vec::new();
+    }
+    let mut outputs: Vec<TransactionOutput> = Vec::new();
+    let mut spent: u128 = 0;
+    for (payload, stake) in included {
+        // The count cap the coinbase's isolation bound reserves for this fan-out. Same tail
+        // semantics as the pool cap below: the canonical-order tail is dropped and NOT minted.
+        if outputs.len() as u64 >= max_outputs {
+            break;
+        }
+        let reward = validator_quality_bonus(quality_pool, *stake as u128, expected_stake, true).min(u64::MAX as u128) as u64;
+        if reward == 0 {
+            continue; // zero stake / zero pool / degenerate denominator
+        }
+        // Whole-output pool cap, `validator_participation_reward_outputs`' semantics exactly: stop
+        // at the first reward that would push the total past the pool. With the precondition above
+        // holding this can never bind (Σ ⌊pool·s_i/E⌋ ≤ pool when Σ s_i ≤ E), which is the point:
+        // it is the doc's claim written as code rather than as a sentence, so it stays true if a
+        // later caller reaches this function by some path the precondition does not cover.
+        if spent.saturating_add(reward as u128) > quality_pool {
+            break;
+        }
+        spent += reward as u128;
+        outputs.push(TransactionOutput::new(reward, p2pkh_mldsa87_spk(&payload.as_bytes())));
+    }
+    outputs
 }
 
 /// ADR-0018 §E — build a block's validator participation-reward outputs from its included
@@ -7754,6 +7903,7 @@ pub fn dns_finality_fresh_for_bridge(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palw_state_v2::{PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS, PALW_V2_MAX_RESERVE_DRIP_PAYOUTS};
 
     // ---- ADR-0022: OverlaySnapshot commitment ----
 
@@ -11588,7 +11738,7 @@ mod tests {
     #[test]
     fn validator_quality_bonus_outputs_met_pays_proportional() {
         let included = vec![(Hash64::from_bytes([0xA1; 64]), 100u64), (Hash64::from_bytes([0xB2; 64]), 300u64)];
-        let out = validator_quality_bonus_outputs(1000, &included, 400, true);
+        let out = validator_quality_bonus_outputs(1000, &included, 400, true, Some(16));
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].value, 250); // 1000 · 100/400
         assert_eq!(out[0].script_public_key, p2pkh_mldsa87_spk(&[0xA1; 64]));
@@ -11602,17 +11752,202 @@ mod tests {
     #[test]
     fn validator_quality_bonus_outputs_unmet_is_empty() {
         let included = vec![(Hash64::from_bytes([0xA1; 64]), 100u64)];
-        assert!(validator_quality_bonus_outputs(1000, &included, 400, false).is_empty());
+        assert!(validator_quality_bonus_outputs(1000, &included, 400, false, Some(16)).is_empty());
     }
 
     /// A zero-stake (or zero-share) validator emits no output even when the epoch met φS.
     #[test]
     fn validator_quality_bonus_outputs_zero_share_skipped() {
         let included = vec![(Hash64::from_bytes([0xA1; 64]), 0u64), (Hash64::from_bytes([0xB2; 64]), 400u64)];
-        let out = validator_quality_bonus_outputs(1000, &included, 400, true);
+        let out = validator_quality_bonus_outputs(1000, &included, 400, true, Some(16));
         assert_eq!(out.len(), 1); // only the 0xB2 validator
         assert_eq!(out[0].value, 1000);
         assert_eq!(out[0].script_public_key, p2pkh_mldsa87_spk(&[0xB2; 64]));
+    }
+
+    /// **§E's stated precondition, as a test rather than as a sentence** (mainnet audit,
+    /// 2026-09-06, H-2).
+    ///
+    /// `validator_quality_bonus_outputs`' doc claimed "the outputs sum to ≤ `quality_pool` (Σ
+    /// included stake ≤ `expected_stake`)". `recompute_epoch_tallies` fills `included` from the
+    /// ATTESTATION epoch and `expected_stake` from a DAA-denominated anchor, so the parenthesis is
+    /// not a fact. The fixture directly above cannot see it: it uses included 100 + 300 against
+    /// `expected_stake` 400 and then asserts `Σ ≤ 1000`, which holds for every pool and every
+    /// implementation, including one that mints twice the pool on an incoherent epoch.
+    ///
+    /// The RULE, not the patch: an epoch whose numerator is not drawn from its own denominator is
+    /// not priceable, and under §E an unpriceable pool ROLLS OVER rather than minting more than it
+    /// holds. The pre-fence arm is pinned as a NUMBER in the same test so testnet-11's behaviour
+    /// can neither drift nor be quietly "fixed" under it — closing it there is a flag day.
+    #[test]
+    fn the_quality_bonus_refuses_an_epoch_whose_included_set_outruns_its_denominator() {
+        let included = vec![(Hash64::from_bytes([0xA1; 64]), 400u64), (Hash64::from_bytes([0xB2; 64]), 400u64)];
+        let unfenced = validator_quality_bonus_outputs(1000, &included, 400, true, None);
+        assert_eq!(
+            unfenced.iter().map(|o| o.value as u128).sum::<u128>(),
+            2000,
+            "below `palw_validator_payout_bounds` this mints twice the pool it was handed — the H-2 mint, \
+             pinned so it cannot widen or close in silence"
+        );
+        let bounded = validator_quality_bonus_outputs(1000, &included, 400, true, Some(16));
+        assert!(bounded.is_empty(), "past the fence an epoch whose Σ included stake exceeds its expected stake pays nothing");
+    }
+
+    /// The count bound the coinbase's isolation rule reserves for this fan-out, with the pool cap's
+    /// tail semantics: the canonical-order tail is dropped and NOT minted (§E rollover). The
+    /// pre-fence arm is pinned in the same test — one output per included validator, unbounded.
+    #[test]
+    fn the_quality_bonus_never_pays_more_outputs_than_the_block_reserved() {
+        let included: Vec<(Hash64, u64)> = (0..40u8).map(|i| (Hash64::from_bytes([i; 64]), 10u64)).collect();
+        let bounded = validator_quality_bonus_outputs(4000, &included, 400, true, Some(16));
+        assert_eq!(bounded.len(), 16, "the block's remaining slot budget bounds the fan-out");
+        assert!(bounded.iter().map(|o| o.value as u128).sum::<u128>() <= 4000);
+        assert_eq!(validator_quality_bonus_outputs(4000, &included, 400, true, None).len(), 40);
+    }
+
+    /// **One map, two numberings — stated as a fact, because closing it is a design change.**
+    ///
+    /// `recompute_epoch_tallies` keys `quality_pool_accrued` and `expected_stake` by
+    /// `block_daa_score / epoch_length_blocks` and `included` by the attestation epoch, which is
+    /// blue-score denominated. On a chain with reds the two indices differ by `(daa − blue)/L`, and
+    /// once that exceeds `walk_bound / L` they stop intersecting at all. Reconciling them needs the
+    /// blue score of every window block including the below-pruning-point ones, which live in
+    /// `OverlaySnapshot` — committed in `Header::overlay_commitment_root` — so it is not repairable
+    /// without moving testnet-11's block validity. That is the user's decision, not this test's.
+    ///
+    /// This test states the gap and the ONE property that must hold across it: a tally built from
+    /// two clocks has an `included` set not drawn from its own `expected_stake`, and past the fence
+    /// it pays NOTHING rather than minting. If the numberings are ever reconciled the first
+    /// assertion fails, which is the signal that the gap closed — it must not close in silence.
+    #[test]
+    fn the_accumulator_keys_one_map_from_two_epoch_numberings() {
+        let (a, b) = (op(0xA1), op(0xB2));
+        // `b` activates at DAA 25 — AFTER epoch 2's DAA-denominated anchor (2 · 10 = 20), so it is
+        // absent from `expected_stake`. The block at DAA 28 lives in block-epoch 2 and rewards an
+        // attestation whose ATTESTATION epoch is 2 for both bonds, so both land in `included`.
+        // That is the two-clock drift in miniature: the numerator carries a bond the denominator
+        // does not.
+        let bonds = vec![bond_rec(a, 100, 0, 0xA1), bond_rec(b, 200, 25, 0xB2)];
+        let contributions = vec![contrib(28, &[(a, 2), (b, 2)], 1000)];
+        let tallies = recompute_epoch_tallies(1_000, 10, 0, &contributions, &bonds);
+        let (_, tally) = tallies.iter().find(|(e, _)| *e == 2).expect("epoch 2 is touched by both numberings");
+        let included_sum: u128 = tally.included.iter().map(|(_, s)| *s as u128).sum();
+        assert_eq!(tally.expected_stake, 100, "the denominator is evaluated at the DAA anchor, where only `a` is active");
+        assert!(
+            included_sum > tally.expected_stake,
+            "the two numberings still disagree: `included` ({included_sum}) carries a bond `expected_stake` \
+             ({}) does not",
+            tally.expected_stake
+        );
+
+        // Below the fence such an epoch mints more than its pool — pinned as the number.
+        let unfenced =
+            validator_quality_bonus_outputs(tally.quality_pool_accrued, &tally.included, tally.expected_stake, true, None);
+        assert_eq!(
+            unfenced.iter().map(|o| o.value as u128).sum::<u128>(),
+            2 * tally.quality_pool_accrued,
+            "testnet-11's arm pays each of the two a full pool"
+        );
+        assert!(
+            validator_quality_bonus_outputs(tally.quality_pool_accrued, &tally.included, tally.expected_stake, true, Some(16))
+                .is_empty(),
+            "and past the fence such an epoch pays nothing instead of minting"
+        );
+    }
+
+    /// A finalized-epoch tally with `n` equal-stake included validators, for the per-block payout
+    /// tests below. `expected_stake` is the true sum, so each epoch is individually coherent — the
+    /// defect under test is the BLOCK's budget, not the epoch's.
+    #[cfg(test)]
+    fn tally_of(n: u8, stake: u64, pool: u128) -> EpochTally {
+        EpochTally {
+            expected_stake: (n as u128) * (stake as u128),
+            included: (0..n).map(|i| (Hash64::from_bytes([i; 64]), stake)).collect(),
+            quality_pool_accrued: pool,
+            finalized: true,
+        }
+    }
+
+    /// **The reserve drip's rate limit is spent per BLOCK, not per crossing** (mainnet audit,
+    /// 2026-09-06, M-1).
+    ///
+    /// `reserve_drip_per_epoch_cap_sompi` is documented as a rate limiter on the security reserve.
+    /// A rate must not depend on how many epoch thresholds one wide mergeset happens to cross, and
+    /// `at_two_minute_cadence` set `epoch_length_blocks = 2` without moving the number, so a block
+    /// that merges 180 crosses ~90 thresholds. `pos_v2_reserve_drip_pays_finalized_epoch` cannot
+    /// see this: it sets the cap to `u64::MAX` and its chain crosses one threshold per block, so
+    /// the multiplier has nothing to multiply.
+    ///
+    /// The RULE is stated over the input a real block hands the loop — a LIST of finalized epochs.
+    /// The pre-fence arm is pinned as a NUMBER (three crossings release three caps) because that is
+    /// what testnet-11 runs and closing it there is a flag day, not a diff.
+    #[test]
+    fn the_reserve_drip_rate_limit_is_spent_per_block_not_per_crossing() {
+        let cap = 1_000u64;
+        // Three epochs finalized by ONE block, each with two included validators.
+        let finalized: Vec<(u64, EpochTally)> = (0..3u64).map(|e| (e, tally_of(2, 50, 0))).collect();
+        let reserve = 1_000_000u64;
+
+        let (unfenced, unfenced_total) = reserve_drip_outputs_for_block(reserve, cap, None, &finalized);
+        assert_eq!(
+            unfenced_total,
+            3 * cap,
+            "below `palw_validator_payout_bounds` the cap is spent once per CROSSED EPOCH — three crossings, three caps; \
+             the M-1 drain, pinned so it cannot widen or close in silence"
+        );
+        assert_eq!(unfenced.len(), 6, "…one output per included validator per crossed epoch");
+
+        let (bounded, bounded_total) =
+            reserve_drip_outputs_for_block(reserve, cap, Some(PALW_V2_MAX_RESERVE_DRIP_PAYOUTS), &finalized);
+        assert!(
+            bounded_total <= cap,
+            "past the fence one block releases at most one cap however many thresholds it crossed ({bounded_total} > {cap})"
+        );
+        assert!(
+            bounded.iter().map(|o| o.value as u64).sum::<u64>() == bounded_total,
+            "the minted total and the outputs are one statement — the reserve recurrence subtracts exactly what was paid"
+        );
+
+        // And the premise holds in the other direction: with ONE crossing the two arms agree, so
+        // the fence changes nothing on the shape the parameter was written for.
+        let one = &finalized[..1];
+        assert_eq!(
+            reserve_drip_outputs_for_block(reserve, cap, None, one).1,
+            reserve_drip_outputs_for_block(reserve, cap, Some(PALW_V2_MAX_RESERVE_DRIP_PAYOUTS), one).1,
+            "a steady chain crossing one threshold a block is byte-identical across the fence"
+        );
+    }
+
+    /// **The deferred bonus's slot budget is the BLOCK's, not the epoch's** (mainnet audit,
+    /// 2026-09-06, H-3).
+    ///
+    /// The fan-out is (epochs this block finalizes) × (validators included in each), so a per-epoch
+    /// bound bounds nothing: the isolation cap the node then applies to its own coinbase is a
+    /// per-BLOCK number. Stated over a multi-epoch crossing, which is the only input the product is
+    /// visible in, and with the pre-fence count pinned as the number testnet-11 builds.
+    #[test]
+    fn the_deferred_bonus_slot_budget_is_carried_across_the_blocks_epochs() {
+        // Four epochs, twelve included validators each — mainnet's own `min_active_validators`.
+        let finalized: Vec<(u64, EpochTally)> = (0..4u64).map(|e| (e, tally_of(12, 100, 1_200))).collect();
+
+        let unfenced = deferred_quality_bonus_outputs_for_block(0, None, &finalized);
+        assert_eq!(
+            unfenced.len(),
+            48,
+            "below the fence one coinbase carries (epochs × included) outputs — the H-3 fan-out, pinned as a number"
+        );
+
+        let bounded = deferred_quality_bonus_outputs_for_block(0, Some(PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS), &finalized);
+        assert_eq!(
+            bounded.len() as u64,
+            PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS,
+            "past the fence the block's slot budget bounds the whole loop, not each epoch"
+        );
+        // The tail is dropped, not minted: the first epoch is paid in full and the rest roll over.
+        assert!(
+            bounded.iter().map(|o| o.value as u128).sum::<u128>() <= 4 * 1_200,
+            "and nothing outside the epochs' own pools is minted"
+        );
     }
 
     /// The deferred-payout once-per-epoch guard: a block finalizes exactly the epochs whose

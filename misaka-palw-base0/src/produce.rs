@@ -653,6 +653,67 @@ pub fn base0_material_decode_any_v1(bytes: &[u8]) -> Result<Base0RetentionV1, Pr
     }
 }
 
+/// **The data-availability responder, for every family that retains this codec** (ADR-0062 D3/SA-2;
+/// mainnet audit 2026-09-06, C-5).
+///
+/// This body was a method on `Base0Backend` alone, and the two model tiers took the trait's
+/// `Err("this family has no data-availability responder")` while declaring `supports_court() ==
+/// true` — so on a network that arms `palw_da_court` every accusation against them won by silence.
+/// It lives HERE, beside `base0_material_decode_any_v1`, because that decoder is what makes it
+/// family-blind: everything below is read off the retention's own binding — the scheme id, the
+/// vocabulary, the decode count and the job context — and nothing is a property of which backend
+/// holds the weights. Three impls delegate; a fourth copy of it would be the "one rule, three
+/// spellings" defect this tree has been bitten by.
+///
+/// `Err` is "this build cannot answer", which on an armed chain is a default. `Ok(OutOfRange)` is
+/// "the accused event is not in the committed run", which `check_trace_event_disclosure_v1`
+/// verifies from the binding alone and is a refutation, not an answer.
+pub fn base0_disclose_trace_event_v1(
+    material: &[u8],
+    row: u32,
+    tile: u8,
+) -> Result<kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1, String> {
+    use kaspa_consensus_core::palw_step_refute::{
+        PALW_LOGITS_TILE_LANES, PalwBase0DecodeTokensV1, PalwTraceEventDisclosureV1 as D, flat_logits_scheme_id_v1,
+        tiled_logits_scheme_id_v1, tiled_trace_event_disclosure_v1,
+    };
+    let retention = base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+    let binding = retention.binding().clone();
+    let rows = retention.logits_rows();
+    let ids = retention.generated_token_ids();
+    let decode = binding.job_context.exact_decode_tokens;
+    let scheme = binding.shape_profile.logits_scheme_id;
+    let vocab = binding.shape_profile.vocab_size as usize;
+    let boxed = Box::new(binding.clone());
+    if scheme == flat_logits_scheme_id_v1() {
+        if row >= decode || tile != 0 {
+            return Ok(D::OutOfRange { binding: boxed });
+        }
+        return Ok(D::Flat {
+            binding: boxed,
+            pin: PalwBase0DecodeTokensV1 { logits_rows: rows.to_vec(), generated_token_ids: ids.to_vec() },
+        });
+    }
+    if scheme == tiled_logits_scheme_id_v1() {
+        let tiles = vocab.div_ceil(PALW_LOGITS_TILE_LANES) as u64;
+        if row >= decode || tile as u64 >= tiles {
+            return Ok(D::OutOfRange { binding: boxed });
+        }
+        let (row_root, row_opening, tile_lanes, tile_opening) =
+            tiled_trace_event_disclosure_v1(&binding.job_context, rows, row, tile)
+                .ok_or_else(|| "the retained rows do not build the tiled trees".to_string())?;
+        return Ok(D::Tiled {
+            binding: boxed,
+            generated_token_ids: ids.to_vec(),
+            row_root,
+            row_opening,
+            tile_lanes,
+            tile_opening,
+        });
+    }
+    Err("this class commits under a scheme no disclosure form names".to_string())
+}
+
 /// **What a panel seat checks before it signs `Valid`, on folded material.**
 ///
 /// The dense check rebuilds the step root from the tiles; this reads it off the retained tree,
