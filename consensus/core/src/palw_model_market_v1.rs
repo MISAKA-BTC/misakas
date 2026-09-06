@@ -13,6 +13,12 @@
 //! stands (the product never falls); there is no virtual reserve. Every line opens with
 //! `PALW_MODEL_POSITION_SUPPLY_V1` positions in the curve. The price at any moment is
 //! `msk_reserve / position_units` and there is no other price.
+//!
+//! **Amended by ADR-0091 (2026-09-06).** The reward buys the pair: at a claim's `Final`,
+//! `PALW_MODEL_BUYBACK_PERMILLE_V1` of its escrowed worker reward enters the reserve as the
+//! chain's own move — no leg, no holder — and the positions the curve gives up for it are
+//! RETIRED (`retired_units`: the chain's, for good; M1 counts them). The other 95 % is the
+//! miner's. Where a line has no pair, or a closed one, the miner is paid in full.
 
 use crate::Hash64;
 use crate::tx::ScriptPublicKey;
@@ -31,6 +37,9 @@ pub const PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1: u64 = 0;
 /// ADR-0090 Decision 2: the least seed that opens a line's market — 100,000 MSK, every sompi of
 /// which enters the curve, none of which any object ever pays out.
 pub const PALW_MODEL_SEED_MIN_SOMPI_V1: u64 = 100_000 * 100_000_000;
+/// ADR-0091 Decision 1: the part of a claim's escrowed worker reward that buys from the pair of
+/// the line the claim ran, in permille — the other 950 ‰ is named for the miner at `Final`.
+pub const PALW_MODEL_BUYBACK_PERMILLE_V1: u64 = 50;
 /// Fee on the MSK leg of every move, in permille: burned.
 pub const PALW_MODEL_BURN_PERMILLE_V1: u64 = 50;
 /// Fee on the MSK leg of every move, in permille: to the class's registrant (burned when the
@@ -70,6 +79,12 @@ pub struct PalwModelMarketV1 {
     /// ADR-0090 Decision 3: who paid the seed — a payout payload kept for the record only; the
     /// seeder holds nothing and can move nothing.
     pub seeded_by: Hash64,
+    /// ADR-0091 Decision 2: MSK the mining reward has put into the curve, cumulative — five
+    /// percent of every model block's escrowed worker reward, entered at the claim's `Final`.
+    pub buyback_sompi: u64,
+    /// ADR-0091 Decision 4: the positions the reward's buys took out of the curve — the chain's,
+    /// for good; no object sells them, and `position_units + Σ holders + retired_units = supply`.
+    pub retired_units: u64,
 }
 
 impl PalwModelMarketV1 {
@@ -87,6 +102,8 @@ impl PalwModelMarketV1 {
             contributor_paid_sompi: 0,
             seed_sompi,
             seeded_by,
+            buyback_sompi: 0,
+            retired_units: 0,
         }
     }
 
@@ -152,6 +169,12 @@ pub fn palw_model_buy_quote_v1(market: &PalwModelMarketV1, msk_in: u64) -> Optio
         burned_sompi: market.burned_sompi.checked_add(fees.burn)?,
         ..*market
     };
+    // ADR-0090 P1, on the buy side too (audit M-12): the product never falls. A buy raises the
+    // reserve, so the seed floor cannot be breached here — the product is the half that can, if the
+    // rounding above is ever changed. Checked, not assumed.
+    if after.k() < k {
+        return None;
+    }
     Some(PalwModelBuyQuoteV1 { fees, units_out, after })
 }
 
@@ -171,7 +194,8 @@ pub fn palw_model_sell_quote_v1(market: &PalwModelMarketV1, units_in: u64) -> Op
     }
     let k = market.k();
     let units_after = market.position_units as u128 + units_in as u128;
-    if units_after > PALW_MODEL_SUPPLY_UNITS_V1 as u128 {
+    // ADR-0091 Decision 4: the curve can hold at most the supply less what the reward retired.
+    if units_after > (PALW_MODEL_SUPPLY_UNITS_V1 - market.retired_units) as u128 {
         return None;
     }
     let x_now = market.msk_reserve as u128;
@@ -187,7 +211,62 @@ pub fn palw_model_sell_quote_v1(market: &PalwModelMarketV1, units_in: u64) -> Op
         burned_sompi: market.burned_sompi.checked_add(fees.burn)?,
         ..*market
     };
+    // **ADR-0090 Decision 2's floor and ADR-0087 M2, as CHECKED refusals rather than emergent
+    // properties of the rounding** (mainnet audit 2026-09-06, M-12).
+    //
+    // The coinbase mints a market payout with nothing withheld — that is ADR-0087 Decision 3's
+    // design ("an accounting entry funded by sinks and drained by coinbase payouts") — and the ONLY
+    // thing between it and a mint above the emission schedule is that the gross leg can never
+    // exceed what was sunk. Today that holds by two accidents: the `.min(msk_reserve)` above, and
+    // `div_ceil`'s rounding keeping the product from falling. Both were only ever asserted in a
+    // unit test (`the_product_never_falls_and_the_seed_never_leaves`), never enforced, so a future
+    // change to the rounding would move real money and no rule would object.
+    //
+    // `None` is a refusal, and a refusal is what ADR-0087 M5 says a protection does: "refuse, never
+    // partially fill".
+    if after.msk_reserve < market.seed_sompi {
+        return None;
+    }
+    if after.k() < k {
+        return None;
+    }
     Some(PalwModelSellQuoteV1 { fees, after })
+}
+
+/// ADR-0091 Decision 1: the slice of an escrowed worker reward that buys from the pair —
+/// `⌊escrow × 50 / 1000⌋`; the miner is named the rest.
+pub fn palw_model_buyback_slice_v1(escrowed_reward: u64) -> u64 {
+    ((escrowed_reward as u128 * PALW_MODEL_BUYBACK_PERMILLE_V1 as u128) / 1000) as u64
+}
+
+/// What the reward's slice does to a market (ADR-0091 Decision 2): the whole slice enters the
+/// reserve — no leg — and the curve gives up `units − ⌈K / reserve′⌉` positions, which are
+/// RETIRED, never held; a slice under one position's price gives up none and still raises the
+/// price (the product rose). `None` where no pair takes it: a closed market, an unseeded row,
+/// or nothing to add — the caller then names the whole escrow for the miner (Decision 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwModelBuybackQuoteV1 {
+    pub slice: u64,
+    pub retired: u64,
+    pub after: PalwModelMarketV1,
+}
+
+pub fn palw_model_buyback_quote_v1(market: &PalwModelMarketV1, slice: u64) -> Option<PalwModelBuybackQuoteV1> {
+    if market.closed_to_buys || slice == 0 || market.position_units == 0 || market.msk_reserve == 0 {
+        return None;
+    }
+    let k = market.k();
+    let reserve_after = market.msk_reserve.checked_add(slice)?;
+    let units_after = k.div_ceil(reserve_after as u128).min(market.position_units as u128) as u64;
+    let retired = market.position_units - units_after;
+    let after = PalwModelMarketV1 {
+        msk_reserve: reserve_after,
+        position_units: units_after,
+        buyback_sompi: market.buyback_sompi.checked_add(slice)?,
+        retired_units: market.retired_units.checked_add(retired)?,
+        ..*market
+    };
+    Some(PalwModelBuybackQuoteV1 { slice, retired, after })
 }
 
 /// The sink a buy's carrier pays into: `OP_RETURN <8-byte tag> <64-byte class id>`. Unspendable
@@ -227,15 +306,77 @@ pub fn palw_model_holder_of_pubkey_v1(pubkey: &[u8]) -> Hash64 {
     crate::dns_finality::validator_id_from_pubkey(pubkey)
 }
 
-/// The message a sell is signed over: the domain, the class, the holder, the units, the floor.
-pub fn palw_model_sell_message_v1(class_id: &Hash64, holder: &Hash64, units_in: u64, min_msk_out: u64) -> Vec<u8> {
-    let mut m = Vec::with_capacity(32 + 64 + 64 + 16);
+/// The message a sell is signed over: the tag, **the network**, the line, the holder, the units,
+/// the floor, **the position the holder is selling out of**, and **the score the authority dies at**.
+///
+/// **The last three are what stop it being a permanent bearer authorisation** (mainnet audit
+/// 2026-09-06, M-11). As first written this message bound the sell to nothing but its own terms, so
+/// a stranger could copy the public payload into a new transaction and re-fire it whenever the
+/// holder held `units_in` again — a forced liquidation with no revocation and no expiry, on which
+/// the line's owner collected 1 % every time. ADR-0087 M8 says "no other key can sell it"; nothing
+/// made that true of the second firing.
+///
+/// * `network_domain` — every ADR-0088 registry message carries `palw_network_domain_v2`; this one
+///   did not, so one signature was good on every chain that happened to share the line id.
+/// * `held_units` — the holder's position at signing. The fold refuses unless the position still
+///   stands at exactly that number, and the sell's own effect moves it, so **a signature is
+///   consumed by the move it authorises**. It becomes re-usable only if the holder buys back to the
+///   identical unit count, which is what `not_after_daa` then bounds. Statelessly single-use: no
+///   nonce table, no new consensus row, nothing added to the state root.
+/// * `not_after_daa` — the last DAA score at which the fold will honour it. An authority with an
+///   end.
+pub fn palw_model_sell_message_v1(
+    network_domain: Hash64,
+    class_id: &Hash64,
+    holder: &Hash64,
+    units_in: u64,
+    min_msk_out: u64,
+    held_units: u64,
+    not_after_daa: u64,
+) -> Vec<u8> {
+    let mut m = Vec::with_capacity(32 + 64 + 64 + 64 + 32);
     m.extend_from_slice(PALW_MODEL_SELL_SIGN_DOMAIN_V1);
+    m.extend_from_slice(network_domain.as_byte_slice());
     m.extend_from_slice(class_id.as_byte_slice());
     m.extend_from_slice(holder.as_byte_slice());
     m.extend_from_slice(&units_in.to_le_bytes());
     m.extend_from_slice(&min_msk_out.to_le_bytes());
+    m.extend_from_slice(&held_units.to_le_bytes());
+    m.extend_from_slice(&not_after_daa.to_le_bytes());
     m
+}
+
+/// **The longest a sell's authority may run** (audit M-11). A holder who signs for a window longer
+/// than this is refused at acceptance, so "forever" is not expressible. 4,000 DAA — the same span
+/// ADR-0088 Decision 2 gives a superseded version's grace (`PALW_VERSION_GRACE_DAA_V1`), so the
+/// chain has one idea of "long enough to act, short enough to forget".
+pub const PALW_MODEL_SELL_MAX_WINDOW_DAA_V1: u64 = 4_000;
+
+/// What a block at `point_daa` may do with a sell that dies at `not_after_daa` (audit M-11).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwModelSellWindowV1 {
+    /// The authority is live here.
+    Live,
+    /// The score is past the one the holder signed for.
+    Expired,
+    /// The window it names is longer than the chain honours; `daa` is the span it asked for.
+    TooLong { daa: u64 },
+}
+
+/// **ADR-0087 M8's authority has an end, and the end is bounded** (mainnet audit 2026-09-06, M-11).
+///
+/// Both halves live here, in one function, so acceptance cannot ask one of them and a later reader
+/// the other. `not_after_daa` is inclusive: the score the holder signed for is a score their sell
+/// still fills at.
+pub fn palw_model_sell_window_v1(point_daa: u64, not_after_daa: u64) -> PalwModelSellWindowV1 {
+    if point_daa > not_after_daa {
+        return PalwModelSellWindowV1::Expired;
+    }
+    let span = not_after_daa - point_daa;
+    if span > PALW_MODEL_SELL_MAX_WINDOW_DAA_V1 {
+        return PalwModelSellWindowV1::TooLong { daa: span };
+    }
+    PalwModelSellWindowV1::Live
 }
 
 #[cfg(test)]
@@ -316,6 +457,64 @@ mod tests {
         assert!(m.msk_reserve >= m.seed_sompi, "with every position back, the reserve is the seed or more: {}", m.msk_reserve);
     }
 
+    /// **ADR-0090 Decision 2's floor is a refusal, not an observation** (mainnet audit 2026-09-06,
+    /// M-12).
+    ///
+    /// The decision says "the reserve never falls under it [the seed]", and until this repair that
+    /// was true only because `div_ceil`'s rounding and the `.min(msk_reserve)` cap happened to make
+    /// it so — asserted in a test, enforced nowhere. The coinbase mints a market payout with
+    /// nothing withheld, so a quote that pays out of the locked seed would move real money.
+    ///
+    /// The rows here are built BY HAND, at and below the floor, precisely because the curve cannot
+    /// reach them today: a test that only re-runs the curve agrees with the curve, and would go on
+    /// passing if a future rounding change let the reserve fall. The rule asserted is the ADR's
+    /// sentence — a quote whose `after` breaks the floor or lowers the product does not exist —
+    /// not the particular arithmetic that satisfies it.
+    #[test]
+    fn a_quote_that_would_break_the_floor_is_refused_not_returned() {
+        let seed_sompi = PALW_MODEL_SEED_MIN_SOMPI_V1;
+        // A row the curve DOES reach: some positions sold, the reserve above the seed. Selling them
+        // all back returns the reserve to the seed exactly, and that is legal — the floor is a
+        // ceiling on what may leave, not a margin.
+        let at_the_floor = PalwModelMarketV1 { msk_reserve: seed_sompi, ..seeded() };
+        assert_eq!(at_the_floor.msk_reserve, at_the_floor.seed_sompi);
+        // With the reserve at the floor and every position already in the curve, nothing can leave.
+        assert!(
+            palw_model_sell_quote_v1(&at_the_floor, 1).is_none(),
+            "a market holding only its seed pays nothing: units_after would exceed the supply"
+        );
+
+        // A row that HAS sold positions and sits at its floor: any sell would have to pay out of
+        // the seed, so every sell is refused — at one unit and at the whole outstanding block.
+        let outstanding = 10_000u64;
+        let sold_at_the_floor = PalwModelMarketV1 {
+            msk_reserve: seed_sompi,
+            position_units: PALW_MODEL_SUPPLY_UNITS_V1 - outstanding,
+            sold_units: outstanding,
+            ..seeded()
+        };
+        for units in [1u64, 7, outstanding / 2, outstanding] {
+            assert!(
+                palw_model_sell_quote_v1(&sold_at_the_floor, units).is_none(),
+                "sell of {units}: the reserve is the seed, so any payout comes out of the locked seed"
+            );
+        }
+
+        // A row BELOW its floor — a state the design says cannot exist. Whatever put it there, no
+        // quote may take it further down.
+        let under_the_floor = PalwModelMarketV1 { msk_reserve: seed_sompi - 1, ..sold_at_the_floor };
+        for units in [1u64, 7, outstanding] {
+            assert!(palw_model_sell_quote_v1(&under_the_floor, units).is_none(), "sell of {units} from under the floor");
+        }
+
+        // ..and the refusal is about the FLOOR, not about selling: the same row with a reserve
+        // above its seed quotes, and what it quotes still leaves the reserve at or above the seed.
+        let above = PalwModelMarketV1 { msk_reserve: seed_sompi * 2, ..sold_at_the_floor };
+        let q = palw_model_sell_quote_v1(&above, outstanding).expect("a market above its floor pays for a sell");
+        assert!(q.after.msk_reserve >= above.seed_sompi, "and what it pays leaves the seed where ADR-0090 put it");
+        assert!(q.after.k() >= above.k(), "ADR-0090 P1: the product never falls");
+    }
+
     /// ADR-0090 Decision 1: a position is whole. A buy that would release less than one position
     /// releases nothing (refused at the fold), and the smallest buy that releases one releases
     /// exactly one.
@@ -364,14 +563,156 @@ mod tests {
         assert_eq!(palw_model_sink_class_v1(&ScriptPublicKey::new(0, crate::tx::ScriptVec::from_slice(&forged))), None);
     }
 
-    /// The sell message binds every field a holder commits to.
+    /// **A sell signature authorises one sale, on one chain, out of one position, until one score**
+    /// (mainnet audit 2026-09-06, M-11).
+    ///
+    /// ADR-0087 M8 is "no other key can sell it". The message as first written bound the domain,
+    /// the line, the holder, the units and the floor — and nothing else — so a stranger could copy
+    /// the public payload out of a mined transaction and re-fire it whenever the holder held
+    /// `units_in` again. The rule this test states is that every input a replay would have to reuse
+    /// is IN the signed bytes: change any one of the seven and the holder's signature no longer
+    /// speaks for it.
+    ///
+    /// The three that were missing are asserted first, because those are the ones the old message
+    /// would have passed this test without.
     #[test]
-    fn the_sell_message_binds_its_fields() {
+    fn a_sell_signature_authorises_one_sale_on_one_chain_and_then_dies() {
         let (c, h) = (Hash64::from_bytes([1u8; 64]), Hash64::from_bytes([2u8; 64]));
-        let m = palw_model_sell_message_v1(&c, &h, 5, 6);
-        assert_ne!(m, palw_model_sell_message_v1(&c, &h, 5, 7));
-        assert_ne!(m, palw_model_sell_message_v1(&c, &h, 6, 6));
-        assert_ne!(m, palw_model_sell_message_v1(&h, &c, 5, 6));
-        assert!(m.starts_with(PALW_MODEL_SELL_SIGN_DOMAIN_V1));
+        let net_a = Hash64::from_bytes([3u8; 64]);
+        let net_b = Hash64::from_bytes([4u8; 64]);
+        let m = palw_model_sell_message_v1(net_a, &c, &h, 5, 6, 40, 1_000);
+
+        // The three the audit found missing.
+        assert_ne!(m, palw_model_sell_message_v1(net_b, &c, &h, 5, 6, 40, 1_000), "one chain: the network domain is signed");
+        assert_ne!(m, palw_model_sell_message_v1(net_a, &c, &h, 5, 6, 41, 1_000), "one position: `held_units` is signed");
+        assert_ne!(m, palw_model_sell_message_v1(net_a, &c, &h, 5, 6, 40, 1_001), "one window: `not_after_daa` is signed");
+
+        // ..and the four it always had.
+        assert_ne!(m, palw_model_sell_message_v1(net_a, &c, &h, 5, 7, 40, 1_000), "the floor is signed");
+        assert_ne!(m, palw_model_sell_message_v1(net_a, &c, &h, 6, 6, 40, 1_000), "the size is signed");
+        assert_ne!(m, palw_model_sell_message_v1(net_a, &h, &c, 5, 6, 40, 1_000), "the line and the holder are signed");
+        assert!(m.starts_with(PALW_MODEL_SELL_SIGN_DOMAIN_V1), "and the tag says which message this is");
+
+        // No two of the seven can be swapped for one another to reach the same bytes: every field
+        // has a fixed offset, so the message is unambiguous rather than merely different.
+        let all: Vec<Vec<u8>> = vec![
+            m.clone(),
+            palw_model_sell_message_v1(net_b, &c, &h, 5, 6, 40, 1_000),
+            palw_model_sell_message_v1(net_a, &h, &c, 5, 6, 40, 1_000),
+            palw_model_sell_message_v1(net_a, &c, &h, 6, 6, 40, 1_000),
+            palw_model_sell_message_v1(net_a, &c, &h, 5, 7, 40, 1_000),
+            palw_model_sell_message_v1(net_a, &c, &h, 5, 6, 41, 1_000),
+            palw_model_sell_message_v1(net_a, &c, &h, 5, 6, 40, 1_001),
+        ];
+        for (i, a) in all.iter().enumerate() {
+            assert_eq!(a.len(), m.len(), "every message is the same fixed length");
+            for b in all.iter().skip(i + 1) {
+                assert_ne!(a, b, "seven distinct commitments produce seven distinct messages");
+            }
+        }
+
+        // The ceiling on the window is a real bound, not a comment: a holder cannot sign "forever".
+        assert_eq!(PALW_MODEL_SELL_MAX_WINDOW_DAA_V1, 4_000, "the longest authority the chain honours");
+    }
+
+    /// **The window is inclusive at its end and bounded at its start** (mainnet audit 2026-09-06,
+    /// M-11) — the two edges a holder and a miner disagree about if either is left to a comment.
+    #[test]
+    fn a_sell_authority_is_live_up_to_its_own_score_and_no_longer_than_the_ceiling() {
+        let max = PALW_MODEL_SELL_MAX_WINDOW_DAA_V1;
+        // The score the holder signed for is a score the sell still fills at.
+        assert_eq!(palw_model_sell_window_v1(1_000, 1_000), PalwModelSellWindowV1::Live, "inclusive at the end");
+        assert_eq!(palw_model_sell_window_v1(1_001, 1_000), PalwModelSellWindowV1::Expired, "and dead one score later");
+        assert_eq!(palw_model_sell_window_v1(u64::MAX, 1_000), PalwModelSellWindowV1::Expired);
+
+        // The longest window the chain honours is exactly the ceiling, and one past it is refused
+        // wherever the block sits — so "forever" is not expressible at any height.
+        assert_eq!(palw_model_sell_window_v1(500, 500 + max), PalwModelSellWindowV1::Live, "the legal maximum window");
+        assert_eq!(
+            palw_model_sell_window_v1(500, 500 + max + 1),
+            PalwModelSellWindowV1::TooLong { daa: max + 1 },
+            "one score longer is refused, and the refusal names the span asked for"
+        );
+        assert!(matches!(palw_model_sell_window_v1(0, u64::MAX), PalwModelSellWindowV1::TooLong { .. }), "no bearer instrument");
+        assert_eq!(palw_model_sell_window_v1(0, 0), PalwModelSellWindowV1::Live, "and a window of zero is a window");
+    }
+
+    /// ADR-0091 §4's worked numbers: testnet-11's block (escrow 229,690,373 sompi) from the least
+    /// seed — the slice, the miner's rest, one block, a day of blocks — and a block big enough
+    /// to retire positions.
+    #[test]
+    fn the_reward_slice_is_worked_as_the_adr_table() {
+        let escrow = 229_690_373u64;
+        let slice = palw_model_buyback_slice_v1(escrow);
+        assert_eq!(slice, 11_484_518, "five percent of the escrow, rounded down");
+        assert_eq!(escrow - slice, 218_205_855, "the other ninety-five percent is the miner's");
+        let m0 = seeded();
+        let one = palw_model_buyback_quote_v1(&m0, slice).expect("a seeded, open market takes the slice");
+        assert_eq!(one.after.msk_reserve, 10_000_011_484_518, "the whole slice is reserve, no leg");
+        assert_eq!(
+            (one.after.position_units, one.retired, one.after.retired_units),
+            (500_000, 0, 0),
+            "under one position's price: nothing retired"
+        );
+        assert_eq!(one.after.price_sompi_per_position_v1(), 20_000_022, "and the price rose anyway");
+        assert_eq!(one.after.buyback_sompi, slice);
+        assert!(one.after.k() > m0.k(), "the product rose");
+        let mut m = m0;
+        for _ in 0..720 {
+            m = palw_model_buyback_quote_v1(&m, slice).unwrap().after;
+        }
+        assert_eq!(
+            (m.msk_reserve, m.position_units, m.price_sompi_per_position_v1()),
+            (10_008_268_852_960, 500_000, 20_016_537),
+            "a day of such blocks"
+        );
+        assert_eq!(m.buyback_sompi, 720 * slice);
+        // A network whose subsidy were 100 MSK a block: escrow 62 MSK, slice 3.1 MSK — 15 positions retire.
+        let big = palw_model_buyback_slice_v1(62 * MSK);
+        assert_eq!(big, 310_000_000);
+        let q = palw_model_buyback_quote_v1(&m0, big).unwrap();
+        assert_eq!((q.after.position_units, q.retired, q.after.retired_units), (499_985, 15, 15));
+        assert_eq!(q.after.price_sompi_per_position_v1(), 20_001_220);
+        assert_eq!(q.after.position_units + q.after.retired_units, PALW_MODEL_SUPPLY_UNITS_V1, "M1 with the retired counted");
+        // No pair takes a slice where the market is closed, or there is nothing to add.
+        assert!(palw_model_buyback_quote_v1(&PalwModelMarketV1 { closed_to_buys: true, ..m0 }, slice).is_none());
+        assert!(palw_model_buyback_quote_v1(&m0, 0).is_none());
+        assert!(
+            palw_model_buyback_quote_v1(&PalwModelMarketV1::seed_v1(1, 0, Hash64::default()), slice).is_none(),
+            "an unseeded row is not a market"
+        );
+    }
+
+    /// ADR-0091 B6 / ADR-0090 P1 over the new move: buys, buybacks and sells in any order never
+    /// lower the product, never take the reserve under the seed, and keep the supply whole with
+    /// the retired positions counted.
+    #[test]
+    fn the_product_never_falls_under_the_reward_too() {
+        let mut m = seeded();
+        let mut k = m.k();
+        let mut held = 0u64;
+        for (i, x) in [1u64, 37 * MSK, 11_484_518, 1_000 * MSK, 31_000_000_000, 999, 250 * MSK, 5 * MSK].iter().enumerate() {
+            if i % 2 == 0 {
+                let q = palw_model_buyback_quote_v1(&m, *x).expect("the pair takes every slice");
+                assert!(q.after.k() >= k, "buyback {x}: product fell");
+                assert_eq!(q.after.position_units + q.retired, m.position_units, "what left the curve was retired");
+                m = q.after;
+            } else if let Some(q) = palw_model_buy_quote_v1(&m, *x) {
+                held += q.units_out;
+                m = q.after;
+            }
+            k = m.k();
+            assert_eq!(m.position_units + held + m.retired_units, PALW_MODEL_SUPPLY_UNITS_V1, "M1 at every stop");
+        }
+        assert!(m.retired_units > 0, "the 310 MSK slice retired positions");
+        let s = palw_model_sell_quote_v1(&m, held).expect("everything held sells");
+        assert!(s.after.k() >= k);
+        assert!(s.after.msk_reserve >= s.after.seed_sompi, "the reserve stays at or above the seed");
+        assert_eq!(
+            s.after.position_units + s.after.retired_units,
+            PALW_MODEL_SUPPLY_UNITS_V1,
+            "sold out: the curve plus the retired is the supply"
+        );
+        assert!(palw_model_sell_quote_v1(&s.after, 1).is_none(), "and nothing can sell a retired position back: the curve is full");
     }
 }

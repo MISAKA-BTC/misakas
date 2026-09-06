@@ -1289,6 +1289,71 @@ mod tests {
         assert!(matches!(err, PalwDrillError::Backend { what: "take a court's turn", .. }), "{err}");
     }
 
+    /// **`supports_court()` promises a data-availability answer, and every shipped family must be
+    /// able to give one** (ADR-0062 D3/SA-2; mainnet audit 2026-09-06, C-5).
+    ///
+    /// The trait's contract is that `supports_court()` covers `disclose_trace_event` AND
+    /// `bisect_prefix_state`. Two of the three shipped fixture backends declared the first and
+    /// implemented only the second, taking the trait's
+    /// `Err("this family has no data-availability responder")` — so on a chain that arms
+    /// `palw_da_court` (testnet-11 from DAA 1,900; a card from block one) an accusation against
+    /// either model tier was won by silence for the price of one bond, and `sweep_da_deadlines`
+    /// took the producer's collateral and its escrowed reward.
+    ///
+    /// The rule under test is the trait's contract, not the shape of the fix: it would read
+    /// identically if the three families each grew their own implementation instead of delegating
+    /// to one. Both legs matter — an event INSIDE the run must open and verify, and an event past
+    /// it must answer `OutOfRange`, which the checker accepts as a refutation rather than as an
+    /// answer. A responder that could only do the first would still default on the second.
+    #[test]
+    fn every_court_capable_shipped_family_answers_a_data_availability_accusation() {
+        use kaspa_consensus_core::palw_step_refute::{PalwTraceEventDisclosureV1, check_trace_event_disclosure_v1};
+
+        let cap = kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES;
+        let floor = floor_fixture_v1().expect("the floor fixture builds");
+        let a16 = a16_v5_fixture_v1().expect("the graph-v5 dense fixture builds");
+        let qwen36 = qwen36_fixture_v1().expect("the hybrid fixture builds");
+        let families: Vec<(&str, &dyn PalwExecutionBackendV1, Hash64)> = vec![
+            ("PALW-BASE-0", &floor.0, Hash64::from_u64_word(0x0E2E_D8111)),
+            ("PALW-QWEN25-A16-V5", &a16.0, Hash64::from_u64_word(0x0E2E_D8255)),
+            ("PALW-QWEN36", &qwen36.0, Hash64::from_u64_word(0x0E2E_D836)),
+        ];
+
+        for (name, backend, anchor) in families {
+            assert!(backend.supports_court(), "{name} declares no court, so this test is about the wrong backend");
+
+            let (job, prompt) = backend.job_for_anchor(anchor).unwrap_or_else(|why| panic!("{name} derives its job: {why}"));
+            let outcome = backend.execute(&job, &prompt).unwrap_or_else(|why| panic!("{name} executes its own job: {why}"));
+            let shape = backend.capture_shape(&outcome.material).unwrap_or_else(|| panic!("{name} states its capture's shape"));
+            let decode = shape.job_context.exact_decode_tokens;
+            assert!(decode > 0, "{name}'s canonical job decodes nothing, so there is no event to accuse");
+
+            // **The event the court would name.** Row 0, tile 0 is inside every committed run.
+            let opened = backend
+                .disclose_trace_event(&outcome.material, 0, 0)
+                .unwrap_or_else(|why| panic!("{name} cannot answer an accusation naming event (0, 0): {why}"));
+            assert!(
+                !matches!(opened, PalwTraceEventDisclosureV1::OutOfRange { .. }),
+                "{name} declared event (0, 0) absent from a run that decoded {decode} rows"
+            );
+            check_trace_event_disclosure_v1(outcome.trace_root, outcome.execution_root, 0, 0, &opened, cap)
+                .unwrap_or_else(|e| panic!("{name}'s own disclosure of event (0, 0) does not verify against its claim: {e}"));
+
+            // **And the refutation half: an event past the run.** `Ok(OutOfRange)` is not an
+            // answer, it is a proof the accusation named nothing — the checker is what decides
+            // that, from the binding alone.
+            let past = backend
+                .disclose_trace_event(&outcome.material, decode, 0)
+                .unwrap_or_else(|why| panic!("{name} cannot answer an accusation naming event ({decode}, 0): {why}"));
+            assert!(
+                matches!(past, PalwTraceEventDisclosureV1::OutOfRange { .. }),
+                "{name} opened event ({decode}, 0), which is past its own committed run"
+            );
+            check_trace_event_disclosure_v1(outcome.trace_root, outcome.execution_root, decode, 0, &past, cap)
+                .unwrap_or_else(|e| panic!("{name}'s OutOfRange for event ({decode}, 0) is refused by the checker: {e}"));
+        }
+    }
+
     /// **The floor's free-prompt lane certifies through the shipped court** (ADR-0073 Decision
     /// 1f) — the same drill as the attempt lane's, over a job the user fixed — and the certifier
     /// refuses the substitutions that matter: a question the vectors were not about, and a

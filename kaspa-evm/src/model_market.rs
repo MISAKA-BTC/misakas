@@ -35,7 +35,7 @@
 //! the same journal, so they unwind together.
 
 use kaspa_consensus_core::evm::model_market::{
-    MAX_MARKET_ACTIONS_PER_EVM_BLOCK, MISAKA_MODEL_AMM_PRECOMPILE, MISAKA_MODEL_POSITION_PRECOMPILE, MISAKA_MODEL_REGISTRY_PRECOMPILE,
+    MAX_MARKET_ACTIONS_PER_EVM_BLOCK, MAX_MARKET_ACTIONS_PER_EVM_BLOCK_PER_ACCOUNT, MISAKA_MODEL_AMM_PRECOMPILE, MISAKA_MODEL_POSITION_PRECOMPILE, MISAKA_MODEL_REGISTRY_PRECOMPILE,
     MISAKA_MODEL_WRITER, PALW_EVM_ACTION_BUY, PALW_EVM_ACTION_SEED, PALW_EVM_ACTION_SELL, PALW_EVM_MARKET_ACTION_ENCODING_V1,
     PALW_EVM_WRITER_GAS_V1, PalwEvmMarketActionKindV1, PalwEvmMarketActionV1, PalwEvmMarketFencesV1, PalwEvmSettlementOutcomeV1,
     PalwEvmSettlementV1, PalwEvmViewV1, evm_holder_v1, facade_address_v1,
@@ -170,6 +170,7 @@ struct Selectors {
     market_not_active: [u8; 4],
     unknown_line: [u8; 4],
     too_many_actions: [u8; 4],
+    too_many_actions_for_account: [u8; 4],
     bad_input: [u8; 4],
     seed_too_small: [u8; 4],
     // ERC-165
@@ -261,6 +262,7 @@ fn sel() -> &'static Selectors {
             market_not_active: selector("MarketNotActive()"),
             unknown_line: selector("UnknownLine()"),
             too_many_actions: selector("TooManyActions()"),
+            too_many_actions_for_account: selector("TooManyActionsForAccount()"),
             bad_input: selector("BadInput()"),
             seed_too_small: selector("SeedTooSmall()"),
             imrc20_interface_id: imrc20,
@@ -327,6 +329,11 @@ pub mod errors {
     /// `TooManyActions()`: the block already queued `MAX_MARKET_ACTIONS_PER_EVM_BLOCK` actions.
     pub fn too_many_actions() -> [u8; 4] {
         super::sel().too_many_actions
+    }
+    /// `TooManyActionsForAccount()`: this account already queued
+    /// `MAX_MARKET_ACTIONS_PER_EVM_BLOCK_PER_ACCOUNT` of this block's actions (audit M-16/L-6).
+    pub fn too_many_actions_for_account() -> [u8; 4] {
+        super::sel().too_many_actions_for_account
     }
     /// `BadInput()`: malformed calldata (a read consumes the frame's gas with it).
     pub fn bad_input() -> [u8; 4] {
@@ -538,6 +545,11 @@ pub struct MarketHandlers {
     /// `facade_address_v1(line) → line`, for every line in the view.
     facades: Arc<HashMap<Address, Hash64>>,
     queued: Arc<AtomicUsize>,
+    /// **Per-account action counts for this block** (mainnet audit 2026-09-06, M-16/L-6).
+    /// Re-synced from the COMMITTED action list beside `queued`, by the same call and for the same
+    /// reason: a reverted or skipped tx must not count. Bounded by
+    /// `MAX_MARKET_ACTIONS_PER_EVM_BLOCK` entries, so at most 128 rows a block.
+    queued_by_account: Arc<std::sync::Mutex<HashMap<Address, usize>>>,
 }
 
 impl MarketHandlers {
@@ -545,7 +557,14 @@ impl MarketHandlers {
     /// `EVM_CHAIN_ID`.
     pub fn new(view: Arc<PalwEvmViewV1>, fences: PalwEvmMarketFencesV1, chain_id: u64) -> Self {
         let facades = view.lines.iter().map(|(id, _)| (to_address(&facade_address_v1(id)), *id)).collect();
-        Self { view, fences, chain_id, facades: Arc::new(facades), queued: Arc::new(AtomicUsize::new(0)) }
+        Self {
+            view,
+            fences,
+            chain_id,
+            facades: Arc::new(facades),
+            queued: Arc::new(AtomicUsize::new(0)),
+            queued_by_account: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
     }
 
     pub fn fences(&self) -> PalwEvmMarketFencesV1 {
@@ -557,9 +576,26 @@ impl MarketHandlers {
         self.queued.load(Ordering::SeqCst)
     }
 
-    /// Re-sync the running count to the committed action list (the executor, after every tx).
-    pub fn set_queued(&self, n: usize) {
-        self.queued.store(n, Ordering::SeqCst)
+    /// How many of this block's committed actions belong to one account (audit M-16/L-6).
+    pub fn queued_for_account(&self, account: &Address) -> usize {
+        self.queued_by_account.lock().map(|m| m.get(account).copied().unwrap_or(0)).unwrap_or(0)
+    }
+
+    /// **Re-sync BOTH running counts to the committed action list** (the executor, after every tx).
+    ///
+    /// One call for the total and the per-account map, deliberately (audit M-16/L-6): two entry
+    /// points is how a later change re-syncs one and forgets the other, and a per-account counter
+    /// that is not rolled back by a reverted tx would refuse honest callers. Deterministic — the
+    /// executor walks the accepted txs in one canonical order on every node, so these counts are a
+    /// function of the same sequence everywhere.
+    pub fn set_committed(&self, actions: &[PalwEvmMarketActionV1]) {
+        self.queued.store(actions.len(), Ordering::SeqCst);
+        if let Ok(mut by_account) = self.queued_by_account.lock() {
+            by_account.clear();
+            for action in actions {
+                *by_account.entry(Address::from(action.account.as_bytes())).or_insert(0) += 1;
+            }
+        }
     }
 
     /// The holder id of an EVM account in this chain's namespace (Decision 7).
@@ -803,8 +839,11 @@ impl MarketHandlers {
                         .u64(m.contributor_paid_sompi)
                         .bool(m.closed_to_buys)
                         .bool(exists)
+                        // ADR-0091: appended, so every word above keeps its offset.
+                        .u64(m.buyback_sompi)
+                        .u64(m.retired_units)
                         .finish(),
-                    None => Out::default().zeros(9).finish(),
+                    None => Out::default().zeros(11).finish(),
                 }
             }
             x if x == s.price_of => {
@@ -1335,6 +1374,15 @@ fn write_frame<EXT, DB: Database>(
     if market.queued() >= MAX_MARKET_ACTIONS_PER_EVM_BLOCK {
         return Ok(revert(errors::too_many_actions(), gas, memory));
     }
+    // **ADR-0089 Decision 5's budget, per account** (mainnet audit 2026-09-06, M-16/L-6). The
+    // block bound above is first-come, and ordering across payload blocks is consensus-determined
+    // (`processor.rs` sources the executed set from `consensus_ordered_mergeset`), so an attacker
+    // who mines occupies the whole budget without outbidding anyone. Same enforcement as the bound
+    // above — a revert at the call, the caller's gas and nothing else — and same place, BEFORE the
+    // escrow transfer, so a refused action moves no value.
+    if market.queued_for_account(&inputs.caller) >= MAX_MARKET_ACTIONS_PER_EVM_BLOCK_PER_ACCOUNT {
+        return Ok(revert(errors::too_many_actions_for_account(), gas, memory));
+    }
     // Escrow (a buy): the value moves caller → writer in the CURRENT tx journal.
     let writer = writer_address();
     if gross_sompi > 0 {
@@ -1353,6 +1401,11 @@ fn write_frame<EXT, DB: Database>(
         ),
     });
     market.queued.fetch_add(1, Ordering::SeqCst);
+    // The per-account half of the same running count (audit M-16/L-6); both are re-synced from the
+    // committed list by `set_committed` after every tx, so a reverted tx counts on neither.
+    if let Ok(mut by_account) = market.queued_by_account.lock() {
+        *by_account.entry(inputs.caller).or_insert(0) += 1;
+    }
     Ok(outcome(InstructionResult::Return, Vec::new(), gas, memory))
 }
 
@@ -1429,6 +1482,46 @@ pub mod abi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **ADR-0091 B7: `market()`'s two new words are the row's, and every earlier word keeps its
+    /// offset.** The window is a read of the fold's row, so the check is the encoding: eleven
+    /// words, the ADR's two at the end, and an unknown line still eleven zeros.
+    #[test]
+    fn adr0091_market_words() {
+        use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_SEED_MIN_SOMPI_V1, PalwModelMarketV1};
+        let line = Hash64::from_u64_word(9);
+        let mut row = PalwModelMarketV1::seed_v1(7, PALW_MODEL_SEED_MIN_SOMPI_V1, Hash64::from_u64_word(1));
+        row.buyback_sompi = 31_000_000_000;
+        row.retired_units = 1_545;
+        row.position_units -= 1_545;
+        let mut view = PalwEvmViewV1 { chain_daa: 42, chain_id: 1, ..Default::default() };
+        view.markets.insert(line, row);
+        let m = MarketHandlers::new(
+            std::sync::Arc::new(view),
+            PalwEvmMarketFencesV1 { market_active: true, lines_active: true, evm_active: true },
+            1,
+        );
+        let mut input = sel().market.to_vec();
+        input.extend_from_slice(&line.as_byte_slice()[..32]);
+        input.extend_from_slice(&line.as_byte_slice()[32..]);
+        let Ok(out) = m.amm(&input) else { panic!("the window answers") };
+        assert_eq!(out.len(), 11 * 32, "nine words became eleven, appended");
+        let word = |i: usize| u64::from_be_bytes(out[i * 32 + 24..i * 32 + 32].try_into().unwrap());
+        assert_eq!(word(0), 7, "openedDaa");
+        assert_eq!(word(1), row.msk_reserve, "mskReserve");
+        assert_eq!(word(2), row.position_units, "positionUnits");
+        assert_eq!(word(7), 0, "closedToBuys");
+        assert_eq!(word(8), 1, "exists");
+        assert_eq!(word(9), 31_000_000_000, "buybackSompi");
+        assert_eq!(word(10), 1_545, "retiredUnits");
+        // An unknown line is the zero row, at the new width.
+        let unknown = Hash64::from_u64_word(0xDEAD);
+        let mut input = sel().market.to_vec();
+        input.extend_from_slice(&unknown.as_byte_slice()[..32]);
+        input.extend_from_slice(&unknown.as_byte_slice()[32..]);
+        let Ok(zero) = m.amm(&input) else { panic!("a zero row") };
+        assert_eq!(zero, vec![0u8; 11 * 32]);
+    }
 
     #[test]
     fn the_core_crate_spells_the_writer_selector_the_intercept_answers() {

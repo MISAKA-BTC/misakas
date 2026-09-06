@@ -36,9 +36,13 @@ pragma solidity ^0.8.20;
 ///         WHAT ELSE REVERTS AT THE CALL (the "user-input fault ⇒ tx revert, block valid"
 ///         class): malformed data, an unknown version or action id, an unknown line, a
 ///         `msg.value` that is zero or not a multiple of 1e10 on a buy or a seed, a seed under
-///         SEED_MIN_SOMPI (`SeedTooSmall()`), a nonzero `msg.value` on a sell, a sell of zero units, a buy on a line closed to buys, and the 129th action
-///         in one EVM block (`PALW_EVM_MARKET_ACTIONS_PER_BLOCK_V1` = 128). A reverted call
-///         leaves no log and therefore no action.
+///         SEED_MIN_SOMPI (`SeedTooSmall()`), a nonzero `msg.value` on a sell, a sell of zero units, a buy on a line closed to buys, the 129th action
+///         in one EVM block (`PALW_EVM_MARKET_ACTIONS_PER_BLOCK_V1` = 128, `TooManyActions()`),
+///         and the 17th action from ONE ACCOUNT in one EVM block
+///         (`TooManyActionsForAccount()`; mainnet audit 2026-09-06, M-16/L-6 — the block bound is
+///         first-come and ordering across payload blocks is consensus-determined, so without a
+///         per-account share one account could occupy every slot without outbidding anyone).
+///         A reverted call leaves no log and therefore no action.
 ///
 ///         WHAT THE CALL DOES. It burns `PALW_EVM_WRITER_GAS_V1` (25,000, the starting schedule;
 ///         re-measured before the fence is armed), moves a buy's `msg.value` into THIS address
@@ -80,4 +84,9 @@ interface IMisakaModelWriter {
     error NotAnAccount();
     /// ADR-0090: the seed is under the network's least seed.
     error SeedTooSmall();
+    /// ADR-0089 Decision 5: this EVM block already queued 128 actions.
+    error TooManyActions();
+    /// This account already queued its share of the block's 128 actions
+    /// (`MAX_MARKET_ACTIONS_PER_EVM_BLOCK_PER_ACCOUNT` = 16; mainnet audit 2026-09-06, M-16/L-6).
+    error TooManyActionsForAccount();
 }

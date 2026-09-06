@@ -1455,6 +1455,35 @@ mod tests {
         assert_eq!(crate::config::genesis::DEVNET_GENESIS.bits, PALW_V2_ATTEMPT_BITS);
     }
 
+    /// **One rule, two spellings — and only one of them is on the live path.**
+    ///
+    /// `Params::palw_receipt_rows_unpriced`'s doc names [`algo_id_is_priced_by_bits_v2`] as the rule
+    /// in force past that fence. Nothing calls it: `difficulty::get_difficulty_blocks_with_lane`
+    /// sets `priced: algo_id_is_priced_by_bits(..)` and a separate `receipt:` flag, and
+    /// `retarget_bits` recomposes the two. The composition equals `_v2` today; nothing says so, and
+    /// a change to either side is invisible until a chain retargets differently from what its own
+    /// fence doc claims. This holds the two equal over the whole id space.
+    ///
+    /// A DRIFT PIN, not a rule test: it passes on today's code and exists so that it stops passing
+    /// the moment the two spellings part company (mainnet audit, 2026-09-06 — the merge-drift item
+    /// beside C-1).
+    #[test]
+    fn the_two_spellings_of_the_priced_row_predicate_agree() {
+        for algo_id in 0u8..=u8::MAX {
+            assert_eq!(
+                algo_id_is_priced_by_bits_v2(algo_id),
+                algo_id_is_priced_by_bits(algo_id) && algo_id != POW_ALGO_ID_PALW_RECEIPT_V3,
+                "algo {algo_id}: the named predicate and the composition the retarget runs must be one rule"
+            );
+        }
+        // …and the composition is not trivially true: at least one id differs between them.
+        assert!(algo_id_is_priced_by_bits(POW_ALGO_ID_PALW_RECEIPT_V3));
+        assert!(!algo_id_is_priced_by_bits_v2(POW_ALGO_ID_PALW_RECEIPT_V3));
+        // …and the lane C-1 is about is priced under both, which is the design (ADR-0072 D3).
+        assert!(algo_id_is_priced_by_bits(POW_ALGO_ID_PALW_COMMITTED_V2));
+        assert!(algo_id_is_priced_by_bits_v2(POW_ALGO_ID_PALW_COMMITTED_V2));
+    }
+
     use super::*;
     use kaspa_hashes::ZERO_HASH64;
 

@@ -4505,6 +4505,7 @@ dependencies = [
  "kaspa-core",
  "kaspa-hashes",
  "kaspa-pq-validator-core",
+ "kaspa-txscript",
  "libc",
  "log",
 ]

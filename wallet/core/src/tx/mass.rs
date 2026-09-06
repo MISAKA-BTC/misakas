@@ -342,17 +342,62 @@ impl MassCalculator {
             .try_fold(0u64, |total, current| current.and_then(|current| total.checked_add(current)))
     }
 
+    /// A zero output value yields [`u64::MAX`] rather than dividing by zero — "too high", the
+    /// direction `Generator` already treats an incomputable mass as
+    /// (`generator.rs`'s `unwrap_or(u64::MAX)`), and the direction the consensus
+    /// `calc_storage_mass` expresses as `None`. Mainnet audit C-4, 2026-09-06: this file is the
+    /// SECOND spelling of that function's arithmetic and carried the same three bare divisions.
     pub fn calc_storage_mass_output_harmonic_single(&self, output_value: u64) -> u64 {
-        self.storage_mass_parameter / output_value
+        self.storage_mass_parameter.checked_div(output_value).unwrap_or(u64::MAX)
     }
 
+    /// **Two checked divisions, and a zero divisor yields NO input credit rather than a panic.**
+    ///
+    /// On a PQ network every standard UTXO occupies at least two storage units, so a mean input
+    /// value can truncate to zero (`consensus/core/src/mass/mod.rs::utxo_plurality`). This term is
+    /// SUBTRACTED by [`Self::calc_storage_mass`], so returning `0` — no credit — is the
+    /// "estimated mass is too high" direction, matching the helper above and the consensus
+    /// function's `None`. Returning `u64::MAX` here would be exactly backwards: it would saturate
+    /// the subtraction to zero mass.
+    ///
+    /// Note this helper counts INPUTS, not storage units, so it already under-estimates against
+    /// consensus on any PQ UTXO. That divergence is untouched here.
     pub fn calc_storage_mass_input_mean_arithmetic(&self, total_input_value: u64, number_of_inputs: u64) -> u64 {
-        let mean_input_value = total_input_value / number_of_inputs;
-        number_of_inputs.saturating_mul(self.storage_mass_parameter / mean_input_value)
+        let Some(mean_input_value) = total_input_value.checked_div(number_of_inputs) else {
+            return 0;
+        };
+        let Some(per_input) = self.storage_mass_parameter.checked_div(mean_input_value) else {
+            return 0;
+        };
+        number_of_inputs.saturating_mul(per_input)
     }
 
     pub fn calc_storage_mass(&self, output_harmonic: u64, total_input_value: u64, number_of_inputs: u64) -> u64 {
         let input_arithmetic = self.calc_storage_mass_input_mean_arithmetic(total_input_value, number_of_inputs);
         output_harmonic.saturating_sub(input_arithmetic)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_consensus_core::network::NetworkType;
+
+    /// The wallet's own spelling of the storage-mass arithmetic must refuse a zero divisor for the
+    /// same reason the consensus one does (mainnet audit C-4, 2026-09-06) — and must refuse it in
+    /// the direction that ESTIMATES HIGH, because both terms feed a subtraction.
+    #[test]
+    fn the_wallet_storage_mass_helpers_do_not_divide_by_zero() {
+        let c = MassCalculator::new(&Params::from(NetworkType::Mainnet));
+        // An added term: incomputable means "too high".
+        assert_eq!(c.calc_storage_mass_output_harmonic_single(0), u64::MAX);
+        // A subtracted term: incomputable means "no credit", which is also "too high".
+        assert_eq!(c.calc_storage_mass_input_mean_arithmetic(0, 0), 0, "no inputs");
+        assert_eq!(c.calc_storage_mass_input_mean_arithmetic(1, 2), 0, "mean truncates to zero");
+        // …and the composed estimate does not collapse to "free" on either.
+        assert_eq!(c.calc_storage_mass(1_234, 1, 2), 1_234, "a degenerate input credit must not zero the estimate");
+        // The non-degenerate neighbours are unchanged.
+        assert_eq!(c.calc_storage_mass_output_harmonic_single(1_000), c.storage_mass_parameter / 1_000);
+        assert_eq!(c.calc_storage_mass_input_mean_arithmetic(2_000, 2), 2 * (c.storage_mass_parameter / 1_000));
     }
 }

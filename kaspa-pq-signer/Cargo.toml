@@ -22,6 +22,12 @@ path = "src/main.rs"
 kaspa-consensus-core.workspace = true
 kaspa-core.workspace = true
 kaspa-hashes.workspace = true
+# The tx-signing context (`MLDSA87_TX_CONTEXT`) lives here and is the ONLY context a
+# `SigningPurpose::Transaction` may carry. Imported rather than re-typed: this crate's test module
+# used to spell the literal a third time. Adds no weight — `kaspa-pq-validator-core` below already
+# depends on it, so it is in this crate's graph either way, and there is no cycle (txscript depends
+# on consensus-core, not on the signer).
+kaspa-txscript.workspace = true
 kaspa-pq-validator-core.workspace = true
 
 blake2b_simd.workspace = true

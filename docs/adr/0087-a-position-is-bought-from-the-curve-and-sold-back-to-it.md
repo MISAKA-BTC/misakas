@@ -9,6 +9,8 @@ transfer between holders**, so that a position is never something one person han
 The operator's word is *position* (ポジション), not *share*: it is bought from the protocol's
 curve and sold back to it, and that is the whole of what it is.
 
+> **Amended a third time (2026-09-06, design first).** [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) adds the chain's own move to Decision 3: at a claim's `Final`, five percent of its escrowed worker reward buys from the pair of the line the claim ran, the positions the curve gives up are retired (the chain's, for good — M1 counts them), no leg is taken (Decision 4), and the miner is named the other ninety-five percent; nothing is ever distributed to a holder. Decision 8's row gains `buyback_sompi` and `retired_units`.
+>
 > **Amended again (2026-09-05, implemented the same day).** [ADR-0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md) retires the virtual reserve and the lazy opening: a market opens only by a **seed** of at least 100,000 MSK that becomes the reserve, fee-free and locked for good (the reserve never falls under it); a position is **whole** and there are **500,000** a line; a third move (`ModelSeed`) rides beside the buy and the sell. Decisions 1, 2, 3, 4 and 8 below read with that in mind.
 >
 > **Amended (design, 2026-09-05, revised the same day).** [ADR-0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md) keys this market by a
@@ -135,15 +137,34 @@ everything else. CLI: `misaka palw model buy|sell|show`.
   | move | gross MSK | burn (5 %) | registrant (1 %) | net (94 %) | positions out / in | price after (MSK) |
   |---|---|---|---|---|---|---|
   | buy | 1,000 | 50 | 10 | 940 → reserve | 48,453 out | 0.0376 |
-  | buy | 1,000 | 50 | 10 | 940 → reserve | 16,824 out | 0.0576 |
+  | buy | 1,000 | 50 | 10 | 940 → reserve | 16,824 out | 0.0829 |
   | sell all 65,277 | 1,880 from reserve | 94 | 18.8 | 1,767.2 paid | 65,277 in | 0.0100 |
 
-  (Corrected with the implementation, §7: the design draft's rows read 12,846 out, 3,014 from the
-  reserve and 2,833 paid, which the curve cannot produce — a reserve of 1,880 pays at most 1,880.)
-  Two buys of 1,000 MSK and one sell of everything bought return 1,767.2 MSK of the 2,000 paid in:
-  when every unit comes back the curve's `x` returns to `V`, so the gross leg is exactly the
-  reserve — there is no last-out loss beyond the fees, and no first-in gain beyond the curve. A
-  partial sell is paid on the curve's slope at that point, which is the only place slippage lives.
+  (Corrected twice, and the second time is why the first is written down. The design draft read
+  `12,846 out`, `0.0742`, `3,014 from the reserve` and `2,833 paid` — arithmetic the curve cannot
+  produce, since a reserve holding 1,880 pays at most 1,880, and 3,014 would have been 1,134 MSK
+  nobody paid in, against M2 and against ADR-0059's carve-not-mint rule. The first correction, made
+  with the implementation, fixed the positions and both MSK columns but left the second row's
+  *price* at `0.0576`, a number belonging to neither reading; reported as
+  [#98](https://github.com/MISAKA-BTC/misakas/issues/98), which reproduced row 1 exactly and so
+  established that the curve is being read as written. `(1,880 + 1,000) / 34,722.22 = 0.082944`.)
+
+  **This table is the pre-[0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)
+  curve and nothing computes it.** It is kept because it is the record of what this ADR decided;
+  the virtual reserve `V` it turns on was retired the same day, and the arithmetic the tree
+  actually runs is ADR-0090 §4's — pinned by `the_adr_table_is_the_curves_arithmetic` in
+  `consensus/core/src/palw_model_market_v1.rs`, which is the golden table M4 asks for. A worked
+  example with no test behind it is a number that drifts, and this one drifted twice.
+
+  Two buys of 1,000 MSK and one sell of everything bought return 1,767.2 MSK of the 2,000 paid in
+  — a round trip of `0.94² = 0.8836`, exactly what M4 states, and 11.6 % less than went in, which
+  is the 12 % this section's own first sentence quotes. When every unit comes back the curve's `x`
+  returns to `V`, so the gross leg is exactly the reserve: there is no last-out loss beyond the
+  fees, and no first-in gain beyond the curve. `V` itself is never paid to anyone — it sets the
+  opening price and the curve's steepness and nothing more, which is why the gross leg tops out at
+  the reserve rather than at `reserve + V`. (ADR-0090 replaces it with a real, locked seed, so the
+  question of what stands behind the opening price stops being rhetorical.) A partial sell is paid
+  on the curve's slope at that point, which is the only place slippage lives.
 * **State:** one market row per class, one position row per (class, holder); ≈ 150 bytes each.
 * **Fold:** O(1) per move; a carrier per move (≈ 300 bytes plus the sink output).
 * **Consensus:** an activation; a state version; two objects; one sink script; one payout kind.

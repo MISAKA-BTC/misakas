@@ -18,8 +18,16 @@
 #   5. a REFUSED EVM buy (min positions impossible) → the escrow comes back in C
 #   6. an EVM sell → the net leg is credited in C
 #   7. every node agrees on the market row, the EVM balance and the EVM position
+#   9b. ADR-0091 (LAST, and slow): with no trade in flight the mining reward alone moves the pair —
+#      every block's escrowed worker reward gives 5 % to this line's curve at its claim's Final and
+#      the miner keeps 95 %. A claim is Final only 180 DAA after it was accepted (~90 min here), so
+#      this step waits on its own clock, `BUYBACK_WAIT`, after everything else has grown the chain.
 #   8. a PARTITION: side A = {0,1} takes another EVM buy through B and C while side B = {2..N-1}
 #      outweighs it; the HEAL must reorg side A and leave every node on one row and one balance
+#
+# Build (the CLI's EVM signing is behind a non-default feature):
+#   cargo build --release -p kaspad -p kaspa-pq-validator
+#   cargo build --release -p misaka-cli --features evm-send
 #
 # Env: KASPAD_BIN, CLI_BIN, PQV_BIN (defaults target/release/*), NODES (5, at least 4), WORK_DIR,
 #      WAIT (s, first blocks), STEP_WAIT (s, any one poll), FENCE_DAA (0), LINE_ID (override the
@@ -37,6 +45,9 @@ WORK_DIR="${WORK_DIR:-$REPO_ROOT/.misaka-palw-model-market-devnet}"
 WAIT="${WAIT:-600}"
 STEP_WAIT="${STEP_WAIT:-420}"
 FENCE_DAA="${FENCE_DAA:-0}"
+# ADR-0091's step waits for a claim to reach Final, which is bind+receipt+challenge (180 DAA) after
+# the block that made it — about 90 minutes on this devnet. Its own clock, not STEP_WAIT.
+BUYBACK_WAIT="${BUYBACK_WAIT:-5400}"
 PREMINE_TXID="6d6973616b612d7072656d696e65$(printf '0%.0s' $(seq 1 100))"   # "misaka-premine" zero-padded to 64 bytes
 MAIN_PREMINE_INDEX=40   # consensus/core/src/config/premine.rs; bond n's fee float sits at MAIN_PREMINE_INDEX + 1 + n
 P2P_BASE=16410; RPC_BASE=17710; EVM_BASE=18545   # clear of the certify (163xx/176xx) and VLT devnets
@@ -46,6 +57,11 @@ die() { log "FATAL: $*"; exit 1; }
 [ "$NODES" -ge 4 ] || die "NODES must be at least 4 (two on side A, two or more on side B)"
 [ "$NODES" -le 6 ] || die "devnet seats six public-seed bonds; NODES must be at most 6"
 for b in "$KASPAD_BIN" "$CLI_BIN" "$PQV_BIN"; do [ -x "$b" ] || die "missing binary $b"; done
+# The EVM half of this drill signs its own transactions, which lives behind misaka-cli's
+# `evm-send` feature — NOT a default. A CLI built without it has no `evm wallet` at all, and run 10
+# discovered that by dying three steps in with clap's "unrecognized subcommand". Ask the binary.
+"$CLI_BIN" evm wallet --help >/dev/null 2>&1 || die "this misaka has no \`evm wallet\`: build it with \`cargo build --release -p misaka-cli --features evm-send\` (the EVM lane of this drill signs transactions)"
+
 
 rm -rf "$WORK_DIR"; mkdir -p "$WORK_DIR/keys" "$WORK_DIR/out"
 python3 - "$WORK_DIR/keys" "$NODES" <<'PY'
@@ -63,6 +79,11 @@ evm_of() { echo $((EVM_BASE + $1)); }
 cli() { local i="$1"; shift; "$CLI_BIN" --network devnet --rpc "127.0.0.1:$(rpc_of "$i")" --evm-rpc "http://127.0.0.1:$(evm_of "$i")" "$@"; }
 
 # Start (or restart) node `i` dialling only the nodes in `peers_csv` (may be empty: listen only).
+# **`--palw-panel` is what makes a claim reach `Final`**, and without it the worker reward is never
+# paid at all: the seats verify each other's material, sign receipts and submit the quorum. Run 10b
+# ran without it and watched `final_claims=0 unresolved=12` climb while ADR-0091's step waited for a
+# buyback that no `Final` could ever produce — the reward path, not the market, was the thing this
+# drill had never exercised.
 # `--connect` is "these and nobody else" — the partition is made of dial lists, not firewalls, and a
 # restart drops whatever links existed; a side's members dial each other so every producer keeps
 # the peer its mining gate demands.
@@ -74,7 +95,7 @@ start_node() {
   local args=(--devnet --appdir="$WORK_DIR/node-$i" --listen="127.0.0.1:$(p2p_of "$i")" --rpclisten-borsh="127.0.0.1:$(rpc_of "$i")"
         --evm-rpc-listen="127.0.0.1:$(evm_of "$i")" --utxoindex --nodnsseed --disable-upnp --nogrpc --enable-unsynced-mining
         --palw-model-devnet="$FENCE_DAA" --palw-devnet-floor-only --evm-bridge-devnet-unpaused
-        --palw-produce --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i" --palw-producer-pay-address="$addr"
+        --palw-produce --palw-panel --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i" --palw-producer-pay-address="$addr"
         --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
   if [ -n "${EXTRA_NODE_ARGS:-}" ]; then read -r -a extra <<<"$EXTRA_NODE_ARGS"; args+=("${extra[@]}"); fi
   local j
@@ -182,7 +203,16 @@ row_of() {
   bal="$(jfind balanceWei "$WORK_DIR/out/bal-$i.json")"
   cli "$i" palw model-evm-position --line "$LINE_ID" --address "$EVM_ADDR" --output json > "$WORK_DIR/out/pos-$i.json" 2>/dev/null || echo '{}' > "$WORK_DIR/out/pos-$i.json"
   pos="$(jfind units "$WORK_DIR/out/pos-$i.json")"
-  echo "reserve=${reserve:-?} sold=${sold:-?} balanceWei=${bal:-?} positionUnits=${pos:-?}"
+  # ADR-0091: the reserve now rises with every Final on this line, so reading six nodes in
+  # sequence catches them at different DAA scores and a raw reserve would never compare equal.
+  # `traded = reserve − buyback` is what the SEED and the TRADES put in — invariant under the
+  # reward's own move, and still different the moment two nodes disagree about a trade.
+  local buyback traded
+  buyback="$(jfind buyback_sompi "$WORK_DIR/out/row-$i.json")"; buyback="${buyback:-0}"
+  traded="?"; [ -n "${reserve:-}" ] && traded=$((reserve - buyback))
+  # The reward's own numbers are for the reader, not for the comparison: they move every block.
+  log "    node-$i reserve=${reserve:-?} buyback=${buyback} retired=$(jfind retired_units "$WORK_DIR/out/row-$i.json")"
+  echo "traded=${traded} sold=${sold:-?} balanceWei=${bal:-?} positionUnits=${pos:-?}"
 }
 # Every node must print the same row; the daa of each is shown for the reader.
 all_nodes_agree() {
@@ -356,6 +386,45 @@ for ((i=0; i<NODES; i++)); do
   [ "$n" -eq 0 ] || { bad=1; log "node-$i logged $n suspicious line(s):"; grep -E "MarketSettlementMismatch|panicked|market settlement|lifecycle object was dropped.*Model" "$WORK_DIR/node-$i.log" | head -5 | sed "s/^/    /" >&2; }
 done
 check "9. no node logged a settlement mismatch, a dropped market object or a panic" "$bad"
+
+# ---- 9b. ADR-0091: the mining reward alone moves the pair ---------------------------------------------
+# Every block these fixture producers make on the floor class escrows a worker reward; at that
+# claim's Final five percent of it buys from THIS pair (the founding line's) and the miner is named
+# the rest. Nothing here trades, so a rise in `buyback_sompi` is the reward's move and nothing else.
+#
+# **This is the drill's slowest fact and it is last for that reason.** A claim reaches Final only
+# after bind (40 DAA) + receipt (40) + challenge (100) have passed since it was accepted, and this
+# devnet grows about two DAA a minute — an hour and a half of chain before the first reward is paid
+# to anybody. Everything above finishes in minutes; this waits, on its own clock (`BUYBACK_WAIT`),
+# after the rest of the drill has already been growing the chain. It also needs `--palw-panel` on
+# the nodes, without which nothing licenses a claim and no reward is ever paid at all (run 10b).
+log "ADR-0091: waiting up to ${BUYBACK_WAIT}s for the reward's own buys (no trade in flight)"
+bb_deadline=$((SECONDS + BUYBACK_WAIT)); bb0=""
+while [ $SECONDS -lt $bb_deadline ]; do
+  cli 0 palw model-show "$LINE_ID" --output json > "$WORK_DIR/out/buyback.json" 2>/dev/null || true
+  bb0="$(jfind buyback_sompi "$WORK_DIR/out/buyback.json")"
+  [ -n "${bb0:-}" ] && [ "${bb0:-0}" -gt 0 ] && break
+  finals="$(grep -ohE 'final_claims=[0-9]+' "$WORK_DIR"/node-*.log 2>/dev/null | tail -1 || true)"
+  log "  buyback ${bb0:-0}; ${finals:-final_claims=?}; chain $(blocks_total) blocks"
+  sleep 30
+done
+if [ -n "${bb0:-}" ] && [ "${bb0:-0}" -gt 0 ]; then
+  res_bb="$(jfind msk_reserve_sompi "$WORK_DIR/out/buyback.json")"; price_bb="$(jfind price_sompi_per_position "$WORK_DIR/out/buyback.json")"
+  ret_bb="$(jfind retired_units "$WORK_DIR/out/buyback.json")"; sold_bb="$(jfind sold_units "$WORK_DIR/out/buyback.json")"
+  log "  buyback ${bb0} sompi; reserve ${res_bb:-?}; price ${price_bb:-?}; retired ${ret_bb:-?}; sold ${sold_bb:-?}"
+  check "9b. the mining reward bought from the pair with no trade in flight" 0
+  # The trades above put their own net legs in, so the identity to check is the one the fold keeps:
+  # the reserve holds the seed, every net leg, and every slice — and the price never fell for a slice.
+  if [ "${res_bb:-0}" -gt $((10000000000000 + ${bb0:-0} - 1)) ]; then
+    check "9c. the reserve carries the seed and the whole buyback" 0
+  else
+    check "9c. the reserve carries the seed and the whole buyback" 1
+  fi
+else
+  log "  no buyback within ${BUYBACK_WAIT}s — no claim on this line reached Final yet"
+  check "9b. the mining reward bought from the pair with no trade in flight" 1
+  check "9c. the reserve carries the seed and the whole buyback" 1
+fi
 
 log "==== verdict ===="
 fail=0

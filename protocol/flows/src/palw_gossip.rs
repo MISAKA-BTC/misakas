@@ -360,6 +360,16 @@ impl PalwGossipCenter {
         *self.material_resolver.lock().unwrap() = Some(resolver);
     }
 
+    /// Roll the serve window if it has expired. **One spelling**, because two copies of a window
+    /// reset drift and a budget that resets on one path and not the other is not a budget.
+    fn roll_serve_window(budget: &mut ServeBudget, now: std::time::Instant) {
+        if now.duration_since(budget.window_started) >= SERVE_BUDGET_WINDOW {
+            budget.window_started = now;
+            budget.bytes_served = 0;
+            budget.per_peer.clear();
+        }
+    }
+
     /// Reserve `bytes` of this window's serve allowance for `peer`. `false` means refuse.
     ///
     /// Reserved BEFORE the disk read and refunded afterwards (audit3 H6): the read is the expensive
@@ -367,12 +377,7 @@ impl PalwGossipCenter {
     /// neither disk I/O nor the worker the read blocks.
     fn reserve_serve_budget(&self, peer: PeerKey, bytes: u64) -> bool {
         let mut budget = self.serve_budget.lock().unwrap();
-        let now = std::time::Instant::now();
-        if now.duration_since(budget.window_started) >= SERVE_BUDGET_WINDOW {
-            budget.window_started = now;
-            budget.bytes_served = 0;
-            budget.per_peer.clear();
-        }
+        Self::roll_serve_window(&mut budget, std::time::Instant::now());
         let peer_used = budget.per_peer.get(&peer).copied().unwrap_or(0);
         if peer_used.saturating_add(bytes) > SERVE_BUDGET_BYTES_PER_PEER {
             return false;
@@ -383,6 +388,43 @@ impl PalwGossipCenter {
         budget.per_peer.insert(peer, peer_used + bytes);
         budget.bytes_served += bytes;
         true
+    }
+
+    /// **The pruning-point sidecar lanes spend the same window the material pull spends** (mainnet
+    /// audit H-1).
+    ///
+    /// `RequestPruningPointPalwState` and its two siblings in `v8/request_pruning_point_snapshots`
+    /// answer a ~40-byte unauthenticated request with a multi-megabyte blob, from a bare `dequeue!`
+    /// loop with no budget, no cost accounting and no rate limit — the one serve family in this
+    /// node that had none. They are serve lanes, so they are bounded by the serve budget rather
+    /// than by a second one invented beside it: an attacker's per-peer share is one number
+    /// whatever it asks for.
+    ///
+    /// **Reserved at the ATTEMPT FLOOR, not at the worst case**, which is the one place this lane
+    /// differs from `resolve_material_bytes`. A pruning-point carriage is accepted up to 64 MiB
+    /// (`MAX_PALW_STATE_BYTES` on the requesting side) — larger than one peer's whole share — so
+    /// reserving the worst case would refuse every honest IBD on a large state. Charging the real
+    /// size afterwards means the first attempt in a window always passes and a peer gets one
+    /// snapshot serve per window on a maximal state, several on a small one, against an honest
+    /// need of one per IBD. Every attempt past the reservation costs the floor, so a refusal is
+    /// never free and repeatable.
+    pub fn reserve_sidecar_serve(&self, peer: PeerKey) -> bool {
+        self.reserve_serve_budget(peer, SERVE_ATTEMPT_FLOOR_BYTES)
+    }
+
+    /// Charge what a sidecar serve actually cost, above the floor [`Self::reserve_sidecar_serve`]
+    /// already took. Unconditional: a peer over its share must still be charged for the bytes it
+    /// was sent, or the overshoot is free.
+    pub fn charge_sidecar_serve(&self, peer: PeerKey, served: u64) {
+        let extra = served.saturating_sub(SERVE_ATTEMPT_FLOOR_BYTES);
+        if extra == 0 {
+            return;
+        }
+        let mut budget = self.serve_budget.lock().unwrap();
+        Self::roll_serve_window(&mut budget, std::time::Instant::now());
+        let peer_used = budget.per_peer.get(&peer).copied().unwrap_or(0);
+        budget.per_peer.insert(peer, peer_used.saturating_add(extra));
+        budget.bytes_served = budget.bytes_served.saturating_add(extra);
     }
 
     /// Give back the part of a reservation that was not sent.
@@ -2268,5 +2310,78 @@ mod tests {
             Ok(PalwGossipEvent::Material { claim: got, .. }) => assert_eq!(got, claim, "and its own panel finally holds it"),
             other => panic!("the echo must reach the producer's own service, got {other:?}"),
         }
+    }
+
+    /// **A pruning-point sidecar serve spends the same per-peer window the material pull spends**
+    /// (mainnet audit H-1).
+    ///
+    /// The three `v8/request_pruning_point_snapshots` flows were bare `dequeue!` loops: no budget,
+    /// no cost accounting, no rate limit — the one serve family in this node that had none —
+    /// answering a forty-byte request with a multi-megabyte blob for any peer past the p2p
+    /// handshake. They are serve lanes, so they are bounded by the serve budget rather than by a
+    /// second one invented beside it: an attacker's per-peer share is ONE number whatever it asks
+    /// for.
+    ///
+    /// The rule has four parts, and the first is as load-bearing as the other three: **a peer's
+    /// first attempt in a window always passes.** A pruning-point carriage is accepted up to
+    /// `MAX_PALW_STATE_BYTES` (64 MiB), larger than one peer's whole share, so a lane that
+    /// reserved the worst case would refuse every honest IBD on a large state. That is also the
+    /// line where ADR-0022 §5's chunked, back-pressured transport would change the answer — the
+    /// gap left open here — so it can neither widen nor close silently.
+    #[test]
+    fn a_sidecar_serve_spends_the_same_per_peer_window_the_material_pull_spends() {
+        let center = PalwGossipCenter::default();
+
+        // (1) The first attempt always passes, whatever the serve will turn out to cost.
+        assert!(center.reserve_sidecar_serve(peer(1)), "an honest IBD's first sidecar request must never be the refused one");
+
+        // (2) A serve larger than one peer's whole share is charged in full, not capped at the
+        // reservation floor — an overshoot that is free is not a bound.
+        center.charge_sidecar_serve(peer(1), 64 << 20);
+        assert!(
+            (64u64 << 20) > SERVE_BUDGET_BYTES_PER_PEER,
+            "the fixture must charge past one peer's share, or it asserts nothing"
+        );
+        assert!(!center.reserve_sidecar_serve(peer(1)), "a peer that has spent its window must be refused the next blob");
+
+        // (3) The bound is PER PEER: one peer cannot spend another's share.
+        assert!(center.reserve_sidecar_serve(peer(2)), "one peer's spending must not refuse a different peer");
+
+        // (4) …and the node-wide backstop still stands above it, so a swarm of fresh peer keys
+        // cannot buy unbounded egress either.
+        let mut fresh = 3u128;
+        while center.serve_budget.lock().unwrap().bytes_served < SERVE_BUDGET_BYTES_PER_WINDOW {
+            let p = peer(fresh);
+            fresh += 1;
+            assert!(fresh < 10_000, "the node-wide backstop was never reached, which means it is not being charged");
+            if !center.reserve_sidecar_serve(p) {
+                break;
+            }
+            center.charge_sidecar_serve(p, SERVE_BUDGET_BYTES_PER_PEER);
+        }
+        assert!(
+            !center.reserve_sidecar_serve(peer(fresh + 1)),
+            "a fresh peer key must not get a serve once the node-wide window is spent"
+        );
+    }
+
+    /// **The window rolls once, for both halves of a sidecar serve.** Two copies of a window reset
+    /// drift, and a budget that resets on the reservation path but not the charge path is not a
+    /// budget: a peer would reserve inside the new window and be charged against a stale one.
+    #[test]
+    fn a_sidecar_charge_rolls_the_same_window_the_reservation_rolls() {
+        let center = PalwGossipCenter::default();
+        assert!(center.reserve_sidecar_serve(peer(1)));
+        center.charge_sidecar_serve(peer(1), 64 << 20);
+        assert!(!center.reserve_sidecar_serve(peer(1)), "the precondition: this peer is out of allowance");
+
+        // Age the window out from under it, the way a minute of wall clock would.
+        center.serve_budget.lock().unwrap().window_started = std::time::Instant::now() - SERVE_BUDGET_WINDOW;
+        assert!(center.reserve_sidecar_serve(peer(1)), "a new window must give the peer its allowance back");
+        assert_eq!(
+            center.serve_budget.lock().unwrap().per_peer.get(&peer(1)).copied(),
+            Some(SERVE_ATTEMPT_FLOOR_BYTES),
+            "and it starts that window owing exactly the attempt floor, not the previous window's tally"
+        );
     }
 }

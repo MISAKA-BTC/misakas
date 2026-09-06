@@ -42,7 +42,12 @@ interface IMisakaModelAMM {
     ///   contributorPaid sompi paid to an adopted contributor out of that leg, cumulative
     ///   closedToBuys    set when the line left Active (retired) — sells continue, buys are
     ///                   refused (ADR-0087 D7, per line since ADR-0088 D6)
-    ///   exists          false until the first buy opens the market
+    ///   exists          false until the market is seeded (ADR-0090 D2)
+    ///   buybackSompi    sompi the MINING REWARD has put into the curve, cumulative — 5 % of every
+    ///                   block's escrowed worker reward on this line, at the claim's Final
+    ///                   (ADR-0091 D1/D2); no leg, no holder
+    ///   retiredUnits    units the reward's buys took out of the curve — the chain's, for good:
+    ///                   positionUnits + every holder's + retiredUnits = totalSupply (ADR-0091 D4)
     function market(bytes32 lineA, bytes32 lineB)
         external
         view
@@ -55,7 +60,9 @@ interface IMisakaModelAMM {
             uint64 ownerPaid,
             uint64 contributorPaid,
             bool closedToBuys,
-            bool exists
+            bool exists,
+            uint64 buybackSompi,
+            uint64 retiredUnits
         );
 
     /// The current price, in sompi per whole position (10^6 units).

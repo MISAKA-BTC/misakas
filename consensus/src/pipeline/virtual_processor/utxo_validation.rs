@@ -33,13 +33,14 @@ use kaspa_consensus_core::{
     coinbase::*,
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondMutation, BondStatus, DnsParams, FeeSplitParams,
-        OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, RewardedEpochSet, SlashingSideEffect, StakeAttestation, UNBOND_REQUEST_CONTEXT,
-        attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score, compute_challenges_with_ids,
-        decode_attestation_shard, effective_bond_status, epoch_meets_quality_floor, epochs_finalized_at, is_bond_active_at,
-        mandatory_attestation_mass_capacity, precommit_evidence_from_accepted_txs, precommit_fault, recompute_epoch_tallies,
+        EpochTally, OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, RewardedEpochSet, SlashingSideEffect, StakeAttestation,
+        UNBOND_REQUEST_CONTEXT, attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score,
+        compute_challenges_with_ids, decode_attestation_shard, deferred_quality_bonus_outputs_for_block, effective_bond_status,
+        epoch_meets_quality_floor, epochs_finalized_at, is_bond_active_at, mandatory_attestation_mass_capacity,
+        precommit_evidence_from_accepted_txs, precommit_fault, recompute_epoch_tallies, reserve_drip_outputs_for_block,
         resolve_slashing_side_effects, slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
         stake_precommit_message, unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
-        validator_participation_reward_outputs, validator_quality_bonus_outputs, victim_compensation_outputs,
+        validator_participation_reward_outputs, victim_compensation_outputs,
     },
     hashing,
     header::Header,
@@ -654,8 +655,12 @@ impl VirtualStateProcessor {
     /// kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 4) §reserve drip — the security-reserve **drip**
     /// coinbase outputs THIS block emits for the epoch(s) it finalizes, plus the total dripped (for
     /// the reserve-balance recurrence). For each epoch the block finalizes (the same crossing as the
-    /// quality bonus), drips `min(remaining_balance, reserve_drip_per_epoch_cap_sompi)` distributed
-    /// stake-proportionally to that epoch's included validators (reusing the bonus distributor). The
+    /// quality bonus), drips at most `reserve_drip_per_epoch_cap_sompi` PER BLOCK past
+    /// `palw_validator_payout_bounds` — per finalized EPOCH below it, which is what testnet-11
+    /// enforces (mainnet audit 2026-09-06, M-1) — distributed across the epochs this block
+    /// finalizes, stake-proportionally to each epoch's included validators (reusing the bonus
+    /// distributor), and at most [`kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_RESERVE_DRIP_PAYOUTS`]
+    /// outputs a block past that fence. The
     /// reserve decreases by exactly the **minted** amount (≤ budget), so it is value-conserving and
     /// the unspent tail rolls over. `parent_balance` is the selected parent's committed cumulative
     /// reserve balance (read by the caller from `reserve_balance_store`), so construction (template)
@@ -687,25 +692,33 @@ impl VirtualStateProcessor {
         let bonds = bond_view.records();
         let tallies = recompute_epoch_tallies(daa_score, epoch_len, finalization_depth, &contributions, &bonds);
 
-        let mut outputs = Vec::new();
-        let mut remaining = parent_balance;
-        let mut total_drip = 0u64;
-        for (epoch, tally) in &tallies {
-            if *epoch < e_min || *epoch > e_max || remaining == 0 {
-                continue;
-            }
-            let budget = remaining.min(cap);
-            if budget == 0 {
-                continue;
-            }
-            // Stake-proportional distribution to the epoch's included validators (meets=true ⇒ pays).
-            let drip = validator_quality_bonus_outputs(budget as u128, &tally.included, tally.expected_stake, true);
-            let minted: u64 = drip.iter().fold(0u64, |acc, o| acc.saturating_add(o.value));
-            outputs.extend(drip);
-            remaining = remaining.saturating_sub(minted);
-            total_drip = total_drip.saturating_add(minted);
-        }
-        (outputs, total_drip)
+        // **The cap is a RATE limit, and a rate must not depend on how many epoch thresholds one
+        // block happens to cross** (mainnet audit, 2026-09-06, M-1).
+        //
+        // `budget = remaining.min(cap)` sat inside this loop, so the reserve released up to `cap`
+        // per FINALIZED EPOCH — and `at_two_minute_cadence` rewrote `epoch_length_blocks` 100 → 2
+        // while naming only `reward_uniqueness_window_blocks` as its deliberate omission, so
+        // `epochs_finalized_at` now returns ~mergeset/2 epochs and one wide-mergeset block could
+        // drain ~90 caps with nothing but `remaining == 0` to stop it. The four-way slashing
+        // split's reserve leg is then not a reserve.
+        //
+        // Fixing this by scaling the constant in `at_two_minute_cadence` is not available: that
+        // function produces testnet-11's LIVE `DnsParams`, the value sits inside the borsh blob
+        // `consensus_params_id` hashes, and moving it would move that chain's fingerprint. So the
+        // budget becomes the BLOCK's, behind `palw_validator_payout_bounds`. With one crossing per
+        // block — the shape the parameter was written for, and the only shape a steady chain has —
+        // this is byte-identical to what it did before.
+        // The DAG's job ends here: the epochs this block finalizes, in canonical order. Everything
+        // after it is arithmetic, and lives in `reserve_drip_outputs_for_block` so the per-block
+        // rate limit can be stated over a MULTI-epoch crossing — the shape a fixture on a linear
+        // chain cannot build and the shape the defect only appears in.
+        let finalized: Vec<(u64, EpochTally)> =
+            tallies.into_iter().filter(|(epoch, _)| *epoch >= e_min && *epoch <= e_max).collect();
+        let bounds = self
+            .palw_validator_payout_bounds
+            .is_some_and(|fence| fence.is_active(daa_score))
+            .then_some(kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_RESERVE_DRIP_PAYOUTS);
+        reserve_drip_outputs_for_block(parent_balance, cap, bounds, &finalized)
     }
 
     /// Verify that the current block fully respects its own UTXO view. We define a block as
@@ -1369,8 +1382,14 @@ impl VirtualStateProcessor {
     ///
     /// Returns no outputs below the v2 fence (`pos_v2_activation_daa_score`), or when no epoch
     /// crosses this block — so it is inert on the devnet/simnet preset (fence = `u64::MAX`); on
-    /// mainnet/testnet (`PRODUCTION_DNS_PARAMS`, fence = 0) it pays from block 1, and is
-    /// O(1) amortized (the deep window walk runs only on the ~1-in-`L` crossing blocks).
+    /// mainnet/testnet (`PRODUCTION_DNS_PARAMS`, fence = 0) it pays from block 1.
+    ///
+    /// **It is NOT "O(1) amortized"** (mainnet audit, 2026-09-06, H-3). That claim rested on the
+    /// deep window walk running only on the ~1-in-`L` crossing blocks, and `at_two_minute_cadence`
+    /// sets `L = 2` on every ConsensusV2 preset, so a crossing happens on essentially every block.
+    /// This function, [`Self::reserve_drip_outputs`] and `slashed_epoch_victim_outputs` each pay
+    /// their own `selected_chain_epoch_contributions` walk plus a full [`recompute_epoch_tallies`]
+    /// BEFORE the `[e_min, e_max]` filter, on both the template and the validation path.
     fn deferred_quality_bonus_outputs(
         &self,
         dns_params: &DnsParams,
@@ -1404,16 +1423,20 @@ impl VirtualStateProcessor {
         let tallies = recompute_epoch_tallies(daa_score, epoch_len, finalization_depth, &contributions, &bonds);
 
         // Pay each crossed epoch in `[e_min, e_max]` that met φS.
-        let mut outputs = Vec::new();
-        for (epoch, tally) in &tallies {
-            if *epoch < e_min || *epoch > e_max {
-                continue;
-            }
-            let included_sum: u128 = tally.included.iter().map(|(_, s)| *s as u128).sum();
-            let meets = epoch_meets_quality_floor(included_sum, tally.expected_stake, dns_params.stake_event_quality_floor_bps);
-            outputs.extend(validator_quality_bonus_outputs(tally.quality_pool_accrued, &tally.included, tally.expected_stake, meets));
-        }
-        outputs
+        //
+        // **The slot budget is the BLOCK's, not the epoch's** (mainnet audit, 2026-09-06, H-3).
+        // One coinbase carries every epoch this block finalizes, and with `epoch_length_blocks = 2`
+        // a wide mergeset finalizes ~mergeset/2 of them, so the fan-out is (epochs) × (included)
+        // and a per-epoch bound would bound nothing. The DAG's job ends at the list below; the
+        // budget is carried across it in `deferred_quality_bonus_outputs_for_block`, so the coinbase
+        // this node builds cannot exceed the isolation cap this node then applies to it.
+        let finalized: Vec<(u64, EpochTally)> =
+            tallies.into_iter().filter(|(epoch, _)| *epoch >= e_min && *epoch <= e_max).collect();
+        let bounds = self
+            .palw_validator_payout_bounds
+            .is_some_and(|fence| fence.is_active(daa_score))
+            .then_some(kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS);
+        deferred_quality_bonus_outputs_for_block(dns_params.stake_event_quality_floor_bps, bounds, &finalized)
     }
 
     /// kaspa-pq DNS-finality (E1/E3 §6.1/§6.2): classify ONE selected mempool tx for

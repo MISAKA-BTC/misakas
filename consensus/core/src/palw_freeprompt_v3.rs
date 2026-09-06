@@ -883,6 +883,15 @@ pub enum PalwFpV3Error {
     ZeroWorkLeaves,
     #[error("work_leaves ({got}) is above the step space's own cap ({max})")]
     WorkLeavesAboveCap { got: u64, max: u64 },
+    /// The job's prompt is longer than this RULESET's advertised `max_prompt_tokens`. Named
+    /// separately from `ContextOverflow` because the two are different facts with different fixes:
+    /// one is a job whose own budget does not fit its own context, the other is a job the network
+    /// does not serve at that size.
+    #[error("prompt_tokens ({got}) is above the ruleset's advertised max_prompt_tokens ({max})")]
+    PromptTokensAboveRulesetCap { got: u32, max: u32 },
+    /// …and the decode half, against `max_decode_tokens`.
+    #[error("decode_token_limit ({got}) is above the ruleset's advertised max_decode_tokens ({max})")]
+    DecodeTokensAboveRulesetCap { got: u32, max: u32 },
     #[error("prompt mode {0} is not user (0) or canonical (1)")]
     UnsupportedPromptMode(u8),
     #[error("a canonical claim's payload carries prompt ids — the prompt is a function of the job and the chain does not carry it")]
@@ -911,7 +920,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         // **`PanelDa` disarmed, because a caller that passed no arming has armed nothing**
         // (ADR-0077 Decision 16). This entry predates the mode; every one of its callers refuses
         // mode 2 today and keeps refusing it until it starts passing the answer.
-        self.validate_v3(Some(network_domain), false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
+        self.validate_v3(Some(network_domain), false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
     }
 
     /// The same rules **under this network's arming** — the entry that can admit a `PanelDa`
@@ -919,7 +928,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// at the point the caller is judging; a caller that cannot resolve it calls
     /// [`Self::validate_stateless_v3`] and gets the disarmed answer.
     pub fn validate_stateless_under_v3(&self, network_domain: Hash64, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
+        self.validate_v3(Some(network_domain), panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
     }
 
     /// The same rules **under this network's arming AND its ruleset's ladder** (ADR-0082
@@ -931,8 +940,9 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         network_domain: Hash64,
         panel_da_armed: bool,
         max_step_leaf_count: u64,
+        ruleset_caps: Option<(u32, u32)>,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false, max_step_leaf_count)
+        self.validate_v3(Some(network_domain), panel_da_armed, false, max_step_leaf_count, ruleset_caps)
     }
 
     /// **The half a context-free caller can run: everything except the two checks that need the
@@ -964,19 +974,28 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// Mode 2's own shape rule, that the payload carries no ids, needs no arming at all and is
     /// checked under both answers.
     pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
+        self.validate_v3(None, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
     }
 
     /// The shape half under a known arming — the door on a network that carries the rule, and
     /// what a builder asks before it spends an inference on a job the chain will refuse.
     pub fn validate_shape_under_v3(&self, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
+        self.validate_v3(None, panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
     }
 
     /// The shape half **under a ruleset's ladder** — for a builder that holds the bundle and wants
     /// the answer the walk will give, rather than the weaker one isolation can give.
-    pub fn validate_shape_under_ruleset_v3(&self, panel_da_armed: bool, max_step_leaf_count: u64) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false, max_step_leaf_count)
+    /// `ruleset_caps` is `Some((fp.max_prompt_tokens(), fp.max_decode_tokens()))` past
+    /// `Params::palw_fp_ruleset_caps` and `None` before it — the ruleset's own advertised caps,
+    /// which until the 2026-09-06 mainnet audit nothing read (L-2). `None` keeps this door strictly
+    /// weaker than the walk, which is the one direction it may not fail in.
+    pub fn validate_shape_under_ruleset_v3(
+        &self,
+        panel_da_armed: bool,
+        max_step_leaf_count: u64,
+        ruleset_caps: Option<(u32, u32)>,
+    ) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(None, panel_da_armed, false, max_step_leaf_count, ruleset_caps)
     }
 
     fn validate_v3(
@@ -985,6 +1004,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         panel_da_armed: bool,
         decode_rules_armed: bool,
         max_step_leaf_count: u64,
+        ruleset_caps: Option<(u32, u32)>,
     ) -> Result<(), PalwFpV3Error> {
         let c = &self.commitment;
         let job = &c.job;
@@ -1040,6 +1060,32 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         if job.decode_token_limit == 0 {
             return Err(PalwFpV3Error::ZeroDecodeLimit);
         }
+        // **The RULESET's two caps, enforced where the ruleset's ladder is** (ADR-0044 Decision 9;
+        // mainnet audit 2026-09-06, L-2).
+        //
+        // `max_prompt_tokens` and `max_decode_tokens` are fields of `PalwFreePromptParamsV3`,
+        // borsh-hashed into `palw_ruleset_id_v2` and therefore advertised in every node's
+        // fingerprint — and until this block a repo-wide grep found only the declarations, the
+        // constructor's range checks, the field writes and the accessor bodies. `validate_v3` never
+        // took the params struct, so the caps were structurally unreachable from the only
+        // validation the lane runs, and the surviving bounds were transaction mass and
+        // `work_leaves <= max_step_leaf_count`. A node advertised caps it did not enforce.
+        //
+        // Threaded exactly as the step ladder is, and for the same reason its own comment gives: a
+        // caller with no ruleset in hand must not be stricter than the walk, so the arming-free
+        // entry points pass `None` and only the ruleset-aware ones pass the bundle's numbers.
+        //
+        // `Some(..)` only past `Params::palw_fp_ruleset_caps`: testnet-11 and devnet have run
+        // without these bounds since genesis, so enforcing them there would refuse jobs those
+        // chains have already accepted.
+        if let Some((max_prompt_tokens, max_decode_tokens)) = ruleset_caps {
+            if job.prompt_tokens > max_prompt_tokens {
+                return Err(PalwFpV3Error::PromptTokensAboveRulesetCap { got: job.prompt_tokens, max: max_prompt_tokens });
+            }
+            if job.decode_token_limit > max_decode_tokens {
+                return Err(PalwFpV3Error::DecodeTokensAboveRulesetCap { got: job.decode_token_limit, max: max_decode_tokens });
+            }
+        }
         let budget = (job.prompt_tokens as u64) + (job.decode_token_limit as u64);
         if budget > job.max_context_tokens as u64 {
             return Err(PalwFpV3Error::ContextOverflow {
@@ -1087,6 +1133,21 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         if c.trace_chunk_count == 0 {
             return Err(PalwFpV3Error::ZeroTraceChunks);
         }
+        // **`trace_manifest_root` is asked NOTHING here, and that is recorded rather than repaired**
+        // (ADR-0072 Decision 8; mainnet audit 2026-09-06 M-3).
+        //
+        // The attempt lane pins its manifest root to a function of a value the panel replays. This
+        // lane cannot: `fp_trace_manifest_root_v3` hashes the per-chunk EVENT digests, which the
+        // chain does not hold and cannot recompute — and `palw_fp_objects_v3`'s extraction does not
+        // carry the field onto the consensus object at all, so no court, no seat and no transition
+        // ever reads it. A refusal here would be a stateless-admission change on a live chain (a
+        // commitment testnet-11 accepts today), so it belongs behind the same `palw_fp_da_pins`
+        // question the transition's derivation sits behind, and it buys nothing while the field
+        // carries no obligation. The state of affairs is pinned instead, by
+        // `palw_fp_objects_v3::tests::the_free_prompt_lanes_trace_manifest_root_is_carried_by_nothing`,
+        // so it can neither widen nor close silently. The worker-side refusal of a zero manifest
+        // (`PalwFpWorkerResultV3::validate_against_request`) is unchanged and is where a producer
+        // still learns it retained nothing.
         Ok(())
     }
 
@@ -1523,7 +1584,7 @@ impl PalwFpCommitmentTxPayloadV3 {
         network_domain: Hash64,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, prompt_ids_form)
+        self.validate_v3(Some(network_domain), false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
     }
 
     /// The same, **under this network's arming** — the entry the extraction walk uses, and the
@@ -1535,7 +1596,7 @@ impl PalwFpCommitmentTxPayloadV3 {
         panel_da_armed: bool,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, prompt_ids_form)
+        self.validate_v3(Some(network_domain), panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
     }
 
     /// The same **under the ruleset's ladder as well as its arming** — what the extraction walk
@@ -1546,16 +1607,17 @@ impl PalwFpCommitmentTxPayloadV3 {
         network_domain: Hash64,
         panel_da_armed: bool,
         max_step_leaf_count: u64,
+        ruleset_caps: Option<(u32, u32)>,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false, max_step_leaf_count, prompt_ids_form)
+        self.validate_v3(Some(network_domain), panel_da_armed, false, max_step_leaf_count, ruleset_caps, prompt_ids_form)
     }
 
     /// The context-free half — see [`PalwFreePromptCommitmentEnvelopeV3::validate_shape_v3`] for
     /// why the transaction validator can only run this one, and why the arming it asks is the
     /// height-free one.
     pub fn validate_shape_v3(&self, prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, prompt_ids_form)
+        self.validate_v3(None, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
     }
 
     /// The shape half under a known arming — `Params::palw_panel_da_admissible` at the door.
@@ -1564,7 +1626,7 @@ impl PalwFpCommitmentTxPayloadV3 {
         panel_da_armed: bool,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, prompt_ids_form)
+        self.validate_v3(None, panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
     }
 
     /// The shape half under a ruleset's ladder — for a builder holding the bundle.
@@ -1572,9 +1634,10 @@ impl PalwFpCommitmentTxPayloadV3 {
         &self,
         panel_da_armed: bool,
         max_step_leaf_count: u64,
+        ruleset_caps: Option<(u32, u32)>,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false, max_step_leaf_count, prompt_ids_form)
+        self.validate_v3(None, panel_da_armed, false, max_step_leaf_count, ruleset_caps, prompt_ids_form)
     }
 
     /// **The signature, on the payload that actually rides a transaction.**
@@ -1600,13 +1663,14 @@ impl PalwFpCommitmentTxPayloadV3 {
         panel_da_armed: bool,
         decode_rules_armed: bool,
         max_step_leaf_count: u64,
+        ruleset_caps: Option<(u32, u32)>,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
         if self.version != PALW_FP_V3_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
         }
         let envelope = PalwFreePromptCommitmentEnvelopeV3 { commitment: self.commitment.clone(), signature: self.signature.clone() };
-        envelope.validate_v3(network_domain, panel_da_armed, decode_rules_armed, max_step_leaf_count)?;
+        envelope.validate_v3(network_domain, panel_da_armed, decode_rules_armed, max_step_leaf_count, ruleset_caps)?;
         // **`PanelDa` carries NO ids, and the check is a REQUIREMENT, not a tolerance** (ADR-0077
         // Decision 16). Placed before the canonical arm because the privacy mode decides what the
         // chain may hold and the prompt mode decides where the ids come from: a mode-2 payload
@@ -1851,6 +1915,102 @@ mod tests {
         }
     }
 
+    /// **A ruleset field is a ruleset BOUND: the lane enforces the two caps it advertises**
+    /// (ADR-0044 Decision 9; mainnet audit 2026-09-06, L-2).
+    ///
+    /// `PalwFreePromptParamsV3::max_prompt_tokens` and `max_decode_tokens` are borsh-hashed into
+    /// `palw_ruleset_id_v2`, so every node advertises them in its fingerprint — and a repo-wide
+    /// grep found only the declarations, the constructor's range checks, the field writes and the
+    /// accessor bodies. `validate_v3` never took the params struct, so the caps were structurally
+    /// unreachable from the only validation this lane runs.
+    ///
+    /// The numbers are READ OFF a shipped bundle, never named here, so this expresses the rule
+    /// rather than agreeing with a constant; and the boundary is pinned in the direction that
+    /// catches an off-by-one — a job exactly AT each cap is accepted.
+    #[test]
+    fn the_free_prompt_lane_enforces_the_caps_it_advertises() {
+        use crate::config::params::devnet_shipped_params;
+        let params = devnet_shipped_params();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("devnet ships a V2 bundle")
+        };
+        let fp = &bundle.freeprompt;
+        let ladder = bundle.court.max_step_leaf_count();
+        let caps = Some((fp.max_prompt_tokens(), fp.max_decode_tokens()));
+
+        // A job sized to the ruleset's own numbers, exactly: the caps are inclusive, and a
+        // refusal here would be the off-by-one this assertion exists for.
+        let mut at_cap = commitment();
+        at_cap.job.prompt_tokens = fp.max_prompt_tokens();
+        at_cap.job.decode_token_limit = fp.max_decode_tokens();
+        at_cap.job.max_context_tokens = fp.max_prompt_tokens() + fp.max_decode_tokens();
+        at_cap.decode_tokens_executed = fp.max_decode_tokens() - 1;
+        let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: at_cap.clone(), signature: sig() };
+        assert_eq!(e.validate_shape_under_ruleset_v3(false, ladder, caps), Ok(()), "a job AT the advertised caps is served");
+
+        // One prompt token above: admitted with no ruleset in hand, refused by the ruleset, and the
+        // refusal names the number that refused it.
+        let mut wide_prompt = at_cap.clone();
+        wide_prompt.job.prompt_tokens = fp.max_prompt_tokens() + 1;
+        wide_prompt.job.max_context_tokens += 1;
+        let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: wide_prompt, signature: sig() };
+        assert_eq!(e.validate_shape_under_ruleset_v3(false, ladder, None), Ok(()), "with no ruleset in hand the door is weaker");
+        assert_eq!(
+            e.validate_shape_under_ruleset_v3(false, ladder, caps),
+            Err(PalwFpV3Error::PromptTokensAboveRulesetCap { got: fp.max_prompt_tokens() + 1, max: fp.max_prompt_tokens() })
+        );
+
+        // …and the decode half, against the other advertised number.
+        let mut wide_decode = at_cap;
+        wide_decode.job.decode_token_limit = fp.max_decode_tokens() + 1;
+        wide_decode.job.max_context_tokens += 1;
+        let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: wide_decode, signature: sig() };
+        assert_eq!(e.validate_shape_under_ruleset_v3(false, ladder, None), Ok(()));
+        assert_eq!(
+            e.validate_shape_under_ruleset_v3(false, ladder, caps),
+            Err(PalwFpV3Error::DecodeTokensAboveRulesetCap { got: fp.max_decode_tokens() + 1, max: fp.max_decode_tokens() })
+        );
+    }
+
+    /// **The gap the fence leaves open, pinned as a fact** (mainnet audit 2026-09-06, L-2).
+    ///
+    /// testnet-11 and devnet have run since genesis with these two numbers unread, so a build that
+    /// enforced them would refuse jobs those chains have already accepted — a validity move on a
+    /// live chain, which is a scheduled flag day or a re-mint and the operator's call. Until then
+    /// both advertise caps in their fingerprints that they do not apply, and this says so rather
+    /// than leaving it silent. If a preset ever arms the fence, this test is the line that fails.
+    #[test]
+    fn the_live_presets_advertise_fp_caps_they_do_not_enforce() {
+        use crate::config::params::{devnet_shipped_params, palw_rc_shipped_params};
+        for (name, params) in [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())] {
+            assert!(
+                params.palw_fp_ruleset_caps.is_none(),
+                "{name}: ADR-0044 D9's caps stay dormant on a live chain — arming them is a scheduled height"
+            );
+            let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+                panic!("{name} ships a V2 bundle")
+            };
+            let fp = &bundle.freeprompt;
+            let ladder = bundle.court.max_step_leaf_count();
+            // What the extraction walk resolves on this preset today: no caps.
+            let resolved = params.palw_fp_ruleset_caps.map(|_| (fp.max_prompt_tokens(), fp.max_decode_tokens()));
+            assert!(resolved.is_none(), "{name}: the walk carries no caps while the fence is dormant");
+
+            let mut over = commitment();
+            over.job.prompt_tokens = fp.max_prompt_tokens() + 1;
+            over.job.decode_token_limit = fp.max_decode_tokens() + 1;
+            over.job.max_context_tokens = over.job.prompt_tokens + over.job.decode_token_limit;
+            over.decode_tokens_executed = 1;
+            let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: over, signature: sig() };
+            assert_eq!(
+                e.validate_shape_under_ruleset_v3(false, ladder, resolved),
+                Ok(()),
+                "{name}: KNOWN GAP — a job above both advertised caps is admitted, because the numbers in this network's \
+                 fingerprint are not the numbers it enforces"
+            );
+        }
+    }
+
     /// The price is the capture's leaf count, bounded by the step space's own cap (ADR-0074
     /// Decision 5), and every non-canonical encoding of the executed shape is refused: a zero
     /// price, a price above the cap, an overrun, a zero run, and both wrong stop-reason arms.
@@ -1882,7 +2042,7 @@ mod tests {
         let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: wide, signature: sig() };
         assert_eq!(e.validate_stateless_v3(net()), Ok(()), "the executor's 2^22 is not the chain's ladder");
         assert_eq!(
-            e.validate_stateless_under_ruleset_v3(net(), false, crate::palw_step::PALW_STEP_MAX_LEAVES),
+            e.validate_stateless_under_ruleset_v3(net(), false, crate::palw_step::PALW_STEP_MAX_LEAVES, None),
             Err(PalwFpV3Error::WorkLeavesAboveCap {
                 got: crate::palw_step::PALW_STEP_MAX_LEAVES + 1,
                 max: crate::palw_step::PALW_STEP_MAX_LEAVES

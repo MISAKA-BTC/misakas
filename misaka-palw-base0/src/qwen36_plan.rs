@@ -1973,6 +1973,8 @@ mod tests {
                 Err(other) => panic!("{}: unexpected plan answer {other}", row.model_id),
             }
         }
-        assert_eq!(served, 3, "the three graph-v3 rows are the servable half of the ledger");
+        // Four since 2026-09-04: Qwen3.8-27B (graph-v3 only, no v1 row) planned and its planned
+        // and compiled forward passes agreed — the row is servable, which is what this counts.
+        assert_eq!(served, 4, "the four graph-v3 rows are the servable half of the ledger");
     }
 }

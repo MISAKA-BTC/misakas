@@ -3026,11 +3026,17 @@ pub struct GetPalwModelMarketResponse {
     pub seeded_by: String,
     /// ADR-0090: the least seed this network takes, in sompi.
     pub seed_min_sompi: u64,
+    /// ADR-0091: MSK the mining reward has put into the curve, cumulative — five percent of every
+    /// model block's escrowed worker reward, at the claim's `Final`.
+    pub buyback_sompi: u64,
+    /// ADR-0091: the positions the reward's buys retired — the chain's, for good; no holder has
+    /// them, and `position_units + Σ holders + retired_units = supply_units`.
+    pub retired_units: u64,
 }
 
 impl Serializer for GetPalwModelMarketResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &3, writer)?;
+        store!(u16, &4, writer)?;
         store!(bool, &self.found, writer)?;
         store!(String, &self.line_id, writer)?;
         store!(bool, &self.opened, writer)?;
@@ -3050,6 +3056,9 @@ impl Serializer for GetPalwModelMarketResponse {
         store!(u64, &self.seed_sompi, writer)?;
         store!(String, &self.seeded_by, writer)?;
         store!(u64, &self.seed_min_sompi, writer)?;
+        // Version 4 (ADR-0091): what the mining reward bought, and what it retired.
+        store!(u64, &self.buyback_sompi, writer)?;
+        store!(u64, &self.retired_units, writer)?;
         Ok(())
     }
 }
@@ -3076,6 +3085,8 @@ impl Deserializer for GetPalwModelMarketResponse {
         // Version 3 (ADR-0090): the seed, its payer and the network's least seed.
         let (seed_sompi, seeded_by, seed_min_sompi) =
             if version >= 3 { (load!(u64, reader)?, load!(String, reader)?, load!(u64, reader)?) } else { (0, String::new(), 0) };
+        // Version 4 (ADR-0091): a version-3 peer's chain had no buyback, so zero reads it exactly.
+        let (buyback_sompi, retired_units) = if version >= 4 { (load!(u64, reader)?, load!(u64, reader)?) } else { (0, 0) };
         Ok(Self {
             found,
             line_id,
@@ -3095,6 +3106,8 @@ impl Deserializer for GetPalwModelMarketResponse {
             seed_sompi,
             seeded_by,
             seed_min_sompi,
+            buyback_sompi,
+            retired_units,
         })
     }
 }

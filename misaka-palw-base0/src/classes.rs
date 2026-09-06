@@ -791,6 +791,17 @@ pub fn qwen36_canonical_classes_v1() -> Vec<Qwen36CanonicalClassV1> {
             canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
             graph_version: 3,
         },
+        // Qwen3.8-27B, 2026-09-04: added under graph-v3 only — a class registered today should
+        // run the graph the engine executes, not the genesis tables' defective spelling, so it
+        // gets no v1 row. Dense FFN as a one-expert mixture, the `Qwen/Qwen3.5-2B` precedent.
+        Qwen36CanonicalClassV1 {
+            model_id: "Qwen/Qwen3.8-27B/graph-v3",
+            geometry: kaspa_consensus_core::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+                kaspa_consensus_core::palw_qwen36_profile::QWEN38_27B,
+            ),
+            canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
+            graph_version: 3,
+        },
     ]
 }
 
@@ -1142,7 +1153,7 @@ mod tests {
         // added without reading this test is still a row added on purpose. The second trio is
         // graph-v3 (2026-09-01), the corrected node tables and epsilon over the SAME weights, and
         // the whole point of the pairing is that each is a different class than its v1 twin.
-        assert_eq!(table.len(), 6);
+        assert_eq!(table.len(), 7);
         let hybrid = &table[0];
         let coder = &table[1];
         let dense = &table[2];
@@ -1151,6 +1162,7 @@ mod tests {
         assert_eq!(table[3].model_id, "Qwen3.6-35B-A3B/graph-v3");
         assert_eq!(table[4].model_id, "huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated/graph-v3");
         assert_eq!(table[5].model_id, "Qwen/Qwen3.5-2B/graph-v3");
+        assert_eq!(table[6].model_id, "Qwen/Qwen3.8-27B/graph-v3");
         let mut ids = Vec::new();
         for row in &table {
             ids.push(row.class_id().expect("every row projects"));

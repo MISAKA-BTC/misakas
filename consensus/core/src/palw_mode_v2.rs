@@ -105,6 +105,21 @@ pub const PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS: u16 = 4;
 /// disagreeing about what a signature authorises. A refused object is SKIPPED and the block stands,
 /// so such a disagreement splits the class registry with no block ever rejected and nothing in
 /// either log saying so.
+///
+/// **FROZEN. This is the set testnet-11 and devnet committed to, and it may never grow**
+/// (mainnet audit M-8, 2026-09-06).
+///
+/// It is still INCOMPLETE — see [`PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2`] — and it is left
+/// incomplete on purpose. `signature_contexts_root` is inside `palw_ruleset_id_v2`, which is
+/// inside `Params::consensus_params_id`, which is what two nodes compare at the handshake;
+/// testnet-11 runs `palw_rc_shipped_params()` and its bundle takes this root. Appending an entry
+/// here re-mints a LIVE network's identity, and nothing in the suite would say so —
+/// `shipped_presets_have_pinned_fingerprints` pins mainnet, testnet-10, simnet and devnet, and has
+/// no testnet-11 row. `the_committed_context_set_of_a_live_network_is_frozen` pins this array and
+/// its root so the mistake is loud instead of silent.
+///
+/// A network that wants the complete set states it at GENESIS, through
+/// `Params::palw_signature_contexts_v2`.
 pub const PALW_V2_SIGNATURE_CONTEXTS: &[&[u8]] = &[
     crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
     crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
@@ -119,20 +134,122 @@ pub const PALW_V2_SIGNATURE_CONTEXTS: &[&[u8]] = &[
     crate::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT,
 ];
 
+/// **Every ML-DSA-87 signing context the ConsensusV2 acceptance layer verifies under — the set
+/// [`PALW_V2_SIGNATURE_CONTEXTS`] was supposed to be** (mainnet audit M-8, 2026-09-06).
+///
+/// Ten contexts were missing from the frozen set, each with a live production verify site: bond
+/// capability, DA accusation and DA disclosure (`palw_v2_validate_objects` in the virtual
+/// processor), the court's close declaration and both attention-dissection moves
+/// (`palw_court_v2`), the free-prompt commitment and spend (`palw_freeprompt_v3`), and the
+/// carriage commitment and execution attestation (again the processor). The frozen list's own doc
+/// named the carriage commitment while the array did not contain it.
+///
+/// **The order is: the frozen nine, in their frozen order, then the ten additions.** The root is
+/// length-prefixed per entry so order matters; keeping V1 as a prefix means a reader can see at a
+/// glance that this is a superset and not a re-shuffle.
+///
+/// The MARKET contexts (`palw_model_market_v1`, `palw_model_lines_v1`) are deliberately absent.
+/// Their objects are refused wholesale unless `Params::palw_model_market` / `palw_model_lines` are
+/// armed, and those are top-level fences already written Some-only into `consensus_params_id` — so
+/// two builds that disagree about a market context already have different identities, by a
+/// different mechanism. `the_committed_context_set_is_derived_not_retyped` states that exclusion
+/// as a rule rather than leaving it as a silence.
+pub const PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2: &[&[u8]] = &[
+    // — the frozen nine, in order —
+    crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+    crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
+    crate::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT,
+    // — the ten the acceptance layer verifies and the frozen set never named —
+    crate::palw_state_v2::PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_DA_DISCLOSURE_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT,
+    crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
+    crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_SPEND_CONTEXT,
+    crate::palw_carriage::PALW_CARRIAGE_MLDSA87_COMMITMENT_CONTEXT,
+    crate::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT,
+];
+
+/// The families whose ML-DSA-87 contexts the ConsensusV2 acceptance layer verifies signatures
+/// from — the SOURCE the committed set is checked against, so the set is derived from the
+/// per-family registries every family already maintains rather than re-typed a second time.
+///
+/// A family is on this list iff `palw_v2_validate_objects`, the header/attempt door, the court or
+/// the free-prompt lane verifies a signature it owns. `palw_receipt` (the V1 receipt) and
+/// `palw_block_commitment` (a V1 fence `validate_palw_v2` refuses on a V2 network) are absent for
+/// that reason and no other.
+#[cfg(test)]
+pub(crate) const PALW_V2_ACCEPTANCE_FAMILIES: &[&[&[u8]]] = &[
+    crate::palw_attempt_v2::PALW_ATTEMPT_V2_ALL_DOMAINS,
+    crate::palw_panel_v2::PALW_PANEL_V2_ALL_DOMAINS,
+    crate::palw_state_v2::PALW_STATE_V2_ALL_DOMAINS,
+    crate::palw_court_v2::PALW_COURT_V2_ALL_DOMAINS,
+    crate::palw_freeprompt_v3::PALW_FP_V3_ALL_DOMAINS,
+    crate::palw_derived_v1::PALW_DERIVED_V1_ALL_DOMAINS,
+    crate::palw_carriage::PALW_CARRIAGE_ALL_DOMAINS,
+    crate::palw_slash::PALW_S_ALL_DOMAINS,
+];
+
+/// The naming convention that separates a signing CONTEXT from a hashing domain inside those
+/// registries. Every ML-DSA-87 context in this tree ends `mldsa87/v1`; no hashing domain does.
+/// Pinned by `the_committed_context_set_is_derived_not_retyped`, which asserts it in both
+/// directions, so the convention is load-bearing and checkable rather than a habit.
+#[cfg(test)]
+pub(crate) fn is_mldsa87_signing_context(domain: &[u8]) -> bool {
+    domain.ends_with(b"mldsa87/v1")
+}
+
 pub const PALW_V2_SIGNATURE_CONTEXTS_DOMAIN: &[u8] = b"misaka-palw/ruleset-id-v2/signature-contexts/v1";
 
-/// `H(count ‖ (len ‖ context)*)` over [`PALW_V2_SIGNATURE_CONTEXTS`]. Length-prefixed per entry
-/// so no two different context lists can concatenate to the same preimage.
-pub fn palw_v2_signature_contexts_root() -> Hash64 {
+/// `H(count ‖ (len ‖ context)*)` over a context list. Length-prefixed per entry so no two
+/// different context lists can concatenate to the same preimage.
+///
+/// ONE spelling of the hash for both sets: a second copy of these eight lines is a second place
+/// the encoding could drift, and the two roots must be comparable.
+fn palw_v2_signature_contexts_root_of(contexts: &[&[u8]]) -> Hash64 {
     let mut state = Blake2bParams::new().hash_length(64).key(PALW_V2_SIGNATURE_CONTEXTS_DOMAIN).to_state();
-    state.update(&(PALW_V2_SIGNATURE_CONTEXTS.len() as u64).to_le_bytes());
-    for context in PALW_V2_SIGNATURE_CONTEXTS {
+    state.update(&(contexts.len() as u64).to_le_bytes());
+    for context in contexts {
         state.update(&(context.len() as u64).to_le_bytes());
         state.update(context);
     }
     let mut out = [0u8; 64];
     out.copy_from_slice(state.finalize().as_bytes());
     Hash64::from_bytes(out)
+}
+
+/// **The literal value of the frozen root, as testnet-11 and devnet committed to it.**
+///
+/// ONE spelling of the golden, read by `the_committed_context_set_of_a_live_network_is_frozen`
+/// here and by `the_complete_context_set_is_carded_and_leaves_every_live_network_where_it_was` in
+/// `config::params`. Both need a value that does NOT move when [`PALW_V2_SIGNATURE_CONTEXTS`]
+/// moves — an assertion against `palw_v2_signature_contexts_root()` agrees with the array in every
+/// possible world and is exactly the shape of test this audit item was raised about.
+///
+/// Derived from this module's own hash of the frozen nine and cross-checked against an independent
+/// BLAKE2b of the same length-prefixed preimage; never transcribed from elsewhere in the tree.
+#[cfg(test)]
+pub(crate) const PALW_V2_FROZEN_SIGNATURE_CONTEXTS_ROOT_HEX: &str = "ce2f210968205e2319c073b0532f9d09682509222bbffb26460377b2fe5c3da1\
+     8df84a438f0ef862201161e8b95798f57b6a7709d040869dcaaf02a47719d2cb";
+
+/// The root of the FROZEN set — testnet-11's and devnet's committed value. Byte-identical to what
+/// this function returned before the complete set existed; do not change what it hashes.
+pub fn palw_v2_signature_contexts_root() -> Hash64 {
+    palw_v2_signature_contexts_root_of(PALW_V2_SIGNATURE_CONTEXTS)
+}
+
+/// The root of [`PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2`] — what a network that arms
+/// `Params::palw_signature_contexts_v2` at genesis commits to.
+pub fn palw_v2_signature_contexts_root_v2() -> Hash64 {
+    palw_v2_signature_contexts_root_of(PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2)
 }
 
 pub const PALW_MODE_V2_ALL_DOMAINS: &[&[u8]] = &[PALW_RULESET_ID_V2_DOMAIN];
@@ -680,6 +797,9 @@ impl PalwBondParamsV2 {
 pub enum PalwModeV2Error {
     #[error("invalid V2 bundle: {0}")]
     Invalid(&'static str),
+    /// The same refusal as [`Self::Invalid`] where the message has to name a class id.
+    #[error("invalid V2 bundle: {0}")]
+    InvalidOwned(String),
     #[error("invalid V2 bundle: {0}")]
     State(#[from] PalwStateV2Error),
     #[error("invalid V2 bundle: {0}")]
@@ -912,8 +1032,17 @@ impl PalwConsensusParamsV2 {
         {
             return Err(PalwModeV2Error::Invalid("trace_format_version is not a format this binary adjudicates"));
         }
-        if self.signature_contexts_root != palw_v2_signature_contexts_root() {
-            return Err(PalwModeV2Error::Invalid("signature_contexts_root is not the context set this binary signs under"));
+        // **Either of the two sets this binary can sign under**, the same shape
+        // `trace_format_version` already has three lines above (3 or 4, chosen at genesis by
+        // `Params::palw_prompt_ids_merkle`). A network states which one it committed to through
+        // `Params::palw_signature_contexts_v2`, and `Params::validate_palw_v2` refuses the fence
+        // without the complete root and the complete root without the fence — so this check asks
+        // "is it a set I implement" and that one asks "is it the set you declared". Neither alone
+        // is enough: this function does not hold a `Params`.
+        if self.signature_contexts_root != palw_v2_signature_contexts_root()
+            && self.signature_contexts_root != palw_v2_signature_contexts_root_v2()
+        {
+            return Err(PalwModeV2Error::Invalid("signature_contexts_root is not a context set this binary signs under"));
         }
         if self.cadence_target_time_per_block_ms != PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS {
             return Err(PalwModeV2Error::Invalid("the bundle's cadence is not the frozen 120 s (ADR-0038 Decision H)"));
@@ -1810,28 +1939,83 @@ pub(crate) mod tests {
         // The signature contexts are committed as their own BYTES, not as a version number, so
         // editing a context string is a startup failure rather than a silent cross-family replay.
         assert_eq!(base.signature_contexts_root, palw_v2_signature_contexts_root());
-        // **Every context the acceptance layer verifies under, not the two it started with**
-        // (audit M2-23). Restated as a set membership so the list is checked against its MEANING —
-        // "a signature this ruleset gives weight to" — rather than against a copy of itself.
-        for context in [
-            crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
-            crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
-            crate::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
-            crate::palw_state_v2::PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT,
-            crate::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
-            crate::palw_court_v2::PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
-            crate::palw_court_v2::PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT,
-            crate::palw_court_v2::PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
-            crate::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT,
-        ] {
-            assert!(
-                PALW_V2_SIGNATURE_CONTEXTS.contains(&context),
-                "a context the acceptance layer verifies under is not committed by the ruleset id: {}",
-                String::from_utf8_lossy(context)
-            );
+        // The completeness of the committed set now has its own two tests below — this one had a
+        // hand-copied list of the same nine names and called it a check against MEANING (mainnet
+        // audit 2026-09-06, M-8). It was a copy of itself, so it agreed with the array in every
+        // possible world and could not have failed.
+        let unique: std::collections::BTreeSet<&&[u8]> = PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2.iter().collect();
+        assert_eq!(unique.len(), PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2.len(), "two objects must not share a context");
+    }
+
+    /// **The committed set is DERIVED from the families that sign, not typed a second time.**
+    ///
+    /// ADR-0042 Decision 11 exists so "a build whose contexts differ from what the network
+    /// committed to refuses to run". A hand-maintained list cannot deliver that — it delivered it
+    /// for nine of nineteen contexts, and the test that closed the gap was a copy of the same nine
+    /// (mainnet audit 2026-09-06, M-8). This derives the set from the per-family `*_ALL_DOMAINS`
+    /// registries every family already maintains for the cross-family uniqueness sweep, so adding
+    /// a context to a family fails this test until the ruleset commits to it.
+    #[test]
+    fn the_committed_context_set_is_derived_not_retyped() {
+        use std::collections::BTreeSet;
+
+        let derived: BTreeSet<&[u8]> = PALW_V2_ACCEPTANCE_FAMILIES
+            .iter()
+            .flat_map(|family| family.iter().copied())
+            .filter(|d| is_mldsa87_signing_context(d))
+            .collect();
+        let committed: BTreeSet<&[u8]> = PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2.iter().copied().collect();
+
+        let missing: Vec<String> = derived.difference(&committed).map(|d| String::from_utf8_lossy(d).into_owned()).collect();
+        assert!(missing.is_empty(), "the acceptance layer verifies under contexts the ruleset id does not commit to: {missing:?}");
+        let extra: Vec<String> = committed.difference(&derived).map(|d| String::from_utf8_lossy(d).into_owned()).collect();
+        assert!(extra.is_empty(), "the ruleset id commits to contexts no acceptance family owns: {extra:?}");
+
+        // The convention the filter rests on, asserted in BOTH directions so it is a rule and not
+        // a habit: every committed entry ends `mldsa87/v1`, and nothing in these registries that
+        // ends `mldsa87/v1` is anything but a signing context.
+        for c in PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2 {
+            assert!(is_mldsa87_signing_context(c), "a committed context breaks the naming convention: {}", String::from_utf8_lossy(c));
         }
-        let unique: std::collections::BTreeSet<&&[u8]> = PALW_V2_SIGNATURE_CONTEXTS.iter().collect();
-        assert_eq!(unique.len(), PALW_V2_SIGNATURE_CONTEXTS.len(), "two objects must not share a context");
+
+        // The frozen set is a strict subset, so the complete set is a superset and not a reshuffle.
+        for c in PALW_V2_SIGNATURE_CONTEXTS {
+            assert!(committed.contains(c), "the complete set dropped a context the frozen one committed to");
+        }
+        assert_ne!(palw_v2_signature_contexts_root(), palw_v2_signature_contexts_root_v2(), "two sets, two roots");
+
+        // The market families are excluded ON PURPOSE and the exclusion is stated, not silent:
+        // their objects are refused wholesale unless `Params::palw_model_market` / `palw_model_lines`
+        // are armed, and those are top-level fences already written Some-only into
+        // `consensus_params_id` — so two builds that disagree about a market context already carry
+        // different identities by a different mechanism. If a market context ever becomes
+        // acceptable WITHOUT its fence, it belongs in the set and this assertion must be deleted
+        // deliberately rather than drifted past.
+        assert!(!committed.contains(&crate::palw_model_market_v1::PALW_MODEL_SELL_MLDSA87_CONTEXT));
+        assert!(!committed.contains(&crate::palw_model_lines_v1::PALW_MODEL_LINE_MLDSA87_CONTEXT));
+    }
+
+    /// **The set a LIVE network committed to is frozen, and this is what says so.**
+    ///
+    /// `signature_contexts_root` is inside `palw_ruleset_id_v2`, inside `consensus_params_id`,
+    /// which is what two nodes compare at the handshake. Testnet-11 runs
+    /// `palw_rc_shipped_params()`; devnet runs `devnet_shipped_params()`; both take this root.
+    /// Appending an entry to [`PALW_V2_SIGNATURE_CONTEXTS`] re-mints those networks' identities,
+    /// and `shipped_presets_have_pinned_fingerprints` would NOT catch it — it pins mainnet,
+    /// testnet-10, simnet and devnet's bundle-free values and has no testnet-11 row.
+    ///
+    /// The golden below is this function's own output on the frozen nine, cross-checked against an
+    /// independent BLAKE2b of the same length-prefixed preimage; it is not transcribed from any
+    /// other place in the tree.
+    #[test]
+    fn the_committed_context_set_of_a_live_network_is_frozen() {
+        assert_eq!(PALW_V2_SIGNATURE_CONTEXTS.len(), 9, "testnet-11 and devnet committed to exactly these nine");
+        assert_eq!(
+            palw_v2_signature_contexts_root().to_string(),
+            PALW_V2_FROZEN_SIGNATURE_CONTEXTS_ROOT_HEX,
+            "the frozen context set moved: this re-mints testnet-11's and devnet's consensus_params_id, and no \
+             fingerprint pin covers testnet-11. If that is intended it is a coordinated flag day, not an edit."
+        );
     }
 
     /// **Audit H2: the worst-case court duration is DERIVED, not asserted.**

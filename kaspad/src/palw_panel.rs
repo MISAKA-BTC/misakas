@@ -46,7 +46,7 @@ use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_
 use kaspa_consensus_core::palw_panel_v2::{
     PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
 };
-use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
+use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwBondStatusV2, PalwConsensusObjectV2};
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
 use kaspa_consensus_core::tx::{MutableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_consensusmanager::ConsensusManager;
@@ -310,6 +310,18 @@ pub struct PalwPanelConfig {
     /// bond, because the registration names it as payee and the carrier must pay the collateral to
     /// exactly that script.
     pub pay_address: Option<String>,
+    /// **The class this node will produce for, already resolved** (`--palw-producer-class`).
+    ///
+    /// A `Hash64` and not a hex string on purpose: the daemon resolves the flag ONCE, for the
+    /// producer and for this service together, so a bad id fails in one place with one message
+    /// instead of being parsed twice and disagreeing.
+    ///
+    /// It is here because the collateral a bond needs is a function of the class whose claims it
+    /// will reserve against, and `--palw-register-bond` runs this service while the flag naming
+    /// that class was read only by the producer. A newcomer registering a bond for a model tier
+    /// therefore got the FLOOR's number — see `size_bond_collateral`. `None` is the floor, which is
+    /// both the default and the truth for a node that never passed the flag.
+    pub producer_class: Option<Hash64>,
 }
 
 pub struct PalwPanelService {
@@ -546,14 +558,58 @@ impl PalwPanelService {
         {
             candidates.push(outpoint);
         }
-        // Every candidate is off-limits to a wallet, whether or not this tick picks it (audit3 H12).
+        // **A remembered outpoint has to be one this node can SIGN for, and nothing checked that.**
+        //
+        // The scan below rejects every output whose script is not ours; the two remembered
+        // outpoints went straight to the signer. Both can name someone else's money. The
+        // CONFIGURED one is whatever the operator typed. The PERSISTED one is worse, because it is
+        // written by a previous run and survives a change of `--palw-producer-key`: a node that
+        // registered a bond under one key, and is now registering under another, reads its
+        // predecessor's change outpoint out of the state dir and tries to spend it.
+        //
+        // Signing it produces a carrier whose signature is over the right transaction with the
+        // wrong key, and the only word the script engine has for that is
+        // `script ran, but verification failed` — the mempool's generic verdict, which names a
+        // signature and points every reader at `--palw-producer-key` and
+        // `--palw-producer-pay-address`, the two things that are NOT wrong. Nothing recovers,
+        // because the entry stays unspent, stays resolvable, and is chosen again on the next tick:
+        // measured as 82 identical refusals over 82 minutes on testnet-11 Relaunch 5f (issue #96,
+        // #97), ending only when an unrelated `wallet send` spent the output and the scan took
+        // over.
+        //
+        // So ask the same question of a remembered outpoint that the scan asks of every other one.
+        // A candidate that fails it is skipped rather than deleted: the scan's own
+        // `persist_fee_outpoint` overwrites the file as soon as it finds real money, so the wedge
+        // clears itself without this path removing state it did not write.
+        let script = self.fee_script(session);
+        // Only ours are off-limits to a wallet (audit3 H12): the reservation exists because this
+        // panel might spend the outpoint, and one it cannot sign for it will never spend.
+        let mut foreign: Vec<TransactionOutpoint> = Vec::new();
         for outpoint in candidates.iter() {
             self.flow_context.palw_reserve_outpoint(*outpoint);
         }
         for outpoint in candidates.iter().filter(|o| is_free(o)) {
             if let Some(entry) = session.get_virtual_utxo_entry(*outpoint) {
+                // Unknown script — no bond payout to read yet — is not evidence against the
+                // candidate, so only a script we positively know and that positively differs
+                // rejects one.
+                if funding_is_foreign(script.as_ref(), &entry.script_public_key) {
+                    foreign.push(*outpoint);
+                    continue;
+                }
                 return Some((*outpoint, entry));
             }
+        }
+        if !foreign.is_empty() {
+            warn!(
+                "[{PALW_PANEL}] ignoring {} remembered funding outpoint(s) that pay to a script this node cannot sign for: {}. \
+                 This is money belonging to another key — spending it would build a carrier the mempool refuses with \
+                 \"script ran, but verification failed\", which reads like a bad key or pay address and is neither. \
+                 A state dir carried over from a run with a different --palw-producer-key is the usual source; \
+                 looking for this node's own funding instead.",
+                foreign.len(),
+                foreign.iter().map(|o| format!("{}:{}", o.transaction_id, o.index)).collect::<Vec<_>>().join(", ")
+            );
         }
         // **Neither remembered outpoint exists, so find the money instead of remembering it.**
         //
@@ -573,7 +629,7 @@ impl PalwPanelService {
         //
         // A scan, so it runs only here: the two remembered outpoints are the hot path and this is
         // the path back from having none.
-        let script = self.fee_script(session)?;
+        let script = script?;
         let mut cursor: Option<TransactionOutpoint> = None;
         // What the scan SAW, so a failure can say which of its three reasons it was.
         let (mut scanned, mut under_script, mut busy) = (0usize, 0usize, 0usize);
@@ -685,6 +741,16 @@ impl PalwPanelService {
     /// one cannot ask: whether a carrier holding an output that small can be relayed at all. That
     /// answer needs the funding UTXO, which is resolved after this — see
     /// `min_carryable_collateral`.
+    ///
+    /// **Exposure is released at `Final`, not at bind, so sizing for one claim buys a ceiling of
+    /// exactly one claim.** `has_exposure_room` is `reserved + claim <= ceiling`, and
+    /// `release_for_claim` runs on `Final` and on `Voided` and nowhere else — up to
+    /// `MAX_CLAIM_EXPOSURE_DAA` after the claim was created. A bond sized for a single claim
+    /// therefore admits the first block and refuses the second for hours, which reads exactly like
+    /// a stuck producer: `holding: the bond's exposure ceiling leaves no room for another claim
+    /// [... exposure=0/N per_claim=M]`, forever, with real money already locked. The whole
+    /// derivation is `palw_v2_collateral_for_claim_lifetime_v1`, which genesis has always used and
+    /// this path did not.
     fn size_bond_collateral(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> Result<u64, String> {
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
             &self.consensus_config.params.palw_consensus_mode
@@ -693,40 +759,71 @@ impl PalwPanelService {
         };
         let floor = bundle.state.min_collateral_sompi();
 
-        // **The floor is not a usable default.** A bond may hold a claim only while
-        // `reserved_exposure + claim_exposure <= collateral * max_exposure_ratio_permille / 1000`
-        // (`has_exposure_room`), and one claim costs `pwu * slash_value_per_pwu` — where `pwu`
-        // rises with the class's retargeted difficulty. So the chain's minimum collateral buys a
-        // bond that may be unable to hold even ONE claim, and the producer would report "the
-        // bond's exposure ceiling leaves no room for another claim" forever, having locked real
-        // money to get there. Sizing from the chain is the only default that is not silently
-        // useless; the operator can still ask for more.
-        let ratio = bundle.admission.max_exposure_ratio_permille().max(1) as u128;
-        // **One inference's exposure, not one block's derived pwu.** Under ADR-0072 `facts.pwu`
-        // is expected draws × one inference and grows with difficulty, while admission item 8
-        // reserves `palw_exposure_pwu_v1` — the one inference the block commits to. Sizing from
-        // `facts.pwu` overstated the need by the draw count and warned honest operators away.
-        let one_claim = session.palw_producer_facts_v2(bundle.base_class_id, None).zip(session.palw_v2_registration_terms()).map(
-            |(facts, terms)| {
-                let per_inference = facts.pwu / kaspa_consensus_core::palw_pwu::palw_expected_attempts_v1(facts.class_target).max(1);
-                (per_inference as u128).saturating_mul(terms.slash_value_per_pwu as u128)
-            },
-        );
-        let for_one_claim = one_claim
-            .map(|exposure| u64::try_from(exposure.saturating_mul(1000).div_ceil(ratio)).unwrap_or(u64::MAX))
-            .unwrap_or(floor);
-        let sized = for_one_claim.max(floor);
+        // **The class this bond will be asked to CARRY — the operator's, not the network's floor.**
+        //
+        // A claim reserves `pwu_per_inference x slash_value_per_pwu` against the bond of the
+        // producer that made it, and `pwu_per_inference` is a property of the CLASS: on
+        // testnet-11 the Qwen3.6 tier's canonical inference counts 348x the floor's. Sizing from
+        // `bundle.base_class_id` regardless was therefore not a conservative default but the wrong
+        // question — it priced a bond for work this node had already been told it would not be
+        // doing. The measured shape (issue #95): a newcomer passing
+        // `--palw-producer-class=<a model tier>` registered a floor-priced bond and its producer
+        // then held forever.
+        let class_id = self.config.producer_class.unwrap_or(bundle.base_class_id);
 
-        let collateral = self.config.bond_collateral.unwrap_or(sized);
+        // **One inference's normative work, not one block's derived pwu.** Under ADR-0072
+        // `facts.pwu` is `expected_draws x pwu_per_inference` and grows with the class's
+        // difficulty, while what a claim reserves is `palw_exposure_pwu_v1` — the one inference
+        // the block commits to. Dividing the draws back out recovers the registration's own frozen
+        // figure, which is what the lifetime derivation is denominated in.
+        let per_inference = session
+            .palw_producer_facts_v2(class_id, None)
+            .map(|facts| facts.pwu / kaspa_consensus_core::palw_pwu::palw_expected_attempts_v1(facts.class_target).max(1));
+        // The FULL claim lifetime, and the same function every genesis registry is sized by
+        // (`palw_rc_params_with_classes` re-derives its bonds from the dearest class it registers).
+        // Its factors are deliberately an over-estimate — funding a bond above its requirement
+        // costs an operator nothing the chain enforces, and funding one below it is the permanent
+        // wedge above.
+        let needed = per_inference
+            .map(kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1)
+            .map(|sized| sized.max(floor));
+
+        let collateral = match (self.config.bond_collateral, needed) {
+            // Their money, their exposure ceiling: an explicit value is always honoured (subject to
+            // the chain's floor below), even when the chain cannot be asked what it should be.
+            (Some(named), _) => named,
+            (None, Some(sized)) => sized,
+            // **No facts, no default.** Falling back to the chain's floor here is what the old code
+            // did, and it is the failure this whole function is about: a bond registered at 400,000
+            // sompi against a class that needs three orders of magnitude more, with nothing said.
+            // Transient before the state store has a tip, so the caller's five-second retry loop
+            // simply asks again; permanent only if the id names no registered class.
+            (None, None) => {
+                return Err(format!(
+                    "this chain reports no producer facts for class {class_id}, so the collateral a bond for it \
+                     needs cannot be derived — waiting. If that id came from --palw-producer-class, check it \
+                     against the class table; sizing against the network floor instead would register a bond that \
+                     cannot hold one of this class's claims."
+                ));
+            }
+        };
+
         if collateral < floor {
             return Err(format!("--palw-bond-collateral {collateral} is below this chain's floor of {floor} sompi"));
         }
-        if collateral < sized {
-            // Their money, their call — but not silently. This is the number whose absence turns
-            // into a producer that holds forever.
+        if let Some(sized) = needed
+            && collateral < sized
+        {
+            // Their money, their call — but not silently, and named against the class they
+            // CONFIGURED rather than against the floor. The old warning compared every value to
+            // the floor class's number, so an operator mining a model tier saw no warning at any
+            // amount above 400,000 sompi — the one reading that would have caught issue #95 before
+            // the money moved.
             warn!(
-                "[{PALW_PANEL}] --palw-bond-collateral {collateral} is below the {sized} sompi one claim on this \
-                 chain's floor class currently needs; this bond will register and may then be unable to hold a claim"
+                "[{PALW_PANEL}] --palw-bond-collateral {collateral} is below the {sized} sompi that a claim of class \
+                 {class_id} needs on this chain for its whole life (exposure is released at Final, not at bind, so \
+                 the ceiling has to hold every claim in flight at once); this bond will register and its producer \
+                 may then hold forever with 'the bond's exposure ceiling leaves no room for another claim'"
             );
         } else if self.config.bond_collateral.is_none() {
             // Once. This runs on every 5 s pass of the registration loop, and a node waiting for
@@ -734,9 +831,11 @@ impl PalwPanelService {
             // reading the log — which is where the actionable "no confirmed UTXO" line lives.
             static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                let scope = if self.config.producer_class.is_some() { "--palw-producer-class" } else { "this chain's base class" };
                 info!(
-                    "[{PALW_PANEL}] sizing collateral at {collateral} sompi — the chain's floor is {floor} and one \
-                     claim on the base class currently needs {for_one_claim}"
+                    "[{PALW_PANEL}] sizing collateral at {collateral} sompi — enough for class {class_id} ({scope}) \
+                     to hold its claims for their whole lifetime, not just one at a time. The chain's own floor is \
+                     {floor}."
                 );
             }
         }
@@ -963,6 +1062,34 @@ impl PalwPanelService {
         extra_outputs: &[kaspa_consensus_core::tx::TransactionOutput],
     ) -> Result<Transaction, String> {
         let kp = self.keypair.as_ref().ok_or("no signing key")?;
+        // **Refuse before signing, and name the field.**
+        //
+        // The one input is signed with this node's key, so a funding output that does not pay to
+        // this key's own script produces a carrier that cannot be spent by anybody who could have
+        // built it. The mempool's word for that is `script ran, but verification failed` — the
+        // script engine's generic verdict, which names a signature and so sends every reader to
+        // `--palw-producer-key` and `--palw-producer-pay-address`, the two things a first
+        // registration has already got right. Checking it here is free, it happens before the
+        // ML-DSA-87 signature is computed, and it can say WHICH of the two scripts it is holding.
+        //
+        // It sits in the shared builder rather than in the registration path because every
+        // carrier — receipt, class, court — spends the same way and fails the same way.
+        let signable = signable_script(kp.verification_key.as_ref());
+        if funding.script_public_key != signable {
+            let addr = |spk: &kaspa_consensus_core::tx::ScriptPublicKey| {
+                kaspa_txscript::extract_script_pub_key_address(spk, self.consensus_config.prefix())
+                    .map(|a| a.to_string())
+                    .unwrap_or_else(|_| "an address this node cannot render".to_string())
+            };
+            return Err(format!(
+                "the funding output pays to {} and --palw-producer-key signs for {} — this node cannot spend it. \
+                 Nothing was signed. Fund the key's own address, or point --palw-producer-key at the key that owns \
+                 this output; a state dir carried over from a run with a different key is the usual source of a \
+                 remembered outpoint belonging to neither.",
+                addr(&funding.script_public_key),
+                addr(&signable)
+            ));
+        }
         let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() })
             .map_err(|e| format!("the lifecycle payload does not serialize: {e}"))?;
         let params = &self.consensus_config.params;
@@ -1320,18 +1447,28 @@ impl PalwPanelService {
     /// court cannot read) is re-drawn, bounded — a capture that yields fewer clear samples than
     /// asked is not verified either.
     fn fp_capture_samples_clear(
-        &self,
         backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
         capture: &[u8],
         prompt_token_ids: &[u32],
         step_leaf_count: u64,
         artifact_root: Hash64,
+        ladder: u64,
         claim: &Hash64,
     ) -> bool {
-        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_capped_v1};
         use rand::Rng;
         const SAMPLES: u64 = 4;
         const DRAWS_MAX: u64 = 32;
+        // **The seat grades a sample at the RULESET's step ladder** (ADR-0084 U-08, ADR-0080 W1b).
+        //
+        // This node's backends are built at `court.max_step_leaf_count()` (the SDK, `new`), and
+        // this check was made at the executor's `2^22` — so every capture of a class the chain
+        // admits above that was refused with `LeafCountOutOfRange` before a byte of evidence was
+        // read, landed in the redraw arm below, and burned all 32 draws while the seat filed
+        // nothing. The capped and uncapped names differ by a suffix and sit ten lines apart in
+        // `palw_step_refute`; `consensus/core/tests/palw_step_ladder_tree_guard.rs` is what keeps
+        // them from being confused again. The number arrives as an argument because the caller is
+        // the one holding `self.config.court`.
         if step_leaf_count == 0 {
             return false;
         }
@@ -1355,11 +1492,27 @@ impl PalwPanelService {
                     return false;
                 }
             };
-            match check_execution_step_refutation_v1(&refutation, &proven) {
+            match check_execution_step_refutation_capped_v1(&refutation, &proven, ladder) {
                 Err(PalwStepRefuteError::NoFaultFound) => cleared += 1,
                 Ok(_) => {
                     warn!(
                         "[{PALW_PANEL}] claim {claim}: leaf {index} of the served capture does not recompute — the court's business, not a receipt's"
+                    );
+                    return false;
+                }
+                // **A limit is not a verdict, and it is not a redraw either.** A capture priced
+                // above the ladder this node was handed is one this node cannot check at ANY leaf,
+                // so redrawing it costs a full job re-execution per draw (this class's retention is
+                // a fold: `refutation_for_free_prompt_index` re-runs the job with no cache) and
+                // buys thirty-two identical refusals. Said once, and the seat falls through to the
+                // caller's tail.
+                Err(PalwStepRefuteError::Leg(kaspa_consensus_core::palw_step_leg::PalwStepLegError::LeafCountOutOfRange {
+                    got,
+                    max,
+                })) => {
+                    warn!(
+                        "[{PALW_PANEL}] claim {claim}: the served capture is priced at {got} leaves and this node's ruleset ladder is \
+                         {max} — this seat cannot check it at any leaf, and says so once rather than redrawing"
                     );
                     return false;
                 }
@@ -1388,7 +1541,14 @@ impl PalwPanelService {
             PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_CANONICAL, PALW_FP_V3_VERSION, PalwFreePromptJobV3, fp_canonical_anchor_v1,
             fp_claim_id_v3, palw_fp_capture_encode_v1,
         };
-        const CANONICAL_CLAIM_FEE_SOMPI: u64 = 250_000;
+        // **The floor under a canonical claim's fee, not the fee.** The carrier is priced from its
+        // own compute mass below, exactly as every lifecycle carrier and the CLI's claims are: a
+        // free-prompt commitment carries an ML-DSA-87 identity (2,592-byte key + 4,627-byte
+        // signature) and the mempool's relay rate is 10 sompi per gram, so a flat 250,000 sits
+        // under what the mempool asks for. Found by the Qwen3.5-2B add-model rehearsal
+        // (2026-09-02): every canonical claim on the new class was refused with "transaction has
+        // 250000 fees which is under the required amount of 262870", and the lane never opened.
+        const CANONICAL_CLAIM_FEE_FLOOR_SOMPI: u64 = 250_000;
 
         let class_id = match self.config.canonical_class.as_deref() {
             Some(hex) => {
@@ -1479,18 +1639,34 @@ impl PalwPanelService {
         };
         let seed = kaspa_pq_validator_core::load_validator_seed(&self.config.key_path)?;
         let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
-        // Canonical: the chain carries no prompt ids (they are a function of the job).
-        let tx = key.build_fp_commitment_tx(
-            network_domain,
-            self.config.prompt_ids_form,
-            commitment,
-            Vec::new(),
-            &bundle.freeprompt,
-            per_inference,
-            funding_outpoint,
-            funding,
-            CANONICAL_CLAIM_FEE_SOMPI,
-        )?;
+        // Canonical: the chain carries no prompt ids (they are a function of the job). Built
+        // twice — once at the floor to read the carrier's mass, once at the fee that mass prices —
+        // because the fee is the only field the second build changes and the mass does not move
+        // with it.
+        let build = |fee: u64| {
+            key.build_fp_commitment_tx(
+                network_domain,
+                self.config.prompt_ids_form,
+                commitment.clone(),
+                Vec::new(),
+                &bundle.freeprompt,
+                per_inference,
+                funding_outpoint,
+                funding,
+                fee,
+            )
+        };
+        let probe = build(CANONICAL_CLAIM_FEE_FLOOR_SOMPI)?;
+        let params = &self.consensus_config.params;
+        let mass_calculator = MassCalculator::new(
+            params.mass_per_tx_byte,
+            params.mass_per_script_pub_key_byte,
+            params.mass_per_sig_op,
+            params.storage_mass_parameter,
+        );
+        let fee = relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&probe).compute_mass)
+            .max(CANONICAL_CLAIM_FEE_FLOOR_SOMPI);
+        let tx = build(fee)?;
         Ok((tx, claim_id, material))
     }
 
@@ -1561,13 +1737,50 @@ impl PalwPanelService {
                 .unwrap_or_else(|_| "this node's pay address".to_string())
         );
 
-        let mut last_complaint: Option<(String, std::time::Instant)> = None;
-        let mut complain = |why: String| {
-            let fresh =
-                last_complaint.as_ref().is_none_or(|(prev, at)| prev != &why || at.elapsed() >= std::time::Duration::from_secs(60));
-            if fresh {
+        // **An unchanged refusal is a different fact from a fresh one, and reprinting it verbatim
+        // hides which of the two an operator is reading.**
+        //
+        // This loop retries every five seconds and the reason usually does not move. The throttle
+        // this replaces let one line through per minute, forever, at identical wording: on
+        // testnet-11 Relaunch 5f that produced 82 copies of the same refusal over 82 minutes
+        // (issue #97). Eighty-two identical lines read as "still trying". They meant "nothing
+        // about the retry differs, so this will never clear on its own" — and on that reading the
+        // operator generated a fresh ML-DSA-87 key and re-funded an address, neither of which was
+        // the problem.
+        //
+        // So a repeat SAYS it is a repeat, carries how long the reason has stood and how many
+        // attempts it has survived, and backs off geometrically to a fifteen-minute ceiling. A
+        // reason that CHANGES prints at once and in full, because that is the event worth reading.
+        struct Standing {
+            why: String,
+            since: std::time::Instant,
+            printed_at: std::time::Instant,
+            gap: std::time::Duration,
+            attempts: u32,
+        }
+        const FIRST_GAP: std::time::Duration = std::time::Duration::from_secs(60);
+        const MAX_GAP: std::time::Duration = std::time::Duration::from_secs(900);
+        let mut standing: Option<Standing> = None;
+        let mut complain = |why: String| match standing.as_mut() {
+            Some(prev) if prev.why == why => {
+                prev.attempts += 1;
+                if prev.printed_at.elapsed() < prev.gap {
+                    return;
+                }
+                warn!(
+                    "[{PALW_PANEL}] still cannot register a bond — the same refusal, unchanged for {} across {} \
+                     attempts. Nothing about the retry differs, so it will not clear until the funding, the flags or \
+                     the chain do: {why}",
+                    brief_duration(prev.since.elapsed()),
+                    prev.attempts
+                );
+                prev.printed_at = std::time::Instant::now();
+                prev.gap = (prev.gap * 2).min(MAX_GAP);
+            }
+            _ => {
                 warn!("[{PALW_PANEL}] cannot register a bond yet: {why}");
-                last_complaint = Some((why, std::time::Instant::now()));
+                let now = std::time::Instant::now();
+                standing = Some(Standing { why, since: now, printed_at: now, gap: FIRST_GAP, attempts: 1 });
             }
         };
 
@@ -1586,13 +1799,33 @@ impl PalwPanelService {
             // that restarts. Asked of the chain rather than a local marker, because this network's
             // own relaunch instructions tell operators to wipe the datadir.
             if let Some(kp) = self.keypair.as_ref()
-                && let Some(existing) = session.palw_bond_of_pubkey_v2(kp.verification_key.as_ref())
+                && let Some((existing, status)) = session.palw_bond_of_pubkey_v2(kp.verification_key.as_ref())
             {
-                info!(
-                    "[{PALW_PANEL}] this key already holds bond {}:{} on this chain — not registering another. \
-                     Drop --palw-register-bond and run with --palw-producer-bond={}:{}",
-                    existing.0.transaction_id, existing.0.index, existing.0.transaction_id, existing.0.index
-                );
+                let (txid, index) = (existing.0.transaction_id, existing.0.index);
+                match status {
+                    PalwBondStatusV2::Active => info!(
+                        "[{PALW_PANEL}] this key already holds bond {txid}:{index} on this chain — not registering \
+                         another. Drop --palw-register-bond and run with --palw-producer-bond={txid}:{index}"
+                    ),
+                    // **A key that has retired is a key that is spent, and this is the only place
+                    // that says so.** The `Active` advice is wrong twice over here:
+                    // `palw_bond_may_take_work_v2` refuses a non-Active bond, so producing with it
+                    // never seats; and registering again is not the way out either, because the
+                    // transition's `DuplicateBondKey` rule scans an append-only registry that
+                    // retirement does not remove a row from. Nothing else in the node, the RPC or
+                    // the docs told an operator that, so the observed path was: retire, restart
+                    // with --palw-register-bond, read "not registering another", and conclude the
+                    // flag was a no-op rather than that the identity was finished.
+                    PalwBondStatusV2::Retiring { since_daa } => warn!(
+                        "[{PALW_PANEL}] this key's bond {txid}:{index} is RETIRING (since DAA {since_daa}), so it can \
+                         take no new work — and it cannot be replaced from this key. The chain refuses a second \
+                         registration from any key already in the bond registry (DuplicateBondKey) and retirement \
+                         does not remove the row, so this identity is finished on this chain. To bond again: \
+                         `misaka key gen --out <a NEW seed file>`, fund that address, and pass the new file as \
+                         --palw-producer-key. The collateral of {txid}:{index} is unaffected — it is still \
+                         reclaimable at its own payee once the withdrawal delay elapses."
+                    ),
+                }
                 return;
             }
             let sized = match self.size_bond_collateral(&session) {
@@ -1623,6 +1856,20 @@ impl PalwPanelService {
             let txid = tx.id();
             match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
                 Ok(()) => {
+                    // **"Accepted" is a local fact, so say whose.** `submit_rpc_transaction`
+                    // returns `Ok` when THIS node's mempool admitted the carrier and queued it for
+                    // broadcast; no peer has acknowledged anything at this point. An operator
+                    // reading "accepted" and then "no bond appeared" reasonably concludes the
+                    // network saw it and refused the object, which is one of three possibilities
+                    // and not the likeliest (issue #96). Naming the input as well, because the
+                    // carrier is rebuilt from it on every retry and it is the one outpoint the
+                    // operator can check for themselves.
+                    info!(
+                        "[{PALW_PANEL}] carrier {txid} admitted to this node's mempool and queued for relay, \
+                         spending {}:{} for {collateral} sompi of collateral. That is a local acceptance, not a \
+                         network one — waiting up to 10 minutes for a block to carry it and a bond to appear.",
+                        funding_outpoint.transaction_id, funding_outpoint.index
+                    );
                     // The change is last, so the rolling fee outpoint is the final output.
                     // One extra output (the collateral) ahead of the change, so the change is 1.
                     self.persist_fee_outpoint(TransactionOutpoint::new(txid, 1));
@@ -1648,8 +1895,11 @@ impl PalwPanelService {
                             return;
                         }
                         let session = self.consensus_manager.consensus().unguarded_session();
+                        // The status is not looked at: a bond that has just been created by
+                        // `BondRegistered` is `Active` by construction, and this loop is asking
+                        // whether the carrier landed at all.
                         if let Some(kp) = self.keypair.as_ref()
-                            && let Some(bond) = session.palw_bond_of_pubkey_v2(kp.verification_key.as_ref())
+                            && let Some((bond, _)) = session.palw_bond_of_pubkey_v2(kp.verification_key.as_ref())
                         {
                             info!(
                                 "[{PALW_PANEL}] registered bond {}:{} with {} sompi of collateral, in tx {txid}. \
@@ -1660,12 +1910,69 @@ impl PalwPanelService {
                             return;
                         }
                         if std::time::Instant::now() >= deadline {
-                            warn!(
-                                "[{PALW_PANEL}] carrier {txid} was accepted but no bond appeared within 10 minutes. \
-                                 The collateral output {txid}:0 is yours and spendable; no bond was created. The \
-                                 usual cause is a network still running a build that predates the index-and-zero-id \
-                                 carrier naming, which drops this registration on extraction."
-                            );
+                            // **"No bond appeared" collapses three different failures into one
+                            // sentence, and the node can tell them apart.**
+                            //
+                            // The message this replaces asserted the third — a network that drops
+                            // the registration on extraction — and asserted, without looking, that
+                            // the collateral output exists and is spendable. On testnet-11
+                            // Relaunch 5f the carrier had never reached a block at all: the
+                            // funding output was still unspent, `{txid}:0` did not exist, and the
+                            // named cause was contradicted by other operators' `BondRegistered`
+                            // extracting normally in the same minutes (issue #96). An operator
+                            // cannot distinguish these from outside the node. This one can, from
+                            // facts it already holds, so it reports what it finds rather than the
+                            // likeliest story.
+                            let collateral_outpoint = TransactionOutpoint::new(txid, 0);
+                            let mined = session.get_virtual_utxo_entry(collateral_outpoint).is_some()
+                                || session.get_virtual_utxo_entry(TransactionOutpoint::new(txid, 1)).is_some();
+                            let in_mempool = self
+                                .flow_context
+                                .mining_manager()
+                                .clone()
+                                .has_transaction(txid, kaspa_mining::model::tx_query::TransactionQuery::All)
+                                .await;
+                            let funding_unspent = session.get_virtual_utxo_entry(funding_outpoint).is_some();
+                            let funding = format!("{}:{}", funding_outpoint.transaction_id, funding_outpoint.index);
+                            match carrier_fate(mined, in_mempool, funding_unspent) {
+                                // The carrier is on chain and its object did not become a bond.
+                                // This — and only this — is the extraction failure.
+                                CarrierFate::Extracted => warn!(
+                                    "[{PALW_PANEL}] carrier {txid} was MINED and produced no bond within 10 minutes. \
+                                     Its outputs are in the UTXO set, so the transaction was relayed, accepted and \
+                                     included; the registration object inside it was dropped on extraction. The \
+                                     collateral output {txid}:0 pays this node's own address and is \
+                                     spendable. The usual cause is a network still running a build that predates the \
+                                     index-and-zero-id carrier naming."
+                                ),
+                                // Still queued. Nothing is lost; the chain has not included it.
+                                CarrierFate::Queued => warn!(
+                                    "[{PALW_PANEL}] carrier {txid} is NOT in any block after 10 minutes — it is still \
+                                     sitting in this node's mempool, and {funding} {}. No bond was created and \
+                                     nothing was spent. This is not the network refusing the registration: no block \
+                                     has carried it yet. Check that this node's transactions reach a miner — peers \
+                                     that reset shortly after connecting will admit a transaction locally and relay \
+                                     it nowhere — and leave the node running, because a carrier already in the \
+                                     mempool can still be mined.",
+                                    if funding_unspent { "is still unspent" } else { "has been spent" }
+                                ),
+                                // Gone from the mempool and never mined: dropped or evicted.
+                                CarrierFate::Dropped => warn!(
+                                    "[{PALW_PANEL}] carrier {txid} reached NO block and is no longer in this node's \
+                                     mempool, and its funding output {funding} is still unspent — so nothing was \
+                                     spent, no fee was paid and no bond exists. The carrier was dropped or evicted \
+                                     before any block, which is a relay or connectivity problem rather than a \
+                                     rejected registration: the network never judged the object. Re-running \
+                                     --palw-register-bond rebuilds the same carrier from the same input; \
+                                     `getMempoolEntry {txid}` on a peer's RPC says whether it ever travelled."
+                                ),
+                                CarrierFate::Stranded => warn!(
+                                    "[{PALW_PANEL}] carrier {txid} reached no block, is not in this node's mempool, \
+                                     and its funding output {funding} has been spent by something else — so this \
+                                     carrier can never be mined as built. No bond exists and no collateral is \
+                                     locked. Fund this node's pay address again and re-run --palw-register-bond."
+                                ),
+                            }
                             return;
                         }
                     }
@@ -1817,6 +2124,7 @@ impl PalwPanelService {
         // Carriers submitted whose change is not yet on chain. Reset the moment the chain's tip
         // appears in the virtual UTXO set, which is the only honest signal that it was mined.
         let mut inflight: usize = 0;
+        let mut held_before = false;
         // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).
         let mut canonical_last_daa: u64 = 0;
 
@@ -2643,7 +2951,11 @@ impl PalwPanelService {
             // accuses: a seat that received nothing cannot tell withholding from transport loss,
             // and an accusation against an honest producer is a charge to the accuser.
             let da_duties = session.palw_da_duties_v2(vec![bond_key]);
-            let da_armed = self.consensus_config.params.palw_da_court.is_some_and(|fence| fence.is_active(current_daa));
+            // One spelling of "is the DA court in force", shared with the producer's refusal to
+            // make a claim it could not answer for (mainnet audit 2026-09-06, C-5): the seat that
+            // answers and the producer that decides whether answering is possible must not be able
+            // to disagree about which chain they are on.
+            let da_armed = crate::palw_producer::palw_da_court_in_force_v1(&self.consensus_config, current_daa);
             for duty in &da_duties {
                 if !da_armed || current_daa > duty.disclose_deadline_daa {
                     continue;
@@ -2763,7 +3075,16 @@ impl PalwPanelService {
                             && let Some(prompt_ids) =
                                 Self::fp_prompt_for_job(resolved.as_ref(), &material, self.config.prompt_ids_form)
                             && let Some(output_ids) = self.fp_committed_output_ids_v1(resolved.as_ref(), duty, &held)
-                            && let Some(ctx) = resolved.fp_job_context_v1(&material.job)
+                            // **The seat's ONE context per claim, built from what RAN** (ADR-0084
+                            // Decision 4, ADR-0074 Decision 7). The executed count is the answer's
+                            // length, and the line above has already made the chain's
+                            // `output_root` agree with it — so this is the context the claim was
+                            // committed under, whether the run reached its ceiling or stopped
+                            // early. Built at the CEILING it excluded every `EndOfGeneration`
+                            // claim from this lane by making its surplus interval indices
+                            // unopenable by construction.
+                            && let Some(ctx) = resolved
+                                .fp_job_context_for_executed_v1(&material.job, output_ids.len().min(u32::MAX as usize) as u32)
                             && let Some(verdict) = self
                                 .interval_seat_outcome_v1(
                                     &session,
@@ -2864,14 +3185,25 @@ impl PalwPanelService {
                                     );
                                     continue;
                                 };
-                                if !self.fp_capture_samples_clear(
-                                    backend.as_ref(),
-                                    &payload.capture,
-                                    &prompt_ids,
-                                    shape.step_leaf_count,
-                                    duty.artifact_root,
-                                    &duty.claim_id,
-                                ) {
+                                // **Off the panel's loop, like every other forward pass on this
+                                // lane.** Each of these draws re-executes the whole job on a fold
+                                // class (`refutation_for_free_prompt_index` →
+                                // `tiles_from_material_v1` → `dense_capture_from_fold_v1`, no
+                                // cache), and running them inline blocked this node's every other
+                                // duty for the duration. The FPM1 arm below has always used
+                                // `offload`; this one did not.
+                                let (capture_owned, prompt_owned, claim_owned) =
+                                    (payload.capture.clone(), prompt_ids.clone(), duty.claim_id);
+                                let (leaves, artifact_root, ladder) =
+                                    (shape.step_leaf_count, duty.artifact_root, self.config.court.max_step_leaf_count());
+                                let Ok((_backend, cleared)) = offload(backend, move |b| {
+                                    Self::fp_capture_samples_clear(b, &capture_owned, &prompt_owned, leaves, artifact_root, ladder, &claim_owned)
+                                })
+                                .await
+                                else {
+                                    continue;
+                                };
+                                if !cleared {
                                     continue;
                                 }
                                 self.persist_foreign_material(&duty.claim_id, &bytes);
@@ -3251,6 +3583,22 @@ impl PalwPanelService {
                     }
                 }
                 let held = inflight >= MAX_INFLIGHT_CARRIERS;
+                // Once per transition, at info: a held submitter stops EVERYTHING it carries —
+                // receipts, quorums, canonical claims — and used to say so only at trace level,
+                // which is silence. Seen on the Qwen3.5-2B add-model rehearsal: the canonical seat
+                // went quiet for 24 minutes at the cap (its chain is mined one carrier per block,
+                // and on a relay-less devnet only by itself) with nothing in the log to read.
+                if held != held_before {
+                    if held {
+                        info!(
+                            "[{PALW_PANEL}] holding every carrier: {inflight} of ours are unconfirmed (cap {MAX_INFLIGHT_CARRIERS}); a \
+                             chained carrier is mined only after its parent, so this clears one block at a time"
+                        );
+                    } else {
+                        info!("[{PALW_PANEL}] carrier chain confirmed; submitting again");
+                    }
+                    held_before = held;
+                }
                 let mut funding = if held {
                     // Back-pressure, not loss. Keeping the objects pending means the next tick
                     // re-offers them in priority order (court moves first), rather than building
@@ -3644,6 +3992,70 @@ fn min_carryable_collateral(
     Some(hi)
 }
 
+/// **The script an ML-DSA-87 key can satisfy**, ADR-0019 §8: P2PKH over BLAKE2b-512 of the
+/// verification key — the same derivation `misaka key address` prints and the same one the
+/// `OP_BLAKE2B_512` opcode recomputes at spend time.
+///
+/// One spelling because two places ask it — the funding filter in `resolve_fee_funding` and the
+/// pre-sign guard in `build_lifecycle_tx_with_outputs` — and a rule spelled twice is a rule that
+/// drifts in one of its copies.
+fn signable_script(verification_key: &[u8]) -> kaspa_consensus_core::tx::ScriptPublicKey {
+    kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(verification_key).as_bytes())
+}
+
+/// Whether a REMEMBERED funding outpoint — the persisted one or `--palw-fee-outpoint` — belongs
+/// to a key other than the one that would sign it.
+///
+/// `ours` is `None` when this node cannot yet read its own payout script, and that is "cannot
+/// tell", not "reject": answering `true` there would strand a funded node that is merely early.
+fn funding_is_foreign(
+    ours: Option<&kaspa_consensus_core::tx::ScriptPublicKey>,
+    entry: &kaspa_consensus_core::tx::ScriptPublicKey,
+) -> bool {
+    ours.is_some_and(|ours| entry != ours)
+}
+
+/// What became of a carrier this node's mempool accepted, once the deadline passes with no bond.
+///
+/// Three outcomes the old warning collapsed into one sentence, and only the first is the
+/// extraction failure it named (issue #96).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CarrierFate {
+    /// On chain — its outputs are in the UTXO set — and no bond came of it: the registration
+    /// object was dropped on extraction. The one case the old message described.
+    Extracted,
+    /// In no block, still queued in this node's mempool. Nothing is lost; nothing has judged it.
+    Queued,
+    /// In no block and no longer queued, with the funding untouched: dropped or evicted before
+    /// any block, so no fee was paid and rebuilding it is free.
+    Dropped,
+    /// In no block, not queued, and the funding is spent — this carrier can never be mined as
+    /// built.
+    Stranded,
+}
+
+/// The verdict, from the three facts the node already holds.
+fn carrier_fate(mined: bool, in_mempool: bool, funding_unspent: bool) -> CarrierFate {
+    match (mined, in_mempool, funding_unspent) {
+        // Mined wins: a mempool copy alongside a mined transaction is incidental.
+        (true, _, _) => CarrierFate::Extracted,
+        (false, true, _) => CarrierFate::Queued,
+        (false, false, true) => CarrierFate::Dropped,
+        (false, false, false) => CarrierFate::Stranded,
+    }
+}
+
+/// `1h02m`, `7m30s`, `45s` — how long a standing refusal has stood, for a log line an operator
+/// reads to decide whether to keep waiting.
+fn brief_duration(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    match (secs / 3600, (secs % 3600) / 60, secs % 60) {
+        (0, 0, s) => format!("{s}s"),
+        (0, m, s) => format!("{m}m{s:02}s"),
+        (h, m, _) => format!("{h}h{m:02}m"),
+    }
+}
+
 fn verdict_name(verdict: &PalwReceiptVerdictV2) -> &'static str {
     match verdict {
         PalwReceiptVerdictV2::Valid => "Valid",
@@ -3832,7 +4244,13 @@ impl PalwPanelService {
             ) {
                 return Err(PalwServeRefusalV1::BadSignature);
             }
-            let Some(bond) = session.palw_bond_of_pubkey_v2(request.requester_pubkey) else {
+            // **A `Retiring` bond is still served, deliberately.** ADR-0077 SA-2 says "an Active
+            // bond acting as challenger", but a bond that was seated before it asked to retire
+            // still owes its live duties to resolution — retirement stops it taking NEW work, not
+            // finishing old work — and its collateral is still locked, so it still bounds the
+            // requester exactly as the rate limit below needs it to. Refusing it here would cut a
+            // seat off from the material for a duty the chain still holds it to.
+            let Some((bond, _status)) = session.palw_bond_of_pubkey_v2(request.requester_pubkey) else {
                 return Err(PalwServeRefusalV1::NotBonded);
             };
             // **A private claim is served to its readers and to nobody else** (ADR-0077 Decision
@@ -4022,8 +4440,6 @@ impl PalwPanelService {
         use kaspa_consensus_core::palw_freeprompt_v3::{palw_fp_committed_output_ids_decode_v1, palw_fp_job_material_decode_v1};
         use misaka_palw_base0::fp_interval::{Base0FpIntervalOpeningV4, base0_fp_interval_close_annex_any_v1};
         let Some(job) = fp_job else { return Err(CloseFromServedV1::NotThisLane) };
-        let Some(ctx) = backend.fp_job_context_v1(&job.job) else { return Err(CloseFromServedV1::NotThisLane) };
-        let Some(wanted) = backend.fp_interval_of_leaf_v1(&ctx, leaf) else { return Err(CloseFromServedV1::NotThisLane) };
         let Some(prompt_ids) = Self::fp_prompt_for_job(backend, job, self.config.prompt_ids_form) else {
             return Err(CloseFromServedV1::Refused("a canonical claim whose material is not its own prompt".to_string()));
         };
@@ -4039,6 +4455,14 @@ impl PalwPanelService {
         }) else {
             return Err(CloseFromServedV1::Refused("no served answer carries this claim's ids".to_string()));
         };
+        // **The context is the run's, so the interval that owns the disputed leaf is the one that
+        // exists** (ADR-0084 Decision 4, ADR-0074 Decision 7). Built at the job's ceiling this
+        // located the leaf in a geometry an early-stopping claim never had; the ids are fetched
+        // first now because the executed count is their length.
+        let Some(ctx) = backend.fp_job_context_for_executed_v1(&job.job, output_ids.len().min(u32::MAX as usize) as u32) else {
+            return Err(CloseFromServedV1::NotThisLane);
+        };
+        let Some(wanted) = backend.fp_interval_of_leaf_v1(&ctx, leaf) else { return Err(CloseFromServedV1::NotThisLane) };
         let primary = openings.get(&(*claim, wanted)).into_iter().flatten().find(|bytes| {
             base0_fp_interval_close_annex_any_v1(bytes).is_some_and(|annex| annex.disputed.iter().any(|d| d.leaf_index == leaf))
         });
@@ -4137,7 +4561,20 @@ impl PalwPanelService {
                 |capture| backend.fp_committed_output_ids(capture),
                 self.config.prompt_ids_form,
             )?;
-            let recomputed = backend.fp_output_root_v1(&material.job, &ids)?;
+            // **The context is built from the ANSWER's own length, and the chain says whether that
+            // was right** (ADR-0084 Decision 1, ADR-0074 Decision 7).
+            //
+            // `fp_output_root_v1` builds it at the job's CEILING. That is the producer's question,
+            // not the run's answer: a claim that stopped early (`EndOfGeneration`, chain-legal by
+            // `validate_stateless_v3`) committed its root under a context carrying the EXECUTED
+            // count, so the ceiling context reproduces nothing and the seat rejected every honest
+            // early-stopping claim's ids — which took the whole ADR-0077 D8 interval lane with it,
+            // because the arm that calls this is gated on its `Some`. The commitment's own
+            // invariant is `output_token_ids.len() == decode_tokens_executed`, so the length IS
+            // the count, and comparing the rebuilt root against `duty.output_root` is the chain
+            // confirming it. Nothing here is believed: a wrong length gives a wrong root.
+            let ctx = backend.fp_job_context_for_executed_v1(&material.job, ids.len().min(u32::MAX as usize) as u32)?;
+            let recomputed = backend.output_root_for_context_v1(&ctx, &ids)?;
             if recomputed != duty.output_root {
                 warn!(
                     "[{PALW_PANEL}] claim {}: a served answer's ids recompute output root {recomputed} and the claim committed {} — \
@@ -4399,12 +4836,35 @@ impl PalwPanelService {
         // boundary is what makes that safe: the only state this claim's row check can find is the
         // one this claim's own recompute put there, seconds earlier and from this claim's ids.
         misaka_palw_base0::fp_recompute::base0_fp_seat_state_forget_v1();
-        // Both counts are the context's own — a free-prompt job's, hash-bound to the claim through
-        // `fp_job_id_v3`, or the anchor-derived job's — never read off a capture, which is the
-        // executor's to shape.
+        // Both counts are the context's own — a free-prompt job's, built from the answer the chain
+        // committed (ADR-0084 Decision 1), or the anchor-derived job's — never read off a capture,
+        // which is the executor's to shape.
+        //
+        // **And the context itself is re-priced against the chain before a single interval is
+        // drawn** (ADR-0074 Decision 5; mainnet audit 2026-09-06 C-3). Hash-binding the context to
+        // the job through `fp_job_id_v3` was believed to be enough and is not: the job id is one
+        // field of `PalwJobContextV2` and the two token counts are two others, so a producer may
+        // commit a fifty-million-leaf execution and SERVE a two-call job carrying the same id.
+        // The seat's interval count is then 1, the draw is `[0]`, and interval 0 is the only
+        // interval such a producer ran — two forward passes for the claim's whole quanta. The
+        // price is the one number the chain does hold, so it is what the context must reproduce.
         let counts =
             PalwFpChainCountsV1 { prompt_tokens: ctx.declared_prefill_tokens, decode_tokens_executed: ctx.exact_decode_tokens };
-        let draw = crate::palw_fp_seat::palw_fp_seat_draw_v1(backend.as_ref(), network_domain, duty, counts)?;
+        let priced = backend.fp_context_work_leaves_v1(ctx);
+        let Some(draw) =
+            crate::palw_fp_seat::palw_fp_seat_draw_at_the_claims_price_v1(backend.as_ref(), network_domain, duty, counts, priced)
+        else {
+            if kaspa_consensus_core::palw_backend::palw_claim_prices_work_v1(duty.work_leaves)
+                && priced.is_some_and(|leaves| leaves != duty.work_leaves)
+            {
+                warn!(
+                    "[{PALW_PANEL}] claim {}: the served job's context prices at {:?} leaves and the chain priced this claim at {} — \
+                     this is not the claim's job, and no interval of it is drawn (ADR-0074 Decision 5)",
+                    duty.claim_id, priced, duty.work_leaves
+                );
+            }
+            return None;
+        };
         let roots = PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor };
         // **The bound is the CLASS's, in the class's own cadence unit** (audit B, C-2). A
         // checkpoint leaf's `covered_decode_call` counts decode calls on a per-call class and
@@ -4429,6 +4889,29 @@ impl PalwPanelService {
             }
             let mut answered = false;
             for bytes in candidates {
+                // **One context per claim** (ADR-0084 Decision 4), enforced rather than assumed.
+                //
+                // The family's own verification binds the opening to the claim's execution root,
+                // its trace root, the job id and the price — and none of those pins the context's
+                // two token counts, which are the numbers this seat's draw was sized by. An
+                // opening whose binding carries a DIFFERENT context is evidence about a different
+                // execution than the one this seat sampled, however honestly it walks. Refused
+                // before a forward pass, and only on the free-prompt lane, where both contexts are
+                // the same function of the same job; the attempt lane's context comes from the
+                // block and is out of scope here.
+                if duty.free_prompt {
+                    match backend.fp_opening_job_context_v1(&bytes) {
+                        Some(carried) if carried == *ctx => {}
+                        _ => {
+                            warn!(
+                                "[{PALW_PANEL}] claim {}: an opening of interval {index} binds a context that is not the one this \
+                                 seat derived from the served job — not this claim's evidence (ADR-0084 Decision 4)",
+                                duty.claim_id
+                            );
+                            continue;
+                        }
+                    }
+                }
                 // What this opening says it resumes from. Every field of it is checked by the
                 // replay below; reading it first is only how the seat learns how far to run.
                 if let Some((checkpoint_index, covered, committed)) =
@@ -4903,6 +5386,113 @@ mod tests {
         // with nothing: the money moves, it does not vanish.
         assert!(!spent.contains(&op(2)), "the change outpoint is free to spend next");
     }
+
+    /// **A remembered funding outpoint must pay to a script this node can sign for** (issue #97).
+    ///
+    /// The scan filters on the script; the two REMEMBERED outpoints — the persisted one and
+    /// `--palw-fee-outpoint` — went straight to the signer without it. The persisted one is
+    /// written by a previous run and survives a change of `--palw-producer-key`, so a state dir
+    /// carried across a key change hands the panel its predecessor's money. Signing it builds a
+    /// carrier the mempool refuses with `script ran, but verification failed` — a verdict that
+    /// names a signature and so points at the key and the pay address, the two things that are
+    /// right — and nothing recovers, because the entry stays unspent, stays resolvable, and is
+    /// chosen again on the next tick. Measured live as 82 identical refusals over 82 minutes.
+    ///
+    /// The predicate is the fix: reject only when the script is KNOWN and DIFFERS, so a node that
+    /// cannot yet read its bond's payout script is not left unable to fund anything.
+    #[test]
+    fn a_remembered_outpoint_paying_elsewhere_is_not_funding() {
+        let ours = mldsa_script(0x11);
+        let theirs = mldsa_script(0x22);
+
+        assert!(funding_is_foreign(Some(&ours), &theirs), "a remembered outpoint under another key is skipped, not signed");
+        assert!(!funding_is_foreign(Some(&ours), &ours), "our own remembered outpoint is still the hot path");
+        assert!(
+            !funding_is_foreign(None, &theirs),
+            "an unreadable payout script rejects nothing — that would strand a funded node that is merely early"
+        );
+
+        // And the guard the signer itself applies is the same question asked of the same script,
+        // so the two cannot disagree about whose money this is.
+        assert_eq!(signable_script(b"a key"), signable_script(b"a key"), "the derivation is a function of the key");
+        assert_ne!(signable_script(b"a key"), signable_script(b"another key"), "and different keys sign different scripts");
+    }
+
+    /// **The address the join docs tell an operator to pass IS the script the pre-sign guard
+    /// requires** — the property that makes that guard safe to add.
+    ///
+    /// `--palw-producer-pay-address` is documented as `misaka key address --key-file <seed>`,
+    /// which is `ValidatorKey::funding_address`. The guard refuses any funding output whose script
+    /// is not `signable_script` of the node's own verification key. If those two derivations ever
+    /// disagreed, the guard would refuse every carrier on every correctly configured seat — a far
+    /// worse failure than the one it fixes — so the equivalence is pinned rather than assumed, and
+    /// pinned through the real function on both sides rather than restated here.
+    #[test]
+    fn the_documented_pay_address_is_the_script_this_node_signs_for() {
+        let key = kaspa_pq_validator_core::ValidatorKey::from_seed([7u8; kaspa_pq_validator_core::VALIDATOR_SEED_LEN]);
+        let address = key.funding_address(kaspa_addresses::Prefix::Testnet);
+        assert_eq!(address.version, kaspa_addresses::Version::PubKeyHashMlDsa87, "the docs' address is an ML-DSA-87 P2PKH one");
+        let payload: [u8; 64] = address.payload.as_ref().try_into().expect("an ML-DSA-87 address carries 64 payload bytes");
+
+        // `pay_payee` builds the script from exactly these payload bytes; the guard builds it from
+        // the key. The two must be one script.
+        assert_eq!(
+            kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&payload),
+            signable_script(key.public_key()),
+            "a seat funded at its own documented pay address must not be refused before signing"
+        );
+
+        // And a different key is a different script, or the guard would pass everything.
+        let other = kaspa_pq_validator_core::ValidatorKey::from_seed([8u8; kaspa_pq_validator_core::VALIDATOR_SEED_LEN]);
+        assert_ne!(
+            signable_script(key.public_key()),
+            signable_script(other.public_key()),
+            "another operator's funding output is still refused, which is the whole point"
+        );
+    }
+
+    /// **A repeat says it is a repeat** (issue #97): 82 identical lines read as "still trying"
+    /// when they meant "nothing about the retry differs". The duration is what carries that,
+    /// so it has to be legible at every scale a stuck registration reaches.
+    #[test]
+    fn a_standing_refusal_reports_how_long_it_has_stood() {
+        use std::time::Duration;
+        assert_eq!(brief_duration(Duration::from_secs(0)), "0s");
+        assert_eq!(brief_duration(Duration::from_secs(45)), "45s");
+        assert_eq!(brief_duration(Duration::from_secs(60)), "1m00s", "the minute boundary keeps its seconds padded");
+        assert_eq!(brief_duration(Duration::from_secs(450)), "7m30s");
+        assert_eq!(brief_duration(Duration::from_secs(3600)), "1h00m");
+        assert_eq!(brief_duration(Duration::from_secs(3720)), "1h02m", "82 minutes is the case that was reported");
+        assert_eq!(brief_duration(Duration::from_secs(4920)), "1h22m");
+    }
+
+    /// **The three fates of an accepted carrier are distinguishable, and the deadline verdict has
+    /// to distinguish them** (issue #96).
+    ///
+    /// The message this replaces asserted one of the three — a network that drops the object on
+    /// extraction — and asserted, without looking, that the collateral output exists. On the
+    /// reported run the carrier had never reached a block: the funding was still unspent and
+    /// `txid:0` did not exist, while other operators' `BondRegistered` extracted normally in the
+    /// same minutes. The two facts that separate the cases are the ones pinned here.
+    #[test]
+    fn the_deadline_verdict_names_which_failure_it_is() {
+        // mined, in_mempool, funding_unspent
+        assert_eq!(carrier_fate(true, false, false), CarrierFate::Extracted, "on chain and no bond IS the extraction failure");
+        assert_eq!(carrier_fate(true, true, true), CarrierFate::Extracted, "mined wins: a mempool copy beside it is incidental");
+        assert_eq!(carrier_fate(false, true, true), CarrierFate::Queued, "still queued is not a refusal, and not a loss");
+
+        // The reported case (#96): admitted locally, never mined, funding untouched. The old
+        // message called this an extraction failure and told the operator their collateral output
+        // existed. Neither was true, and the difference is what decides whether they wait, re-fund
+        // or go looking at their peers.
+        assert_eq!(
+            carrier_fate(false, false, true),
+            CarrierFate::Dropped,
+            "an unspent funding output is the proof that no fee was paid and the rebuild is free"
+        );
+        assert_ne!(carrier_fate(false, false, true), CarrierFate::Extracted, "and it is NOT the cause the old line named");
+        assert_eq!(carrier_fate(false, false, false), CarrierFate::Stranded, "this carrier can never be mined as built");
+    }
 }
 
 #[cfg(test)]
@@ -4938,5 +5528,47 @@ mod replay_rule_tests {
     fn a_root_that_does_not_reproduce_is_never_licensed() {
         assert!(!replay_licenses_v1(&roots(Some(30)), Hash64::from_u64_word(0xF), Hash64::from_u64_word(0x7), 0));
         assert!(!replay_licenses_v1(&roots(Some(30)), Hash64::from_u64_word(0xE), Hash64::from_u64_word(0x8), 30));
+    }
+}
+
+#[cfg(test)]
+mod court_responder_coverage_pin {
+    /// **PIN THE LIMITATION, NOT THE BEHAVIOUR: no shipped binary files a `CourtAttnRootClaimed`**
+    /// (ADR-0082 Decision 2; mainnet audit 2026-09-06, C-2/H-5).
+    ///
+    /// §10.6 gave a fused terminal a CLOCK — the responder owes the root claim, and silence past
+    /// the rung convicts it — on the premise that the responder can file one. That premise is what
+    /// `Params::palw_court_responder_coverage` exists to suspend, and the exemption is a
+    /// placeholder for a responder rather than a rule anybody wants: the whole k-ary dissection
+    /// responder (a panel arm, plus a backend verb producing the fused site's root, its arity, its
+    /// binding, its opened output tile and its operand openings) is a FEATURE nobody has built.
+    ///
+    /// This is the trigger to retire the exemption by activation. It scans the panel's own source
+    /// — the only file where a responder could live, since `palw_da_duties_v2` and
+    /// `palw_court_duties_v2` are both read here and nowhere else in this binary — and it goes RED
+    /// the day the identifier appears anywhere but the naming table. The day it does, the fix is
+    /// not to relax this test: it is to schedule `palw_court_responder_coverage` off, on a fresh
+    /// card or at a height, so the clock the ADR designed starts meaning what it says.
+    ///
+    /// A comment that mentions the object will also turn it red. That is the intended cost: the
+    /// question "can a party in the field actually make this move" must be re-answered by hand,
+    /// and it is cheap to answer. This module's own text is excluded, or the pin would be counting
+    /// itself.
+    #[test]
+    fn no_shipped_binary_files_a_court_attn_root_claimed() {
+        const MARKER: &str = "mod court_responder_coverage_pin";
+        let whole = include_str!("palw_panel.rs");
+        let panel = &whole[..whole.find(MARKER).expect("this module is in this file")];
+        let producer = include_str!("palw_producer.rs");
+        assert_eq!(
+            panel.matches("CourtAttnRootClaimed").count(),
+            2,
+            "the panel names ADR-0082's terminal move exactly twice — the match arm and the string it maps to — and              builds one nowhere. If that count moved because a RESPONDER now exists, retire              `Params::palw_court_responder_coverage` by activation rather than editing this number: the fence is only              correct while this is true."
+        );
+        assert_eq!(
+            producer.matches("CourtAttnRootClaimed").count(),
+            0,
+            "the producer does not file court moves at all; if it now does, the exemption above is a rule nobody chose"
+        );
     }
 }

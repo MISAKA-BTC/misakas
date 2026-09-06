@@ -251,7 +251,45 @@ pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/opera
 ///
 /// Eight against at most one new claim per block: a backlog drains eight times faster than it can
 /// be created, so this bounds latency, not throughput.
+///
+/// **The premise had a second writer and no argument** (mainnet audit 2026-09-06, M-10). ADR-0087's
+/// market writes fee legs into this same map — up to two rows a buy and three a carrier sell
+/// (`write_model_fee`), and the same functions are reached by up to
+/// [`crate::evm::model_market::MAX_MARKET_ACTIONS_PER_EVM_BLOCK`] EVM actions per block — so
+/// "at most one new claim per block" stopped being the whole story. It is restored as a *bound*
+/// rather than an assumption by [`PALW_V2_MAX_PENDING_PAYOUTS`] below: the queue has a ceiling and a
+/// market move that would breach it is refused, so the map cannot grow without limit whatever the
+/// market does, and claim rows drain ahead of market rows (see
+/// [`PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX`]).
 pub const PALW_V2_MAX_PAYOUTS_PER_BLOCK: usize = 8;
+
+/// **The ceiling on the payout queue itself** (mainnet audit 2026-09-06, M-10).
+///
+/// `pending_payouts` is in the state-root preimage and is served over IBD, so an unbounded writer
+/// into it is an unbounded consensus table. Claims cannot fill it — at most one is created per
+/// block against a drain of [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] — but ADR-0087's market can, from two
+/// lanes at once. This is the bound that makes the drain's sizing argument true again.
+///
+/// 1,024 = 128 blocks of drain: a market payout that queues behind a full table waits at most that
+/// long, and the table costs at most 1,024 × ~72 bytes ≈ 74 KB of state-root preimage.
+///
+/// **Only market moves are measured against it.** A claim payout is never refused: ADR-0042
+/// Decision 10's escrow release is the worker's own reward and refusing it would burn it. What
+/// keeps claims safe is that market rows sort after claim rows and the market's own ceiling leaves
+/// the drain's whole prefix available to them.
+pub const PALW_V2_MAX_PENDING_PAYOUTS: usize = 1_024;
+
+/// **The first byte of every model-market payout key** (mainnet audit 2026-09-06, M-10).
+///
+/// The drain is "the first [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] in `BTreeMap` key order", and market
+/// rows were interleaved with claim rows in hash order — so market traffic delayed the escrow
+/// releases ADR-0042 Decision 10 sizes this queue for. Minting market keys in the top 1/256 of the
+/// key space puts every market row after every claim row whose id does not begin `0xFF`, which
+/// restores Decision 10's latency bound for claims at the cost of nothing but market latency.
+///
+/// It costs no serialization change: the key is a `Hash64` either way, and no chain has a market
+/// row (the fence is `None` on every shipped preset), so no existing state moves.
+pub const PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX: u8 = 0xFF;
 
 /// **Coinbase outputs a ConsensusV2 block may carry beyond the classic mergeset payout.**
 ///
@@ -269,6 +307,57 @@ pub const PALW_V2_COINBASE_EXTRA_OUTPUTS: u64 = PALW_V2_MAX_PAYOUTS_PER_BLOCK as
 /// network shipped today (no validator is bonded), but the cap must cover the configuration that
 /// pays them, or bonding a validator would stop the chain the same way the first `Final` did.
 pub const PALW_V2_MAX_VALIDATOR_PAYOUTS: u64 = 16;
+
+/// **The §E deferred quality-bonus payouts one coinbase may carry** (mainnet audit, 2026-09-06,
+/// H-3), per BLOCK and not per finalized epoch.
+///
+/// [`PALW_V2_MAX_VALIDATOR_PAYOUTS`] bounds the PARTICIPATION fan-out, which is one output per
+/// attesting validator per block. The deferred bonus is one output per included validator per
+/// EPOCH THE BLOCK FINALIZES, and `epochs_finalized_at` returns one epoch per
+/// `epoch_length_blocks` of DAA the block advanced — which `at_two_minute_cadence` sets to 2 on
+/// every ConsensusV2 network. At mainnet's own `min_active_validators = 12` a mergeset of 26
+/// therefore emits 156 outputs on top of the mergeset payout, against a cap of 206, and the block
+/// that would merge the wide tips away is itself unbuildable. The participation cap's own comment
+/// already names the shape: "the chain would halt for the offence of being popular."
+///
+/// The dropped tail is NOT minted — §E's "Unspent → rollover" — but unlike the participation
+/// queue it is never re-offered, because each epoch's threshold is crossed by exactly one block.
+/// Raising this number costs exactly its own count in reserved coinbase slots.
+pub const PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS: u64 = 16;
+
+/// **The §F reserve-drip payouts one coinbase may carry**, per block and not per finalized epoch,
+/// for [`PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS`]' reason and out of the same crossing loop. Sized
+/// equal to it because it fans out over the same set.
+pub const PALW_V2_MAX_RESERVE_DRIP_PAYOUTS: u64 = 16;
+
+/// **What [`PALW_V2_COINBASE_EXTRA_OUTPUTS`] becomes once every appended kind is COUNTED** (mainnet
+/// audit, 2026-09-06, H-3), enforced past `palw_validator_payout_bounds`.
+///
+/// The old constant names three kinds; `expected_coinbase_transaction` plus
+/// `validator_reward_outputs_for_block` append six. At `mergeset_size_limit = 180` the cap was 206
+/// and the pinned worst case was 206 — zero slack — so the first output of a fourth kind made a
+/// node refuse the coinbase it had just built itself. Every kind, in append order, with the
+/// constant that bounds it:
+///
+/// | kind | bound |
+/// |---|---|
+/// | mergeset payout (per blue, per ADR-0058 entitled red) | `mergeset_size_limit` — outside this constant |
+/// | unentitled-red aggregate | 1 — outside this constant, the `+ 1` at the cap |
+/// | §E participation | [`PALW_V2_MAX_VALIDATOR_PAYOUTS`] |
+/// | VLT §6 audit fee | 0 — `vlt: VltParams::INERT` on every preset a card assembles from |
+/// | §E deferred quality bonus | [`PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS`] |
+/// | §F reserve drip | [`PALW_V2_MAX_RESERVE_DRIP_PAYOUTS`] |
+/// | ADR-0033 B14 credit | 0 — `palw_credit: None` on every preset |
+/// | §D inclusion bounty | 1 |
+/// | ADR-0042 D10 escrow releases | [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] |
+///
+/// The two zeros are DORMANT, not absent: `the_coinbase_cap_counts_every_kind_the_builder_appends`
+/// fails on a preset that arms either of them without a bound beside it.
+pub const PALW_V2_COINBASE_EXTRA_OUTPUTS_BOUNDED: u64 = PALW_V2_MAX_PAYOUTS_PER_BLOCK as u64
+    + 1
+    + PALW_V2_MAX_VALIDATOR_PAYOUTS
+    + PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS
+    + PALW_V2_MAX_RESERVE_DRIP_PAYOUTS;
 
 /// `H(operator_pubkey)` — the operator identity panel dedup runs on.
 ///
@@ -480,12 +569,26 @@ pub const PALW_STATE_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_STATE_V2_DOMAIN_OBJECT_CHUNK_GROUP,
     PALW_STATE_V2_DOMAIN_CAPABILITY_FACT,
     PALW_STATE_V2_DOMAIN_COURT_CLOSE_CHUNK,
-    // The two authorisation domains in this module. A signing domain that no sweep can see is a
+    // The authorisation domains in this module. A signing domain that no sweep can see is a
     // domain nothing stops another family from reusing, and a reused domain is a signature made
     // for one purpose accepted for another.
     PALW_CLASS_REGISTRATION_V2_DOMAIN,
     PALW_BOND_RETIREMENT_V2_DOMAIN,
     PALW_BOND_REGISTRATION_V2_DOMAIN,
+    // **And the ML-DSA-87 SIGNING CONTEXTS, which the comment above already claims for this list**
+    // (mainnet audit M-8, 2026-09-06). Every other family carries its contexts here —
+    // `palw_court_v2`, `palw_attempt_v2`, `palw_panel_v2`, `palw_carriage`, `palw_slash`,
+    // `palw_freeprompt_v3`, `palw_derived_v1` all do — and this module was the one that did not,
+    // so three of its six contexts were invisible BOTH to
+    // `derived_domains_are_unique_across_every_palw_family` and to the ruleset id. A context is a
+    // signing domain by definition; listing them here is what makes the committed context set
+    // derivable from the acceptance families instead of re-typed.
+    PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+    PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+    PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT,
+    PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT,
+    PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT,
+    PALW_DA_DISCLOSURE_V2_MLDSA87_CONTEXT,
 ];
 
 fn keyed(domain: &[u8]) -> blake2b_simd::State {
@@ -2962,12 +3065,22 @@ pub enum PalwConsensusObjectV2 {
     /// `palw_model_sell_message_v1` under `PALW_MODEL_SELL_MLDSA87_CONTEXT`. The fold debits
     /// `units_in`, pays the net leg to `holder` through the coinbase, refusing when under
     /// `min_msk_out`. Refused below `Params::palw_model_market`.
+    /// **`held_units` and `not_after_daa` are what make the signature single-use and mortal**
+    /// (mainnet audit 2026-09-06, M-11). ADR-0087 M8 is "no other key can sell it"; without these
+    /// two a stranger re-fired the holder's own public payload whenever the holder held enough
+    /// again. The fold refuses unless the holder's position is EXACTLY `held_units` — and the sell
+    /// itself moves it — and acceptance refuses past `not_after_daa`.
     ModelSell {
         /// ADR-0088 Decision 9: a LINE id; a class's founding line has the class id.
         line_id: Hash64,
         holder: Hash64,
         units_in: u64,
         min_msk_out: u64,
+        /// The position the holder is selling out of, at signing. Must equal the fold's own row.
+        held_units: u64,
+        /// The last DAA score at which this sell may be accepted. Refused past it, and refused if
+        /// it names a window longer than `PALW_MODEL_SELL_MAX_WINDOW_DAA_V1`.
+        not_after_daa: u64,
         pubkey: Vec<u8>,
         signature: Vec<u8>,
     },
@@ -4246,6 +4359,12 @@ pub enum PalwStateV2Error {
     ModelBuyBelowFloor { want: u64, got: u64 },
     #[error("the sell names {want} units and the holder holds {held}")]
     ModelSellExceedsPosition { held: u64, want: u64 },
+
+    /// **ADR-0087 M8 (mainnet audit 2026-09-06, M-11): the sell names a position the holder does
+    /// not have.** The signature covers `held_units`, and the fold honours it only against exactly
+    /// that row — so applying the sell consumes the signature, and a replay finds a different row.
+    #[error("a model sell was signed against a position of {signed}; the holder holds {held}")]
+    ModelSellPositionMoved { signed: u64, held: u64 },
     #[error("the curve pays nothing for the sell of class {0}")]
     ModelSellPaysNothing(Hash64),
     #[error("the sell would pay {got} sompi, under its floor of {want}")]
@@ -4255,6 +4374,15 @@ pub enum PalwStateV2Error {
     ModelMarketAlreadySeeded(Hash64),
     #[error("the seed of {got} sompi is under the least seed of {want}")]
     ModelSeedTooSmall { want: u64, got: u64 },
+
+    /// **ADR-0042 Decision 10's queue is full** (mainnet audit 2026-09-06, M-10). A market move
+    /// whose fee legs would push `pending_payouts` past [`PALW_V2_MAX_PENDING_PAYOUTS`] is refused;
+    /// the queue drains [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] rows a block, so this clears on its own.
+    /// On the carrier lane the acceptance rehearsal drops the move before the fold sees it (the
+    /// block stands); on the EVM lane it becomes ADR-0089 Decision 6's `Refused { reason }` and the
+    /// caller's escrow is refunded at the settling block.
+    #[error("the payout queue is full ({held} of {cap}); this market move would add {want} rows")]
+    ModelPayoutQueueFull { held: usize, want: usize, cap: usize },
     #[error("class {0} is frozen, so its line takes no seed")]
     ModelClassClosed(Hash64),
     // ADR-0088, the model registry.
@@ -4680,8 +4808,28 @@ impl PalwChainStateV2 {
     }
 
     /// ADR-0087 Decision 8: every position a holder has, by class.
+    ///
+    /// **And its cost** (mainnet audit 2026-09-06, M-13). This is a full scan of `model_positions`,
+    /// paid per RPC call with no per-caller budget. The table is bounded — see
+    /// [`Self::model_position_rows_of_line`] for the argument — but bounded is not small: at
+    /// `PALW_MODEL_SUPPLY_UNITS_V1` rows a line it is 500,000 entries a line, and this walks every
+    /// line's. The key is `(line, holder)`, so no range answers "this holder's rows" without a
+    /// second index; adding one would be a new consensus table, which is the defect this finding is
+    /// about. The scan stays, the cost is stated, and the caller is bounded instead.
     pub fn model_positions_of(&self, holder: &Hash64) -> Vec<(Hash64, u64)> {
         self.model_positions.iter().filter(|((_, h), _)| h == holder).map(|((c, _), units)| (*c, *units)).collect()
+    }
+
+    /// **How many position rows one line holds** (audit M-13). Bounded by
+    /// `PALW_MODEL_SUPPLY_UNITS_V1`: `write_model_position` removes a row at zero units, ADR-0090
+    /// Decision 1 makes a position a whole unit, and ADR-0087 M1 makes the sum of holders' units at
+    /// most the supply — so a line cannot have more holders than it has units, and each of those
+    /// units was bought from a curve that is strictly more expensive as the table grows, on a line
+    /// that cost `PALW_MODEL_SEED_MIN_SOMPI_V1` to open. The bound exists; nothing said it, and
+    /// nothing would notice if a later change to the supply constant or to the zero-row removal
+    /// took it away. Read by the test that pins it.
+    pub fn model_position_rows_of_line(&self, line_id: &Hash64) -> usize {
+        self.model_positions.range((*line_id, Hash64::default())..).take_while(|((l, _), _)| l == line_id).count()
     }
 
     /// ADR-0087 M1: units held in a class across every holder.
@@ -4796,6 +4944,20 @@ impl PalwChainStateV2 {
         }
         let class = self.classes.get(class_id)?;
         (!self.model_lines.contains_key(class_id) && class.artifact_root == *root).then_some((*class_id, 1))
+    }
+
+    /// ADR-0091 Decision 2: the line a root belongs to, for the reward's buyback — every version
+    /// of every line of the class, in force or not, in the registry's order (attribution was a
+    /// fact of the accepting block and does not lapse with a version); the class itself, as its
+    /// founding line, when no line row exists and the root is the class's.
+    pub fn model_line_of_root(&self, class_id: &Hash64, root: &Hash64) -> Option<Hash64> {
+        for (line_id, _) in self.model_lines.iter().filter(|(_, l)| l.class_id == *class_id) {
+            if self.model_versions.range((*line_id, 0)..=(*line_id, u32::MAX)).any(|(_, v)| v.root == *root) {
+                return Some(*line_id);
+            }
+        }
+        let class = self.classes.get(class_id)?;
+        (!self.model_lines.contains_key(class_id) && class.artifact_root == *root).then_some(*class_id)
     }
 
     /// ADR-0088 Decision 3: the root a claim was admitted against, when the fold recorded one.
@@ -4993,6 +5155,27 @@ impl PalwChainStateV2 {
     /// Iterate the bond registry in canonical key order — what the panel sortition tickets.
     pub fn bonds_iter(&self) -> impl Iterator<Item = (&PalwBondKeyV2, &PalwBondStateV2)> {
         self.bonds.iter()
+    }
+
+    /// **Has this public key ever registered a bond here — and is that bond still Active?**
+    ///
+    /// **Deliberately UNFILTERED, and the status rides along rather than narrowing the answer.**
+    /// The registry is append-only: `BondRetireRequested` rewrites `status` in place and nothing
+    /// else writes a bond row away (`write_bond(_, None)` is reachable only from a delta undo), and
+    /// `BondRegistered` refuses any key that already appears in it —
+    /// [`PalwStateV2Error::DuplicateBondKey`], "one key, one bond". So a key that has held a bond
+    /// can never register another, retired or not.
+    ///
+    /// That is why filtering `Retiring` out here would be a defect and not a fix. A node whose
+    /// "am I already bonded?" question skipped retiring bonds would not gain the ability to
+    /// register a replacement — it would build and submit a carrier the transition must reject,
+    /// spend the fee, and leave the operator watching a ten-minute "no bond appeared" timeout
+    /// instead of reading the one line that tells them the truth: this key is spent, mint a new
+    /// ML-DSA-87 seed. The status is returned so the caller can say WHICH situation it is in
+    /// without asking a second question; `palw_bond_may_take_work_v2` is the predicate for
+    /// "may this bond be given work", which is a different question again.
+    pub fn bond_of_pubkey_v2(&self, pubkey: &[u8]) -> Option<(PalwBondKeyV2, PalwBondStatusV2)> {
+        self.bonds.iter().find(|(_, bond)| bond.pubkey == pubkey).map(|(key, bond)| (*key, bond.status.clone()))
     }
 
     /// Decision 6's `reserved_exposure(bond)` — what the admission ceiling is checked against.
@@ -6403,6 +6586,14 @@ impl<'a> TransitionBuilder<'a> {
 
     /// ADR-0087 Decision 4: a fee leg leaves the move as a payout to `payload`, keyed by the move
     /// so two moves in one block cannot share a row; `None` burns it (a class with no registrant).
+    ///
+    /// **The key is minted in the top 1/256 of the key space** (mainnet audit 2026-09-06, M-10).
+    /// The drain and `palw_v2_payout_outputs` both take "the first N in `BTreeMap` key order", and
+    /// a market row that sorted among the claim rows delayed the escrow release ADR-0042 Decision 10
+    /// sizes the queue for. Forcing `PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX` puts every market row
+    /// after every claim row whose id does not begin with that byte, so claims keep Decision 10's
+    /// latency and market rows take the remainder. The other 63 bytes are the keyed hash they always
+    /// were, so two legs of two moves still cannot share a row.
     fn write_model_fee(
         &mut self,
         ctx: &PalwBlockContextV2,
@@ -6422,9 +6613,44 @@ impl<'a> TransitionBuilder<'a> {
         h.update(&ctx.daa_score.to_le_bytes());
         h.update(&self.model_moves.to_le_bytes());
         h.update(leg);
-        let key = finish(h);
+        let mut key_bytes = finish(h).as_bytes();
+        key_bytes[0] = PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX;
+        let key = Hash64::from_bytes(key_bytes);
         self.write_payout(key, Some(PalwPayoutV2 { payload, amount }));
         0
+    }
+
+    /// **How many payout rows a market move of this shape will write, at most** (audit M-10).
+    ///
+    /// Counted BEFORE the move touches anything, so a move that would breach
+    /// [`PALW_V2_MAX_PENDING_PAYOUTS`] is refused whole rather than half-applied. An upper bound,
+    /// not exact: a leg whose amount rounds to zero or whose payee has no bond writes nothing
+    /// (`write_model_fee`'s first two lines), so this over-counts in the safe direction.
+    ///
+    ///   * a buy: the owner leg and the contributor leg  → 2
+    ///   * a carrier sell: those two plus `sell-net`     → 3
+    ///   * an EVM sell: those two; the net leg is an ADR-0089 Decision 7 settlement credit, and
+    ///     "the coinbase never emits it"                 → 2
+    ///   * a seed: fee-free by ADR-0090 Decision 2       → 0
+    fn model_payout_rows_would_add(pays_net_via_coinbase: bool, is_seed: bool) -> usize {
+        if is_seed {
+            0
+        } else if pays_net_via_coinbase {
+            3
+        } else {
+            2
+        }
+    }
+
+    /// **ADR-0042 Decision 10's queue has a ceiling** (audit M-10). Refuses a market move whose fee
+    /// legs would push `pending_payouts` past [`PALW_V2_MAX_PENDING_PAYOUTS`]. Called first in each
+    /// of the three move functions, before any write.
+    fn check_model_payout_room(&self, rows: usize) -> Result<(), PalwStateV2Error> {
+        let held = self.state.pending_payouts.len();
+        if held.saturating_add(rows) > PALW_V2_MAX_PENDING_PAYOUTS {
+            return Err(PalwStateV2Error::ModelPayoutQueueFull { held, want: rows, cap: PALW_V2_MAX_PENDING_PAYOUTS });
+        }
+        Ok(())
     }
 
     fn write_panel(&mut self, key: Hash64, new: Option<PalwPanelStateV2>) {
@@ -6828,8 +7054,17 @@ impl<'a> TransitionBuilder<'a> {
             // bond that still had live claims — an invariant break, not a payout policy — so this
             // errors rather than skipping: a silently unpaid producer is worse than a refused
             // block, and the refusal names the claim.
-            let bond = self.state.bonds.get(&claim.bond).ok_or(PalwStateV2Error::MissingBond(claim.bond))?;
-            self.write_payout(id, Some(PalwPayoutV2 { payload: bond.payout_payload, amount: claim.escrowed_reward }));
+            let payout_payload = self.state.bonds.get(&claim.bond).ok_or(PalwStateV2Error::MissingBond(claim.bond))?.payout_payload;
+            // ADR-0091 Decisions 1–3: five percent of the escrow buys from the pair of the line
+            // the claim ran, where that pair exists and is open; the miner is named the rest.
+            // Where no pair takes it the whole escrow is the miner's — nothing is burned for a
+            // model. Either way the number the accepting block withheld is the number that leaves
+            // here: as a payout, as reserve, never as a mint (Decision 8).
+            let slice = self.model_buyback_at_final(&id, claim);
+            let amount = claim.escrowed_reward - slice;
+            if amount > 0 {
+                self.write_payout(id, Some(PalwPayoutV2 { payload: payout_payload, amount }));
+            }
         }
         let mut finalized = claim.clone();
         finalized.phase = PalwClaimPhaseV2::Final { final_daa };
@@ -7318,6 +7553,12 @@ pub fn apply_palw_transition_v7(
     //     The prefix is the first N in `BTreeMap` key order, which is the same set on every node
     //     and the same set `palw_v2_payout_outputs` pays. A backlog drains at N per block against
     //     at most one new claim per block, so the queue cannot grow.
+    //
+    //     **The second writer** (mainnet audit 2026-09-06, M-10): ADR-0087's market writes fee legs
+    //     into this same map from two lanes, so "at most one new claim per block" is no longer the
+    //     whole story. What holds the sentence up now is `PALW_V2_MAX_PENDING_PAYOUTS` — every
+    //     market move is measured against it and refused by it — and market keys are minted in the
+    //     top 1/256 of the key space, so this prefix still belongs to the claims it was sized for.
     for claim_id in builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>() {
         builder.write_payout(claim_id, None);
     }
@@ -7403,7 +7644,21 @@ pub fn apply_palw_transition_v7(
             PalwBlockWorkV3::Attempt(envelope) => match admission {
                 None => Some("a merged attempt on a caller that supplied no admission params".to_string()),
                 Some(admission) => {
-                    match crate::palw_admission_v2::check_palw_attempt_admission_v2(&builder.state, params, admission, ctx, envelope) {
+                    // **`boundary_budget: false`, and the value is inert here** (ADR-0045 D2;
+                    // mainnet audit 2026-09-06, M-2). This runs against the LIVE fold state, and
+                    // step 3b's `ensure_epoch_budgets` has already written the table for
+                    // `ctx.daa_score`'s epoch — so the stored snapshot matches and the fence's
+                    // branch is unreachable. Passing `true` would be a rule change on every
+                    // network, including the two whose validity may not move; passing the fold a
+                    // fence it cannot resolve would be a second reading of one block's DAA.
+                    match crate::palw_admission_v2::check_palw_attempt_admission_v2(
+                        &builder.state,
+                        params,
+                        admission,
+                        ctx,
+                        envelope,
+                        false,
+                    ) {
                         Err(refused) => Some(refused.to_string()),
                         Ok(_) => {
                             let checkpoint = builder.checkpoint();
@@ -7783,7 +8038,10 @@ pub(crate) fn court_session_class_is_fused_v2(state: &PalwChainStateV2, session:
     state.claims.get(&session.claim).and_then(|claim| state.classes.get(&claim.class_id)).is_some_and(|class| class.fused_attention)
 }
 
-fn court_turn_and_rung_deadline_v2(
+/// Visible to the crate so the PRODUCER's duty view asks it too (mainnet audit 2026-09-06, H-5
+/// item d): that view spelled "whose move is it" a second way, off the ladder, and reported
+/// `Terminal` to a responder the fold was clocking as `AwaitDisclosure`.
+pub(crate) fn court_turn_and_rung_deadline_v2(
     session: &PalwCourtSessionStateV2,
     class_is_fused: bool,
 ) -> (crate::palw_bisect::PalwBisectTurnV1, u64) {
@@ -7932,8 +8190,18 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         // index uses. Asking the LADDER here would read `Terminal` on every session that had
         // reached its dissection and hand the whole exchange to the backstop, which closes
         // challenger-side: a responder could simply stop answering rounds and win.
-        let (turn, rung_deadline) =
-            court_turn_and_rung_deadline_v2(&session, court_session_class_is_fused_v2(&builder.state, &session));
+        let class_is_fused = court_session_class_is_fused_v2(&builder.state, &session);
+        let (turn, rung_deadline) = court_turn_and_rung_deadline_v2(&session, class_is_fused);
+        // **The fused terminal's OPENING move, named before the ladder is abandoned** (mainnet
+        // audit 2026-09-06, C-2/H-5).
+        //
+        // `declare_no_show` below takes `&mut` and stamps the ladder `Abandoned`, so this question
+        // cannot be asked after it; and the remap above has already rewritten the turn to
+        // `AwaitDisclosure`, so by then a fused terminal is indistinguishable from an ordinary rung.
+        // It is asked once, here, off the same two facts the remap used.
+        let owes_the_dissection_opening = session.dissection.is_none()
+            && class_is_fused
+            && session.ladder.turn() == crate::palw_bisect::PalwBisectTurnV1::Terminal;
         let turn_can_still_move =
             !matches!(turn, crate::palw_bisect::PalwBisectTurnV1::Terminal | crate::palw_bisect::PalwBisectTurnV1::Abandoned);
         let rung_fired = turn_can_still_move && rung_deadline < ctx.daa_score && rung_deadline < session.deadline_daa;
@@ -7999,8 +8267,24 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                     // PHASE inherit it would give an executor one free silence per dispute after
                     // it had already shown it could play — the exemption becoming a strategy
                     // rather than a mercy.
+                    //
+                    // **And the same mercy at a FUSED TERMINAL, past the fence** (mainnet audit
+                    // 2026-09-06, C-2/H-5). The exemption above is spelled `ladder.round() == 0`,
+                    // which is "the responder has not shown it can play"; the exemption's own
+                    // sentence for why it stops at a dissection is that "a session with an open
+                    // phase has a responder that filed a root claim, which is the move the
+                    // exemption doubts it can make". At a fused terminal `dissection.is_none()` —
+                    // the root claim is precisely the move that has NOT been made, and no binary in
+                    // the field constructs one. A converged ladder has `round() > 0` by
+                    // construction, so the `round() == 0` clause — written before ADR-0082 §10.6
+                    // added the fused remap — could never reach this state, and every fused
+                    // terminal that ran its clock out convicted the accused regardless of guilt.
+                    //
+                    // Fenced, and deliberately not merged into the clause above: that one is
+                    // unfenced and always was, and it decides a different question.
                     crate::palw_bisect::PalwBisectPartyV1::Responder
-                        if session.dissection.is_none() && session.ladder.round() == 0 && !class_holds_weight =>
+                        if (session.dissection.is_none() && session.ladder.round() == 0 && !class_holds_weight)
+                            || (builder.extras.court_responder_coverage_active && owes_the_dissection_opening) =>
                     {
                         // Ends the session, convicts nobody, and FINES nobody — see
                         // `rearm_after_unanswered_opening` (audit3 H4). Routing this to the
@@ -8352,6 +8636,57 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
     Ok(())
 }
 
+/// **ADR-0045 Decision 2's boundary freeze, as ONE pure function over ONE state** (mainnet audit
+/// 2026-09-06, M-2).
+///
+/// The ADR's own sentence is "Admission reads the snapshot; for the crossing block itself (whose
+/// apply has not happened yet) it derives from the parent state — the same pure function over the
+/// same inputs". There was no such function: `ensure_epoch_budgets` did the derivation inline at
+/// step 3b of the fold, and admission had nothing to call, so a crossing block whose class was not
+/// the floor was refused `EpochBudgetUnspecified` and disqualified. This is that function; the fold
+/// calls it and, past `Params::palw_epoch_boundary_budget`, so does admission.
+///
+/// `None` means the fact does not exist yet — an empty share table, which is the genesis block
+/// before its own object list applies. A budget over an empty table is not "no budget".
+pub fn palw_epoch_budgets_for_v2(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    epoch_index: u64,
+) -> Option<PalwEpochBudgetsV2> {
+    if state.class_shares.is_empty() {
+        return None;
+    }
+    // The H1 census, for the budget's denominator (ADR-0045 Decision 2). Same rule the retarget
+    // applies one step earlier in this transition, on the same counters: the classes that produced
+    // in the CLOSED epoch — the parent's — among the unfrozen ones. The attempt lane specifically,
+    // because the budget caps attempt blocks and reads the attempt counter; a class that produced
+    // only receipts is not in this lane's span and is measured against the set plus itself.
+    let closed_epoch = state.last_point.map(|point| point.daa_score / params.epoch_length);
+    let frozen: BTreeSet<Hash64> = state
+        .classes
+        .iter()
+        .filter(|(_, record)| matches!(record.status, PalwClassStatusV2::Frozen { .. }))
+        .map(|(id, _)| *id)
+        .collect();
+    let competing: BTreeSet<Hash64> = match closed_epoch {
+        None => BTreeSet::new(),
+        Some(closed) => state
+            .epoch_counters
+            .iter()
+            .filter(|(id, counter)| counter.epoch_index == closed && counter.produced_blocks > 0 && !frozen.contains(*id))
+            .map(|(id, _)| *id)
+            .collect(),
+    };
+    Some(derive_epoch_budgets_v2(
+        &state.class_shares,
+        &frozen,
+        &competing,
+        params.epoch_length,
+        params.budget_tolerance_permille,
+        epoch_index,
+    ))
+}
+
 fn ensure_epoch_budgets(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
     let epoch_index = ctx.daa_score / builder.params.epoch_length;
     // **This returns on the epoch alone, and that is a known defect kept deliberately.** A class
@@ -8378,42 +8713,10 @@ fn ensure_epoch_budgets(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
     if builder.state.epoch_budgets.as_ref().is_some_and(|b| b.epoch_index == epoch_index) {
         return;
     }
-    if builder.state.class_shares.is_empty() {
-        // Nothing is registered yet — the genesis block before its own object list applies. A
-        // budget over an empty table is not "no budget", it is a fact that does not exist yet.
-        return;
-    }
-    // The H1 census, for the budget's denominator (ADR-0045 Decision 2). Same rule the retarget
-    // applies one step earlier in this transition, on the same counters: the classes that produced
-    // in the CLOSED epoch — the parent's — among the unfrozen ones. The attempt lane specifically,
-    // because the budget caps attempt blocks and reads the attempt counter; a class that produced
-    // only receipts is not in this lane's span and is measured against the set plus itself.
-    let closed_epoch = builder.state.last_point.map(|point| point.daa_score / builder.params.epoch_length);
-    let frozen: BTreeSet<Hash64> = builder
-        .state
-        .classes
-        .iter()
-        .filter(|(_, record)| matches!(record.status, PalwClassStatusV2::Frozen { .. }))
-        .map(|(id, _)| *id)
-        .collect();
-    let competing: BTreeSet<Hash64> = match closed_epoch {
-        None => BTreeSet::new(),
-        Some(closed) => builder
-            .state
-            .epoch_counters
-            .iter()
-            .filter(|(id, counter)| counter.epoch_index == closed && counter.produced_blocks > 0 && !frozen.contains(*id))
-            .map(|(id, _)| *id)
-            .collect(),
-    };
-    let budgets = derive_epoch_budgets_v2(
-        &builder.state.class_shares,
-        &frozen,
-        &competing,
-        builder.params.epoch_length,
-        builder.params.budget_tolerance_permille,
-        epoch_index,
-    );
+    // Nothing registered yet is a fact that does not exist rather than a budget of zero — see
+    // `palw_epoch_budgets_for_v2`, which is this derivation and the one admission calls past
+    // `Params::palw_epoch_boundary_budget`.
+    let Some(budgets) = palw_epoch_budgets_for_v2(&builder.state, builder.params, epoch_index) else { return };
     builder.write_epoch_budgets(Some(budgets));
 }
 
@@ -9038,8 +9341,8 @@ fn apply_object(
         PalwConsensusObjectV2::ModelBuy { line_id, holder, msk_in, min_units_out, sink_index: _ } => {
             model_buy_v1(builder, ctx, line_id, holder, *msk_in, *min_units_out)?;
         }
-        PalwConsensusObjectV2::ModelSell { line_id, holder, units_in, min_msk_out, .. } => {
-            model_sell_v1(builder, ctx, line_id, holder, *units_in, *min_msk_out, true)?;
+        PalwConsensusObjectV2::ModelSell { line_id, holder, units_in, min_msk_out, held_units, .. } => {
+            model_sell_v1(builder, ctx, line_id, holder, *units_in, *min_msk_out, true, Some(*held_units))?;
         }
         PalwConsensusObjectV2::ModelSeed { line_id, seeder, msk_seed, sink_index: _ } => {
             model_seed_v1(builder, ctx, line_id, seeder, *msk_seed)?;
@@ -10476,8 +10779,10 @@ fn apply_object(
             work_leaves,
             prompt_token_ids_hash,
             // Audit H-4: the committed length is a field of the JOB and therefore of the claim id;
-            // it is no longer part of the work identity, because a prefix of a run is that run.
-            decode_tokens_executed: _,
+            // it is no longer part of the WORK IDENTITY, because a prefix of a run is that run.
+            // Past `Params::palw_fp_da_pins` it is read for one other thing — the run's retained
+            // chunk shape, which is what bounds an accusation's row range (ADR-0072 Decision 8).
+            decode_tokens_executed,
             trace_root,
             output_root,
             execution_root,
@@ -10604,8 +10909,37 @@ fn apply_object(
                 trace_root: *trace_root,
                 output_root: *output_root,
                 execution_root: *execution_root,
-                trace_chunk_count: *trace_chunk_count,
-                trace_retention_daa: *trace_retention_daa,
+                // **The DA obligation is the CHAIN's, not the producer's** (ADR-0072 Decision 8,
+                // free-prompt half; mainnet audit 2026-09-06 M-3).
+                //
+                // Both were carried verbatim, and `trace_retention_daa` is the only bound on when
+                // a `DefaultAccused` may be filed (`DaOutsideRetention`, this file's accusation
+                // arm). A producer writing `0` was permanently immune to the DA court for free —
+                // and so was an honest one, who is *also* better off writing `0` because it
+                // immunises against griefing accusations that pause the claim. A field with that
+                // shape does not need an attacker; it drifts to `0` on its own, and the court the
+                // card arms becomes decorative.
+                //
+                // The attempt lane pins these by EQUALITY at admission, because an attempt rides
+                // its block's header and knows the DAA. A commitment rides an ordinary transaction
+                // built before anyone knows which block accepts it, so equality is unsatisfiable
+                // and the chain DERIVES instead — the same decision at the only layer holding the
+                // input. `ctx.daa_score` is the same value this record's `accepted_daa` takes,
+                // which is what the accusation arm anchors on.
+                //
+                // The chunk count is the run's own shape: `⌈decode_tokens_executed / 256⌉`, the
+                // formula `PalwFpWorkerResultV3::validate_against_request` already enforces on the
+                // worker. It bounds `palw_da_max_accusable_rows_v1` and nothing else.
+                trace_chunk_count: if builder.extras.fp_da_pins_active {
+                    decode_tokens_executed.div_ceil(crate::palw_freeprompt_v3::PALW_FP_TRACE_CHUNK_EVENTS_V3).max(1)
+                } else {
+                    *trace_chunk_count
+                },
+                trace_retention_daa: if builder.extras.fp_da_pins_active {
+                    ctx.daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(builder.params))
+                } else {
+                    *trace_retention_daa
+                },
                 reserved,
                 // Zero, deliberately (ADR-0044): a commitment riding a transaction is not a
                 // block's work — β credit here would let commitment-stuffing pump a chain's live
@@ -10744,6 +11078,21 @@ pub struct PalwTransitionExtrasV1 {
     /// ADR-0089 Decision 6: the actions the block's EVM execution queued, in sequence order —
     /// applied after every carrier-borne object, each quoted on the row as it then stands.
     pub evm_actions: Vec<crate::evm::model_market::PalwEvmMarketActionV1>,
+    /// `Params::palw_court_responder_coverage` resolved at the block's DAA (mainnet audit
+    /// 2026-09-06, C-2/H-5). Below it a fused terminal's silence convicts the responder exactly as
+    /// it does today; past it that one ending routes to `rearm_after_unanswered_opening` instead.
+    ///
+    /// It rides HERE rather than as a fourth positional bool on
+    /// `apply_palw_transition_v2_with_policies`, for the reason that function's own doc gives:
+    /// "Three lanes wrote three faces of this shape in one batch and a fourth would have been
+    /// written next; separate faces let a policy be added to one and forgotten in the other."
+    pub court_responder_coverage_active: bool,
+    /// `Params::palw_fp_da_pins` resolved at the block's DAA (ADR-0072 Decision 8, free-prompt
+    /// half; mainnet audit 2026-09-06 M-3). Below it a free-prompt claim's DA obligation is the two
+    /// numbers its own producer wrote; past it the transition derives the retention window from
+    /// this block's DAA and pins the chunk count to the run's own shape. `false` by `Default`, so
+    /// every existing caller and every dormant network is byte-identical.
+    pub fp_da_pins_active: bool,
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -10803,6 +11152,25 @@ impl<'a> TransitionBuilder<'a> {
         after.burned_sompi = after.burned_sompi.saturating_add(burned_owner).saturating_add(burned_contributor);
         after.registrant_paid_sompi = after.registrant_paid_sompi.saturating_add(to_owner - burned_owner);
         after.contributor_paid_sompi = after.contributor_paid_sompi.saturating_add(to_contributor - burned_contributor);
+    }
+
+    /// **ADR-0091 Decision 2: the chain's own move at a claim's `Final`.** The slice of the escrow
+    /// buys from the pair of the line the claim was attributed to (`claim_roots`, written at
+    /// accept where the lines fence was armed); the positions the curve gives up are retired.
+    /// Returns the slice taken — `0` where no pair takes it (no root recorded, no line, no market,
+    /// a closed market: Decision 3), so a reward that finds no pair is a reward paid in full.
+    /// Never fails and never touches a holder: the row is the only thing written.
+    fn model_buyback_at_final(&mut self, claim_id: &Hash64, claim: &PalwClaimStateV2) -> u64 {
+        use crate::palw_model_market_v1::{palw_model_buyback_quote_v1, palw_model_buyback_slice_v1};
+        let Some(root) = self.state.claim_roots.get(claim_id).copied() else { return 0 };
+        let Some(line_id) = self.state.model_line_of_root(&claim.class_id, &root) else { return 0 };
+        let Some(market) = self.state.model_markets.get(&line_id).copied() else { return 0 };
+        let Some(quote) = palw_model_buyback_quote_v1(&market, palw_model_buyback_slice_v1(claim.escrowed_reward)) else {
+            return 0;
+        };
+        self.write_model_market(line_id, Some(quote.after));
+        self.model_moves += 1;
+        quote.slice
     }
 
     /// ADR-0088 Decision 4: attribute an accepted claim to the version whose root it named, and
@@ -10877,6 +11245,12 @@ fn model_seed_v1(
     msk_seed: u64,
 ) -> Result<crate::palw_model_market_v1::PalwModelMarketV1, PalwStateV2Error> {
     use crate::palw_model_market_v1::{PALW_MODEL_SEED_MIN_SOMPI_V1, PalwModelMarketV1};
+    // **ADR-0042 Decision 10's queue has room, or this move does not happen** (audit M-10).
+    // Checked first, before any read that could leave a half-applied move: the fee legs below are
+    // rows in `pending_payouts`, which is in the state-root preimage, and this is the only bound on
+    // how many of them a block may add. Refused, never truncated — a truncated fee leg is a payee
+    // silently not paid.
+    builder.check_model_payout_room(TransitionBuilder::model_payout_rows_would_add(false, true))?;
     if *seeder == Hash64::default() {
         return Err(PalwStateV2Error::ModelHolderUnset);
     }
@@ -10913,6 +11287,12 @@ fn model_buy_v1(
     min_units_out: u64,
 ) -> Result<crate::palw_model_market_v1::PalwModelBuyQuoteV1, PalwStateV2Error> {
     use crate::palw_model_market_v1::palw_model_buy_quote_v1;
+    // **ADR-0042 Decision 10's queue has room, or this move does not happen** (audit M-10).
+    // Checked first, before any read that could leave a half-applied move: the fee legs below are
+    // rows in `pending_payouts`, which is in the state-root preimage, and this is the only bound on
+    // how many of them a block may add. Refused, never truncated — a truncated fee leg is a payee
+    // silently not paid.
+    builder.check_model_payout_room(TransitionBuilder::model_payout_rows_would_add(false, false))?;
     if *holder == Hash64::default() {
         return Err(PalwStateV2Error::ModelHolderUnset);
     }
@@ -10950,12 +11330,30 @@ fn model_sell_v1(
     units_in: u64,
     min_msk_out: u64,
     pay_net_via_coinbase: bool,
+    // **ADR-0087 M8 (audit M-11): the position the holder's signature was made against.**
+    // `Some` on the carrier lane, where a detached ML-DSA-87 message is what authorises the move;
+    // `None` on the ADR-0089 EVM lane, where the authority is the EVM transaction's own signature
+    // and nonce and there is no detached message to replay.
+    signed_held_units: Option<u64>,
 ) -> Result<crate::palw_model_market_v1::PalwModelSellQuoteV1, PalwStateV2Error> {
     use crate::palw_model_market_v1::palw_model_sell_quote_v1;
+    // **ADR-0042 Decision 10's queue has room, or this move does not happen** (audit M-10).
+    // Checked first, before any read that could leave a half-applied move: the fee legs below are
+    // rows in `pending_payouts`, which is in the state-root preimage, and this is the only bound on
+    // how many of them a block may add. Refused, never truncated — a truncated fee leg is a payee
+    // silently not paid.
+    builder.check_model_payout_room(TransitionBuilder::model_payout_rows_would_add(pay_net_via_coinbase, false))?;
     let market = *builder.state.model_markets.get(line_id).ok_or(PalwStateV2Error::ModelMarketMissing(*line_id))?;
     let held = builder.state.model_position(line_id, holder);
     if units_in == 0 || units_in > held {
         return Err(PalwStateV2Error::ModelSellExceedsPosition { held, want: units_in });
+    }
+    // **ADR-0087 M8 (audit M-11): the signature covers the position it was signed against.**
+    // The sell's own effect moves that row, so the authority is spent by the move it authorises.
+    if let Some(signed) = signed_held_units
+        && signed != held
+    {
+        return Err(PalwStateV2Error::ModelSellPositionMoved { signed, held });
     }
     let quote = palw_model_sell_quote_v1(&market, units_in).ok_or(PalwStateV2Error::ModelSellPaysNothing(*line_id))?;
     if quote.fees.net < min_msk_out {
@@ -10997,6 +11395,10 @@ fn evm_refusal_reason(error: &PalwStateV2Error) -> u8 {
         PalwStateV2Error::ModelSellPaysNothing(_) => PAYS_NOTHING,
         PalwStateV2Error::ModelMarketAlreadySeeded(_) => ALREADY_SEEDED,
         PalwStateV2Error::ModelSeedTooSmall { .. } => SEED_TOO_SMALL,
+        // ADR-0089 Decision 6 (audit M-10): the fold's own payout queue is full, so this action is
+        // refused with a reason and its escrow is refunded at the settling block — the Decision's
+        // own mechanism, applied to the Decision's own resource.
+        PalwStateV2Error::ModelPayoutQueueFull { .. } => PAYOUT_QUEUE_FULL,
         PalwStateV2Error::ModelClassClosed(_) => CLASS_CLOSED,
         _ => OTHER,
     }
@@ -11030,7 +11432,7 @@ fn apply_evm_market_actions(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlock
                 }
             }
             PalwEvmMarketActionKindV1::Sell { units_in, min_msk_out_sompi } => {
-                match model_sell_v1(builder, ctx, &action.line_id, &holder, units_in, min_msk_out_sompi, false) {
+                match model_sell_v1(builder, ctx, &action.line_id, &holder, units_in, min_msk_out_sompi, false, None) {
                     Ok(quote) => (
                         0,
                         PalwEvmSettlementOutcomeV1::Filled {
@@ -12667,6 +13069,108 @@ pub(crate) mod tests {
         );
     }
 
+    // ---- issue #95: the newcomer's key, after a retirement ------------------------------------
+
+    /// **`bond_of_pubkey_v2` must keep finding a bond after it retires, and must say that it has.**
+    ///
+    /// This is the guard on the one line a tidy-up would delete. The node asks this lookup "am I
+    /// already bonded?" before spending money on a `BondRegistered`, and the obvious-looking
+    /// improvement — skip `Retiring` rows, so a retired operator can register a replacement — is
+    /// wrong, because the CHAIN does not skip them either
+    /// (`a_retired_key_can_never_register_a_second_bond`, directly below). A filtered lookup would
+    /// not buy the replacement registration; it would buy a submitted carrier, a spent fee and the
+    /// panel's ten-minute "no bond appeared" timeout, in place of a line that tells the operator
+    /// their key is finished.
+    ///
+    /// So: the row survives retirement, the lookup still returns it, and the STATUS is what the
+    /// caller branches on. If this test ever fails because the lookup returned `None` for a
+    /// retiring bond, the fix is not to relax this assertion.
+    #[test]
+    fn bond_of_pubkey_v2_keeps_finding_a_bond_after_it_retires_and_reports_the_status() {
+        let (state, p, _ids) = chain_with_classes(1, 1_000_000);
+        let bond = bond_key(1);
+        // `chain_with_classes` registers bond 1 under this key — the same fixture the SA-4 test
+        // above uses, spelled out here because the pubkey is what this test is about.
+        let pubkey = vec![7u8; 4];
+
+        let (found, status) = state.bond_of_pubkey_v2(&pubkey).expect("an active bond is found by its key");
+        assert_eq!(found, bond);
+        assert_eq!(status, PalwBondStatusV2::Active);
+
+        let retire = PalwConsensusObjectV2::BondRetireRequested { bond, signature: vec![1] };
+        let (retired, ..) = apply_palw_transition_v6(
+            &state,
+            &p,
+            None,
+            &ctx(3, 12, 3),
+            &[retire],
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+            false,
+            false,
+        )
+        .expect("the bond retires");
+
+        let (found, status) =
+            retired.bond_of_pubkey_v2(&pubkey).expect("a RETIRING bond is still found by its key — see the doc above");
+        assert_eq!(found, bond, "retirement does not remove the row, so it must not remove the answer");
+        assert!(matches!(status, PalwBondStatusV2::Retiring { .. }), "and the status is how the caller tells them apart");
+
+        // Nothing else answers to this key, and an unknown key answers to nothing.
+        assert!(retired.bond_of_pubkey_v2(&vec![8u8; 4]).is_none(), "an unregistered key holds no bond");
+    }
+
+    /// **The reason the lookup above may not filter: one key, one bond, for the life of the chain.**
+    ///
+    /// `BondRegistered` refuses any pubkey already present in the registry
+    /// (`DuplicateBondKey`), and retirement rewrites `status` in place rather than removing the
+    /// row — so a retired key can never back another bond. An operator who wants to bond again
+    /// needs a NEW ML-DSA-87 seed, and the panel's refusal message is the only thing that says so.
+    #[test]
+    fn a_retired_key_can_never_register_a_second_bond() {
+        let (state, p, _ids) = chain_with_classes(1, 1_000_000);
+        let bond = bond_key(1);
+        let retire = PalwConsensusObjectV2::BondRetireRequested { bond, signature: vec![1] };
+        let (retired, ..) = apply_palw_transition_v6(
+            &state,
+            &p,
+            None,
+            &ctx(3, 12, 3),
+            &[retire],
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+            false,
+            false,
+        )
+        .expect("the bond retires");
+
+        // A fresh bond outpoint and a fresh operator — everything is new except the signing key.
+        let again = bond_registration_with_collateral(2, 7, 22, 1_000_000);
+        let err = apply_palw_transition_v6(
+            &retired,
+            &p,
+            None,
+            &ctx(4, 13, 4),
+            &[again],
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+            false,
+            false,
+        )
+        .expect_err("a key already in the registry may not register a second bond, retired or not");
+        assert!(
+            matches!(err, PalwStateV2Error::DuplicateBondKey(b) if b == bond_key(2)),
+            "the refusal must be DuplicateBondKey — if this ever changes, the panel's 'mint a new seed' \
+             advice and the lookup's no-filter rule both need revisiting; got {err}"
+        );
+    }
+
     /// **The fence off is byte-identical.** Every rule above is refused past the fence and
     /// admitted before it, and the state the un-fenced fold produces is the state this ruleset
     /// produced before the amendment existed — asserted on the ROOT, which is the only equality
@@ -14126,7 +14630,7 @@ pub(crate) mod tests {
         let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
         let mut env = attempt(40, 1);
         env.attempt.class_id = entrant;
-        let err = crate::palw_admission_v2::check_palw_attempt_admission_v2(&s1, &p, &admission, &ctx(2, 101, 2), &env)
+        let err = crate::palw_admission_v2::check_palw_attempt_admission_v2(&s1, &p, &admission, &ctx(2, 101, 2), &env, false)
             .expect_err("a weightless class admits nothing");
         assert!(
             matches!(err, crate::palw_admission_v2::PalwAdmissionV2Error::ClassNotYetActive { activation_daa: 500, .. }),
@@ -14150,9 +14654,9 @@ pub(crate) mod tests {
         // …and now it admits. The class had to become active for this to change, which is what
         // makes the refusal above a real gate rather than an unrelated failure.
         assert!(
-            crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env).is_ok()
+            crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env, false).is_ok()
                 || !matches!(
-                    crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env),
+                    crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env, false),
                     Err(crate::palw_admission_v2::PalwAdmissionV2Error::ClassNotYetActive { .. })
                 ),
             "after activation the class is no longer refused FOR BEING INACTIVE"
@@ -14715,6 +15219,181 @@ pub(crate) mod tests {
         assert_eq!(ladder.interval(), (4, 5), "one index wide");
         assert_eq!(ladder.terminal_index(), Some(4), "and the dispute is located");
         assert_eq!(ladder.turn(), crate::palw_bisect::PalwBisectTurnV1::Terminal, "only an arithmetic close finishes it now");
+    }
+
+    /// Apply with the fused-terminal responder-coverage rule set either way — the ONLY difference
+    /// between the two tests below, so what they disagree about is the fence and nothing else.
+    fn apply_with_coverage(
+        parent: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        c: &PalwBlockContextV2,
+        objects: &[PalwConsensusObjectV2],
+        coverage: bool,
+    ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+        let extras = PalwTransitionExtrasV1 { court_responder_coverage_active: coverage, ..Default::default() };
+        let (state, delta) =
+            apply_palw_transition_v2_with_extras(parent, p, c, objects, None, false, false, false, false, &extras)
+                .expect("transition applies");
+        state.assert_internal_consistency(p).expect("internal consistency after apply");
+        state.assert_deadline_consistency(p).expect("deadline consistency after apply");
+        (state, delta)
+    }
+
+    /// **A court driven to a FUSED terminal, with two bonds so "who paid" is answerable.**
+    ///
+    /// `weightless` picks the class: `false` is the cadence-holding class (so the opening-rung
+    /// mercy's `!class_holds_weight` clause is false), `true` the share-0 one (so it is true). The
+    /// fusion is stamped on the class record before the court opens; the reason it cannot be
+    /// stamped afterwards is written at the line that does it.
+    fn fused_terminal_court(p: &PalwStateParamsV2, weightless: bool) -> (PalwChainStateV2, Hash64, Hash64) {
+        let (class, artifact) = if weightless { (h64(2), h64(12)) } else { (h64(1), h64(11)) };
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(2),
+            pubkey: vec![8; 4],
+            operator_pubkey: op_key(22),
+            collateral: 1_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A22),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        });
+        if weightless {
+            objects.push(register_weightless_class());
+        }
+        let genesis = PalwChainStateV2::genesis();
+        let (mut s1, _) = apply(&genesis, p, &ctx(1, 100, 1), &objects, None);
+        // **Stamped BEFORE the court opens, because the court-deadline index is maintained
+        // incrementally off this very bit.** `court_turn_and_rung_deadline_v2` remaps a fused
+        // terminal to `AwaitDisclosure`, and the index stores the deadline that remap produces, so
+        // a class fused after the ladder converged leaves the index naming a deadline the session
+        // no longer has — `assert_internal_consistency` says so, which is the checker doing its job.
+        // A genesis registration carries no profile, so this is where the bit
+        // `verify_class_admission_v6` would have written from a graph-v5 carriage goes in.
+        s1.classes.get_mut(&class).expect("the class is registered").fused_attention = true;
+        let env = attempt_for_class(40, 1, class, bond_key(1), vec![7; 4], op_id(21), artifact);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, p, &ctx(2, 101, 2), &[], Some(&env));
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+        let (s3, _) =
+            apply(&s2, p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        let (s4, _) = apply(
+            &s3,
+            p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
+        let (s5, _) = apply(&s4, p, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(2))], None);
+        let sid = court_session_of(claim_id, h64(31), bond_key(1), bond_key(2));
+        assert_eq!(s5.court_session(&sid).unwrap().ladder.interval(), (0, 16), "the fixture's space");
+
+        // Four rungs collapse [0,16) to one index — the same sequence
+        // `palw_v2_the_ladder_narrows_across_blocks` walks, because the state this is about is that
+        // test's ending.
+        let (s6, _) = apply(&s5, p, &ctx(6, 105, 6), &[disclose(sid, 0, 8, 0xD0)], None);
+        let (s7, _) = apply(&s6, p, &ctx(7, 106, 7), &[rung_verdict(sid, 0, false)], None);
+        let (s8, _) = apply(&s7, p, &ctx(8, 107, 8), &[disclose(sid, 1, 4, 0xD1)], None);
+        let (s9, _) = apply(&s8, p, &ctx(9, 108, 9), &[rung_verdict(sid, 1, true)], None);
+        let (s10, _) = apply(&s9, p, &ctx(10, 109, 10), &[disclose(sid, 2, 6, 0xD2)], None);
+        let (s11, _) = apply(&s10, p, &ctx(11, 110, 11), &[rung_verdict(sid, 2, false)], None);
+        let (s12, _) = apply(&s11, p, &ctx(12, 111, 12), &[disclose(sid, 3, 5, 0xD3)], None);
+        let (s13, _) = apply(&s12, p, &ctx(13, 112, 13), &[rung_verdict(sid, 3, false)], None);
+        assert_eq!(
+            s13.court_session(&sid).unwrap().ladder.turn(),
+            crate::palw_bisect::PalwBisectTurnV1::Terminal,
+            "the fixture's premise: the ladder has converged"
+        );
+        assert!(s13.classes.get(&class).expect("the class is registered").fused_attention, "…on a fused class");
+        (s13, claim_id, sid)
+    }
+
+    /// **A fused terminal's silence convicts nobody where no party in the field can open the
+    /// dissection** (ADR-0082 §10.6; mainnet audit 2026-09-06, C-2/H-5).
+    ///
+    /// §10.6 gave the fused terminal a clock so that "silence no longer wins challenger-side". Its
+    /// premise is a responder that owes a `CourtAttnRootClaimed` and can file one. Nothing in this
+    /// tree builds that object outside a test module and the panel's court arm has no arm that
+    /// produces it, so the move being clocked is the opening move of a machine no party has ever
+    /// moved in — and the ending was `void_and_slash(CourtFraud)`, which burns the producer's
+    /// collateral and forfeits its escrowed reward on a verdict independent of the facts.
+    ///
+    /// Past the fence the ending is this fold's own third direction: the session ends, nobody is
+    /// convicted, and NOBODY IS FINED — neither the accused for a move it cannot make nor the
+    /// accuser for opening a court that could not run.
+    #[test]
+    fn a_fused_terminal_silence_convicts_nobody_where_no_party_can_open_the_dissection() {
+        let p = params_with_ladder();
+        let (fused, claim_id, sid) = fused_terminal_court(&p, false);
+        let rung = fused.court_session(&sid).unwrap().ladder.last_deadline_daa();
+        assert!(rung < fused.court_session(&sid).unwrap().deadline_daa, "the RUNG fires first, not the session backstop");
+        let (executor_before, challenger_before) = (fused.bond(&bond_key(1)).unwrap(), fused.bond(&bond_key(2)).unwrap());
+        let (executor_before, challenger_before) = (executor_before.clone(), challenger_before.clone());
+
+        let (after, _) = apply_with_coverage(&fused, &p, &ctx(14, rung + 1, 14), &[], true);
+        assert!(after.court_session(&sid).is_none(), "the session is decided and gone");
+        assert!(
+            !matches!(after.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }),
+            "a producer must not be convicted for failing to make a move no binary in this tree can construct"
+        );
+        let executor_after = after.bond(&bond_key(1)).unwrap();
+        assert_eq!(executor_after.slashed, executor_before.slashed, "the accused was not fined");
+        assert_eq!(executor_after.collateral, executor_before.collateral, "…and its collateral is intact");
+        let challenger_after = after.bond(&bond_key(2)).unwrap();
+        assert_eq!(challenger_after.slashed, challenger_before.slashed, "and the accuser was not fined either");
+        assert_eq!(challenger_after.collateral, challenger_before.collateral, "…nor its collateral touched");
+    }
+
+    /// **The same silence convicts while the rule is dormant** — the fence's own pin.
+    ///
+    /// This is the assertion that fails if the exemption is written unfenced, which is the mistake
+    /// that would move testnet-11's and devnet's folds. It runs the identical fixture and the
+    /// identical block; the ONLY difference is `court_responder_coverage_active`.
+    #[test]
+    fn the_same_silence_convicts_while_the_rule_is_dormant() {
+        let p = params_with_ladder();
+        let (fused, claim_id, sid) = fused_terminal_court(&p, false);
+        let rung = fused.court_session(&sid).unwrap().ladder.last_deadline_daa();
+        let executor_before = fused.bond(&bond_key(1)).unwrap().clone();
+
+        let (after, _) = apply_with_coverage(&fused, &p, &ctx(14, rung + 1, 14), &[], false);
+        assert!(after.court_session(&sid).is_none(), "the session is decided and gone either way");
+        assert!(
+            matches!(after.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "below the fence the shipped behaviour stands: the fused terminal's silence is a fraud conviction"
+        );
+        assert!(
+            after.bond(&bond_key(1)).unwrap().slashed > executor_before.slashed,
+            "…and it costs the accused collateral, which is the whole reason the rule above it exists"
+        );
+    }
+
+    /// **The opening-rung mercy cannot reach a fused terminal, and `class_holds_weight` is not what
+    /// decides it.**
+    ///
+    /// The finding was first read as "the weightless exemption saves an honest producer here"; it
+    /// does not, and this pins why so nobody re-derives it. `PalwBisectLadderV1::apply_verdict`
+    /// increments `round` on every accepted verdict and only then may set `Terminal`, so a ladder
+    /// that has converged has `round() > 0` BY CONSTRUCTION and the `round() == 0` clause is
+    /// unreachable there — for a cadence-holding class and a weightless one alike. The second half
+    /// of the test is the demonstration: with the rule dormant, a WEIGHTLESS fused class is
+    /// convicted exactly as the weighted one is.
+    #[test]
+    fn the_round_zero_mercy_cannot_reach_a_fused_terminal() {
+        let p = params_with_ladder();
+        let (fused, _claim_id, sid) = fused_terminal_court(&p, false);
+        let ladder = &fused.court_session(&sid).unwrap().ladder;
+        assert_eq!(ladder.turn(), crate::palw_bisect::PalwBisectTurnV1::Terminal);
+        assert!(ladder.round() > 0, "a converged ladder has taken at least one verdict, so the round-0 clause cannot fire here");
+
+        let (weightless, claim_id, sid) = fused_terminal_court(&p, true);
+        assert_eq!(weightless.class_shares.get(&h64(2)).copied(), Some(0), "the premise: this class holds no cadence");
+        assert!(weightless.court_session(&sid).unwrap().ladder.round() > 0);
+        let rung = weightless.court_session(&sid).unwrap().ladder.last_deadline_daa();
+        let (after, _) = apply_with_coverage(&weightless, &p, &ctx(14, rung + 1, 14), &[], false);
+        assert!(
+            matches!(after.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "the weightless exemption is demonstrably not what saves anyone at a fused terminal: it is convicted too"
+        );
     }
 
     /// **A party can find out what it owes in a court it is in.**
@@ -20339,6 +21018,129 @@ pub(crate) mod tests {
         PalwConsensusObjectV2::MaterialDisclosed { claim, event_index: index, disclosure, signature: vec![5; 8] }
     }
 
+    /// **ADR-0072 Decision 8's free-prompt half: the DA obligation is the chain's, and a zero no
+    /// longer buys immunity** (mainnet audit 2026-09-06 M-3).
+    ///
+    /// Both halves, which is what makes this a rule rather than an agreement with the patch. The
+    /// DORMANT half pins the defect — a producer writing `trace_retention_daa = 0` is refused
+    /// every accusation forever, at zero cost, and an HONEST producer is weakly better off writing
+    /// it too because it also immunises against griefing accusations that pause the claim, so the
+    /// field drifts to zero with no adversary at all. The ARMED half pins the repair, and its last
+    /// assertion pins that the repair does not turn the retention window into an unbounded
+    /// accusation window: SA-1's rule that the whole disclose window must fit inside the
+    /// obligation still closes it.
+    #[test]
+    fn a_free_prompt_claims_retention_is_the_chains_obligation_and_a_zero_no_longer_buys_immunity() {
+        let p = params();
+        let obligation = crate::palw_producer_v2::palw_min_trace_retention_daa_v1(&p);
+        assert_eq!(obligation, 10 + 10 + 20 + 500, "this fixture's windows are the ones the arithmetic below assumes");
+
+        // The producer writes the hostile value: no retention at all, and one chunk.
+        let mut commit = fp_commit(0xFC, 60, 3);
+        let PalwConsensusObjectV2::FreePromptCommitted {
+            executor_pubkey,
+            decode_tokens_executed,
+            trace_chunk_count,
+            trace_retention_daa,
+            ..
+        } = &mut commit
+        else {
+            unreachable!("fp_commit builds a commitment")
+        };
+        *executor_pubkey = fp_executor_key();
+        *decode_tokens_executed = 300;
+        *trace_chunk_count = 1;
+        *trace_retention_daa = 0;
+
+        // Both worlds are folded from the same parent and the same object; only the fence moves.
+        let seats = vec![
+            PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) },
+            PalwPanelSeatV2 { bond: bond_key(2), operator_id: h64(91) },
+        ];
+        let bind = PalwConsensusObjectV2::PanelBound { claim: h64(0xFC), anchor: h64(77), seats };
+        let fold = |armed: bool| -> (PalwChainStateV2, PalwStateParamsV2) {
+            let mut objects = register_class_and_bond();
+            for object in objects.iter_mut() {
+                if let PalwConsensusObjectV2::BondRegistered { pubkey, .. } = object {
+                    *pubkey = fp_executor_key();
+                }
+            }
+            objects.push(PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(2),
+                pubkey: vec![8; 4],
+                operator_pubkey: op_key(22),
+                collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A22),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            });
+            let extras = PalwTransitionExtrasV1 { fp_da_pins_active: armed, ..Default::default() };
+            let apply = |parent: &PalwChainStateV2, c: &PalwBlockContextV2, objects: &[PalwConsensusObjectV2]| {
+                apply_palw_transition_v2_with_extras(parent, &p, c, objects, None, false, false, false, true, &extras)
+                    .expect("transition applies")
+                    .0
+            };
+            let s1 = apply(&PalwChainStateV2::genesis(), &ctx(1, 100, 1), &objects);
+            let s2 = apply(&s1, &ctx(2, 500, 2), std::slice::from_ref(&commit));
+            (apply(&s2, &ctx(3, 501, 3), std::slice::from_ref(&bind)), p.clone())
+        };
+        let accuse = |state: &PalwChainStateV2, at: u64| {
+            let extras = PalwTransitionExtrasV1::default();
+            apply_palw_transition_v2_with_extras(
+                state,
+                &p,
+                &ctx(4, at, 4),
+                &[da_accuse(h64(0xFC), 0)],
+                None,
+                false,
+                false,
+                false,
+                true,
+                &extras,
+            )
+            .map(|(s, _)| s)
+        };
+
+        // DORMANT: byte-identical to today. The record keeps the producer's zero…
+        let (dormant, _) = fold(false);
+        let claim = dormant.claim(&h64(0xFC)).expect("the claim was recorded");
+        assert_eq!(claim.trace_retention_daa, 0, "dormant, the field is still the producer's");
+        assert_eq!(claim.trace_chunk_count, 1, "…and so is the chunk count");
+        // …and every accusation against it refuses forever, which IS the defect, pinned.
+        assert!(
+            matches!(accuse(&dormant, 502), Err(PalwStateV2Error::DaOutsideRetention { .. })),
+            "dormant, a producer that wrote 0 is immune to the DA court"
+        );
+
+        // ARMED: the record carries the chain's obligation…
+        let (armed, _) = fold(true);
+        let claim = armed.claim(&h64(0xFC)).expect("the claim was recorded");
+        assert_eq!(claim.accepted_daa, 500, "the anchor the obligation is measured from");
+        assert_eq!(
+            claim.trace_retention_daa,
+            500 + obligation,
+            "armed, the obligation is accepted_daa + the chain's minimum — the attempt lane's own function"
+        );
+        assert_eq!(
+            claim.trace_chunk_count,
+            300u32.div_ceil(crate::palw_freeprompt_v3::PALW_FP_TRACE_CHUNK_EVENTS_V3),
+            "armed, the chunk count is the run's own shape"
+        );
+        // …and an accusation inside it is admitted on its merits rather than refused by arithmetic.
+        assert!(
+            !matches!(accuse(&armed, 502), Err(PalwStateV2Error::DaOutsideRetention { .. })),
+            "armed, writing 0 buys nothing: {:?}",
+            accuse(&armed, 502).err()
+        );
+        // The window still CLOSES: an accusation whose disclose window runs past the obligation is
+        // refused, armed or not — SA-1's own rule, which this must not weaken.
+        let late = 500 + obligation;
+        assert!(
+            matches!(accuse(&armed, late), Err(PalwStateV2Error::DaOutsideRetention { .. })),
+            "the retention window is still a window"
+        );
+    }
+
     /// **DA-1: an accusation outside the claim's retention window is refused.**
     ///
     /// Both edges, because "inside the window" is two statements: not before the claim exists, and
@@ -22278,6 +23080,120 @@ pub(crate) mod tests {
             );
         }
 
+        /// **The same silence, past the responder-coverage fence, convicts nobody** (mainnet audit
+        /// 2026-09-06, C-2/H-5) — the test directly above, run over the same drill with the one
+        /// bit flipped.
+        ///
+        /// The test above is right about the DIRECTION: if a responder can file the root claim,
+        /// its silence is a default on the only defence it has, and charging it challenger-side
+        /// was the defect. It is wrong about the world: nothing in this tree constructs a
+        /// `CourtAttnRootClaimed` outside this very test module, and the panel's court arm has no
+        /// arm that produces one. So on a network that arms the k-ary court today, EVERY fused
+        /// terminal ends in `void_and_slash(CourtFraud)` — a verdict that is a function of the
+        /// fence and not of the facts, costing an honest producer its collateral and its escrowed
+        /// reward for the price of one accusation.
+        ///
+        /// Past the fence that one ending becomes this fold's own third direction. Nothing else
+        /// moves: the remap, the rung clock and every other silence are the tests around this one,
+        /// and they stay green.
+        #[test]
+        fn the_fused_terminal_conviction_is_lifted_past_the_responder_coverage_fence() {
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+            let (state, claim_id, sid, _daa) = court_at_the_fused_leaf(&p, &drill);
+            let session = state.court_session(&sid).expect("the session lives");
+            assert!(session.dissection.is_none(), "nobody has filed a root claim — that is the whole scenario");
+            assert_eq!(session.ladder.turn(), PalwBisectTurnV1::Terminal);
+            let after = session.ladder.last_deadline_daa() + 1;
+            assert!(after < session.deadline_daa, "the RUNG is what fires, not the backstop");
+
+            let extras = PalwTransitionExtrasV1 { court_responder_coverage_active: true, ..Default::default() };
+            let (swept, _) = apply_palw_transition_v2_with_extras(
+                &state,
+                &p,
+                &ctx(after, after, after),
+                &[],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &extras,
+            )
+            .expect("the sweep applies");
+            swept.assert_internal_consistency(&p).expect("internal consistency after apply");
+            swept.assert_deadline_consistency(&p).expect("deadline consistency after apply");
+            assert!(swept.court_session(&sid).is_none(), "the session is decided and gone either way");
+            assert!(
+                !matches!(swept.claim(&claim_id).expect("the claim is still a record").phase, PalwClaimPhaseV2::Voided { .. }),
+                "past the fence, a responder is not convicted for failing to file an object no binary in this tree builds"
+            );
+        }
+
+        /// **A dissection phase reports its OWN turn to the responder** (ADR-0082 Decision 2;
+        /// mainnet audit 2026-09-06, H-5 item d).
+        ///
+        /// `sweep_court_deadlines`' own comment states the rule — "the turn is the PHASE's once one
+        /// is open ... Asking the LADDER here would read `Terminal` on every session that had
+        /// reached its dissection" — and the producer's duty view was the third reader of that
+        /// question and the one still asking the ladder. It reported `Terminal` to a responder that
+        /// owed the phase's next round, and `Terminal` to a fused terminal the chain was clocking
+        /// as `AwaitDisclosure`; every court arm in the panel switches on `duty.turn`, so it would
+        /// misroute even a correct responder.
+        ///
+        /// The equality at the end IS the rule, and it survives either side being rewritten: what
+        /// the producer is told it owes is what the chain will charge it for.
+        #[test]
+        fn a_dissection_phase_reports_its_own_turn_to_the_responder() {
+            use crate::palw_producer_v2::palw_court_duties_v2;
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+
+            // (1) A fused terminal with no phase: the chain clocks it as `AwaitDisclosure` — the
+            // responder owes the root claim — and that is what the view must say.
+            let (terminal, _claim_id, sid, daa) = court_at_the_fused_leaf(&p, &drill);
+            let duties = palw_court_duties_v2(&terminal, &[bond_key(1)]);
+            assert_eq!(duties.len(), 1, "one open session names this bond");
+            assert_eq!(terminal.court_session(&sid).unwrap().ladder.turn(), PalwBisectTurnV1::Terminal, "the LADDER is terminal");
+            assert_eq!(duties[0].turn, PalwBisectTurnV1::AwaitDisclosure, "…and the responder is nonetheless owed a move");
+            assert_eq!(
+                duties[0].rung_deadline_daa,
+                terminal.court_session(&sid).unwrap().ladder.last_deadline_daa(),
+                "clocked by the rung the chain sweeps at"
+            );
+
+            // (2) The same session with the phase open: every one of the three fields is the
+            // PHASE's, and none of them is the ladder's.
+            let (opened, _) = apply(&terminal, &p, &ctx(daa, daa, daa), &[root_claimed(sid, &drill, 2)], None);
+            let phase = opened.court_session(&sid).unwrap().dissection.clone().expect("the root claim opened the phase");
+            let after = palw_court_duties_v2(&opened, &[bond_key(1)]);
+            assert_eq!(after[0].turn, phase.turn(), "the turn is the phase's");
+            assert_eq!(after[0].round, phase.round(), "…and so is the round");
+            assert_eq!(after[0].rung_deadline_daa, phase.last_deadline_daa(), "…and so is the rung deadline");
+            assert_eq!(
+                opened.court_session(&sid).unwrap().ladder.turn(),
+                PalwBisectTurnV1::Terminal,
+                "the ladder still says `Terminal`, which is what the view used to report"
+            );
+
+            // (3) The equality, over every session in both fixtures: the view and the fold answer
+            // "whose move is it, and by when" through one helper.
+            for state in [&terminal, &opened] {
+                for (id, session) in state.court_sessions_iter() {
+                    let (turn, rung) = crate::palw_state_v2::court_turn_and_rung_deadline_v2(
+                        session,
+                        crate::palw_state_v2::court_session_class_is_fused_v2(state, session),
+                    );
+                    let duty = palw_court_duties_v2(state, &[bond_key(1)])
+                        .into_iter()
+                        .find(|d| d.session_id == *id)
+                        .expect("this bond is party to every session in the fixture");
+                    assert_eq!(duty.turn, turn, "the duty view and the fold must not hold two answers to whose move it is");
+                    assert_eq!(duty.rung_deadline_daa, rung, "…nor two answers to when it is due");
+                }
+            }
+        }
+
         /// **The mirror, and the reason the flag has to exist at all.**
         ///
         /// The SAME row, the same ladder, the same narrowed leaf — entered as a genesis
@@ -22479,15 +23395,25 @@ pub(crate) mod tests {
         fn buy(class: Hash64, who: Hash64, msk_in: u64, min_units_out: u64) -> PalwConsensusObjectV2 {
             PalwConsensusObjectV2::ModelBuy { line_id: class, holder: who, msk_in, min_units_out, sink_index: 1 }
         }
-        fn sell(class: Hash64, who: Hash64, units_in: u64, min_msk_out: u64) -> PalwConsensusObjectV2 {
+        /// A sell signed against `held_units` — audit M-11's binding, spelled out where a test
+        /// wants to name a position other than the one the holder actually has.
+        fn sell_against(class: Hash64, who: Hash64, units_in: u64, min_msk_out: u64, held_units: u64) -> PalwConsensusObjectV2 {
             PalwConsensusObjectV2::ModelSell {
                 line_id: class,
                 holder: who,
                 units_in,
                 min_msk_out,
+                held_units,
+                // Far past every fixture's DAA; the window is acceptance's rule, not the fold's.
+                not_after_daa: u64::MAX,
                 pubkey: vec![1],
                 signature: vec![1],
             }
+        }
+        /// The honest sell: signed against the position the state actually holds, which is what a
+        /// holder's own tool builds.
+        fn sell_from(state: &PalwChainStateV2, class: Hash64, who: Hash64, units_in: u64, min_msk_out: u64) -> PalwConsensusObjectV2 {
+            sell_against(class, who, units_in, min_msk_out, state.model_position(&class, &who))
         }
         /// Σ pending payouts, which in these fixtures are the market's alone.
         fn paid(state: &PalwChainStateV2) -> u64 {
@@ -22497,14 +23423,14 @@ pub(crate) mod tests {
         fn invariants(state: &PalwChainStateV2, class: Hash64, paid_in: u64) {
             let m = state.model_market(&class).expect("a market row");
             assert_eq!(
-                m.position_units as u128 + state.model_units_held(&class),
+                m.position_units as u128 + state.model_units_held(&class) + m.retired_units as u128,
                 PALW_MODEL_SUPPLY_UNITS_V1 as u128,
-                "M1: the curve's units plus every holder's are the supply"
+                "M1: the curve's units plus every holder's plus the retired are the supply"
             );
             assert_eq!(
-                paid_in + m.seed_sompi,
+                paid_in + m.seed_sompi + m.buyback_sompi,
                 m.msk_reserve + paid(state) + m.burned_sompi,
-                "M2: what went in (the seed included) is where the ADR says it is"
+                "M2: what went in (the seed and the reward's slices included) is where the ADR says it is"
             );
             assert!(m.msk_reserve >= m.seed_sompi, "ADR-0090 P1: the reserve never falls under the seed");
         }
@@ -22552,7 +23478,7 @@ pub(crate) mod tests {
             invariants(&s3, class, 2_000 * MSK);
 
             let held = s3.model_position(&class, &holder(1));
-            let (s4, _) = apply(&s3, &p, &ctx(5, 104, 5), &[sell(class, holder(1), held, 0)], None);
+            let (s4, _) = apply(&s3, &p, &ctx(5, 104, 5), &[sell_from(&s3, class, holder(1), held, 0)], None);
             let m4 = *s4.model_market(&class).unwrap();
             let sq = palw_model_sell_quote_v1(&m3, held).unwrap();
             assert_eq!(s4.model_position(&class, &holder(1)), 0, "sold out");
@@ -22591,7 +23517,7 @@ pub(crate) mod tests {
             ));
             assert!(
                 matches!(
-                    apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(9), 1, 0)], None),
+                    apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[sell_from(&s2, class, holder(9), 1, 0)], None),
                     Err(PalwStateV2Error::ModelSellExceedsPosition { held: 0, want: 1 })
                 ),
                 "the seeder holds no position to sell"
@@ -22616,21 +23542,21 @@ pub(crate) mod tests {
             let held = s2.model_position(&class, &holder(1));
             let sq = palw_model_sell_quote_v1(s2.model_market(&class).unwrap(), held).unwrap();
             assert!(matches!(
-                apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), held, sq.fees.net + 1)], None),
+                apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell_from(&s2, class, holder(1), held, sq.fees.net + 1)], None),
                 Err(PalwStateV2Error::ModelSellBelowFloor { .. })
             ));
             assert!(matches!(
-                apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), held + 1, 0)], None),
+                apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell_from(&s2, class, holder(1), held + 1, 0)], None),
                 Err(PalwStateV2Error::ModelSellExceedsPosition { .. })
             ));
             assert!(
                 matches!(
-                    apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(2), 1, 0)], None),
+                    apply_palw_transition_v2(&s2, &p, &ctx(4, 103, 4), &[sell_from(&s2, class, holder(2), 1, 0)], None),
                     Err(PalwStateV2Error::ModelSellExceedsPosition { held: 0, want: 1 })
                 ),
                 "another holder cannot sell what it does not hold"
             );
-            let (s3, _) = apply(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), held, sq.fees.net)], None);
+            let (s3, _) = apply(&s2, &p, &ctx(4, 103, 4), &[sell_from(&s2, class, holder(1), held, sq.fees.net)], None);
             invariants(&s3, class, 10 * MSK);
         }
 
@@ -22645,7 +23571,7 @@ pub(crate) mod tests {
             assert!(s1.model_positions_of(&holder(1)).is_empty() && s1.model_positions_of(&holder(2)).is_empty());
             let (s2, _) =
                 apply(&s1, &p, &ctx(3, 102, 3), &[buy(class, holder(1), 5 * MSK, 0), buy(class, holder(2), 5 * MSK, 0)], None);
-            let (s3, d3) = apply(&s2, &p, &ctx(4, 103, 4), &[sell(class, holder(1), 1, 0)], None);
+            let (s3, d3) = apply(&s2, &p, &ctx(4, 103, 4), &[sell_from(&s2, class, holder(1), 1, 0)], None);
             let changed: BTreeSet<(Hash64, Hash64)> = d3
                 .entries
                 .iter()
@@ -22656,6 +23582,159 @@ pub(crate) mod tests {
                 .collect();
             assert_eq!(changed.len(), 1, "one move, one holder's row");
             assert_eq!(s3.model_position(&class, &holder(2)), s2.model_position(&class, &holder(2)), "the other holder is untouched");
+        }
+
+        /// **A line's position table cannot outgrow its own supply** (mainnet audit 2026-09-06,
+        /// M-13).
+        ///
+        /// `ModelBuy` carries `holder` as a free field authorised by the sink rather than by a
+        /// signature, so anyone may open a row keyed to an id nobody controls, and both tables are
+        /// in the state-root preimage. What bounds it is not a check but the design's own
+        /// arithmetic: a position is a whole unit (ADR-0090 Decision 1), `write_model_position`
+        /// removes a row at zero units, and ADR-0087 M1 makes the sum of holders' units at most the
+        /// supply — so a line cannot have more holders than it has units, each of which was bought
+        /// from a curve that is strictly more expensive as the table grows, on a line that cost a
+        /// 100,000 MSK seed to open.
+        ///
+        /// This passes on today's code, and that is the point: the bound is real and was simply
+        /// never written down or pinned. It asserts the REASON (M1, and the zero-row removal)
+        /// rather than the number, so widening the supply keeps it green while losing either half
+        /// of the argument turns it red.
+        #[test]
+        fn a_lines_position_table_cannot_outgrow_its_own_supply() {
+            let p = params();
+            let class = h64(1);
+            let (s0, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let (mut state, _) = apply(&s0, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None);
+            assert_eq!(state.model_position_rows_of_line(&class), 0, "a seeded line has no holders");
+
+            // Buys to fresh ids, which is exactly the shape the finding names: nothing authorises
+            // the holder but the sink output that paid for it.
+            let mut daa = 102u64;
+            for i in 0..24u64 {
+                let stranger = Hash64::from_u64_word(0x5EED_0000 + i);
+                let (next, _) = apply(&state, &p, &ctx(3 + i, daa, 3 + i), &[buy(class, stranger, 50 * MSK, 0)], None);
+                state = next;
+                daa += 1;
+
+                let rows = state.model_position_rows_of_line(&class);
+                let market = state.model_market(&class).expect("a market row");
+                // The REASON, asserted at every step: M1 is what makes the table bounded.
+                assert_eq!(
+                    market.position_units as u128 + state.model_units_held(&class),
+                    PALW_MODEL_SUPPLY_UNITS_V1 as u128,
+                    "ADR-0087 M1: the curve's units plus every holder's are the supply"
+                );
+                assert!(
+                    rows as u128 <= state.model_units_held(&class),
+                    "every row holds at least one whole unit (ADR-0090 Decision 1), so rows cannot exceed units held"
+                );
+                assert!(
+                    rows <= PALW_MODEL_SUPPLY_UNITS_V1 as usize,
+                    "…and units held are at most the supply, which is the bound the table has and never stated"
+                );
+            }
+            let rows_before = state.model_position_rows_of_line(&class);
+            assert_eq!(rows_before, 24, "one row a holder, and no row for anyone else");
+
+            // The other half the bound rests on: a holder who sells out leaves NO row behind. If
+            // zero-unit rows persisted, "rows ≤ units held" above would be false and the table
+            // would be an attacker-keyed map with no ceiling at all.
+            let leaver = Hash64::from_u64_word(0x5EED_0000);
+            let held = state.model_position(&class, &leaver);
+            assert!(held > 0);
+            let (after, _) = apply(&state, &p, &ctx(99, daa, 99), &[sell_from(&state, class, leaver, held, 0)], None);
+            assert_eq!(after.model_position(&class, &leaver), 0);
+            assert_eq!(
+                after.model_position_rows_of_line(&class),
+                rows_before - 1,
+                "a sold-out holder's row is removed, not left at zero"
+            );
+            assert!(after.model_positions_of(&leaver).is_empty(), "and the holder's own view agrees");
+
+            // The row counter counts ONE line's rows, not the map's — the bound is per line.
+            assert_eq!(after.model_position_rows_of_line(&h64(0xDEAD)), 0, "a line with no market has no rows");
+        }
+
+        /// **ADR-0087 M8: "no other key can sell it" — including the second time** (mainnet audit
+        /// 2026-09-06, M-11).
+        ///
+        /// A sell's authorisation used to bind only its own terms, so the payload of a mined sell
+        /// was a bearer instrument: a stranger could re-fire it whenever the holder held `units_in`
+        /// again, force-exiting the position at a price the holder consented to once. The signature
+        /// now covers the position it is sold out of, and the sell's own effect moves that position,
+        /// so the authority is consumed by the move it authorises — with no nonce table and nothing
+        /// added to the state root.
+        ///
+        /// The last leg states the RESIDUAL honestly rather than overclaiming: the position binding
+        /// alone is not revocation. A holder who buys back to exactly the same unit count makes the
+        /// old payload fillable again, and what bounds that is `not_after_daa`, which acceptance
+        /// enforces (`processor.rs`'s `Obj::ModelSell` arm) — so the test asserts the fold WOULD
+        /// fill it, which is the fact the window exists to answer.
+        #[test]
+        fn a_replayed_sell_finds_a_position_that_moved() {
+            let p = params();
+            let class = h64(1);
+            let (s0, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let (s1, _) = apply(&s0, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None);
+            let (s2, _) = apply(&s1, &p, &ctx(3, 102, 3), &[buy(class, holder(1), 1_000 * MSK, 0)], None);
+            let full = s2.model_position(&class, &holder(1));
+            assert!(full > 2, "the holder has a position to be sold out of");
+
+            // The holder signs one sale out of the position it actually has, and it fills.
+            let authorised = sell_against(class, holder(1), 1, 0, full);
+            let (s3, _) = apply(&s2, &p, &ctx(4, 103, 4), std::slice::from_ref(&authorised), None);
+            assert_eq!(s3.model_position(&class, &holder(1)), full - 1, "one position sold");
+
+            // The identical object, fired again by anyone: the row it was signed against is gone.
+            let replay = apply_palw_transition_v2(&s3, &p, &ctx(5, 104, 5), std::slice::from_ref(&authorised), None)
+                .expect_err("a sell is not a bearer instrument");
+            assert!(
+                matches!(replay, PalwStateV2Error::ModelSellPositionMoved { signed, held } if signed == full && held == full - 1),
+                "the refusal names the position the signature bought and the one that is there: {replay}"
+            );
+
+            // ..and it is the SIGNED position that binds, not merely "some position": a payload
+            // naming a row the holder never had is refused the same way, even where the holder
+            // could afford the sale.
+            let never_held = sell_against(class, holder(1), 1, 0, full + 7);
+            let bogus = apply_palw_transition_v2(&s3, &p, &ctx(5, 104, 5), &[never_held], None).expect_err("not this row either");
+            assert!(matches!(bogus, PalwStateV2Error::ModelSellPositionMoved { signed, .. } if signed == full + 7), "{bogus}");
+
+            // The honest holder is not inconvenienced: a fresh signature against the row that IS
+            // there fills.
+            let (s4, _) = apply(&s3, &p, &ctx(5, 104, 5), &[sell_from(&s3, class, holder(1), 1, 0)], None);
+            assert_eq!(s4.model_position(&class, &holder(1)), full - 2);
+
+            // **The residual, stated.** Buy back to exactly the signed count and the old payload
+            // becomes fillable again — the position binding makes a signature single-use, not
+            // revocable. `not_after_daa` is what bounds that window, and acceptance refuses past
+            // it; the fold, which is what this test drives, has no clock of its own.
+            let mut back = s4;
+            let mut daa = 105u64;
+            for round in 0..8 {
+                let (next, _) = apply(&back, &p, &ctx(6 + round, daa, 6 + round), &[buy(class, holder(1), MSK, 0)], None);
+                back = next;
+                daa += 1;
+                if back.model_position(&class, &holder(1)) >= full {
+                    break;
+                }
+            }
+            let now = back.model_position(&class, &holder(1));
+            if now == full {
+                assert!(
+                    apply_palw_transition_v2(&back, &p, &ctx(20, daa, 20), std::slice::from_ref(&authorised), None).is_ok(),
+                    "the fold honours the old payload again once the row matches — which is what the window is for"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        apply_palw_transition_v2(&back, &p, &ctx(20, daa, 20), std::slice::from_ref(&authorised), None),
+                        Err(PalwStateV2Error::ModelSellPositionMoved { .. })
+                    ),
+                    "and while the row does not match exactly, it stays refused"
+                );
+            }
         }
 
         /// M6: a class that is not Active refuses buys and honours sells; a genesis class burns
@@ -22708,7 +23787,7 @@ pub(crate) mod tests {
                 borsh::from_slice(&legacy_bytes).expect("a build without ADR-0087 decodes it");
             assert_eq!(twin.version, PALW_STATE_V2_VERSION);
             let (s2, d2) = apply(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED), buy(class, holder(1), 3 * MSK, 0)], None);
-            let (s3, d3) = apply(&s2, &p, &ctx(3, 102, 3), &[sell(class, holder(1), 1, 0)], None);
+            let (s3, d3) = apply(&s2, &p, &ctx(3, 102, 3), &[sell_from(&s2, class, holder(1), 1, 0)], None);
             let r1 = apply_delta_v2(&g, &d1, &p).unwrap();
             let r2 = apply_delta_v2(&r1, &d2, &p).unwrap();
             let r3 = apply_delta_v2(&r2, &d3, &p).unwrap();
@@ -22724,6 +23803,161 @@ pub(crate) mod tests {
                 "a legacy reader refuses the tailed carriage rather than misreading it"
             );
             assert_ne!(s3.state_root(), s1.state_root());
+        }
+
+        // ---- ADR-0091 — the reward buys the pair, and no holder is paid: B1–B5 at the fold ------
+
+        /// The registry fence armed, so an accepted attempt is attributed to the line it ran
+        /// (ADR-0088 Decision 4) and the reward can find its pair.
+        fn apply_armed_delta(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+            att: Option<&PalwAttemptEnvelopeV2>,
+        ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+            let extras = PalwTransitionExtrasV1 { model_lines_active: true, ..Default::default() };
+            let (state, delta) = apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, &extras)
+                .expect("transition applies");
+            state.assert_internal_consistency(p).expect("internal consistency after apply");
+            (state, delta)
+        }
+
+        fn apply_armed(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+            att: Option<&PalwAttemptEnvelopeV2>,
+        ) -> PalwChainStateV2 {
+            apply_armed_delta(parent, p, c, objects, att).0
+        }
+
+        /// The lattice `palw_v2_escrow_is_carved_once_and_paid_once` walks, with `seed_first`
+        /// deciding whether the founding line has a pair before the claim is accepted: the class,
+        /// the bond, (the seed), the attempt at a subsidy of `subsidy`, the panel, the licence, the
+        /// sweep that makes it `Final`. Returns the state at `Final` and the claim id.
+        fn finalized_claim(subsidy: u64, seed_first: bool) -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+            let p = params().with_worker_carve_permille(620).unwrap();
+            let class = h64(1);
+            let s1 = apply_armed(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let s1 = if seed_first { apply_armed(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None) } else { s1 };
+            let env = attempt(40, 1);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let s2 = apply_armed(&s1, &p, &PalwBlockContextV2 { subsidy, ..ctx(3, 102, 3) }, &[], Some(&env));
+            assert_eq!(s2.claim_root(&claim_id), Some(h64(11)), "the claim is attributed to the root it named");
+            let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+            let s3 = apply_armed(
+                &s2,
+                &p,
+                &ctx(4, 103, 4),
+                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+                None,
+            );
+            let s4 = apply_armed(
+                &s3,
+                &p,
+                &ctx(5, 104, 5),
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+                None,
+            );
+            assert!(s4.pending_payouts_iter().next().is_none(), "nothing payable while the claim is refutable");
+            if let Some(m) = s4.model_market(&class) {
+                assert_eq!((m.msk_reserve, m.buyback_sompi), (SEED, 0), "and nothing bought while it is");
+            }
+            let (s5, d5) = apply_armed_delta(&s4, &p, &PalwBlockContextV2 { subsidy: 9_999_999, ..ctx(6, 125, 6) }, &[], None);
+            assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+            // A reorg of the maturing block takes the reward's buy back with it — the move is an
+            // ordinary `ModelMarket` delta entry, so the revert restores the row byte for byte.
+            let back = revert_delta_v2(&s5, &d5, &p).expect("the maturing block reverts");
+            assert_eq!(back.state_root(), s4.state_root(), "reverting the Final undoes the buyback and the payout");
+            assert_eq!(
+                back.model_market(&h64(1)).map(|m| (m.msk_reserve, m.buyback_sompi)),
+                s4.model_market(&h64(1)).map(|m| (m.msk_reserve, m.buyback_sompi))
+            );
+            (p, s5, claim_id)
+        }
+
+        /// B1, B4: at `Final` five percent of the escrow is reserve on the line the claim ran, the
+        /// miner is named the other ninety-five, and no holder or position row moved.
+        #[test]
+        fn the_reward_buys_the_pair_at_final_and_the_miner_is_paid_the_rest() {
+            let (_, s5, claim_id) = finalized_claim(1_000, true);
+            let class = h64(1);
+            let released: Vec<_> = s5.pending_payouts_iter().map(|(id, pay)| (*id, *pay)).collect();
+            assert_eq!(
+                released,
+                vec![(claim_id, PalwPayoutV2 { payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), amount: 589 })],
+                "620 escrowed: 31 bought the pair, 589 are the miner's, one payout row, the bond's payload"
+            );
+            let m = s5.model_market(&class).expect("the pair");
+            assert_eq!(m.msk_reserve, SEED + 31, "the slice is reserve, all of it");
+            assert_eq!(
+                (m.buyback_sompi, m.retired_units, m.position_units),
+                (31, 0, PALW_MODEL_SUPPLY_UNITS_V1),
+                "31 sompi buys no whole position and retires none"
+            );
+            assert!(m.price_sompi_per_position_v1() >= SEED / 500_000, "the price did not fall");
+            assert_eq!((m.burned_sompi, m.registrant_paid_sompi, m.contributor_paid_sompi), (0, 0, 0), "no leg on the chain's move");
+            assert_eq!(s5.model_units_held(&class), 0, "no holder was handed anything");
+            assert!(
+                s5.model_positions_of(&holder(9)).is_empty()
+                    && s5.model_positions_of(&kaspa_hashes::Hash64::from_u64_word(0x9A11)).is_empty()
+            );
+            // M2 at the fold with the reward's source: nothing paid in, the seed and the slice.
+            assert_eq!(m.seed_sompi + m.buyback_sompi, m.msk_reserve + m.burned_sompi, "what went in is the reserve");
+        }
+
+        /// B3: a line without a pair pays its miner in full, and nothing is burned for a model.
+        #[test]
+        fn a_miner_of_an_unseeded_line_is_paid_in_full() {
+            let (_, s5, claim_id) = finalized_claim(1_000, false);
+            let released: Vec<_> = s5.pending_payouts_iter().map(|(id, pay)| (*id, *pay)).collect();
+            assert_eq!(released, vec![(claim_id, PalwPayoutV2 { payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), amount: 620 })]);
+            assert!(s5.model_market(&h64(1)).is_none(), "no pair was conjured");
+        }
+
+        /// B5: a slice worth positions retires exactly what the curve gave up, M1 counts them, a
+        /// holder's round trip leaves them retired, and the seed floor holds under it all.
+        #[test]
+        fn what_the_reward_buys_is_retired_and_the_supply_stays_whole() {
+            use crate::palw_model_market_v1::palw_model_buyback_quote_v1;
+            let (p, s5, _) = finalized_claim(1_000_000_000_000, true);
+            let class = h64(1);
+            let m = *s5.model_market(&class).unwrap();
+            let expect = palw_model_buyback_quote_v1(&seeded_row(101), 31_000_000_000).unwrap();
+            assert_eq!(m.buyback_sompi, 31_000_000_000, "five percent of a 620,000,000,000 escrow");
+            assert_eq!(
+                (m.msk_reserve, m.position_units, m.retired_units),
+                (expect.after.msk_reserve, expect.after.position_units, expect.retired)
+            );
+            assert_eq!(m.retired_units, 1_545, "the curve gave up 1,545 positions to the reward, and they are the chain's");
+            assert_eq!(m.price_sompi_per_position_v1(), 20_124_183);
+            assert_eq!(m.position_units + m.retired_units, PALW_MODEL_SUPPLY_UNITS_V1, "M1: nobody holds them");
+            assert_eq!(s5.model_units_held(&class), 0);
+            // A holder buys and sells everything: the retired positions stay out of reach.
+            let (s6, _) = apply(&s5, &p, &ctx(7, 126, 7), &[buy(class, holder(1), 1_000 * MSK, 0)], None);
+            let held = s6.model_position(&class, &holder(1));
+            assert!(held > 0);
+            let m6 = *s6.model_market(&class).unwrap();
+            assert_eq!(
+                m6.position_units as u128 + held as u128 + m6.retired_units as u128,
+                PALW_MODEL_SUPPLY_UNITS_V1 as u128,
+                "M1 with a holder"
+            );
+            let (s7, _) = apply(&s6, &p, &ctx(8, 127, 8), &[sell_from(&s6, class, holder(1), held, 0)], None);
+            let m7 = *s7.model_market(&class).unwrap();
+            assert_eq!(
+                m7.position_units + m7.retired_units,
+                PALW_MODEL_SUPPLY_UNITS_V1,
+                "sold out: the curve plus the retired is the supply"
+            );
+            assert_eq!(m7.retired_units, 1_545, "no object moved a retired position");
+            assert!(m7.msk_reserve >= m7.seed_sompi, "ADR-0090 P1 under the reward");
+            assert!(matches!(
+                apply_palw_transition_v2(&s7, &p, &ctx(9, 128, 9), &[sell_from(&s7, class, holder(1), 1, 0)], None),
+                Err(PalwStateV2Error::ModelSellExceedsPosition { held: 0, want: 1 })
+            ));
         }
     }
 
@@ -22998,6 +24232,185 @@ pub(crate) mod tests {
             );
         }
 
+        /// **ADR-0042 Decision 10's queue is bounded, and a claim still drains ahead of every
+        /// market row** (mainnet audit 2026-09-06, M-10).
+        ///
+        /// `PALW_V2_MAX_PAYOUTS_PER_BLOCK`'s sizing premise is "at most one new claim per block",
+        /// and ADR-0087's market is a second writer into the same map — reached from the carrier
+        /// lane and from up to `MAX_MARKET_ACTIONS_PER_EVM_BLOCK` EVM actions, through the SAME
+        /// three functions. The premise is restored by bounding the writer, and this test asserts
+        /// the three things that bound is made of, on a line whose leg pays BOTH halves (an owner
+        /// bond and an adopted proposal's contributor) so every leg a move can write is written.
+        ///
+        /// It is deliberately not a test of the constants' values: parts (1) and (2) read
+        /// `PALW_V2_MAX_PENDING_PAYOUTS` and `PALW_V2_MAX_PAYOUTS_PER_BLOCK` from the code, so
+        /// re-tuning either keeps the test meaningful and only the RULES fail.
+        #[test]
+        fn the_payout_queue_cannot_be_grown_past_its_cap_by_market_moves() {
+            let (p, s, class) = owned_class_chain();
+            // A line with an owner and an adopted contributor: the leg splits 25/75 and both halves
+            // are payable, so a buy writes two rows and a carrier sell three.
+            let proposal = PalwConsensusObjectV2::ModelProposalPosted {
+                line_id: class,
+                root: h64(0xC1),
+                note_hash: h64(0xC2),
+                by: bond_key(2),
+                signature: vec![1],
+            };
+            let id = model_proposal_id_v1(&class, &h64(0xC1), &bond_key(2));
+            let (s3, _) = apply_lines(&s, &p, &ctx(3, 251, 3), std::slice::from_ref(&proposal), None);
+            let share = PalwConsensusObjectV2::ModelLineRolesSet {
+                line_id: class,
+                developer: None,
+                maintainer: None,
+                contributor_permille_of_leg: 250,
+                signature: vec![1],
+            };
+            let mut adopting = publish(class, 2, h64(0xC1), false);
+            if let PalwConsensusObjectV2::ModelVersionPublished { adopted_from, .. } = &mut adopting {
+                *adopted_from = Some(id);
+            }
+            let (s4, _) = apply_lines(&s3, &p, &ctx(4, 252, 4), &[share, adopting], None);
+
+            let buyer = h64(0xB0_0001);
+            let seed = PalwConsensusObjectV2::ModelSeed {
+                line_id: class,
+                seeder: h64(0xB0_0009),
+                msk_seed: crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1,
+                sink_index: 1,
+            };
+            // Audit M-11: a sell is signed against the position it is sold out of, and its own
+            // effect moves that position — so a holder firing several in one block signs each
+            // against the row the one before it leaves behind.
+            let sell_out_of = |held_units: u64| PalwConsensusObjectV2::ModelSell {
+                line_id: class,
+                holder: buyer,
+                units_in: 1,
+                min_msk_out: 0,
+                held_units,
+                not_after_daa: u64::MAX,
+                pubkey: vec![1],
+                signature: vec![1],
+            };
+            let sell_one = |state: &PalwChainStateV2| sell_out_of(state.model_position(&class, &buyer));
+
+            // ---- (3) the sizing identity: what a move writes is what the bound counts ----------
+            // Each of these blocks starts with fewer than PALW_V2_MAX_PAYOUTS_PER_BLOCK rows
+            // queued, so step 1b drains the lot and the count afterwards is this move's own rows.
+            let (s5, _) = apply_lines(&s4, &p, &ctx(5, 253, 5), std::slice::from_ref(&seed), None);
+            assert_eq!(s5.pending_payouts_iter().count(), 0, "ADR-0090 Decision 2: a seed takes no leg");
+            assert_eq!(TransitionBuilder::model_payout_rows_would_add(false, true), 0);
+
+            let buy = PalwConsensusObjectV2::ModelBuy {
+                line_id: class,
+                holder: buyer,
+                msk_in: 10_000 * MSK,
+                min_units_out: 0,
+                sink_index: 1,
+            };
+            let (s6, _) = apply_lines(&s5, &p, &ctx(6, 254, 6), &[buy], None);
+            assert_eq!(
+                s6.pending_payouts_iter().count(),
+                TransitionBuilder::model_payout_rows_would_add(false, false),
+                "a buy writes the owner leg and the contributor leg, and the bound counts exactly those"
+            );
+
+            let (s7, _) = apply_lines(&s6, &p, &ctx(7, 255, 7), &[sell_one(&s6)], None);
+            assert_eq!(
+                s7.pending_payouts_iter().count(),
+                TransitionBuilder::model_payout_rows_would_add(true, false),
+                "a carrier sell writes those two plus `sell-net`, and the bound counts exactly those"
+            );
+
+            // ---- (1) the cap: market moves cannot grow the queue past it -----------------------
+            // Twenty carrier sells a block is sixty rows against a drain of eight, so the queue
+            // fills; every intermediate state must still respect the cap, and the block that would
+            // breach it must be REFUSED by name rather than truncated.
+            let per_block = 20usize;
+            let mut state = s7.clone();
+            let mut daa = 256u64;
+            let mut refusal = None;
+            for round in 0..64 {
+                let start = state.model_position(&class, &buyer);
+                let objects: Vec<_> = (0..per_block as u64).map(|i| sell_out_of(start - i)).collect();
+                match try_lines(&state, &p, &ctx(8 + round, daa, 8 + round), &objects, None) {
+                    Ok((next, _)) => {
+                        assert!(
+                            next.pending_payouts_iter().count() <= PALW_V2_MAX_PENDING_PAYOUTS,
+                            "the queue never exceeds its cap"
+                        );
+                        state = next;
+                    }
+                    Err(e) => {
+                        refusal = Some(e);
+                        break;
+                    }
+                }
+                daa += 1;
+            }
+            let refusal = refusal.expect("twenty sells a block against a drain of eight must reach the cap");
+            assert!(
+                matches!(
+                    refusal,
+                    PalwStateV2Error::ModelPayoutQueueFull { cap, want, .. } if cap == PALW_V2_MAX_PENDING_PAYOUTS && want == 3
+                ),
+                "the refusal names the queue, its cap and the rows the move wanted: {refusal}"
+            );
+            let held = state.pending_payouts_iter().count();
+            assert!(held <= PALW_V2_MAX_PENDING_PAYOUTS, "and the state it refused from is itself under the cap");
+            assert!(
+                held + per_block * 3 > PALW_V2_MAX_PENDING_PAYOUTS,
+                "the cap is what refused, not some earlier limit: the last accepted block left the queue within one \
+                 block's writing of it"
+            );
+
+            // ..and the edge itself, pinned by the legal maximum rather than only by the refusal.
+            // The block drains PALW_V2_MAX_PAYOUTS_PER_BLOCK rows before any object is applied, so
+            // a queue of `rows + drain` is a queue of `rows` by the time the move is quoted.
+            let at_the_edge = |rows: usize| {
+                let mut st = s7.clone();
+                st.pending_payouts.clear();
+                for i in 0..(rows + PALW_V2_MAX_PAYOUTS_PER_BLOCK) {
+                    let mut bytes = [0u8; 64];
+                    bytes[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                    st.pending_payouts.insert(Hash64::from_bytes(bytes), PalwPayoutV2 { payload: h64(0xFEED), amount: 1 });
+                }
+                try_lines(&st, &p, &ctx(900, 900, 900), &[sell_one(&st)], None)
+            };
+            assert!(
+                at_the_edge(PALW_V2_MAX_PENDING_PAYOUTS - 3).is_ok(),
+                "a sell that fills the queue's last three rows is legal — the cap is a ceiling, not a margin"
+            );
+            let over = at_the_edge(PALW_V2_MAX_PENDING_PAYOUTS - 2).expect_err("one row over the ceiling is refused");
+            assert!(
+                matches!(over, PalwStateV2Error::ModelPayoutQueueFull { held, want: 3, cap }
+                    if cap == PALW_V2_MAX_PENDING_PAYOUTS && held == PALW_V2_MAX_PENDING_PAYOUTS - 2),
+                "and the refusal names where the queue stood: {over}"
+            );
+
+            // ---- (2) the drain's prefix still belongs to claims --------------------------------
+            // The rule is about the KEY SPACE, not about the one id this fixture happens to make:
+            // every market row is minted in the top 1/256, so every claim id outside that band
+            // sorts ahead of all of them and takes the drain's prefix.
+            let market_keys: Vec<Hash64> = state.pending_payouts_iter().map(|(k, _)| *k).collect();
+            assert!(market_keys.len() > PALW_V2_MAX_PAYOUTS_PER_BLOCK, "enough rows queued for the question to matter");
+            assert!(
+                market_keys.iter().all(|k| k.as_bytes()[0] == PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX),
+                "every market payout key carries the market prefix"
+            );
+            for lead in [0u8, 1, 0x42, 0x7F, 0xC3, 0xFE] {
+                let mut bytes = [0xA5u8; 64];
+                bytes[0] = lead;
+                let claim_id = Hash64::from_bytes(bytes);
+                assert!(market_keys.iter().all(|m| claim_id < *m), "a claim id outside the top 1/256 sorts first");
+                let mut with_claim = state.clone();
+                with_claim.pending_payouts.insert(claim_id, PalwPayoutV2 { payload: h64(0xFEED), amount: 1 });
+                let prefix: Vec<Hash64> =
+                    with_claim.pending_payouts_iter().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).map(|(k, _)| *k).collect();
+                assert_eq!(prefix[0], claim_id, "the block that drains eight rows pays the claim, not the market backlog");
+            }
+        }
+
         #[test]
         fn usage_is_counted_on_the_version_a_claim_named_and_admission_reads_the_roots_in_force() {
             let (p, s, class) = owned_class_chain();
@@ -23115,7 +24528,13 @@ pub(crate) mod tests {
         const MSK: u64 = 100_000_000;
 
         fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
-            PalwTransitionExtrasV1 { model_lines_active: true, evm_market_active: true, evm_actions: actions }
+            PalwTransitionExtrasV1 {
+                model_lines_active: true,
+                evm_market_active: true,
+                evm_actions: actions,
+                court_responder_coverage_active: false,
+                fp_da_pins_active: false,
+            }
         }
 
         fn apply_evm(
@@ -23310,6 +24729,8 @@ pub(crate) mod tests {
                 model_lines_active: true,
                 evm_market_active: false,
                 evm_actions: vec![buy(0, 1, class, MSK, 0)],
+                court_responder_coverage_active: false,
+                fp_da_pins_active: false,
             };
             let (s_off, _) =
                 apply_palw_transition_v2_with_extras(&s, &p, &ctx(3, 251, 3), &[], None, false, false, false, false, &dormant)

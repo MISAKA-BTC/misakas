@@ -843,6 +843,61 @@ async fn sanity_test() {
                         .unwrap();
                     assert!(!response.available, "a non-ConsensusV2 network answers available:false, and does not error");
                     assert!(!response.bond_known, "and names no bond it does not have");
+
+                    // **The three replies stay three replies after mainnet audit M-5's
+                    // reordering.** The parses moved above the two consensus reads so that a
+                    // malformed request costs this node nothing — the reads are full PALW-state
+                    // materializations and they used to run first. What must NOT have moved is
+                    // which answer each input gets: an empty class id is a legal request asking
+                    // only for the locked-bond set (audit3 H3), a malformed one is an error, and
+                    // "this chain does not have that class" is neither of those.
+                    let empty = rpc_client
+                        .get_palw_producer_facts_call(
+                            None,
+                            GetPalwProducerFactsRequest {
+                                class_id: String::new(),
+                                bond_transaction_id: String::new(),
+                                bond_index: 0,
+                                with_bond: false,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!empty.available, "a hash-only chain has no locked PALW collateral to report");
+                    assert!(empty.locked_bond_outpoints.is_empty(), "…and lists none");
+
+                    // An empty class id must still not reach the bond parse, `with_bond` or not —
+                    // it never did, and the reordering had to preserve that.
+                    assert!(
+                        rpc_client
+                            .get_palw_producer_facts_call(
+                                None,
+                                GetPalwProducerFactsRequest {
+                                    class_id: String::new(),
+                                    bond_transaction_id: "nonsense".into(),
+                                    bond_index: 0,
+                                    with_bond: true,
+                                },
+                            )
+                            .await
+                            .is_ok(),
+                        "an empty class id asks only for the locked-bond set and must not parse a bond id"
+                    );
+                    assert!(
+                        rpc_client
+                            .get_palw_producer_facts_call(
+                                None,
+                                GetPalwProducerFactsRequest {
+                                    class_id: "nonsense".into(),
+                                    bond_transaction_id: "00".repeat(64),
+                                    bond_index: 0,
+                                    with_bond: true,
+                                },
+                            )
+                            .await
+                            .is_err(),
+                        "a malformed class id is an error, not an absence — and now a free one"
+                    );
                 })
             }
             // ADR-0078 Decision 5: the consumer's read path. The sanity daemon is simnet, which is

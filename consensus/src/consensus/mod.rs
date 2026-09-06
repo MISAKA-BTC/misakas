@@ -1371,6 +1371,25 @@ impl ConsensusApi for Consensus {
         // template. They differ only in the one block that crosses an activation.
         let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
         let fences = self.config.params.palw_evm_market_fences_at(tip_daa);
+        // **ADR-0089 Decision 9: below the fence there is no window** (mainnet audit 2026-09-06,
+        // M-13). This resolved the fences and then returned them ALONGSIDE the view instead of
+        // consulting them, so the whole flattening — every class, every line, every version, and a
+        // `BTreeMap` copy of the markets and of every position row — was built for every `eth_call`
+        // and `eth_estimateGas` on any ConsensusV2 network, including a carded mainnet, with no
+        // per-caller budget. It is cheap today only because the tables are empty, which is not a
+        // bound, it is a coincidence.
+        //
+        // `None` is the documented "the market's doors are not registered, whatever the fences say"
+        // (`kaspa_evm::sim::EthCallEnv::palw_view`), which is exactly Decision 9's sentence: below
+        // the fence the four addresses and the facades are empty accounts. The consumer in
+        // `kaspad/src/eth_rpc.rs` already maps `None` to an empty view and default fences, and its
+        // second call site deliberately passes `None` for the same reason.
+        //
+        // The registry reads (F010–F012) are ADR-0088's fence and the market reads ADR-0087's, so
+        // the window is built when ANY of the three is in force and not otherwise.
+        if !fences.any_active() {
+            return None;
+        }
         Some((Arc::new(state.evm_view_v1(kaspa_consensus_core::evm::EVM_CHAIN_ID, base_class_id)), fences))
     }
 
@@ -2355,7 +2374,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_bond_payout_payload_v2_impl(&bond)
     }
 
-    fn palw_bond_of_pubkey_v2(&self, pubkey: &[u8]) -> Option<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
+    fn palw_bond_of_pubkey_v2(
+        &self,
+        pubkey: &[u8],
+    ) -> Option<(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2)> {
         self.virtual_processor.palw_bond_of_pubkey_v2_impl(pubkey)
     }
 

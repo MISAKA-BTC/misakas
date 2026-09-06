@@ -1005,7 +1005,16 @@ pub fn adjudicate_close_proof_v2(
             // tiled pin against a class that registered the flat commitment.
             check_arithmetic_close_binding(claim.trace_root, binding_logits_root_of(binding))?;
             check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
-            map_refutation_outcome(crate::palw_step_refute::check_tiled_decode_token_refutation_v1(binding, pin))
+            // **…and the same ladder.** The two arms above take `step_ladder` and this one kept
+            // the default-ladder name — one predicate, four arms, one missed (ADR-0084 U-08;
+            // mainnet audit 2026-09-06 H-4). It is byte-identical on every network that exists,
+            // because `palw_refutation_leaf_cap_v2` IS `PALW_STEP_LEG_MAX_LEAVES` while
+            // `Params::palw_court_ladder` is dormant, and it is the correct rule past the fence.
+            map_refutation_outcome(crate::palw_step_refute::check_tiled_decode_token_refutation_capped_v1(
+                binding,
+                pin,
+                step_ladder,
+            ))
         }
         // The one arm that cannot be graded from the claim alone — see `adjudicate_court_close_v2`,
         // which returns before reaching here. Refused rather than silently acquitted, because an
