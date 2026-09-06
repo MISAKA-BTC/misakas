@@ -1245,6 +1245,43 @@ pub struct Params {
     /// scheduled height, ADR-0083's path (a), which is the operator's call.
     pub palw_receipt_rows_unpriced: Option<ForkActivation>,
 
+    /// **ADR-0072 Decision 8, asked where the draw is actually spent** (mainnet audit, 2026-09-06
+    /// — C-1).
+    ///
+    /// D8's rule is "every field inside the priced bytes is pinned, or it is the challenge", and
+    /// D8's own evidence is a HEADER-STAGE fact: sweeping one unpinned field over one execution
+    /// "gave 4,096 distinct tickets and 4,096 distinct Layer-0 tags". A Layer-0 tag under `bits` is
+    /// a valid block, a relayed header, and — by ADR-0083 Decision 1, since
+    /// `algo_id_is_priced_by_bits_v2` says the attempt lane is priced — a counted difficulty row.
+    /// The pins that close D8 (`palw_admission_v2::check_palw_attempt_da_pins_v1`) are asked only
+    /// at the composed admission entry point, which runs in the virtual processor and only for a
+    /// candidate chain block; an attempt no bond backs is `StatusDisqualifiedFromChain` there,
+    /// which is not an invalidity and does not remove the row. Both of that function's inputs are a
+    /// network CONSTANT and the header's own DAA score, so the pin was always decidable on the
+    /// relay path and simply was not asked there.
+    ///
+    /// Past this fence, and only on a `ConsensusV2` network, `palw_carriage_stateless_v1` asks the
+    /// three DA pins beside the ML-DSA signature, and refuses a nonce whose bucket is above
+    /// [`crate::palw_attempt_v2::PALW_ATTEMPT_MAX_NONCE_BUCKET_V1`].
+    ///
+    /// **What this does NOT do, stated here so nobody reads the fence as the repair.** It closes
+    /// three free fields and 18 of the 42 bits of per-template anchor space. It does not make an
+    /// attempt row cost an execution. `trace_root`, `output_root` and `execution_root` are
+    /// classified `Pin::ExecutionReplay` — pinned by a panel that never convenes for an unadmitted
+    /// attempt — and `hashing::header::pre_pow_hash_64` carries `utxo_commitment`,
+    /// `accepted_id_merkle_root` and `palw_state_root`, none of which any header-stage rule
+    /// constrains and all of which are checked only at the UTXO stage. C-1 stays open behind this
+    /// fence; its size is pinned by
+    /// `an_unadmitted_attempt_header_is_still_a_priced_difficulty_row`.
+    ///
+    /// **TOP LEVEL and bare, for [`Self::palw_difficulty_priced_rows`]' reasons**: it decides which
+    /// headers are valid, so old and new builds must peer until the height, and there is no
+    /// companion value a normalisation could hide (the pins' derivation is the bundle's own state
+    /// params). `None` on every shipped preset — testnet-11 and devnet keep validating every header
+    /// they already hold and their fingerprints do not move. A carded mainnet states it from
+    /// genesis, where it is free: no history was judged under the looser rule.
+    pub palw_attempt_header_pins: Option<ForkActivation>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -1629,6 +1666,22 @@ impl Params {
                      receipt lane can only leave a count that is already taken by lane (ADR-0083 Decision 1)",
                 ));
             }
+        }
+        // **ADR-0072 D8's header-stage pin is a V2-lane rule, and it must not be armable without a
+        // lane** (mainnet audit, 2026-09-06 — C-1). The pins it enforces are fields of a V2 attempt
+        // envelope and their derivation is the bundle's own `PalwStateParamsV2`; armed on a network
+        // with no bundle the fence names a rule with nothing to apply it to, and the header
+        // processor would resolve it to `None` while `consensus_params_id` said the network had
+        // armed something. A fence that hashes and does not fire is the silent-fork shape this file
+        // exists to refuse.
+        if let Some(pins) = self.palw_attempt_header_pins
+            && pins != ForkActivation::never()
+            && !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_))
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_attempt_header_pins is armed on a network that is not ConsensusV2: the DA pins it enforces are fields \
+                 of a V2 attempt envelope and their derivation is the bundle's state params (ADR-0072 Decision 8)",
+            ));
         }
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             return Ok(());
@@ -2414,6 +2467,10 @@ impl Params {
         if self.palw_receipt_rows_unpriced == Some(ForkActivation::never()) {
             self.palw_receipt_rows_unpriced = None;
         }
+        // ADR-0072 D8 at the header stage, the same shape: a bare fence, `never()` is absence.
+        if self.palw_attempt_header_pins == Some(ForkActivation::never()) {
+            self.palw_attempt_header_pins = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -2846,6 +2903,13 @@ impl Params {
             h.write(b"palw_receipt_rows_unpriced");
             h.write(receipts.daa_score().to_le_bytes());
         }
+        // ADR-0072 D8 at the header stage. Some-only: arming it changes which headers are valid,
+        // so it belongs in the fingerprint, and every shipped preset leaves it `None` and hashes
+        // byte-identically to a build without the field.
+        if let Some(pins) = self.palw_attempt_header_pins {
+            h.write(b"palw_attempt_header_pins");
+            h.write(pins.daa_score().to_le_bytes());
+        }
         h.finalize()
     }
 
@@ -2940,6 +3004,7 @@ impl Params {
             palw_fp_decode_rules,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
+            palw_attempt_header_pins,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -3209,6 +3274,11 @@ impl Params {
         if let Some(activation) = palw_receipt_rows_unpriced.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0072 D8 at the header stage. Some-only, likewise — a scheduled height must normalise
+        // so an armed and an un-armed build peer until it fires.
+        if let Some(activation) = palw_attempt_header_pins.as_mut() {
+            fork(activation, visit);
+        }
 
         let Some(dns) = dns_params.as_mut() else {
             absent = u64::MAX;
@@ -3410,6 +3480,7 @@ impl Params {
             palw_fp_decode_rules,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
+            palw_attempt_header_pins,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -3698,6 +3769,13 @@ impl Params {
         }
         if let Some(activation) = palw_receipt_rows_unpriced {
             h.write(b"palw_receipt_rows_unpriced");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0072 D8 at the header stage. Some-only, for the reason above — both ids gain it
+        // together: a fence in one and not the other is two builds that agree on identity and
+        // disagree on schedule.
+        if let Some(activation) = palw_attempt_header_pins {
+            h.write(b"palw_attempt_header_pins");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
@@ -3997,6 +4075,7 @@ impl Params {
             palw_fp_decode_rules: self.palw_fp_decode_rules,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
+            palw_attempt_header_pins: self.palw_attempt_header_pins,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -4929,6 +5008,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_decode_rules: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
+    palw_attempt_header_pins: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -5085,6 +5165,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_decode_rules: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
+    palw_attempt_header_pins: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -5223,6 +5304,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_decode_rules: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
+    palw_attempt_header_pins: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -8416,6 +8498,9 @@ pub fn mainnet_shipped_params() -> Params {
 /// * `palw_difficulty_priced_rows` and `palw_receipt_rows_unpriced` (ADR-0083 D1, both halves) — the
 ///   window counts by lane, and a receipt row is not a priced row. The first is also what
 ///   `palw_rc_arm_phase1` would add; stated here because the assembly validates before it runs.
+/// * `palw_attempt_header_pins` (ADR-0072 D8) — the three DA pins and ADR-0071 D2's bucket ceiling
+///   are asked on the relay path, not only at the composed admission entry point a disqualified
+///   block never reaches.
 /// * `palw_certification_rent` (ADR-0075 SA-1/SA-2) and `palw_chunk_cap_charge` (ADR-0075 D14) —
 ///   without them two ~60-byte `ObjectChunk`s a block spend the certification grading slots before
 ///   the object is validated, and eight unsigned chunks squat every pending-chunk slot: a
@@ -8432,6 +8517,12 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     // `palw_rc_arm_phase1` runs, and the second half is refused on a base whose first is dormant.
     base.palw_difficulty_priced_rows = Some(ForkActivation::always());
     base.palw_receipt_rows_unpriced = Some(ForkActivation::always());
+    // **ADR-0072 Decision 8 at the header stage** (mainnet audit, 2026-09-06 — C-1). A card is a
+    // fresh chain: no history was judged under the rule where the DA pins ran only in the virtual
+    // processor, so stating it from genesis costs nothing, and the three fields D8 names are pinned
+    // on the path where a draw becomes a `bits`-priced difficulty row. It is a partial answer to
+    // C-1 and the field's own doc says which part; it is not a reason to consider C-1 closed.
+    base.palw_attempt_header_pins = Some(ForkActivation::always());
     base.palw_certification_rent = Some(ForkActivation::always());
     base.palw_chunk_cap_charge = Some(ForkActivation::always());
     // **The private-prompt set, armed from block one** (private-prompts design, 2026-09-05):
@@ -9142,6 +9233,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_decode_rules: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
+    palw_attempt_header_pins: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -12693,6 +12785,7 @@ mod consensus_params_id_tests {
             ("palw_fp_decode_rules", p.palw_fp_decode_rules.is_some()),
             ("palw_difficulty_priced_rows", p.palw_difficulty_priced_rows.is_some()),
             ("palw_receipt_rows_unpriced", p.palw_receipt_rows_unpriced.is_some()),
+            ("palw_attempt_header_pins", p.palw_attempt_header_pins.is_some()),
         ]
     }
 
@@ -12737,11 +12830,12 @@ mod consensus_params_id_tests {
         .expect("a mainnet-equivalent genesis assembles");
         let carded = palw_rc_arm_phase1(mainnet_certify_registered_classes_v1(assembled));
 
-        // The eight the card STATES on its base (`mainnet_card_base_v1`), individually: seven armed
+        // The nine the card STATES on its base (`mainnet_card_base_v1`), individually: eight armed
         // from genesis on every card, the k-ary court only when the dense tier is pinned.
         for (name, armed) in [
             ("palw_context_ladder", carded.palw_context_ladder),
             ("palw_receipt_rows_unpriced", carded.palw_receipt_rows_unpriced),
+            ("palw_attempt_header_pins", carded.palw_attempt_header_pins),
             ("palw_certification_rent", carded.palw_certification_rent),
             ("palw_chunk_cap_charge", carded.palw_chunk_cap_charge),
             ("palw_prompt_ids_merkle", carded.palw_prompt_ids_merkle),
@@ -13028,6 +13122,81 @@ mod consensus_params_id_tests {
             vec![1150, PALW_RC_DA_COURT_FENCE_DAA, 2000],
             "…and a schedule lists every scheduled gate fence's height"
         );
+    }
+
+    /// **The header-stage DA pins are stated on a card, dormant on every live chain, and cost
+    /// nothing while they are dormant** (mainnet audit, 2026-09-06 — C-1).
+    ///
+    /// Three separate claims, because a bare fence can fail any one of them on its own:
+    /// `None` everywhere shipped, so no live chain's fingerprint moves and no header it already
+    /// holds is re-judged; `Some(never())` is absence, so a build that spells the dormant state the
+    /// long way fingerprints identically to one that omits the field; and arming it moves the
+    /// identity, so an armed build and an un-armed one cannot silently believe they run one rule.
+    /// The fourth claim is the fail-closed one: the pins are fields of a V2 attempt envelope, so
+    /// the fence is refused on a network that has no V2 bundle to derive them from.
+    #[test]
+    fn the_attempt_header_pins_fence_is_dormant_on_every_shipped_preset_and_visible_the_moment_it_is_not() {
+        for p in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS] {
+            assert!(p.palw_attempt_header_pins.is_none(), "{}: a shipped preset states no header-stage pin fence", p.net);
+        }
+        let rc = palw_rc_shipped_params();
+        assert!(
+            rc.palw_attempt_header_pins.is_none(),
+            "testnet-11's stored history was judged with the DA pins asked only in the virtual processor; arming this \
+             fence there is a decision and a flag day, not an inheritance"
+        );
+        assert!(devnet_shipped_params().palw_attempt_header_pins.is_none(), "devnet inherits the dormant state too");
+
+        // `Some(never())` is absence — the D4 collapse, observable through `consensus_identity_id`,
+        // which is where the normalizer runs (`consensus_params_id` hashes the raw field and never
+        // normalizes).
+        let mut spelled_out = rc.clone();
+        spelled_out.palw_attempt_header_pins = Some(ForkActivation::never());
+        assert_eq!(
+            spelled_out.consensus_identity_id(),
+            rc.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse in normalize_values_a_scheduled_fence_drags_with_it is gone"
+        );
+
+        // A FUTURE height must not split the mesh on deploy day: `for_each_fence` visits the fence,
+        // so a scheduled height normalises away in the identity and shows up in the schedule the
+        // operator log carries. That is the whole reason the field is visited rather than only
+        // hashed.
+        let mut scheduled = rc.clone();
+        scheduled.palw_attempt_header_pins = Some(ForkActivation::new(9_000_000));
+        assert_eq!(
+            scheduled.consensus_identity_id(),
+            rc.consensus_identity_id(),
+            "an armed and an un-armed build must peer until the height fires (SA-2's deploy-day partition)"
+        );
+        assert_ne!(scheduled.consensus_params_id(), rc.consensus_params_id(), "…while the ruleset id still names the rule");
+        assert_ne!(scheduled.consensus_schedule_id(), rc.consensus_schedule_id(), "…and the operator log names the height");
+
+        // …and in force FROM GENESIS is a real rule difference, which must separate identities.
+        let mut armed = rc.clone();
+        armed.palw_attempt_header_pins = Some(ForkActivation::always());
+        assert_ne!(armed.consensus_params_id(), rc.consensus_params_id(), "arming a validity fence moves the ruleset id");
+        assert_ne!(armed.consensus_identity_id(), rc.consensus_identity_id(), "…and at genesis the handshake must see it");
+        armed.validate_palw_v2().expect("the RC is ConsensusV2, so the fence has a lane to apply to");
+
+        // Fail-closed: no V2 bundle, no pins to enforce.
+        let mut laneless = TESTNET_PARAMS;
+        laneless.palw_attempt_header_pins = Some(ForkActivation::always());
+        let e = laneless.validate_palw_v2().expect_err("a fence that hashes and cannot fire is refused at assembly");
+        assert!(format!("{e:?}").contains("palw_attempt_header_pins"), "{e:?}");
+        // …and the dormant spelling is not a rule, so it is accepted there.
+        let mut laneless_dormant = TESTNET_PARAMS;
+        laneless_dormant.palw_attempt_header_pins = Some(ForkActivation::never());
+        laneless_dormant.validate_palw_v2().expect("never() names no rule on any network");
+
+        // A card states it from genesis, where it is free: no history was judged under the looser
+        // rule. It is a PARTIAL answer to C-1 — see the field's doc and
+        // `palw_attempt_v2::tests::an_unadmitted_attempt_header_is_still_a_priced_difficulty_row`.
+        let base = mainnet_card_base_v1(mainnet_v2_mint_base(), false);
+        let carded = palw_rc_arm_phase1(
+            palw_v2_params_from_artifacts_on_base(base, PALW_RC_GENESIS_ARTIFACT_ROOT, vec![]).expect("a zero-seat card assembles"),
+        );
+        assert_eq!(carded.palw_attempt_header_pins, Some(ForkActivation::always()));
     }
 
     /// **A card certifies the free-prompt lane of the classes it registers; the RC's pinned set
