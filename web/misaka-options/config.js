@@ -28,6 +28,30 @@ window.MISAKA_CONFIG = {
     "5bd9ae3d91df80650caffe3126a38bafb0b4feb9b046a416d353a7c3f71af6eab5aadf9b1ce41650007a980f1cc6044ef218424f4cbb8299ef9e92c97b99ef8e", // Qwen3.6-35B-A3B (graph-v3)
   ],
 
+  // **What each registered class actually IS, for a reader who sees an id.**
+  //
+  // A line's name is a chain fact — `getPalwModelLine` serves it — but only from a node built
+  // after ADR-0088, and testnet-11's public node is older than that, so on the live site every
+  // name comes back empty and a row reads as its own id twice. This catalogue is the fallback,
+  // and the site LABELS it as one: a title from here is this site's word, never the chain's.
+  // Keyed by class id (a class's founding line has the class's id) or by any line id.
+  MODELS: {
+    "4277d84f7d91528cc04aa366d51ee1c2e4f7902c4f6b16a213dead1c7e227977db732f18ed6183db3d944d44726ebd3feff7b15c48f9dba11cd526684f35f1b7": {
+      title: "Qwen/Qwen2.5-1.5B-Instruct",
+      variant: "A16 dense · graph-v5 · n_ctx 512",
+      params: "1.5B",
+      hf: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct",
+      artifact: ".palwart, 1.7 GiB — converted locally from the repository above",
+    },
+    "5bd9ae3d91df80650caffe3126a38bafb0b4feb9b046a416d353a7c3f71af6eab5aadf9b1ce41650007a980f1cc6044ef218424f4cbb8299ef9e92c97b99ef8e": {
+      title: "Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
+      variant: "hybrid 35B (A3B) · graph-v3",
+      params: "35B",
+      hf: "https://huggingface.co/Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
+      artifact: "qwen36.palwq36, 34 GiB — root f4aad4fd543928eb…",
+    },
+  },
+
   // The explorer, linked from ids and hashes.
   EXPLORER_URL: "https://misakascan.com",
 

@@ -697,8 +697,49 @@ const db = {
     store.set('lines', Array.from(this.lines.values()).map((r) => ({ lineId: r.lineId, classId: r.classId, name: r.name, symbol: r.symbol })));
     store.set('classes', Array.from(this.classes.keys()));
   },
-  label(rec) { return rec && (rec.name || rec.symbol || shortId(rec.lineId)); },
+  // What this line is called, and — as important — WHO SAID SO. The chain's own name (an
+  // ADR-0088 node serves it) wins; `config.js`'s catalogue is the fallback for a node that does
+  // not; the derived MP- symbol is the last resort. Every caller that shows a catalogue title
+  // marks it, because this site's rule is that a figure names its source.
+  named(rec) {
+    if (!rec) return { text: 'this line', source: 'none' };
+    if (rec.name) return { text: rec.name, source: 'chain' };
+    const c = catalogue(rec);
+    if (c && c.title) return { text: c.title, source: 'catalogue', entry: c };
+    return { text: rec.symbol || shortId(rec.lineId), source: 'id' };
+  },
+  label(rec) { return db.named(rec).text; },
 };
+
+// `config.js`'s MODELS, by class id or line id. A line the catalogue does not know reads as its
+// symbol, which is what it did before this existed.
+function catalogue(rec) {
+  const m = CFG.MODELS || {};
+  if (!rec) return null;
+  return (rec.classId && m[rec.classId]) || m[rec.lineId] || null;
+}
+// The line under a title: what the chain registered, when the catalogue knows it.
+function modelSub(rec) {
+  const c = catalogue(rec);
+  return c && c.variant ? c.variant : null;
+}
+// The mark a catalogue title carries, so nobody reads this site's word as the chain's.
+const CATALOGUE_NOTE = 'This name is from the site\'s own catalogue (config.js), not from the chain: this node serves no line name. The id below is the chain fact.';
+// The catalogue's own row: the repository the artifact comes from, what the chain registered of
+// it, and the size. Empty for a line the catalogue does not know.
+function catalogueRows(rec) {
+  const c = catalogue(rec);
+  if (!c) return '';
+  return h`<dt>Model</dt><dd>${c.hf ? raw('<a href="' + esc(c.hf) + '" target="_blank" rel="noopener">' + esc(c.title) + '</a>') : c.title}${raw('<span class="dim tiny" title="' + esc(CATALOGUE_NOTE) + '"> \u24d8 site catalogue</span>')}</dd>
+    ${c.variant ? h`<dt>Registered as</dt><dd>${c.variant}${c.params ? ' · ' + c.params + ' parameters' : ''}</dd>` : ''}
+    ${c.artifact ? h`<dt>Artifact</dt><dd class="tiny">${c.artifact}</dd>` : ''}`;
+}
+function nameCell(rec) {
+  const n = db.named(rec), sub = modelSub(rec);
+  const mark = n.source === 'catalogue' ? h`<span class="dim tiny" title="${CATALOGUE_NOTE}"> \u24d8</span>` : '';
+  const sym = n.text === rec.symbol ? '' : h` <span class="dim tiny mono">${rec.symbol}</span>`;
+  return h`<b>${n.text}</b>${mark}${sym}${sub ? h`<br><span class="dim tiny">${sub}</span>` : ''}`;
+}
 
 async function refreshChainInfo() {
   try {
@@ -1378,7 +1419,7 @@ async function pageTrade(arg) {
     ];
     bar.innerHTML = h`
       <button class="mkt-select" id="mktSelect" aria-haspopup="listbox" aria-expanded="false">
-        <span><span class="mkt-name">${rec ? db.label(rec) : 'No line selected'}</span><br><span class="mkt-sym">${rec ? rec.symbol : ''}${rec && rec.name && rec.symbol ? '' : ''} ${rec ? raw('<span class="dim">· ' + esc(shortId(rec.lineId)) + '</span>') : ''}</span></span>
+        <span><span class="mkt-name">${rec ? db.label(rec) : 'No line selected'}${rec && db.named(rec).source === 'catalogue' ? raw('<span class="dim tiny" title="' + esc(CATALOGUE_NOTE) + '"> \u24d8</span>') : ''}</span><br><span class="mkt-sym">${rec && modelSub(rec) ? modelSub(rec) + ' · ' : ''}${rec ? rec.symbol : ''} ${rec ? raw('<span class="dim">· ' + esc(shortId(rec.lineId)) + '</span>') : ''}</span></span>
         <span class="caret">▾</span>
       </button>
       <div class="mkt-stats">${stats.map(([k, v, t]) => h`<div class="stat" title="${t || ''}"><div class="k">${k}</div><div class="v">${v}</div></div>`)}</div>`.s;
@@ -1692,7 +1733,8 @@ async function pageTrade(arg) {
       <dl class="kv">
         <dt>Line id</dt><dd>${idCell(rec.lineId, 16)} <a href="#/line/${rec.lineId}">line page</a></dd>
         <dt>Class id</dt><dd>${rec.classId ? idCell(rec.classId, 16) : '—'}</dd>
-        <dt>Name</dt><dd>${rec.name || raw('<span class="dim">— (not served without the wRPC)</span>')}</dd>
+        <dt>Name</dt><dd>${rec.name || raw('<span class="dim">— (this node serves no line name)</span>')}</dd>
+        ${catalogueRows(rec)}
         <dt>Status</dt><dd>${row.status || '—'} ${row.hasRow === false ? raw('<span class="tag">founding line, no row yet</span>') : ''}</dd>
         <dt>Owner</dt><dd>${row.ownerPayoutPayload ? idCell(row.ownerPayoutPayload, 12) : row.owner ? h`${shortId(row.owner.transactionId)}:${row.owner.index}` : rec.row ? 'unowned (genesis line)' : '—'}</dd>
         <dt>Developer</dt><dd>${row.developerPayoutPayload ? idCell(row.developerPayoutPayload, 12) : rec.row ? 'the owner' : '—'}</dd>
@@ -1822,7 +1864,7 @@ function lineRowsHtml(list, opts) {
   </tr></thead><tbody>
     ${list.length ? list.map((r, i) => { const m = r.market, row = r.row, o = ownerLabel(row), u = usageOf(r); const held = m ? m.supplyUnits - m.positionUnits : null; const seeded = !!(m && m.seeded); return h`<tr class="row-link" data-href="#/trade/${r.lineId}">
       ${opts.rank ? h`<td class="rank">${i + 1}</td>` : ''}
-      <td class="l"><b>${db.label(r)}</b> <span class="dim tiny mono">${r.symbol}</span><br><span class="dim tiny mono">${shortId(r.lineId, 12)}</span></td>
+      <td class="l">${nameCell(r)}<br><span class="dim tiny mono">${shortId(r.lineId, 12)}</span></td>
       <td class="l"><span class="mono tiny" title="${r.classId || ''}">${r.classId ? shortId(r.classId) : '—'}</span></td>
       <td class="num">${seeded && m.price != null ? fmtPrice(m.price) : m && !seeded ? raw('<a class="btn btn-sm btn-accent" href="#/trade/' + esc(r.lineId) + '" title="No market yet: seed it with at least ' + esc(fmtMsk(seedMinFor(m), 0)) + ' MSK">Seed</a>') : '—'}</td>
       <td class="num">${seeded ? changeCell(r) : raw('<span class="dim">—</span>')}</td>
@@ -1909,7 +1951,7 @@ async function pageLine(arg) {
     const versions = rec.versions;
     const inForce = info && info.rootsInForce ? info.rootsInForce : null;
     main.innerHTML = h`
-      <div class="page-h"><h1>${db.label(rec)}</h1><span class="sub mono">${rec.symbol} · ${shortId(lineId, 16)}</span>${statusTag(rec)} <a class="btn btn-sm btn-accent" href="#/trade/${lineId}">Trade</a></div>
+      <div class="page-h"><h1>${db.label(rec)}</h1><span class="sub">${modelSub(rec) ? modelSub(rec) + ' · ' : ''}${raw('<span class="mono">' + esc(rec.symbol) + ' · ' + esc(shortId(lineId, 16)) + '</span>')}</span>${statusTag(rec)} <a class="btn btn-sm btn-accent" href="#/trade/${lineId}">Trade</a></div>
       ${rec.notFound ? raw('<div class="banner bad" style="margin-bottom:8px">The node reports no line and no class with this id.</div>') : ''}
       <div class="grid3">
         <div class="tile"><div class="k">Price (MSK)</div><div class="v">${m && m.price != null ? fmtPrice(m.price) : m && !m.seeded ? raw('<a class="btn btn-sm btn-accent" href="#/trade/' + esc(lineId) + '">Seed this market</a>') : '—'}</div><div class="s">${m ? (m.seeded ? 'seeded at DAA ' + fmtInt(m.openedDaa) : 'not seeded: no reserve, no price; at least ' + fmtMsk(seedMinFor(m), 0) + ' MSK opens it') : ''}</div></div>
@@ -1926,6 +1968,7 @@ async function pageLine(arg) {
           <dt>Line id</dt><dd>${idCell(lineId, 24)}</dd>
           <dt>Class id</dt><dd>${rec.classId ? idCell(rec.classId, 24) : '—'}</dd>
           <dt>Name</dt><dd>${rec.name || raw('<span class="dim">—</span>')} ${row.nameHex ? raw('<span class="dim tiny mono">hex ' + esc(row.nameHex) + '</span>') : ''}</dd>
+          ${catalogueRows(rec)}
           <dt>Founding</dt><dd>${rec.classId === lineId ? 'the class’s founding line (line id = class id)' : 'founded on its class'}${row.hasRow === false ? ', no row written yet' : ''}</dd>
           <dt>Founded (DAA)</dt><dd>${row.foundedDaa != null ? fmtInt(row.foundedDaa) : '—'}</dd>
           <dt>Status</dt><dd>${row.status || '—'}${row.retiredDaa ? ' at DAA ' + fmtInt(row.retiredDaa) : ''}</dd>

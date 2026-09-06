@@ -281,6 +281,14 @@ on. Nothing in mock mode is a chain fact; it exists for demos, screenshots and U
   A node of this tree answers the ADR-0090 shape and everything above applies.
 - Below the fences there is no way to enumerate classes from the chain (the registry window is
   the enumeration), hence `CLASS_IDS` in `config.js`.
+- **Names.** A line's name is a chain fact (`getPalwModelLine` serves it), but only from an
+  ADR-0088 node, and testnet-11's public node is older — so on the live site every name comes back
+  empty and a row used to read as its own derived symbol twice (`MP-4277d84f MP-4277d84f`).
+  `config.js`'s `MODELS` is the fallback catalogue: a Hugging Face-style repository title, what the
+  chain registered of it (`A16 dense · graph-v5 · n_ctx 512`), the parameter count and the
+  artifact. A title from there is marked ⓘ and says, on hover, that it is the site's word and the
+  id below is the chain's. A chain-served name always wins; a line the catalogue does not know
+  still reads as its symbol.
 - ADR-0091: the market row carries `buybackSompi` (MSK the mining reward has bought into the pair)
   and `retiredUnits` (positions the chain holds for good). Both travel on the wRPC row and as the
   AMM window's two appended words, so a node from before ADR-0091 answers nine words and the site
