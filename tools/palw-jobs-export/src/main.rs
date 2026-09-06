@@ -17,8 +17,10 @@ use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::palw_attempt_v2::{PalwAttemptEnvelopeV2, attempt_id_v2, palw_job_anchor_v1, palw_network_domain_v2_for};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kaspa_hashes::Hash64;
-use misaka_palw_base0::qwen25_a16_backend::{qwen25_a16_material_decode_v1, qwen25_a16_prompt_for_anchor};
-use misaka_palw_base0::qwen36_backend::{qwen36_material_decode_v1, qwen36_prompt_for_anchor};
+// The material decoders are gone with the reads that used them: this tool derives the anchor
+// prompt (public by construction) and opens nothing the executor retains.
+use misaka_palw_base0::qwen25_a16_backend::qwen25_a16_prompt_for_anchor;
+use misaka_palw_base0::qwen36_backend::qwen36_prompt_for_anchor;
 use serde_json::{Value, json};
 use std::str::FromStr;
 
@@ -149,6 +151,12 @@ fn main() {
 
     // claim hex -> the generated ids that claim's material holds. Loaded before the walk, written
     // after it; a missing or unreadable file is an empty cache, never a failure.
+    // **Accepted and no longer read.** `--retention` and `--generated-cache` name the executor's
+    // own files; since 2026-09-06 this tool publishes commitments only, so it opens neither. They
+    // stay on the command line because the publish script passes them, and dropping them would
+    // turn a privacy change into a deployment break.
+    let _ = (&retention, &generated_cache);
+    #[allow(unused)]
     let mut cache: std::collections::BTreeMap<String, Vec<u32>> = generated_cache
         .as_ref()
         .and_then(|path| std::fs::read(path).ok())
@@ -207,65 +215,11 @@ fn main() {
         // that shape — 253 MB each, and the flat decoder returns None on the first field, so the
         // page's answer column was empty for every row. `base0_material_decode_any_v1` tries the
         // folded form and falls back to the flat one, which is exactly what a seat does.
-        let cached = cache.get(&claim.to_string()).cloned();
-        let generated: Option<Vec<u32>> = if cached.is_some() {
-            cached
-        } else {
-            // **The answer envelope first** (ADR-0084): `<claim>.answer` is a few kilobytes — the
-            // `FPA1`/`ATA1` payload the node serves to seats in place of a capture over the
-            // transport cap — and it carries exactly the ids this column shows. Reading it spares
-            // the exporter a decode of a 253–748 MB retention every two minutes, and it is present
-            // for every claim submitted through the ADR-0084 rail or produced by an ADR-0084 node.
-            retention
-                .split(',')
-                .find_map(|dir| std::fs::read(format!("{dir}/{claim}.answer")).ok())
-                .and_then(|bytes| {
-                    // An export reads whatever form the network wrote (ADR-0081 Decision 3): the
-                    // decoder only checks the ids against the job's commitment, so trying the
-                    // flat form and then the Merkle form admits exactly the honest envelope.
-                    kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(
-                        &bytes,
-                        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
-                    )
-                    .or_else(|| {
-                        kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(
-                            &bytes,
-                            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
-                        )
-                    })
-                    .map(|a| a.output_token_ids)
-                    .or_else(|| {
-                        kaspa_consensus_core::palw_attempt_v2::palw_attempt_answer_decode_v1(&bytes).map(|a| a.output_token_ids)
-                    })
-                })
-                .or_else(|| {
-                    retention.split(',').find_map(|dir| std::fs::read(format!("{dir}/{claim}.material")).ok()).and_then(|bytes| {
-                        match misaka_palw_base0::produce::base0_material_decode_any_v1(&bytes) {
-                            Ok(misaka_palw_base0::produce::Base0RetentionV1::Folded(folded)) => Some(folded.generated_token_ids),
-                            // **The attempt lane's retention is the DENSE tuple, and its fourth element is
-                            // the answer** — `(binding, tiles, logits_rows, generated, checkpoints)`. A
-                            // 5f QWEN36 material is 253 MB of which 2,685,360 entries are tiles, and it
-                            // decodes in 0.15 s at 575 MB peak; measured on e78441c7…, generated
-                            // `[979, 7287]`. Reading this arm and then falling through to the flat
-                            // decoders — which is what this did for one revision — throws away the answer
-                            // it just decoded and prints an empty column.
-                            Ok(misaka_palw_base0::produce::Base0RetentionV1::Dense((_, _, _, generated, ..))) => Some(generated),
-                            // The flat layout the earlier producers wrote, kept so an archived material
-                            // still renders: the class decides which of the two readers understands it.
-                            Err(_) => {
-                                if class_hex == QWEN36_CLASS {
-                                    qwen36_material_decode_v1(&bytes).map(|r| r.generated)
-                                } else {
-                                    qwen25_a16_material_decode_v1(&bytes).map(|r| r.generated)
-                                }
-                            }
-                        }
-                    })
-                })
-        };
-        if let Some(ids) = generated.as_ref() {
-            cache.insert(claim.to_string(), ids.clone());
-        }
+        // **The answer is not read.** It used to come out of the `<claim>.answer` envelope or the
+        // retained capture, so this feed could print what the model said. Both are the executor's
+        // to SERVE — to the claim's five drawn seats, over an authenticated pull — and the chain
+        // carries `output_root` instead. Not publishing it would fix the page; not reading it is
+        // what lets a reader check the guarantee by reading this function.
         rows.push(json!({
             "block": dumped_hash,
             "daa": h.get("daaScore").map(u64of),
@@ -298,7 +252,7 @@ fn main() {
     {
         let _ = std::fs::write(path, bytes);
     }
-    let fp_rows = fp_outbox.as_deref().map(|dirs| free_prompt_rows(dirs, &mut cache)).unwrap_or_default();
+    let fp_rows = fp_outbox.as_deref().map(free_prompt_rows).unwrap_or_default();
     if let Some(path) = generated_cache.as_ref()
         && let Ok(bytes) = serde_json::to_vec(&cache)
     {
@@ -342,7 +296,7 @@ fn main() {
 /// joined by claim id from `*.derived.json`. Nothing here is verified against the chain — the page
 /// joins these rows to the `FreePromptCommitted` events it decodes from transactions, by claim id,
 /// and a row with no event is shown as what it is: the gateway's word.
-fn free_prompt_rows(dirs: &str, cache: &mut std::collections::BTreeMap<String, Vec<u32>>) -> Vec<Value> {
+fn free_prompt_rows(dirs: &str) -> Vec<Value> {
     fn family_class(family: &str) -> String {
         match family {
             "qwen25-a16" | "a16-v5" | "a16" => "QWEN25-A16".to_string(),
@@ -382,21 +336,10 @@ fn free_prompt_rows(dirs: &str, cache: &mut std::collections::BTreeMap<String, V
                 continue;
             }
             let Some(claim) = v.get("fp_claim_id").and_then(|c| c.as_str()).map(str::to_string) else { continue };
-            let key = format!("fp:{claim}");
-            let prompt_ids: Option<Vec<u32>> = if let Some(ids) = cache.get(&key) {
-                Some(ids.clone())
-            } else {
-                let ids = std::fs::read(format!("{dir}/traces/{claim}.material")).ok().and_then(|bytes| {
-                    match misaka_palw_base0::produce::base0_material_decode_any_v1(&bytes) {
-                        Ok(misaka_palw_base0::produce::Base0RetentionV1::Folded(folded)) => Some(folded.prompt_token_ids),
-                        _ => None,
-                    }
-                });
-                if let Some(ids) = ids.as_ref() {
-                    cache.insert(key, ids.clone());
-                }
-                ids
-            };
+            // **The prompt is not read at all.** It used to be decoded out of the retained
+            // `.material` — the file a claim's five drawn seats pull under ADR-0077 Decision 16 —
+            // so that this feed could print it. Not publishing it would be enough to fix the page;
+            // not READING it is what makes the guarantee checkable by looking at this function.
             let family = v.get("family").and_then(|f| f.as_str()).unwrap_or("");
             let chain = v.get("chain").cloned().unwrap_or(Value::Null);
             // **Neither the prompt nor the answer is published** (2026-09-06). The prompt was read
@@ -407,7 +350,6 @@ fn free_prompt_rows(dirs: &str, cache: &mut std::collections::BTreeMap<String, V
             //
             // The ids are still computed above, because the cache they feed is the node's own and
             // never leaves it. They simply do not enter this file.
-            let _ = &prompt_ids;
             rows.push(json!({
                 "claim": claim,
                 "class": family_class(family),
