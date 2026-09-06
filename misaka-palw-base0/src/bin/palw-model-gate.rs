@@ -448,8 +448,7 @@ fn main() {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
         };
         let leaves_for = |decode: u32| -> Result<u64, String> {
-            use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
-            use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
+            use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1};
             let job = job_for(decode);
             let class = PalwFpClassFactsV3 {
                 model_profile_id: rt.manifest().model_profile_id,
@@ -458,15 +457,9 @@ fn main() {
                 shape_profile_id: rt.manifest().shape_profile_id,
                 cu_ruleset_id: Hash64::default(),
             };
-            let facts = PalwFpRunFactsV3 {
-                decode_tokens_executed: decode,
-                stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
-                full_logits_trace_root: Hash64::default(),
-                activation_leg_root: Hash64::default(),
-                checkpoint_leg_root: Hash64::default(),
-                step_leg_root: Hash64::default(),
-                step_leaf_count: 0,
-            };
+            // The pairing is derived from the executed count (ADR-0074 Decision 7); this gate
+            // prices the ceiling it just declared, so the reason follows from the number.
+            let facts = palw_fp_run_facts_for_executed_v1(&job, decode);
             let ctx = palw_fp_job_context_v3(&job, &class, &facts, &net_bytes).map_err(|e| format!("{e:?}"))?;
             kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &ctx, ladder).map_err(|e| format!("{e:?}"))
         };

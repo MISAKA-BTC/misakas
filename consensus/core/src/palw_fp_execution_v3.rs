@@ -185,6 +185,39 @@ pub fn palw_fp_job_context_v3(
     })
 }
 
+/// **The run facts a finished free-prompt run has, from the ONE number that decides them**
+/// (ADR-0074 Decision 7).
+///
+/// The stop reason is not an independent observation: the enum's own doc says
+/// `executed == limit` MUST be `ExactBudgetReached` and `EndOfGeneration` MUST come with
+/// `executed < limit`, "otherwise the same execution admits two encodings, and two encodings of
+/// one fact are two claim ids for one claim". Six sites in `misaka-palw-base0` spelled that
+/// pairing by hand, all six as the CEILING with `ExactBudgetReached`, so no caller could express
+/// an early stop and every seat rebuilt an early-stopping claim's context wrongly. This is the one
+/// spelling: hand it what ran, and the reason follows.
+///
+/// The four roots and `step_leaf_count` are zeroed because a context does not read them — see
+/// `palw_fp_job_context_v3`'s callers, every one of which passes placeholders and then derives the
+/// execution root from the context afterwards.
+pub fn palw_fp_run_facts_for_executed_v1(job: &PalwFreePromptJobV3, decode_tokens_executed: u32) -> PalwFpRunFactsV3 {
+    PalwFpRunFactsV3 {
+        decode_tokens_executed,
+        // `>=` and not `==`: a count ABOVE the ceiling is not a run, and
+        // `palw_fp_job_context_v3` refuses it by name (`OverBudget`) on the next line rather than
+        // being handed a stop reason that quietly makes it look canonical.
+        stop_reason: if decode_tokens_executed >= job.decode_token_limit {
+            PalwFpStopReasonV3::ExactBudgetReached
+        } else {
+            PalwFpStopReasonV3::EndOfGeneration
+        },
+        full_logits_trace_root: Hash64::default(),
+        activation_leg_root: Hash64::default(),
+        checkpoint_leg_root: Hash64::default(),
+        step_leg_root: Hash64::default(),
+        step_leaf_count: 0,
+    }
+}
+
 pub const PALW_FP_V3_DOMAIN_EXECUTION_SEED: &[u8] = b"misaka-palw/fp-v3/execution-seed/v1";
 
 /// **The commitment, from the capture's OWN job context** (ADR-0074 Decision 1, the canonical
@@ -353,6 +386,43 @@ mod tests {
             step_leaf_count: 4_096,
             step_leg_root: h64(0x57),
         }
+    }
+
+    /// **The stop reason FOLLOWS from the executed count, and an early stop is a different job**
+    /// (ADR-0074 Decision 7; mainnet audit 2026-09-06 M-4).
+    ///
+    /// The third assertion is the defect, not the fix: the ceiling's context and the run's context
+    /// hash differently, so a seat that rebuilt an early-stopping claim's context at the job's
+    /// ceiling could never reproduce the claim's committed `output_root` — and the whole ADR-0077
+    /// D8 interval lane is gated on that reproduction succeeding.
+    #[test]
+    fn an_early_stop_builds_its_own_context_and_a_ceiling_context_is_a_different_job() {
+        let job = job(); // decode_token_limit == 128
+        assert_eq!(job.decode_token_limit, 128);
+        // The pairing, derived — never an independent observation.
+        assert_eq!(palw_fp_run_facts_for_executed_v1(&job, 128).stop_reason, PalwFpStopReasonV3::ExactBudgetReached);
+        assert_eq!(palw_fp_run_facts_for_executed_v1(&job, 100).stop_reason, PalwFpStopReasonV3::EndOfGeneration);
+
+        let early = palw_fp_job_context_v3(&job, &class(), &palw_fp_run_facts_for_executed_v1(&job, 100), NET)
+            .expect("an EndOfGeneration run is chain-legal and builds a context");
+        assert_eq!(early.exact_decode_tokens, 100);
+        let at_ceiling = palw_fp_job_context_v3(&job, &class(), &palw_fp_run_facts_for_executed_v1(&job, 128), NET)
+            .expect("the ceiling run builds one too");
+        assert_eq!(at_ceiling.exact_decode_tokens, 128);
+        assert_ne!(
+            early.context_hash(),
+            at_ceiling.context_hash(),
+            "the two contexts are different jobs — which is why a seat that built the ceiling one could not \
+             reproduce an early-stopping claim's output root"
+        );
+        assert_eq!(early.job_id, at_ceiling.job_id, "and the job id does NOT separate them, which is why C-3 exists");
+
+        // A count above the ceiling is not a run: the derived `ExactBudgetReached` must not
+        // launder it past the builder.
+        assert_eq!(
+            palw_fp_job_context_v3(&job, &class(), &palw_fp_run_facts_for_executed_v1(&job, 129), NET),
+            Err(PalwFpExecutionV3Error::OverBudget { executed: 129, limit: 128 })
+        );
     }
 
     /// The derived context passes the court's OWN shape check — which is the point of deriving it

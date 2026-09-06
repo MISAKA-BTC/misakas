@@ -202,6 +202,52 @@ pub fn palw_fp_seat_draw_v1(
     Some(PalwFpSeatDrawV1 { intervals, interval_count })
 }
 
+/// **The two counts a seat is allowed to build, and the ONE place they are built**
+/// (ADR-0077 Decision 8, ADR-0084 Decision 1).
+///
+/// The prefill is the job's declared prompt length, which `palw_fp_prompt_ids_admit_v1` has
+/// already tied to the ids the seat holds. The executed count is the LENGTH OF THE ANSWER — the
+/// commitment's own invariant (`output_token_ids.len() == decode_tokens_executed`), and the seat's
+/// ids are bound to `claim.output_root`, a chain fact, before this is ever called. It is
+/// deliberately NOT `job.decode_token_limit`: the ceiling is what the producer asked for, the
+/// answer is what happened, and a claim that stopped early (`EndOfGeneration`, ADR-0074
+/// Decision 7) is chain-legal.
+pub fn palw_fp_seat_counts_v1(prompt_tokens: u32, committed_output_ids: usize) -> PalwFpChainCountsV1 {
+    PalwFpChainCountsV1 { prompt_tokens, decode_tokens_executed: committed_output_ids.min(u32::MAX as usize) as u32 }
+}
+
+/// **The draw a seat is entitled to make, at the price the CHAIN paid** (ADR-0074 Decision 5,
+/// ADR-0077 Decision 8).
+///
+/// `context_leaves` is what the family prices the seat's own context at
+/// ([`PalwExecutionBackendV1::fp_context_work_leaves_v1`]). A claim that prices its work and a
+/// context that does not price it at the same number are not the same claim, and drawing anyway
+/// would put the DENOMINATOR of the sample in the accused's hands — which is exactly what
+/// [`PalwFpChainCountsV1`]'s own doc forbids, and what a two-call job served against a
+/// fifty-million-leaf commitment buys: `interval_count == 1`, the draw is `[0]`, and interval 0
+/// is the one interval such a producer actually ran.
+///
+/// `None` is "this seat has no interval duty": the caller falls through to the whole-capture arms,
+/// which re-price independently. It is never an accusation and never a verdict.
+pub fn palw_fp_seat_draw_at_the_claims_price_v1(
+    backend: &dyn PalwExecutionBackendV1,
+    network_domain: Hash64,
+    duty: &PalwSeatDutyV2,
+    counts: PalwFpChainCountsV1,
+    context_leaves: Option<u64>,
+) -> Option<PalwFpSeatDrawV1> {
+    use kaspa_consensus_core::palw_backend::{palw_claim_prices_work_v1, palw_opening_is_at_the_claims_price_v1};
+    if palw_claim_prices_work_v1(duty.work_leaves) {
+        // A family that cannot price the context cannot answer the question, and a context whose
+        // price is not the claim's answers it in the negative. Both are "no interval duty".
+        let priced = context_leaves?;
+        if !palw_opening_is_at_the_claims_price_v1(priced, duty.work_leaves) {
+            return None;
+        }
+    }
+    palw_fp_seat_draw_v1(backend, network_domain, duty, counts)
+}
+
 // ---------------------------------------------------------------------------------------------
 // W10: the bytes a seat fetches per claim, bounded
 // ---------------------------------------------------------------------------------------------
@@ -562,6 +608,80 @@ mod tests {
         .unwrap();
         assert_eq!(draw.interval_count, 1);
         assert_eq!(draw.intervals, vec![0]);
+    }
+
+    /// **The denominator is the CHAIN's, not the served job's** (ADR-0074 Decision 5; mainnet
+    /// audit 2026-09-06 C-3).
+    ///
+    /// The attack this pins: commit a fifty-million-leaf execution and SERVE a two-call job
+    /// carrying the same job id. `PalwJobContextV2` holds `job_id`, `declared_prefill_tokens` and
+    /// `exact_decode_tokens` as independent fields, so the hash-binding to the job id proves
+    /// nothing about the two counts — the seat's interval count collapses, the draw is the
+    /// cheapest intervals the wide job has, and the claim's whole quanta is bought with two
+    /// forward passes.
+    #[test]
+    fn a_served_job_that_does_not_price_the_claim_draws_no_intervals() {
+        let backend = StubBackend::new(1); // one interval per position
+        let d = duty(2, 0x33, 0x22); // duty().work_leaves == 4_096
+        // The C-3 shape: a two-call job served against a claim the chain priced far higher.
+        let served = palw_fp_seat_counts_v1(14, 2);
+        // The unguarded draw still behaves exactly as it does today — this is the GAP, pinned, so
+        // the test cannot be satisfied by making the raw draw stricter somewhere else.
+        let raw = palw_fp_seat_draw_v1(&backend, h(0x11), &d, served).expect("the raw draw still draws");
+        assert_eq!(raw.interval_count, 16, "the denominator is the served job's, which is the defect");
+        // The guarded draw refuses, because the served context does not price the claim.
+        assert!(
+            palw_fp_seat_draw_at_the_claims_price_v1(&backend, h(0x11), &d, served, Some(64)).is_none(),
+            "a context priced at 64 leaves is not a claim priced at 4,096"
+        );
+        // …and it draws normally when the price is the chain's.
+        let honest = palw_fp_seat_counts_v1(14, 300);
+        let draw = palw_fp_seat_draw_at_the_claims_price_v1(&backend, h(0x11), &d, honest, Some(d.work_leaves))
+            .expect("a context at the claim's own price draws");
+        assert_eq!(draw.interval_count, 314);
+        assert!(draw.intervals.iter().all(|i| *i < draw.interval_count));
+        // A family that cannot price refuses rather than guessing…
+        assert!(palw_fp_seat_draw_at_the_claims_price_v1(&backend, h(0x11), &d, honest, None).is_none());
+        // …but an UNPRICED claim (the attempt lane, work_leaves == 0) is unaffected.
+        let attempt = PalwSeatDutyV2 { work_leaves: 0, free_prompt: false, ..duty(2, 0x33, 0x22) };
+        assert!(palw_fp_seat_draw_at_the_claims_price_v1(&backend, h(0x11), &attempt, honest, None).is_some());
+    }
+
+    /// **The seat's executed count is the answer's length, and never a ceiling** — the one line
+    /// that keeps C-3's repair and M-4's from drifting apart later (ADR-0084 Decision 1).
+    #[test]
+    fn the_seat_prices_the_context_it_drew_from() {
+        for ids in [1usize, 2, 99, 100, 300] {
+            assert_eq!(
+                palw_fp_seat_counts_v1(14, ids).decode_tokens_executed,
+                ids as u32,
+                "the executed count is the ids the chain's output root bound, not any budget"
+            );
+        }
+        assert_eq!(palw_fp_seat_counts_v1(14, 7).prompt_tokens, 14, "and the prefill is the job's declared prompt length");
+    }
+
+    /// **A run that stopped early is sampled over the geometry it HAS** (ADR-0074 Decision 7;
+    /// mainnet audit 2026-09-06 M-4).
+    ///
+    /// The exclusion this pins was structural: the seat built its context at the job's ceiling, so
+    /// it drew interval indices an `EndOfGeneration` run never produced, and every such index came
+    /// back unopenable. The last assertion is the one that states the defect rather than the fix —
+    /// the ceiling's geometry is strictly larger than the run's.
+    #[test]
+    fn the_seats_executed_count_is_the_answers_length_not_the_declared_ceiling() {
+        // A run that stopped early: the ceiling was 300, the answer is 100 ids.
+        let counts = palw_fp_seat_counts_v1(14, 100);
+        assert_eq!(counts.decode_tokens_executed, 100, "the executed count is the answer's length");
+        let backend = StubBackend::new(32);
+        let draw = palw_fp_seat_draw_v1(&backend, h(0x11), &duty(2, 0x33, 0x22), counts).expect("the class has a free-prompt path");
+        assert_eq!(draw.interval_count, (14 + 100u32).div_ceil(32), "the geometry is the RUN's, not the budget's");
+        // The property the exclusion actually was: every drawn index must be an interval that exists.
+        assert!(draw.intervals.iter().all(|i| *i < draw.interval_count), "a seat never draws an interval the run does not have");
+        // And the ceiling's geometry — what the seat builds today — is a strictly larger one, so the
+        // gap is pinned rather than merely absent after the fix.
+        let at_ceiling = palw_fp_seat_draw_v1(&backend, h(0x11), &duty(2, 0x33, 0x22), palw_fp_seat_counts_v1(14, 300)).unwrap();
+        assert!(at_ceiling.interval_count > draw.interval_count, "the ceiling names intervals the run never had");
     }
 
     /// **An opening tampered by one byte is `Mismatch`, and a seat that gets one files nothing.**

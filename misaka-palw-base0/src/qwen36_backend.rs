@@ -1140,8 +1140,9 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         prompt_tokens: &[usize],
         on_token: &mut dyn FnMut(u32),
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
-        use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
+        use kaspa_consensus_core::palw_fp_execution_v3::{
+            PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1,
+        };
 
         // ADR-0077 SA-6: the artifact is a 33 GiB read-only mapping and a job may outlive the file
         // it was opened from. A directory extent that no longer lies inside the mapping is named
@@ -1169,15 +1170,9 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             shape_profile_id: self.class_profile_id,
             cu_ruleset_id: Hash64::default(),
         };
-        let shape = PalwFpRunFactsV3 {
-            decode_tokens_executed: job.decode_token_limit,
-            stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
-            full_logits_trace_root: Hash64::default(),
-            activation_leg_root: Hash64::default(),
-            checkpoint_leg_root: Hash64::default(),
-            step_leg_root: Hash64::default(),
-            step_leaf_count: 0,
-        };
+        // The pairing is derived from the executed count (ADR-0074 Decision 7); this producer runs
+        // its declared ceiling, which is what it passes.
+        let shape = palw_fp_run_facts_for_executed_v1(job, job.decode_token_limit);
         let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
 
         let run = qwen36_execute_free_prompt_streaming_v1(
@@ -1672,9 +1667,14 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     }
 
     /// The one context this family runs a free-prompt job under (ADR-0084 Decision 4) — the
-    /// same value `execute_free_prompt` builds; see the A16 backend's for the rationale.
-    fn fp_job_context_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3) -> Option<PalwJobContextV2> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
+    /// same value `execute_free_prompt` builds, at the budget THAT RAN (ADR-0074 Decision 7);
+    /// see the A16 backend's for the rationale.
+    fn fp_job_context_for_executed_v1(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        decode_tokens_executed: u32,
+    ) -> Option<PalwJobContextV2> {
+        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1};
         let class = PalwFpClassFactsV3 {
             model_profile_id: self.shape_id,
             runtime_manifest_hash: Hash64::default(),
@@ -1682,16 +1682,19 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             shape_profile_id: self.class_profile_id,
             cu_ruleset_id: Hash64::default(),
         };
-        let shape = PalwFpRunFactsV3 {
-            decode_tokens_executed: job.decode_token_limit,
-            stop_reason: kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached,
-            full_logits_trace_root: Hash64::default(),
-            activation_leg_root: Hash64::default(),
-            checkpoint_leg_root: Hash64::default(),
-            step_leg_root: Hash64::default(),
-            step_leaf_count: 0,
-        };
+        let shape = palw_fp_run_facts_for_executed_v1(job, decode_tokens_executed);
         palw_fp_job_context_v3(job, &class, &shape, &self.network_id).ok()
+    }
+
+    /// This class's price for a context (ADR-0074 Decision 5). `None` for a backend holding no
+    /// registered graph — it can price nothing, and saying so is not an accusation.
+    fn fp_context_work_leaves_v1(&self, context: &PalwJobContextV2) -> Option<u64> {
+        let profile = self.profile.as_ref()?;
+        kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, context, self.step_ladder_cap).ok()
+    }
+
+    fn fp_opening_job_context_v1(&self, opening: &[u8]) -> Option<PalwJobContextV2> {
+        crate::fp_interval::base0_fp_interval_opening_job_context_v1(opening)
     }
 
     /// ADR-0082 Decision 9 keyed on the context (ADR-0084 Decision 4): the prefix on this seat's

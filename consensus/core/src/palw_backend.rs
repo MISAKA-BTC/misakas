@@ -597,8 +597,54 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// meet: `execute_free_prompt` runs under it, the checkpoint recompute rebuilds it, and the
     /// context-taking seams below take it — so a seat holds ONE context per claim, on either lane,
     /// and the lane decides only where the context comes from (this, or `job_for_anchor`).
+    ///
+    /// **The budget is a PARAMETER, because a run that stopped early is still this job's run**
+    /// (ADR-0074 Decision 7; mainnet audit 2026-09-06 M-4). `decode_tokens_executed` is what
+    /// actually ran — `job.decode_token_limit` for a run that reached its ceiling, less for an
+    /// `EndOfGeneration` one. Every family that hard-paired the ceiling with
+    /// `ExactBudgetReached` built a context no early-stopping claim can reproduce, which excluded
+    /// such a claim from this lane entirely. `palw_fp_job_context_v3` re-checks the pairing, so a
+    /// count above the ceiling is refused here rather than believed.
+    ///
     /// `None` when this family has no free-prompt path.
-    fn fp_job_context_v1(&self, _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3) -> Option<PalwJobContextV2> {
+    fn fp_job_context_for_executed_v1(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _decode_tokens_executed: u32,
+    ) -> Option<PalwJobContextV2> {
+        None
+    }
+
+    /// [`Self::fp_job_context_for_executed_v1`] at the job's declared ceiling — what a PRODUCER
+    /// about to run the job knows, and what every caller that had no executed count meant. A seat
+    /// must not use this: it holds the answer, and the answer's length is the executed count
+    /// (ADR-0084 Decision 1).
+    fn fp_job_context_v1(&self, job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3) -> Option<PalwJobContextV2> {
+        self.fp_job_context_for_executed_v1(job, job.decode_token_limit)
+    }
+
+    /// **What this family's geometry prices a CONTEXT at, in step leaves** (ADR-0074 Decision 5,
+    /// ADR-0084 Decision 4): `palw_step::step_leaf_count_capped_v1(profile, context, ladder)` for
+    /// the profile this backend holds, at the ruleset ladder it was built with.
+    ///
+    /// It exists so a seat can ask the ONE question the chain cannot ask for it: is the context I
+    /// derived from what was served the context the chain PAID for? Without it the seat's
+    /// interval draw takes its denominator from a number the accused wrote
+    /// (`PalwFpChainCountsV1`'s own doc), and a served two-call job buys the whole claim's quanta.
+    /// `None` when this family cannot price a context; a seat that gets `None` files nothing on
+    /// this lane rather than guessing, which is never an accusation.
+    fn fp_context_work_leaves_v1(&self, _context: &PalwJobContextV2) -> Option<u64> {
+        None
+    }
+
+    /// **The job context an interval opening's binding carries** (ADR-0084 Decision 4).
+    ///
+    /// A seat holds one context per claim and must be able to check that the evidence is about
+    /// THAT context. The binding pins its own `job_id` against the claim's anchor and its own
+    /// `step_leaf_count` against the geometry, and neither of those pins the two token counts — so
+    /// a producer can bind a wide context to a narrow job's id and have the seat's draw sized by
+    /// the narrow one. `None` when the bytes are not this family's opening.
+    fn fp_opening_job_context_v1(&self, _opening: &[u8]) -> Option<PalwJobContextV2> {
         None
     }
 

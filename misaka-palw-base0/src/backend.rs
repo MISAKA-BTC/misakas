@@ -322,8 +322,9 @@ impl PalwExecutionBackendV1 for Base0Backend {
         prompt_tokens: &[usize],
         on_token: &mut dyn FnMut(u32),
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
-        use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
+        use kaspa_consensus_core::palw_fp_execution_v3::{
+            PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1,
+        };
 
         // ADR-0077 SA-6: an artifact this host can no longer read is a job failure named at the
         // boundary, not a fault taken three layers into a kernel.
@@ -351,18 +352,15 @@ impl PalwExecutionBackendV1 for Base0Backend {
         // **This family decodes a declared budget, so the count and the stop reason are known
         // before the run rather than after it.** ADR-0044 Decision 7's early stop is a property of
         // a sampler that can emit end-of-generation; `base0_execute_for_attempt_v1` runs
-        // `exact_decode_tokens` and returns. `ExactBudgetReached` is therefore the only honest stop
-        // reason here, and the context builder enforces the pairing (`executed == limit`) rather
-        // than trusting this comment.
-        let shape = PalwFpRunFactsV3 {
-            decode_tokens_executed: job.decode_token_limit,
-            stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
-            full_logits_trace_root: Hash64::default(),
-            activation_leg_root: Hash64::default(),
-            checkpoint_leg_root: Hash64::default(),
-            step_leg_root: Hash64::default(),
-            step_leaf_count: 0,
-        };
+        // `exact_decode_tokens` and returns, so the ceiling IS what this run executes.
+        //
+        // **The pairing is derived rather than typed** (ADR-0074 Decision 7). Hand-spelling it at
+        // six sites made "the ceiling, and therefore ExactBudgetReached" a property of the
+        // codebase rather than of the run — so a SEAT rebuilding an early-stopping claim's context
+        // rebuilt it at the ceiling too, and the claim was excluded from the interval lane. This
+        // producer still runs its ceiling; the derivation is what makes that a statement about
+        // this call instead of about the type.
+        let shape = palw_fp_run_facts_for_executed_v1(job, job.decode_token_limit);
 
         // The context the COURT will recompute against — built first, and then run under. The
         // roots in `shape` are placeholders and are not read: the context is the job's shape, the
@@ -827,10 +825,15 @@ impl PalwExecutionBackendV1 for Base0Backend {
     }
 
     /// The one context the floor runs a free-prompt job under (ADR-0084 Decision 4): the
-    /// integer family's default class facts, the budget decoded exactly, the RC network id —
-    /// the same value `execute_free_prompt` builds.
-    fn fp_job_context_v1(&self, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3) -> Option<PalwJobContextV2> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
+    /// integer family's default class facts, the budget THAT RAN, the RC network id — the same
+    /// value `execute_free_prompt` builds. The count is the caller's because a run that stopped
+    /// early is still this job's run (ADR-0074 Decision 7).
+    fn fp_job_context_for_executed_v1(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        decode_tokens_executed: u32,
+    ) -> Option<PalwJobContextV2> {
+        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1};
         let class = PalwFpClassFactsV3 {
             model_profile_id: Hash64::default(),
             runtime_manifest_hash: Hash64::default(),
@@ -838,16 +841,23 @@ impl PalwExecutionBackendV1 for Base0Backend {
             shape_profile_id: self.profile.shape_profile_id(),
             cu_ruleset_id: Hash64::default(),
         };
-        let shape = PalwFpRunFactsV3 {
-            decode_tokens_executed: job.decode_token_limit,
-            stop_reason: kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3::ExactBudgetReached,
-            full_logits_trace_root: Hash64::default(),
-            activation_leg_root: Hash64::default(),
-            checkpoint_leg_root: Hash64::default(),
-            step_leg_root: Hash64::default(),
-            step_leaf_count: 0,
-        };
+        let shape = palw_fp_run_facts_for_executed_v1(job, decode_tokens_executed);
         palw_fp_job_context_v3(job, &class, &shape, RC_NETWORK_ID).ok()
+    }
+
+    /// **The floor's price for a context** (ADR-0074 Decision 5): the class's own graph enumerated
+    /// over the context, at the ruleset ladder this backend was built with
+    /// (`with_step_ladder_cap`, ADR-0080 W1b) — the same number
+    /// `base0_fp_binding_step_space_v1` re-derives from an opening's binding, so the seat's
+    /// context and the evidence's binding are priced by one function.
+    fn fp_context_work_leaves_v1(&self, context: &PalwJobContextV2) -> Option<u64> {
+        kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&self.profile, context, self.step_ladder_cap).ok()
+    }
+
+    /// The context an opening's binding carries (ADR-0084 Decision 4), read through this family's
+    /// own decoder — the panel names no family's codec.
+    fn fp_opening_job_context_v1(&self, opening: &[u8]) -> Option<PalwJobContextV2> {
+        crate::fp_interval::base0_fp_interval_opening_job_context_v1(opening)
     }
 
     /// `output_root` from the answer's ids under `context` (ADR-0078 X6; ADR-0084): the floor
