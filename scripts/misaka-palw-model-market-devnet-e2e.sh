@@ -75,6 +75,11 @@ evm_of() { echo $((EVM_BASE + $1)); }
 cli() { local i="$1"; shift; "$CLI_BIN" --network devnet --rpc "127.0.0.1:$(rpc_of "$i")" --evm-rpc "http://127.0.0.1:$(evm_of "$i")" "$@"; }
 
 # Start (or restart) node `i` dialling only the nodes in `peers_csv` (may be empty: listen only).
+# **`--palw-panel` is what makes a claim reach `Final`**, and without it the worker reward is never
+# paid at all: the seats verify each other's material, sign receipts and submit the quorum. Run 10b
+# ran without it and watched `final_claims=0 unresolved=12` climb while ADR-0091's step waited for a
+# buyback that no `Final` could ever produce — the reward path, not the market, was the thing this
+# drill had never exercised.
 # `--connect` is "these and nobody else" — the partition is made of dial lists, not firewalls, and a
 # restart drops whatever links existed; a side's members dial each other so every producer keeps
 # the peer its mining gate demands.
@@ -86,7 +91,7 @@ start_node() {
   local args=(--devnet --appdir="$WORK_DIR/node-$i" --listen="127.0.0.1:$(p2p_of "$i")" --rpclisten-borsh="127.0.0.1:$(rpc_of "$i")"
         --evm-rpc-listen="127.0.0.1:$(evm_of "$i")" --utxoindex --nodnsseed --disable-upnp --nogrpc --enable-unsynced-mining
         --palw-model-devnet="$FENCE_DAA" --palw-devnet-floor-only --evm-bridge-devnet-unpaused
-        --palw-produce --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i" --palw-producer-pay-address="$addr"
+        --palw-produce --palw-panel --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i" --palw-producer-pay-address="$addr"
         --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
   if [ -n "${EXTRA_NODE_ARGS:-}" ]; then read -r -a extra <<<"$EXTRA_NODE_ARGS"; args+=("${extra[@]}"); fi
   local j
