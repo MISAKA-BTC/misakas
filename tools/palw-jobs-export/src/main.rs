@@ -273,10 +273,24 @@ fn main() {
             "class": name,
             "claim": claim.to_string(),
             "anchor": anchor.to_string(),
+            // **Published because ANYONE can recompute it** — the attempt lane's prompt is a pure
+            // function of the block's own anchor, the class and the producer's bond. It is a
+            // lottery draw, not a person's words, and a reader who does not trust this file
+            // re-derives it from the block.
             "prompt_ids": prompt,
-            "generated_ids": generated,
+            // `generated_ids` is NOT here, and that is the change of 2026-09-06. The answer exists
+            // in the executor's retention and in the answer envelope it serves to the claim's
+            // seats; the chain carries `output_root` and nothing else. Publishing it here made a
+            // web page the one place the network's own rules do not put it. See `visibility`.
             "prefill": job.0,
             "decode": job.1,
+            // **What a demand has opened, and nothing else.** Empty on every network whose
+            // `palw_da_court` is not in force — which is every network until testnet-11 crosses
+            // DAA 1,900. When it is, a `MaterialDisclosed` object names the claim and the event
+            // its accuser demanded, and that event is public because the chain carries it. Reading
+            // those objects is the exporter's next job; the field exists now so the page renders
+            // the same shape before and after, and an empty list is an honest "nobody has asked".
+            "disclosed": Vec::<Value>::new(),
         }));
     }
     if let Some(path) = generated_cache.as_ref()
@@ -290,7 +304,28 @@ fn main() {
     {
         let _ = std::fs::write(path, bytes);
     }
-    let out = json!({ "network": network, "rows": rows, "fp_rows": fp_rows, "hash_mismatches": hash_mismatch });
+    let out = json!({
+        "network": network,
+        // **What this file may carry, stated in the file** (ADR-0062, ADR-0077 Decision 16).
+        //
+        // The rule is the network's, not the exporter's: a claim publishes COMMITMENTS, and the
+        // content behind them lives with the executor and reaches the drawn seats over an
+        // authenticated pull. A piece of it becomes public exactly when somebody demands it — a
+        // data-availability accusation the executor answers on chain — and the demand costs the
+        // accuser if the answer comes. So this file publishes what the chain carries and what any
+        // reader can recompute, and it carries `disclosed` for the pieces a demand has opened.
+        "visibility": {
+            "rule": "commitments and chain-derived facts are published; content held in an executor's retention is not",
+            "attempt_prompt": "anchor-derived — a lottery draw any reader recomputes from the block",
+            "answers": "not published: the chain carries output_root; the ids ride the answer envelope served to seats",
+            "free_prompt": "not published: PanelDa carries no ids on chain at all, and a PublicDa payload's ids are the \
+                            block's to show, not this file's",
+            "disclosed": "content a data-availability accusation forced on chain (ADR-0062 SA-2); empty until palw_da_court is in force"
+        },
+        "rows": rows,
+        "fp_rows": fp_rows,
+        "hash_mismatches": hash_mismatch
+    });
     std::fs::write(&out_path, serde_json::to_vec_pretty(&out).unwrap()).unwrap_or_else(|e| die(format!("{out_path}: {e}")));
     eprintln!(
         "palw-jobs-export: {} LLM rows, {} free-prompt rows, {} hash mismatches → {}",
@@ -364,17 +399,27 @@ fn free_prompt_rows(dirs: &str, cache: &mut std::collections::BTreeMap<String, V
             };
             let family = v.get("family").and_then(|f| f.as_str()).unwrap_or("");
             let chain = v.get("chain").cloned().unwrap_or(Value::Null);
+            // **Neither the prompt nor the answer is published** (2026-09-06). The prompt was read
+            // out of the executor's retained `.material` — the file ADR-0077 Decision 16 serves
+            // only to the claim's readers — and the answer out of the gateway's own outbox. What a
+            // reader is owed is the commitment and the counts, which is what a claim puts on chain;
+            // what a reader may DEMAND is a disclosure, and that is the `disclosed` list.
+            //
+            // The ids are still computed above, because the cache they feed is the node's own and
+            // never leaves it. They simply do not enter this file.
+            let _ = &prompt_ids;
             rows.push(json!({
                 "claim": claim,
                 "class": family_class(family),
                 "family": family,
-                "prompt_ids": prompt_ids,
                 "prompt_tokens": v.get("prompt_tokens"),
-                "generated_text": v.get("answer_untrimmed"),
                 "decode_tokens": v.get("decode_tokens_executed"),
                 "work_leaves": v.get("work_leaves"),
                 "daa": chain.get("daa_score").cloned().unwrap_or(Value::Null),
+                // ADR-0078's derived artifacts ARE on chain — the kind, the id and the hash — so
+                // they stay: they are the claim's public product, not its private input.
                 "derived": derived_by_claim.get(&claim).cloned().unwrap_or_default(),
+                "disclosed": Vec::<Value>::new(),
             }));
         }
     }
