@@ -4541,12 +4541,26 @@ impl VirtualStateProcessor {
     /// The seat duties this node holds at the state store's tip (launch blockers §2).
     /// Claims this node could still dispute — licensed, not its own, and not already under a
     /// session of its own.
+    // ---------------------------------------------------------------------------------------
+    // **Every read-side `palw_*_impl` below takes `load_tip_cached`, and that is the rule, not a
+    // property of the sites that happen to** (audit M-7, re-opened by mainnet audit H-1). These
+    // are the answers `ConsensusApi` hands the RPC service and the p2p serve flows, so an
+    // uncached read here is a borsh decode of the whole carriage, `rebuild_deadline_free_indices`,
+    // `rebuild_deadline_index_v2`, two consistency walks and a full `state_root()` per
+    // unauthenticated ~200-byte request. `load_tip` stays for the fold and restart paths only —
+    // `calculate_utxo_state_relatively`, `calculate_virtual_state`,
+    // `palw_candidate_state_v2_checked`, `palw_weighing_point_v2`, `palw_pruning_point_allowed_v2`
+    // and `capture_pruning_point_palw_state` — which materialize in order to WALK or to WRITE and
+    // need an owned state. A new read path added on `load_tip` is caught by
+    // `palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization`, which measures decoded
+    // carriage bytes rather than trusting this comment.
+    // ---------------------------------------------------------------------------------------
     pub fn palw_disputable_claims_v2_impl(
         &self,
         mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
     ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwDisputableClaimV2> {
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
-        let Some((_, state)) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten() else {
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else {
             return Vec::new();
         };
         kaspa_consensus_core::palw_producer_v2::palw_disputable_claims_v2(&state, mine)
@@ -4566,7 +4580,7 @@ impl VirtualStateProcessor {
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let court = self.palw_court_params_v2.as_ref()?;
-        let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         // The tip's DAA: this is the verdict the close WOULD get if it rode the next block.
         let daa_score = self.virtual_stores.read().state.get().ok()?.daa_score;
         let step_ladder = self.palw_court_step_ladder_at(daa_score, court);
@@ -4582,7 +4596,7 @@ impl VirtualStateProcessor {
         mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
     ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2> {
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
-        let Some((_, state)) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten() else {
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else {
             return Vec::new();
         };
         kaspa_consensus_core::palw_producer_v2::palw_court_duties_v2(&state, mine)
@@ -4595,7 +4609,7 @@ impl VirtualStateProcessor {
         mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
     ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwDaDutyV2> {
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
-        let Some((_, state)) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten() else {
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else {
             return Vec::new();
         };
         kaspa_consensus_core::palw_producer_v2::palw_da_duties_v2(&state, state_params, mine)
@@ -4608,7 +4622,7 @@ impl VirtualStateProcessor {
         claim: kaspa_consensus_core::Hash64,
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
-        let Some((_, state)) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten() else {
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else {
             return Vec::new();
         };
         state.claim_readers_v2(&claim)
@@ -4620,7 +4634,7 @@ impl VirtualStateProcessor {
         bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
     ) -> Option<kaspa_consensus_core::Hash64> {
         let state_params = self.palw_state_params_v2.as_ref()?;
-        let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         state.bond(bond).map(|b| b.payout_payload)
     }
 
@@ -4630,7 +4644,7 @@ impl VirtualStateProcessor {
     /// together because "budget 0" alone cannot say whether the class was never granted share.
     pub fn palw_v2_class_table_impl(&self) -> Vec<kaspa_consensus_core::palw_state_v2::PalwClassRowV2> {
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
-        let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip(state_params) else { return Vec::new() };
+        let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params) else { return Vec::new() };
         // The PALW state's own last point, not the virtual store's: the two can disagree while a
         // node is coming up, and reading the store's default of 0 answers about genesis while
         // looking like an answer about now.
@@ -4652,7 +4666,7 @@ impl VirtualStateProcessor {
 
     pub fn palw_bond_of_pubkey_v2_impl(&self, pubkey: &[u8]) -> Option<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
         let state_params = self.palw_state_params_v2.as_ref()?;
-        let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         state.bonds_iter().find(|(_, bond)| bond.pubkey == pubkey).map(|(key, _)| *key)
     }
 
@@ -4665,7 +4679,7 @@ impl VirtualStateProcessor {
     pub fn palw_v2_registration_terms_impl(&self) -> Option<kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let bundle = self.palw_v2_bundle.as_ref()?;
-        let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         let base = state.class(&bundle.base_class_id)?;
         // The target lives beside the class, not inside it — retargeting moves one and not the
         // other, and an entrant seeded from a stale copy would start at a difficulty the chain
@@ -4690,7 +4704,7 @@ impl VirtualStateProcessor {
         class_id: kaspa_hashes::Hash64,
     ) -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)> {
         let state_params = self.palw_state_params_v2.as_ref()?;
-        let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         let class = state.class(&class_id)?;
         // **Frozen means frozen for serving too.** The store's doc promised this read was gated on
         // the class existing "and not being frozen", and only existence was in the code — so a
@@ -4727,7 +4741,10 @@ impl VirtualStateProcessor {
     /// to `--palw-class-carriage`.
     pub fn palw_class_carriages_for_sync_v1_impl(&self) -> Vec<(kaspa_hashes::Hash64, Vec<u8>)> {
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
-        let Some((_, state)) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten() else {
+        // Audit M-7's shared materialization, on the one caller that is a P2P serve path
+        // (mainnet audit H-1): this answers `RequestPruningPointPalwState`, so an uncached read
+        // here is a full PALW-state re-rooting per forty-byte request from any handshaked peer.
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else {
             return Vec::new();
         };
         let store = self.palw_class_carriage_store.read();
@@ -4761,7 +4778,7 @@ impl VirtualStateProcessor {
         let (_, state) = self
             .palw_state_v2_store
             .read()
-            .load_tip(state_params)
+            .load_tip_cached(state_params)
             .ok()
             .flatten()
             .ok_or("this node holds no V2 state to check a declaration against")?;
@@ -4791,7 +4808,7 @@ impl VirtualStateProcessor {
         mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
     ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2> {
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
-        let Some((_, state)) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten() else {
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else {
             return Vec::new();
         };
         kaspa_consensus_core::palw_producer_v2::palw_seat_duties_v2(&state, state_params, mine)
@@ -4804,7 +4821,7 @@ impl VirtualStateProcessor {
     ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwProducerFactsV2> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let admission = self.palw_admission_params_v2.as_ref()?;
-        let (chain_point, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         let virtual_read = self.virtual_stores.read();
         let candidate_daa = virtual_read.state.get().ok()?.daa_score;
         drop(virtual_read);
@@ -4844,7 +4861,7 @@ impl VirtualStateProcessor {
         let Some(state_params) = self.palw_state_params_v2.as_ref() else {
             return Vec::new();
         };
-        let Ok(Some((chain_point, state))) = self.palw_state_v2_store.read().load_tip(state_params) else {
+        let Ok(Some((chain_point, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params) else {
             return Vec::new();
         };
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
@@ -4922,7 +4939,7 @@ impl VirtualStateProcessor {
         let Some(state_params) = self.palw_state_params_v2.as_ref() else {
             return Vec::new();
         };
-        let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip(state_params) else {
+        let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params) else {
             return Vec::new();
         };
         let now_daa = self.lkg_virtual_state.load().daa_score;
@@ -5848,7 +5865,7 @@ impl VirtualStateProcessor {
         use kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2 as Q;
         let state_params = self.palw_state_params_v2.as_ref()?;
         let panel_params = self.palw_panel_params_v2.as_ref()?;
-        let (tip_block, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        let (tip_block, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         // The evaluation point is VIRTUAL's — where the carrying transaction will actually be
         // accepted — not the sink's own. The difference is one DAA, and it bites: a receipt signed
         // "now" carries virtual's daa, and a point at the sink's daa refuses it as "signed after
@@ -12981,6 +12998,11 @@ impl VirtualStateProcessor {
         // ADR-0018 §F staged rollout: None (Stage 1) / bootstrap (Stage 2) / full
         // (Stage 3) selected by DAA, identically to the validation path.
         let carve = self.dns_params.as_ref().and_then(|p| p.reward_fee_split(virtual_state.daa_score));
+        // **A template build is six PALW-state materializations, and `getBlockTemplate` is an
+        // unauthenticated wRPC method miners poll** (mainnet audit H-1's sibling sweep). The five
+        // reads below and the existence probe at the header assembly all ask about the SAME tip
+        // row; through the shared materialization they cost one, and the answers cannot differ
+        // from each other any more than they could before.
         let validator_pool = carve.map_or(0, |fs| {
             // The template computes the SAME set the validator will, from the same state it is
             // building on — a template whose pool disagreed with validation would build a coinbase
@@ -12991,7 +13013,7 @@ impl VirtualStateProcessor {
             let unentitled = self
                 .palw_state_params_v2
                 .as_ref()
-                .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
+                .and_then(|params| self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten())
                 .map(|(_, state)| {
                     self.palw_v2_unentitled_blues(
                         &state,
@@ -13063,7 +13085,7 @@ impl VirtualStateProcessor {
             let payouts = self
                 .palw_state_v2_store
                 .read()
-                .load_tip(state_params)
+                .load_tip_cached(state_params)
                 .ok()
                 .flatten()
                 .map(|(_, state)| self.palw_v2_payout_outputs(&state))
@@ -13076,7 +13098,7 @@ impl VirtualStateProcessor {
         let palw_escrow_withheld = self
             .palw_state_params_v2
             .as_ref()
-            .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
+            .and_then(|params| self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten())
             .filter(|(block, _)| *block == virtual_state.ghostdag_data.selected_parent)
             .map(|(block, state)| self.palw_v2_escrow_withheld_at(&state, block))
             .unwrap_or(0);
@@ -13086,7 +13108,7 @@ impl VirtualStateProcessor {
         let palw_unentitled_blues = self
             .palw_state_params_v2
             .as_ref()
-            .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
+            .and_then(|params| self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten())
             .filter(|(block, _)| *block == virtual_state.ghostdag_data.selected_parent)
             .map(|(_, state)| {
                 self.palw_v2_unentitled_blues(
@@ -13195,12 +13217,12 @@ impl VirtualStateProcessor {
         // mined from this template reproduces the root byte-for-byte (construction == validation,
         // the `overlay_commitment_root` discipline). Inert (header unchanged, root stays zero)
         // wherever the mode carries no V2 bundle, where the preimage gate reads zero as absent.
-        let header = match (self.palw_state_params_v2.as_ref(), self.palw_state_v2_store.read().tip_record().ok().flatten()) {
+        let header = match (self.palw_state_params_v2.as_ref(), self.palw_state_v2_store.read().tip_key().ok().flatten()) {
             (Some(state_params), Some(_)) => {
                 let (_, parent_state) = self
                     .palw_state_v2_store
                     .read()
-                    .load_tip(state_params)
+                    .load_tip_cached(state_params)
                     .expect("a stored V2 tip must load under its own committed root")
                     .expect("the tip record exists");
                 let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
@@ -13538,9 +13560,22 @@ impl VirtualStateProcessor {
         // -imported node pins the flat pointer to the pp), else §12-reconstruct (a full-sync serving
         // node whose head is far ahead of the buried pp; needs recent/archive history — `head` keeps
         // none, hence the startup warning). `None` if neither yields it (the peer tries another server).
+        //
+        // **Only for a hash this node actually calls a pruning point** (mainnet audit H-1's sibling
+        // sweep). The argument is peer-chosen and reaches this function for any block whose EVM
+        // header is stored, so without this a forty-byte request could aim `materialize_snapshot`
+        // or the §12 forward-diff walk at an arbitrary chain block. The persisted 206 row above is
+        // a point lookup and needs no such gate; these two are not. The gate is THIS node's current
+        // pruning point, not the whole past-pruning-points set: `DbPastPruningPointsStore` exposes
+        // only `get(index)`, so a set-membership test here would itself be a per-request walk —
+        // an amplification of the same shape as the one being closed. Historical points keep their
+        // serve path through the persisted 206 row above, which returns before this block.
         #[cfg(feature = "evm")]
         {
             use crate::model::stores::evm::{EvmCodeStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader};
+            if self.pruning_point_store.read().pruning_point().ok() != Some(pruning_point) {
+                return None;
+            }
             if let Ok(Some(ptr)) = self.evm_latest_state_ptr_store.read().get()
                 && ptr.canonical_head == pruning_point
             {
@@ -13715,8 +13750,15 @@ impl VirtualStateProcessor {
         // asking whether it equals the pruning point was a question whose answer was always no on
         // a running node — and the reply was always `found: false`, which aborts the requester's
         // whole IBD. `capture_pruning_point_palw_state` materialises this row at pruning-advance.
-        let (block, state) = self.palw_state_v2_store.read().load_pruning_snapshot(params).ok().flatten()?;
-        (block == pruning_point).then(|| kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state))
+        //
+        // **The peer's hash is compared BEFORE anything is decoded** (mainnet audit H-1). This
+        // used to run `load_pruning_snapshot` — borsh decode of the whole carriage, both index
+        // rebuilds, both consistency walks, a full `state_root()` recompute — and ask afterwards
+        // whether the block it had just rebuilt was the one the peer named. Forty bytes from any
+        // peer past the handshake, no operator opt-in, on the blocking pool block processing
+        // shares. The store now holds the check and the memo; the answer is the same bytes.
+        let carriage = self.palw_state_v2_store.read().load_pruning_snapshot_carriage_cached(params, pruning_point).ok().flatten()?;
+        Some(carriage.as_ref().clone())
     }
 
     /// **The child of `pruning_point` whose header is allowed to witness the pruning point's own

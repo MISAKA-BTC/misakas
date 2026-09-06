@@ -11485,3 +11485,278 @@ fn the_processor_resolves_the_refutation_ladder_from_palw_court_ladder_alone() {
     let (armed, ruleset_ladder) = case(|p| p.palw_court_ladder = Some(ForkActivation::always()));
     assert_eq!(armed, ruleset_ladder, "armed: the ruleset's own ladder, which is the value a class was admitted at");
 }
+
+/// **A `RequestPruningPointPalwState` costs the serving node one materialization per captured
+/// snapshot, and a hash it never captured costs it nothing** (mainnet audit H-1).
+///
+/// Forty bytes on the wire, reachable by any peer that completed the p2p handshake, with no
+/// operator opt-in and no `--profile` to turn it off. The serve used to run `load_pruning_snapshot`
+/// — a borsh decode of the whole carriage, two index rebuilds, two consistency walks and a full
+/// `state_root()` — and compare the peer's hash afterwards, and then run a SECOND full tip
+/// materialization for the class declarations whose result the not-found arm threw away.
+///
+/// This measures the node's cost in carriage bytes decoded, which is the only form of the claim
+/// that a later refactor cannot quietly falsify. The rule: `wrong hash ⇒ zero`, `right hash ⇒ one
+/// row's worth however many times it is asked`, and the answer identical to the pre-patch
+/// expression each time — because the requester verifies its root against the pruning point's own
+/// header, so a serve that is merely equivalent is a serve that fails IBD.
+#[tokio::test]
+async fn palw_v2_a_pruning_point_state_request_costs_one_materialization_and_a_wrong_hash_costs_none() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let (tip, _) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    vp.capture_pruning_point_palw_state(tip);
+
+    const CALLS: usize = 64;
+    let wrong = kaspa_consensus_core::BlockHash::from_u64_word(0xBAD);
+    assert_ne!(wrong, tip);
+
+    // **A hash this node did not capture must be answered without touching the state.**
+    let tip_before = vp.palw_state_v2_store.read().tip_bytes_decoded();
+    let snapshot_before = vp.palw_state_v2_store.read().pruning_snapshot_bytes_decoded();
+    for _ in 0..CALLS {
+        assert!(vp.pruning_point_palw_state(wrong).is_none(), "a point this node never captured answers not-found");
+    }
+    assert_eq!(
+        vp.palw_state_v2_store.read().pruning_snapshot_bytes_decoded(),
+        snapshot_before,
+        "{CALLS} forty-byte requests for a hash we do not hold each bought a full snapshot materialization"
+    );
+    assert_eq!(
+        vp.palw_state_v2_store.read().tip_bytes_decoded(),
+        tip_before,
+        "…and each bought a second one, for class declarations the not-found reply never carries"
+    );
+
+    // **The captured point costs one row's worth however often it is asked for, and the bytes are
+    // the ones the uncached expression produced.**
+    // The pre-patch expression, verbatim, as the reference answer. `load_pruning_snapshot` keeps
+    // its own uncached shape and does not touch the serve counter, so this does not perturb the
+    // measurement below.
+    let expected = {
+        let store = vp.palw_state_v2_store.read();
+        let (block, state) = store.load_pruning_snapshot(&bundle.state).unwrap().expect("the snapshot is captured");
+        assert_eq!(block, tip);
+        PalwStateCarriageV2::from_state(&state)
+    };
+    let one_carriage = vp.palw_state_v2_store.read().pruning_snapshot_record().unwrap().unwrap().carriage_borsh.len() as u64;
+    let snapshot_before = vp.palw_state_v2_store.read().pruning_snapshot_bytes_decoded();
+    for _ in 0..CALLS {
+        let served = vp.pruning_point_palw_state(tip).expect("the captured snapshot is servable");
+        assert_eq!(served, expected, "the served carriage is not the one the uncached path produced");
+    }
+    assert_eq!(
+        vp.palw_state_v2_store.read().pruning_snapshot_bytes_decoded() - snapshot_before,
+        one_carriage,
+        "{CALLS} serves of one captured snapshot decoded more than one carriage"
+    );
+
+    // **And the declarations that ride with it are one tip read, not one per request** (ADR-0067
+    // Decision 6's serving half, which the same flow calls).
+    let tip_before = vp.palw_state_v2_store.read().tip_bytes_decoded();
+    let first = vp.palw_class_carriages_for_sync_v1_impl();
+    for _ in 1..CALLS {
+        assert_eq!(vp.palw_class_carriages_for_sync_v1_impl(), first, "two serves of the declaration set disagreed");
+    }
+    let tip_grew = vp.palw_state_v2_store.read().tip_bytes_decoded() - tip_before;
+    assert!(
+        tip_grew <= vp.palw_state_v2_store.read().tip_record().unwrap().unwrap().carriage_borsh.len() as u64,
+        "{CALLS} declaration serves materialized the tip more than once ({tip_grew} B)"
+    );
+}
+
+/// **No read-side `palw_*_impl` takes an uncached tip materialization** (audit M-7, re-opened by
+/// mainnet audit H-1).
+///
+/// These are the answers `ConsensusApi` hands the RPC service and the p2p serve flows, so each
+/// uncached read is a borsh decode of the whole carriage, `rebuild_deadline_free_indices`,
+/// `rebuild_deadline_index_v2`, two consistency walks and a full `state_root()` against a request
+/// of a couple of hundred bytes from a caller that authenticated to nothing.
+///
+/// Two halves, because neither alone states the rule:
+///
+/// * the MEASUREMENT drives the read paths and asserts the node decoded one carriage in total, so
+///   a loader that stops sharing fails whatever the source looks like;
+/// * the ALLOWLIST names every `load_tip` caller left in the production source. `load_tip` is the
+///   right read for the fold and restart paths — they materialize in order to WALK or to WRITE and
+///   need an owned state — and the wrong one everywhere else, and a seventeenth read path added on
+///   it turns this red the day it is added, including the one impl below the measurement cannot
+///   call (`palw_court_close_verdict_v2_impl` needs a full `PalwCourtVerdictProofV2`, whose
+///   `PalwStepBindingV2` has no cheap constructor outside consensus-core's own `cfg(test)`).
+#[tokio::test]
+async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let class_id = kaspa_hashes::Hash64::from_u64_word(1);
+    let bond_key = {
+        let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+        state.bonds_iter().next().map(|(key, _)| *key).expect("the genesis registry seated bonds")
+    };
+    let mine = [bond_key];
+
+    // The tip has to be materialized once before the baseline, or the first call below pays for
+    // the cold cache and the number under test becomes "two carriages" for a reason that is not
+    // the finding.
+    let _ = vp.palw_state_v2_store.read().load_tip_cached(&bundle.state).unwrap();
+    let baseline = vp.palw_state_v2_store.read().tip_bytes_decoded();
+
+    // The fifteen read-side impls that are callable with cheap arguments, in the order the
+    // production source declares them. Every one of them reaches its tip read before it looks at
+    // its arguments, so the values here only have to be well-formed.
+    let _ = vp.palw_disputable_claims_v2_impl(&mine);
+    let _ = vp.palw_court_duties_v2_impl(&mine);
+    let _ = vp.palw_da_duties_v2_impl(&mine);
+    let _ = vp.palw_claim_readers_v2_impl(kaspa_hashes::Hash64::from_u64_word(0xC1A1));
+    let _ = vp.palw_bond_payout_payload_v2_impl(&bond_key);
+    let _ = vp.palw_v2_class_table_impl();
+    let _ = vp.palw_bond_of_pubkey_v2_impl(&[7u8; 4]);
+    let _ = vp.palw_v2_registration_terms_impl();
+    let _ = vp.palw_registered_class_carriage_v1_impl(class_id);
+    let _ = vp.palw_class_carriages_for_sync_v1_impl();
+    let _ = vp.palw_adopt_class_carriage_v1_impl(class_id, &[]);
+    let _ = vp.palw_seat_duties_v2_impl(&mine);
+    let _ = vp.palw_producer_facts_v2_impl(class_id, Some(bond_key.0));
+    let _ = vp.palw_fp_spendable_v3_impl(bond_key.0);
+    let _ = vp.palw_locked_bond_outpoints_v2_impl();
+    let _ = vp.palw_v2_receipt_quorum_assemble_impl(kaspa_hashes::Hash64::from_u64_word(0xC1A1), &[]);
+
+    let one_carriage = vp.palw_state_v2_store.read().tip_record().unwrap().unwrap().carriage_borsh.len() as u64;
+    let grew = vp.palw_state_v2_store.read().tip_bytes_decoded() - baseline;
+    assert_eq!(
+        grew, 0,
+        "the read-side impls decoded {grew} B of carriage ({} materializations of {one_carriage} B) for one unmoved tip",
+        grew / one_carriage.max(1)
+    );
+
+    // **The allowlist.** `load_tip` is for the callers that walk or write; every other caller in
+    // this file is a read path and must take `load_tip_cached`. Adding a name here is a deliberate
+    // act, which is the point — the sixteen sites above were converted one audit at a time exactly
+    // because nothing made the boundary visible.
+    const OWNED_STATE_CALLERS: &[&str] = &[
+        "calculate_utxo_state_relatively",
+        "evm_template_fields",
+        "calculate_virtual_state",
+        "palw_candidate_state_v2_checked",
+        "palw_weighing_point_v2",
+        "palw_pruning_point_allowed_v2",
+        "capture_pruning_point_palw_state",
+    ];
+    let source = include_str!("processor.rs");
+    let mut enclosing = String::new();
+    let mut found: Vec<String> = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed
+            .strip_prefix("pub(crate) fn ")
+            .or_else(|| trimmed.strip_prefix("pub(super) fn "))
+            .or_else(|| trimmed.strip_prefix("pub fn "))
+            .or_else(|| trimmed.strip_prefix("fn "))
+        {
+            enclosing = rest.split(['(', '<']).next().unwrap_or_default().to_string();
+        }
+        if line.contains(".load_tip(") {
+            found.push(enclosing.clone());
+        }
+    }
+    found.sort();
+    found.dedup();
+    let mut allowed: Vec<String> = OWNED_STATE_CALLERS.iter().map(|s| s.to_string()).collect();
+    allowed.sort();
+    assert_eq!(
+        found, allowed,
+        "a `load_tip` caller in virtual_processor/processor.rs is not one of the fold/restart paths. A READ path \
+         must take `load_tip_cached`; a new walk-or-write path belongs in OWNED_STATE_CALLERS."
+    );
+}
+
+/// **`getPalwProducerFacts` answers from one tip materialization, not two per call** (mainnet
+/// audit M-5).
+///
+/// The RPC ran `palw_locked_bond_outpoints_v2` and then `palw_producer_facts_v2`, both on the
+/// uncached loader, both synchronously on an RPC reactor thread, and both above the class-id parse
+/// — so a caller who fat-fingered a class id had already bought two full PALW-state
+/// materializations before it was told its request was malformed.
+///
+/// This is the consensus half of that repair and it states the rule rather than the patch: the two
+/// answers are unchanged across every call, and the node decodes one carriage in total for an
+/// unmoved tip. It fails the moment either impl goes back to an uncached read, in either order.
+#[tokio::test]
+async fn palw_v2_the_producer_facts_read_paths_materialize_the_tip_once_per_tip() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let class_id = kaspa_hashes::Hash64::from_u64_word(1);
+    let bond_key = {
+        let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+        state.bonds_iter().next().map(|(key, _)| *key).expect("the genesis registry seated bonds")
+    };
+
+    const CALLS: usize = 64;
+    let _ = vp.palw_state_v2_store.read().load_tip_cached(&bundle.state).unwrap();
+    let baseline = vp.palw_state_v2_store.read().tip_bytes_decoded();
+
+    let first_facts = vp.palw_producer_facts_v2_impl(class_id, Some(bond_key.0));
+    let first_outpoints = vp.palw_locked_bond_outpoints_v2_impl();
+    for _ in 1..CALLS {
+        // Interleaved, because the two used to be separate materializations and a cache shared by
+        // only one of them would still pass a test that ran them in two blocks.
+        assert_eq!(vp.palw_producer_facts_v2_impl(class_id, Some(bond_key.0)), first_facts, "the producer facts changed");
+        assert_eq!(vp.palw_locked_bond_outpoints_v2_impl(), first_outpoints, "the locked-bond set changed");
+    }
+
+    let one_carriage = vp.palw_state_v2_store.read().tip_record().unwrap().unwrap().carriage_borsh.len() as u64;
+    let grew = vp.palw_state_v2_store.read().tip_bytes_decoded() - baseline;
+    assert_eq!(
+        grew,
+        0,
+        "{CALLS} interleaved producer-facts reads decoded {grew} B of carriage ({} materializations of {one_carriage} B) \
+         for one unmoved tip",
+        grew / one_carriage.max(1)
+    );
+    assert!(!first_outpoints.is_empty(), "the fixture must actually have locked collateral, or the measurement is vacuous");
+}
