@@ -1449,6 +1449,30 @@ pub struct Params {
     /// genesis, where it is free: no history was judged under the looser rule.
     pub palw_attempt_header_pins: Option<ForkActivation>,
 
+    /// **ADR-0042 Decision 11's signature-context set, complete** (mainnet audit 2026-09-06, M-8).
+    ///
+    /// Armed, the bundle's `signature_contexts_root` is
+    /// [`crate::palw_mode_v2::palw_v2_signature_contexts_root_v2`] — every ML-DSA-87 context the
+    /// acceptance layer verifies under, nineteen of them. Dormant, it is the frozen nine testnet-11
+    /// and devnet committed to, ten of which the acceptance layer verifies without the ruleset id
+    /// naming: bond capability, DA accusation, DA disclosure, the court's close declaration and
+    /// both attention moves, the free-prompt commitment and spend, the carriage commitment and the
+    /// execution attestation. Two builds that spell any of those differently share an id, and a
+    /// refused object is SKIPPED while the block stands — so they split the registry with no block
+    /// ever rejected and nothing in either log saying so.
+    ///
+    /// **Bare, TOP LEVEL and GENESIS-ONLY, for [`Self::palw_prompt_ids_merkle`]'s reasons.** A
+    /// fence inside the bundle moves `palw_ruleset_id_v2`, which `for_each_fence` never descends
+    /// into, so every old/new pair would fail the handshake outright. `validate_palw_v2` refuses
+    /// any height but `always()`: the set is what every signature ON the network means, and no
+    /// verifier of a signature holds the object's block height.
+    ///
+    /// **`None` on every shipped preset, and it must stay that way on testnet-11 and devnet.**
+    /// Arming it moves that network's `consensus_params_id`, which is a re-mint of a live chain.
+    /// A carded mainnet states it from genesis (`mainnet_card_base_v1`), which is the designed
+    /// path for a network with no history.
+    pub palw_signature_contexts_v2: Option<ForkActivation>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -2009,6 +2033,33 @@ impl Params {
             return Err(PalwModeV2Error::Invalid(
                 "the bundle's trace_format_version is the Merkle-ids format (4) but palw_prompt_ids_merkle is dormant: the \
                  ruleset id claims a prompt commitment the fence does not arm",
+            ));
+        }
+        // **ADR-0042 Decision 11: the fence and the committed set are written from one fact, and
+        // neither half may stand alone** (mainnet audit 2026-09-06, M-8). Same shape and same
+        // reasons as the block above it. Genesis-only for the stronger of those reasons: a signing
+        // context is what a signature MEANS, every verifier of one holds bytes rather than a block
+        // height, and a set that changed mid-chain would make the meaning of a signature a
+        // function of a height none of them can see.
+        if let Some(activation) = self.palw_signature_contexts_v2
+            && activation != ForkActivation::never()
+        {
+            if activation != ForkActivation::always() {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_signature_contexts_v2 may only be armed at genesis: the set of contexts a ruleset commits to is \
+                     decided once per network, never per height, because no verifier of a signature holds the object's height",
+                ));
+            }
+            if bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v2() {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_signature_contexts_v2 is armed but the bundle's signature_contexts_root is not the complete set: \
+                     the ruleset id would not name every context a signature on this network is verified under",
+                ));
+            }
+        } else if bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root() {
+            return Err(PalwModeV2Error::Invalid(
+                "the bundle's signature_contexts_root is the complete set but palw_signature_contexts_v2 is dormant: the \
+                 ruleset id claims a context set the fence does not arm",
             ));
         }
         if self.palw_credit.is_some()
@@ -2710,6 +2761,11 @@ impl Params {
         if self.palw_attempt_header_pins == Some(ForkActivation::never()) {
             self.palw_attempt_header_pins = None;
         }
+        // ADR-0042 Decision 11's complete context set. The `palw_prompt_ids_merkle` shape: a bare
+        // fence, so the whole option collapses.
+        if self.palw_signature_contexts_v2 == Some(ForkActivation::never()) {
+            self.palw_signature_contexts_v2 = None;
+        }
         // ADR-0072 D8 on the free-prompt lane, a bare fence: the same collapse for the same reason.
         if self.palw_fp_da_pins == Some(ForkActivation::never()) {
             self.palw_fp_da_pins = None;
@@ -3146,6 +3202,7 @@ impl Params {
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
+            palw_signature_contexts_v2,
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation: _,
             pow_palw_activation: _,
@@ -3190,6 +3247,7 @@ impl Params {
             ("palw_difficulty_priced_rows", *palw_difficulty_priced_rows),
             ("palw_receipt_rows_unpriced", *palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
+            ("palw_signature_contexts_v2", *palw_signature_contexts_v2),
         ]
     }
 
@@ -3374,6 +3432,13 @@ impl Params {
             h.write(b"palw_fp_ruleset_caps");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0042 Decision 11's complete context set (mainnet audit 2026-09-06, M-8). Some-only,
+        // at the tail, for the reason its siblings are: it is genesis-only, so an operator reading
+        // the schedule sees a rule in force from block one rather than a height to cross.
+        if let Some(activation) = self.palw_signature_contexts_v2 {
+            h.write(b"palw_signature_contexts_v2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         h.finalize()
     }
 
@@ -3470,6 +3535,7 @@ impl Params {
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
+            palw_signature_contexts_v2,
             palw_fp_da_pins,
             palw_validator_payout_bounds,
             palw_epoch_boundary_budget,
@@ -3773,6 +3839,12 @@ impl Params {
         if let Some(activation) = palw_fp_ruleset_caps.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0042 Decision 11's complete context set. Some-only and at the tail, for the reason
+        // `palw_chunk_cap_charge` states: the schedule id hashes these in sequence, and a
+        // `u64::MAX`-for-absence arm would put eight bytes into every preset that leaves it `None`.
+        if let Some(activation) = palw_signature_contexts_v2.as_mut() {
+            fork(activation, visit);
+        }
 
         let Some(dns) = dns_params.as_mut() else {
             absent = u64::MAX;
@@ -3976,6 +4048,7 @@ impl Params {
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
+            palw_signature_contexts_v2,
             palw_fp_da_pins,
             palw_validator_payout_bounds,
             palw_epoch_boundary_budget,
@@ -4309,6 +4382,15 @@ impl Params {
             h.write(b"palw_fp_ruleset_caps");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0042 Decision 11's complete context set (mainnet audit 2026-09-06, M-8). Some-only,
+        // like every fence above it: arming it changes what set of signing contexts the ruleset
+        // commits to, so it belongs in the fingerprint — and every shipped preset leaves it `None`
+        // and fingerprints byte-identically to a build without the field at all. Both ids gain it
+        // together, for the reason `palw_attempt_header_pins` states.
+        if let Some(activation) = palw_signature_contexts_v2 {
+            h.write(b"palw_signature_contexts_v2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
         // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
         // is the same value the V2 handshake exchanges (two commitments cannot drift when one is
@@ -4608,6 +4690,7 @@ impl Params {
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
+            palw_signature_contexts_v2: self.palw_signature_contexts_v2,
             palw_fp_da_pins: self.palw_fp_da_pins,
             palw_validator_payout_bounds: self.palw_validator_payout_bounds,
             palw_epoch_boundary_budget: self.palw_epoch_boundary_budget,
@@ -5558,6 +5641,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
+    palw_signature_contexts_v2: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
@@ -5720,6 +5804,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
+    palw_signature_contexts_v2: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
@@ -5864,6 +5949,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
+    palw_signature_contexts_v2: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
@@ -9238,6 +9324,17 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     base.palw_attempt_header_pins = Some(ForkActivation::always());
     base.palw_certification_rent = Some(ForkActivation::always());
     base.palw_chunk_cap_charge = Some(ForkActivation::always());
+    // **ADR-0042 Decision 11's complete signature-context set, from block one** (mainnet audit
+    // 2026-09-06, M-8). Ten contexts the acceptance layer verifies under are outside the frozen
+    // set testnet-11 committed to, and on a card the DA and court ones are consensus-live from
+    // genesis. A fresh network is the only place this can be stated — arming it on a running chain
+    // re-mints that chain's identity — which is exactly what a card is for. The assembly
+    // (`palw_v2_params_on_base`) writes the matching root into the bundle, and `validate_palw_v2`
+    // refuses either half alone.
+    //
+    // Deliberately NOT in `palw_rc_arm_phase1`: that function runs for testnet-11 too, and
+    // testnet-11 is live.
+    base.palw_signature_contexts_v2 = Some(ForkActivation::always());
     // **The private-prompt set, armed from block one** (private-prompts design, 2026-09-05):
     //
     // * `palw_prompt_ids_merkle` (ADR-0081 D3) — a job's `prompt_token_ids_hash` is a tiled Merkle
@@ -9747,6 +9844,15 @@ pub fn palw_v2_params_on_base(
     if base.palw_prompt_ids_merkle.is_some_and(|a| a != ForkActivation::never()) {
         bundle.trace_format_version = crate::palw_mode_v2::PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS;
     }
+    // **And the signature-context set, from the same one fact and for the same reason** (ADR-0042
+    // Decision 11; mainnet audit 2026-09-06, M-8). This is the ONE assembly both testnet-11 and a
+    // carded mainnet pass through, so it is the one place where "which set did this network commit
+    // to" can be answered once. A base that does not arm the fence keeps the frozen root the
+    // bundle builder already wrote — which is what leaves testnet-11's and devnet's ruleset ids
+    // exactly where they are.
+    if base.palw_signature_contexts_v2.is_some_and(|a| a != ForkActivation::never()) {
+        bundle.signature_contexts_root = crate::palw_mode_v2::palw_v2_signature_contexts_root_v2();
+    }
     // The bond's withdrawal delay is NOT rewritten here where the DA court is armed: it is resolved
     // at each block by `palw_v2_bond_withdrawal_delay_at_v1`, so the ruleset id (and therefore every
     // fingerprint and identity) stays what it would be without the fence. See that function for why
@@ -10027,6 +10133,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
+    palw_signature_contexts_v2: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
@@ -13936,6 +14043,7 @@ mod consensus_params_id_tests {
             "palw_panel_da",
             "palw_prompt_ids_merkle",
             "palw_receipt_rows_unpriced",
+            "palw_signature_contexts_v2",
             "palw_unavailable_abstains",
             "palw_uncertified_weightless",
             "palw_validator_payout_bounds",
@@ -13978,6 +14086,96 @@ mod consensus_params_id_tests {
             "ADR-0069 D7 is genesis-only: a mainnet minted without it can never acquire it"
         );
         carded.validate_palw_v2().expect("the startup gate a mainnet node runs accepts the armed card");
+    }
+
+    /// **The complete context set is a CARD's rule, and testnet-11's identity does not move for it**
+    /// (ADR-0042 Decision 11; mainnet audit 2026-09-06, M-8).
+    ///
+    /// Both halves, because either alone is a different and wrong outcome: the card must actually
+    /// commit to the complete set, and every network that already exists must be byte-identical to
+    /// a build in which this fence was never added.
+    ///
+    /// Clause (b) is the assertion `shipped_presets_have_pinned_fingerprints` cannot make — it has
+    /// no testnet-11 row, because that ruleset is a function of pinned genesis artifacts — and it is
+    /// the whole reason the complete set is fenced rather than appended to
+    /// `PALW_V2_SIGNATURE_CONTEXTS`.
+    #[test]
+    fn the_complete_context_set_is_carded_and_leaves_every_live_network_where_it_was() {
+        use crate::palw_mode_v2::{
+            PALW_V2_FROZEN_SIGNATURE_CONTEXTS_ROOT_HEX, PalwConsensusMode, palw_v2_signature_contexts_root,
+            palw_v2_signature_contexts_root_v2,
+        };
+
+        // (a) Dormant on every shipped preset, and dormant is byte-identical to absent.
+        for (name, preset) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("devnet", DEVNET_PARAMS), ("simnet", SIMNET_PARAMS)]
+        {
+            assert!(preset.palw_signature_contexts_v2.is_none(), "{name}: a shipped preset armed the complete context set");
+            let before = preset.consensus_params_id();
+            let mut probe = preset;
+            probe.palw_signature_contexts_v2 = None;
+            assert_eq!(before, probe.consensus_params_id(), "{name}: the Some-only write ran on a None");
+        }
+
+        // (b) THE LIVE NETWORKS. testnet-11 and devnet keep the frozen root, so their ruleset ids
+        //     are unmoved.
+        for (name, live) in [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())] {
+            assert!(live.palw_signature_contexts_v2.is_none(), "{name}: arming this re-mints a live chain");
+            let PalwConsensusMode::ConsensusV2(bundle) = &live.palw_consensus_mode else {
+                panic!("{name} is a ConsensusV2 network");
+            };
+            // Against the LITERAL golden, not against `palw_v2_signature_contexts_root()`: that
+            // function moves with the array, so comparing to it agrees with any append and is the
+            // shape of test M-8 was raised about. This is the value the live chains committed to.
+            assert_eq!(
+                bundle.signature_contexts_root.to_string(),
+                PALW_V2_FROZEN_SIGNATURE_CONTEXTS_ROOT_HEX,
+                "{name}'s committed context set moved: that re-mints a live chain's consensus_params_id, which is a \
+                 coordinated flag day and not an edit"
+            );
+            assert_eq!(bundle.signature_contexts_root, palw_v2_signature_contexts_root(), "{name}: and this build agrees");
+            assert_ne!(bundle.signature_contexts_root, palw_v2_signature_contexts_root_v2());
+        }
+
+        // (c) A card states it from genesis and its BUNDLE carries the complete root — the two
+        //     halves `validate_palw_v2` refuses to separate, checked together so a card that armed
+        //     the fence without the assembly writing the root could not pass.
+        let carded = mainnet_card_fixture_v1(false);
+        assert_eq!(carded.palw_signature_contexts_v2, Some(ForkActivation::always()), "a card states the complete set from genesis");
+        let PalwConsensusMode::ConsensusV2(card_bundle) = &carded.palw_consensus_mode else {
+            panic!("a carded mainnet is a ConsensusV2 network");
+        };
+        assert_eq!(card_bundle.signature_contexts_root, palw_v2_signature_contexts_root_v2(), "…and its bundle commits to it");
+        assert!(carded.validate_palw_v2().is_ok());
+
+        // (d) Neither half stands alone.
+        let mut fence_only = carded.clone();
+        if let PalwConsensusMode::ConsensusV2(b) = &mut fence_only.palw_consensus_mode {
+            b.signature_contexts_root = palw_v2_signature_contexts_root();
+        }
+        assert!(fence_only.validate_palw_v2().is_err(), "an armed fence over the frozen root must be refused");
+        let mut root_only = carded.clone();
+        root_only.palw_signature_contexts_v2 = None;
+        assert!(root_only.validate_palw_v2().is_err(), "the complete root without the fence must be refused");
+
+        // (e) …and it is genesis-only: the meaning of a signature is not a function of a height no
+        //     verifier of one holds.
+        let mut scheduled = carded.clone();
+        scheduled.palw_signature_contexts_v2 = Some(ForkActivation::new(5_000));
+        assert!(scheduled.validate_palw_v2().is_err(), "the set of contexts a ruleset commits to is not a height");
+
+        // (f) `never()` is absence, whole option and all — the collapse every bare fence keeps.
+        //     Observable through `consensus_identity_id`, which is where the normalizer runs, and
+        //     a spelled-out dormant testnet-11 is still testnet-11 to the startup gate.
+        let rc = palw_rc_shipped_params();
+        let mut spelled_out = rc.clone();
+        spelled_out.palw_signature_contexts_v2 = Some(ForkActivation::never());
+        assert_eq!(
+            spelled_out.consensus_identity_id(),
+            rc.consensus_identity_id(),
+            "never() is absence, or the collapse in normalize_values_a_scheduled_fence_drags_with_it is gone"
+        );
+        assert!(spelled_out.validate_palw_v2().is_ok(), "…and a dormant spelling is still testnet-11");
     }
 
     /// **The liveness proof a card's arming cannot ship without** — the card's own registry, not
