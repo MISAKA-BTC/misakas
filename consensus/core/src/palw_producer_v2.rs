@@ -349,7 +349,7 @@ mod tests {
         assert!(won, "a quarter-of-the-space target is winnable in 1e5 tries");
 
         let ctx = PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(2), daa_score: 101, blue_score: 2, subsidy: 0 };
-        check_palw_attempt_admission_v2(&state, &params, &admission, &ctx, &env).expect("the chain takes it");
+        check_palw_attempt_admission_v2(&state, &params, &admission, &ctx, &env, false).expect("the chain takes it");
         crate::palw_admission_v2::check_palw_class_lottery_v3(&state, &env.attempt, anchor).expect("and its draw wins");
     }
 
@@ -408,7 +408,7 @@ mod tests {
         ] {
             let env = build(mutate);
             assert!(
-                check_palw_attempt_admission_v2(&state, &params, &admission, &ctx, &env).is_err(),
+                check_palw_attempt_admission_v2(&state, &params, &admission, &ctx, &env, false).is_err(),
                 "a producer that got the {name} from anywhere but the facts is a producer with no blocks"
             );
         }

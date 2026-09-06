@@ -1127,6 +1127,41 @@ pub struct Params {
     /// Read through [`Self::palw_validator_payout_bounds_fence`] only.
     pub palw_validator_payout_bounds: Option<ForkActivation>,
 
+    /// **ADR-0045 Decision 2's boundary sentence, made real — the crossing block derives its own
+    /// epoch's budget from the parent state** (mainnet audit 2026-09-06, M-2). `None` on every
+    /// shipped preset, so the behaviour is byte-identical to not having the field at all.
+    ///
+    /// Dormant, admission reads the stored snapshot and refuses anything else by name: at every
+    /// epoch boundary the stored table is stamped with the CLOSED epoch while `ctx.daa_score` is in
+    /// the new one, so `EpochBudgetUnspecified` refuses every non-floor attempt the boundary block
+    /// carries or merges. The chain block is disqualified and — because `sink_search_algorithm`
+    /// discards it rather than deferring it — permanently orphaned, and the claims, escrow and
+    /// worker carves of every non-floor attempt it merged are gone. The floor, the heartbeat lane
+    /// and the receipt lane are exempt, so this is liveness and fairness, never a halt.
+    ///
+    /// Past the fence, admission calls [`crate::palw_state_v2::palw_epoch_budgets_for_v2`] for the
+    /// block's own epoch — the same pure function the fold's `ensure_epoch_budgets` calls — which is
+    /// the ADR's sentence verbatim: "for the crossing block itself (whose apply has not happened
+    /// yet) it derives from the parent state".
+    ///
+    /// **A bare fence with no companion value**, the [`Self::palw_frontier_provenance`] rule for its
+    /// reason: every number the derivation uses (`epoch_length`, `budget_tolerance_permille`) is
+    /// already a `PalwStateParamsV2` field and therefore already inside `palw_ruleset_id_v2`.
+    ///
+    /// **TOP LEVEL rather than in the V2 bundle**, the [`Self::palw_unavailable_abstains`] reason:
+    /// this rule has to be able to reach a LIVE network, and a fence inside the bundle moves
+    /// `palw_ruleset_id_v2`, which `for_each_fence` never descends into — every old/new pair would
+    /// fail the handshake outright instead of peering with a warning until the height.
+    ///
+    /// **The residual, stated rather than hidden.** The ADR asserts the parent-state derivation and
+    /// the stored snapshot "cannot disagree". On this tree they can: `apply_class_share_growth`
+    /// (step 2c) and `apply_class_reclamation` (step 2d) run before `ensure_epoch_budgets` (step
+    /// 3b), so with `class_growth_permille != 0` the fold's table is derived from a share table the
+    /// pre-check has not seen. The disagreement is bounded — one block's budget, at one boundary,
+    /// for one class — and is pinned by
+    /// `the_boundary_derivation_and_the_folds_snapshot_can_differ_when_growth_is_on`.
+    pub palw_epoch_boundary_budget: Option<ForkActivation>,
+
     /// **ADR-0087 Decision 6 — the model market is a consensus rule armed by activation.** `None`
     /// on every shipped preset: below it `ModelBuy`/`ModelSell` are refused by name at acceptance
     /// and no market exists; past it the fold opens a class's market on its first buy. The
@@ -2666,6 +2701,11 @@ impl Params {
         if self.palw_validator_payout_bounds == Some(ForkActivation::never()) {
             self.palw_validator_payout_bounds = None;
         }
+        // ADR-0045 D2's boundary budget (mainnet audit 2026-09-06, M-2): a bare fence, the same
+        // collapse for the same reason.
+        if self.palw_epoch_boundary_budget == Some(ForkActivation::never()) {
+            self.palw_epoch_boundary_budget = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -3173,6 +3213,13 @@ impl Params {
             h.write(b"palw_validator_payout_bounds");
             h.write(bounds.daa_score().to_le_bytes());
         }
+        // ADR-0045 D2's boundary budget. Some-only, at the tail, for the reason its siblings are:
+        // a preset that leaves it `None` prints the schedule id of a build from before the field
+        // existed.
+        if let Some(activation) = self.palw_epoch_boundary_budget {
+            h.write(b"palw_epoch_boundary_budget");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         h.finalize()
     }
 
@@ -3271,6 +3318,7 @@ impl Params {
             palw_attempt_header_pins,
             palw_fp_da_pins,
             palw_validator_payout_bounds,
+            palw_epoch_boundary_budget,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -3561,6 +3609,12 @@ impl Params {
         if let Some(activation) = palw_validator_payout_bounds.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0045 D2's boundary budget. Some-only and at the tail, for its siblings' reason: a
+        // `u64::MAX`-for-absence arm would put eight bytes into every preset that leaves it
+        // `None`.
+        if let Some(activation) = palw_epoch_boundary_budget.as_mut() {
+            fork(activation, visit);
+        }
 
         let Some(dns) = dns_params.as_mut() else {
             absent = u64::MAX;
@@ -3766,6 +3820,7 @@ impl Params {
             palw_attempt_header_pins,
             palw_fp_da_pins,
             palw_validator_payout_bounds,
+            palw_epoch_boundary_budget,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -4083,6 +4138,13 @@ impl Params {
             h.write(b"palw_validator_payout_bounds");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0045 D2's boundary budget (mainnet audit 2026-09-06, M-2). Some-only, at the tail,
+        // for the ADR-0065 D4 reason: every shipped preset leaves it `None` and fingerprints
+        // byte-identically to a build from before the field existed.
+        if let Some(activation) = palw_epoch_boundary_budget {
+            h.write(b"palw_epoch_boundary_budget");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
         // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
         // is the same value the V2 handshake exchanges (two commitments cannot drift when one is
@@ -4384,6 +4446,7 @@ impl Params {
             palw_attempt_header_pins: self.palw_attempt_header_pins,
             palw_fp_da_pins: self.palw_fp_da_pins,
             palw_validator_payout_bounds: self.palw_validator_payout_bounds,
+            palw_epoch_boundary_budget: self.palw_epoch_boundary_budget,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -5332,6 +5395,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_attempt_header_pins: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
+    palw_epoch_boundary_budget: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -5492,6 +5556,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_attempt_header_pins: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
+    palw_epoch_boundary_budget: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -5634,6 +5699,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_attempt_header_pins: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
+    palw_epoch_boundary_budget: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -8913,6 +8979,10 @@ fn mainnet_card_params_v1(
 ///   without them two ~60-byte `ObjectChunk`s a block spend the certification grading slots before
 ///   the object is validated, and eight unsigned chunks squat every pending-chunk slot: a
 ///   block-cheap way to keep an honest class weightless for the life of the chain.
+/// * `palw_epoch_boundary_budget` (ADR-0045 D2; mainnet audit 2026-09-06, M-2) — the block that
+///   crosses an epoch boundary derives its own epoch's budget from the parent state, which is the
+///   ADR's own sentence. Dormant, every non-floor attempt at a boundary is `EpochBudgetUnspecified`
+///   and the crossing block is permanently orphaned with its mergeset's claims.
 /// * `palw_capability_bound` (ADR-0071 SA-1/SA-2/SA-4) — a bond's `capable_classes` set is bounded
 ///   at `PALW_MAX_CAPABLE_CLASSES` and priced at `PALW_CAPABILITY_EXPOSURE_SOMPI` against its own
 ///   collateral, at BOTH writers (`BondRegistered` and `BondCapabilityDeclared`). Dormant it is a
@@ -8937,6 +9007,13 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     base.palw_capability_bound = Some(ForkActivation::always());
     base.palw_context_ladder = Some(ForkActivation::always());
     base.palw_court_ladder = Some(ForkActivation::always());
+    // **ADR-0045 Decision 2's boundary sentence, in force from block one** (mainnet audit
+    // 2026-09-06, M-2). Free on a fresh chain: no epoch has closed, so no history was judged under
+    // the other reading, and a card is the one network that can be born obeying the ADR the tree
+    // already carries. testnet-11 reaches it by a scheduled height or not at all — it is a live
+    // chain with orphaned boundary blocks in its past, and a node on the new rule would accept
+    // history a node on the old one refuses.
+    base.palw_epoch_boundary_budget = Some(ForkActivation::always());
     // Both halves of ADR-0083 Decision 1, stated together: the assembly validates before
     // `palw_rc_arm_phase1` runs, and the second half is refused on a base whose first is dormant.
     base.palw_difficulty_priced_rows = Some(ForkActivation::always());
@@ -9718,6 +9795,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_attempt_header_pins: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
+    palw_epoch_boundary_budget: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW

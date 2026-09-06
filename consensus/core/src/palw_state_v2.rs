@@ -7586,7 +7586,21 @@ pub fn apply_palw_transition_v7(
             PalwBlockWorkV3::Attempt(envelope) => match admission {
                 None => Some("a merged attempt on a caller that supplied no admission params".to_string()),
                 Some(admission) => {
-                    match crate::palw_admission_v2::check_palw_attempt_admission_v2(&builder.state, params, admission, ctx, envelope) {
+                    // **`boundary_budget: false`, and the value is inert here** (ADR-0045 D2;
+                    // mainnet audit 2026-09-06, M-2). This runs against the LIVE fold state, and
+                    // step 3b's `ensure_epoch_budgets` has already written the table for
+                    // `ctx.daa_score`'s epoch — so the stored snapshot matches and the fence's
+                    // branch is unreachable. Passing `true` would be a rule change on every
+                    // network, including the two whose validity may not move; passing the fold a
+                    // fence it cannot resolve would be a second reading of one block's DAA.
+                    match crate::palw_admission_v2::check_palw_attempt_admission_v2(
+                        &builder.state,
+                        params,
+                        admission,
+                        ctx,
+                        envelope,
+                        false,
+                    ) {
                         Err(refused) => Some(refused.to_string()),
                         Ok(_) => {
                             let checkpoint = builder.checkpoint();
@@ -8564,6 +8578,57 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
     Ok(())
 }
 
+/// **ADR-0045 Decision 2's boundary freeze, as ONE pure function over ONE state** (mainnet audit
+/// 2026-09-06, M-2).
+///
+/// The ADR's own sentence is "Admission reads the snapshot; for the crossing block itself (whose
+/// apply has not happened yet) it derives from the parent state — the same pure function over the
+/// same inputs". There was no such function: `ensure_epoch_budgets` did the derivation inline at
+/// step 3b of the fold, and admission had nothing to call, so a crossing block whose class was not
+/// the floor was refused `EpochBudgetUnspecified` and disqualified. This is that function; the fold
+/// calls it and, past `Params::palw_epoch_boundary_budget`, so does admission.
+///
+/// `None` means the fact does not exist yet — an empty share table, which is the genesis block
+/// before its own object list applies. A budget over an empty table is not "no budget".
+pub fn palw_epoch_budgets_for_v2(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    epoch_index: u64,
+) -> Option<PalwEpochBudgetsV2> {
+    if state.class_shares.is_empty() {
+        return None;
+    }
+    // The H1 census, for the budget's denominator (ADR-0045 Decision 2). Same rule the retarget
+    // applies one step earlier in this transition, on the same counters: the classes that produced
+    // in the CLOSED epoch — the parent's — among the unfrozen ones. The attempt lane specifically,
+    // because the budget caps attempt blocks and reads the attempt counter; a class that produced
+    // only receipts is not in this lane's span and is measured against the set plus itself.
+    let closed_epoch = state.last_point.map(|point| point.daa_score / params.epoch_length);
+    let frozen: BTreeSet<Hash64> = state
+        .classes
+        .iter()
+        .filter(|(_, record)| matches!(record.status, PalwClassStatusV2::Frozen { .. }))
+        .map(|(id, _)| *id)
+        .collect();
+    let competing: BTreeSet<Hash64> = match closed_epoch {
+        None => BTreeSet::new(),
+        Some(closed) => state
+            .epoch_counters
+            .iter()
+            .filter(|(id, counter)| counter.epoch_index == closed && counter.produced_blocks > 0 && !frozen.contains(*id))
+            .map(|(id, _)| *id)
+            .collect(),
+    };
+    Some(derive_epoch_budgets_v2(
+        &state.class_shares,
+        &frozen,
+        &competing,
+        params.epoch_length,
+        params.budget_tolerance_permille,
+        epoch_index,
+    ))
+}
+
 fn ensure_epoch_budgets(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
     let epoch_index = ctx.daa_score / builder.params.epoch_length;
     // **This returns on the epoch alone, and that is a known defect kept deliberately.** A class
@@ -8590,42 +8655,10 @@ fn ensure_epoch_budgets(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
     if builder.state.epoch_budgets.as_ref().is_some_and(|b| b.epoch_index == epoch_index) {
         return;
     }
-    if builder.state.class_shares.is_empty() {
-        // Nothing is registered yet — the genesis block before its own object list applies. A
-        // budget over an empty table is not "no budget", it is a fact that does not exist yet.
-        return;
-    }
-    // The H1 census, for the budget's denominator (ADR-0045 Decision 2). Same rule the retarget
-    // applies one step earlier in this transition, on the same counters: the classes that produced
-    // in the CLOSED epoch — the parent's — among the unfrozen ones. The attempt lane specifically,
-    // because the budget caps attempt blocks and reads the attempt counter; a class that produced
-    // only receipts is not in this lane's span and is measured against the set plus itself.
-    let closed_epoch = builder.state.last_point.map(|point| point.daa_score / builder.params.epoch_length);
-    let frozen: BTreeSet<Hash64> = builder
-        .state
-        .classes
-        .iter()
-        .filter(|(_, record)| matches!(record.status, PalwClassStatusV2::Frozen { .. }))
-        .map(|(id, _)| *id)
-        .collect();
-    let competing: BTreeSet<Hash64> = match closed_epoch {
-        None => BTreeSet::new(),
-        Some(closed) => builder
-            .state
-            .epoch_counters
-            .iter()
-            .filter(|(id, counter)| counter.epoch_index == closed && counter.produced_blocks > 0 && !frozen.contains(*id))
-            .map(|(id, _)| *id)
-            .collect(),
-    };
-    let budgets = derive_epoch_budgets_v2(
-        &builder.state.class_shares,
-        &frozen,
-        &competing,
-        builder.params.epoch_length,
-        builder.params.budget_tolerance_permille,
-        epoch_index,
-    );
+    // Nothing registered yet is a fact that does not exist rather than a budget of zero — see
+    // `palw_epoch_budgets_for_v2`, which is this derivation and the one admission calls past
+    // `Params::palw_epoch_boundary_budget`.
+    let Some(budgets) = palw_epoch_budgets_for_v2(&builder.state, builder.params, epoch_index) else { return };
     builder.write_epoch_budgets(Some(budgets));
 }
 
@@ -14418,7 +14451,7 @@ pub(crate) mod tests {
         let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
         let mut env = attempt(40, 1);
         env.attempt.class_id = entrant;
-        let err = crate::palw_admission_v2::check_palw_attempt_admission_v2(&s1, &p, &admission, &ctx(2, 101, 2), &env)
+        let err = crate::palw_admission_v2::check_palw_attempt_admission_v2(&s1, &p, &admission, &ctx(2, 101, 2), &env, false)
             .expect_err("a weightless class admits nothing");
         assert!(
             matches!(err, crate::palw_admission_v2::PalwAdmissionV2Error::ClassNotYetActive { activation_daa: 500, .. }),
@@ -14442,9 +14475,9 @@ pub(crate) mod tests {
         // …and now it admits. The class had to become active for this to change, which is what
         // makes the refusal above a real gate rather than an unrelated failure.
         assert!(
-            crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env).is_ok()
+            crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env, false).is_ok()
                 || !matches!(
-                    crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env),
+                    crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env, false),
                     Err(crate::palw_admission_v2::PalwAdmissionV2Error::ClassNotYetActive { .. })
                 ),
             "after activation the class is no longer refused FOR BEING INACTIVE"

@@ -517,6 +517,13 @@ pub struct VirtualStateProcessor {
     /// crate (audit D H-3), so the rules the ADR wrote had no door on the only permissionless
     /// registration path.
     pub(super) palw_context_ladder: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0045 Decision 2's boundary sentence, `None` on every shipped preset** (mainnet audit
+    /// 2026-09-06, M-2). Past it the block that CROSSES an epoch boundary derives its own epoch's
+    /// budget from the parent state — the ADR's own sentence — instead of being refused
+    /// `EpochBudgetUnspecified` and orphaned with its mergeset's claims. Resolved in exactly one
+    /// place, `palw_v2_check_attempt_admission`, at the BLOCK's own DAA, which is the same score
+    /// admission divides by `epoch_length`.
+    pub(super) palw_epoch_boundary_budget: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0069 Decision 7's fence, `None` on every shipped preset. Past it a block whose class
     /// holds no granted share contributes zero pwu to both chain weights — see
     /// [`Self::palw_uncertified_weightless_at`], which is the ONE place this is resolved.
@@ -968,6 +975,7 @@ impl VirtualStateProcessor {
             palw_model_lines: params.palw_model_lines_fence(),
             palw_model_evm: params.palw_model_evm_fence(),
             palw_context_ladder: params.palw_context_ladder,
+            palw_epoch_boundary_budget: params.palw_epoch_boundary_budget,
             palw_uncertified_weightless: params.palw_uncertified_weightless,
             palw_da_court: params.palw_da_court,
             palw_frontier_provenance: params.palw_frontier_provenance,
@@ -7524,6 +7532,13 @@ impl VirtualStateProcessor {
             &envelope,
             |key, message, sig, context| verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
             bootstrap_bond.as_ref(),
+            // ADR-0045 Decision 2's boundary sentence, resolved at the BLOCK's own DAA — the same
+            // score item 7 divides by `epoch_length`, so the fence and the epoch it governs are one
+            // reading. All three consumers of this function (the chain block's own attempt, the
+            // merged-work collector, the payment-entitlement set) get it here, because one predicate
+            // refused at three sites is what made this defect cost a block, its mergeset's claims
+            // and their carves at once.
+            self.palw_epoch_boundary_budget.is_some_and(|fence| fence.is_active(point.daa_score)),
         )
         .map_err(|e| e.to_string())?;
         Ok(Some(envelope))
