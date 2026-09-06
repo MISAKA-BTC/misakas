@@ -3893,10 +3893,7 @@ impl PalwPanelService {
         let _gate = self.opening_gate.lock().unwrap_or_else(|e| e.into_inner());
         // Somebody ahead in the queue may have opened exactly this request while we waited.
         if let Some(hit) = self.cached_opening_v1(&claim, interval_index, &disputed) {
-            info!(
-                "[{PALW_PANEL}] claim {claim}: request {interval_index:#x} was opened while this one queued ({} bytes)",
-                hit.len()
-            );
+            info!("[{PALW_PANEL}] claim {claim}: request {interval_index:#x} was opened while this one queued ({} bytes)", hit.len());
             return Some(hit);
         }
         let remember = |opened: Option<Vec<u8>>| -> Option<Vec<u8>> {

@@ -3054,7 +3054,11 @@ mod probe_output_root {
         let Ok(artifact_path) = std::env::var("MISAKA_PALW_ARTIFACT") else { return };
         let network = std::env::var("MISAKA_NETWORK_ID").unwrap_or_else(|_| "testnet-11".to_string());
         let bytes = std::fs::read(&answer_path).expect("the answer file reads");
-        let answer = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(&bytes).expect("an FPA1 envelope");
+        let answer = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(
+            &bytes,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect("an FPA1 envelope");
         let job = &answer.material.job;
         eprintln!(
             "job: class {} decode_limit {} prompt_ids {} output_ids {}",
