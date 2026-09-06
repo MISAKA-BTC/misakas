@@ -4,15 +4,28 @@
 
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
-> **Status (2026-09-04).** The live public network is **`testnet-11`** — the PALW release candidate, Relaunch 5f with the ADR-0083 fence live since DAA 1150.
-> Explorer at **[misakascan.com](https://misakascan.com)**, web wallet at
+> **Status (2026-09-06).** The live public network is **`testnet-11`** — the PALW release candidate,
+> Relaunch 5f. Explorer at **[misakascan.com](https://misakascan.com)**, web wallet at
 > **[wallet.misakascan.com](https://wallet.misakascan.com)**. Current network identity: consensus
-> fingerprint **`71b35c25…`**, genesis **`ad30b5cb…`** (three execution classes and the
-> 347M MSK community allocation in genesis). The chain was re-minted 2026-09-03 (Relaunch 5f) and
-> scheduled ADR-0083's fence at DAA 1150 on 2026-09-04 — build from tag
-> `testnet-11-relaunch-5f-adr0083-h1150` or later; the 5f cut (`2222e054…`) parts from the chain at that
-> height. A node with older state must wipe its appdir and resync; a node on an older ruleset is refused
-> at handshake by fingerprint, which is the intended behaviour.
+> fingerprint **`060e3597…`**, genesis **`ad30b5cb…`** (three execution classes and the
+> 347M MSK community allocation in genesis).
+>
+> **Build from `main` at `06bf5118` or later.** Do **not** build the tag
+> `testnet-11-relaunch-5f-adr0083-h1150`: it is the build the fork-id gate refuses, and this line
+> used to send joiners to it. A node on it reaches peers, holds them for minutes, drops to
+> `broken pipe` / `stream ended`, and its own produced blocks never reach the explorer — that is the
+> partition, not a connectivity fault, and **the reject is sent by the older side**, so nothing the
+> fleet deploys ends it for you.
+>
+> The chain was re-minted 2026-09-03 (Relaunch 5f) — no flag day since has re-minted the genesis, so
+> if you joined after 5f your appdir is fine. Three fences are scheduled on it: ADR-0083's at
+> **DAA 1150** (live), the DA court, private prompts and the model market at **DAA 1900**, and
+> ADR-0084 U-08's refutation ladder at **DAA 2150**. A build missing any of them is refused from the
+> first height it does not carry — now, not at the height itself.
+>
+> A node with state older than 5f must wipe its appdir and resync; a node on an older ruleset is
+> refused at handshake by fingerprint, which is the intended behaviour. The value to trust is the one
+> your own node prints on startup, not the one on this page.
 > `testnet-10` has been **stopped**; its parameter set still exists so historical data can be read,
 > but nothing operates it and its public entry point is closed.
 >
@@ -72,7 +85,7 @@ cargo build --release -p kaspad
 The log must show this fingerprint, or you are on the wrong ruleset:
 
 ```
-Consensus params fingerprint: 71b35c250d01598ee8925146e66e8200945503ce2de1030bfd167e799b2498e9 (network testnet-11)
+Consensus params fingerprint: 060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89 (network testnet-11)
 ```
 
 and the genesis the network builds on is
@@ -121,10 +134,15 @@ Authoritative design & spec live under [`docs/`](docs/):
 
 ## Prebuilt binaries
 
-The release for the live chain is
-[`testnet-11-relaunch-5f-adr0083-h1150`](https://github.com/MISAKA-BTC/misakas/releases/tag/testnet-11-relaunch-5f-adr0083-h1150)
-— the Linux x86_64 `kaspad` the fleet runs (sha256 `002cee6a153f5d2abda7792ee0209ddb827ae21160674cc455871cb1695bed8a`).
-Older releases on that page are earlier chains and are refused at the handshake.
+**Build from source for the live chain today.** The newest `testnet-main-*` release carries the
+current ruleset in its notes but attaches no binaries, and the last release that *does* attach them
+— `testnet-11-relaunch-5f-adr0083-h1150` — is on the far side of the fork-id gate and is refused.
+Downloading it is the single most common way to end up with a node that peers, drops after minutes,
+and mines blocks nobody accepts.
+
+The check is never the tag: it is the fingerprint your node prints on its second startup line. If it
+does not match the one in the Status block above, you are on the wrong ruleset whatever you
+downloaded. Older releases on that page are earlier chains and are refused at the handshake.
 
 Linux x86_64 binaries (`kaspad`, `kaspa-pq-miner`, `kaspa-pq-validator`, `kaspa-pq-signer`, `misaka`) are published under [Releases](https://github.com/MISAKA-BTC/misakas/releases). Each release is built from the source snapshot of the same tag; verify with the `SHA256SUMS` attached to the release.
 
