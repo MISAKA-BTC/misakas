@@ -9187,6 +9187,32 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     base.palw_capability_bound = Some(ForkActivation::always());
     base.palw_context_ladder = Some(ForkActivation::always());
     base.palw_court_ladder = Some(ForkActivation::always());
+    // **The future-time tolerance the median-time window actually models** (mainnet audit
+    // 2026-09-06, L-1).
+    //
+    // `past_median_time_window_size` is 27 samples, defined as `(2·T − 1)/10` for `T = 132 s` — a
+    // 263-second window at the hash lineage's 10-second sample interval. At the V2 cadence the
+    // sample interval is one 120-second block, so the same 27 samples span 54 minutes and the
+    // declared 132 s describes nothing: the observable band is a ~26-minute backdating window
+    // (Bitcoin-like) and a ~26-minute lag on lock-time finality, while the node's future-time bound
+    // is still 132 seconds. Two numbers, one clock, and they disagree by 12.3x.
+    //
+    // The WINDOW is not the thing to move — `AVERAGE_FRAME_SIZE` is 11, so a window short enough to
+    // model 132 s is a median any producer holding two of three recent blocks sets outright, which
+    // is a worse property than a wide band. The tolerance is the mis-sized quantity, and it is
+    // derived here from the cadence rather than typed.
+    //
+    // **A card only.** `timestamp_deviation_tolerance` is inside `consensus_params_id`, and
+    // testnet-11 and devnet are live chains running the inconsistent pair — correcting them is a
+    // fingerprint move and therefore the operator's call and a coordinated flag day.
+    // `the_v2_median_time_window_and_the_timestamp_tolerance_describe_one_clock` pins that gap so it
+    // can neither close nor widen in silence. Carding mainnet is a re-mint, so this is a value the
+    // ceremony chooses — the same argument the ambient-target mint rests on.
+    base.timestamp_deviation_tolerance = palw_v2_timestamp_deviation_tolerance_v1(
+        base.past_median_time_window_size,
+        BlockrateParams::new_two_minute_bps().past_median_time_sample_rate,
+        BlockrateParams::new_two_minute_bps().target_time_per_block,
+    );
     // **ADR-0045 Decision 2's boundary sentence, in force from block one** (mainnet audit
     // 2026-09-06, M-2). Free on a fresh chain: no epoch has closed, so no history was judged under
     // the other reading, and a card is the one network that can be born obeying the ADR the tree
@@ -9665,6 +9691,28 @@ pub const PALW_V2_DIFFICULTY_WINDOW_SIZE: usize = 264;
 /// The floor beneath [`PALW_V2_DIFFICULTY_WINDOW_SIZE`] — the fixed-difficulty launch window a
 /// fresh V2 chain runs before it has samples to retarget from (~5 h at this cadence).
 pub const PALW_V2_MIN_DIFFICULTY_WINDOW_SIZE: usize = MIN_DIFFICULTY_WINDOW_SIZE;
+
+/// **The future-time tolerance a past-median-time window of this shape MODELS** (mainnet audit
+/// 2026-09-06, L-1).
+///
+/// `MEDIAN_TIME_SAMPLED_WINDOW_SIZE` is defined as `(2·T − 1) / PAST_MEDIAN_TIME_SAMPLE_INTERVAL`
+/// rounded up — the window is sized to span twice the tolerance, at whatever wall-clock interval
+/// separates two samples. This inverts that: given a window, a sample rate and a cadence, the `T`
+/// the window is a window FOR.
+///
+/// The sample interval on a hash-lineage network is `PAST_MEDIAN_TIME_SAMPLE_INTERVAL` = 10 s. On a
+/// V2 network `past_median_time_sample_rate` is 1 and a block is 120 s, so the same 27 samples span
+/// 54 minutes and model a tolerance of 1,620 s — 12.3x the 132 s every preset declares. The window
+/// is NOT the quantity to shrink: `AVERAGE_FRAME_SIZE` is 11, so a three-sample window is a median
+/// any producer holding two of three recent blocks sets outright, which trades a wide backdating
+/// band for a settable one.
+///
+/// Read at exactly one place in consensus (`pre_ghostdag_validation`'s
+/// `unix_now() + timestamp_deviation_tolerance * 1000`), so what this corrects is the future-time
+/// bound a V2 node applies, not the median rule.
+pub fn palw_v2_timestamp_deviation_tolerance_v1(window_samples: usize, sample_rate: u64, target_time_per_block_ms: u64) -> u64 {
+    (window_samples as u64) * sample_rate * (target_time_per_block_ms / 1000) / 2
+}
 
 pub fn palw_v2_params_on_base(
     base: Params,
@@ -13685,6 +13733,46 @@ mod consensus_params_id_tests {
     #[cfg(test)]
     fn palw_v2_fence_table(p: &Params) -> Vec<(&'static str, bool)> {
         p.palw_fences_v1().into_iter().map(|(name, fence)| (name, fence.is_some())).collect()
+    }
+
+    /// **The median-time window and the future-time tolerance describe ONE clock** (ADR-0038
+    /// Decision H; mainnet audit 2026-09-06, L-1).
+    ///
+    /// `MEDIAN_TIME_SAMPLED_WINDOW_SIZE` is `(2·T − 1)/PAST_MEDIAN_TIME_SAMPLE_INTERVAL` — a window
+    /// sized to span twice the tolerance at whatever interval separates two samples. At the V2
+    /// cadence the sample interval is one 120-second block, not 10 seconds, so the same 27 samples
+    /// span 54 minutes: the pair is a description of a clock, and the two halves disagree by 12.3x.
+    ///
+    /// Clause 1 is the identity, re-read from the params rather than from the number 1,620, so it
+    /// expresses the relation and holds for a cadence chosen tomorrow. Clause 2 is the PINNED GAP:
+    /// both live V2 presets carry the hash lineage's 132 s against a 54-minute window, and
+    /// correcting them is a fingerprint move — a flag day or a re-mint, and the operator's call.
+    #[test]
+    fn the_v2_median_time_window_and_the_timestamp_tolerance_describe_one_clock() {
+        let c = mainnet_card_fixture_v1(true);
+        let seconds_per_sample = (c.past_median_time_sample_rate() * c.target_time_per_block() / 1000) as usize;
+        assert_eq!(
+            c.past_median_time_window_size,
+            ((2 * c.timestamp_deviation_tolerance - 1) as usize).div_ceil(seconds_per_sample),
+            "a card's window is a window FOR its own tolerance — the config/constants.rs definition, at this cadence"
+        );
+
+        // The pinned gap on the two networks that have actually run V2.
+        for (name, p) in [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())] {
+            let modelled = palw_v2_timestamp_deviation_tolerance_v1(
+                p.past_median_time_window_size,
+                p.past_median_time_sample_rate(),
+                p.target_time_per_block(),
+            );
+            assert_eq!(p.timestamp_deviation_tolerance, crate::config::constants::consensus::TIMESTAMP_DEVIATION_TOLERANCE);
+            assert_eq!(modelled, 1_620, "{name}: 27 samples x 1 x 120 s / 2");
+            assert_ne!(
+                modelled, p.timestamp_deviation_tolerance,
+                "KNOWN GAP: {name} runs a 54-minute median window against a {} s future-time bound. Correcting it is a \
+                 fingerprint move and a flag day. If this starts failing, someone re-minted — update the pin deliberately.",
+                p.timestamp_deviation_tolerance
+            );
+        }
     }
 
     /// **The fence table names every PALW fence `Params` carries** (mainnet audit 2026-09-06, L-3).
