@@ -294,6 +294,19 @@ pub struct PalwEvmMarketFencesV1 {
     pub evm_active: bool,
 }
 
+impl PalwEvmMarketFencesV1 {
+    /// **Is there a window to build at all?** (mainnet audit 2026-09-06, M-13.)
+    ///
+    /// ADR-0089 Decision 9: "below the fence the four addresses and the facades are empty
+    /// accounts". The registry reads (F010–F012) are ADR-0088's fence and the market reads
+    /// ADR-0087's, so a window exists exactly when one of the three is in force — and below all
+    /// three, building one is work no read precompile could ever serve. Spelled once, here, so the
+    /// consensus path and the RPC path cannot answer it differently.
+    pub fn any_active(&self) -> bool {
+        self.market_active || self.lines_active || self.evm_active
+    }
+}
+
 // ---- the view (Decision 2) ---------------------------------------------------------------------
 
 /// A class row as the registry precompile serves it.

@@ -11615,6 +11615,77 @@ mod consensus_params_id_tests {
         );
     }
 
+    /// **ADR-0089 Decision 9: below the fence there is no window to build** (mainnet audit
+    /// 2026-09-06, M-13).
+    ///
+    /// Decision 9 says the four addresses and the facades are empty accounts below the fence, and
+    /// `Consensus::palw_evm_view_v1` resolved these fences and then built the whole flattening
+    /// anyway, for every `eth_call` and `eth_estimateGas`, on every ConsensusV2 network — cheap
+    /// only because the tables happen to be empty.
+    ///
+    /// The rule is `any_active()`, asserted here at the layer that decides it: on every shipped
+    /// preset, at every score, there is no window; and arming ANY ONE of the three — the market's
+    /// reads are ADR-0087's fence, the registry's F010–F012 are ADR-0088's, the facades are
+    /// ADR-0089's — is enough to need one.
+    #[test]
+    fn no_evm_window_exists_below_all_three_model_fences() {
+        for (name, params) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("devnet", DEVNET_PARAMS), ("simnet", SIMNET_PARAMS)]
+        {
+            for daa in [0u64, 1, 1_000, 9_000_000, u64::MAX] {
+                assert!(
+                    !params.palw_evm_market_fences_at(daa).any_active(),
+                    "{name} at {daa}: every shipped preset leaves all three model fences dormant, so no window is ever built"
+                );
+            }
+        }
+
+        // Each fence alone is enough — none of the three is subsumed by another. Armed on a
+        // ConsensusV2 preset, because all three accessors fold the mode condition in: on a network
+        // with no V2 bundle there is no market to have a window onto.
+        // The RC preset is the one build in the tree that SCHEDULES all three, and it is the case
+        // that matters: below its own activation it must have no window either, or a scheduled
+        // build pays for a market that does not exist yet.
+        let rc = palw_rc_shipped_params();
+        if rc.palw_model_market.is_some() {
+            let at = PALW_RC_DA_COURT_FENCE_DAA;
+            assert!(!rc.palw_evm_market_fences_at(at - 1).any_active(), "a scheduled build builds no window before its own score");
+            assert!(rc.palw_evm_market_fences_at(at).any_active(), "…and one from it");
+        }
+
+        let mut v2 = rc.clone();
+        v2.palw_model_market = None;
+        v2.palw_model_lines = None;
+        v2.palw_model_evm = None;
+        assert!(!v2.palw_evm_market_fences_at(u64::MAX).any_active(), "the dormant base of the three arms below");
+
+        let mut market = v2.clone();
+        market.palw_model_market = Some(ForkActivation::new(1_000));
+        assert!(!market.palw_evm_market_fences_at(999).any_active(), "and not one block early");
+        assert!(market.palw_evm_market_fences_at(1_000).any_active(), "the market's own reads need the window");
+
+        let mut lines = v2.clone();
+        lines.palw_model_lines = Some(ForkActivation::new(1_000));
+        assert!(!lines.palw_evm_market_fences_at(999).any_active());
+        assert!(lines.palw_evm_market_fences_at(1_000).any_active(), "the registry reads F010-F012 need it too");
+
+        let mut evm = v2.clone();
+        evm.palw_model_market = Some(ForkActivation::new(1_000));
+        evm.palw_model_evm = Some(ForkActivation::new(1_000));
+        assert!(evm.palw_evm_market_fences_at(1_000).any_active());
+
+        // `any_active` is the disjunction and nothing more — spelled once so the consensus path and
+        // the RPC path cannot answer it differently.
+        for bits in 0..8u8 {
+            let f = crate::evm::model_market::PalwEvmMarketFencesV1 {
+                market_active: bits & 1 != 0,
+                lines_active: bits & 2 != 0,
+                evm_active: bits & 4 != 0,
+            };
+            assert_eq!(f.any_active(), bits != 0, "one window iff some fence is in force");
+        }
+    }
+
     /// **ADR-0062 SA-6: the lattice with the DA phase in it, at every preset that has a lattice.**
     ///
     /// A preset with no V2 bundle has no claim lattice at all, so the bound is vacuous there; the

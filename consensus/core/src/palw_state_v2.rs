@@ -4743,8 +4743,28 @@ impl PalwChainStateV2 {
     }
 
     /// ADR-0087 Decision 8: every position a holder has, by class.
+    ///
+    /// **And its cost** (mainnet audit 2026-09-06, M-13). This is a full scan of `model_positions`,
+    /// paid per RPC call with no per-caller budget. The table is bounded — see
+    /// [`Self::model_position_rows_of_line`] for the argument — but bounded is not small: at
+    /// `PALW_MODEL_SUPPLY_UNITS_V1` rows a line it is 500,000 entries a line, and this walks every
+    /// line's. The key is `(line, holder)`, so no range answers "this holder's rows" without a
+    /// second index; adding one would be a new consensus table, which is the defect this finding is
+    /// about. The scan stays, the cost is stated, and the caller is bounded instead.
     pub fn model_positions_of(&self, holder: &Hash64) -> Vec<(Hash64, u64)> {
         self.model_positions.iter().filter(|((_, h), _)| h == holder).map(|((c, _), units)| (*c, *units)).collect()
+    }
+
+    /// **How many position rows one line holds** (audit M-13). Bounded by
+    /// `PALW_MODEL_SUPPLY_UNITS_V1`: `write_model_position` removes a row at zero units, ADR-0090
+    /// Decision 1 makes a position a whole unit, and ADR-0087 M1 makes the sum of holders' units at
+    /// most the supply — so a line cannot have more holders than it has units, and each of those
+    /// units was bought from a curve that is strictly more expensive as the table grows, on a line
+    /// that cost `PALW_MODEL_SEED_MIN_SOMPI_V1` to open. The bound exists; nothing said it, and
+    /// nothing would notice if a later change to the supply constant or to the zero-row removal
+    /// took it away. Read by the test that pins it.
+    pub fn model_position_rows_of_line(&self, line_id: &Hash64) -> usize {
+        self.model_positions.range((*line_id, Hash64::default())..).take_while(|((l, _), _)| l == line_id).count()
     }
 
     /// ADR-0087 M1: units held in a class across every holder.
@@ -22812,6 +22832,78 @@ pub(crate) mod tests {
                 .collect();
             assert_eq!(changed.len(), 1, "one move, one holder's row");
             assert_eq!(s3.model_position(&class, &holder(2)), s2.model_position(&class, &holder(2)), "the other holder is untouched");
+        }
+
+        /// **A line's position table cannot outgrow its own supply** (mainnet audit 2026-09-06,
+        /// M-13).
+        ///
+        /// `ModelBuy` carries `holder` as a free field authorised by the sink rather than by a
+        /// signature, so anyone may open a row keyed to an id nobody controls, and both tables are
+        /// in the state-root preimage. What bounds it is not a check but the design's own
+        /// arithmetic: a position is a whole unit (ADR-0090 Decision 1), `write_model_position`
+        /// removes a row at zero units, and ADR-0087 M1 makes the sum of holders' units at most the
+        /// supply — so a line cannot have more holders than it has units, each of which was bought
+        /// from a curve that is strictly more expensive as the table grows, on a line that cost a
+        /// 100,000 MSK seed to open.
+        ///
+        /// This passes on today's code, and that is the point: the bound is real and was simply
+        /// never written down or pinned. It asserts the REASON (M1, and the zero-row removal)
+        /// rather than the number, so widening the supply keeps it green while losing either half
+        /// of the argument turns it red.
+        #[test]
+        fn a_lines_position_table_cannot_outgrow_its_own_supply() {
+            let p = params();
+            let class = h64(1);
+            let (s0, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let (mut state, _) = apply(&s0, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None);
+            assert_eq!(state.model_position_rows_of_line(&class), 0, "a seeded line has no holders");
+
+            // Buys to fresh ids, which is exactly the shape the finding names: nothing authorises
+            // the holder but the sink output that paid for it.
+            let mut daa = 102u64;
+            for i in 0..24u64 {
+                let stranger = Hash64::from_u64_word(0x5EED_0000 + i);
+                let (next, _) = apply(&state, &p, &ctx(3 + i, daa, 3 + i), &[buy(class, stranger, 50 * MSK, 0)], None);
+                state = next;
+                daa += 1;
+
+                let rows = state.model_position_rows_of_line(&class);
+                let market = state.model_market(&class).expect("a market row");
+                // The REASON, asserted at every step: M1 is what makes the table bounded.
+                assert_eq!(
+                    market.position_units as u128 + state.model_units_held(&class),
+                    PALW_MODEL_SUPPLY_UNITS_V1 as u128,
+                    "ADR-0087 M1: the curve's units plus every holder's are the supply"
+                );
+                assert!(
+                    rows as u128 <= state.model_units_held(&class),
+                    "every row holds at least one whole unit (ADR-0090 Decision 1), so rows cannot exceed units held"
+                );
+                assert!(
+                    rows <= PALW_MODEL_SUPPLY_UNITS_V1 as usize,
+                    "…and units held are at most the supply, which is the bound the table has and never stated"
+                );
+            }
+            let rows_before = state.model_position_rows_of_line(&class);
+            assert_eq!(rows_before, 24, "one row a holder, and no row for anyone else");
+
+            // The other half the bound rests on: a holder who sells out leaves NO row behind. If
+            // zero-unit rows persisted, "rows ≤ units held" above would be false and the table
+            // would be an attacker-keyed map with no ceiling at all.
+            let leaver = Hash64::from_u64_word(0x5EED_0000);
+            let held = state.model_position(&class, &leaver);
+            assert!(held > 0);
+            let (after, _) = apply(&state, &p, &ctx(99, daa, 99), &[sell_from(&state, class, leaver, held, 0)], None);
+            assert_eq!(after.model_position(&class, &leaver), 0);
+            assert_eq!(
+                after.model_position_rows_of_line(&class),
+                rows_before - 1,
+                "a sold-out holder's row is removed, not left at zero"
+            );
+            assert!(after.model_positions_of(&leaver).is_empty(), "and the holder's own view agrees");
+
+            // The row counter counts ONE line's rows, not the map's — the bound is per line.
+            assert_eq!(after.model_position_rows_of_line(&h64(0xDEAD)), 0, "a line with no market has no rows");
         }
 
         /// **ADR-0087 M8: "no other key can sell it" — including the second time** (mainnet audit
