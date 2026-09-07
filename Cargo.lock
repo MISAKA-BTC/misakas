@@ -5947,6 +5947,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-mtp"
+version = "1.1.0"
+dependencies = [
+ "borsh",
+ "faster-hex 0.9.0",
+ "kaspa-addresses",
+ "kaspa-hashes",
+ "kaspa-pq-validator-core",
+ "kaspa-txscript",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.64",
+]
+
+[[package]]
+name = "misaka-mtp-collectors"
+version = "1.1.0"
+dependencies = [
+ "misaka-mtp",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.64",
+]
+
+[[package]]
+name = "misaka-mtp-service"
+version = "1.1.0"
+dependencies = [
+ "borsh",
+ "chrono",
+ "faster-hex 0.9.0",
+ "kaspa-addresses",
+ "kaspa-hashes",
+ "kaspa-pq-validator-core",
+ "log",
+ "misaka-mtp",
+ "misaka-mtp-collectors",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.64",
+ "tokio",
+]
+
+[[package]]
 name = "misaka-palw"
 version = "1.1.0"
 dependencies = [

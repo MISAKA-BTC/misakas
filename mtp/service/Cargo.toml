@@ -1,0 +1,40 @@
+[package]
+name = "misaka-mtp-service"
+description = "MISAKA Testnet Points Program (MTP, ADR-0038) service layer: registration + nonce lifecycle, single-attribution resolver (G1), fresh-window epoch cron, append-only signed-ledger publication with supersede/finality, and the read-only self-serve points query surface. Off-chain, consensus-neutral, testnet-only."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "misaka-mtp-service"
+path = "src/main.rs"
+
+[lib]
+name = "misaka_mtp_service"
+path = "src/lib.rs"
+
+[dependencies]
+misaka-mtp.workspace = true
+misaka-mtp-collectors.workspace = true
+kaspa-addresses.workspace = true
+kaspa-hashes.workspace = true
+kaspa-pq-validator-core.workspace = true
+
+borsh = { workspace = true, features = ["derive"] }
+faster-hex.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+# Hand-rolled minimal HTTP/1.1 over tokio (no axum/hyper — the workspace pins
+# tokio 1.42.1; mirrors the kaspa-eth-rpc house pattern, D2).
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
+log.workspace = true
+
+[lints]
+workspace = true
