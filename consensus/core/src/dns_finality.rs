@@ -11903,7 +11903,7 @@ mod tests {
             "past the fence one block releases at most one cap however many thresholds it crossed ({bounded_total} > {cap})"
         );
         assert!(
-            bounded.iter().map(|o| o.value as u64).sum::<u64>() == bounded_total,
+            bounded.iter().map(|o| o.value).sum::<u64>() == bounded_total,
             "the minted total and the outputs are one statement — the reserve recurrence subtracts exactly what was paid"
         );
 
