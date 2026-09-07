@@ -21,7 +21,11 @@ pub enum Role {
 
 /// The testnet networks in ADR-0027 D1 scope, with their ADR-0026 BPS stage coefficient.
 ///
-/// **testnet-22 is the whole scope.** It replaced `testnet-21` at the 2026-08-02 static-audit
+/// **testnet-11 is the whole scope.** It replaced `testnet-22` when the live network was re-minted
+/// under that name; the deployed service has scored under `testnet-11` since, while this constant
+/// still named the network before it — so a build from this tree refused the only network there is
+/// with "not in the testnet scope", which is how the rename was found. The earlier chain:
+/// `testnet-22` replaced `testnet-21` at the 2026-08-02 static-audit
 /// C-01/C-02 re-genesis (the PCPB clauses moved to fork-relative reads, which changes leaf
 /// acceptance, and the DB version moved besides), which had replaced `testnet-20` at the
 /// 2026-08-01 ADR-0045 D3-b re-genesis, which had replaced `testnet-200` at the 2026-07-30 re-genesis
@@ -33,7 +37,7 @@ pub enum Role {
 /// bump that accompanied the 10→200 migration was for the simultaneous Stage::B/C retirement,
 /// not for the rename. (The BPS-ladder history: this list once carried `testnet-25/40/50`;
 /// the block rate is fixed at 10 BPS (2 hash + 8 PALW replica), so those rungs are not coming.)
-pub const NETWORKS: &[(&str, Stage)] = &[("testnet-22", Stage::A)];
+pub const NETWORKS: &[(&str, Stage)] = &[("testnet-11", Stage::A)];
 
 /// The BPS stage for a scoped testnet network name, or `None` if out of scope
 /// (e.g. a mainnet name — which by D1 can never reach the scorer anyway).
@@ -101,7 +105,8 @@ mod tests {
 
     #[test]
     fn stage_mapping_matches_adr_0026() {
-        assert_eq!(stage_for("testnet-22"), Some(Stage::A));
+        assert_eq!(stage_for("testnet-11"), Some(Stage::A));
+        assert_eq!(stage_for("testnet-22"), None, "a network that was re-minted away scores nothing new");
         assert_eq!(stage_for("testnet-21"), None, "the deprecated re-genesis predecessor must not score new epochs");
         assert_eq!(stage_for("testnet-20"), None, "the deprecated re-genesis predecessor must not score new epochs");
         assert_eq!(stage_for("testnet-200"), None, "the deprecated re-genesis predecessor must not score new epochs");
@@ -117,6 +122,6 @@ mod tests {
         for rung in ["testnet-25", "testnet-40", "testnet-50", "testnet-palw-40"] {
             assert_eq!(stage_for(rung), None, "{rung} is a retired ladder rung — it must not score");
         }
-        assert_eq!(NETWORKS.len(), 1, "testnet-22 is the whole scope");
+        assert_eq!(NETWORKS.len(), 1, "testnet-11 is the whole scope");
     }
 }
