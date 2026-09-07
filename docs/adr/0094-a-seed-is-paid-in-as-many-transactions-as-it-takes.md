@@ -174,3 +174,29 @@ testnet-11 pair. The implementation record is filled in as the work of §7 lands
 
 0092 and 0093 were taken while ADR-0091 was being written; the README's "next free number" line
 was stale and is corrected with this row. This is ADR-0094; the next free number is 0095.
+
+## Amendment (2026-09-07): this needed a fence, and its field needed to stay derivable
+
+The version of this ADR that shipped on 2026-09-06 had **no activation**, and that was a defect
+found while ADR-0095 was being written. Two separate problems, both of which would have forked
+testnet-11:
+
+* **The encoding.** `seed_pledged_sompi` was a new field on `PalwModelMarketV1`, and
+  `collection_root` borsh-serializes each row into the state root. Adding it changed the bytes of
+  EVERY existing market, so a node running this build computes a different state root than one that
+  is not — on a chain whose market opened at DAA 1,947, that is a fork on the next block, and no
+  fence could have prevented it because the encoding never consults one. A self-delimiting tail does
+  not fix it either: a market row is a value inside a `BTreeMap`, so a reader peeking one byte past
+  its row steals the next row's first byte. **The fix is that the field is not new information**: an
+  open market has `seed_pledged_sompi == seed_sompi`, and a pledged one has `seed_sompi == 0` with
+  its whole reserve being the pledge. So the encoding writes the pre-ADR-0094 fields exactly and the
+  reader derives the pledge, with the invariant asserted on the way out rather than assumed.
+* **The behaviour.** Accepting a sub-floor payment is a rule change: below the fence such an object
+  is refused, so a node that took one would build a block its peers reject. The accumulate arms now
+  ride `Params::palw_model_benefits` — ADR-0095's fence, scheduled on testnet-11 at DAA 2,400 —
+  because the two ship in one build and should cross at one height. Below it, this behaves exactly
+  as it did before this ADR, and the tests that stay below the fence are what pin that.
+
+The lesson generalises and is why ADR-0095 §4.11 reads as it does: **a row that enters the state
+root cannot be extended under a live chain, fence or no fence.** Ask what the encoding does before
+asking what the rule does.

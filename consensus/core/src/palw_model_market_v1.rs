@@ -55,8 +55,81 @@ pub const PALW_MODEL_SELL_SIGN_DOMAIN_V1: &[u8] = b"misaka-palw/model-market/sel
 /// ML-DSA-87 context of a sell's signature, distinct from every other context on the chain.
 pub const PALW_MODEL_SELL_MLDSA87_CONTEXT: &[u8] = b"misaka-palw-model-sell-v1";
 
+/// **ADR-0094's field is DERIVED on read, not encoded, and the reason is a live network.**
+///
+/// `collection_root` borsh-serializes each row, so a field added to this struct changes the bytes
+/// of EVERY existing market and therefore the state root — on a chain whose market is already open
+/// that is a fork on the next block, and no fence can prevent it because the encoding never
+/// consults one. A self-delimiting tail does not work either: a row is a value INSIDE a
+/// `BTreeMap`, so a reader that peeks one byte past its row steals the next row's first byte.
+///
+/// The way out is that the field carries no information the row does not already hold:
+///
+/// * an OPEN market has `seed_pledged_sompi == seed_sompi` — `seed_v1` sets them equal,
+///   `open_from_pledge_v1` sets the seed from the pledge, and an open market takes no further seed;
+/// * a PLEDGED market has `seed_sompi == 0` and its whole reserve IS the pledge, because nothing
+///   but instalments can have funded it before it opened.
+///
+/// So the encoding writes the pre-ADR-0094 fields exactly and the reader derives the pledge. The
+/// bytes of every row an old node could produce are unchanged, byte for byte, and the invariant
+/// that makes this sound is asserted on the way out rather than assumed.
+impl borsh::BorshSerialize for PalwModelMarketV1 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        debug_assert_eq!(
+            self.seed_pledged_sompi,
+            if self.seed_sompi > 0 { self.seed_sompi } else { self.msk_reserve },
+            "ADR-0094's pledge must stay derivable or this encoding loses it"
+        );
+        self.opened_daa.serialize(writer)?;
+        self.msk_reserve.serialize(writer)?;
+        self.position_units.serialize(writer)?;
+        self.sold_units.serialize(writer)?;
+        self.burned_sompi.serialize(writer)?;
+        self.registrant_paid_sompi.serialize(writer)?;
+        self.closed_to_buys.serialize(writer)?;
+        self.contributor_paid_sompi.serialize(writer)?;
+        self.seed_sompi.serialize(writer)?;
+        self.seeded_by.serialize(writer)?;
+        self.buyback_sompi.serialize(writer)?;
+        self.retired_units.serialize(writer)
+    }
+}
+
+impl borsh::BorshDeserialize for PalwModelMarketV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let opened_daa = u64::deserialize_reader(reader)?;
+        let msk_reserve = u64::deserialize_reader(reader)?;
+        let position_units = u64::deserialize_reader(reader)?;
+        let sold_units = u64::deserialize_reader(reader)?;
+        let burned_sompi = u64::deserialize_reader(reader)?;
+        let registrant_paid_sompi = u64::deserialize_reader(reader)?;
+        let closed_to_buys = bool::deserialize_reader(reader)?;
+        let contributor_paid_sompi = u64::deserialize_reader(reader)?;
+        let seed_sompi = u64::deserialize_reader(reader)?;
+        let seeded_by = Hash64::deserialize_reader(reader)?;
+        let buyback_sompi = u64::deserialize_reader(reader)?;
+        let retired_units = u64::deserialize_reader(reader)?;
+        let seed_pledged_sompi = if seed_sompi > 0 { seed_sompi } else { msk_reserve };
+        Ok(Self {
+            opened_daa,
+            msk_reserve,
+            position_units,
+            sold_units,
+            burned_sompi,
+            registrant_paid_sompi,
+            closed_to_buys,
+            contributor_paid_sompi,
+            seed_sompi,
+            seeded_by,
+            seed_pledged_sompi,
+            buyback_sompi,
+            retired_units,
+        })
+    }
+}
+
 /// One class's market row, as the fold holds it (Decision 1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PalwModelMarketV1 {
     pub opened_daa: u64,
     /// MSK the curve holds, in sompi — funded by sinks, drained by payouts, never a spendable output.
