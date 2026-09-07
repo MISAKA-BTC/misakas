@@ -13118,7 +13118,7 @@ pub(crate) mod tests {
         assert!(matches!(status, PalwBondStatusV2::Retiring { .. }), "and the status is how the caller tells them apart");
 
         // Nothing else answers to this key, and an unknown key answers to nothing.
-        assert!(retired.bond_of_pubkey_v2(&vec![8u8; 4]).is_none(), "an unregistered key holds no bond");
+        assert!(retired.bond_of_pubkey_v2(&[8u8; 4]).is_none(), "an unregistered key holds no bond");
     }
 
     /// **The reason the lookup above may not filter: one key, one bond, for the life of the chain.**
