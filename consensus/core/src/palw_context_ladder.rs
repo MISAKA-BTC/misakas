@@ -3998,10 +3998,9 @@ mod v5_vector_bound {
     #[ignore = "measurement: run with --ignored --nocapture"]
     fn how_many_vectors_would_each_512_projection_cost() {
         let cap = crate::palw_state_v2::PALW_CERTIFICATION_MAX_VECTORS;
-        for (name, built) in [
-            ("graph-v2/v3 @512", palw_a16_context_row_profile_v1(512)),
-            ("graph-v5    @512", palw_a16_context_row_profile_v5(512)),
-        ] {
+        for (name, built) in
+            [("graph-v2/v3 @512", palw_a16_context_row_profile_v1(512)), ("graph-v5    @512", palw_a16_context_row_profile_v5(512))]
+        {
             match built {
                 Ok(p) => {
                     let (pairs, ub) = bound(&p);

@@ -8199,9 +8199,8 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         // cannot be asked after it; and the remap above has already rewritten the turn to
         // `AwaitDisclosure`, so by then a fused terminal is indistinguishable from an ordinary rung.
         // It is asked once, here, off the same two facts the remap used.
-        let owes_the_dissection_opening = session.dissection.is_none()
-            && class_is_fused
-            && session.ladder.turn() == crate::palw_bisect::PalwBisectTurnV1::Terminal;
+        let owes_the_dissection_opening =
+            session.dissection.is_none() && class_is_fused && session.ladder.turn() == crate::palw_bisect::PalwBisectTurnV1::Terminal;
         let turn_can_still_move =
             !matches!(turn, crate::palw_bisect::PalwBisectTurnV1::Terminal | crate::palw_bisect::PalwBisectTurnV1::Abandoned);
         let rung_fired = turn_can_still_move && rung_deadline < ctx.daa_score && rung_deadline < session.deadline_daa;
@@ -15231,9 +15230,8 @@ pub(crate) mod tests {
         coverage: bool,
     ) -> (PalwChainStateV2, PalwStateDeltaV2) {
         let extras = PalwTransitionExtrasV1 { court_responder_coverage_active: coverage, ..Default::default() };
-        let (state, delta) =
-            apply_palw_transition_v2_with_extras(parent, p, c, objects, None, false, false, false, false, &extras)
-                .expect("transition applies");
+        let (state, delta) = apply_palw_transition_v2_with_extras(parent, p, c, objects, None, false, false, false, false, &extras)
+            .expect("transition applies");
         state.assert_internal_consistency(p).expect("internal consistency after apply");
         state.assert_deadline_consistency(p).expect("deadline consistency after apply");
         (state, delta)
@@ -24335,10 +24333,7 @@ pub(crate) mod tests {
                 let objects: Vec<_> = (0..per_block as u64).map(|i| sell_out_of(start - i)).collect();
                 match try_lines(&state, &p, &ctx(8 + round, daa, 8 + round), &objects, None) {
                     Ok((next, _)) => {
-                        assert!(
-                            next.pending_payouts_iter().count() <= PALW_V2_MAX_PENDING_PAYOUTS,
-                            "the queue never exceeds its cap"
-                        );
+                        assert!(next.pending_payouts_iter().count() <= PALW_V2_MAX_PENDING_PAYOUTS, "the queue never exceeds its cap");
                         state = next;
                     }
                     Err(e) => {

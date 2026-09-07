@@ -3197,7 +3197,15 @@ impl PalwPanelService {
                                 let (leaves, artifact_root, ladder) =
                                     (shape.step_leaf_count, duty.artifact_root, self.config.court.max_step_leaf_count());
                                 let Ok((_backend, cleared)) = offload(backend, move |b| {
-                                    Self::fp_capture_samples_clear(b, &capture_owned, &prompt_owned, leaves, artifact_root, ladder, &claim_owned)
+                                    Self::fp_capture_samples_clear(
+                                        b,
+                                        &capture_owned,
+                                        &prompt_owned,
+                                        leaves,
+                                        artifact_root,
+                                        ladder,
+                                        &claim_owned,
+                                    )
                                 })
                                 .await
                                 else {

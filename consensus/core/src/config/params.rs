@@ -13961,8 +13961,7 @@ mod consensus_params_id_tests {
     /// merge added to `Params` while the hand-written table sat unchanged with zero merge conflict.
     #[test]
     fn the_fence_table_names_every_palw_fence_on_params() {
-        let names: std::collections::BTreeSet<&str> =
-            palw_v2_fence_table(&MAINNET_PARAMS).into_iter().map(|(n, _)| n).collect();
+        let names: std::collections::BTreeSet<&str> = palw_v2_fence_table(&MAINNET_PARAMS).into_iter().map(|(n, _)| n).collect();
         for (name, _) in MAINNET_PARAMS.palw_fences_v1() {
             assert!(names.contains(name), "{name} is a PALW fence on Params and the table does not name it");
         }
@@ -14261,8 +14260,7 @@ mod consensus_params_id_tests {
     fn a_carded_registry_still_draws_a_full_panel_with_the_capability_fence_armed() {
         use crate::palw_mode_v2::PalwConsensusMode;
         use crate::palw_state_v2::{
-            PalwBlockContextV2, PalwChainStateV2, apply_palw_transition_v2, palw_bond_may_judge_class_v3,
-            palw_bond_may_take_work_v2,
+            PalwBlockContextV2, PalwChainStateV2, apply_palw_transition_v2, palw_bond_may_judge_class_v3, palw_bond_may_take_work_v2,
         };
 
         let params = mainnet_card_fixture_v1(true);
@@ -15567,7 +15565,3 @@ mod fingerprint_probe {
         );
     }
 }
-
-
-
-

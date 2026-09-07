@@ -11841,8 +11841,7 @@ mod tests {
         );
 
         // Below the fence such an epoch mints more than its pool — pinned as the number.
-        let unfenced =
-            validator_quality_bonus_outputs(tally.quality_pool_accrued, &tally.included, tally.expected_stake, true, None);
+        let unfenced = validator_quality_bonus_outputs(tally.quality_pool_accrued, &tally.included, tally.expected_stake, true, None);
         assert_eq!(
             unfenced.iter().map(|o| o.value as u128).sum::<u128>(),
             2 * tally.quality_pool_accrued,
