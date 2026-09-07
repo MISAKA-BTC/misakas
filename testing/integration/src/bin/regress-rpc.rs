@@ -13,7 +13,7 @@
 //! regress-rpc 127.0.0.1:41241
 //!   → pruning_point=8e23…3e3a virtual_daa_score=6013 is_synced=false sink=fa01…9b22 …
 //!
-//! regress-rpc 127.0.0.1:41241 connect 160.16.131.119:41221
+//! regress-rpc 127.0.0.1:41241 connect <node-ip>:41221
 //!   → connected
 //! ```
 //!

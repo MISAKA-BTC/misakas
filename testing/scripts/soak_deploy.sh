@@ -18,7 +18,7 @@ set -uo pipefail
 ACTION=${1:?usage: soak_deploy.sh install|rollback|verify <ssh-target> <unit> [binary] [sha256]}
 TARGET=${2:?ssh-target required}
 UNIT=${3:?systemd unit required}
-SSH="ssh -i ${SSH_KEY:-$HOME/.ssh/claude_key} -o BatchMode=yes -o ConnectTimeout=15"
+SSH="ssh ${SSH_KEY:+-i $SSH_KEY} -o BatchMode=yes -o ConnectTimeout=15"
 
 exe_path() {
   $SSH "$TARGET" "systemctl show -p ExecStart --value '$UNIT' 2>/dev/null | sed -n 's/.*path=\([^ ;]*\).*/\1/p' | head -1"
@@ -53,7 +53,7 @@ case "$ACTION" in
     fi
 
     echo "installing on $TARGET: $path"
-    scp -i "${SSH_KEY:-$HOME/.ssh/claude_key}" -o BatchMode=yes "$BIN" "$TARGET:$path.new" || exit 1
+    scp ${SSH_KEY:+-i "$SSH_KEY"} -o BatchMode=yes "$BIN" "$TARGET:$path.new" || exit 1
     $SSH "$TARGET" "
       set -e
       got=\$(sha256sum '$path.new' | cut -d' ' -f1)

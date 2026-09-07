@@ -40,7 +40,7 @@ fence at 1,900 makes possible.
 
 ## Deploying a change
 
-    scp app.js root@169.58.232.113:/tmp/ && ssh … 'cd /var/www/misaka-explorer && cp -a app.js app.js.bak-<tag>-<ts> && install -m644 /tmp/app.js app.js'
+    scp app.js root@<explorer-host>:/tmp/ && ssh … 'cd /var/www/misaka-explorer && cp -a app.js app.js.bak-<tag>-<ts> && install -m644 /tmp/app.js app.js'
 
 then bump BOTH `?v=` tokens in `index.html` (the hash router does not reload, and a stale `app.js`
 against a fresh feed is the failure mode this bump exists for).

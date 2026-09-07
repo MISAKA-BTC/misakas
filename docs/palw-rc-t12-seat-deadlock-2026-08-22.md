@@ -6,7 +6,7 @@ cause is not identified.** What follows is what was measured before the kill.
 
 ## What happened
 
-Host C (`5.104.81.23`), the seat holding **bond 2** (`--palw-panel`, appdir `/root/.t12`,
+Host C (`<host-C>`), the seat holding **bond 2** (`--palw-panel`, appdir `/root/.t12`,
 listening `:26411`), stopped doing anything at **06:55:25 CEST** and was still stopped when it was
 found at **07:39** — 44 minutes. Its two siblings on the same host (`.t12b`, `.t12c`) logged
 continuously throughout, so this was one process, not the host.
@@ -108,7 +108,7 @@ nonsense.
 ## Fleet state at the time
 
 t10 and t11 had just been stopped on all four hosts, and **that is not the cause**: this node went
-quiet at 06:55:25 and the first change on host C was at ~07:05. The producer on `169.58.39.220`
+quiet at 06:55:25 and the first change on host C was at ~07:05. The producer on `<producer-host>`
 was unaffected throughout and was at block #763 when this was written.
 
 

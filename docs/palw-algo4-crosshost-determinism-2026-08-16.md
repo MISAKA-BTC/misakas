@@ -20,10 +20,10 @@ v2 trace のクラス校正 (2026-08-15, 4/4一致) は済んでいたが、**Po
 
 | host | label | worker sha | GGUF sha | manifest行 sha |
 |---|---|---|---|---|
-| A 160.16.131.119 | broadwell-8c | 2bd857f8… | aaf42c8b… | 14f5628d… |
-| B 95.111.236.186 | epyc-6c | 同上 | 同上 | 同上 |
-| C 5.104.81.23 | epyc-8c-c | 同上 | 同上 | 同上 |
-| ibm 169.58.39.220 | epyc-8c-d | 同上 | 同上 | 同上 |
+| A <host-A> | broadwell-8c | 2bd857f8… | aaf42c8b… | 14f5628d… |
+| B <host-B> | epyc-6c | 同上 | 同上 | 同上 |
+| C <host-C> | epyc-8c-c | 同上 | 同上 | 同上 |
+| ibm <producer-host> | epyc-8c-d | 同上 | 同上 | 同上 |
 
 preflight で worker バイナリ・GGUF・`--mode manifest` 全文が byte 一致していることを
 先に固定 — **以後のタグ差異は「設定ドリフト」ではなく「実算術の分岐」としてしか

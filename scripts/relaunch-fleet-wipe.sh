@@ -29,8 +29,13 @@
 #          scripts/relaunch-fleet-wipe.sh wipe --genesis <hash> [--execute]
 set -uo pipefail
 
-HOSTS=(169.58.39.220 169.58.232.113 5.104.81.23)
-KEY="${MISAKA_WIPE_KEY:-$HOME/.ssh/claude_key}"
+# The fleet is the caller's to name. It used to be three addresses hardcoded here, which put a
+# map of the fleet in a public repo and, worse, made this destructive script silently authoritative
+# about which machines it was allowed to erase. Space-separated in MISAKA_WIPE_HOSTS.
+: "${MISAKA_WIPE_HOSTS:?set MISAKA_WIPE_HOSTS to the space-separated hosts to act on}"
+read -r -a HOSTS <<< "$MISAKA_WIPE_HOSTS"
+# Optional: unset means "let ssh pick", which is what a normal ~/.ssh/config already does.
+KEY="${MISAKA_WIPE_KEY:-}"
 EXECUTE=0; GENESIS=""
 CMD="${1:-}"; shift || true
 while [ $# -gt 0 ]; do
@@ -41,7 +46,7 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
-r() { ssh -o ConnectTimeout=10 -o BatchMode=yes -i "$KEY" "root@$1" "$2" 2>/dev/null; }
+r() { ssh -o ConnectTimeout=10 -o BatchMode=yes ${KEY:+-i "$KEY"} "root@$1" "$2" 2>/dev/null; }
 say() { printf '%s\n' "$*"; }
 
 case "$CMD" in

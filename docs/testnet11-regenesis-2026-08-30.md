@@ -31,14 +31,13 @@ yet — so the DAA-360 stall of 2026-08-30 remains a live risk if the floor prod
 
 | host | units | appdir | reachable |
 |---|---|---|---|
-| `169.58.39.220` (ibm) | `misaka-t11-node0` (producer+panel), `misaka-t11-node1` (failed/OOM), `misaka-faucet` | `/root/.t11`, `/root/.t11b` | directly |
-| `169.58.232.113` | `misaka-t11-node`, `misaka-dnsseeder`, `misaka-minerpool`, `misaka-pool-slot@01`, `misaka-mtp` | `/root/.t11` | via ibm as root |
-| `160.16.131.119` (A) | `misaka-t11-node-b`, `misaka-t11-hub-tunnel` | `/home/ubuntu/.t11` | via ibm as ubuntu |
-| `5.104.81.23` (C) | — | — | **NO** — its operator must act |
+| `<producer-host>` (ibm) | `misaka-t11-node0` (producer+panel), `misaka-t11-node1` (failed/OOM), `misaka-faucet` | `/root/.t11`, `/root/.t11b` | directly |
+| `<explorer-host>` | `misaka-t11-node`, `misaka-dnsseeder`, `misaka-minerpool`, `misaka-pool-slot@01`, `misaka-mtp` | `/root/.t11` | via ibm as root |
+| `<host-A>` (A) | `misaka-t11-node-b`, `misaka-t11-hub-tunnel` | `/home/ubuntu/.t11` | via ibm as ubuntu |
+| `<host-C>` (C) | — | — | **NO** — its operator must act |
 
 Community nodes seen as peers in the last 12 h and orphaned by this change:
-`5.104.81.228`, `217.178.131.170`, `13.140.185.225`, `60.114.127.4`, `169.58.13.16`,
-`207.180.230.3`, `183.176.36.141`, `113.155.23.105`.
+eight peer addresses this repository no longer names.
 
 ## Order, and why
 
@@ -57,13 +56,13 @@ grep -E '^(HEAD|EXIT|STAGED)' /root/deploy-build.log
 
 # 2. stop everything, everywhere (kaspad ignores SIGTERM, handles SIGINT)
 systemctl kill -s INT misaka-t11-node0 misaka-t11-node1
-ssh root@169.58.232.113 'systemctl kill -s INT misaka-t11-node; systemctl stop misaka-minerpool misaka-pool-slot@01 misaka-mtp misaka-dnsseeder'
-ssh ubuntu@160.16.131.119 'sudo systemctl kill -s INT misaka-t11-node-b'
+ssh root@<explorer-host> 'systemctl kill -s INT misaka-t11-node; systemctl stop misaka-minerpool misaka-pool-slot@01 misaka-mtp misaka-dnsseeder'
+ssh ubuntu@<host-A> 'sudo systemctl kill -s INT misaka-t11-node-b'
 
 # 3. wipe every datadir
 rm -rf /root/.t11/misaka-testnet-11 /root/.t11b/misaka-testnet-11
-ssh root@169.58.232.113 'rm -rf /root/.t11/misaka-testnet-11'
-ssh ubuntu@160.16.131.119 'rm -rf /home/ubuntu/.t11/misaka-testnet-11'
+ssh root@<explorer-host> 'rm -rf /root/.t11/misaka-testnet-11'
+ssh ubuntu@<host-A> 'rm -rf /home/ubuntu/.t11/misaka-testnet-11'
 
 # 4. install the candidate on every host, then start the PRODUCER first
 #    (it mints block 1; the others sync from it)

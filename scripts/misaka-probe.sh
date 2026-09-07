@@ -41,8 +41,8 @@ Options:
   -h, --help               Show this help.
 
 Examples:
-  misaka-probe.sh --ip 217.76.57.217
-  misaka-probe.sh --ip 217.76.57.217 --stake-bond <txid>:0
+  misaka-probe.sh --ip <node-ip>
+  misaka-probe.sh --ip <node-ip> --stake-bond <txid>:0
 EOF
 }
 

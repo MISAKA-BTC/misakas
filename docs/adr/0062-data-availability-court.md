@@ -589,7 +589,7 @@ the schedule partitions old from new IMMEDIATELY. The new build keeps an old pee
 peer"); the old build does not keep the new one — its gate is already armed by ADR-0083's fence, the
 new node announces `next = 1900`, and 1900 is not on the old schedule, so the old side rejects and
 closes. Six third-party seats were cut off within four minutes of the first restart
-(164.68.119.212, 217.178.131.170, 113.155.23.105, 60.114.127.4, 207.180.230.3, 121.81.248.189).
+(<peer>, <peer>, <peer>, <peer>, <peer>, <peer>).
 The height's lead time buys the FLEET an ordering; it does not buy the network a grace period, and
 anyone running a testnet-11 seat has to upgrade now rather than before DAA 1,900. Recorded at
 `fork_id_gate_fences_v1`, where the next operator will read it.

@@ -2105,10 +2105,10 @@ seed one, where the test needs the agent alive to kill it.
 Measured across all three hosts, every `palw-worker` on disk:
 
 ```
-169.58.39.220    /root/palw-drill/bin/palw-worker   2026-08-16   pow-agent=0
+<producer-host>    /root/palw-drill/bin/palw-worker   2026-08-16   pow-agent=0
                  /root/palw-class/palw-worker       2026-08-14   pow-agent=0
-169.58.232.113   /root/palw-class/palw-worker       2026-08-26   pow-agent=0
-5.104.81.23      /root/palw-class/palw-worker       2026-08-14   pow-agent=0
+<explorer-host>   /root/palw-class/palw-worker       2026-08-26   pow-agent=0
+<host-C>      /root/palw-class/palw-worker       2026-08-14   pow-agent=0
 ```
 
 **Four binaries, three hosts, three build dates, zero of them have the resident-agent mode.**
@@ -2866,14 +2866,14 @@ walk /proc, match the EXECUTABLE's basename by prefix
 **The corrected census — seven running nodes, not five and not six:**
 
 ```
-169.58.39.220    kaspad                       --appdir=/root/.t11
+<producer-host>    kaspad                       --appdir=/root/.t11
                  kaspad                       --appdir=/root/.t11b
                  kaspad.candidate (deleted)   --appdir=/tmp/fpchk      <- invisible to both
                                                                           earlier forms
-169.58.232.113   kaspad                       --appdir=/root/.t11
+<explorer-host>   kaspad                       --appdir=/root/.t11
                  kaspad                       --appdir=/root/.t11c
                  kaspad                       --appdir=/var/lib/misaka-minerpool/slots/slot-01/appdir
-5.104.81.23      kaspad                       --appdir=/root/.t11
+<host-C>      kaspad                       --appdir=/root/.t11
 ```
 
 **`(deleted)`** is the third thing the new form reports and neither old one could: that binary
@@ -3792,10 +3792,10 @@ and **the procedure said nothing about what to do next.**
 cgroup contains `.service`, and reports what it finds with the cgroup attached:
 
 ```
--- 169.58.39.220 --
+-- <producer-host> --
   would kill pid 1156471 (kaspad.candidate, in (deleted) session-28377.scope — NOT a service)
--- 169.58.232.113 --   none — every node here is owned by a unit
--- 5.104.81.23 --      none — every node here is owned by a unit
+-- <explorer-host> --   none — every node here is owned by a unit
+-- <host-C> --      none — every node here is owned by a unit
 ```
 
 **One host has one; the other two have none** — which is why nobody hit this: on two of three
@@ -4327,7 +4327,7 @@ TABLE=/path/to/extracted-pins.txt scripts/check-repin-predictions.sh <frozen-sha
 cargo test -p kaspa-consensus-core --lib -- every_genesis_commits_to_the_premine shipped_presets_have_pinned_fingerprints golden_vector_ids_are_frozen
 
 # 3. transport + Linux build on ibm — bundle or push, -j 4 (the OOM table in runbook §2)
-git push ssh://root@169.58.39.220/root/misakas-t11r <5f-tip>:refs/heads/cut-<5f-tip>
+git push ssh://root@<producer-host>/root/misakas-t11r <5f-tip>:refs/heads/cut-<5f-tip>
 ssh misaka-ibm 'cd /root/misakas-t11r && git checkout cut-<5f-tip> && nice -n 19 cargo build --release -j 4 -p kaspad -p misaka-cli 2>&1 | tee /tmp/cut-build.log'
 #    read the log for `error`, not the exit code; a `tail` is a display decision on a diagnostic
 
@@ -4428,14 +4428,14 @@ guard enforces that. It will be re-run there before anything is pasted.
 ### The census, from processes and sockets (not journals)
 
 ```
-169.58.39.220 (ibm)   kaspad --appdir=/root/.t11   kaspad --appdir=/root/.t11b
+<producer-host> (ibm)   kaspad --appdir=/root/.t11   kaspad --appdir=/root/.t11b
                       kaspad.candidate (DELETED binary) --appdir=/tmp/fpchk     <- a leftover isolated
                       units: t11-node0, t11-node1, faucet running; miner/validator/kaspad dead     boot; wipe must kill it
-169.58.232.113        kaspad .t11   kaspad .t11c   kaspad /var/lib/misaka-minerpool/slots/slot-01/appdir
+<explorer-host>        kaspad .t11   kaspad .t11c   kaspad /var/lib/misaka-minerpool/slots/slot-01/appdir
                       units: dnsseeder, minerpool, pool-slot@01, t11-node, t11-seat4 running
-5.104.81.23           kaspad .t11
+<host-C>           kaspad .t11
                       units: dnsseeder, miner-c, validator-c, t11-seat2 running; seat3 dead
-external peers        111.67.115.228  183.176.36.141  5.104.81.228  60.114.127.4   <- CANNOT be wiped;
+external peers        <peer>  <peer>  <peer>  <peer>   <- CANNOT be wiped;
                                                                                    the handshake fingerprint rejects them
 live binaries         every running kaspad on ibm execs /root/t11/kaspad — NOT the build target. The wipe
                       replaces THAT path; a rebuild into target/ changes nothing a restart would pick up.
@@ -5114,13 +5114,13 @@ rather than mapping a second time. rss 4.5 GB. The four lines the run sheet asks
                   = PREDICTED_T11_GENESIS. M-07 silent, 0 panics.
     outpoints     panel and producer started on bond misaka-premine:0 (float :41 accepted by the producer's own start)
 
-Nine distinct external community nodes were refused on genesis mismatch within the first minute (one, 169.58.13.16,
+Nine distinct external community nodes were refused on genesis mismatch within the first minute (one, <peer>,
 still carries Relaunch 4's `8d2002cc…`). They need the announcement: new genesis, wipe, new binary.
 `getBlockDagInfo` over `--rpclisten-json` failed as an HTTP POST: that port is wRPC over WebSocket. The instrument is
 `misaka node liveness --rpc 127.0.0.1:26313` (borsh). At +2 min: `ALIVE: daa=0 blocks=0`.
 
 **6b node1 (ibm, `misaka-t11-node1`, floor producer + panel).** Listening after 56 s (no model class to map),
-fingerprint `2222e054…`, **connected to node0** on both `127.0.0.1:26311` and `169.58.39.220:26311` — a completed
+fingerprint `2222e054…`, **connected to node0** on both `127.0.0.1:26311` and `<producer-host>:26311` — a completed
 handshake is the same-genesis proof, stronger than a reject line. 0 panics. Liveness right after:
 `ALIVE: daa=1 blocks=1 advanced` — the new chain's first block.
 
@@ -5483,20 +5483,20 @@ own answer) follow as they land. The public chain's own claim still waits for th
 testnet-11's shipped seed list is `seeder1–4.misakascan.com` (`params.rs:8139`, outside `consensus_params_id`; the
 bare `TESTNET11_PARAMS` carries none). The parent zone at xdomain delegates each name to its own host:
 
-    seeder1.misakascan.com → ns-seeder1 = 169.58.232.113   .113's misaka-dnsseeder: active since 17:30 UTC, backed by the cut node
-                                                          (--node-wrpc-borsh 127.0.0.1:26313, --anchors-only), answers 169.58.232.113 169.58.39.220   OK
-    seeder2.misakascan.com → ns-seeder2 = 217.76.57.217    port 53 closed → SERVFAIL                                                              DEAD
-    seeder3.misakascan.com → ns-seeder3 = 95.111.236.186   a seeder outside the fleet (the game host; 53 open, no node on 26311),
+    seeder1.misakascan.com → ns-seeder1 = <explorer-host>   .113's misaka-dnsseeder: active since 17:30 UTC, backed by the cut node
+                                                          (--node-wrpc-borsh 127.0.0.1:26313, --anchors-only), answers <explorer-host> <producer-host>   OK
+    seeder2.misakascan.com → ns-seeder2 = <seeder-ns1>    port 53 closed → SERVFAIL                                                              DEAD
+    seeder3.misakascan.com → ns-seeder3 = <host-B>   a seeder outside the fleet (the game host; 53 open, no node on 26311),
                                                           answers the same two anchors                                                            OK
-    seeder4.misakascan.com → ns-seeder4 = 217.178.101.111  port 53 closed → SERVFAIL                                                              DEAD
+    seeder4.misakascan.com → ns-seeder4 = <seeder-ns2>  port 53 closed → SERVFAIL                                                              DEAD
 
-`node doctor` on node0 confirms: "Seeder-advertised peers 2 (169.58.232.113, 169.58.39.220)". A joiner resolves the
+`node doctor` on node0 confirms: "Seeder-advertised peers 2 (<explorer-host>, <producer-host>)". A joiner resolves the
 new chain's anchors from seeder1/seeder3 and waits out two SERVFAILs; the fleet's own nodes use `--nodnsseed
 --addpeer`. The seeder daemon verifies nothing about the chain itself — it relays its backing node's `is_synced` and
 the configured anchors — so its Aug-31 binary (not part of the cut's build; `misaka-dnsseeder` is not in the release
 targets) is not a correctness question. ibm runs no seeder (port 53 is systemd-resolved); 5.104's unit is testnet-10's
-(`--network-id testnet-10`, anchors 160.16.131.119 / 95.111.236.186) and stays down. `seeder1–3.misakachain.com`
-(mainnet's and testnet-10's lists) resolve to `85.131.213.182` — the registrar's wildcard A record → the web host,
+(`--network-id testnet-10`, anchors <host-A> / <host-B>) and stays down. `seeder1–3.misakachain.com`
+(mainnet's and testnet-10's lists) resolve to `<peer>` — the registrar's wildcard A record → the web host,
 not a seeder; irrelevant to testnet-11, stale for the others. The seeder on `.113` was in the stop list and was
 restarted in step 6 with the fleet.
 
@@ -5672,7 +5672,7 @@ one 24 GB host cannot carry a Qwen3.6 producer and a Qwen3.6-capable panel seat 
 
 **6n, continued (23:40 UTC).** A second contributor, found and removed by 6a: the explorer's `llm-jobs.json` cron on
 ibm (`/root/llm-jobs-publish.sh`, every two minutes) read the three 253 MB retention materials into memory on every
-run — a swap event every two minutes — and stalled each run on a dead `rsync` to 160.16.131.119; it now runs with
+run — a swap event every two minutes — and stalled each run on a dead `rsync` to <host-A>; it now runs with
 `--retention /root/palw-class/retention-empty`, publishes 3 rows, and any text column is derived off-host. Right
 after node1's restart the host read 13.9 GB free, 15.5 GB available, swap 4.2 GB and draining. Two mappings of a
 33.99 GiB file plus a two-minute 760 MB read on a 24 GB host was the whole of the pressure.
@@ -5731,7 +5731,7 @@ to the two successor sessions (`misaka-testnet-e1`, `-ff`) so no wallet send rac
     .113   misaka-t11-node    public + panel    2222e054  ad30b5cb  0      ALIVE daa=729
     .113   misaka-t11-seat4   panel             2222e054  (handshakes)  0  ALIVE daa=729
     5.104  misaka-t11-seat2   panel (paused)    2222e054  (handshakes)  0  ALIVE daa=400, catching up
-    explorer misaka-testnet-11 at 729 (db 733 rows from blue 0) · seeder answers 169.58.232.113 169.58.39.220, publicly too
+    explorer misaka-testnet-11 at 729 (db 733 rows from blue 0) · seeder answers <explorer-host> <producer-host>, publicly too
     pool active · faucet active, grant 12, balance 0 (operator funds it) · QWEN36 3 blocks · kaspad sha 14065c93 on all hosts
     ibm 9 GB available / swap 4.5 GB · .113 10 GB available
 
@@ -6145,7 +6145,7 @@ Difficulty 1.00 on .113's node. The tightening had reached ×3,100 by the fence 
 1,147 blocks); the first fenced window held no priced row, so it answered `max_difficulty_target` in
 one block — ADR-0083 §4.3 as written, and the recovery path (a) was chosen for. Every seat was on
 `cef2ecdb` (§10h); no refusals, no forks among the eight; the old-build external node at
-113.155.23.105 is the only party expected to part here. The floor's chance per draw is back to
+<peer> is the only party expected to part here. The floor's chance per draw is back to
 7.9e-5 × 0.5; the first attempt-lane block after H, from any seat, is being watched for.
 
 **§10i, continued (05:50Z): root, inspect, preflight — ADMISSIBLE.** `qwen36-run --root-only` over the
@@ -6456,7 +6456,7 @@ each against state they recomputed for themselves, and **not one of them fetched
 |---|---|---|
 | ibm node0 | 187, 101, 62, 11 | 14:06:39Z |
 | .113 node (seat 6) | 90, 218, 287, 206 | 15:21:26Z |
-| seat2 (5.104.81.23) | 278, 222, 159, 47 | 16:52Z |
+| seat2 (<host-C>) | 278, 222, 159, 47 | 16:52Z |
 
 The answer the gateway returned at 06:22Z recomputes the root the chain licensed —
 `output_root 0658d893…` on both sides, `job_context_hash acf9093d…`, 300 ids. `derived-verify`

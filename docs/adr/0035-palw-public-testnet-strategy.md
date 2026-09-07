@@ -144,7 +144,7 @@ At launch, validating/mining testnet-11 requires being in the pinned class:
    default-deny), ibm currently centers the star.
 3. **Validator bonding** on TN11 (lifts emission from 62 % toward full; reuses the
    t10 bond tooling) — its own runbook when scheduled.
-4. **B (95.111.236.186)**: disk 100 % full; `/root/palw` (15 G) is the cleanup
+4. **B (<host-B>)**: disk 100 % full; `/root/palw` (15 G) is the cleanup
    candidate. B joins the fleet only after that operator decision.
 5. **Launch criteria** before announcing (gate 6's entry checklist):
    ≥ 48 h clean soak; a fresh node's from-genesis IBD join over the public path;

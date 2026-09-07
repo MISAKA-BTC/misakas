@@ -8,10 +8,10 @@ fingerprint `62781823…`) を **live t10 fleet 3 host上の隔離チェーン**
 
 | host | 役割 | ノードcap | miner cap | 備考 |
 |---|---|---|---|---|
-| ibm 169.58.39.220 | node + miner (build host) | 6G | 3500M | star中心 (A/Cがdial) |
-| C 5.104.81.23 | node + **先行miner** | 6G | 3500M | ufw deny→dialする側 |
-| A 160.16.131.119 | node + miner | 5G | 3500M | ubuntu + sudo systemd |
-| B 95.111.236.186 | **不参加** | — | — | disk 100%満杯 (下記) |
+| ibm <producer-host> | node + miner (build host) | 6G | 3500M | star中心 (A/Cがdial) |
+| C <host-C> | node + **先行miner** | 6G | 3500M | ufw deny→dialする側 |
+| A <host-A> | node + miner | 5G | 3500M | ubuntu + sudo systemd |
+| B <host-B> | **不参加** | — | — | disk 100%満杯 (下記) |
 
 - binaries: commit **7c8afbf** の `git archive` からibmでビルド (kaspad `ceea673e…`,
   misaminer `e9372a5c…`, 3 host sha一致)。**working treeを配布しない** — 並行セッションの
@@ -68,7 +68,7 @@ ssh <host> 'RIG=<name> BIN=~/palw-soak/misaminer bash ~/palw-soak/misaka-palw-so
 ssh <host> 'tail ~/.palw-soak/status.log'
 ```
 
-## B (95.111.236.186) の状態 — 運用者判断待ち
+## B (<host-B>) の状態 — 運用者判断待ち
 
 disk **100%** (473MB free / 193G)。内訳: `/root/kpq-testnet-t10` 36G (live t10 —
 触るな) / **`/root/palw` 15G (旧PALW артефакты — 掃除候補)** / `/var/lib` 49G

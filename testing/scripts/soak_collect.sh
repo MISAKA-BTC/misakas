@@ -22,7 +22,7 @@ set -uo pipefail
 FLEET=${1:?usage: soak_collect.sh <fleet-file> [outfile]}
 OUT=${2:-soak-samples.tsv}
 RPC_BIN=${RPC_BIN:-/var/lib/misaka-regression/src/target/release/regress-rpc}
-SSH="ssh -i ${SSH_KEY:-$HOME/.ssh/claude_key} -o BatchMode=yes -o ConnectTimeout=15"
+SSH="ssh ${SSH_KEY:+-i $SSH_KEY} -o BatchMode=yes -o ConnectTimeout=15"
 
 # Header once, so the file explains itself to whoever opens it later.
 if [ ! -s "$OUT" ]; then
