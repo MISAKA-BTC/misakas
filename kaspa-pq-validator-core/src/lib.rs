@@ -591,6 +591,74 @@ impl ValidatorKey {
         Ok(tx)
     }
 
+    /// **ADR-0094 Decision 5: a carrier funded by as many utxos as it takes.**
+    ///
+    /// The single-utxo twin above is what every lifecycle carrier used, and it is why a producer
+    /// with 190,000 MSK in 202 coinbase outputs could not pay a 100,000 MSK seed: no ONE output
+    /// held it. This spends a list, in the order given, and the caller is the one that knows how
+    /// many an ML-DSA-87 transaction fits under the mass cap (fifteen, measured).
+    ///
+    /// Every input is signed over the whole transaction (`SIG_HASH_ALL`), so no input can be
+    /// lifted into another transaction; the change returns to the first input's script, which is
+    /// this key's own funding address.
+    pub fn build_palw_lifecycle_tx_multi(
+        &self,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        funding: &[(TransactionOutpoint, UtxoEntry)],
+        fee: u64,
+        extra: Vec<TransactionOutput>,
+    ) -> Result<Transaction, String> {
+        if funding.is_empty() {
+            return Err("a carrier needs at least one funding utxo".to_string());
+        }
+        let payload = kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2 {
+            version: kaspa_consensus_core::palw_lifecycle_objects_v2::PALW_LIFECYCLE_TX_VERSION_V2,
+            object: object.clone(),
+        };
+        let bytes = borsh::to_vec(&payload).map_err(|e| format!("a lifecycle object must serialize: {e}"))?;
+        let extra_total: u64 = extra.iter().map(|o| o.value).sum();
+        let spent = fee.checked_add(extra_total).ok_or("fee and outputs overflow")?;
+        let funded: u64 = funding.iter().try_fold(0u64, |a, (_, e)| a.checked_add(e.amount)).ok_or("funding overflows")?;
+        if funded <= spent {
+            return Err(format!("funding utxos total {funded} does not cover fee {fee} and outputs {extra_total}"));
+        }
+        let inputs: Vec<TransactionInput> =
+            funding.iter().map(|(o, _)| TransactionInput::new(*o, vec![], MAX_TX_IN_SEQUENCE_NUM, 1)).collect();
+        let mut outputs = vec![TransactionOutput::new(funded - spent, funding[0].1.script_public_key.clone())];
+        outputs.extend(extra);
+        let tx = Transaction::new(
+            TX_VERSION,
+            inputs,
+            outputs,
+            0,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            bytes,
+        );
+        let entries: Vec<UtxoEntry> = funding.iter().map(|(_, e)| e.clone()).collect();
+        let mtx = MutableTransaction::with_entries(tx, entries);
+        let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
+        let mut scripts = Vec::with_capacity(funding.len());
+        for i in 0..funding.len() {
+            let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), i, SIG_HASH_ALL, &reused_mldsa);
+            let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
+            sig_data.push(SIG_HASH_ALL.to_u8());
+            scripts.push(
+                ScriptBuilder::new()
+                    .add_data(&sig_data)
+                    .map_err(|e| format!("carrier funding sig push failed: {e}"))?
+                    .add_data(self.keypair.verification_key.as_ref())
+                    .map_err(|e| format!("carrier funding pubkey push failed: {e}"))?
+                    .drain(),
+            );
+        }
+        let mut tx = mtx.tx;
+        for (input, script) in tx.inputs.iter_mut().zip(scripts) {
+            input.signature_script = script;
+        }
+        Ok(tx)
+    }
+
     pub fn build_funded_native_carriage_tx(
         &self,
         payload: Vec<u8>,

@@ -525,6 +525,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelMarketResponse>, protowire::G
         seed_sompi: item.seed_sompi,
         seeded_by: item.seeded_by.clone(),
         seed_min_sompi: item.seed_min_sompi,
+        seed_pledged_sompi: item.seed_pledged_sompi,
         buyback_sompi: item.buyback_sompi,
         retired_units: item.retired_units,
         error: None,
@@ -1473,6 +1474,7 @@ try_from!(item: &protowire::GetPalwModelMarketResponseMessage, RpcResult<kaspa_r
         seed_sompi: item.seed_sompi,
         seeded_by: item.seeded_by.clone(),
         seed_min_sompi: item.seed_min_sompi,
+        seed_pledged_sompi: item.seed_pledged_sompi,
         buyback_sompi: item.buyback_sompi,
         retired_units: item.retired_units,
     }

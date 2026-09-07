@@ -76,6 +76,7 @@ fn market_from_response(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwM
         contributor_paid_sompi: r.contributor_paid_sompi,
         seed_sompi: r.seed_sompi,
         seeded_by: r.seeded_by.parse().unwrap_or_default(),
+        seed_pledged_sompi: r.seed_pledged_sompi,
         buyback_sompi: r.buyback_sompi,
         retired_units: r.retired_units,
     }
@@ -96,6 +97,7 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
         "registrant_paid_sompi": r.registrant_paid_sompi,
         "contributor_paid_sompi": r.contributor_paid_sompi,
         "seed_sompi": r.seed_sompi,
+        "seed_pledged_sompi": r.seed_pledged_sompi,
         "seeded_by": r.seeded_by,
         "seed_min_sompi": r.seed_min_sompi,
         "buyback_sompi": r.buyback_sompi,
@@ -146,6 +148,15 @@ pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: boo
         println!("  reserve        {}", msk(r.msk_reserve));
         if r.opened {
             println!("  seed (locked)  {} by {}", msk(r.seed_sompi), r.seeded_by);
+        } else if r.seed_pledged_sompi > 0 {
+            // ADR-0094: paid into, not yet a market. What is locked and what is still owed.
+            println!(
+                "  seed           {} of {} collected, {} to go — locked in the sink already",
+                msk(r.seed_pledged_sompi),
+                msk(r.seed_min_sompi),
+                msk(r.seed_min_sompi.saturating_sub(r.seed_pledged_sompi))
+            );
+            println!("  market         opens on the instalment that reaches the floor (ADR-0094)");
         } else {
             println!("  seed           none yet — the market opens with `model-seed` (at least {})", msk(r.seed_min_sompi));
         }
@@ -216,6 +227,41 @@ pub async fn positions(ctx: &Ctx, holder: Option<String>, ks: Option<&crate::key
 
 /// One carrier, priced like every other lifecycle carrier, with `extra` value outputs after the
 /// change (a buy's sink at index 1).
+/// **ADR-0094 Decision 5: how many post-quantum inputs one carrier fits.**
+///
+/// Measured on testnet-11, not reasoned about: a 20-input consolidation was refused at a transient
+/// storage mass of 585,524 against the 480,000 cap; 15 was accepted. An ML-DSA-87 signature is
+/// large, so this is a property of the signature scheme rather than of any one transaction.
+pub(crate) const PALW_CARRIER_MAX_INPUTS: usize = 15;
+
+/// The multi-input twin of [`build_move_carrier`], priced the same way: build once to measure the
+/// compute mass, then rebuild at the fee that mass earns.
+fn build_move_carrier_multi(
+    key: &kaspa_pq_validator_core::ValidatorKey,
+    nv: &crate::wallet::NodeView,
+    object: &PalwConsensusObjectV2,
+    funding: &[(kaspa_consensus_core::tx::TransactionOutpoint, UtxoEntry)],
+    extra: Vec<TransactionOutput>,
+) -> Result<(kaspa_consensus_core::tx::Transaction, u64), CliError> {
+    use kaspa_consensus_core::mass::MassCalculator;
+    let floor = kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI;
+    let calc = MassCalculator::new(
+        nv.params.mass_per_tx_byte,
+        nv.params.mass_per_script_pub_key_byte,
+        nv.params.mass_per_sig_op,
+        nv.params.storage_mass_parameter,
+    );
+    let probe = key
+        .build_palw_lifecycle_tx_multi(object, funding, floor, extra.clone())
+        .map_err(|e| CliError::new(exit::GENERIC, format!("build the carrier: {e}")))?;
+    let compute_mass = calc.calc_non_contextual_masses(&probe).compute_mass;
+    let fee = kaspa_pq_validator_core::relay_fee_for_compute_mass(compute_mass).max(floor);
+    let tx = key
+        .build_palw_lifecycle_tx_multi(object, funding, fee, extra)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("build the carrier: {e}")))?;
+    Ok((tx, fee))
+}
+
 fn build_move_carrier(
     key: &kaspa_pq_validator_core::ValidatorKey,
     nv: &crate::wallet::NodeView,
@@ -298,23 +344,47 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
             format!("line {line} is already seeded ({} locked by {})", msk(r.seed_sompi), r.seeded_by),
         ));
     }
-    if msk_seed < r.seed_min_sompi {
-        return Err(CliError::new(
-            exit::GENERIC,
-            format!("a seed of {} is under this network's least seed of {}", msk(msk_seed), msk(r.seed_min_sompi)),
-        ));
+    // ADR-0094: a payment under the floor is an INSTALMENT, not an error — it lands in the sink
+    // and is locked there, and the market opens on the payment that carries the total across.
+    // What is still refused is a payment of nothing.
+    if msk_seed == 0 {
+        return Err(CliError::new(exit::GENERIC, "a seed of zero pays nothing toward the floor".to_string()));
     }
     let object = PalwConsensusObjectV2::ModelSeed { line_id: line, seeder, msk_seed, sink_index: 1 };
     let addr = key.funding_address(nv.params.prefix());
     let candidates = crate::palw_fp::spendable_candidates_v1(&nv, &addr).await?;
-    let (outpoint, entry) = candidates
-        .into_iter()
-        .find(|(_, e)| e.amount > msk_seed.saturating_add(kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI))
-        .ok_or_else(|| {
-            CliError::new(exit::GENERIC, format!("no mature, unbonded UTXO at {addr} holds {} plus a fee", msk(msk_seed)))
-        })?;
+    // **ADR-0094 Decision 5: spend as many utxos as the mass cap fits, largest first.** A producer
+    // is paid one coinbase output a block, so the money is in hundreds of small pieces and no
+    // single one holds a seed. Fifteen ML-DSA-87 inputs is the most one transaction fits under the
+    // 480,000 storage-mass cap (measured: 15 accepted, 20 refused at 585,524).
+    let mut sorted: Vec<_> = candidates.into_iter().collect();
+    sorted.sort_by(|a, b| b.1.amount.cmp(&a.1.amount));
+    let want = msk_seed.saturating_add(kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI);
+    let mut funding: Vec<_> = Vec::new();
+    let mut have: u64 = 0;
+    for (o, e) in sorted.into_iter().take(PALW_CARRIER_MAX_INPUTS) {
+        have = have.saturating_add(e.amount);
+        funding.push((o, e));
+        if have > want {
+            break;
+        }
+    }
+    if funding.is_empty() || have <= want {
+        let reach = have;
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!(
+                "the {} mature utxo(s) this carrier can spend at {addr} hold {}, which does not cover {} plus a fee.\n                   One transaction fits at most {PALW_CARRIER_MAX_INPUTS} post-quantum inputs, so pay the seed in instalments: \n                   `misaka palw model-seed --line {line} --msk {}` now, and again until the line has {} in all.\n                   Every instalment is locked in the line's sink the moment it lands (ADR-0094); the market opens on the one that crosses the floor.",
+                funding.len(),
+                msk(reach),
+                msk(msk_seed),
+                (reach.saturating_sub(kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI)) / 100_000_000,
+                msk(r.seed_min_sompi)
+            ),
+        ));
+    }
     let sink = TransactionOutput::new(msk_seed, palw_model_sink_spk_v1(&line));
-    let (tx, fee) = build_move_carrier(&key, &nv, &object, outpoint, &entry, vec![sink])?;
+    let (tx, fee) = build_move_carrier_multi(&key, &nv, &object, &funding, vec![sink])?;
     if ctx.output != OutputFormat::Json {
         println!("seed {} into line {line}", msk(msk_seed));
         println!("  seeder         {seeder} (for the record; the seeder holds no position)");

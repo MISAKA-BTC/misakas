@@ -3026,6 +3026,9 @@ pub struct GetPalwModelMarketResponse {
     pub seeded_by: String,
     /// ADR-0090: the least seed this network takes, in sompi.
     pub seed_min_sompi: u64,
+    /// ADR-0094: what this line has collected toward the floor — locked in its sink from the
+    /// moment each payment landed. Equals `seed_sompi` once the market opened.
+    pub seed_pledged_sompi: u64,
     /// ADR-0091: MSK the mining reward has put into the curve, cumulative — five percent of every
     /// model block's escrowed worker reward, at the claim's `Final`.
     pub buyback_sompi: u64,
@@ -3036,7 +3039,7 @@ pub struct GetPalwModelMarketResponse {
 
 impl Serializer for GetPalwModelMarketResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &4, writer)?;
+        store!(u16, &5, writer)?;
         store!(bool, &self.found, writer)?;
         store!(String, &self.line_id, writer)?;
         store!(bool, &self.opened, writer)?;
@@ -3059,6 +3062,8 @@ impl Serializer for GetPalwModelMarketResponse {
         // Version 4 (ADR-0091): what the mining reward bought, and what it retired.
         store!(u64, &self.buyback_sompi, writer)?;
         store!(u64, &self.retired_units, writer)?;
+        // Version 5 (ADR-0094): the instalments collected toward the floor.
+        store!(u64, &self.seed_pledged_sompi, writer)?;
         Ok(())
     }
 }
@@ -3087,6 +3092,9 @@ impl Deserializer for GetPalwModelMarketResponse {
             if version >= 3 { (load!(u64, reader)?, load!(String, reader)?, load!(u64, reader)?) } else { (0, String::new(), 0) };
         // Version 4 (ADR-0091): a version-3 peer's chain had no buyback, so zero reads it exactly.
         let (buyback_sompi, retired_units) = if version >= 4 { (load!(u64, reader)?, load!(u64, reader)?) } else { (0, 0) };
+        // Version 5 (ADR-0094): a peer older than this served no pledge, and on such a peer a
+        // market that exists has always been fully seeded — so its opened seed IS the total.
+        let seed_pledged_sompi = if version >= 5 { load!(u64, reader)? } else { seed_sompi };
         Ok(Self {
             found,
             line_id,
@@ -3108,6 +3116,7 @@ impl Deserializer for GetPalwModelMarketResponse {
             seed_min_sompi,
             buyback_sompi,
             retired_units,
+            seed_pledged_sompi,
         })
     }
 }

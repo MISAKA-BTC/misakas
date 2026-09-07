@@ -77,8 +77,15 @@ pub struct PalwModelMarketV1 {
     /// above), and the number the site shows as "locked".
     pub seed_sompi: u64,
     /// ADR-0090 Decision 3: who paid the seed — a payout payload kept for the record only; the
-    /// seeder holds nothing and can move nothing.
+    /// seeder holds nothing and can move nothing. ADR-0094 Decision 3: with the seed paid in
+    /// instalments this is the FIRST payer, the one who opened the pledge.
     pub seeded_by: Hash64,
+    /// **ADR-0094 Decision 1: what this line has collected toward its floor.** A hundred thousand
+    /// MSK does not fit in one post-quantum transaction (fifteen ML-DSA-87 inputs is the most the
+    /// mass cap allows, about a fifth of the floor from mining income), so the seed arrives in
+    /// several. Every sompi counted here is already in the line's sink and already locked; the
+    /// market does not exist until this reaches `PALW_MODEL_SEED_MIN_SOMPI_V1`.
+    pub seed_pledged_sompi: u64,
     /// ADR-0091 Decision 2: MSK the mining reward has put into the curve, cumulative — five
     /// percent of every model block's escrowed worker reward, entered at the claim's `Final`.
     pub buyback_sompi: u64,
@@ -88,8 +95,43 @@ pub struct PalwModelMarketV1 {
 }
 
 impl PalwModelMarketV1 {
+    /// **ADR-0094 Decision 1: a line that has been paid into but is not yet a market.** The
+    /// collected total is in the reserve — it is in the sink, so it is locked — and the curve is
+    /// empty: no positions, no price, and every move refused until [`Self::is_open`].
+    pub fn pledge_v1(daa: u64, pledged_sompi: u64, first_payer: Hash64) -> Self {
+        Self {
+            opened_daa: daa,
+            msk_reserve: pledged_sompi,
+            position_units: 0,
+            sold_units: 0,
+            burned_sompi: 0,
+            registrant_paid_sompi: 0,
+            closed_to_buys: false,
+            contributor_paid_sompi: 0,
+            seed_sompi: 0,
+            seeded_by: first_payer,
+            seed_pledged_sompi: pledged_sompi,
+            buyback_sompi: 0,
+            retired_units: 0,
+        }
+    }
+
+    /// **ADR-0094 Decision 2: is this a market yet?** A row exists from the first payment; it is a
+    /// market only once the collected total reached the floor, which is the one predicate every
+    /// move consults. `seed_sompi` is set at that moment and never after, so it doubles as the
+    /// record of what the pair opened with.
+    pub fn is_open(&self) -> bool {
+        self.seed_sompi > 0
+    }
+
+    /// What is still owed before this line is a market. Zero once it is one.
+    pub fn seed_remaining_sompi(&self) -> u64 {
+        PALW_MODEL_SEED_MIN_SOMPI_V1.saturating_sub(self.seed_pledged_sompi)
+    }
+
     /// ADR-0090 Decision 2: a market opens ONLY by a seed — the whole supply in the curve and the
-    /// seed as the reserve, fee-free. There is no other opening.
+    /// seed as the reserve, fee-free. There is no other opening. ADR-0094: `seed_sompi` is the
+    /// WHOLE collected total, the crossing payment's excess included.
     pub fn seed_v1(opened_daa: u64, seed_sompi: u64, seeded_by: Hash64) -> Self {
         Self {
             opened_daa,
@@ -102,8 +144,21 @@ impl PalwModelMarketV1 {
             contributor_paid_sompi: 0,
             seed_sompi,
             seeded_by,
+            seed_pledged_sompi: seed_sompi,
             buyback_sompi: 0,
             retired_units: 0,
+        }
+    }
+
+    /// **ADR-0094 Decision 2: the payment that carries a pledge across the floor.** The reserve is
+    /// the whole collected total, the supply enters the curve, and `seed_sompi` records what the
+    /// pair opened with. The first payer keeps the record (Decision 3).
+    pub fn open_from_pledge_v1(&self, daa: u64) -> Self {
+        Self {
+            opened_daa: daa,
+            position_units: PALW_MODEL_SUPPLY_UNITS_V1,
+            seed_sompi: self.seed_pledged_sompi,
+            ..*self
         }
     }
 
@@ -113,6 +168,12 @@ impl PalwModelMarketV1 {
     }
 
     pub fn price_sompi_per_position_v1(&self) -> u64 {
+        // ADR-0094: a row that is still collecting its floor has no price — not an infinite one.
+        // The two zero-unit cases are different facts: nothing has opened yet (no price), and a
+        // curve that opened and has given up every position (a price no buy can reach).
+        if !self.is_open() {
+            return 0;
+        }
         if self.position_units == 0 {
             return u64::MAX;
         }
@@ -150,7 +211,9 @@ pub struct PalwModelBuyQuoteV1 {
 pub fn palw_model_buy_quote_v1(market: &PalwModelMarketV1, msk_in: u64) -> Option<PalwModelBuyQuoteV1> {
     // ADR-0090: a row with no reserve is not a market (the fold never writes one; a reader may
     // synthesise one for a line that has no seed) — it quotes nothing rather than the whole curve.
-    if market.closed_to_buys || msk_in == 0 || market.position_units == 0 || market.msk_reserve == 0 {
+    // ADR-0094: a row that has been paid into but has not reached its floor is not a market — it
+    // has no positions and no price, and quoting one would invent both.
+    if !market.is_open() || market.closed_to_buys || msk_in == 0 || market.position_units == 0 || market.msk_reserve == 0 {
         return None;
     }
     let fees = palw_model_fee_split_v1(msk_in);
@@ -189,7 +252,7 @@ pub struct PalwModelSellQuoteV1 {
 }
 
 pub fn palw_model_sell_quote_v1(market: &PalwModelMarketV1, units_in: u64) -> Option<PalwModelSellQuoteV1> {
-    if units_in == 0 {
+    if units_in == 0 || !market.is_open() {
         return None;
     }
     let k = market.k();
@@ -252,7 +315,7 @@ pub struct PalwModelBuybackQuoteV1 {
 }
 
 pub fn palw_model_buyback_quote_v1(market: &PalwModelMarketV1, slice: u64) -> Option<PalwModelBuybackQuoteV1> {
-    if market.closed_to_buys || slice == 0 || market.position_units == 0 || market.msk_reserve == 0 {
+    if !market.is_open() || market.closed_to_buys || slice == 0 || market.position_units == 0 || market.msk_reserve == 0 {
         return None;
     }
     let k = market.k();
