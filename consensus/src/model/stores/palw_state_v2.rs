@@ -364,6 +364,18 @@ impl DbPalwStateV2Store {
         self.tip.remove(DirectDbWriter::new(&self.db))
     }
 
+    /// Plant a pruning-point snapshot through this store's own db handle — the direct-write twin
+    /// of [`Self::set_pruning_snapshot_batch`], for the tests that need a second base to recover
+    /// from without running a prune. Test-only: production writes it from the prune's own batch.
+    #[cfg(test)]
+    pub fn set_pruning_snapshot_for_tests(&mut self, block: BlockHash, state: &PalwChainStateV2) -> StoreResult<()> {
+        use kaspa_database::prelude::DirectDbWriter;
+        let carriage = PalwStateCarriageV2::from_state(state);
+        let carriage_borsh = borsh::to_vec(&carriage).expect("PalwStateCarriageV2 is borsh-serializable");
+        self.pruning_snapshot
+            .write(DirectDbWriter::new(&self.db), &PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh })
+    }
+
     /// Load and REBUILD the tip state, demanding the recorded root — index rebuild, internal
     /// consistency, deadline consistency and the root equality all run (`into_state`), so what
     /// this returns is a state the machine would have produced, or an error naming why not.

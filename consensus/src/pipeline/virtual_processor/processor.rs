@@ -1231,7 +1231,7 @@ impl VirtualStateProcessor {
     /// The function returns the top-most UTXO-valid block on `chain(to)` which is ideally
     /// `to` itself (with the exception of returning `from` if `to` is already known to be UTXO disqualified).
     /// When returning it is guaranteed that `diff` holds the diff of the returned block from virtual
-    fn calculate_utxo_state_relatively(
+    pub(super) fn calculate_utxo_state_relatively(
         &self,
         stores: &VirtualStores,
         diff: &mut UtxoDiff,
@@ -1295,10 +1295,72 @@ impl VirtualStateProcessor {
                                 Some(state)
                             }
                             Err(e) => {
-                                warn!(
-                                    "PALW V2 state tip stands at {tip_block}, the UTXO walk starts at {from}, and the path between them cannot be walked ({e}); leaving the sink at {from}"
-                                );
-                                return from;
+                                // **A gap between the stored tip and the walk's base is THIS NODE's
+                                // problem, and it used to be charged to the chain.**
+                                //
+                                // Returning `from` here says "the candidate is UTXO-disqualified",
+                                // but nothing about the candidate was examined: the failure is that
+                                // the deltas between the tip row and `from` are not all present.
+                                // The sink search calls this once per candidate, so ONE missing
+                                // delta disqualified every block it could reach, virtual walked back
+                                // to the finality frontier, and the search then died on an empty
+                                // heap — the 2026-09-07 field report's three identical crashes,
+                                // which reproduced on every start because the store stayed in that
+                                // shape.
+                                //
+                                // The tip is not the only base. The PRUNING SNAPSHOT is a state at
+                                // a block on the chain every candidate descends from, and every
+                                // chain block above it has a delta (that is how it was applied), so
+                                // walking forward from there rebuilds the state at `from` without
+                                // the tip. A node whose tip row is unusable recovers instead of
+                                // declaring the network invalid.
+                                match store.load_pruning_snapshot(params) {
+                                    Ok(Some((snap_block, snap_state))) => {
+                                        let snap_path = self.dag_traversal_manager.calculate_chain_path(snap_block, from, None);
+                                        let snap_removed: Vec<BlockHash> = snap_path.removed.to_vec();
+                                        let snap_added: Vec<BlockHash> = snap_path.added.to_vec();
+                                        match crate::processes::palw_state_walk::walk_chain_path(
+                                            &store,
+                                            params,
+                                            snap_state,
+                                            &snap_removed,
+                                            &snap_added,
+                                        ) {
+                                            Ok(state) => {
+                                                warn!(
+                                                    "PALW V2 state tip stands at {tip_block}, the UTXO walk starts at {from}, and the path between them cannot be walked ({e}); \
+                                                     rebuilt the state at {from} from the pruning snapshot at {snap_block} instead ({} block(s) reverted, {} applied). \
+                                                     The tip row is stale or incomplete; it is rewritten when this round commits.",
+                                                    snap_removed.len(),
+                                                    snap_added.len()
+                                                );
+                                                Some(state)
+                                            }
+                                            Err(snap_err) => {
+                                                error!(
+                                                    "PALW V2 state cannot be established at {from}: the tip at {tip_block} does not walk here ({e}) and neither does the \
+                                                     pruning snapshot at {snap_block} ({snap_err}). This node cannot evaluate ANY candidate until its state store is repaired \
+                                                     — resync this data directory from peers announcing this build's fingerprint."
+                                                );
+                                                return from;
+                                            }
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        error!(
+                                            "PALW V2 state cannot be established at {from}: the tip at {tip_block} does not walk here ({e}) and this store holds no pruning \
+                                             snapshot to rebuild from. This node cannot evaluate ANY candidate until its state store is repaired — resync this data directory."
+                                        );
+                                        return from;
+                                    }
+                                    Err(snap_err) => {
+                                        error!(
+                                            "PALW V2 state cannot be established at {from}: the tip at {tip_block} does not walk here ({e}) and the pruning snapshot cannot be \
+                                             read ({snap_err}). This node cannot evaluate ANY candidate until its state store is repaired — resync this data directory."
+                                        );
+                                        return from;
+                                    }
+                                }
                             }
                         }
                     }
@@ -1334,13 +1396,24 @@ impl VirtualStateProcessor {
             // make unrepresentable). `revert_delta_v2` verifies every value it replaces, so a
             // delta applied to the wrong parent is an error rather than a quiet divergence.
             if let Some(state) = palw_state.as_mut() {
-                let (_, delta) = self.palw_state_v2_store.read().delta_of(current).expect("a chain block on this walk has a delta");
-                *state = kaspa_consensus_core::palw_state_v2::revert_delta_v2(
-                    state,
-                    &delta,
-                    self.palw_state_params_v2.as_ref().expect("palw_state is Some only when the params are"),
-                )
-                .expect("the delta reverts from the state it produced");
+                // The backward twin of the forward leg's rule: a row this node does not have is a
+                // gap in this node. Stopping returns the last point actually established, which is
+                // what every other unfinished walk in this function returns.
+                let params = self.palw_state_params_v2.as_ref().expect("palw_state is Some only when the params are");
+                let reverted = self.palw_state_v2_store.read().delta_of(current).map_err(|e| e.to_string()).and_then(|(_, delta)| {
+                    kaspa_consensus_core::palw_state_v2::revert_delta_v2(state, &delta, params).map_err(|e| e.to_string())
+                });
+                match reverted {
+                    Ok(previous) => *state = previous,
+                    Err(why) => {
+                        error!(
+                            "PALW V2 state cannot be reverted through chain block {current} ({why}); the UTXO walk stops at {from} \
+                             and virtual will hold there. This is a gap in THIS node's delta store, not a fault of the chain — \
+                             resync this data directory if it persists."
+                        );
+                        return from;
+                    }
+                }
             }
         }
 
@@ -1386,14 +1459,31 @@ impl VirtualStateProcessor {
                     // the transition here instead would be a second computation of one fact, and
                     // a second chance to disagree with what the chain already committed to.
                     if let Some(state) = palw_state.as_mut() {
-                        let (_, delta) =
-                            self.palw_state_v2_store.read().delta_of(current).expect("a validated chain block has a delta");
-                        *state = kaspa_consensus_core::palw_state_v2::apply_delta_v2(
-                            state,
-                            &delta,
-                            self.palw_state_params_v2.as_ref().expect("palw_state is Some only when the params are"),
-                        )
-                        .expect("the delta applies to its own parent");
+                        // **A delta this node does not have is a gap in this node, not a verdict on
+                        // the block.** Both of these used to be `expect`, on the reasoning above:
+                        // a validated chain block wrote its delta, so it is there. It is there
+                        // until it is not — a prune that raced the walk, an unclean shutdown
+                        // between two batches, a datadir carried across builds — and then the
+                        // node died on a row it could have simply stopped at. The walk stops here
+                        // and returns the last point it did establish, which is the same shape as
+                        // every other "this candidate cannot be taken further" answer in this
+                        // function; the caller holds virtual where it is and says so.
+                        let params = self.palw_state_params_v2.as_ref().expect("palw_state is Some only when the params are");
+                        let applied =
+                            self.palw_state_v2_store.read().delta_of(current).map_err(|e| e.to_string()).and_then(|(_, delta)| {
+                                kaspa_consensus_core::palw_state_v2::apply_delta_v2(state, &delta, params).map_err(|e| e.to_string())
+                            });
+                        match applied {
+                            Ok(next) => *state = next,
+                            Err(why) => {
+                                error!(
+                                    "PALW V2 state cannot advance through chain block {current} ({why}); the UTXO walk stops at {diff_point} \
+                                     and virtual will hold there. This is a gap in THIS node's delta store, not a fault of the chain — \
+                                     resync this data directory if it persists."
+                                );
+                                return diff_point;
+                            }
+                        }
                     }
                 }
                 Err(StoreError::KeyNotFound(_)) => {

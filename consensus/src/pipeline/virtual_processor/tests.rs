@@ -11800,3 +11800,87 @@ async fn an_exhausted_sink_search_holds_at_the_previous_sink() {
     assert!(candidates.is_empty(), "and merge nothing while it holds");
     assert!(vp.utxo_multisets_store.get(sink).is_ok(), "the held sink must still be one the caller can read a multiset for");
 }
+
+/// **A gap between the stored PALW tip and the walk's base is this node's problem, and it must not
+/// be charged to the chain.**
+///
+/// `calculate_utxo_state_relatively` needs the V2 state at `from`. When the tip row stands
+/// elsewhere it walks the deltas between them — and when one of those deltas is missing it used to
+/// return `from`, which is the same answer it gives for "this candidate is UTXO-disqualified".
+/// The sink search calls it once per candidate, so a single missing delta disqualified every block
+/// the search could reach; virtual walked back to the finality frontier and the search then died on
+/// an empty heap. That is the 2026-09-07 field report, and it reproduced on every start because the
+/// store stayed in that shape.
+///
+/// The pruning snapshot is a second base: a state at a block the candidates descend from, with a
+/// delta on every chain block above it. This drives exactly the broken shape — tip elsewhere, its
+/// delta deleted — and demands the walk still arrive at `to`.
+#[tokio::test]
+async fn a_missing_delta_under_the_tip_is_recovered_from_the_pruning_snapshot() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let state_params = match &config.params.palw_consensus_mode {
+        PalwConsensusMode::ConsensusV2(bundle) => bundle.state.clone(),
+        _ => unreachable!(),
+    };
+    let genesis_hash = config.params.genesis.hash;
+
+    let consensus = TestConsensus::new(&config);
+    // The snapshot a live node writes at its pruning point is a state IT HELD. Capture the real
+    // genesis state before the chain moves, rather than synthesising one: a bare `genesis()` is a
+    // different state from the one this bundle installs, and the deltas would not apply to it.
+    let genesis_state = {
+        let store = consensus.virtual_processor().palw_state_v2_store.read();
+        let (block, state) = store.load_tip(&state_params).unwrap().expect("a V2 network installs its genesis tip");
+        assert_eq!(block, genesis_hash, "the zero point stands at genesis");
+        state
+    };
+
+    let mut ctx = TestContext::new(consensus);
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let sink = ctx.consensus.get_sink();
+    let vp = ctx.consensus.virtual_processor();
+    let tip_block = {
+        let store = vp.palw_state_v2_store.read();
+        store.tip_record().unwrap().expect("the walk wrote a tip").block
+    };
+    assert_ne!(tip_block, genesis_hash, "the fixture must have advanced, or the walk has nothing to cross");
+    {
+        let mut store = vp.palw_state_v2_store.write();
+        store.set_pruning_snapshot_for_tests(genesis_hash, &genesis_state).expect("the snapshot is planted");
+        // Break the tip's own path: reverting it needs its delta, and the delta is gone.
+        store.delete_delta_for_tests(tip_block).expect("the delta is deleted");
+    }
+
+    // The walk from genesis to the sink now has no usable tip base. It must still land on `to`.
+    let virtual_read = vp.virtual_stores.upgradable_read();
+    let mut diff = kaspa_consensus_core::utxo::utxo_diff::UtxoDiff::default();
+    let mut bond_view = vp.initial_active_bond_view();
+    // Two failures are staged at once and each has its own answer, so the assertions separate them.
+    let reached = vp.calculate_utxo_state_relatively(&virtual_read, &mut diff, &mut bond_view, genesis_hash, sink);
+
+    // 1. The BASE. Reverting the tip needs the delta that is gone, so the tip is not a usable base;
+    //    the pruning snapshot is, and the walk got past `from` on the strength of it. Without that
+    //    recovery this call returns `from` immediately and this assertion is what fails.
+    assert_ne!(reached, genesis_hash, "the walk must rebuild its base from the pruning snapshot, not give up at {genesis_hash}");
+    assert!(
+        ctx.consensus.reachability_service().is_chain_ancestor_of(reached, sink),
+        "whatever it reached must be on the chain it was asked to walk"
+    );
+
+    // 2. And it arrives. The recovery is not a partial one: with the base rebuilt, the forward leg
+    //    walks the chain to the block it was asked for. The process being alive to assert it is the
+    //    other half — the missing row used to reach an `expect` on this path.
+    assert_eq!(reached, sink, "the rebuilt base must carry the walk all the way to {sink}");
+    let _ = state_params;
+}
