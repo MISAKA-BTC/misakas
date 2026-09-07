@@ -1184,10 +1184,7 @@ mod pq_output_class_enforcement_tests {
             ("mergeset payout (per blue, per ADR-0058 entitled red)", Some(params.mergeset_size_limit())),
             ("unentitled-red aggregate", Some(1)),
             ("§E participation", Some(PALW_V2_MAX_VALIDATOR_PAYOUTS)),
-            (
-                "VLT §6 audit fee",
-                (dns.vlt.vlt_shadow_activation_daa_score == u64::MAX || dns.vlt.audit_fee_sompi == 0).then_some(0),
-            ),
+            ("VLT §6 audit fee", (dns.vlt.vlt_shadow_activation_daa_score == u64::MAX || dns.vlt.audit_fee_sompi == 0).then_some(0)),
             ("§E deferred quality bonus", Some(PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS)),
             ("§F reserve drip", Some(PALW_V2_MAX_RESERVE_DRIP_PAYOUTS)),
             ("ADR-0033 credit", params.palw_credit.is_none().then_some(0)),

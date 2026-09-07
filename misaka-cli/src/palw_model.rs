@@ -460,15 +460,8 @@ pub async fn sell(
     // `getPalwModelPositions` above and checked against; the window is measured from the tip the
     // node reported when this command connected, so the holder signs the window they were shown.
     let not_after_daa = nv.virtual_daa.saturating_add(PALW_MODEL_SELL_WINDOW_DAA);
-    let message = palw_model_sell_message_v1(
-        crate::bond::network_domain(&nv),
-        &line,
-        &holder,
-        units_in,
-        min_msk_out,
-        held,
-        not_after_daa,
-    );
+    let message =
+        palw_model_sell_message_v1(crate::bond::network_domain(&nv), &line, &holder, units_in, min_msk_out, held, not_after_daa);
     let signature = key.sign_with_context(&message, PALW_MODEL_SELL_MLDSA87_CONTEXT).to_vec();
     let object = PalwConsensusObjectV2::ModelSell {
         line_id: line,

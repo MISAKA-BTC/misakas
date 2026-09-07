@@ -35,10 +35,11 @@
 //! the same journal, so they unwind together.
 
 use kaspa_consensus_core::evm::model_market::{
-    MAX_MARKET_ACTIONS_PER_EVM_BLOCK, MAX_MARKET_ACTIONS_PER_EVM_BLOCK_PER_ACCOUNT, MISAKA_MODEL_AMM_PRECOMPILE, MISAKA_MODEL_POSITION_PRECOMPILE, MISAKA_MODEL_REGISTRY_PRECOMPILE,
-    MISAKA_MODEL_WRITER, PALW_EVM_ACTION_BUY, PALW_EVM_ACTION_SEED, PALW_EVM_ACTION_SELL, PALW_EVM_MARKET_ACTION_ENCODING_V1,
-    PALW_EVM_WRITER_GAS_V1, PalwEvmMarketActionKindV1, PalwEvmMarketActionV1, PalwEvmMarketFencesV1, PalwEvmSettlementOutcomeV1,
-    PalwEvmSettlementV1, PalwEvmViewV1, evm_holder_v1, facade_address_v1,
+    MAX_MARKET_ACTIONS_PER_EVM_BLOCK, MAX_MARKET_ACTIONS_PER_EVM_BLOCK_PER_ACCOUNT, MISAKA_MODEL_AMM_PRECOMPILE,
+    MISAKA_MODEL_POSITION_PRECOMPILE, MISAKA_MODEL_REGISTRY_PRECOMPILE, MISAKA_MODEL_WRITER, PALW_EVM_ACTION_BUY,
+    PALW_EVM_ACTION_SEED, PALW_EVM_ACTION_SELL, PALW_EVM_MARKET_ACTION_ENCODING_V1, PALW_EVM_WRITER_GAS_V1, PalwEvmMarketActionKindV1,
+    PalwEvmMarketActionV1, PalwEvmMarketFencesV1, PalwEvmSettlementOutcomeV1, PalwEvmSettlementV1, PalwEvmViewV1, evm_holder_v1,
+    facade_address_v1,
 };
 use kaspa_consensus_core::evm::{EVM_NATIVE_SCALE, EvmAddress, EvmLog};
 use kaspa_consensus_core::palw_model_market_v1::{

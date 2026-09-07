@@ -391,7 +391,9 @@ pub fn evaluate_fork_id_v1(params: &Params, local_daa_score: u64, peer_fired: &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::params::{ForkActivation, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, palw_rc_shipped_params};
+    use crate::config::params::{
+        ForkActivation, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, palw_rc_shipped_params,
+    };
     use crate::network::NetworkId;
 
     fn shipped() -> Vec<(&'static str, Params)> {

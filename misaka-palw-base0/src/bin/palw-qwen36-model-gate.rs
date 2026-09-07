@@ -594,7 +594,9 @@ fn main() {
             temperature_q: 0,
         };
         let leaves_for = |decode: u32| -> Result<u64, String> {
-            use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1};
+            use kaspa_consensus_core::palw_fp_execution_v3::{
+                PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1,
+            };
             let job = job_for(decode);
             let class = PalwFpClassFactsV3 {
                 model_profile_id: rt.manifest().model_profile_id,

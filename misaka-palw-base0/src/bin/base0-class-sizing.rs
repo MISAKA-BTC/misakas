@@ -17,18 +17,18 @@
 //! The Qwen geometries are the MEASURED ones from `palw_qwen25_profile`, not a sketch: the second
 //! class's graph is that module's and this binary only prices it.
 
+use kaspa_consensus_core::palw_attn_court_v1::palw_attn_court_admits_row_v1;
 use kaspa_consensus_core::palw_base0_profile::{
     PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, PALW_RC_BASE0_WORST_CASE, PalwBase0GeometryV1, base0_profile_v1,
 };
 use kaspa_consensus_core::palw_catalog_coverage::{PalwReachableKernelSetV1, verify_catalog_coverage_v1};
+use kaspa_consensus_core::palw_context_ladder::palw_close_assembly_daa_v1;
+use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwCourtParamsV2};
 use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, QWEN25_3B, qwen25_profile_v1};
+use kaspa_consensus_core::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4;
 use kaspa_consensus_core::palw_step::{
     PALW_STEP_MAX_LEAVES, PalwShapeProfileV3, step_leaf_count_capped_v1, worst_case_step_leaf_count_capped_v1,
 };
-use kaspa_consensus_core::palw_attn_court_v1::palw_attn_court_admits_row_v1;
-use kaspa_consensus_core::palw_context_ladder::palw_close_assembly_daa_v1;
-use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwCourtParamsV2};
-use kaspa_consensus_core::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4;
 use kaspa_consensus_core::palw_step_refute::catalogued_kernel_ids_v1;
 use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
 use kaspa_hashes::Hash64;
