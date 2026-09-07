@@ -3127,6 +3127,16 @@ pub enum PalwConsensusObjectV2 {
     },
     /// **ADR-0088 Decision 6: the owner sets the roles and the contributor share**, signed over
     /// `palw_model_roles_message_v1`. `None` means the owner.
+    /// **ADR-0095 §4.1: what this line's positions grant its holders**, signed by the OWNER over
+    /// `palw_model_benefits_message_v1`. The owner rather than the developer because this is what
+    /// the line PROMISES, not what it ships. §4.7 decides whether it lands now or waits out notice.
+    ModelLineBenefitsDeclared {
+        line_id: Hash64,
+        tiers: Vec<crate::palw_model_benefits_v1::PalwModelBenefitTierV1>,
+        cadence_daa: u64,
+        expires_daa: u64,
+        signature: Vec<u8>,
+    },
     ModelLineRolesSet {
         line_id: Hash64,
         developer: Option<PalwBondKeyV2>,
@@ -4412,6 +4422,19 @@ pub enum PalwStateV2Error {
     ModelPreviewsFull(Hash64),
     #[error("version {1} of line {0} is not a preview")]
     ModelVersionNotPreview(Hash64, u32),
+    /// ADR-0095 §4.4: the declared early-access window has not passed, so this version may not
+    /// become current yet. The holder's exclusivity is a rule, not a promise.
+    #[error(
+        "line {line} version {version} may not become current until daa {promotable_at}: its holders were promised an early-access lead"
+    )]
+    ModelBenefitLeadNotElapsed { line: Hash64, version: u32, promotable_at: u64 },
+    /// ADR-0095 §4.4: while a lead is in effect a version must ENTER as a preview — otherwise the
+    /// whole window is bypassable in one field.
+    #[error("line {line} promises its holders a {lead_daa} daa early-access lead, so a version must be published as a preview")]
+    ModelBenefitMustEnterAsPreview { line: Hash64, lead_daa: u64 },
+    /// ADR-0095 §4.2/§4.1: the declaration's own shape (N5, N6).
+    #[error("the benefits declaration for line {0} is not well formed: {1:?}")]
+    ModelBenefitsRejected(Hash64, crate::palw_model_benefits_v1::PalwModelBenefitRejectV1),
     #[error("version {1} of line {0} is current and cannot be withdrawn, only succeeded")]
     ModelVersionIsCurrent(Hash64, u32),
     #[error("version {1} of line {0} is not in force")]
@@ -4499,6 +4522,12 @@ pub struct PalwChainStateV2 {
     /// ADR-0088 Decision 2: versions by `(line, n)`; the last `PALW_MODEL_VERSION_HISTORY_V1` per
     /// line stay, older rows are evicted at the next publish.
     model_versions: BTreeMap<(Hash64, u32), crate::palw_model_lines_v1::PalwModelVersionV1>,
+    /// ADR-0095 §4.1: what each line grants its holders.
+    model_benefits: BTreeMap<Hash64, crate::palw_model_benefits_v1::PalwModelBenefitsV1>,
+    /// ADR-0095 §4.5: when each holder's tenure clock last started. Set when a balance rises from
+    /// zero, PRESERVED when they buy more, and reset to the current height whenever it falls — so
+    /// it measures how long since the holder last sold.
+    model_position_since: BTreeMap<(Hash64, Hash64), u64>,
     /// ADR-0088 Decision 7: open and adopted proposals, by proposal id.
     model_proposals: BTreeMap<Hash64, crate::palw_model_lines_v1::PalwModelProposalV1>,
     /// ADR-0088 Decision 5: evaluations by `(line, version, by)`.
@@ -4624,6 +4653,8 @@ impl PalwChainStateV2 {
             model_positions: BTreeMap::new(),
             model_lines: BTreeMap::new(),
             model_versions: BTreeMap::new(),
+            model_benefits: BTreeMap::new(),
+            model_position_since: BTreeMap::new(),
             model_proposals: BTreeMap::new(),
             model_evaluations: BTreeMap::new(),
             claim_roots: BTreeMap::new(),
@@ -4803,6 +4834,94 @@ impl PalwChainStateV2 {
     }
 
     /// ADR-0087: units `holder` holds in `class_id`, zero when no row exists.
+    /// ADR-0095 §4.6: the height of the line's most recent publication, which is what the cadence
+    /// is measured from. A line that has never published beyond its founding is measured from the
+    /// founding, so a new line is not born already lapsed.
+    pub fn model_line_last_version_daa(&self, line_id: &Hash64) -> u64 {
+        let founded = self.model_line_or_founding(line_id).map(|l| l.founded_daa).unwrap_or(0);
+        self.model_versions
+            .range((*line_id, 0)..=(*line_id, u32::MAX))
+            .map(|((_, _), v)| v.published_daa)
+            .max()
+            .unwrap_or(founded)
+            .max(founded)
+    }
+
+    /// ADR-0095 §4.1: the line's declaration, as stored (including any pending weakening).
+    pub fn model_benefits(&self, line_id: &Hash64) -> Option<&crate::palw_model_benefits_v1::PalwModelBenefitsV1> {
+        self.model_benefits.get(line_id)
+    }
+
+    /// ADR-0095 §4.6: the tiers GOVERNING at `daa` — after the notice has matured and after the
+    /// lapse rules. This is the reader every rule and every card must use; the raw `tiers` field is
+    /// only what was last written.
+    pub fn model_benefit_tiers_in_effect(
+        &self,
+        line_id: &Hash64,
+        daa: u64,
+    ) -> Vec<crate::palw_model_benefits_v1::PalwModelBenefitTierV1> {
+        let Some(row) = self.model_benefits.get(line_id) else { return Vec::new() };
+        let last = self.model_line_last_version_daa(line_id);
+        crate::palw_model_benefits_v1::palw_model_benefits_in_effect_v1(row, last, daa).to_vec()
+    }
+
+    /// ADR-0095 §4.6: why the declaration is granting nothing, for the card.
+    pub fn model_benefit_lapse(&self, line_id: &Hash64, daa: u64) -> Option<crate::palw_model_benefits_v1::PalwModelBenefitLapseV1> {
+        let row = self.model_benefits.get(line_id)?;
+        let last = self.model_line_last_version_daa(line_id);
+        crate::palw_model_benefits_v1::palw_model_benefits_lapse_v1(row, last, daa)
+    }
+
+    /// ADR-0095 §4.4: the lead the fold enforces on this line's version paths at `daa`.
+    pub fn model_benefit_enforced_lead(&self, line_id: &Hash64, daa: u64) -> u64 {
+        crate::palw_model_benefits_v1::palw_model_benefits_enforced_lead_v1(&self.model_benefit_tiers_in_effect(line_id, daa))
+    }
+
+    /// ADR-0095 §4.5: how long this holder has held without selling, at `daa`.
+    pub fn model_position_tenure(&self, line_id: &Hash64, holder: &Hash64, daa: u64) -> u64 {
+        match self.model_position_since.get(&(*line_id, *holder)) {
+            Some(since) => daa.saturating_sub(*since),
+            None => 0,
+        }
+    }
+
+    /// **ADR-0095 §4.3 — the tier, and the one place the whole network computes it.**
+    ///
+    /// A gateway, a wallet and the explorer must agree, so this takes the height it is asked about
+    /// and answers from the tiers in effect there. Both lanes count: ADR-0089 keeps carrier-held
+    /// and EVM-held positions in separate namespaces, and a person is not two people.
+    pub fn model_benefit_tier_across(
+        &self,
+        line_id: &Hash64,
+        holders: &[Hash64],
+        daa: u64,
+    ) -> Option<(usize, crate::palw_model_benefits_v1::PalwModelBenefitTierV1)> {
+        let tiers = self.model_benefit_tiers_in_effect(line_id, daa);
+        if tiers.is_empty() {
+            return None;
+        }
+        let (units, tenure) = self.model_position_across(line_id, holders, daa);
+        let chosen = crate::palw_model_benefits_v1::tier_for_units(&tiers, units, tenure)?.clone();
+        let idx = tiers.iter().position(|t| t.min_units == chosen.min_units)?;
+        Some((idx, chosen))
+    }
+
+    pub fn model_benefit_tier(
+        &self,
+        line_id: &Hash64,
+        holder: &Hash64,
+        daa: u64,
+    ) -> Option<(usize, crate::palw_model_benefits_v1::PalwModelBenefitTierV1)> {
+        let tiers = self.model_benefit_tiers_in_effect(line_id, daa);
+        if tiers.is_empty() {
+            return None;
+        }
+        let (units, tenure) = self.model_position_across(line_id, std::slice::from_ref(holder), daa);
+        let chosen = crate::palw_model_benefits_v1::tier_for_units(&tiers, units, tenure)?.clone();
+        let idx = tiers.iter().position(|t| t.min_units == chosen.min_units)?;
+        Some((idx, chosen))
+    }
+
     pub fn model_position(&self, class_id: &Hash64, holder: &Hash64) -> u64 {
         self.model_positions.get(&(*class_id, *holder)).copied().unwrap_or(0)
     }
@@ -4816,6 +4935,30 @@ impl PalwChainStateV2 {
     /// line's. The key is `(line, holder)`, so no range answers "this holder's rows" without a
     /// second index; adding one would be a new consensus table, which is the defect this finding is
     /// about. The scan stays, the cost is stated, and the caller is bounded instead.
+    /// **ADR-0095 §4.3, N3 — what a PERSON holds of a line, across the ids they proved.**
+    ///
+    /// ADR-0089 gives the EVM lane its own holder ids (`evm_holder_v1` of the account), unrelated
+    /// to a carrier-lane payout key, and the chain cannot tell that two ids are one person. So the
+    /// PERSON is whatever set of ids they can sign for (§4.8), and this sums exactly that set —
+    /// never more, because an unproven id is somebody else's.
+    ///
+    /// The tenure is the MOST RECENT of the ids' clocks: a person who sold from one of their own
+    /// addresses last block has sold, and taking the oldest clock would let a holder keep a long
+    /// tenure in one hand while trading with the other.
+    pub fn model_position_across(&self, line_id: &Hash64, holders: &[Hash64], daa: u64) -> (u64, u64) {
+        let mut units = 0u64;
+        let mut tenure = u64::MAX;
+        for h in holders {
+            let held = self.model_position(line_id, h);
+            if held == 0 {
+                continue;
+            }
+            units = units.saturating_add(held);
+            tenure = tenure.min(self.model_position_tenure(line_id, h, daa));
+        }
+        (units, if tenure == u64::MAX { 0 } else { tenure })
+    }
+
     pub fn model_positions_of(&self, holder: &Hash64) -> Vec<(Hash64, u64)> {
         self.model_positions.iter().filter(|((_, h), _)| h == holder).map(|((c, _), units)| (*c, *units)).collect()
     }
@@ -5323,6 +5466,14 @@ impl PalwChainStateV2 {
             state.update(collection_root(b"model_proposals", &self.model_proposals).as_byte_slice());
             state.update(collection_root(b"model_evaluations", &self.model_evaluations).as_byte_slice());
             state.update(collection_root(b"claim_roots", &self.claim_roots).as_byte_slice());
+        }
+        // **ADR-0095 §4.11 as corrected.** Its own block, NOT folded into the registry's above:
+        // on a chain where the registry is already live, adding these to that block would move the
+        // root the moment the code shipped. Empty until something is declared, and nothing can be
+        // declared below `Params::palw_model_benefits`.
+        if !self.model_benefits.is_empty() || !self.model_position_since.is_empty() {
+            state.update(collection_root(b"model_benefits", &self.model_benefits).as_byte_slice());
+            state.update(collection_root(b"model_position_since", &self.model_position_since).as_byte_slice());
         }
         // ADR-0089 Decision 6: the settlement list is in the root while it waits for the child,
         // and only then.
@@ -6077,6 +6228,18 @@ pub enum PalwDeltaEntryV2 {
         old: Option<u64>,
         new: Option<u64>,
     },
+    /// ADR-0095: a line's benefits declaration moved.
+    ModelBenefits {
+        key: Hash64,
+        old: Option<crate::palw_model_benefits_v1::PalwModelBenefitsV1>,
+        new: Option<crate::palw_model_benefits_v1::PalwModelBenefitsV1>,
+    },
+    /// ADR-0095 §4.5: a holder's tenure clock moved.
+    ModelPositionSince {
+        key: (Hash64, Hash64),
+        old: Option<u64>,
+        new: Option<u64>,
+    },
     /// ADR-0088: a line row moved.
     ModelLine {
         key: Hash64,
@@ -6517,6 +6680,45 @@ impl<'a> TransitionBuilder<'a> {
         };
         if old != new {
             self.entries.push(PalwDeltaEntryV2::ModelPosition { key, old, new });
+        }
+    }
+
+    /// **ADR-0095 §4.5 — the tenure clock, moved from the one place a balance changes.**
+    ///
+    /// It starts when a balance rises from zero, is PRESERVED when a holder buys more, and is
+    /// reset to the current height whenever the balance falls. So it measures how long since the
+    /// holder last sold, which is the honest description of what a membership should reward:
+    /// punishing someone for increasing their stake would be perverse, and rewarding someone who
+    /// sold last block would make `min_hold_daa` decorative.
+    fn touch_model_position_tenure(&mut self, key: (Hash64, Hash64), before: u64, after: u64, daa: u64) {
+        if !self.extras.model_benefits_active {
+            return;
+        }
+        let old = self.state.model_position_since.get(&key).copied();
+        let new = if after == 0 {
+            None
+        } else if before == 0 || after < before {
+            Some(daa)
+        } else {
+            old.or(Some(daa))
+        };
+        if old != new {
+            match new {
+                Some(v) => self.state.model_position_since.insert(key, v),
+                None => self.state.model_position_since.remove(&key),
+            };
+            self.entries.push(PalwDeltaEntryV2::ModelPositionSince { key, old, new });
+        }
+    }
+
+    /// ADR-0095 §4.1.
+    fn write_model_benefits(&mut self, key: Hash64, new: Option<crate::palw_model_benefits_v1::PalwModelBenefitsV1>) {
+        let old = match &new {
+            Some(record) => self.state.model_benefits.insert(key, record.clone()),
+            None => self.state.model_benefits.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ModelBenefits { key, old, new });
         }
     }
 
@@ -8199,9 +8401,8 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         // cannot be asked after it; and the remap above has already rewritten the turn to
         // `AwaitDisclosure`, so by then a fused terminal is indistinguishable from an ordinary rung.
         // It is asked once, here, off the same two facts the remap used.
-        let owes_the_dissection_opening = session.dissection.is_none()
-            && class_is_fused
-            && session.ladder.turn() == crate::palw_bisect::PalwBisectTurnV1::Terminal;
+        let owes_the_dissection_opening =
+            session.dissection.is_none() && class_is_fused && session.ladder.turn() == crate::palw_bisect::PalwBisectTurnV1::Terminal;
         let turn_can_still_move =
             !matches!(turn, crate::palw_bisect::PalwBisectTurnV1::Terminal | crate::palw_bisect::PalwBisectTurnV1::Abandoned);
         let rung_fired = turn_can_still_move && rung_deadline < ctx.daa_score && rung_deadline < session.deadline_daa;
@@ -9384,6 +9585,9 @@ fn apply_object(
         }
         PalwConsensusObjectV2::ModelVersionWithdrawn { line_id, version, signature: _ } => {
             apply_model_version_withdrawn(builder, line_id, *version)?;
+        }
+        PalwConsensusObjectV2::ModelLineBenefitsDeclared { line_id, tiers, cadence_daa, expires_daa, signature: _ } => {
+            apply_model_line_benefits(builder, ctx, line_id, tiers, *cadence_daa, *expires_daa)?;
         }
         PalwConsensusObjectV2::ModelLineRolesSet { line_id, developer, maintainer, contributor_permille_of_leg, signature: _ } => {
             apply_model_line_roles(builder, line_id, *developer, *maintainer, *contributor_permille_of_leg)?;
@@ -11072,6 +11276,10 @@ pub struct PalwTransitionExtrasV1 {
     /// `Params::palw_model_lines` resolved at the block's DAA (ADR-0088 Decision 11). Below it
     /// the ten registry objects are refused and no claim is attributed.
     pub model_lines_active: bool,
+    /// `Params::palw_model_benefits` resolved at the block's DAA (ADR-0095 §4.11 as corrected).
+    /// Below it a declaration is refused, no tenure clock is written, and §4.4's two refusals never
+    /// fire — so a chain that has not armed it keeps exactly the state root it had.
+    pub model_benefits_active: bool,
     /// `Params::palw_model_evm` resolved at the block's DAA (ADR-0089 Decision 9). Below it the
     /// action list is empty by construction and no settlement is written.
     pub evm_market_active: bool,
@@ -11096,6 +11304,11 @@ pub struct PalwTransitionExtrasV1 {
 }
 
 impl<'a> TransitionBuilder<'a> {
+    /// ADR-0095 §4.11 as corrected. The membership's own fence.
+    fn require_model_benefits(&self) -> Result<(), PalwStateV2Error> {
+        if self.extras.model_benefits_active { Ok(()) } else { Err(PalwStateV2Error::ModelLinesNotArmed) }
+    }
+
     fn require_model_lines(&self) -> Result<(), PalwStateV2Error> {
         if self.extras.model_lines_active { Ok(()) } else { Err(PalwStateV2Error::ModelLinesNotArmed) }
     }
@@ -11334,6 +11547,8 @@ fn model_buy_v1(
     builder.write_model_market(*line_id, Some(after));
     let held = builder.state.model_position(line_id, holder);
     builder.write_model_position((*line_id, *holder), held.saturating_add(quote.units_out));
+    // ADR-0095 §4.5: buying more keeps the clock a holder has already earned.
+    builder.touch_model_position_tenure((*line_id, *holder), held, held.saturating_add(quote.units_out), ctx.daa_score);
     builder.model_moves += 1;
     Ok(crate::palw_model_market_v1::PalwModelBuyQuoteV1 { after, ..quote })
 }
@@ -11402,6 +11617,8 @@ fn model_sell_v1(
     after.closed_to_buys = !(class_active && line.as_ref().is_some_and(|l| l.is_active()));
     builder.write_model_market(*line_id, Some(after));
     builder.write_model_position((*line_id, *holder), held - units_in);
+    // ADR-0095 §4.5: selling any part of a holding restarts it.
+    builder.touch_model_position_tenure((*line_id, *holder), held, held - units_in, ctx.daa_score);
     builder.model_moves += 1;
     Ok(crate::palw_model_market_v1::PalwModelSellQuoteV1 { after, ..quote })
 }
@@ -11583,6 +11800,15 @@ fn apply_model_version_published(
     if preview && line.previews.len() >= PALW_MODEL_PREVIEWS_V1 {
         return Err(PalwStateV2Error::ModelPreviewsFull(*line_id));
     }
+    // **ADR-0095 §4.4, second clause.** While the line's declaration in effect promises an
+    // early-access lead, a version must ENTER as a preview. Without this the entire window is
+    // bypassable in one boolean: publish straight to current and no holder ever sees it first.
+    if !preview && builder.extras.model_benefits_active {
+        let lead = builder.state.model_benefit_enforced_lead(line_id, ctx.daa_score);
+        if lead > 0 {
+            return Err(PalwStateV2Error::ModelBenefitMustEnterAsPreview { line: *line_id, lead_daa: lead });
+        }
+    }
     if let Some(proposal_id) = declared.adopted_from {
         let mut proposal =
             builder.state.model_proposals.get(&proposal_id).cloned().ok_or(PalwStateV2Error::ModelProposalMissing(proposal_id))?;
@@ -11643,6 +11869,20 @@ fn apply_model_version_promoted(
     if row.status != PalwVersionStatusV1::Preview {
         return Err(PalwStateV2Error::ModelVersionNotPreview(*line_id, version));
     }
+    // **ADR-0095 §4.4, first clause — the holder's window is a rule, not a promise.**
+    //
+    // The lead is read from the declaration IN EFFECT at this height, so a lapsed promise (§4.6)
+    // constrains nobody and a weakening that has not finished its notice (§4.7) still binds. A
+    // developer who wants to promote sooner must lower their own declaration first, and lowering a
+    // lead is itself a weakening — which is what closes A9.
+    let lead =
+        if builder.extras.model_benefits_active { builder.state.model_benefit_enforced_lead(line_id, ctx.daa_score) } else { 0 };
+    if lead > 0 {
+        let promotable_at = row.published_daa.saturating_add(lead);
+        if ctx.daa_score < promotable_at {
+            return Err(PalwStateV2Error::ModelBenefitLeadNotElapsed { line: *line_id, version, promotable_at });
+        }
+    }
     builder.make_model_version_current(ctx, line_id, &mut line, version);
     row.status = PalwVersionStatusV1::Current;
     builder.write_model_version((*line_id, version), Some(row));
@@ -11671,6 +11911,82 @@ fn apply_model_version_withdrawn(builder: &mut TransitionBuilder<'_>, line_id: &
     row.status = PalwVersionStatusV1::Withdrawn;
     builder.write_model_version((*line_id, version), Some(row));
     builder.write_model_line(*line_id, Some(line));
+    Ok(())
+}
+
+/// **ADR-0095 §4.1 and §4.7 — the line declares what its positions grant.**
+///
+/// Signed by the OWNER (the signature is checked in the virtual processor, like every other line
+/// object). The one decision made here is §4.7's: giving a benefit lands now, taking one away waits
+/// out the notice. Without that asymmetry every promise in ADR-0095 is theatre — declare rich
+/// benefits, take a buyer's money at the curve, withdraw in the next block.
+fn apply_model_line_benefits(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    line_id: &Hash64,
+    tiers: &[crate::palw_model_benefits_v1::PalwModelBenefitTierV1],
+    cadence_daa: u64,
+    expires_daa: u64,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_model_benefits_v1 as b;
+    builder.require_model_lines()?;
+    builder.require_model_benefits()?;
+    let line = builder.model_line_for_write(line_id)?;
+    if !line.is_active() {
+        return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
+    }
+    let owner = line.owner.ok_or(PalwStateV2Error::ModelLineUnowned(*line_id))?;
+    builder.require_active_bond(&owner)?;
+    b::palw_model_benefits_validate_v1(tiers, expires_daa, ctx.daa_score)
+        .map_err(|e| PalwStateV2Error::ModelBenefitsRejected(*line_id, e))?;
+
+    let existing = builder.state.model_benefits.get(line_id).cloned();
+    let row = match existing {
+        None => b::PalwModelBenefitsV1 {
+            tiers: tiers.to_vec(),
+            cadence_daa,
+            expires_daa,
+            declared_daa: ctx.daa_score,
+            declared_by: Some(owner),
+            pending: None,
+        },
+        Some(prev) => {
+            // The comparison is against what GOVERNS now, not against the row's `tiers` field: a
+            // line with a pending weakening that declares again must be measured from the promise
+            // holders actually have, or a two-step withdrawal would slip past the notice.
+            let last_version_daa = builder.state.model_line_last_version_daa(line_id);
+            let live = b::palw_model_benefits_in_effect_v1(&prev, last_version_daa, ctx.daa_score).to_vec();
+            let live_expires = match &prev.pending {
+                Some(pd) if ctx.daa_score >= pd.effective_daa => pd.expires_daa,
+                _ => prev.expires_daa,
+            };
+            if b::palw_model_benefits_is_strengthening_v1(&live, live_expires, tiers, expires_daa) {
+                b::PalwModelBenefitsV1 {
+                    tiers: tiers.to_vec(),
+                    cadence_daa,
+                    expires_daa,
+                    declared_daa: ctx.daa_score,
+                    declared_by: Some(owner),
+                    pending: None,
+                }
+            } else {
+                b::PalwModelBenefitsV1 {
+                    tiers: live,
+                    cadence_daa: prev.cadence_daa,
+                    expires_daa: live_expires,
+                    declared_daa: prev.declared_daa,
+                    declared_by: prev.declared_by,
+                    pending: Some(b::PalwModelBenefitPendingV1 {
+                        tiers: tiers.to_vec(),
+                        cadence_daa,
+                        expires_daa,
+                        effective_daa: ctx.daa_score.saturating_add(b::PALW_MODEL_BENEFIT_NOTICE_DAA),
+                    }),
+                }
+            }
+        }
+    };
+    builder.write_model_benefits(*line_id, Some(row));
     Ok(())
 }
 
@@ -12088,6 +12404,10 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         }
         PalwDeltaEntryV2::ModelMarket { key, old, new } => swap_write!(state.model_markets, key, old, new),
         PalwDeltaEntryV2::ModelPosition { key, old, new } => swap_write!(state.model_positions, key, old, new),
+        PalwDeltaEntryV2::ModelBenefits { key, old, new } => swap_write!(state.model_benefits, key, old, new),
+        PalwDeltaEntryV2::ModelPositionSince { key, old, new } => {
+            swap_write!(state.model_position_since, key, old, new)
+        }
         PalwDeltaEntryV2::ModelLine { key, old, new } => swap_write!(state.model_lines, key, old, new),
         PalwDeltaEntryV2::ModelVersion { key, old, new } => swap_write!(state.model_versions, key, old, new),
         PalwDeltaEntryV2::ModelProposal { key, old, new } => swap_write!(state.model_proposals, key, old, new),
@@ -12269,6 +12589,10 @@ pub struct PalwStateCarriageV2 {
     /// ADR-0088 Decision 10. A second tagged tail after ADR-0087's, encoded only when non-empty,
     /// for the same reason.
     pub model_lines: BTreeMap<Hash64, crate::palw_model_lines_v1::PalwModelLineV1>,
+    /// ADR-0095 §4.1 and §4.5, carried like every other accumulator so a syncing node rebuilds the
+    /// same root.
+    pub model_benefits: BTreeMap<Hash64, crate::palw_model_benefits_v1::PalwModelBenefitsV1>,
+    pub model_position_since: BTreeMap<(Hash64, Hash64), u64>,
     pub model_versions: BTreeMap<(Hash64, u32), crate::palw_model_lines_v1::PalwModelVersionV1>,
     pub model_proposals: BTreeMap<Hash64, crate::palw_model_lines_v1::PalwModelProposalV1>,
     pub model_evaluations: BTreeMap<(Hash64, u32, PalwBondKeyV2), crate::palw_model_lines_v1::PalwModelEvaluationV1>,
@@ -12319,6 +12643,10 @@ const PALW_CARRIAGE_MODEL_TAIL_V1: u8 = 0x87;
 const PALW_CARRIAGE_LINES_TAIL_V1: u8 = 0x88;
 /// The tail byte that says the ADR-0089 settlement list follows (last of the three).
 const PALW_CARRIAGE_SETTLEMENTS_TAIL_V1: u8 = 0x89;
+/// The tail byte that says ADR-0095's membership collections follow (last of the four). A node
+/// below `Params::palw_model_benefits` never writes it, and one that reads it from a peer ahead of
+/// its own fence rebuilds the same root because the root's block is guarded the same way.
+const PALW_CARRIAGE_BENEFITS_TAIL_V1: u8 = 0x95;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -12372,6 +12700,11 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_SETTLEMENTS_TAIL_V1.serialize(writer)?;
             self.evm_settlements.serialize(writer)?;
         }
+        if !self.model_benefits.is_empty() || !self.model_position_since.is_empty() {
+            PALW_CARRIAGE_BENEFITS_TAIL_V1.serialize(writer)?;
+            self.model_benefits.serialize(writer)?;
+            self.model_position_since.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -12402,6 +12735,9 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_model = false;
         let mut seen_lines = false;
         let mut seen_settlements = false;
+        let mut model_benefits = BTreeMap::new();
+        let mut model_position_since = BTreeMap::new();
+        let mut seen_benefits = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -12424,6 +12760,11 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                 PALW_CARRIAGE_SETTLEMENTS_TAIL_V1 if !seen_settlements => {
                     seen_settlements = true;
                     evm_settlements = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_BENEFITS_TAIL_V1 if !seen_benefits => {
+                    seen_benefits = true;
+                    model_benefits = BTreeMap::deserialize_reader(reader)?;
+                    model_position_since = BTreeMap::deserialize_reader(reader)?;
                 }
                 _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "an unknown tail follows the state carriage")),
             }
@@ -12466,6 +12807,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             model_evaluations,
             claim_roots,
             evm_settlements,
+            model_benefits,
+            model_position_since,
         })
     }
 }
@@ -12499,6 +12842,8 @@ impl PalwStateCarriageV2 {
             model_markets: state.model_markets.clone(),
             model_positions: state.model_positions.clone(),
             model_lines: state.model_lines.clone(),
+            model_benefits: state.model_benefits.clone(),
+            model_position_since: state.model_position_since.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -12580,6 +12925,8 @@ impl PalwStateCarriageV2 {
             model_markets: self.model_markets,
             model_positions: self.model_positions,
             model_lines: self.model_lines,
+            model_benefits: self.model_benefits,
+            model_position_since: self.model_position_since,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -15255,9 +15602,8 @@ pub(crate) mod tests {
         coverage: bool,
     ) -> (PalwChainStateV2, PalwStateDeltaV2) {
         let extras = PalwTransitionExtrasV1 { court_responder_coverage_active: coverage, ..Default::default() };
-        let (state, delta) =
-            apply_palw_transition_v2_with_extras(parent, p, c, objects, None, false, false, false, false, &extras)
-                .expect("transition applies");
+        let (state, delta) = apply_palw_transition_v2_with_extras(parent, p, c, objects, None, false, false, false, false, &extras)
+            .expect("transition applies");
         state.assert_internal_consistency(p).expect("internal consistency after apply");
         state.assert_deadline_consistency(p).expect("deadline consistency after apply");
         (state, delta)
@@ -20281,6 +20627,8 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::CourtCloseChunkArrived { .. } => "court_close_chunk_arrived",
                     PalwDeltaEntryV2::ModelMarket { .. } => "model_market",
                     PalwDeltaEntryV2::ModelPosition { .. } => "model_position",
+                    PalwDeltaEntryV2::ModelBenefits { .. } => "model_benefits",
+                    PalwDeltaEntryV2::ModelPositionSince { .. } => "model_position_since",
                     PalwDeltaEntryV2::ModelLine { .. } => "model_line",
                     PalwDeltaEntryV2::ModelVersion { .. } => "model_version",
                     PalwDeltaEntryV2::ModelProposal { .. } => "model_proposal",
@@ -20775,6 +21123,8 @@ pub(crate) mod tests {
         // decided place in the root fails to compile HERE, next to the list it has to join, and
         // the author is reading the M-02 story when it does.
         let PalwStateCarriageV2 {
+            model_benefits: _,
+            model_position_since: _,
             version: _,
             bonds: _,
             reserved_exposure: _,
@@ -23864,10 +24214,13 @@ pub(crate) mod tests {
             assert_eq!(m.seed_sompi, 0, "S1: nothing has opened, so there is no opening seed");
 
             // A buy on a pledged line is told what a buy on an unseeded line is told.
-            assert!(matches!(
-                apply_palw_transition_v2(&s3, &p, &ctx(4, 103, 4), &[buy(class, holder(1), 10 * MSK, 0)], None),
-                Err(PalwStateV2Error::ModelMarketMissing(_))
-            ), "S1: a pledged row is not a market to a trader");
+            assert!(
+                matches!(
+                    apply_palw_transition_v2(&s3, &p, &ctx(4, 103, 4), &[buy(class, holder(1), 10 * MSK, 0)], None),
+                    Err(PalwStateV2Error::ModelMarketMissing(_))
+                ),
+                "S1: a pledged row is not a market to a trader"
+            );
 
             // The payment that crosses the floor. It carries MORE than what is owed, and the
             // excess joins the reserve exactly as an over-floor single seed's already did.
@@ -24082,6 +24435,189 @@ pub(crate) mod tests {
         }
     }
 
+    // ---- ADR-0095 — the membership: N1–N12 at the fold ---------------------------------------
+    mod model_benefits {
+        use super::*;
+        use crate::palw_model_benefits_v1::*;
+
+        fn extras() -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 { model_lines_active: true, model_benefits_active: true, ..Default::default() }
+        }
+
+        /// The registry armed but ADR-0095 NOT — the state a chain is in the moment this code ships
+        /// and before its fence passes.
+        fn extras_unarmed() -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 { model_lines_active: true, model_benefits_active: false, ..Default::default() }
+        }
+
+        fn try_with(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+            e: &PalwTransitionExtrasV1,
+        ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+            apply_palw_transition_v2_with_extras(parent, p, c, objects, None, false, false, false, false, e)
+        }
+
+        fn apply_b(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+        ) -> PalwChainStateV2 {
+            try_with(parent, p, c, objects, &extras()).expect("transition applies").0
+        }
+
+        fn tier(min_units: u64, grants: u32, lead_daa: u64, min_hold_daa: u64) -> PalwModelBenefitTierV1 {
+            PalwModelBenefitTierV1 { min_units, grants, lead_daa, min_hold_daa, note: Vec::new() }
+        }
+
+        fn declare(line: Hash64, tiers: Vec<PalwModelBenefitTierV1>, cadence: u64, expires: u64) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::ModelLineBenefitsDeclared {
+                line_id: line,
+                tiers,
+                cadence_daa: cadence,
+                expires_daa: expires,
+                signature: vec![1],
+            }
+        }
+
+        pub(super) fn publish(line: Hash64, version: u32, root: Hash64, preview: bool) -> PalwConsensusObjectV2 {
+            super::model_lines::publish(line, version, root, preview)
+        }
+
+        /// The same owned class the registry tests use.
+        fn chain() -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+            super::model_lines::owned_class_chain()
+        }
+
+        /// N5, N6: the declaration's shape is checked at the FOLD, not trusted from the wire.
+        #[test]
+        fn a_malformed_declaration_never_reaches_the_state() {
+            let (p, s, class) = chain();
+            let bad = [
+                (vec![tier(0, grant::SUPPORT, 0, 0)], PalwModelBenefitRejectV1::TiersNotIncreasing),
+                (vec![tier(1, 1 << 21, 0, 0)], PalwModelBenefitRejectV1::UnknownGrant),
+                (vec![tier(1, grant::SUPPORT, 500, 0)], PalwModelBenefitRejectV1::LeadWithoutEarlyAccess),
+            ];
+            for (tiers, want) in bad {
+                let e = try_with(&s, &p, &ctx(3, 251, 3), &[declare(class, tiers, 0, 0)], &extras()).unwrap_err();
+                assert!(
+                    matches!(e, PalwStateV2Error::ModelBenefitsRejected(l, r) if l == class && r == want),
+                    "expected {want:?}, got {e:?}"
+                );
+            }
+            assert!(s.model_benefits(&class).is_none(), "N1: nothing was written");
+        }
+
+        /// **The fence.** Below it a declaration is refused outright — which is what keeps a live
+        /// chain's state root exactly where it was on the block this code shipped.
+        #[test]
+        fn nothing_happens_below_the_membership_fence() {
+            let (p, s, class) = chain();
+            let d = declare(class, vec![tier(1, grant::EARLY_VERSION, 600, 0)], 0, 0);
+            assert!(matches!(try_with(&s, &p, &ctx(3, 251, 3), &[d], &extras_unarmed()), Err(PalwStateV2Error::ModelLinesNotArmed)));
+            // And with the registry live but the membership unarmed, a straight-to-current publish
+            // is still allowed: §4.4 cannot bind where §4.1 cannot be declared.
+            let (s3, _) = try_with(&s, &p, &ctx(3, 251, 3), &[publish(class, 2, h64(0xB2), false)], &extras_unarmed()).unwrap();
+            assert_eq!(s3.model_line_or_founding(&class).unwrap().current, 2);
+            assert!(s3.model_benefits(&class).is_none());
+        }
+
+        /// **N7, N8 — the revision's core: the window is a rule.**
+        #[test]
+        fn the_early_access_window_is_enforced_on_both_of_its_edges() {
+            let (p, s, class) = chain();
+            let s1 = apply_b(&s, &p, &ctx(3, 251, 3), &[declare(class, vec![tier(1, grant::EARLY_VERSION, 600, 0)], 0, 0)]);
+            assert_eq!(s1.model_benefit_enforced_lead(&class, 251), 600);
+
+            // N8: while a lead is in effect a version may not go straight to current.
+            let e = try_with(&s1, &p, &ctx(4, 252, 4), &[publish(class, 2, h64(0xB2), false)], &extras()).unwrap_err();
+            assert!(
+                matches!(e, PalwStateV2Error::ModelBenefitMustEnterAsPreview { line, lead_daa } if line == class && lead_daa == 600),
+                "got {e:?}"
+            );
+
+            // It must enter as a preview, which is exactly the holder's window opening.
+            let s2 = apply_b(&s1, &p, &ctx(4, 252, 4), &[publish(class, 2, h64(0xB2), true)]);
+            let promote = PalwConsensusObjectV2::ModelVersionPromoted { line_id: class, version: 2, signature: vec![1] };
+
+            // N7, the closed side: one block short of the promise is refused.
+            let e = try_with(&s2, &p, &ctx(5, 851, 5), &[promote.clone()], &extras()).unwrap_err();
+            assert!(
+                matches!(e, PalwStateV2Error::ModelBenefitLeadNotElapsed { line, version, promotable_at }
+                    if line == class && version == 2 && promotable_at == 852),
+                "got {e:?}"
+            );
+
+            // N7, the open side: the boundary itself is allowed. Pinning both sides is what stops
+            // an off-by-one from quietly shortening or lengthening every holder's window.
+            let s3 = apply_b(&s2, &p, &ctx(5, 852, 5), &[promote]);
+            assert_eq!(s3.model_line_or_founding(&class).unwrap().current, 2, "promoted the block the window closed");
+        }
+
+        /// N9, A1: taking a benefit away waits; giving one does not. Without this the whole design
+        /// is theatre — declare, sell into the demand, withdraw next block.
+        #[test]
+        fn a_withdrawal_cannot_outrun_its_notice() {
+            let (p, s, class) = chain();
+            let strong = vec![tier(1, grant::EARLY_VERSION | grant::PRIVATE_BETA, 600, 0)];
+            let s1 = apply_b(&s, &p, &ctx(3, 251, 3), &[declare(class, strong.clone(), 0, 0)]);
+
+            // Withdraw everything.
+            let s2 = apply_b(&s1, &p, &ctx(4, 252, 4), &[declare(class, Vec::new(), 0, 0)]);
+            assert_eq!(s2.model_benefit_tiers_in_effect(&class, 252).len(), 1, "the old promise still governs");
+            assert_eq!(s2.model_benefit_enforced_lead(&class, 252), 600, "and it still binds the version paths");
+            let eff = 252 + PALW_MODEL_BENEFIT_NOTICE_DAA;
+            assert_eq!(s2.model_benefit_tiers_in_effect(&class, eff - 1).len(), 1);
+            assert!(s2.model_benefit_tiers_in_effect(&class, eff).is_empty(), "and on the height, it is gone");
+
+            // A9: shortening the lead is a weakening too, so it is not an escape from N7.
+            let s3 = apply_b(
+                &s1,
+                &p,
+                &ctx(4, 252, 4),
+                &[declare(class, vec![tier(1, grant::EARLY_VERSION | grant::PRIVATE_BETA, 1, 0)], 0, 0)],
+            );
+            assert_eq!(s3.model_benefit_enforced_lead(&class, 253), 600, "the short lead waits its notice");
+
+            // Strengthening lands at once.
+            let more = vec![tier(1, grant::EARLY_VERSION | grant::PRIVATE_BETA | grant::SUPPORT, 900, 0)];
+            let s4 = apply_b(&s1, &p, &ctx(4, 252, 4), &[declare(class, more, 0, 0)]);
+            assert_eq!(s4.model_benefit_enforced_lead(&class, 252), 900, "a longer window helps holders now");
+        }
+
+        /// N10, N12, A4: a line that stops shipping stops granting — as a read, with no object.
+        #[test]
+        fn a_line_that_stops_shipping_stops_granting() {
+            let (p, s, class) = chain();
+            let s1 = apply_b(&s, &p, &ctx(3, 251, 3), &[declare(class, vec![tier(1, grant::EARLY_VERSION, 600, 0)], 1_000, 0)]);
+            let last = s1.model_line_last_version_daa(&class);
+            assert!(s1.model_benefit_lapse(&class, last + 1_000).is_none(), "on the due height it still holds");
+            assert_eq!(
+                s1.model_benefit_lapse(&class, last + 1_001),
+                Some(PalwModelBenefitLapseV1::CadenceMissed { due_daa: last + 1_000 })
+            );
+            assert!(s1.model_benefit_tiers_in_effect(&class, last + 1_001).is_empty());
+            // N10's second half: a lapsed promise constrains nobody, so the version paths reopen.
+            assert_eq!(s1.model_benefit_enforced_lead(&class, last + 1_001), 0);
+            let (s2, _) = try_with(&s1, &p, &ctx(9, last + 1_001, 9), &[publish(class, 2, h64(0xB2), false)], &extras()).unwrap();
+            assert_eq!(s2.model_line_or_founding(&class).unwrap().current, 2, "a dead promise blocks nothing");
+        }
+
+        /// N1: the membership never moves money, and never mints or retires a position.
+        #[test]
+        fn a_declaration_moves_no_money_and_no_position() {
+            let (p, s, class) = chain();
+            let before = (s.model_market(&class).copied(), s.model_positions_of(&h64(9)).len());
+            let s1 = apply_b(&s, &p, &ctx(3, 251, 3), &[declare(class, vec![tier(1, grant::KNOWN, 600, 0)], 0, 0)]);
+            assert_eq!(s1.model_market(&class).copied(), before.0, "no reserve, no units, no retirement");
+            assert_eq!(s1.model_positions_of(&h64(9)).len(), before.1);
+            assert!(s1.model_benefits(&class).is_some(), "only its own row");
+        }
+    }
+
     // ---- ADR-0088 — the model registry: L1–L8 at the fold ------------------------------------
     mod model_lines {
         use super::*;
@@ -24118,7 +24654,7 @@ pub(crate) mod tests {
 
         /// A chain with the floor (class 1, registrant-less), a class registered by bond 1 that has
         /// activated (class 2, root `0xA1`), and a second Active bond (bond 2).
-        fn owned_class_chain() -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+        pub(super) fn owned_class_chain() -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
             let p = economy_params();
             let class = h64(2);
             let mut objects = register_class_and_bond();
@@ -24135,7 +24671,7 @@ pub(crate) mod tests {
             (p, s2, class)
         }
 
-        fn publish(line: Hash64, version: u32, root: Hash64, preview: bool) -> PalwConsensusObjectV2 {
+        pub(super) fn publish(line: Hash64, version: u32, root: Hash64, preview: bool) -> PalwConsensusObjectV2 {
             PalwConsensusObjectV2::ModelVersionPublished {
                 line_id: line,
                 version,
@@ -24456,10 +24992,7 @@ pub(crate) mod tests {
                 let objects: Vec<_> = (0..per_block as u64).map(|i| sell_out_of(start - i)).collect();
                 match try_lines(&state, &p, &ctx(8 + round, daa, 8 + round), &objects, None) {
                     Ok((next, _)) => {
-                        assert!(
-                            next.pending_payouts_iter().count() <= PALW_V2_MAX_PENDING_PAYOUTS,
-                            "the queue never exceeds its cap"
-                        );
+                        assert!(next.pending_payouts_iter().count() <= PALW_V2_MAX_PENDING_PAYOUTS, "the queue never exceeds its cap");
                         state = next;
                     }
                     Err(e) => {
@@ -24651,6 +25184,7 @@ pub(crate) mod tests {
         fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
             PalwTransitionExtrasV1 {
                 model_lines_active: true,
+                model_benefits_active: false,
                 evm_market_active: true,
                 evm_actions: actions,
                 court_responder_coverage_active: false,
@@ -24855,6 +25389,7 @@ pub(crate) mod tests {
             // Below the fence the same actions write nothing.
             let dormant = PalwTransitionExtrasV1 {
                 model_lines_active: true,
+                model_benefits_active: false,
                 evm_market_active: false,
                 evm_actions: vec![buy(0, 1, class, MSK, 0)],
                 court_responder_coverage_active: false,

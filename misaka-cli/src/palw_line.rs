@@ -232,6 +232,7 @@ pub async fn line_show(ctx: &Ctx, line_id: &str, json: bool) -> CliResult {
         for root in &r.roots_in_force {
             println!("                 {root}");
         }
+        print_benefits(r.benefits.as_ref(), r.tip_daa);
     } else {
         println!("this chain holds no line {line} (and no class of that id)");
     }
@@ -736,6 +737,158 @@ pub async fn line_roles(
     let out = carry(ctx, &nv, &key, &object, &what, yes).await;
     let _ = nv.client.disconnect().await;
     out
+}
+
+/// ADR-0095 §4.10 — the membership card. The reason to buy belongs BEFORE the buy, so this prints
+/// what the position gets you, what the next tier needs, and when the promise stops.
+fn print_benefits(b: Option<&kaspa_rpc_core::RpcPalwModelBenefits>, tip_daa: u64) {
+    let Some(b) = b else { return };
+    match (&b.lapsed, b.lapse_daa) {
+        (Some(why), at) => {
+            let what = if why == "expired" { "expired" } else { "lapsed: no version by the cadence" };
+            println!("  membership     LAPSED — {what}{}", at.map(|d| format!(" (daa {d})")).unwrap_or_default());
+            println!("                 it grants nothing and constrains nothing until it is declared again");
+        }
+        (None, _) if b.tiers.is_empty() => println!("  membership     none declared"),
+        (None, _) => {
+            println!("  membership     {} tier(s), declared at daa {}", b.tiers.len(), b.declared_daa);
+            for t in &b.tiers {
+                println!("    {:>8} units  {}", t.min_units, t.grant_names.join(", "));
+                if t.lead_daa > 0 {
+                    println!("               a new version {} daa before it may become current", t.lead_daa);
+                }
+                if t.min_hold_daa > 0 {
+                    println!("               after {} daa held without selling", t.min_hold_daa);
+                }
+                if !t.note.is_empty() {
+                    println!("               {}", t.note);
+                }
+            }
+            if b.enforced_lead_daa > 0 {
+                println!("    enforced     the fold refuses a promotion inside {} daa of the publish", b.enforced_lead_daa);
+            }
+            if b.cadence_daa > 0 {
+                println!("    cadence      a version every {} daa, or this lapses on its own", b.cadence_daa);
+            }
+            if b.expires_daa > 0 {
+                println!("    expires      daa {} ({} away)", b.expires_daa, b.expires_daa.saturating_sub(tip_daa));
+            }
+        }
+    }
+    if let Some(at) = b.pending_effective_daa {
+        // §4.7. A holder reading this card is being told what they are about to lose and when,
+        // which is the whole point of the notice.
+        if b.pending_tiers.is_empty() {
+            println!("    PENDING      the declaration is WITHDRAWN at daa {at}");
+        } else {
+            println!("    PENDING      a weaker declaration ({} tier(s)) governs from daa {at}", b.pending_tiers.len());
+        }
+    }
+}
+
+/// **ADR-0095 §4.1 — `misaka palw line-benefits --line <id> --tier <spec> …`.**
+///
+/// A tier is one `--tier` argument: `units:GRANT[,GRANT…][:lead][:hold][:note]`, e.g.
+/// `--tier 1:EARLY_VERSION,SUPPORT:600` and `--tier 1000:EARLY_VERSION,DEVELOPER_ACCESS:600:4000`.
+/// Passing no `--tier` at all WITHDRAWS the declaration, which §4.7 makes wait out its notice.
+pub async fn line_benefits(
+    ctx: &Ctx,
+    ks: &crate::keys::KeySource,
+    line_id: &str,
+    tiers: Vec<String>,
+    cadence_daa: u64,
+    expires_daa: u64,
+    yes: bool,
+) -> CliResult {
+    use kaspa_consensus_core::palw_model_benefits_v1::{
+        PALW_MODEL_BENEFIT_NOTICE_DAA, PalwModelBenefitTierV1, grant, palw_model_benefits_message_v1, palw_model_benefits_validate_v1,
+    };
+    let line = parse_hash(line_id, "line id")?;
+    let key = ks.load_key()?;
+    let parsed = tiers.iter().map(|t| parse_tier(t)).collect::<Result<Vec<PalwModelBenefitTierV1>, CliError>>()?;
+    let nv = connect(ctx).await?;
+    let (_, row) = require_line(&nv, line).await?;
+    require_active(&row)?;
+    // The same shape check the fold will make, made here so a malformed card costs no fee.
+    let tip = nv.client.get_palw_model_line(line.to_string()).await.ok().map(|r| r.tip_daa).unwrap_or(0);
+    if let Err(e) = palw_model_benefits_validate_v1(&parsed, expires_daa, tip) {
+        return Err(CliError::new(exit::GENERIC, format!("the declaration is not well formed: {e:?}")));
+    }
+    let owner = role_bond(&row, "owner")?;
+    let class = parse_hash(&row.class_id, "class id")?;
+    assert_key_owns_bond(&nv, &key, class, &owner, "line's owner").await?;
+    let message = palw_model_benefits_message_v1(network_domain(&nv), &line, &parsed, cadence_daa, expires_daa);
+    let object = PalwConsensusObjectV2::ModelLineBenefitsDeclared {
+        line_id: line,
+        tiers: parsed.clone(),
+        cadence_daa,
+        expires_daa,
+        signature: sign(&key, &message),
+    };
+    if ctx.output != OutputFormat::Json {
+        if parsed.is_empty() {
+            println!("WITHDRAWING the membership of line {line}");
+        } else {
+            println!("declaring what line {line} grants its holders");
+        }
+        for t in &parsed {
+            let names = grant::names_of(t.grants).join(", ");
+            println!("  {:>8} units  {names}", t.min_units);
+            if t.lead_daa > 0 {
+                println!("           early access {} daa before the version may become current", t.lead_daa);
+            }
+            if t.min_hold_daa > 0 {
+                println!("           after holding {} daa without selling", t.min_hold_daa);
+            }
+            if !t.note.is_empty() {
+                println!("           note: {}", String::from_utf8_lossy(&t.note));
+            }
+        }
+        if cadence_daa > 0 {
+            println!("  cadence   a version every {cadence_daa} daa, or the promise lapses on its own");
+        }
+        if expires_daa > 0 {
+            println!("  expires   daa {expires_daa}");
+        }
+        // The asymmetry is the holder's protection and the operator should see which one this is
+        // BEFORE they pay for it: a weakening they thought was instant is a surprise either way.
+        println!(
+            "  note      giving lands now; taking away (a removed grant, a raised threshold, a shorter lead, a\n            withdrawal) waits {PALW_MODEL_BENEFIT_NOTICE_DAA} daa — ADR-0095 §4.7"
+        );
+    }
+    let what = format!("ModelLineBenefitsDeclared on line {line}");
+    let out = carry(ctx, &nv, &key, &object, &what, yes).await;
+    let _ = nv.client.disconnect().await;
+    out
+}
+
+/// `units:GRANT[,GRANT…][:lead[:hold[:note]]]` — see `line_benefits`.
+fn parse_tier(spec: &str) -> Result<kaspa_consensus_core::palw_model_benefits_v1::PalwModelBenefitTierV1, CliError> {
+    use kaspa_consensus_core::palw_model_benefits_v1::{PalwModelBenefitTierV1, grant};
+    let mut parts = spec.splitn(5, ':');
+    let units_s = parts.next().unwrap_or_default();
+    let min_units: u64 =
+        units_s.parse().map_err(|_| CliError::new(exit::GENERIC, format!("--tier {spec}: '{units_s}' is not a unit count")))?;
+    let grants_s =
+        parts.next().ok_or_else(|| CliError::new(exit::GENERIC, format!("--tier {spec}: no grants — try {units_s}:EARLY_VERSION")))?;
+    let mut grants = 0u32;
+    for name in grants_s.split(',').filter(|n| !n.is_empty()) {
+        let up = name.trim().to_ascii_uppercase();
+        let bit = grant::NAMES.iter().position(|n| *n == up).ok_or_else(|| {
+            CliError::new(exit::GENERIC, format!("--tier {spec}: '{name}' is not a grant. The set is: {}", grant::NAMES.join(", ")))
+        })?;
+        grants |= 1 << bit;
+    }
+    let num = |o: Option<&str>, what: &str| -> Result<u64, CliError> {
+        match o.filter(|v| !v.is_empty()) {
+            None => Ok(0),
+            Some(v) => v.parse().map_err(|_| CliError::new(exit::GENERIC, format!("--tier {spec}: '{v}' is not a {what} in daa"))),
+        }
+    };
+    let lead_daa = num(parts.next(), "lead")?;
+    let min_hold_daa = num(parts.next(), "hold")?;
+    let note = parts.next().unwrap_or("").as_bytes().to_vec();
+    Ok(PalwModelBenefitTierV1 { min_units, grants, lead_daa, min_hold_daa, note })
 }
 
 /// `misaka palw line-transfer --line <id> --new-owner <outpoint> --key … [--yes]`.

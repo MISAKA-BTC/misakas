@@ -992,6 +992,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             current_root: read.current_root.map(|h| h.to_string()),
             roots_in_force: read.roots_in_force.iter().map(|h| h.to_string()).collect(),
             tip_daa: read.tip_daa,
+            benefits: read.benefits.as_ref().map(rpc_palw_model_benefits),
         })
     }
 
@@ -2616,6 +2617,38 @@ fn parse_hash64(text: &str, what: &str) -> RpcResult<kaspa_hashes::Hash64> {
 }
 
 /// ADR-0088 Decision 12: one line's row for the wire.
+/// ADR-0095: the membership as a card — the tiers governing now, the weakening waiting out its
+/// notice, and why the promise is silent when it is.
+fn rpc_palw_model_benefits(read: &kaspa_consensus_core::api::PalwModelBenefitsReadV1) -> kaspa_rpc_core::RpcPalwModelBenefits {
+    use kaspa_consensus_core::palw_model_benefits_v1::{PalwModelBenefitLapseV1, grant};
+    fn tier(t: &kaspa_consensus_core::palw_model_benefits_v1::PalwModelBenefitTierV1) -> kaspa_rpc_core::RpcPalwModelBenefitTier {
+        kaspa_rpc_core::RpcPalwModelBenefitTier {
+            min_units: t.min_units,
+            grants: t.grants,
+            grant_names: grant::names_of(t.grants).into_iter().map(String::from).collect(),
+            lead_daa: t.lead_daa,
+            min_hold_daa: t.min_hold_daa,
+            note: String::from_utf8_lossy(&t.note).to_string(),
+        }
+    }
+    let (lapsed, lapse_daa) = match read.lapse {
+        Some(PalwModelBenefitLapseV1::Expired { at_daa }) => (Some("expired".to_string()), Some(at_daa)),
+        Some(PalwModelBenefitLapseV1::CadenceMissed { due_daa }) => (Some("cadenceMissed".to_string()), Some(due_daa)),
+        None => (None, None),
+    };
+    kaspa_rpc_core::RpcPalwModelBenefits {
+        tiers: read.in_effect.iter().map(tier).collect(),
+        pending_tiers: read.row.pending.as_ref().map(|p| p.tiers.iter().map(tier).collect()).unwrap_or_default(),
+        pending_effective_daa: read.row.pending.as_ref().map(|p| p.effective_daa),
+        cadence_daa: read.row.cadence_daa,
+        expires_daa: read.row.expires_daa,
+        declared_daa: read.row.declared_daa,
+        lapsed,
+        lapse_daa,
+        enforced_lead_daa: read.enforced_lead_daa,
+    }
+}
+
 fn rpc_palw_model_line(row: &kaspa_consensus_core::api::PalwModelLineRowReadV1) -> RpcPalwModelLine {
     let line = &row.line;
     RpcPalwModelLine {

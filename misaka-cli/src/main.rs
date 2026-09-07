@@ -762,6 +762,26 @@ enum PalwCmd {
     },
     /// **ADR-0088: set a line's developer, maintainer and contributor share** (owner). A flag
     /// omitted keeps the row's value; `owner` resets a role to the owner.
+    /// ADR-0095 §4.1: declare what this line's positions grant their holders.
+    LineBenefits {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// `units:GRANT[,GRANT…][:lead[:hold[:note]]]`, once per tier, e.g.
+        /// `--tier 1:EARLY_VERSION,SUPPORT:600`. Pass none to WITHDRAW the declaration.
+        #[arg(long = "tier")]
+        tiers: Vec<String>,
+        /// §4.6: publish a version this often, or the promise lapses on its own. 0 = no undertaking.
+        #[arg(long, default_value_t = 0)]
+        cadence_daa: u64,
+        /// §4.6: the height the whole declaration stops granting. 0 = never.
+        #[arg(long, default_value_t = 0)]
+        expires_daa: u64,
+        #[arg(long)]
+        yes: bool,
+    },
     LineRoles {
         #[command(flatten)]
         key: KeyArgs,
@@ -1516,6 +1536,9 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Palw(PalwCmd::VersionWithdraw { key, line, version, yes }) => {
             palw_line::version_move(&ctx, &key.source(), &line, version, false, yes).await
+        }
+        Command::Palw(PalwCmd::LineBenefits { key, line, tiers, cadence_daa, expires_daa, yes }) => {
+            palw_line::line_benefits(&ctx, &key.source(), &line, tiers, cadence_daa, expires_daa, yes).await
         }
         Command::Palw(PalwCmd::LineRoles { key, line, developer, maintainer, contributor_permille, yes }) => {
             palw_line::line_roles(&ctx, &key.source(), &line, developer, maintainer, contributor_permille, yes).await

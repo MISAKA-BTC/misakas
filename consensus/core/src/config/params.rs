@@ -1191,6 +1191,14 @@ pub struct Params {
     /// founding line exists and its developer publishes. Independent of `palw_model_market`.
     /// The fingerprint moves only where this is set. Read through `palw_model_lines_fence` only.
     pub palw_model_lines: Option<ForkActivation>,
+    /// **ADR-0095 §4.11 as corrected: the membership needs its OWN fence.**
+    ///
+    /// The first draft put it under `palw_model_lines`, which is wrong on any chain where the
+    /// registry is already live: ADR-0095 writes two new collections that enter the state root
+    /// (the declarations and the tenure clocks), so switching it on with the registry's fence
+    /// would move the root under a running network. It is a consensus change and gets an
+    /// activation of its own, like every other one.
+    pub palw_model_benefits: Option<ForkActivation>,
     /// **ADR-0089 Decision 9 — the market's EVM face is a consensus rule armed by activation.**
     /// `None` on every shipped preset: below it the four system addresses and the facades are
     /// empty accounts, the writer accepts nothing and the transition takes an empty action list;
@@ -2719,6 +2727,9 @@ impl Params {
             self.palw_model_market = None;
         }
         // ADR-0088 Decision 11, a bare fence: the same collapse, for the same reason.
+        if self.palw_model_benefits == Some(ForkActivation::never()) {
+            self.palw_model_benefits = None;
+        }
         if self.palw_model_lines == Some(ForkActivation::never()) {
             self.palw_model_lines = None;
         }
@@ -3014,6 +3025,21 @@ impl Params {
         }
     }
 
+    /// ADR-0095's fence, with the mode condition and the registry dependency folded in. A
+    /// membership over a registry that does not exist is meaningless, so this is `Some` only where
+    /// the registry is armed too — the ONE place ADR-0095 is decided.
+    pub fn palw_model_benefits_fence(&self) -> Option<ForkActivation> {
+        match (self.palw_model_lines_fence(), self.palw_model_benefits) {
+            (Some(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Is ADR-0095's membership in force at `daa_score`? `false` on every shipped preset.
+    pub fn palw_model_benefits_active_at(&self, daa_score: u64) -> bool {
+        matches!(self.palw_model_benefits_fence(), Some(fence) if fence.is_active(daa_score))
+    }
+
     /// Is ADR-0088's model registry in force at `daa_score`? `false` on every shipped preset.
     pub fn palw_model_lines_active_at(&self, daa_score: u64) -> bool {
         matches!(self.palw_model_lines_fence(), Some(fence) if fence.is_active(daa_score))
@@ -3193,6 +3219,7 @@ impl Params {
             palw_fp_ruleset_caps,
             palw_model_market,
             palw_model_lines,
+            palw_model_benefits,
             palw_model_evm,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
@@ -3238,6 +3265,7 @@ impl Params {
             ("palw_fp_ruleset_caps", *palw_fp_ruleset_caps),
             ("palw_model_market", *palw_model_market),
             ("palw_model_lines", *palw_model_lines),
+            ("palw_model_benefits", *palw_model_benefits),
             ("palw_model_evm", *palw_model_evm),
             ("palw_chunk_cap_charge", *palw_chunk_cap_charge),
             ("palw_prompt_ids_merkle", *palw_prompt_ids_merkle),
@@ -3526,6 +3554,7 @@ impl Params {
             palw_court_ladder,
             palw_model_market,
             palw_model_lines,
+            palw_model_benefits,
             palw_model_evm,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
@@ -3706,6 +3735,14 @@ impl Params {
         }
         // ADR-0088 Decision 11. A pure fence with no payload, the same shape.
         match palw_model_lines.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0095 §4.11 as corrected. A pure fence with no payload, the same shape.
+        match palw_model_benefits.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -4039,6 +4076,7 @@ impl Params {
             palw_court_ladder,
             palw_model_market,
             palw_model_lines,
+            palw_model_benefits,
             palw_model_evm,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
@@ -4681,6 +4719,7 @@ impl Params {
             palw_court_ladder: self.palw_court_ladder,
             palw_model_market: self.palw_model_market,
             palw_model_lines: self.palw_model_lines,
+            palw_model_benefits: self.palw_model_benefits,
             palw_model_evm: self.palw_model_evm,
             palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
@@ -5632,6 +5671,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_court_ladder: None,
     palw_model_market: None,
     palw_model_lines: None,
+    palw_model_benefits: None,
     palw_model_evm: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
@@ -5795,6 +5835,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_court_ladder: None,
     palw_model_market: None,
     palw_model_lines: None,
+    palw_model_benefits: None,
     palw_model_evm: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
@@ -5940,6 +5981,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_court_ladder: None,
     palw_model_market: None,
     palw_model_lines: None,
+    palw_model_benefits: None,
     palw_model_evm: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
@@ -9403,6 +9445,19 @@ pub const PALW_RC_PHASE1_FENCE_DAA: u64 = 5_000;
 /// peers and warns rather than partitioning early, which is what makes a rolling upgrade possible.
 pub const PALW_RC_DA_COURT_FENCE_DAA: u64 = 1_900;
 
+/// **testnet-11's fourth flag day: the membership** (ADR-0095).
+///
+/// It gets a height of its own rather than riding the registry's, and the reason is not stylistic.
+/// ADR-0095 writes two collections that enter the state root — the declarations and the tenure
+/// clocks — so switching it on with `palw_model_lines`, which passed at DAA 1,900 and is long
+/// live, would move the root under a running network the moment the code shipped. A consensus
+/// change gets an activation, and this is one.
+///
+/// Chosen at DAA 2,011 against the recent rate: 389 DAA of lead, which is days rather than hours
+/// for a build, a three-host rsync and the seat restarts. Every seat must run a build carrying
+/// this fence BEFORE this height or it forks off at it.
+pub const PALW_RC_MODEL_BENEFITS_FENCE_DAA: u64 = 2_400;
+
 /// **testnet-11's third flag day: the refutation ladder** (ADR-0084 U-08, the 2026-09-06 audit's
 /// H-4, ADR-0092 §9 step 2).
 ///
@@ -9737,6 +9792,7 @@ pub fn palw_rc_base_params() -> Params {
     params.palw_panel_da = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_model_market = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_model_lines = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
+    params.palw_model_benefits = Some(ForkActivation::new(PALW_RC_MODEL_BENEFITS_FENCE_DAA));
     params.palw_model_evm = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_court_ladder = Some(ForkActivation::new(PALW_RC_COURT_LADDER_FENCE_DAA));
     // **The EVM lane is ON from DAA 0, inherited from `TESTNET_PARAMS` and kept deliberately.**
@@ -10123,6 +10179,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_court_ladder: None,
     palw_model_market: None,
     palw_model_lines: None,
+    palw_model_benefits: None,
     palw_model_evm: None,
     palw_chunk_cap_charge: None,
     // ADR-0082 Decision 5: NOT armed. At the registered 512 row the flat prompt ids are 82,080
@@ -12028,6 +12085,7 @@ mod consensus_params_id_tests {
         previous.palw_panel_da = None;
         previous.palw_model_market = None;
         previous.palw_model_lines = None;
+        previous.palw_model_benefits = None;
         previous.palw_model_evm = None;
         // Scheduled on the same flag day by the 2026-09-06 audit's H-4 (ADR-0084 U-08), so the
         // build the fleet is running does not carry it either.
@@ -13961,8 +14019,7 @@ mod consensus_params_id_tests {
     /// merge added to `Params` while the hand-written table sat unchanged with zero merge conflict.
     #[test]
     fn the_fence_table_names_every_palw_fence_on_params() {
-        let names: std::collections::BTreeSet<&str> =
-            palw_v2_fence_table(&MAINNET_PARAMS).into_iter().map(|(n, _)| n).collect();
+        let names: std::collections::BTreeSet<&str> = palw_v2_fence_table(&MAINNET_PARAMS).into_iter().map(|(n, _)| n).collect();
         for (name, _) in MAINNET_PARAMS.palw_fences_v1() {
             assert!(names.contains(name), "{name} is a PALW fence on Params and the table does not name it");
         }
@@ -14067,6 +14124,11 @@ mod consensus_params_id_tests {
         //   row, this equivalent registers only the floor, and `validate_palw_v2` refuses the fence
         //   on a ruleset whose frozen arity does not match one it can derive. A carded mainnet that
         //   pins the dense tier states it on the base — see the test below.
+        // * `palw_model_benefits` (ADR-0095) follows the three below for the same reason and one
+        //   more of its own: a membership is a promise a LINE makes, and a card that armed it from
+        //   genesis would be arming a promise mechanism on a network whose lines do not exist yet.
+        //   It is scheduled on testnet-11 at `PALW_RC_MODEL_BENEFITS_FENCE_DAA` and stated by no
+        //   card, deliberately.
         // * The three model fences (ADR-0087 D6, ADR-0088 D11, ADR-0089 D9) are SCHEDULED on
         //   testnet-11, at `PALW_RC_DA_COURT_FENCE_DAA`, and a card states none of them. Arming a
         //   market, a registry and an EVM from block one on a network with value is the measured
@@ -14078,7 +14140,7 @@ mod consensus_params_id_tests {
         //   that has to be changed deliberately.
         assert_eq!(
             missing,
-            vec!["palw_model_market", "palw_model_lines", "palw_model_evm", "palw_kary_court"],
+            vec!["palw_model_market", "palw_model_lines", "palw_model_benefits", "palw_model_evm", "palw_kary_court"],
             "a carded mainnet must arm every fence testnet-11 arms except the four named above \
              (rc: {rc_armed:?}, mainnet: {mainnet_armed:?})"
         );
@@ -14261,8 +14323,7 @@ mod consensus_params_id_tests {
     fn a_carded_registry_still_draws_a_full_panel_with_the_capability_fence_armed() {
         use crate::palw_mode_v2::PalwConsensusMode;
         use crate::palw_state_v2::{
-            PalwBlockContextV2, PalwChainStateV2, apply_palw_transition_v2, palw_bond_may_judge_class_v3,
-            palw_bond_may_take_work_v2,
+            PalwBlockContextV2, PalwChainStateV2, apply_palw_transition_v2, palw_bond_may_judge_class_v3, palw_bond_may_take_work_v2,
         };
 
         let params = mainnet_card_fixture_v1(true);
@@ -14776,7 +14837,7 @@ mod consensus_params_id_tests {
         // about it being the only one.
         assert_eq!(
             crate::fork_id_v1::fork_id_gate_fences_v1(&later),
-            vec![1150, PALW_RC_DA_COURT_FENCE_DAA, 2000, PALW_RC_COURT_LADDER_FENCE_DAA],
+            vec![1150, PALW_RC_DA_COURT_FENCE_DAA, 2000, PALW_RC_COURT_LADDER_FENCE_DAA, PALW_RC_MODEL_BENEFITS_FENCE_DAA,],
             "…and a schedule lists every scheduled gate fence's height"
         );
     }
@@ -15567,7 +15628,3 @@ mod fingerprint_probe {
         );
     }
 }
-
-
-
-

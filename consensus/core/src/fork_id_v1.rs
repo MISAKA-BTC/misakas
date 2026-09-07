@@ -391,7 +391,9 @@ pub fn evaluate_fork_id_v1(params: &Params, local_daa_score: u64, peer_fired: &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::params::{ForkActivation, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, palw_rc_shipped_params};
+    use crate::config::params::{
+        ForkActivation, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, palw_rc_shipped_params,
+    };
     use crate::network::NetworkId;
 
     fn shipped() -> Vec<(&'static str, Params)> {
@@ -450,7 +452,12 @@ mod tests {
         // The invariance the repair had to meet: the live chain's gate set does not move.
         assert_eq!(
             fork_id_gate_fences_v1(&palw_rc_shipped_params()),
-            vec![1150, crate::config::params::PALW_RC_DA_COURT_FENCE_DAA, crate::config::params::PALW_RC_COURT_LADDER_FENCE_DAA],
+            vec![
+                1150,
+                crate::config::params::PALW_RC_DA_COURT_FENCE_DAA,
+                crate::config::params::PALW_RC_COURT_LADDER_FENCE_DAA,
+                crate::config::params::PALW_RC_MODEL_BENEFITS_FENCE_DAA,
+            ],
             "testnet-11's gate set is ADR-0083's flag day and ADR-0062's, and deriving the list must not widen it"
         );
     }
@@ -501,6 +508,7 @@ mod tests {
             "palw_fp_ruleset_caps" => params.palw_fp_ruleset_caps = Some(at),
             "palw_model_market" => params.palw_model_market = Some(at),
             "palw_model_lines" => params.palw_model_lines = Some(at),
+            "palw_model_benefits" => params.palw_model_benefits = Some(at),
             "palw_model_evm" => params.palw_model_evm = Some(at),
             "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
             "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
@@ -546,7 +554,7 @@ mod tests {
                 // same fork id, peer, and disagree past the height. A rule added to a named height is
                 // invisible here; a height is not. Measured before it moved: identical fork ids at
                 // 1899, 1900 and 2500.
-                ("testnet-11", vec![1150, 1900, 2150, 2_125_000]),
+                ("testnet-11", vec![1150, 1900, 2150, 2400, 2_125_000]),
                 ("devnet", vec![]),
                 ("simnet", vec![]),
             ],
@@ -572,13 +580,16 @@ mod tests {
         const ADR_0062: u64 = 1900;
         /// ADR-0084 U-08's own height — see `the_shipped_schedules_are_measured_not_assumed`.
         const ADR_0084_U08: u64 = 2150;
+        /// ADR-0095's own height — the membership writes rows that enter the state root, so it
+        /// cannot ride the registry's fence on a chain where the registry is already live.
+        const ADR_0095: u64 = 2400;
         const CRESCENDO_T11: u64 = 2_125_000;
         for (name, params) in shipped() {
             if name == "testnet-11" {
                 assert_eq!(
                     fork_id_gate_fences_v1(&params),
-                    vec![ADR_0083, ADR_0062, ADR_0084_U08],
-                    "{name}: armed by ADR-0083's fence, ADR-0062's and ADR-0084 U-08's, and nothing else"
+                    vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095],
+                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's and ADR-0095's, and nothing else"
                 );
                 assert!(fork_id_gate_armed_v1(&params));
                 continue;
@@ -595,7 +606,7 @@ mod tests {
         }
 
         let t11 = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
-        assert_eq!(t11.fence_schedule_v1(), vec![ADR_0083, ADR_0062, ADR_0084_U08, CRESCENDO_T11]);
+        assert_eq!(t11.fence_schedule_v1(), vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, CRESCENDO_T11]);
         let genesis = t11.genesis.hash;
         // The un-upgraded build: same genesis, schedule [2_125_000] — it has crossed nothing and names
         // crescendo as its next fence, which is exactly what its digest and next look like on the wire.

@@ -3338,31 +3338,140 @@ pub struct GetPalwModelLineResponse {
     /// Decision 3: the roots in force for the line's CLASS at `tip_daa` — every line's.
     pub roots_in_force: Vec<String>,
     pub tip_daa: u64,
+    /// ADR-0095: what this line's positions grant, `None` where nothing was declared or the
+    /// membership is not in force.
+    pub benefits: Option<RpcPalwModelBenefits>,
 }
 
 impl Serializer for GetPalwModelLineResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(bool, &self.exists, writer)?;
         store!(String, &self.line_id, writer)?;
         serialize!(Option<RpcPalwModelLine>, &self.line, writer)?;
         store!(Option<String>, &self.current_root, writer)?;
         store!(Vec<String>, &self.roots_in_force, writer)?;
         store!(u64, &self.tip_daa, writer)?;
+        serialize!(Option<RpcPalwModelBenefits>, &self.benefits, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwModelLineResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
         let exists = load!(bool, reader)?;
         let line_id = load!(String, reader)?;
         let line = deserialize!(Option<RpcPalwModelLine>, reader)?;
         let current_root = load!(Option<String>, reader)?;
         let roots_in_force = load!(Vec<String>, reader)?;
         let tip_daa = load!(u64, reader)?;
-        Ok(Self { exists, line_id, line, current_root, roots_in_force, tip_daa })
+        // A version-1 peer wrote nothing here; a membership it never knew about is `None`, not a
+        // read past the end of the frame.
+        let benefits = if version >= 2 { deserialize!(Option<RpcPalwModelBenefits>, reader)? } else { None };
+        Ok(Self { exists, line_id, line, current_root, roots_in_force, tip_daa, benefits })
+    }
+}
+
+/// ADR-0095 §4.1: one tier of a line's membership declaration.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwModelBenefitTier {
+    pub min_units: u64,
+    /// The raw bitset, so a client that knows a newer set can still render it.
+    pub grants: u32,
+    /// The names of the bits this node knows, for a card that need not know the protocol.
+    pub grant_names: Vec<String>,
+    pub lead_daa: u64,
+    pub min_hold_daa: u64,
+    pub note: String,
+}
+
+impl Serializer for RpcPalwModelBenefitTier {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u64, &self.min_units, writer)?;
+        store!(u32, &self.grants, writer)?;
+        store!(Vec<String>, &self.grant_names, writer)?;
+        store!(u64, &self.lead_daa, writer)?;
+        store!(u64, &self.min_hold_daa, writer)?;
+        store!(String, &self.note, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwModelBenefitTier {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let min_units = load!(u64, reader)?;
+        let grants = load!(u32, reader)?;
+        let grant_names = load!(Vec<String>, reader)?;
+        let lead_daa = load!(u64, reader)?;
+        let min_hold_daa = load!(u64, reader)?;
+        let note = load!(String, reader)?;
+        Ok(Self { min_units, grants, grant_names, lead_daa, min_hold_daa, note })
+    }
+}
+
+/// ADR-0095: what a line promises its holders, as a reader sees it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwModelBenefits {
+    /// §4.6: the tiers GOVERNING at `tip_daa` — empty when the promise has lapsed.
+    pub tiers: Vec<RpcPalwModelBenefitTier>,
+    /// §4.7: a weakening waiting out its notice, and the height it lands.
+    pub pending_tiers: Vec<RpcPalwModelBenefitTier>,
+    pub pending_effective_daa: Option<u64>,
+    pub cadence_daa: u64,
+    pub expires_daa: u64,
+    pub declared_daa: u64,
+    /// §4.6: `expired`, `cadenceMissed`, or absent when the promise is live.
+    pub lapsed: Option<String>,
+    /// The height the lapse names: the expiry, or the height a version was due by.
+    pub lapse_daa: Option<u64>,
+    /// §4.4: the window the fold is enforcing on this line's version paths right now.
+    pub enforced_lead_daa: u64,
+}
+
+impl Serializer for RpcPalwModelBenefits {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        serialize!(Vec<RpcPalwModelBenefitTier>, &self.tiers, writer)?;
+        serialize!(Vec<RpcPalwModelBenefitTier>, &self.pending_tiers, writer)?;
+        store!(Option<u64>, &self.pending_effective_daa, writer)?;
+        store!(u64, &self.cadence_daa, writer)?;
+        store!(u64, &self.expires_daa, writer)?;
+        store!(u64, &self.declared_daa, writer)?;
+        store!(Option<String>, &self.lapsed, writer)?;
+        store!(Option<u64>, &self.lapse_daa, writer)?;
+        store!(u64, &self.enforced_lead_daa, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwModelBenefits {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let tiers = deserialize!(Vec<RpcPalwModelBenefitTier>, reader)?;
+        let pending_tiers = deserialize!(Vec<RpcPalwModelBenefitTier>, reader)?;
+        let pending_effective_daa = load!(Option<u64>, reader)?;
+        let cadence_daa = load!(u64, reader)?;
+        let expires_daa = load!(u64, reader)?;
+        let declared_daa = load!(u64, reader)?;
+        let lapsed = load!(Option<String>, reader)?;
+        let lapse_daa = load!(Option<u64>, reader)?;
+        let enforced_lead_daa = load!(u64, reader)?;
+        Ok(Self {
+            tiers,
+            pending_tiers,
+            pending_effective_daa,
+            cadence_daa,
+            expires_daa,
+            declared_daa,
+            lapsed,
+            lapse_daa,
+            enforced_lead_daa,
+        })
     }
 }
 

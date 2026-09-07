@@ -1613,7 +1613,32 @@ message GetPalwModelLineResponseMessage {
   optional string currentRoot = 4;
   repeated string rootsInForce = 5;
   uint64 tipDaa = 6;
+  // ADR-0095: what this line's positions grant. Absent where nothing is declared.
+  optional RpcPalwModelBenefits benefits = 7;
   RPCError error = 1000;
+}
+
+// ADR-0095 §4.1: one tier of a line's membership declaration.
+message RpcPalwModelBenefitTier {
+  uint64 minUnits = 1;
+  uint32 grants = 2;
+  repeated string grantNames = 3;
+  uint64 leadDaa = 4;
+  uint64 minHoldDaa = 5;
+  string note = 6;
+}
+
+// ADR-0095: what a line promises its holders, resolved at the tip.
+message RpcPalwModelBenefits {
+  repeated RpcPalwModelBenefitTier tiers = 1;
+  repeated RpcPalwModelBenefitTier pendingTiers = 2;
+  optional uint64 pendingEffectiveDaa = 3;
+  uint64 cadenceDaa = 4;
+  uint64 expiresDaa = 5;
+  uint64 declaredDaa = 6;
+  optional string lapsed = 7;
+  optional uint64 lapseDaa = 8;
+  uint64 enforcedLeadDaa = 9;
 }
 
 message RpcPalwModelVersion {
