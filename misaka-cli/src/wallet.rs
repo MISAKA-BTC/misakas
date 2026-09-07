@@ -61,6 +61,41 @@ pub(crate) struct NodeView {
     /// the floor is 1 and this is 600, so every coinbase younger than 600 DAA read as spendable
     /// and the send was rejected for spending an immature UTXO. `0` is the feature off.
     settlement_long_maturity_daa: u64,
+    /// The DNS overlay as the node describes it.
+    ///
+    /// The anchor half of it is what decides whether a mining reward is spendable in minutes or
+    /// after the whole settlement fallback, and it used to be dropped here on a belief that has
+    /// not been true for a long time — see the note in `connect`.
+    pub(crate) overlay: Overlay,
+}
+
+/// The DNS overlay's own account of itself.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct Overlay {
+    /// The DAA score of the last DNS-confirmed anchor; `None` when none is confirmed or the node
+    /// could not be asked. `None` is the strict reading: no acceleration.
+    pub(crate) anchor_daa: Option<u64>,
+    /// `DnsHealth` as the RPC reports it; `None` when the node could not be asked.
+    pub(crate) health: Option<u32>,
+}
+
+impl Overlay {
+    pub(crate) fn health_name(&self) -> &'static str {
+        match self.health {
+            Some(0) => "DisabledBeforeActivation",
+            Some(1) => "Active",
+            Some(2) => "DegradedStakeQualityLow",
+            Some(3) => "DegradedCertificateCensored",
+            Some(_) => "unknown",
+            None => "unreadable",
+        }
+    }
+
+    /// Whether a NEW coinbase can expect the fast path. Both degraded states are defined as the
+    /// confirmed anchor having stopped advancing, so an anchor that exists is not enough.
+    pub(crate) fn accelerating(&self) -> bool {
+        self.anchor_daa.is_some() && self.health == Some(1)
+    }
 }
 
 pub(crate) async fn connect(ctx: &Ctx) -> Result<NodeView, CliError> {
@@ -96,7 +131,23 @@ pub(crate) async fn connect(ctx: &Ctx) -> Result<NodeView, CliError> {
     let params = Params::from(server.network_id);
     let coinbase_maturity = params.coinbase_maturity();
     let settlement_long_maturity_daa = params.dns_params.as_ref().map_or(0, |d| d.coinbase_settlement_long_maturity_daa);
-    Ok(NodeView { client, params, virtual_daa: server.virtual_daa_score, coinbase_maturity, settlement_long_maturity_daa })
+    // **The confirmed anchor IS on the RPC**, and passing `None` for it was not a conservative
+    // simplification but a wrong answer: on testnet-11 the fallback is 600 DAA and the anchor
+    // normally sits a few DAA behind the tip, so every mining reward read as locked for what was
+    // measured at ~40 hours while the node's own mempool would have accepted the spend. Proven by
+    // spending one: a coinbase 261 DAA old was accepted and mined. `kaspa-pq-validator` has read
+    // this same field all along.
+    //
+    // `None` on any failure keeps the strict reading — an unreadable overlay may only ever delay a
+    // spend, and guessing "accelerated" produces the rejection this is here to avoid.
+    let overlay = match client.get_dns_confirmation().await {
+        Ok(c) if !c.last_dns_confirmed_anchor.is_empty() && c.last_dns_confirmed_anchor.bytes().any(|b| b != b'0') => {
+            Overlay { anchor_daa: Some(c.last_dns_confirmed_anchor_daa_score), health: Some(c.health) }
+        }
+        Ok(c) => Overlay { anchor_daa: None, health: Some(c.health) },
+        Err(_) => Overlay::default(),
+    };
+    Ok(NodeView { client, params, virtual_daa: server.virtual_daa_score, coinbase_maturity, settlement_long_maturity_daa, overlay })
 }
 
 /// Page the ENTIRE UTXO set of `address` (op 160, ≤1000/page) — never the
@@ -245,17 +296,15 @@ pub(crate) async fn page_all(nv: &NodeView, address: &Address) -> Result<Vec<Fun
             .map_err(|e| CliError::new(exit::GENERIC, format!("getUtxosByAddressPage: {e}")))?;
         for e in resp.entries {
             let amount = e.utxo_entry.amount;
-            // Both gates, as the node applies them. The confirmed anchor is not exposed over RPC,
-            // so `None` is passed: that only ever makes this stricter than the node, which is the
-            // safe direction for a wallet — it may hold back a spendable output, never offer an
-            // unspendable one.
+            // All three gates, as the node applies them: base maturity, then either the fallback
+            // or the confirmed anchor having passed this output's own block.
             let mature = is_spendable_settled(
                 e.utxo_entry.is_coinbase,
                 e.utxo_entry.block_daa_score,
                 nv.virtual_daa,
                 nv.coinbase_maturity,
                 nv.settlement_long_maturity_daa,
-                None,
+                nv.overlay.anchor_daa,
             );
             let outpoint: TransactionOutpoint = e.outpoint.into();
             let bonded = bonds.contains(&outpoint);
@@ -304,6 +353,99 @@ const MAX_TXS_PER_RUN_HARD_CAP: usize = 200;
 
 pub(crate) fn sompi_to_msk(s: u64) -> String {
     format!("{}.{:08}", s / 100_000_000, s % 100_000_000)
+}
+
+// ---------------------------------------------------------------------------
+// wallet settlement — read-only
+// ---------------------------------------------------------------------------
+
+/// When this address's MINING REWARDS become spendable, and what decides it.
+///
+/// Written because that diagnosis used to need two unrelated commands and the consensus source:
+/// `wallet utxo list` says how much is not spendable, `validator status` says where the confirmed
+/// anchor is, and nothing said they were the same question. The failure it exists to catch is not
+/// "my coinbase is young" — it is "the anchor stopped advancing", which turns a minutes-long wait
+/// into the full fallback and is reported nowhere, because nothing errors.
+pub(crate) async fn settlement(ctx: &Ctx, address: Option<&str>, ks: &KeySource) -> CliResult {
+    let nv = connect(ctx).await?;
+    let addr = resolve_address(ctx, address, ks, &nv)?;
+    let utxos = page_all(&nv, &addr).await?;
+
+    let fallback = nv.coinbase_maturity.max(nv.settlement_long_maturity_daa);
+    let (mut rewards, mut spendable, mut waiting, mut bonded) = (0u64, 0u64, 0u64, 0u64);
+    let mut clears_at: Vec<u64> = Vec::new();
+    for u in &utxos {
+        if u.bonded {
+            bonded += u.amount;
+            continue;
+        }
+        if u.entry.is_coinbase {
+            rewards += u.amount;
+        }
+        if u.mature {
+            spendable += u.amount;
+        } else {
+            waiting += u.amount;
+            clears_at.push(u.entry.block_daa_score.saturating_add(fallback));
+        }
+    }
+    clears_at.sort_unstable();
+    let first_clears = clears_at.first().copied();
+
+    match ctx.output {
+        OutputFormat::Json => println!(
+            "{}",
+            json!({ "ok": true, "address": addr.to_string(), "virtualDaa": nv.virtual_daa,
+                    "coinbaseMaturityDaa": nv.coinbase_maturity,
+                    "settlementDaa": nv.settlement_long_maturity_daa,
+                    "fallbackDepthDaa": fallback,
+                    "confirmedAnchorDaa": nv.overlay.anchor_daa,
+                    "overlayHealth": nv.overlay.health_name(),
+                    "accelerating": nv.overlay.accelerating(),
+                    "unspentRewardsSompi": rewards, "spendableSompi": spendable,
+                    "waitingSompi": waiting, "bondedSompi": bonded,
+                    "firstClearsAtDaa": first_clears })
+        ),
+        OutputFormat::Human => {
+            println!("Address        : {addr}");
+            println!("Chain          : virtual DAA {}", nv.virtual_daa);
+            // "unspent", not "earned": a reward that has already been spent is change now, and
+            // labelling this as lifetime earnings would make every spend look like a loss.
+            println!("Unspent rewards (coinbase) : {} MSK", sompi_to_msk(rewards));
+            println!("  spendable now    : {} MSK", sompi_to_msk(spendable));
+            println!("  waiting          : {} MSK", sompi_to_msk(waiting));
+            if bonded > 0 {
+                println!("  bonded (locked)  : {} MSK", sompi_to_msk(bonded));
+            }
+            println!();
+            println!(
+                "Rule           : a coinbase needs {} DAA of age, and THEN either {} DAA more or the",
+                nv.coinbase_maturity, nv.settlement_long_maturity_daa
+            );
+            println!("                 DNS confirmed anchor passing its own block, whichever comes first.");
+            match nv.overlay.anchor_daa {
+                Some(a) => {
+                    println!("Confirmed anchor: DAA {a}  ({} DAA behind the tip)", nv.virtual_daa.saturating_sub(a));
+                    println!("Overlay health : {}", nv.overlay.health_name());
+                    if !nv.overlay.accelerating() {
+                        println!();
+                        println!("WARNING: the anchor is not advancing, so a reward won above DAA {a} cannot take the");
+                        println!("         fast path and must wait the full {fallback}-DAA fallback. Rewards at or below");
+                        println!("         DAA {a} are unaffected.");
+                    }
+                }
+                None => {
+                    println!("Confirmed anchor: none observed — every reward waits the full {fallback}-DAA fallback");
+                    println!("Overlay health : {}", nv.overlay.health_name());
+                }
+            }
+            if let Some(d) = first_clears {
+                println!("First waiting output clears at DAA {d} by the fallback, or sooner if the anchor reaches it.");
+            }
+        }
+    }
+    let _ = nv.client.disconnect().await;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -630,7 +772,7 @@ mod bond_lock_tests {
     //! `send` spends a validator's collateral out from under an Active bond (audit M1-3); too
     //! strong and an honest validator that has served its unbonding period cannot reclaim 20M KAS
     //! with any shipped command.
-    use super::bond_is_releasable;
+    use super::{Overlay, bond_is_releasable};
     use kaspa_rpc_core::RpcStakeBondEntry;
 
     fn bond(effective_status: &str, requested: Option<u64>, period: u64) -> RpcStakeBondEntry {
@@ -670,5 +812,36 @@ mod bond_lock_tests {
         assert!(!bond_is_releasable(&bond("unbonding", None, 100), u64::MAX));
         // And an overflowing period cannot wrap into "releasable".
         assert!(!bond_is_releasable(&bond("unbonding", Some(u64::MAX), 1), u64::MAX));
+    }
+
+    /// **An anchor that exists is not an anchor that is working.**
+    ///
+    /// Both degraded states are *defined* as the confirmed anchor having stopped advancing, so a
+    /// wallet that only checked `anchor_daa.is_some()` would keep promising the fast path to
+    /// rewards that will actually wait the whole fallback — and say nothing, because the anchor is
+    /// still there and still has a DAA score. Measured on testnet-11 on 2026-09-07: health went
+    /// Active -> DegradedCertificateCensored with the anchor frozen at DAA 1730 under a tip of 1875.
+    #[test]
+    fn only_an_active_overlay_is_accelerating() {
+        let at = |anchor, health| Overlay { anchor_daa: anchor, health };
+        assert!(at(Some(1_730), Some(1)).accelerating(), "an Active overlay with an anchor accelerates");
+        assert!(!at(Some(1_730), Some(3)).accelerating(), "DegradedCertificateCensored does not, anchor or no anchor");
+        assert!(!at(Some(1_730), Some(2)).accelerating(), "and neither does DegradedStakeQualityLow");
+        assert!(!at(Some(1_730), Some(0)).accelerating(), "nor an overlay that has not activated");
+        assert!(!at(None, Some(1)).accelerating(), "Active with no confirmed anchor has nothing to accelerate past");
+        assert!(!at(None, None).accelerating(), "an unreadable overlay is the strict reading");
+    }
+
+    /// The names must match `DnsHealth`'s discriminants, because the number is all the RPC sends
+    /// and an off-by-one here reports a healthy overlay as censored.
+    #[test]
+    fn health_names_match_the_enum_discriminants() {
+        let n = |h| Overlay { anchor_daa: None, health: h }.health_name();
+        assert_eq!(n(Some(0)), "DisabledBeforeActivation");
+        assert_eq!(n(Some(1)), "Active");
+        assert_eq!(n(Some(2)), "DegradedStakeQualityLow");
+        assert_eq!(n(Some(3)), "DegradedCertificateCensored");
+        assert_eq!(n(Some(4)), "unknown", "a value this build does not know must not be named");
+        assert_eq!(n(None), "unreadable", "and 'could not ask' must not read as a health verdict");
     }
 }

@@ -324,6 +324,19 @@ enum WalletCmd {
     /// UTXO-set operations (list / consolidate).
     #[command(subcommand)]
     Utxo(UtxoCmd),
+    /// When this address's MINING REWARDS become spendable, and what decides it.
+    ///
+    /// A coinbase clears the base maturity and then EITHER the DNS confirmed anchor passing its
+    /// own block or the settlement fallback elapsing. Which one applies is the difference between
+    /// minutes and, on a slow chain, days — and an anchor that has stopped advancing silently
+    /// moves every new reward onto the slow path.
+    Settlement {
+        /// Address to read (defaults to the one the key derives).
+        #[arg(long)]
+        address: Option<String>,
+        #[command(flatten)]
+        key: KeyArgs,
+    },
     /// Send MSK to a recipient (dry-run unless --yes).
     Send {
         /// Recipient address (must match --network).
@@ -1555,6 +1568,7 @@ async fn main() -> std::process::ExitCode {
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::Consolidate { max_inputs, max_txs_per_run, sleep_ms, yes, key })) => {
             wallet::consolidate(&ctx, &key.source(), max_inputs, !yes, yes, max_txs_per_run, sleep_ms).await
         }
+        Command::Wallet(WalletCmd::Settlement { address, key }) => wallet::settlement(&ctx, address.as_deref(), &key.source()).await,
         Command::Wallet(WalletCmd::Send { to, amount, yes, coinbase_only, key }) => match parse_msk_to_sompi(&amount) {
             Ok(sompi) => wallet::send(&ctx, &key.source(), &to, sompi, !yes, yes, coinbase_only).await,
             Err(e) => Err(e),
