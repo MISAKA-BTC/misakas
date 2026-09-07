@@ -727,6 +727,49 @@ function modelSub(rec) {
 const CATALOGUE_NOTE = 'This name is from the site\'s own catalogue (config.js), not from the chain: this node serves no line name. The id below is the chain fact.';
 // The catalogue's own row: the repository the artifact comes from, what the chain registered of
 // it, and the size. Empty for a line the catalogue does not know.
+// ADR-0095: what this position gets you. The reason to buy belongs BEFORE the buy, so this sits on
+// the trade page rather than somewhere a holder finds afterwards.
+function benefitsPanel(info) {
+  const b = info && info.benefits;
+  if (!b) return '';
+  const head = '<div class="panel"><div class="panel-h">What a position grants</div><div class="panel-b">';
+  if (b.lapsed) {
+    const why = b.lapsed === 'expired' ? 'the declaration expired' : 'no version shipped by the declared cadence';
+    return head + '<div class="banner warn">LAPSED — ' + esc(why) +
+      (b.lapseDaa != null ? ' (DAA ' + fmtInt(b.lapseDaa) + ')' : '') +
+      '</div><div class="note tiny">A lapsed promise grants nothing and constrains nothing until the owner declares again.</div></div></div>';
+  }
+  const tiers = b.tiers || [];
+  if (!tiers.length) return head + '<div class="dim">Nothing declared.</div></div></div>';
+  const rows = tiers.map((t) => {
+    const extra = [];
+    if (t.leadDaa) extra.push('a new version ' + fmtInt(t.leadDaa) + ' DAA before it may become current');
+    if (t.minHoldDaa) extra.push('after ' + fmtInt(t.minHoldDaa) + ' DAA held without selling');
+    if (t.note) extra.push(esc(t.note));
+    return '<tr><td class="r mono">' + fmtPos(t.minUnits) + '</td><td class="l">' +
+      (t.grantNames || []).map((g) => '<span class="tag">' + esc(g) + '</span>').join(' ') +
+      (extra.length ? '<div class="note tiny">' + extra.join(' · ') + '</div>' : '') + '</td></tr>';
+  }).join('');
+  let foot = [];
+  if (b.enforcedLeadDaa) {
+    // The one line on this page that is a RULE rather than a promise, so it is worth saying plainly.
+    foot.push('The chain refuses to make a new version current within ' + fmtInt(b.enforcedLeadDaa) +
+      ' DAA of its publication. The window is enforced, not promised.');
+  }
+  if (b.cadenceDaa) foot.push('A version every ' + fmtInt(b.cadenceDaa) + ' DAA, or this lapses on its own.');
+  if (b.expiresDaa) foot.push('Expires at DAA ' + fmtInt(b.expiresDaa) + '.');
+  if (b.pendingEffectiveDaa != null) {
+    foot.push((b.pendingTiers && b.pendingTiers.length)
+      ? 'A WEAKER declaration governs from DAA ' + fmtInt(b.pendingEffectiveDaa) + '.'
+      : 'The declaration is WITHDRAWN at DAA ' + fmtInt(b.pendingEffectiveDaa) + '.');
+  }
+  return head + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="r">Units</th><th class="l">Grants</th></tr></thead><tbody>' +
+    rows + '</tbody></table></div>' +
+    (foot.length ? '<div class="note tiny">' + foot.join(' ') + '</div>' : '') +
+    '<div class="note tiny">A position is a membership, not an income: no holder is ever paid, and the chain proves the holding and publishes the promise. Serving is the developer\'s.</div>' +
+    '</div></div>';
+}
+
 function catalogueRows(rec) {
   const c = catalogue(rec);
   if (!c) return '';
@@ -1981,7 +2024,8 @@ async function pageLine(arg) {
         </tbody></table></div><div class="note tiny">A bond is the chain's address-shaped identity (ML-DSA-87). The owner keeps the cold key; the developer signs versions; nothing here moves a position.</div>
         <div class="panel-h" style="border-top:1px solid var(--border);margin-top:8px">Roots in force</div>
         <div style="padding:6px 0">${inForce ? (inForce.length ? raw(inForce.map((r) => '<div class="hash">' + (r ? idCell(r, 32).s : '(id not served by the EVM window)') + '</div>').join('')) : '<span class="dim">none</span>') : '—'}</div>
-        </div></div>
+        </div></div></div>
+        ${raw(benefitsPanel(info))}
       </div>
       <div class="panel section"><div class="panel-h">Versions <span class="spacer"></span><span class="dim">the node holds the last 64; the explorer keeps the whole history</span></div><div class="panel-b" id="versionsBox">
         ${!versions ? raw('<div class="empty">Loading versions…</div>') : !versions.length ? raw('<div class="empty">No version rows are held for this line' + (row.hasRow === false ? ' (a founding line nothing touched has its registration root as version 1)' : '') + '.</div>') :
