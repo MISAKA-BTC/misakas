@@ -53,13 +53,45 @@ const ACTION_NAME = { 1: 'buy', 2: 'sell', 3: 'seed' };
 // wei per sompi; the value of a buy or a seed is whole sompi scaled to wei (the F002 rule)
 const sompiToWei = (sompi) => bi(sompi) * NATIVE_SCALE_WEI;
 
-function resolveWrpcUrl() {
-  if (CFG.WRPC_URL) return CFG.WRPC_URL;
+// **Whose node this page reads is the reader's choice, not the host's.**
+//
+// The market itself is permissionless: the rows live in the chain's own state, the curve is
+// consensus arithmetic every node computes, and a buy is an ordinary transaction paying an
+// OP_RETURN sink — no gateway, no operator key, no allowlist. The one thing that was NOT
+// permissionless was this page, because `config.js` hard-codes an endpoint: a copy of these six
+// files served anywhere still read the original operator's node, and if that host went away every
+// copy went with it, including copies the operator had nothing to do with.
+//
+// So the endpoint is overridable by whoever is looking, kept in their own browser, and shown next
+// to the network pill. Point it at `ws://127.0.0.1:26314` and the page is reading your node; the
+// files can be served from anywhere, or from a file:// directory with `?wrpc=` in the query.
+//
+// Order: the reader's own setting, then a `?wrpc=` link (so one can be shared without editing
+// anything), then `config.js`, then this page's own origin. The last is what makes an
+// unconfigured copy work when it is served beside a node.
+const ENDPOINT_KEY = 'wrpcUrl';
+const EVM_ENDPOINT_KEY = 'evmRpcUrl';
+
+function queryParam(name) {
+  try { return new URLSearchParams(location.search).get(name) || ''; } catch (e) { return ''; }
+}
+function sameOriginWrpc() {
   if (!location.host) return '';
   return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/kaspa';
 }
+function resolveWrpcUrl() {
+  return store.get(ENDPOINT_KEY, '') || queryParam('wrpc') || CFG.WRPC_URL || sameOriginWrpc();
+}
 function resolveEvmUrl() {
-  try { return new URL(CFG.EVM_RPC_URL, location.href).href; } catch (e) { return ''; }
+  const chosen = store.get(EVM_ENDPOINT_KEY, '') || queryParam('evm') || CFG.EVM_RPC_URL;
+  try { return new URL(chosen, location.href).href; } catch (e) { return ''; }
+}
+/// Save a reader's endpoints and reload onto them. Empty clears the override, which falls back to
+/// the link, then the file, then this origin — so there is always a way back to the default.
+function setEndpoints(wrpcUrl, evmUrl) {
+  if (wrpcUrl) store.set(ENDPOINT_KEY, wrpcUrl); else store.del(ENDPOINT_KEY);
+  if (evmUrl) store.set(EVM_ENDPOINT_KEY, evmUrl); else store.del(EVM_ENDPOINT_KEY);
+  location.reload();
 }
 
 // ============================================================================================
@@ -2366,7 +2398,27 @@ function selfTestReport() {
   return report;
 }
 
+/// Wire the node picker. The pill is the handle because the pill is what a reader looks at when
+/// the page is not showing what they expect.
+function bindNodePicker() {
+  const dlg = $('#nodeDialog'), pill = $('#netPill');
+  if (!dlg || !pill || typeof dlg.showModal !== 'function') return;
+  const wrpcIn = $('#nodeWrpc'), evmIn = $('#nodeEvm'), now = $('#nodeNow');
+  pill.addEventListener('click', () => {
+    wrpcIn.value = store.get(ENDPOINT_KEY, '') || '';
+    evmIn.value = store.get(EVM_ENDPOINT_KEY, '') || '';
+    // Say what is in force, so "Cancel" is an informed choice and not a guess.
+    now.textContent = 'Reading now: ' + (resolveWrpcUrl() || '(no endpoint — this page has no origin)');
+    dlg.showModal();
+  });
+  dlg.addEventListener('close', () => {
+    if (dlg.returnValue === 'save') setEndpoints(wrpcIn.value.trim(), evmIn.value.trim());
+    else if (dlg.returnValue === 'reset') setEndpoints('', '');
+  });
+}
+
 async function boot() {
+  bindNodePicker();
   bindNav();
   status.listeners.add(renderNav);
   db.listeners.add(() => { renderNav(); renderBanner(); });

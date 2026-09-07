@@ -16,6 +16,36 @@ and trades through the EVM writer from an injected EIP-1193 wallet (MetaMask).
 **Every figure on screen is an RPC reply or the ADR-0090 arithmetic applied to a market row, or a
 dash.** Nothing is estimated or invented, and there is no server side: four static files.
 
+## Run your own copy — nothing here depends on this site
+
+The market is on the chain: the rows are in consensus state, the curve is arithmetic every node
+computes, and a trade is an ordinary transaction paying an `OP_RETURN` sink. No gateway, no
+operator key, no allowlist. These six files are a **viewer**, and a viewer is replaceable.
+
+So if misakaoptions.com is gone tomorrow, or you would simply rather not trust it:
+
+```bash
+git clone https://github.com/MISAKA-BTC/misakas
+cd misakas/web/misaka-options
+python3 -m http.server 8080        # or any static host, or open index.html directly
+```
+
+Then click the network pill and point it at a node. **You do not have to edit anything**: the
+endpoint a reader sets is kept in their own browser and beats `config.js`. Order of precedence:
+
+1. what the reader typed into the pill dialog,
+2. `?wrpc=ws://host:port` in the link — so a working endpoint can be shared without editing files,
+3. `config.js`,
+4. this page's own origin (`/kaspa`), which is what makes an unedited copy work when it is served
+   beside a node.
+
+Your own node answers everything on the Trade, Portfolio, Models and Leaderboard pages
+(`ws://127.0.0.1:26314` with `--rpclisten-json`). The EVM endpoint is optional and needed only to
+*send* a trade; reading needs neither it nor a wallet.
+
+Editing `config.js` is still the right move when you are publishing a copy for other people — it
+sets the default they arrive on. It is no longer the only way in.
+
 ## Files
 
 | file | what it is |

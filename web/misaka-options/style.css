@@ -311,3 +311,14 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
   .btn { padding: 6px 8px; }
   .stat { min-width: 90px; padding: 6px 10px; }
 }
+
+/* The node picker. Plain dialog: no library, same as the rest of this page. */
+.node-dialog{border:1px solid var(--line,#2a2a3a);border-radius:12px;background:var(--panel,#15151f);color:inherit;max-width:34rem;padding:20px}
+.node-dialog::backdrop{background:rgba(0,0,0,.6)}
+.node-dialog h3{margin:0 0 8px}
+.node-dialog label{display:block;font-size:12px;margin:12px 0 4px;opacity:.85}
+.node-dialog input{width:100%;box-sizing:border-box;padding:9px 10px;border-radius:8px;border:1px solid var(--line,#2a2a3a);background:#0e0e16;color:inherit;font-family:ui-monospace,monospace;font-size:13px}
+.node-dialog menu{display:flex;gap:8px;justify-content:flex-end;margin:18px 0 0;padding:0}
+.node-dialog .muted{font-size:12px;opacity:.75;line-height:1.5}
+#netPill{cursor:pointer}
+

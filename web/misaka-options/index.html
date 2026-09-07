@@ -35,7 +35,7 @@
     </div>
   </nav>
   <div class="nav-right">
-    <div class="pill" id="netPill" title="Network status">
+    <div class="pill" id="netPill" title="Network status — click to choose which node this page reads">
       <span class="dot" id="netDot" aria-hidden="true"></span>
       <span id="netText">connecting</span>
     </div>
@@ -43,6 +43,28 @@
   </div>
 </header>
 <div id="banner" class="banner" role="status" hidden></div>
+
+<!-- Which node this page reads. The market is on the chain, so any node answers it; this is here
+     so a copy of these files served anywhere is not tied to whoever first published them. -->
+<dialog id="nodeDialog" class="node-dialog">
+  <form method="dialog">
+    <h3>Which node should this page read?</h3>
+    <p class="muted">
+      The market lives in the chain's own state, so every node has the same answer. Point this at
+      your own node and nothing here depends on the site's host. Kept in this browser only.
+    </p>
+    <label for="nodeWrpc">wRPC (JSON over WebSocket)</label>
+    <input id="nodeWrpc" type="text" spellcheck="false" placeholder="ws://127.0.0.1:26314" />
+    <label for="nodeEvm">EVM JSON-RPC (optional — needed only to trade)</label>
+    <input id="nodeEvm" type="text" spellcheck="false" placeholder="http://127.0.0.1:8545" />
+    <p class="muted" id="nodeNow"></p>
+    <menu>
+      <button value="cancel" id="nodeCancel">Cancel</button>
+      <button value="reset" id="nodeReset">Use this site's default</button>
+      <button value="save" id="nodeSave" class="btn btn-accent">Save and reload</button>
+    </menu>
+  </form>
+</dialog>
 <main id="main" class="main" tabindex="-1"></main>
 <footer class="foot">
   <span id="footStatus">wRPC: idle. EVM RPC: idle.</span>
