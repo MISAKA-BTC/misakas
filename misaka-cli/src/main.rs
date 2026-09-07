@@ -29,6 +29,7 @@ mod forward;
 mod key_roles;
 mod keys;
 mod node;
+mod palw_claims;
 mod palw_court;
 mod palw_da;
 mod palw_derived;
@@ -348,6 +349,23 @@ enum WalletCmd {
 
 #[derive(Subcommand, Debug)]
 enum PalwCmd {
+    /// The finalized claims of a DAA window, and who did the work on each (JSONL).
+    ///
+    /// One line per claim that reached `Final`: the producer's bond, every panel seat that signed
+    /// a verdict, and the claim's `work_leaves`. Feeds the points scorer's C5 (LLM mining), whose
+    /// only other reader indexes an algo-4 lane this chain does not have.
+    Claims {
+        /// Only claims finalized at or above this DAA score.
+        #[arg(long)]
+        since_daa: u64,
+        /// Only claims finalized at or below this DAA score (default: the tip).
+        #[arg(long)]
+        until_daa: Option<u64>,
+        /// Stop the block walk after this many blocks. The output says so when it stops early —
+        /// an absence is then the walk's, not the chain's.
+        #[arg(long, default_value_t = 50_000)]
+        max_blocks: u64,
+    },
     /// Submit a free-prompt commitment built by `misaka-palw-fp-rail` (dry-run unless --yes).
     FpSubmit {
         /// The rail's `*.commitment-tx.borsh`.
@@ -1449,6 +1467,9 @@ async fn main() -> std::process::ExitCode {
             .await
         }
         Command::Palw(PalwCmd::Certified { class_id, json }) => palw_fp::certified(&ctx, &class_id, json).await,
+        Command::Palw(PalwCmd::Claims { since_daa, until_daa, max_blocks }) => {
+            palw_claims::claims(&ctx, since_daa, until_daa, max_blocks).await
+        }
         Command::Palw(PalwCmd::Derived { claim_id, json }) => palw_derived::show(&ctx, &claim_id, json).await,
         Command::Palw(PalwCmd::ModelShow { line_id, quote_msk, json }) => palw_model::show(&ctx, &line_id, quote_msk, json).await,
         Command::Palw(PalwCmd::ModelPositions { holder, key, json }) => {
