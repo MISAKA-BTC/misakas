@@ -640,8 +640,7 @@ mod palw_carriage_lane_tests {
     /// would fail on the signature rather than on the rule under test.
     fn header_with_retention(retention: u64) -> Header {
         let mut header = header_with(POW_ALGO_ID_PALW_COMMITTED_V2, Vec::new());
-        header.palw_commitment =
-            signed_carriage(&header, PalwAttemptLaneV1::Unfenced.attempt_version(), retention);
+        header.palw_commitment = signed_carriage(&header, PalwAttemptLaneV1::Unfenced.attempt_version(), retention);
         header.finalize();
         header
     }
@@ -651,8 +650,7 @@ mod palw_carriage_lane_tests {
     fn header_at_nonce(nonce: u64, state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2) -> Header {
         let retention = kaspa_consensus_core::palw_producer_v2::palw_min_trace_retention_daa_v1(state_params);
         let mut header = header_with_nonce(POW_ALGO_ID_PALW_COMMITTED_V2, Vec::new(), nonce);
-        header.palw_commitment =
-            signed_carriage(&header, PalwAttemptLaneV1::Unfenced.attempt_version(), retention);
+        header.palw_commitment = signed_carriage(&header, PalwAttemptLaneV1::Unfenced.attempt_version(), retention);
         header.finalize();
         header
     }
@@ -713,7 +711,9 @@ mod palw_carriage_lane_tests {
     /// this test rather than pass it.
     #[test]
     fn one_template_may_not_claim_more_executions_than_the_ceiling() {
-        use kaspa_consensus_core::palw_attempt_v2::{PALW_ATTEMPT_MAX_NONCE_BUCKET_V1, PALW_TICKET_NONCE_BUCKET_LOG2, palw_nonce_bucket_v1};
+        use kaspa_consensus_core::palw_attempt_v2::{
+            PALW_ATTEMPT_MAX_NONCE_BUCKET_V1, PALW_TICKET_NONCE_BUCKET_LOG2, palw_nonce_bucket_v1,
+        };
         let state_params = pin_state_params();
         // The ceiling is inclusive, so the last legal bucket IS the ceiling: its first nonce and
         // its last nonce both admit, and the next nonce is the first illegal one.

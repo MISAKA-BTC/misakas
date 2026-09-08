@@ -461,8 +461,10 @@ mod tests {
         // The claim id DOES move, because the field is inside `fp_claim_id_v3` — which is the only
         // thing on this lane that reads it.
         let (mut object_a, mut object_b) = (a.objects[0].object.clone(), b.objects[0].object.clone());
-        let (PalwConsensusObjectV2::FreePromptCommitted { claim: claim_a, .. }, PalwConsensusObjectV2::FreePromptCommitted { claim: claim_b, .. }) =
-            (&mut object_a, &mut object_b)
+        let (
+            PalwConsensusObjectV2::FreePromptCommitted { claim: claim_a, .. },
+            PalwConsensusObjectV2::FreePromptCommitted { claim: claim_b, .. },
+        ) = (&mut object_a, &mut object_b)
         else {
             panic!("both extractions produce a free-prompt commitment");
         };

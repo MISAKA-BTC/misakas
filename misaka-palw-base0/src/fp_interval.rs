@@ -1003,9 +1003,7 @@ pub fn base0_fp_interval_opening_anchor_v1(opening_bytes: &[u8]) -> Option<(u32,
 ///
 /// `None` for bytes that are not this family's opening; it decodes and reads a header and spends
 /// no forward pass.
-pub fn base0_fp_interval_opening_job_context_v1(
-    opening_bytes: &[u8],
-) -> Option<kaspa_consensus_core::palw_v2::PalwJobContextV2> {
+pub fn base0_fp_interval_opening_job_context_v1(opening_bytes: &[u8]) -> Option<kaspa_consensus_core::palw_v2::PalwJobContextV2> {
     let any = base0_fp_interval_opening_decode_any_v1(opening_bytes).ok()?;
     Some(match &any {
         Base0FpIntervalOpeningAnyV1::WithHistory(o) => o.binding.job_context.clone(),
