@@ -147,8 +147,8 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
 .tbl th.sorted { color: var(--accent); }
 .tbl td.num, .tbl th.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
-/* ---- trade layout ---- */
-.trade {
+/* ---- store layout ---- */
+.store {
   display: grid;
   gap: 8px;
   grid-template-columns: minmax(0, 1fr) 340px 320px;
@@ -158,13 +158,13 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
     "chart depth entry"
     "bottom bottom entry";
 }
-.trade > .a-bar { grid-area: bar; }
-.trade > .a-chart { grid-area: chart; display: flex; flex-direction: column; min-height: 420px; }
-.trade > .a-depth { grid-area: depth; }
-.trade > .a-entry { grid-area: entry; align-self: start; }
-.trade > .a-bottom { grid-area: bottom; }
+.store > .a-bar { grid-area: bar; }
+.store > .a-chart { grid-area: chart; display: flex; flex-direction: column; min-height: 420px; }
+.store > .a-depth { grid-area: depth; }
+.store > .a-entry { grid-area: entry; align-self: start; display: flex; flex-direction: column; gap: 8px; }
+.store > .a-bottom { grid-area: bottom; }
 @media (max-width: 1180px) {
-  .trade {
+  .store {
     grid-template-columns: minmax(0, 1fr) 320px;
     grid-template-rows: auto auto auto auto;
     grid-template-areas:
@@ -175,8 +175,8 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
   }
 }
 @media (max-width: 800px) {
-  .trade { grid-template-columns: minmax(0, 1fr); grid-template-areas: "bar" "entry" "chart" "depth" "bottom"; }
-  .trade > .a-chart { min-height: 320px; }
+  .store { grid-template-columns: minmax(0, 1fr); grid-template-areas: "bar" "entry" "chart" "depth" "bottom"; }
+  .store > .a-chart { min-height: 320px; }
 }
 
 /* market bar */

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<meta name="description" content="MISAKA Options: seed a model's pair with locked MSK and trade whole positions on the MISAKA chain's protocol curve.">
+<meta name="description" content="MISAKA Options: the model store on the MISAKA chain. Join a model line's membership, read what the line promises its members, and see every figure come from a node.">
 <title>MISAKA Options</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1417'/%3E%3Cpath d='M7 23V9l9 9 9-9v14' fill='none' stroke='%2350d2c1' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
@@ -12,18 +12,18 @@
 <body>
 <a class="skip" href="#main">Skip to content</a>
 <header class="nav" id="nav" role="banner">
-  <a class="brand" href="#/trade" aria-label="MISAKA Options home">
+  <a class="brand" href="#/store" aria-label="MISAKA Options home">
     <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#132228"/><path d="M7 23V9l9 9 9-9v14" fill="none" stroke="#50d2c1" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     <span>MISAKA <b>Options</b></span>
   </a>
   <button class="nav-toggle" id="navToggle" aria-label="Toggle menu" aria-expanded="false">Menu</button>
   <nav class="nav-links" id="navLinks" aria-label="Primary">
-    <a href="#/trade" data-page="trade">Trade</a>
-    <a href="#/portfolio" data-page="portfolio">Portfolio</a>
+    <a href="#/store" data-page="store">Store</a>
+    <a href="#/portfolio" data-page="portfolio">My memberships</a>
     <a href="#/lines" data-page="lines">Models</a>
-    <a href="#/leaderboard" data-page="leaderboard">Leaderboard</a>
-    <a href="#/add" data-page="add">Add model</a>
-    <a href="#/docs" data-page="docs">Docs</a>
+    <a href="#/leaderboard" data-page="leaderboard">Rankings</a>
+    <a href="#/add" data-page="add">List a model</a>
+    <a href="#/docs" data-page="docs">How it works</a>
     <div class="more">
       <button class="more-btn" id="moreBtn" aria-haspopup="true" aria-expanded="false">More</button>
       <div class="more-menu" id="moreMenu" hidden>
@@ -46,7 +46,7 @@
 <main id="main" class="main" tabindex="-1"></main>
 <footer class="foot">
   <span id="footStatus">wRPC: idle. EVM RPC: idle.</span>
-  <span class="foot-right">Every figure on this site is read from a node or computed with the chain's own curve arithmetic; a dash means the value is not available.</span>
+  <span class="foot-right">A membership is access to a model's service, never an income: no holder is ever paid. Every figure here is read from a node or computed with the chain's own arithmetic; a dash means the value is not available.</span>
 </footer>
 <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
 <script src="config.js"></script>

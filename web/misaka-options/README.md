@@ -1,17 +1,34 @@
 # MISAKA Options
 
-A static web front-end for the MISAKA chain's **model market** (ADR-0087, ADR-0088, ADR-0089,
-**ADR-0090**): a Hyperliquid-style trading app for **model positions**, served at
-https://misakaoptions.com.
+A static web front-end for the MISAKA chain's **model store** (ADR-0087, ADR-0088, ADR-0089,
+**ADR-0090**, **ADR-0095**), served at https://misakaoptions.com. What a model sells is a
+**membership**: access its owner declares on chain, and that the fold enforces where it can.
 
-A model's market is a **pair somebody makes** by locking at least 100,000 MSK into the model's
-line (ADR-0090): the whole seed becomes the curve's reserve, fee-free, and is locked for good; the
-seeder receives no position. The pair holds **500,000 whole positions** (no fraction of one),
-bought from the line's protocol curve and sold back to it, never transferred; 5 % of every MSK leg
-of a buy or a sell is burned and 1 % goes to the line's owner; the curve's product never falls, so
-the reserve never falls under the seed. This site reads the market through a node (the Kaspa-style
-wRPC and the EVM's read precompiles), quotes with the chain's own curve arithmetic, and sends seeds
-and trades through the EVM writer from an injected EIP-1193 wallet (MetaMask).
+**The site's words and the chain's words.** [ADR-0095](../../docs/adr/0095-a-position-is-a-membership-not-an-income.md)
+settled what a position is — a membership, never an income — and the front-end says so, in one
+mapping used everywhere:
+
+| the page says | the chain, the CLI and the ABI say |
+|---|---|
+| store | the line's market (`palw_model_market_v1`) |
+| membership | position (`decimals() == 0`) |
+| join / leave | `buy(minUnitsOut)` / `sell(unitsIn, minMskOutSompi)` |
+| open the store, opening deposit | `seed()`, the seed |
+| buy-back reserve | the curve's MSK reserve |
+
+Each mapped word carries the chain's own name in a `title`, and every table of chain events still
+prints the facade's event name in its tooltip: the site never becomes a second vocabulary a reader
+cannot trace back to the explorer.
+
+A model's store is **opened by somebody paying** at least 100,000 MSK into the model's line
+(ADR-0090): the whole deposit becomes the curve's reserve, fee-free, and is locked for good; whoever
+pays it receives no membership and nothing back. The store holds **500,000 whole memberships** (no
+fraction of one), bought from the line's protocol curve and sold back to it, never transferred; 5 %
+of every MSK leg of a join or a leave is burned and 1 % goes to the line's owner; the curve's
+product never falls, so the reserve never falls under the opening deposit. **No holder is ever
+paid** (ADR-0091). This site reads the store through a node (the Kaspa-style wRPC and the EVM's
+read precompiles), quotes with the chain's own curve arithmetic, and sends every move through the
+EVM writer from an injected EIP-1193 wallet (MetaMask).
 
 **Every figure on screen is an RPC reply or the ADR-0090 arithmetic applied to a market row, or a
 dash.** Nothing is estimated or invented, and there is no server side: four static files.
@@ -20,12 +37,12 @@ dash.** Nothing is estimated or invented, and there is no server side: four stat
 
 | file | what it is |
 |---|---|
-| `index.html` | the shell: nav (Trade, Portfolio, Models, Leaderboard, Add model, Docs), banner, main, footer, toasts |
-| `app.js` | everything else, plain ES2020 (no build): the curve arithmetic (BigInt port of `consensus/core/src/palw_model_market_v1.rs` as amended by ADR-0090), keccak-256 and BLAKE2b-512 (selectors, event topics, facade addresses, EVM holder ids), a wRPC client (JSON over WebSocket), an EVM JSON-RPC client with hand-rolled ABI encoding for the native doors, the wallet flow, the seed panel, the pages, and a canvas price chart |
+| `index.html` | the shell: nav (Store, My memberships, Models, Rankings, List a model, How it works), banner, main, footer, toasts |
+| `app.js` | everything else, plain ES2020 (no build): the curve arithmetic (BigInt port of `consensus/core/src/palw_model_market_v1.rs` as amended by ADR-0090), keccak-256 and BLAKE2b-512 (selectors, event topics, facade addresses, EVM holder ids), a wRPC client (JSON over WebSocket), an EVM JSON-RPC client with hand-rolled ABI encoding for the native doors, the wallet flow, the opening panel, the membership card, the pages, and a canvas price chart |
 | `style.css` | dark theme, teal accent, dense layout; responsive down to 380 px |
 | `config.js` | the only file you need to edit: endpoints, chain id, network name, fallback class ids, explorer and docs URLs |
 | `mock.js` | loaded **only** with `?mock=1`: a simulated node and wallet for demos and screenshots (see below) |
-| `screenshots/` | `trade.png` (a seeded line), `trade-unseeded.png` (the seed panel), `add-model.png` (the checklist), `models.png`, `portfolio.png`, taken in mock mode at 1440 px wide |
+| `screenshots/` | `store.png` (an open store), `store-not-open.png` (the opening panel), `list-a-model.png` (the checklist), `models.png`, `rankings.png`, `memberships.png`, taken in mock mode at 1440 px wide |
 
 No external dependencies, no CDN, no fonts, no build step. `app.js` is about 185 KB unminified.
 
@@ -41,10 +58,10 @@ window.MISAKA_CONFIG = {
   NETWORK_NAME: "testnet-11",
   CLASS_IDS: [],                // fallback class ids (128 hex) when the registry window is not armed
   EXPLORER_URL: "https://misakascan.com",
-  POLL_MS: 10000,               // trade page refresh cadence
+  POLL_MS: 10000,               // store page refresh cadence
   LOG_LOOKBACK_BLOCKS: 5000,    // eth_getLogs window for settlement events (node cap: 10000)
   ADR_URL: "https://github.com/MISAKA-BTC/misakas/tree/main/docs/adr",
-  DOCS_URL: "https://github.com/MISAKA-BTC/misakas/tree/main/docs"   // the runbooks the Add model page links
+  DOCS_URL: "https://github.com/MISAKA-BTC/misakas/tree/main/docs"   // the runbooks the List a model page links
 };
 ```
 
@@ -65,7 +82,7 @@ Known class ids on testnet-11 (from the tree, `tools/palw-jobs-export/src/main.r
 ```
 
 A class's founding line has the class id as its line id, so each of these is also a line id
-(`#/trade/<id>`, `#/line/<id>`, `#/add/<id>`).
+(`#/store/<id>`, `#/line/<id>`, `#/add/<id>`).
 
 ## Serve
 
@@ -113,49 +130,61 @@ For a local look: `cd web/misaka-options && python3 -m http.server 9471`, then o
 
 ## What each page does
 
-Hash routes: `#/trade/<lineId>`, `#/portfolio`, `#/lines`, `#/line/<lineId>`, `#/leaderboard`,
-`#/add[/<classId>]`, `#/docs`.
+Hash routes: `#/store/<lineId>`, `#/portfolio`, `#/lines`, `#/line/<lineId>`, `#/leaderboard`,
+`#/add[/<classId>]`, `#/docs`. `#/trade/<id>` is the store's former name and is redirected
+(`location.replace`, no history entry), so links printed before the rename still land.
 
-- **Trade** (default). Market selector (name from the wRPC line row, symbol from the facade's
-  `symbol()`, fallback `MP-<8 hex>`), stats (price, 24 h change, reserve, **seed (locked)**,
-  **seeded by**, sold/supply in whole positions, owner, current version, roots in force); a canvas
-  chart of curve prices sampled every `POLL_MS` while the page is open and folded with the
-  facade's `Bought`/`Sold` events (price after, at the block's timestamp), persisted per line in
-  `localStorage`; **curve depth** (cost of 1/10/100/1,000/10,000 whole positions and the net MSK a
-  sell of the same sizes returns, all from the ADR-0090 arithmetic on the market row); recent
-  settlements (facade events, `Seeded` included); the **order entry** (Buy/Sell, amount, slippage
-  → floor, quote with whole positions out, average price, price after, price impact, 5 % burn,
-  1 % owner leg, 94 % net, quoted by the node's AMM precompile when the EVM RPC is armed and by
-  local arithmetic otherwise); bottom tabs Positions, Order history (transactions sent from this
-  browser, seeds included, followed through `eth_getTransactionReceipt` and then the settlement
-  event at the next block), Settlements, Line info.
-  **For an unseeded line the order entry is replaced by the "Seed this market" panel**: what a
-  seed is (at least the network's least seed, locked for good, no position for the seeder, the
-  first price seed / 500,000, 500,000 whole positions in the curve), an MSK input defaulting to the
-  least seed (`seedMinSompi` from the wRPC, else the AMM window's `constants()`, else 100,000),
-  the first-price preview, the class's status, and a **Seed** button that sends the facade's
-  `seed()` with `value = seed sompi × 10^10 wei`. The depth table, the chart and the quote say
-  "not seeded yet" rather than quoting a curve that does not exist.
-- **Add model** (`#/add`). The path from a registered class to a traded pair, as a checklist with
-  live status where the chain can answer: (1) register the class (the exact `kaspad
+- **Store** (default, `#/store/<lineId>`). Model selector (name from the wRPC line row, symbol from
+  the facade's `symbol()`, fallback `MP-<8 hex>`); a header strip that leads with what the model
+  **is and is used for** — membership price, members hold, declared tiers, paid inferences, current
+  version — before the market's own numbers (bought by mining, 24 h, buy-back reserve, opening
+  deposit, who opened it, owner, roots in force). Three tabs, opening on **Use** (the fold's claim
+  counts and the version table), then **Versions**, then **Price history** (a canvas chart of curve
+  prices sampled every `POLL_MS` while the page is open and folded with the facade's
+  `Bought`/`Sold` events, persisted per line in `localStorage`).
+  A **price list** (what 1/10/100/1,000/10,000 memberships cost and what the store pays back for the
+  same sizes, all from the ADR-0090 arithmetic on the market row) and recent joins and leaves.
+  Beside them, the **membership card** (ADR-0095 §4.10: the tiers in effect, what each grants in
+  plain words with the chain's bit name in the tooltip, the lead and tenure each asks for, any
+  pending weakening, and the lapse — the reason to join belongs before the join; where a node serves
+  no declaration the card says so rather than showing nothing), and under it the **desk**
+  (Join/Leave, amount, the floor, the quote's 5 % burn, 1 % owner leg and 94 % net, quoted by the
+  node's AMM precompile when the EVM RPC is armed and by local arithmetic otherwise). Bottom tabs:
+  My memberships, My activity (transactions sent from this browser, followed through
+  `eth_getTransactionReceipt` and then the settlement event at the next block), Recent joins and
+  leaves, Model details.
+  **For a line with no store the desk is replaced by the "Open this store" panel**: what an opening
+  deposit is (at least the network's least seed, locked for good, no membership for whoever pays it,
+  the first price deposit / 500,000), an MSK input defaulting to the least seed (`seedMinSompi` from
+  the wRPC, else the AMM window's `constants()`, else 100,000), the first-price preview, the class's
+  status, and an **Open** button that sends the facade's `seed()` with
+  `value = deposit sompi × 10^10 wei`. The price list, the chart and the quote say "this store is
+  not open yet" rather than quoting a curve that does not exist.
+- **List a model** (`#/add`). The path from a registered class to a store people can join, as a
+  checklist with live status where the chain can answer: (1) register the class (the exact `kaspad
   --palw-register-class` / `palw-class preflight` / `--palw-register-bond` commands from the
-  runbooks, with links; this step cannot be done from a browser), (2) seed the pair (the same seed
+  runbooks, with links; this step cannot be done from a browser), (2) open the store (the same
   panel, with a line-id input defaulting to the class id, which is the founding line's id), (3)
   approval (the class's status as the chain names it, `Registered { activation_daa }` /
   `Active` / `Frozen` / `Dormant`, the chain's DAA now, and the attempt / free-prompt lane
-  certification), (4) trade (links to the trade and line pages, price, reserve, positions).
-- **Models** (`#/lines`). Every line of every known class, sortable, with the seed column; an
-  unseeded line shows a **Seed** call to action in place of a price.
-- **Line**. The row, the seed tile (locked MSK, seeder), roles, versions with chain-counted usage
-  and declared hashes/evaluations (labelled *declared*), proposals, roots in force.
-- **Portfolio**. The connected account's EVM-namespace positions (whole numbers) with a mark value
-  (the net MSK of the curve's sell quote for the whole position right now), MSK balance, settlement
-  events, order history.
-- **Leaderboard**. Lines ranked by reserve, seed, positions sold, or chain-counted usage. No
-  benchmark scores: the chain refuses a quality oracle, and declared evaluations are shown only on
-  line pages. Unseeded lines rank last.
-- **Docs**. The explainer for ADR-0090 (the seed, whole positions, the curve without a virtual
-  reserve, the seed floor invariant, one seed a line, no transfer), with links to the ADRs.
+  certification), (4) members — and the owner's last step, declaring what a membership gets them
+  with `misaka palw line-benefits`.
+- **Models** (`#/lines`). Every line of every known class, sortable, **use first**; a line with no
+  store shows an **Open it** call to action in place of a price.
+- **Line** (`#/line/<lineId>`). The row, the tiles (use first), roles, the membership card, versions
+  with chain-counted usage and declared hashes/evaluations (labelled *declared*), proposals, roots
+  in force.
+- **My memberships** (`#/portfolio`). The connected account's EVM-namespace memberships (whole
+  numbers) with what the curve would pay back if it left every one right now, MSK balance, joins and
+  leaves, activity.
+- **Rankings** (`#/leaderboard`). Models ranked by **use** (the default), members, what mining
+  bought back, the buy-back reserve, or the opening deposit. No benchmark scores: the chain refuses
+  a quality oracle, and declared evaluations are shown only on line pages. A store that is not open
+  ranks last.
+- **How it works** (`#/docs`). What a membership gets you and what the fold enforces of it
+  (ADR-0095), then the mechanism: the opening deposit, whole memberships, the curve without a
+  virtual reserve, the deposit floor invariant, one opening a line, no transfer, and that no holder
+  is ever paid — with links to the ADRs.
 
 ## The arithmetic (ADR-0090)
 
@@ -180,7 +209,7 @@ wRPC (JSON over WebSocket, one persistent socket, requests multiplexed by id):
 `getPalwModelMarket(lineId)` (now with `seedSompi`, `seededBy`, `seedMinSompi`, `classStatus`;
 the request also carries `classId` for a pre-ADR-0088 node, see below),
 `getPalwModelVersion(lineId, version)`, `getPalwModelProposals(lineId)`,
-`getPalwModelPositions(holder)`, and on the Add model page `getPalwProducerFacts(classId)` for the
+`getPalwModelPositions(holder)`, and on the List a model page `getPalwProducerFacts(classId)` for the
 free-prompt certification. Wire format:
 `{"id":n,"method":"getPalwModelMarket","params":{"lineId":"<128 hex>"}}` in,
 `{"id":n,"method":"...","params":{...result...}}` out (`error` on failure). Integer literals of 16+
@@ -203,8 +232,8 @@ events are read with `eth_getLogs` on the facade over `LOG_LOOKBACK_BLOCKS`, fil
 Degradation, in order: a market row comes from the wRPC and, failing that, from the AMM window
 (which does not carry the seed or the seeder: those show as a dash); lines come from the wRPC, then
 the registry window, then a bare founding line per configured class; the facade address is read
-from `facadeOf` and, until confirmed, derived locally (BLAKE2b) and shown as *unconfirmed* (neither
-seeds nor trades are sent to an unconfirmed facade); the holder id is read from `holderIdOf` or
+from `facadeOf` and, until confirmed, derived locally (BLAKE2b) and shown as *unconfirmed* (nothing
+is sent to an unconfirmed facade); the holder id is read from `holderIdOf` or
 derived locally the same way. If neither RPC answers, every figure is a dash and a banner says so;
 the layout always renders. A page's poll that fails logs the failure to the console rather than
 swallowing it.
@@ -247,10 +276,10 @@ buys and honours sells). 51 checks, all passing as shipped.
 classes (the two testnet-11 class ids above, both `Active`, and a third, `Registered` with an
 activation DAA 300 blocks ahead, that flips to `Active` when the mock's clock reaches it), four
 lines (three seeded with real seeds of 250,000, 100,000 and 120,000 MSK, priced by the site's own
-curve port; the registered class's founding line **unseeded**, so the seed panel and the Add model
-checklist have a subject), a trade tape over the previous 26 hours, a block every 6 seconds with
-background trades and usage, and a wallet account holding 150,000 MSK (enough to seed) and two
-positions. A buy, a sell or a seed sent in mock mode goes through the real code path: the receipt
+curve port; the registered class's founding line with **no store**, so the opening panel and the
+List a model checklist have a subject), a tape of joins and leaves over the previous 26 hours, a
+block every 6 seconds with background moves and usage, and a wallet account holding 150,000 MSK
+(enough to open a store) and two memberships. A buy, a sell or a seed sent in mock mode goes through the real code path: the receipt
 appears in the next block, the fold's decision and the `Bought`/`Sold`/`Seeded`/`Refused` event
 one block later (a second seed on a seeded line is refused with reason 10; a buy on the registered
 class is refused with reason 3 until it activates). Mock data lives under its own `localStorage`
@@ -266,11 +295,15 @@ on. Nothing in mock mode is a chain fact; it exists for demos, screenshots and U
   positions, no price, `seedMinSompi` = 100,000 MSK), `getPalwModelLines` with the synthesised
   founding line, and the EVM doors are empty accounts (`chainDaa()` returns no data). The site
   detects this and shows "Market not armed on this network yet" while rendering the layout. When
-  the wRPC answers, every line reads unseeded and the Seed panel appears with its button disabled
-  ("the market is not armed on this network: the facade is an empty account"), so a seed sent by
-  hand would be refused or lost; when no market row can be read at all (the wRPC down), the order
-  panel shows dashes and its button is disabled. Until the fences are armed (a release: they enter
-  the fingerprint) nothing can be seeded or traded.
+  the wRPC answers, every line reads as having no store and the opening panel appears with its
+  button disabled ("the store is not armed on this network: the facade is an empty account"), so a
+  deposit sent by hand would be refused or lost; when no market row can be read at all (the wRPC
+  down), the desk shows dashes and its button is disabled. Until the fences are armed (a release:
+  they enter the fingerprint) no store can be opened and nobody can join one.
+- **ADR-0095 has a fence of its own** (`palw_model_benefits`, `None` on every preset today), so no
+  line can declare what its memberships grant yet and `getPalwModelLine` serves no `benefits` word.
+  The membership card says exactly that instead of rendering an empty promise; it fills in on its
+  own once a node serves the field.
 - The public node behind misakascan.com (probed 2026-09-06) still runs a build from **before
   ADR-0088/0090**: its `getPalwModelMarket` is keyed by `classId` (a request with only `lineId`
   is answered with "request deserialization error") and its row carries a virtual reserve of
@@ -298,7 +331,7 @@ on. Nothing in mock mode is a chain fact; it exists for demos, screenshots and U
   two cells are a dash even for a seeded line.
 - Attempt-lane certification is served by the registry window only (`certified(class, 0)`); the
   wRPC serves the free-prompt lane (`getPalwProducerFacts.fpCertified`). With the window dormant
-  the attempt lane is a dash on the Add model page.
+  the attempt lane is a dash on the List a model page.
 - The `CLASSICAL-ECC` label for EVM-held positions (ADR-0089 E12) is not served by the RPC yet;
   the site states the namespace in copy instead.
 - Historical `eth_call` against the doors is not supported by the node (the fold is kept at the
@@ -314,21 +347,21 @@ on. Nothing in mock mode is a chain fact; it exists for demos, screenshots and U
 - Prices are shown in MSK per position with up to 8 decimals in the header and 6 in dense tables;
   position counts are integers everywhere (an input with a decimal point is refused with a
   message, not rounded).
-- "Sold / Supply" shows positions currently outside the curve (supply minus the curve's units);
-  the cumulative `soldUnits` is in the tooltip and in Line info.
-- "Not seeded" is decided by `reserve == 0` (the fold's own quote guard), never by the absence of
+- "Members hold" shows memberships currently outside the curve (supply minus the curve's units);
+  the cumulative `soldUnits` is in the tooltip and in Model details.
+- "Not open" is decided by `reserve == 0` (the fold's own quote guard), never by the absence of
   a `seedSompi` field, so an old node and the AMM window read the same way.
-- The seed panel defaults to the least seed and refuses (before the wallet) a value under it, a
-  seeded line, a frozen or dormant class, an unconfirmed facade, and an insufficient balance; the
-  same panel serves the trade page and the Add model page. A seed is recorded in Order history as
-  its own action kind and settles on the `Seeded` event.
-- The Add model page reads the class status from the wRPC market row's `classStatus` string
+- The opening panel defaults to the least seed and refuses (before the wallet) a value under it, an
+  already-open store, a frozen or dormant class, an unconfirmed facade, and an insufficient balance;
+  the same panel serves the store page and the List a model page. An opening is recorded in My
+  activity as its own action kind and settles on the `Seeded` event.
+- The List a model page reads the class status from the wRPC market row's `classStatus` string
   (parsed for `activation_daa`) and, when the doors are armed, from `classRow`; `#/add/<classId>`
   opens the checklist on a class, and the last class checked is remembered per browser.
-- A buy on a line whose class is not `Active` is explained by the class status ("Registered,
+- A join on a line whose class is not `Active` is explained by the class status ("Registered,
   activates at DAA n: buys wait for Active") rather than by the RPC's `closedToBuys` flag, which
   the node sets for both a retired line and a class that is not Active.
-- The trade page polls every 10 s; models/leaderboard every 30 s; the Add model page every 15 s;
+- The store page polls every 10 s; models/rankings every 30 s; the List a model page every 15 s;
   pending transactions every 12 s. A poll that fails is logged, not swallowed.
-- `screenshots/add-model.png` is taken 1440 px wide and taller than the others so the whole
+- `screenshots/list-a-model.png` is taken 1440 px wide and taller than the others so the whole
   checklist is in one image.

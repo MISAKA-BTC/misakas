@@ -727,12 +727,39 @@ function modelSub(rec) {
 const CATALOGUE_NOTE = 'This name is from the site\'s own catalogue (config.js), not from the chain: this node serves no line name. The id below is the chain fact.';
 // The catalogue's own row: the repository the artifact comes from, what the chain registered of
 // it, and the size. Empty for a line the catalogue does not know.
-// ADR-0095: what this position gets you. The reason to buy belongs BEFORE the buy, so this sits on
-// the trade page rather than somewhere a holder finds afterwards.
-function benefitsPanel(info) {
+// ADR-0095 §4.2: the closed set of grants, in the words a member reads. The chain's own spelling
+// is kept beside each one, because the bit name is what the CLI, the wallet and the explorer print
+// and prose that replaced it would be a second spelling of the same fact.
+const GRANT_WORDS = {
+  EARLY_VERSION: ['Early access to new versions', 'the artifact of a new version, before the line may make it current'],
+  PRIVATE_BETA: ['Private beta', 'versions published as previews are served to members and to nobody else'],
+  PRIORITY_INFERENCE: ['Priority in the queue', 'the line\'s gateways serve members\' jobs ahead of others\''],
+  EXPERIMENTAL: ['Experimental modes', 'modes the line runs but has not made default: longer context, thinking, tools, a new quantisation'],
+  DEVELOPER_ACCESS: ['The developer\'s room', 'proposals, research previews, where the next version is argued about'],
+  INFERENCE_QUOTA: ['A served allowance', 'a request allowance the gateway honours; the size is in the tier\'s note'],
+  HOLDER_VOICE: ['A voice in what ships next', 'evaluations and proposals carry the member mark and the tier they were written at'],
+  SUPPORT: ['Support answered first', 'the line answers members\' reports before others\''],
+};
+function grantChip(name) {
+  const w = GRANT_WORDS[name];
+  return '<span class="tag" title="' + esc(w ? w[1] + ' (' + name + ')' : name) + '">' + esc(w ? w[0] : name) + '</span>';
+}
+// ADR-0095 §4.10: what this membership gets you. The reason to join belongs BEFORE the join, so
+// this sits on the store page as well as on the line page.
+function benefitsPanel(info, opts) {
+  opts = opts || {};
   const b = info && info.benefits;
-  if (!b) return '';
-  const head = '<div class="panel"><div class="panel-h">What a position grants</div><div class="panel-b">';
+  const head = '<div class="panel"><div class="panel-h">What a membership gets you</div><div class="panel-b">';
+  const closedSet = '<div class="note tiny">A line may promise only from the chain\'s closed set: ' +
+    Object.keys(GRANT_WORDS).map((k) => GRANT_WORDS[k][0]).join(', ') +
+    '. There is no bit for a share, a rebate or a claim on the reserve — a grant is a service or it is not a grant (ADR-0095).</div>';
+  if (!b) {
+    // The node serves no benefits word: either it is older than ADR-0095 or the fence is dormant.
+    // Saying that is worth more than an empty column, because "nothing shown" and "nothing
+    // promised" are different facts and only one of them is this line's fault.
+    return opts.always ? head + '<div class="dim small">This node serves no membership declaration for this line: either it is older than ADR-0095 or the rule is not armed on ' +
+      esc(CFG.NETWORK_NAME) + ' yet. Nothing is promised here that the chain can show you.</div>' + closedSet + '</div></div>' : '';
+  }
   if (b.lapsed) {
     const why = b.lapsed === 'expired' ? 'the declaration expired' : 'no version shipped by the declared cadence';
     return head + '<div class="banner warn">LAPSED — ' + esc(why) +
@@ -740,14 +767,14 @@ function benefitsPanel(info) {
       '</div><div class="note tiny">A lapsed promise grants nothing and constrains nothing until the owner declares again.</div></div></div>';
   }
   const tiers = b.tiers || [];
-  if (!tiers.length) return head + '<div class="dim">Nothing declared.</div></div></div>';
+  if (!tiers.length) return head + '<div class="dim small">This line\'s owner has promised its members nothing yet.</div>' + closedSet + '</div></div>';
   const rows = tiers.map((t) => {
     const extra = [];
     if (t.leadDaa) extra.push('a new version ' + fmtInt(t.leadDaa) + ' DAA before it may become current');
     if (t.minHoldDaa) extra.push('after ' + fmtInt(t.minHoldDaa) + ' DAA held without selling');
     if (t.note) extra.push(esc(t.note));
     return '<tr><td class="r mono">' + fmtPos(t.minUnits) + '</td><td class="l">' +
-      (t.grantNames || []).map((g) => '<span class="tag">' + esc(g) + '</span>').join(' ') +
+      (t.grantNames || []).map(grantChip).join(' ') +
       (extra.length ? '<div class="note tiny">' + extra.join(' · ') + '</div>' : '') + '</td></tr>';
   }).join('');
   let foot = [];
@@ -763,10 +790,10 @@ function benefitsPanel(info) {
       ? 'A WEAKER declaration governs from DAA ' + fmtInt(b.pendingEffectiveDaa) + '.'
       : 'The declaration is WITHDRAWN at DAA ' + fmtInt(b.pendingEffectiveDaa) + '.');
   }
-  return head + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="r">Units</th><th class="l">Grants</th></tr></thead><tbody>' +
+  return head + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="r">Memberships</th><th class="l">What the line gives you</th></tr></thead><tbody>' +
     rows + '</tbody></table></div>' +
     (foot.length ? '<div class="note tiny">' + foot.join(' ') + '</div>' : '') +
-    '<div class="note tiny">A position is a membership, not an income: no holder is ever paid, and the chain proves the holding and publishes the promise. Serving is the developer\'s.</div>' +
+    '<div class="note tiny">A membership is access, not an income: no holder is ever paid. The chain proves the holding, publishes the promise and enforces the window; serving is the developer\'s.</div>' +
     '</div></div>';
 }
 
@@ -1142,7 +1169,7 @@ function clearPage() { for (const t of pageState.timers) clearInterval(t); for (
 function parseHash() {
   const raw = location.hash.replace(/^#\/?/, '');
   const [name, ...rest] = raw.split('/');
-  return { name: name || 'trade', arg: rest.join('/') || '' };
+  return { name: name || 'store', arg: rest.join('/') || '' };
 }
 function navigate(hash) { location.hash = hash; }
 
@@ -1167,9 +1194,9 @@ function renderBanner() {
   const anySeeded = Array.from(db.lines.values()).some((r) => r.market && r.market.seeded);
   const anyLegacy = Array.from(db.lines.values()).some((r) => r.market && r.market.legacy);
   if (MOCK) { text = 'Mock mode: the wRPC, the EVM RPC and the wallet are simulated by mock.js. Nothing here is a chain fact.'; cls += ' info'; }
-  else if (db.armed === false) text = 'Market not armed on ' + CFG.NETWORK_NAME + ' yet: the palw_model_market / palw_model_lines / palw_model_evm fences are dormant, so every line reads as an unseeded market (no reserve, no price) and neither a seed nor a trade can be sent: the facades are empty accounts and a Seed or Buy would be refused. The layout below is live against the node.' + (anyLegacy ? ' The node also serves the market row in its pre-ADR-0090 shape (a virtual reserve, no least seed), so position counts are not shown.' : '');
+  else if (db.armed === false) text = 'The store is not open on ' + CFG.NETWORK_NAME + ' yet: the palw_model_market / palw_model_lines / palw_model_evm fences are dormant, so every model reads as an unopened store (no reserve, no price) and nothing can be sent — the facades are empty accounts and an opening deposit or a join would be refused. The layout below is live against the node.' + (anyLegacy ? ' The node also serves the market row in its pre-ADR-0090 shape (a virtual reserve, no least seed), so position counts are not shown.' : '');
   else if (db.armed === null && status.evm === 'down' && status.wrpc === 'down') { text = 'No node reachable: neither the wRPC (' + (wrpc.url || 'not configured') + ') nor the EVM RPC (' + (evm.url || 'not configured') + ') answered. Showing the layout with no data.'; cls += ' bad'; }
-  else if (db.armed === null && status.evm === 'down') { text = 'EVM RPC unreachable: the market fence state cannot be read and neither seeds nor trades can be sent. Chain reads still come from the wRPC.' + (anySeeded ? '' : ' No market has been seeded on this network yet.'); cls += ' info'; }
+  else if (db.armed === null && status.evm === 'down') { text = 'EVM RPC unreachable: the market fence state cannot be read, and nothing can be sent. Chain reads still come from the wRPC.' + (anySeeded ? '' : ' No market has been seeded on this network yet.'); cls += ' info'; }
   else if (status.wrpc === 'down' && db.armed !== null) { text = 'wRPC unreachable: line names, versions and proposals cannot be read; markets and positions are read through the EVM window instead.'; cls += ' info'; }
   b.className = cls; b.textContent = text; b.hidden = !text;
 }
@@ -1300,20 +1327,20 @@ function seedReasonNotToSend(rec, sompi, balance) {
   const m = rec && rec.market;
   if (MOCK && !wallet.provider) return 'Mock wallet missing.';
   if (!wallet.provider) return 'No EIP-1193 wallet found: install MetaMask and reload.';
-  if (!wallet.account) return 'Connect a wallet to seed.';
+  if (!wallet.account) return 'Connect a wallet to open this store.';
   if (!wallet.onChain()) return 'Switch the wallet to the MISAKA chain (' + CFG.CHAIN_ID + ').';
-  if (db.armed === false) return 'The market is not armed on this network: the facade is an empty account, so a seed would be refused.';
+  if (db.armed === false) return 'The store is not armed on this network: the facade is an empty account, so an opening deposit would be refused.';
   if (db.armed === null) return 'EVM RPC unreachable: the transaction cannot be built.';
   if (!rec) return 'Enter a line id.';
   if (rec.notFound) return 'The node reports no line with this id.';
   if (!m) return 'The market row has not been read yet.';
-  if (m.seeded) return 'This line is already seeded (one seed a line).';
+  if (m.seeded) return 'This store is already open (one opening a line).';
   const cs = classStatusOf(rec);
-  if (cs && cs.head === 'Frozen') return 'The class is frozen: a frozen class takes no seed.';
-  if (cs && cs.head === 'Dormant') return 'The class is dormant: it must be registered again before it takes a seed.';
+  if (cs && cs.head === 'Frozen') return 'The class is frozen: a frozen class cannot be opened.';
+  if (cs && cs.head === 'Dormant') return 'The class is dormant: it must be registered again before it can be opened.';
   if (rec.facadeSource !== 'registry') return 'Facade address not confirmed by the registry window yet.';
-  if (sompi == null) return 'Enter the seed in MSK (whole sompi, at most 8 decimals).';
-  if (sompi < seedMinFor(m)) return 'Under the least seed of ' + fmtMsk(seedMinFor(m), 8) + ' MSK: the writer reverts SeedTooSmall at the call.';
+  if (sompi == null) return 'Enter the deposit in MSK (whole sompi, at most 8 decimals).';
+  if (sompi < seedMinFor(m)) return 'Under the least deposit of ' + fmtMsk(seedMinFor(m), 8) + ' MSK: the writer reverts SeedTooSmall at the call.';
   if (balance != null && sompiToWei(sompi) > balance) return 'Insufficient MSK balance in the EVM account.';
   return null;
 }
@@ -1330,29 +1357,29 @@ function renderSeedPanel(box, st, getRec, onSent) {
   const label = rec ? db.label(rec) : 'this line';
   box.innerHTML = h`
     <div class="panel-b seedp">
-      <div class="seed-h"><span class="tag warn">Not seeded</span> Seed this market</div>
-      <p class="small">No curve exists for <b>${label}</b> yet. A market opens only when someone locks at least <b>${fmtMsk(min, 0)} MSK</b> into the line:</p>
+      <div class="seed-h"><span class="tag warn">Not open</span> Open this store</div>
+      <p class="small"><b>${label}</b> has no store yet. One opens only when someone locks at least <b>${fmtMsk(min, 0)} MSK</b> into the line:</p>
       <ul class="small seed-facts">
-        <li>the whole seed becomes the reserve, fee-free, and is <b>locked for good</b>: no object pays a seed out, and the curve's product never falls, so a sell can never drain the reserve under the seed;</li>
-        <li>the seeder gets <b>no position</b> and nothing back, ever; exposure is bought like anyone else's;</li>
-        <li><b>${fmtPos(pv.supply)}</b> whole positions open in the curve at a first price of <b>seed / ${fmtPos(pv.supply)}</b>;</li>
-        <li>one seed a line (a second is refused); a frozen class takes none; a class still waiting for its activation takes the seed, and its buys wait for Active.</li>
+        <li>the whole deposit becomes the buy-back reserve, fee-free, and is <b>locked for good</b>: no object pays it out, and the curve's product never falls, so no member leaving can drain the reserve under it;</li>
+        <li>whoever pays it gets <b>no membership</b> and nothing back, ever — this is not a purchase, and it buys no claim on the model;</li>
+        <li><b>${fmtPos(pv.supply)}</b> memberships open at a first price of <b>deposit / ${fmtPos(pv.supply)}</b>;</li>
+        <li>one opening a line (a second is refused); a frozen class cannot be opened; a class still waiting for its activation can be, and its first members wait for Active.</li>
       </ul>
       <div class="field">
-        <label for="seedAmt">Seed (MSK, locked for good)</label>
+        <label for="seedAmt">Opening deposit (MSK, locked for good)</label>
         <div class="inp"><input id="seedAmt" inputmode="decimal" autocomplete="off" value="${st.msk}" aria-describedby="seedQuote"><span class="unit">MSK</span></div>
       </div>
       <div class="quote" id="seedQuote">
-        <div class="r"><span>Least seed</span><span class="v">${fmtMsk(min, 8)} MSK</span></div>
-        <div class="r"><span>First price</span><span class="v">${pv.price != null ? fmtPrice(pv.price) : '—'} MSK</span></div>
-        <div class="r"><span>Positions in the curve</span><span class="v">${fmtPos(pv.supply)}</span></div>
-        <div class="r"><span>Positions you receive</span><span class="v">0</span></div>
-        <div class="r"><span>Fee on the seed</span><span class="v">none</span></div>
+        <div class="r"><span>Least deposit</span><span class="v">${fmtMsk(min, 8)} MSK</span></div>
+        <div class="r"><span>First membership price</span><span class="v">${pv.price != null ? fmtPrice(pv.price) : '—'} MSK</span></div>
+        <div class="r"><span>Memberships opened</span><span class="v">${fmtPos(pv.supply)}</span></div>
+        <div class="r"><span>Memberships you receive</span><span class="v">0</span></div>
+        <div class="r"><span>Fee on the deposit</span><span class="v">none</span></div>
         <div class="r"><span>Class status</span><span class="v">${cs ? cs.head + (cs.activationDaa != null ? ' (activates at DAA ' + fmtInt(cs.activationDaa) + ')' : '') : '—'}</span></div>
-        <div class="r tot"><span>Available (EVM)</span><span class="v" id="availV">${st.balance != null ? fmtWeiMsk(st.balance) + ' MSK' : wallet.account ? '—' : 'connect a wallet'}</span></div>
+        <div class="r tot"><span>MSK available</span><span class="v" id="availV">${st.balance != null ? fmtWeiMsk(st.balance) + ' MSK' : wallet.account ? '—' : 'connect a wallet'}</span></div>
       </div>
-      <div class="field"><button id="seedBtn" class="btn btn-lg btn-accent" ${reason || st.busy ? 'disabled' : ''}>${st.busy ? 'Confirm in wallet…' : 'Seed ' + (rec ? rec.symbol : '')}</button><div class="reason" id="seedWhy">${reason || ''}</div></div>
-      <div class="note tiny">Sent as <code>seed()</code> on the line's facade with value = seed × 10<sup>10</sup> wei. The call queues the action (<code>ActionQueued</code>) in the block that carries it; the fold makes the seed the reserve after that block, and the facade emits <code>Seeded</code> (or <code>Refused</code>: already seeded, class closed) one block later, when the escrow is burned into the line's sink. A value under the least seed reverts at the call (<code>SeedTooSmall</code>).</div>
+      <div class="field"><button id="seedBtn" class="btn btn-lg btn-accent" ${reason || st.busy ? 'disabled' : ''}>${st.busy ? 'Confirm in wallet…' : 'Open ' + (rec ? rec.symbol : '')}</button><div class="reason" id="seedWhy">${reason || ''}</div></div>
+      <div class="note tiny">Sent as <code>seed()</code> on the line's facade with value = deposit × 10<sup>10</sup> wei. The call queues the action (<code>ActionQueued</code>) in the block that carries it; the fold makes the deposit the reserve after that block, and the facade emits <code>Seeded</code> (or <code>Refused</code>: already open, class closed) one block later, when the escrow is burned into the line's sink. A value under the least deposit reverts at the call (<code>SeedTooSmall</code>).</div>
     </div>`.s;
   const amt = $('#seedAmt', box);
   amt.addEventListener('input', () => { st.msk = amt.value; const pos = amt.selectionStart; renderSeedPanel(box, st, getRec, onSent); const a2 = $('#seedAmt', box); a2.focus(); try { a2.setSelectionRange(pos, pos); } catch (e) { /* ignore */ } });
@@ -1363,7 +1390,7 @@ function renderSeedPanel(box, st, getRec, onSent) {
     try {
       const hash = await wallet.sendTx({ from: wallet.account, to: r.facade, value: toHex(sompiToWei(s)), data: ABI.call(SIG.seed) });
       txlog.add({ hash, from: wallet.account, lineId: r.lineId, label: r.symbol, kind: 'seed', amount: s.toString(), min: '0', sentAt: Date.now(), status: 'sent' });
-      toast('Seed sent: ' + shortId(hash, 10) + '. Queued at the next block; the market opens one block after that.', 'ok', 'Seed ' + r.symbol);
+      toast('Opening deposit sent: ' + shortId(hash, 10) + '. Queued at the next block; the store opens one block after that.', 'ok', 'Open ' + r.symbol);
       if (onSent) onSent(hash);
     } catch (e) { toast((e && e.message) || String(e), 'bad', 'Wallet'); }
     st.busy = false; renderSeedPanel(box, st, getRec, onSent);
@@ -1371,9 +1398,14 @@ function renderSeedPanel(box, st, getRec, onSent) {
 }
 
 // ============================================================================================
-// 10. the trade page
+// 10. the store page: one model, what its membership gets you, and the desk that sells it
 // ============================================================================================
 const DEPTH_SIZES = [1n, 10n, 100n, 1000n, 10000n];
+// A move has two names: what a member does, and what the facade emits. Both are shown — the first
+// so the page reads like a store, the second so a reader can find the same row in the explorer.
+const EVENT_WORD = { Bought: 'Joined', Sold: 'Left', Seeded: 'Store opened', Refused: 'Refused' };
+function eventWord(kind) { return EVENT_WORD[kind] || kind; }
+const MOVE_WORD = { buy: 'joined', sell: 'left', seed: 'opened the store' };
 const RANGES = [['1h', 3600000], ['6h', 6 * 3600000], ['24h', 86400000], ['7d', 7 * 86400000], ['All', 0]];
 
 function sortedLines() {
@@ -1395,9 +1427,9 @@ function statusTag(rec) {
   const m = rec.market, row = rec.row;
   const retired = row && /retired/i.test(row.status || '');
   if (retired) return h`<span class="tag bad">Retired</span>`;
-  if (m && !m.seeded) return h`<span class="tag warn" title="No market yet: a seed of at least the least seed opens it">Not seeded</span>`;
-  if (m && m.closedToBuys) return h`<span class="tag warn">Closed to buys</span>`;
-  if (m) return h`<span class="tag ok">Seeded</span>`;
+  if (m && !m.seeded) return h`<span class="tag warn" title="No store yet: an opening deposit of at least the least seed opens it">Not open</span>`;
+  if (m && m.closedToBuys) return h`<span class="tag warn">Closed to new members</span>`;
+  if (m) return h`<span class="tag ok">Open</span>`;
   return h`<span class="tag">—</span>`;
 }
 function changeCell(rec) {
@@ -1409,7 +1441,7 @@ function changeCell(rec) {
   return h`<span class="${cls}" title="${title}">${fmtPct(c.pct)}${c.partial ? raw('<span class="dim">*</span>') : ''}</span>`;
 }
 
-async function pageTrade(arg) {
+async function pageStore(arg) {
   const gen = pageState.gen, alive = () => gen === pageState.gen;
   const main = $('#main');
   let lineId = normId(arg);
@@ -1418,27 +1450,35 @@ async function pageTrade(arg) {
   if (lineId) store.set('lastLine', lineId);
   const rec = lineId ? db.upsertLine(lineId, {}) : null;
   const entry = { side: 'buy', amount: '', slippage: String(store.get('slippage', '2')), quote: null, nodeQuote: null, quoteSeq: 0, busy: false, balance: null, position: null, positionSrc: null };
-  const view = { chartTab: 'chart', bottomTab: 'positions', range: store.get('range', 86400000), positions: null, settlements: null, mySettlements: null, versions: null, err: null };
+  const view = { chartTab: 'usage', bottomTab: 'positions', range: store.get('range', 86400000), positions: null, settlements: null, mySettlements: null, versions: null, err: null };
 
   main.innerHTML = h`
-  <section class="trade" aria-label="Trade">
+  <section class="store" aria-label="Model store">
     <div class="panel a-bar mkt-bar" id="mktBar"></div>
     <div class="panel a-chart">
-      <div class="tabs" id="chartTabs"><button data-t="chart" class="on">Chart</button><button data-t="versions">Versions</button><button data-t="usage">Usage</button></div>
-      <div class="chart-tools" id="chartTools"></div>
-      <div class="chart-box" id="chartBox"></div>
-      <div class="tab-body" id="chartAlt" hidden></div>
+      <div class="tabs" id="chartTabs"><button data-t="usage" class="on">Use</button><button data-t="versions">Versions</button><button data-t="chart">Price history</button></div>
+      <div class="chart-tools" id="chartTools" hidden></div>
+      <div class="chart-box" id="chartBox" hidden></div>
+      <div class="tab-body" id="chartAlt"></div>
     </div>
     <div class="panel a-depth depth" id="depth"></div>
-    <aside class="panel a-entry entry" id="entry" aria-label="Order entry"></aside>
+    <aside class="a-entry" aria-label="Membership desk">
+      <div id="benefits"></div>
+      <div class="panel entry" id="entry"></div>
+    </aside>
     <div class="panel a-bottom">
-      <div class="tabs" id="bottomTabs"><button data-t="positions" class="on">Positions</button><button data-t="history">Order history</button><button data-t="settlements">Settlements</button><button data-t="info">Line info</button></div>
+      <div class="tabs" id="bottomTabs"><button data-t="positions" class="on">My memberships</button><button data-t="history">My activity</button><button data-t="settlements">Recent joins and leaves</button><button data-t="info">Model details</button></div>
       <div class="tab-body" id="bottomBody"></div>
     </div>
   </section>`.s;
 
   const chart = new PriceChart($('#chartBox'));
   onCleanup(() => chart.destroy());
+  function renderBenefits() {
+    if (!alive()) return;
+    const box = $('#benefits'); if (!box) return;
+    box.innerHTML = benefitsPanel(rec && rec.info, { always: true });
+  }
 
   // ---- market bar -------------------------------------------------------------------------
   function renderBar() {
@@ -1448,16 +1488,20 @@ async function pageTrade(arg) {
     const price = m && m.price != null ? fmtPrice(m.price) : '—';
     const owner = ownerLabel(row);
     const held = m ? m.supplyUnits - m.positionUnits : null;
+    const use = usageOf(rec || {});
+    const tiers = info && info.benefits && !info.benefits.lapsed && info.benefits.tiers ? info.benefits.tiers.length : null;
     const stats = [
-      ['Price (MSK)', price, m && !m.seeded ? 'Not seeded yet: no reserve, no curve, no price' : 'reserve / positions in the curve, sompi per whole position, from the market row'],
-      ['24h change', changeCell(rec || {}), null],
-      ['Reserve (MSK)', m ? fmtMsk(m.mskReserve, 2) : '—', 'MSK the curve holds (never a spendable output); never under the seed'],
-      ['Seed (locked)', m ? (m.seeded ? (m.seedSompi != null ? fmtMsk(m.seedSompi, 2) : raw('<span class="dim" title="The AMM window does not carry the seed; the wRPC does">—</span>')) : raw('<span class="dim">none</span>')) : '—', m && m.seeded ? 'The MSK the market opened with, locked for good (ADR-0090)' : 'No seed yet: at least ' + fmtMsk(seedMinFor(m), 0) + ' MSK opens the market'],
-      ['Seeded by', m && m.seeded && m.seededBy ? raw(idCell(m.seededBy, 8).s) : '—', 'The seeder\'s payout payload, kept for the record; the seeder holds nothing'],
-      ['Sold / Supply', m && !m.legacy ? fmtPos(held) + ' / ' + fmtPos(m.supplyUnits) : '—', m && m.legacy ? 'The node serves the pre-ADR-0090 row (units of a millionth of a position); not shown' : m ? 'Whole positions outside the curve now. Ever bought: ' + fmtPos(m.soldUnits) : null],
-      ['Bought by mining', m && m.buybackSompi != null ? fmtMsk(m.buybackSompi, 2) + (bi(m.retiredUnits || 0n) > 0n ? ' · ' + fmtPos(m.retiredUnits) + ' retired' : '') : m ? raw('<span class="dim" title="This node is from before ADR-0091 and serves no buyback">—</span>') : '—', 'ADR-0091: 5 % of every block\'s mining reward on this line buys from the pair and stays in it; what the curve gives up is retired, held by the chain for good. Nothing is paid to holders.'],
-      ['Owner', owner ? owner.text : '—', owner ? owner.title : null],
+      ['Membership price (MSK)', price, m && !m.seeded ? 'Not open yet: no reserve, no curve, no price' : 'What one membership costs at this moment: reserve / memberships in the curve, from the market row'],
+      ['Members hold', m && !m.legacy ? fmtPos(held) + ' of ' + fmtPos(m.supplyUnits) : '—', m && m.legacy ? 'The node serves the pre-ADR-0090 row (units of a millionth of a position); not shown' : m ? 'Memberships outside the curve now. Ever taken: ' + fmtPos(m.soldUnits) : null],
+      ['Membership tiers', tiers != null ? String(tiers) : raw('<span class="dim" title="This node serves no membership declaration for this line">—</span>'), 'Tiers the line\'s owner has declared, and what each one gets you (ADR-0095); the card is beside the desk'],
+      ['Used (paid inferences)', use != null ? fmtInt(use) : '—', 'Claims the fold accepted against this line\'s current version: the one measurement the chain makes of a model, and it says what was used, never how good it was'],
       ['Current version', row && row.current ? 'v' + row.current + (row.previews && row.previews.length ? ' +' + row.previews.length + ' preview' : '') : (row ? 'v1' : '—'), row ? row.versionsPublished + ' published' : null],
+      ['Bought by mining', m && m.buybackSompi != null ? fmtMsk(m.buybackSompi, 2) + (bi(m.retiredUnits || 0n) > 0n ? ' · ' + fmtPos(m.retiredUnits) + ' retired' : '') : m ? raw('<span class="dim" title="This node is from before ADR-0091 and serves no buyback">—</span>') : '—', 'ADR-0091: 5 % of every block\'s mining reward on this line buys memberships back and retires them. Nothing is paid to holders.'],
+      ['Price 24 h', changeCell(rec || {}), 'What the curve\'s price did, sampled by this browser'],
+      ['Buy-back reserve (MSK)', m ? fmtMsk(m.mskReserve, 2) : '—', 'MSK the curve holds to buy memberships back (never a spendable output); never under the seed'],
+      ['Opening deposit (locked)', m ? (m.seeded ? (m.seedSompi != null ? fmtMsk(m.seedSompi, 2) : raw('<span class="dim" title="The AMM window does not carry the seed; the wRPC does">—</span>')) : raw('<span class="dim">none</span>')) : '—', m && m.seeded ? 'The MSK this store opened with, locked for good; nobody can take it out (ADR-0090)' : 'Not open yet: at least ' + fmtMsk(seedMinFor(m), 0) + ' MSK opens it'],
+      ['Opened by', m && m.seeded && m.seededBy ? raw(idCell(m.seededBy, 8).s) : '—', 'The opener\'s payout payload, kept for the record; the opener holds no membership'],
+      ['Owner', owner ? owner.text : '—', owner ? owner.title : null],
       ['Roots in force', info && info.rootsInForce ? String(info.rootsInForce.length) : '—', 'Roots an attempt claim may name for this class (ADR-0088 D3)'],
     ];
     bar.innerHTML = h`
@@ -1467,6 +1511,7 @@ async function pageTrade(arg) {
       </button>
       <div class="mkt-stats">${stats.map(([k, v, t]) => h`<div class="stat" title="${t || ''}"><div class="k">${k}</div><div class="v">${v}</div></div>`)}</div>`.s;
     $('#mktSelect').addEventListener('click', toggleMenu);
+    renderBenefits();
   }
   function toggleMenu(ev) {
     ev.stopPropagation();
@@ -1477,7 +1522,7 @@ async function pageTrade(arg) {
     menu.innerHTML = lines.length ? lines.map((r) => h`<div class="item ${r.lineId === lineId ? 'on' : ''}" role="option" data-id="${r.lineId}"><span class="n">${db.label(r)}</span><span class="p">${r.market && r.market.price != null ? fmtPrice(r.market.price) : r.market && !r.market.seeded ? raw('<span class="tag warn">not seeded</span>') : '—'}</span><span class="s">${r.symbol} · ${shortId(r.lineId)}</span><span class="c">class ${shortId(r.classId || '', 8)}${r.market && r.market.seeded ? ' · reserve ' + fmtMsk(r.market.mskReserve, 2) + ' MSK' : ''}</span></div>`).join('') : '<div class="item"><span class="n dim">No lines known. Configure CLASS_IDS in config.js or reach a node.</span></div>';
     $('#mktSelect').appendChild(menu);
     $('#mktSelect').setAttribute('aria-expanded', 'true');
-    menu.addEventListener('click', (e) => { const it = e.target.closest('[data-id]'); if (it) navigate('#/trade/' + it.dataset.id); });
+    menu.addEventListener('click', (e) => { const it = e.target.closest('[data-id]'); if (it) navigate('#/store/' + it.dataset.id); });
     const close = () => { if (menu.parentNode) menu.remove(); document.removeEventListener('click', close); };
     setTimeout(() => document.addEventListener('click', close), 0);
   }
@@ -1486,12 +1531,12 @@ async function pageTrade(arg) {
   function renderChartTools() {
     if (!alive()) return;
     const n = rec ? history.load(rec.lineId).length : 0;
-    $('#chartTools').innerHTML = h`<span class="rng">${RANGES.map(([l, ms]) => h`<button data-ms="${ms}" class="${ms === view.range ? 'on' : ''}">${l}</button>`)}</span><span class="legend">${rec ? db.label(rec) : ''} price, MSK per position · ${n} sample${n === 1 ? '' : 's'} in this browser</span>`.s;
+    $('#chartTools').innerHTML = h`<span class="rng">${RANGES.map(([l, ms]) => h`<button data-ms="${ms}" class="${ms === view.range ? 'on' : ''}">${l}</button>`)}</span><span class="legend">${rec ? db.label(rec) : ''} · MSK for one membership · ${n} sample${n === 1 ? '' : 's'} in this browser</span>`.s;
     $$('#chartTools button').forEach((b) => b.addEventListener('click', () => { view.range = Number(b.dataset.ms); store.set('range', view.range); chart.setRange(view.range); renderChartTools(); }));
   }
   function renderChart() {
     if (!alive()) return;
-    if (rec) { chart.hint = rec.market && !rec.market.seeded ? 'Not seeded yet: there is no price until someone seeds this line with at least ' + fmtMsk(seedMinFor(rec.market), 0) + ' MSK.' : null; chart.setRange(view.range); chart.setPoints(history.points(rec.lineId)); }
+    if (rec) { chart.hint = rec.market && !rec.market.seeded ? 'This store is not open yet: there is no price until someone opens it with at least ' + fmtMsk(seedMinFor(rec.market), 0) + ' MSK.' : null; chart.setRange(view.range); chart.setPoints(history.points(rec.lineId)); }
     renderChartTools();
   }
   function versionRows(list) {
@@ -1509,9 +1554,9 @@ async function pageTrade(arg) {
     if (showChart) { chart.draw(); return; }
     if (!rec) { alt.innerHTML = '<div class="empty">No line selected.</div>'; return; }
     if (!rec.versions) { refreshVersions(rec.lineId).then(() => { if (view.chartTab !== 'chart') renderChartAlt(); }).catch(() => {}); }
-    if (view.chartTab === 'versions') { alt.innerHTML = h`<div class="note">Every version the node still holds (the last 64 per line). Roots, DAA scores and usage are chain facts; the four declared hashes and every evaluation are declarations the chain records and never reads.</div>`.s + versionRows(rec.versions); return; }
+    if (view.chartTab === 'versions') { alt.innerHTML = h`<div class="note">What this model has shipped: every version the node still holds (the last 64 per line). Roots, DAA scores and usage are chain facts; the four declared hashes and every evaluation are declarations the chain records and never reads.</div>`.s + versionRows(rec.versions); return; }
     const u = rec.usage;
-    alt.innerHTML = h`<div class="note">Usage is the one measurement the chain makes: accepted claims that named this line's roots, counted by the fold (ADR-0088 D4). It says what was used, never how good it was.</div>
+    alt.innerHTML = h`<div class="note">What this model is actually used for, and the only measurement the chain makes of it: accepted claims that named this line's roots, counted by the fold (ADR-0088 D4). It says what was used, never how good it was.</div>
       <div class="grid3">
         <div class="tile"><div class="k">Current version</div><div class="v">${u ? 'v' + u.version : '—'}</div></div>
         <div class="tile"><div class="k">Attempt-lane claims</div><div class="v">${u ? fmtInt(u.attempt) : '—'}</div></div>
@@ -1519,7 +1564,7 @@ async function pageTrade(arg) {
         <div class="tile"><div class="k">Work leaves</div><div class="v">${u ? fmtInt(u.workLeaves) : '—'}</div></div>
         <div class="tile"><div class="k">Last used (DAA)</div><div class="v">${u && u.lastUsedDaa ? fmtInt(u.lastUsedDaa) : '—'}</div></div>
       </div>
-      <div class="section">${rec.versions ? versionRows(rec.versions) : ''}</div>`.s;
+      <div class="section">${rec.versions ? raw(versionRows(rec.versions)) : ''}</div>`.s;
   }
   $('#chartTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; view.chartTab = b.dataset.t; $$('#chartTabs button').forEach((x) => x.classList.toggle('on', x === b)); renderChartAlt(); });
 
@@ -1543,20 +1588,20 @@ async function pageTrade(arg) {
     const maxNet = sells.reduce((a, b) => (b.net != null && b.net > a ? b.net : a), 0n);
     const bar = (v, max, cls) => h`<td class="num bar ${cls}"><i style="width:${v != null && max > 0n ? Math.max(2, Math.round(ratio(v, max) * 100)) : 0}%"></i><span>${v != null ? fmtMsk(v, 4) : '—'}</span></td>`;
     const ev = view.settlements;
-    const noCurve = m && !seeded ? raw('<tr><td colspan="4" class="empty">Not seeded yet: no reserve, so no quote. At least ' + esc(fmtMsk(seedMinFor(m), 0)) + ' MSK opens the market.</td></tr>') : raw('<tr><td colspan="4" class="empty">—</td></tr>');
+    const noCurve = m && !seeded ? raw('<tr><td colspan="4" class="empty">This store is not open yet: no reserve, so no price. At least ' + esc(fmtMsk(seedMinFor(m), 0)) + ' MSK opens it.</td></tr>') : raw('<tr><td colspan="4" class="empty">—</td></tr>');
     $('#depth').innerHTML = h`
-      <div class="panel-h">Curve depth <span class="spacer"></span><span class="dim tiny" title="Every row is the chain's own curve arithmetic (ADR-0087 as amended by ADR-0090) applied to the market row as last read">on the ${m ? (m.source === 'wrpc' ? 'node' : 'EVM window') : 'market'} row</span></div>
-      <div class="sub">Buy: cost of N whole positions (gross MSK, fees included)</div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Size</th><th>Cost</th><th>Avg</th><th>After</th></tr></thead><tbody>
+      <div class="panel-h">Price list <span class="spacer"></span><span class="dim tiny" title="Every row is the chain's own curve arithmetic (ADR-0087 as amended by ADR-0090) applied to the market row as last read">on the ${m ? (m.source === 'wrpc' ? 'node' : 'EVM window') : 'market'} row</span></div>
+      <div class="sub">Join: what N memberships cost right now (MSK, fees included)</div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Memberships</th><th>Cost</th><th>Each</th><th>After</th></tr></thead><tbody>
         ${buys.length ? buys.map((b) => h`<tr><td class="num">${fmtInt(b.n)}</td>${bar(b.cost, maxCost, 'buy')}<td class="num">${b.avg != null ? fmtPx(b.avg) : '—'}</td><td class="num">${b.after != null ? fmtPx(b.after) : '—'}</td></tr>`) : noCurve}
       </tbody></table></div>
-      <div class="sub">Sell: net MSK returned for N positions</div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Size</th><th>Returns</th><th>Avg</th><th>After</th></tr></thead><tbody>
+      <div class="sub">Leave: what the store pays back for N memberships (MSK, after fees)</div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Memberships</th><th>Back</th><th>Each</th><th>After</th></tr></thead><tbody>
         ${sells.length ? sells.map((s) => h`<tr><td class="num">${fmtInt(s.n)}</td>${bar(s.net, maxNet, 'sell')}<td class="num">${s.avg != null ? fmtPx(s.avg) : '—'}</td><td class="num">${s.after != null ? fmtPx(s.after) : '—'}</td></tr>`) : noCurve}
       </tbody></table></div>
-      <div class="sub">Recent settlements <span class="dim">(facade events, both doors' EVM side)</span></div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Block</th><th>Event</th><th>Positions</th><th>MSK</th><th>Price after</th></tr></thead><tbody>
-        ${ev === null || ev === undefined ? raw('<tr><td colspan="5" class="empty">' + (db.armed ? 'Loading…' : db.armed === false ? 'The market doors are dormant on this network.' : 'EVM RPC unreachable.') + '</td></tr>') : ev.length ? ev.slice(0, 8).map((e) => h`<tr><td class="num">${fmtInt(e.blockNumber)}</td><td class="l ${e.kind === 'Bought' ? 'up' : e.kind === 'Sold' ? 'down' : e.kind === 'Seeded' ? '' : 'dim'}">${e.kind}${e.kind === 'Refused' ? raw(' <span class="dim tiny">' + esc(ACTION_NAME[e.actionId] || '') + ': ' + esc(REFUSAL[e.reason] || String(e.reason)) + '</span>') : ''}</td><td class="num">${e.units != null ? fmtPos(e.units) : e.kind === 'Seeded' ? raw('<span class="dim">seed</span>') : '—'}</td><td class="num">${e.kind === 'Bought' || e.kind === 'Seeded' ? fmtMsk(e.mskIn, 2) : e.kind === 'Sold' ? fmtMsk(e.mskOut, 2) : e.actionId !== 2 ? fmtMsk(e.amount, 2) : '—'}</td><td class="num">${e.priceAfter != null ? fmtPx(e.priceAfter) : '—'}</td></tr>`) : raw('<tr><td colspan="5" class="empty">No settlements in the last ' + esc(String(CFG.LOG_LOOKBACK_BLOCKS)) + ' blocks.</td></tr>')}
+      <div class="sub">Recent joins and leaves <span class="dim">(facade events, both doors' EVM side)</span></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Block</th><th>What happened</th><th>Memberships</th><th>MSK</th><th>Price after</th></tr></thead><tbody>
+        ${ev === null || ev === undefined ? raw('<tr><td colspan="5" class="empty">' + (db.armed ? 'Loading…' : db.armed === false ? 'The market doors are dormant on this network.' : 'EVM RPC unreachable.') + '</td></tr>') : ev.length ? ev.slice(0, 8).map((e) => h`<tr><td class="num">${fmtInt(e.blockNumber)}</td><td class="l ${e.kind === 'Bought' ? 'up' : e.kind === 'Sold' ? 'down' : e.kind === 'Seeded' ? '' : 'dim'}" title="facade event ${e.kind}">${eventWord(e.kind)}${e.kind === 'Refused' ? raw(' <span class="dim tiny">' + esc(ACTION_NAME[e.actionId] || '') + ': ' + esc(REFUSAL[e.reason] || String(e.reason)) + '</span>') : ''}</td><td class="num">${e.units != null ? fmtPos(e.units) : e.kind === 'Seeded' ? raw('<span class="dim">opening</span>') : '—'}</td><td class="num">${e.kind === 'Bought' || e.kind === 'Seeded' ? fmtMsk(e.mskIn, 2) : e.kind === 'Sold' ? fmtMsk(e.mskOut, 2) : e.actionId !== 2 ? fmtMsk(e.amount, 2) : '—'}</td><td class="num">${e.priceAfter != null ? fmtPx(e.priceAfter) : '—'}</td></tr>`) : raw('<tr><td colspan="5" class="empty">No settlements in the last ' + esc(String(CFG.LOG_LOOKBACK_BLOCKS)) + ' blocks.</td></tr>')}
       </tbody></table></div>`.s;
   }
 
@@ -1609,19 +1654,19 @@ async function pageTrade(arg) {
   function reasonNotToSend(q) {
     if (MOCK && !wallet.provider) return 'Mock wallet missing.';
     if (!wallet.provider) return 'No EIP-1193 wallet found: install MetaMask and reload.';
-    if (!wallet.account) return 'Connect a wallet to trade.';
+    if (!wallet.account) return 'Connect a wallet to join.';
     if (!wallet.onChain()) return 'Switch the wallet to the MISAKA chain (' + CFG.CHAIN_ID + ').';
     if (db.armed === false) return 'The market is not armed on this network: the facade is an empty account.';
     if (db.armed === null) return 'EVM RPC unreachable: the transaction cannot be built.';
     if (!rec) return 'No line selected.';
-    if (rec.market && !rec.market.seeded) return 'Not seeded yet: seed the market first.';
+    if (rec.market && !rec.market.seeded) return 'This store is not open yet: it takes an opening deposit first.';
     if (rec.facadeSource !== 'registry') return 'Facade address not confirmed by the registry window yet.';
     if (!q) return 'Enter an amount.';
     if (q.invalid) return q.invalid;
     if (q.kind === 'buy' && rec.market && rec.market.closedToBuys) return 'This line is closed to buys (retired); sells still queue.';
     if (q.kind === 'buy') { const cs = classStatusOf(rec); if (cs && cs.head !== 'Active') return 'The class is ' + cs.head + (cs.activationDaa != null ? ' (activates at DAA ' + fmtInt(cs.activationDaa) + ')' : '') + ': buys wait for Active.'; }
     if (q.kind === 'buy' && entry.balance != null && sompiToWei(q.sompi) > entry.balance) return 'Insufficient MSK balance in the EVM account.';
-    if (q.kind === 'sell' && entry.position != null && q.units > entry.position) return 'That is more than the EVM-namespace position this account holds.';
+    if (q.kind === 'sell' && entry.position != null && q.units > entry.position) return 'That is more than the memberships this account holds in the EVM namespace.';
     return null;
   }
   function renderQuote() {
@@ -1637,35 +1682,35 @@ async function pageTrade(arg) {
       if (q.kind === 'buy') {
         const avg = q.unitsOut > 0n ? q.sompi / q.unitsOut : null;
         rows = h`
-          <div class="r"><span>Positions out (whole)</span><span class="v">${fmtPos(q.unitsOut)}</span></div>
-          <div class="r"><span>Average price</span><span class="v">${avg != null ? fmtPrice(avg) : '—'} MSK</span></div>
-          <div class="r"><span>Price after</span><span class="v">${fmtPrice(q.priceAfter)} MSK</span></div>
-          <div class="r"><span>Price impact</span><span class="v ${impact > 5 ? 'down' : ''}">${fmtPct(impact)}</span></div>
+          <div class="r"><span>Memberships you get</span><span class="v">${fmtPos(q.unitsOut)}</span></div>
+          <div class="r"><span>Price each</span><span class="v">${avg != null ? fmtPrice(avg) : '—'} MSK</span></div>
+          <div class="r"><span>Price after this join</span><span class="v">${fmtPrice(q.priceAfter)} MSK</span></div>
+          <div class="r"><span>How far it moves the price</span><span class="v ${impact > 5 ? 'down' : ''}">${fmtPct(impact)}</span></div>
           <div class="r"><span>Burned (5 %)</span><span class="v">${fmtMsk(q.fees.burn)} MSK</span></div>
-          <div class="r"><span>Owner leg (1 %)</span><span class="v">${fmtMsk(q.fees.leg)} MSK</span></div>
-          <div class="r"><span>To the reserve (94 %)</span><span class="v">${fmtMsk(q.fees.net)} MSK</span></div>
-          <div class="r tot"><span>Min positions (floor)</span><span class="v">${fmtPos(mn.minUnits)}</span></div>`.s;
+          <div class="r"><span>To the model's owner (1 %)</span><span class="v">${fmtMsk(q.fees.leg)} MSK</span></div>
+          <div class="r"><span>Into the buy-back reserve (94 %)</span><span class="v">${fmtMsk(q.fees.net)} MSK</span></div>
+          <div class="r tot"><span>Refuse below (floor)</span><span class="v">${fmtPos(mn.minUnits)} memberships</span></div>`.s;
       } else {
         const avg = q.units > 0n ? q.fees.net / q.units : null;
         rows = h`
-          <div class="r"><span>Gross from the curve</span><span class="v">${fmtMsk(q.fees.gross)} MSK</span></div>
+          <div class="r"><span>From the buy-back reserve</span><span class="v">${fmtMsk(q.fees.gross)} MSK</span></div>
           <div class="r"><span>Burned (5 %)</span><span class="v">${fmtMsk(q.fees.burn)} MSK</span></div>
-          <div class="r"><span>Owner leg (1 %)</span><span class="v">${fmtMsk(q.fees.leg)} MSK</span></div>
+          <div class="r"><span>To the model's owner (1 %)</span><span class="v">${fmtMsk(q.fees.leg)} MSK</span></div>
           <div class="r"><span>You receive (94 %)</span><span class="v">${fmtMsk(q.fees.net)} MSK</span></div>
-          <div class="r"><span>Average price</span><span class="v">${avg != null ? fmtPrice(avg) : '—'} MSK</span></div>
-          <div class="r"><span>Price after</span><span class="v">${fmtPrice(q.priceAfter)} MSK</span></div>
-          <div class="r"><span>Price impact</span><span class="v ${impact < -5 ? 'down' : ''}">${fmtPct(impact)}</span></div>
-          <div class="r tot"><span>Min MSK (floor)</span><span class="v">${fmtMsk(mn.minMsk)} MSK</span></div>`.s;
+          <div class="r"><span>Price each</span><span class="v">${avg != null ? fmtPrice(avg) : '—'} MSK</span></div>
+          <div class="r"><span>Price after this leave</span><span class="v">${fmtPrice(q.priceAfter)} MSK</span></div>
+          <div class="r"><span>How far it moves the price</span><span class="v ${impact < -5 ? 'down' : ''}">${fmtPct(impact)}</span></div>
+          <div class="r tot"><span>Refuse below (floor)</span><span class="v">${fmtMsk(mn.minMsk)} MSK</span></div>`.s;
       }
       rows += h`<div class="r dim tiny"><span>Quoted by</span><span>${q.source === 'node' ? 'the node (AMM precompile)' : 'local arithmetic on the market row'}</span></div>`.s;
     } else if (q && q.invalid) rows = h`<div class="err">${q.invalid}</div>`.s;
-    else rows = h`<div class="dim small">Enter an amount to see the quote. ${m && price != null ? 'Spot price ' + fmtPrice(price) + ' MSK per position.' : ''}</div>`.s;
+    else rows = h`<div class="dim small">Enter an amount to see what it costs. ${m && price != null ? 'One membership is ' + fmtPrice(price) + ' MSK right now.' : ''}</div>`.s;
     box.innerHTML = rows;
     const btn = $('#sendBtn'), why = $('#sendWhy');
     if (!btn) return;
     const reason = reasonNotToSend(q);
     btn.disabled = !!reason || entry.busy;
-    btn.textContent = entry.busy ? 'Confirm in wallet…' : (entry.side === 'buy' ? 'Buy ' : 'Sell ') + (rec ? rec.symbol : '');
+    btn.textContent = entry.busy ? 'Confirm in wallet…' : (entry.side === 'buy' ? 'Join ' : 'Leave ') + (rec ? rec.symbol : '');
     btn.className = 'btn btn-lg ' + (entry.side === 'buy' ? 'btn-accent' : 'btn-sell');
     why.textContent = reason && q && !q.invalid ? reason : (reason && !q ? '' : reason || '');
     if (!wallet.account && !reason) why.textContent = '';
@@ -1676,7 +1721,7 @@ async function pageTrade(arg) {
     if (!alive()) return;
     const m = rec && rec.market;
     const acct = wallet.account;
-    // ADR-0090: an unseeded line has no curve to trade on; the panel becomes the seed panel
+    // ADR-0090: a store that is not open has no curve to price; the panel becomes the opening panel
     if (m && !m.seeded) {
       seedState.balance = entry.balance;
       renderSeedPanel($('#entry'), seedState, () => rec, () => { renderBottom(); });
@@ -1684,21 +1729,22 @@ async function pageTrade(arg) {
     }
     $('#entry').innerHTML = h`
       <div class="panel-b">
-        <div class="seg wide" role="tablist"><button class="${entry.side === 'buy' ? 'on buy' : ''}" data-side="buy" role="tab">Buy</button><button class="${entry.side === 'sell' ? 'on sell' : ''}" data-side="sell" role="tab">Sell</button></div>
-        <div class="avail" style="margin-top:10px"><span class="muted">Available (EVM)</span><span class="v" id="availV">${entry.balance != null ? fmtWeiMsk(entry.balance) + ' MSK' : acct ? '—' : 'connect a wallet'}</span></div>
-        <div class="avail"><span class="muted">Your position</span><span class="v" id="posV">${entry.position != null ? fmtPos(entry.position) + ' ' + (rec ? rec.symbol : '') : acct ? '—' : '—'}</span></div>
+        <div class="seg wide" role="tablist"><button class="${entry.side === 'buy' ? 'on buy' : ''}" data-side="buy" role="tab" title="Buy a membership from the protocol's curve">Join</button><button class="${entry.side === 'sell' ? 'on sell' : ''}" data-side="sell" role="tab" title="Sell the membership back to the curve; nobody else can buy it from you">Leave</button></div>
+        <div class="note tiny" style="margin-top:6px">${entry.side === 'buy' ? 'A membership is bought from the protocol, not from another person, and joining raises the price for the next member.' : 'A membership is sold back to the protocol, not to another person. It cannot be transferred, lent or given away.'}</div>
+        <div class="avail" style="margin-top:10px"><span class="muted">MSK available</span><span class="v" id="availV">${entry.balance != null ? fmtWeiMsk(entry.balance) + ' MSK' : acct ? '—' : 'connect a wallet'}</span></div>
+        <div class="avail"><span class="muted">Your membership</span><span class="v" id="posV">${entry.position != null ? fmtPos(entry.position) + ' ' + (rec ? rec.symbol : '') : acct ? '—' : '—'}</span></div>
         <div class="field">
-          <label for="amt">${entry.side === 'buy' ? 'Amount to pay (MSK, gross)' : 'Positions to sell (whole)'}</label>
-          <div class="inp"><input id="amt" inputmode="${entry.side === 'buy' ? 'decimal' : 'numeric'}" autocomplete="off" placeholder="0" value="${entry.amount}" aria-describedby="quoteBox"><span class="unit">${entry.side === 'buy' ? 'MSK' : 'positions'}</span></div>
+          <label for="amt">${entry.side === 'buy' ? 'What you pay (MSK, fees included)' : 'Memberships to give up (whole)'}</label>
+          <div class="inp"><input id="amt" inputmode="${entry.side === 'buy' ? 'decimal' : 'numeric'}" autocomplete="off" placeholder="0" value="${entry.amount}" aria-describedby="quoteBox"><span class="unit">${entry.side === 'buy' ? 'MSK' : 'memberships'}</span></div>
           <div class="pcts">${[25, 50, 75, 100].map((p) => h`<button data-pct="${p}" ${entry.side === 'buy' ? (entry.balance == null ? 'disabled' : '') : (entry.position == null ? 'disabled' : '')}>${p}%</button>`)}</div>
         </div>
         <div class="field">
-          <label for="slip">Slippage tolerance (%)</label>
-          <div class="inp"><input id="slip" inputmode="decimal" value="${entry.slippage}" aria-label="Slippage tolerance in percent"><span class="unit">${entry.side === 'buy' ? 'min positions' : 'min MSK'}</span></div>
+          <label for="slip">Refuse if the price moved more than (%)</label>
+          <div class="inp"><input id="slip" inputmode="decimal" value="${entry.slippage}" aria-label="Refuse if the price moved more than this many percent"><span class="unit">${entry.side === 'buy' ? 'min memberships' : 'min MSK'}</span></div>
         </div>
         <div class="quote" id="quoteBox"></div>
-        <div class="field"><button id="sendBtn" class="btn btn-lg btn-accent" disabled>Buy</button><div class="reason" id="sendWhy"></div></div>
-        <div class="note tiny">Your action is applied by the fold after the block that carries it and settles one block later; a fill worse than your floor is refused (never partial) and a refused buy is refunded. A position is a whole number. Positions bought here live in the EVM namespace and can only be sold from it.</div>
+        <div class="field"><button id="sendBtn" class="btn btn-lg btn-accent" disabled>Join</button><div class="reason" id="sendWhy"></div></div>
+        <div class="note tiny">Your request is applied by the fold after the block that carries it and settles one block later; a result worse than your floor is refused (never partial) and a refused join is refunded. A membership is a whole number, and it never pays you anything: what it gets you is the card above. A membership taken here lives in the EVM namespace and can only be given up from it.</div>
       </div>`.s;
     $$('#entry .seg button').forEach((b) => b.addEventListener('click', () => { entry.side = b.dataset.side; entry.amount = ''; entry.nodeQuote = null; renderEntry(); }));
     const amt = $('#amt'), slip = $('#slip');
@@ -1740,36 +1786,36 @@ async function pageTrade(arg) {
     const body = $('#bottomBody'); if (!body) return;
     const acct = wallet.account;
     if (view.bottomTab === 'positions') {
-      if (!acct) { body.innerHTML = '<div class="empty">Connect a wallet to see the positions this account holds across lines.</div>'; return; }
+      if (!acct) { body.innerHTML = '<div class="empty">Connect a wallet to see the memberships this account holds across models.</div>'; return; }
       const p = view.positions;
-      if (!p) { body.innerHTML = '<div class="empty">Loading positions…</div>'; return; }
-      if (p.error) { body.innerHTML = h`<div class="empty">Positions unavailable: ${p.error}</div>`.s; return; }
-      if (!p.positions.length) { body.innerHTML = h`<div class="empty">No positions in the EVM namespace for ${shortAddr(acct)}. <span class="dim">holder id ${shortId(p.holder)}</span></div>`.s; return; }
-      body.innerHTML = h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Line</th><th>Positions</th><th>Price</th><th>Mark value (sell now, net)</th><th></th></tr></thead><tbody>
-        ${p.positions.map((x) => { const r = db.line(x.lineId) || db.upsertLine(x.lineId, {}); const m = r.market; const q = m ? curve.sellQuote(m, x.units) : null; return h`<tr class="row-link" data-href="#/trade/${x.lineId}"><td class="l">${db.label(r)} <span class="dim tiny">${r.symbol}</span></td><td class="num">${fmtPos(x.units)}</td><td class="num">${m && m.price != null ? fmtPrice(m.price) : '—'}</td><td class="num">${q ? fmtMsk(q.fees.net) + ' MSK' : '—'}</td><td><a href="#/trade/${x.lineId}">Trade</a></td></tr>`; })}
-      </tbody></table></div><div class="note tiny">Read through ${p.source === 'wrpc' ? 'getPalwModelPositions(holder)' : 'the position window per known line'}; holder id ${shortId(p.holder)}. A position is a whole number. Mark value is the net MSK a sell of the whole position would return right now.</div>`.s;
+      if (!p) { body.innerHTML = '<div class="empty">Loading memberships…</div>'; return; }
+      if (p.error) { body.innerHTML = h`<div class="empty">Memberships unavailable: ${p.error}</div>`.s; return; }
+      if (!p.positions.length) { body.innerHTML = h`<div class="empty">This account holds no membership in the EVM namespace. <span class="dim">holder id ${shortId(p.holder)}</span></div>`.s; return; }
+      body.innerHTML = h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Model</th><th>Memberships</th><th>Price</th><th>If you left now (net MSK)</th><th></th></tr></thead><tbody>
+        ${p.positions.map((x) => { const r = db.line(x.lineId) || db.upsertLine(x.lineId, {}); const m = r.market; const q = m ? curve.sellQuote(m, x.units) : null; return h`<tr class="row-link" data-href="#/store/${x.lineId}"><td class="l">${db.label(r)} <span class="dim tiny">${r.symbol}</span></td><td class="num">${fmtPos(x.units)}</td><td class="num">${m && m.price != null ? fmtPrice(m.price) : '—'}</td><td class="num">${q ? fmtMsk(q.fees.net) + ' MSK' : '—'}</td><td><a href="#/store/${x.lineId}">Open</a></td></tr>`; })}
+      </tbody></table></div><div class="note tiny">Read through ${p.source === 'wrpc' ? 'getPalwModelPositions(holder)' : 'the position window per known line'}; holder id ${shortId(p.holder)}. A membership is a whole number, and it is never paid anything: the last column is only what the curve would return if you gave every one of them up right now.</div>`.s;
       return;
     }
     if (view.bottomTab === 'history') {
       const list = txlog.forAccount(acct);
-      if (!list.length) { body.innerHTML = '<div class="empty">No transactions sent from this browser' + (acct ? ' by ' + shortAddr(acct) : '') + '.</div>'; return; }
-      body.innerHTML = h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Time</th><th>Line</th><th>Action</th><th>Amount</th><th>Floor</th><th>Status</th><th>Block</th><th>Settled</th><th>Tx</th></tr></thead><tbody>
-        ${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}">${t.kind}</td><td class="num">${t.kind === 'sell' ? fmtPos(t.amount) + ' pos' : fmtMsk(t.amount) + ' MSK' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="num">${t.kind === 'buy' ? fmtPos(t.min) + ' pos' : t.kind === 'sell' ? fmtMsk(t.min) + ' MSK' : '—'}</td><td class="l">${statusCell(t)}</td><td class="num">${t.blockNumber != null ? fmtInt(t.blockNumber) : '—'}</td><td class="num">${t.status === 'settled' ? (t.kind === 'seed' ? 'seeded ' + fmtMsk(t.msk) + ' MSK, first price ' + fmtPrice(t.priceAfter) : fmtPos(t.units) + ' pos for ' + fmtMsk(t.msk) + ' MSK') : t.settledBlock ? 'block ' + fmtInt(t.settledBlock) : '—'}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}
+      if (!list.length) { body.innerHTML = '<div class="empty">Nothing sent from this browser' + (acct ? ' by ' + shortAddr(acct) : '') + '.</div>'; return; }
+      body.innerHTML = h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Time</th><th>Model</th><th>What you did</th><th>Amount</th><th>Floor</th><th>Status</th><th>Block</th><th>Settled</th><th>Tx</th></tr></thead><tbody>
+        ${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}" title="facade call ${t.kind}()">${MOVE_WORD[t.kind] || t.kind}</td><td class="num">${t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' MSK' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="num">${t.kind === 'buy' ? fmtPos(t.min) + ' memberships' : t.kind === 'sell' ? fmtMsk(t.min) + ' MSK' : '—'}</td><td class="l">${statusCell(t)}</td><td class="num">${t.blockNumber != null ? fmtInt(t.blockNumber) : '—'}</td><td class="num">${t.status === 'settled' ? (t.kind === 'seed' ? 'opened with ' + fmtMsk(t.msk) + ' MSK, first price ' + fmtPrice(t.priceAfter) : fmtPos(t.units) + ' memberships for ' + fmtMsk(t.msk) + ' MSK') : t.settledBlock ? 'block ' + fmtInt(t.settledBlock) : '—'}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}
       </tbody></table></div>`.s;
       return;
     }
     if (view.bottomTab === 'settlements') {
-      if (!acct) { body.innerHTML = '<div class="empty">Connect a wallet to list its settlement events.</div>'; return; }
+      if (!acct) { body.innerHTML = '<div class="empty">Connect a wallet to list what it has joined and left.</div>'; return; }
       const s = view.mySettlements;
       if (db.armed === false) { body.innerHTML = '<div class="empty">The market doors are dormant on this network; no facade emits events yet.</div>'; return; }
-      if (!s) { body.innerHTML = '<div class="empty">' + (db.armed ? 'Loading settlement events…' : 'EVM RPC unreachable.') + '</div>'; return; }
-      if (!s.length) { body.innerHTML = '<div class="empty">No settlements for ' + esc(shortAddr(acct)) + ' in the last ' + CFG.LOG_LOOKBACK_BLOCKS + ' blocks of the known lines.</div>'; return; }
-      body.innerHTML = h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Block</th><th>Line</th><th>Event</th><th>Positions</th><th>MSK</th><th>Price after</th><th>Tx</th></tr></thead><tbody>
-        ${s.map((e) => { const r = db.line(e.lineId); return h`<tr><td class="num">${fmtInt(e.blockNumber)}</td><td class="l">${r ? db.label(r) : shortId(e.lineId)}</td><td class="l ${e.kind === 'Bought' ? 'up' : e.kind === 'Sold' ? 'down' : ''}">${e.kind}${e.kind === 'Refused' ? raw(' <span class="dim tiny">' + esc(ACTION_NAME[e.actionId] || '') + ': ' + esc(REFUSAL[e.reason] || String(e.reason)) + '</span>') : ''}</td><td class="num">${e.units != null ? fmtPos(e.units) : e.kind === 'Refused' && e.actionId === 2 ? fmtPos(e.amount) : e.kind === 'Seeded' ? '0 (seed)' : '—'}</td><td class="num">${e.kind === 'Bought' ? fmtMsk(e.mskIn) : e.kind === 'Seeded' ? fmtMsk(e.mskIn) + ' locked' : e.kind === 'Sold' ? fmtMsk(e.mskOut) : e.actionId !== 2 ? fmtMsk(e.amount) + ' refunded' : '—'}</td><td class="num">${e.priceAfter != null ? fmtPrice(e.priceAfter) : '—'}</td><td class="l">${idCell(e.txHash || '', 10)}</td></tr>`; })}
+      if (!s) { body.innerHTML = '<div class="empty">' + (db.armed ? 'Loading…' : 'EVM RPC unreachable.') + '</div>'; return; }
+      if (!s.length) { body.innerHTML = '<div class="empty">Nothing for ' + esc(shortAddr(acct)) + ' in the last ' + CFG.LOG_LOOKBACK_BLOCKS + ' blocks of the known models.</div>'; return; }
+      body.innerHTML = h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Block</th><th>Model</th><th>What happened</th><th>Memberships</th><th>MSK</th><th>Price after</th><th>Tx</th></tr></thead><tbody>
+        ${s.map((e) => { const r = db.line(e.lineId); return h`<tr><td class="num">${fmtInt(e.blockNumber)}</td><td class="l">${r ? db.label(r) : shortId(e.lineId)}</td><td class="l ${e.kind === 'Bought' ? 'up' : e.kind === 'Sold' ? 'down' : ''}" title="facade event ${e.kind}">${eventWord(e.kind)}${e.kind === 'Refused' ? raw(' <span class="dim tiny">' + esc(ACTION_NAME[e.actionId] || '') + ': ' + esc(REFUSAL[e.reason] || String(e.reason)) + '</span>') : ''}</td><td class="num">${e.units != null ? fmtPos(e.units) : e.kind === 'Refused' && e.actionId === 2 ? fmtPos(e.amount) : e.kind === 'Seeded' ? '0 (opening)' : '—'}</td><td class="num">${e.kind === 'Bought' ? fmtMsk(e.mskIn) : e.kind === 'Seeded' ? fmtMsk(e.mskIn) + ' locked' : e.kind === 'Sold' ? fmtMsk(e.mskOut) : e.actionId !== 2 ? fmtMsk(e.amount) + ' refunded' : '—'}</td><td class="num">${e.priceAfter != null ? fmtPrice(e.priceAfter) : '—'}</td><td class="l">${idCell(e.txHash || '', 10)}</td></tr>`; })}
       </tbody></table></div>`.s;
       return;
     }
-    if (!rec) { body.innerHTML = '<div class="empty">No line selected.</div>'; return; }
+    if (!rec) { body.innerHTML = '<div class="empty">No model selected.</div>'; return; }
     const row = rec.row || {}, m = rec.market, info = rec.info;
     const cs = classStatusOf(rec);
     body.innerHTML = h`<div class="grid2">
@@ -1792,18 +1838,18 @@ async function pageTrade(arg) {
         <dt>Facade (MRC-20)</dt><dd><span class="mono">${rec.facade}</span> <span class="tag ${rec.facadeSource === 'registry' ? 'ok' : 'warn'}">${rec.facadeSource === 'registry' ? 'from the registry' : 'derived locally, unconfirmed'}</span></dd>
         <dt>Symbol</dt><dd>${rec.symbol}</dd>
         <dt>Market</dt><dd>${m ? (m.seeded ? 'seeded at DAA ' + fmtInt(m.openedDaa) : 'not seeded yet (a seed of at least ' + fmtMsk(seedMinFor(m), 0) + ' MSK opens it)') : '—'}</dd>
-        <dt>Seed (locked)</dt><dd>${m && m.seeded ? (m.seedSompi != null ? fmtMsk(m.seedSompi) + ' MSK, locked for good' : raw('<span class="dim">not served by the AMM window</span>')) : m ? 'none' : '—'}</dd>
-        <dt>Bought by mining</dt><dd>${m && m.buybackSompi != null ? fmtMsk(m.buybackSompi) + ' MSK · ' + fmtPos(m.retiredUnits || 0n) + ' positions retired' : raw('<span class="dim">not served by this node</span>')}</dd>
-        <dt>Seeded by</dt><dd>${m && m.seededBy ? idCell(m.seededBy, 12) : '—'}</dd>
-        <dt>Reserve</dt><dd>${m ? fmtMsk(m.mskReserve) + ' MSK' : '—'}</dd>
-        <dt>Positions in the curve</dt><dd>${m && !m.legacy ? fmtPos(m.positionUnits) + ' of ' + fmtPos(m.supplyUnits) : m ? raw('<span class="dim">— (the node serves the pre-ADR-0090 row: units of 10<sup>-6</sup> position, a virtual reserve)</span>') : '—'}</dd>
-        <dt>Sold (cumulative)</dt><dd>${m && !m.legacy ? fmtPos(m.soldUnits) + ' positions' : '—'}</dd>
+        <dt>Opening deposit (locked)</dt><dd>${m && m.seeded ? (m.seedSompi != null ? fmtMsk(m.seedSompi) + ' MSK, locked for good' : raw('<span class="dim">not served by the AMM window</span>')) : m ? 'none' : '—'}</dd>
+        <dt>Bought by mining</dt><dd>${m && m.buybackSompi != null ? fmtMsk(m.buybackSompi) + ' MSK · ' + fmtPos(m.retiredUnits || 0n) + ' memberships retired' : raw('<span class="dim">not served by this node</span>')}</dd>
+        <dt>Opened by</dt><dd>${m && m.seededBy ? idCell(m.seededBy, 12) : '—'}</dd>
+        <dt>Buy-back reserve</dt><dd>${m ? fmtMsk(m.mskReserve) + ' MSK' : '—'}</dd>
+        <dt>Memberships unsold</dt><dd>${m && !m.legacy ? fmtPos(m.positionUnits) + ' of ' + fmtPos(m.supplyUnits) : m ? raw('<span class="dim">— (the node serves the pre-ADR-0090 row: units of 10<sup>-6</sup> position, a virtual reserve)</span>') : '—'}</dd>
+        <dt>Taken (cumulative)</dt><dd>${m && !m.legacy ? fmtPos(m.soldUnits) + ' memberships' : '—'}</dd>
         <dt>Burned</dt><dd>${m ? fmtMsk(m.burnedSompi) + ' MSK' : '—'}</dd>
         <dt>Paid to the owner</dt><dd>${m ? fmtMsk(m.ownerPaid) + ' MSK' : '—'}</dd>
         <dt>Paid to a contributor</dt><dd>${m ? fmtMsk(m.contributorPaid) + ' MSK' : '—'}</dd>
-        <dt>Closed to buys</dt><dd>${m ? (m.closedToBuys ? 'yes' : 'no') : '—'}</dd>
+        <dt>Closed to new members</dt><dd>${m ? (m.closedToBuys ? 'yes' : 'no') : '—'}</dd>
         <dt>Class status</dt><dd>${cs ? cs.head + (cs.activationDaa != null ? ', activates at DAA ' + fmtInt(cs.activationDaa) : '') + (cs.sinceDaa != null ? ' since DAA ' + fmtInt(cs.sinceDaa) : '') : '—'}</dd>
-        <dt>Least seed (network)</dt><dd>${m ? fmtMsk(seedMinFor(m), 0) + ' MSK' : '—'}</dd>
+        <dt>Least opening deposit (network)</dt><dd>${m ? fmtMsk(seedMinFor(m), 0) + ' MSK' : '—'}</dd>
         <dt>Read through</dt><dd>${m ? (m.source === 'wrpc' ? 'wRPC getPalwModelMarket' : 'AMM window (eth_call)') + ', ' + fmtAgo(m.at) : '—'}</dd>
       </dl></div>`.s;
   }
@@ -1835,6 +1881,9 @@ async function pageTrade(arg) {
     if (!wallet.account || !rec) { entry.balance = null; entry.position = null; return; }
     try { entry.balance = await balanceOf(wallet.account); } catch (e) { entry.balance = null; }
     try { entry.position = await positionOf(rec.lineId, wallet.account); } catch (e) { entry.position = null; }
+    // Two awaits back: this page may have been replaced while they were in flight, and writing
+    // into #posV then labels the NEW store's row with the OLD line's symbol.
+    if (!alive()) return;
     const a = $('#availV'), p = $('#posV');
     if (a) a.textContent = entry.balance != null ? fmtWeiMsk(entry.balance) + ' MSK' : '—';
     if (p) p.textContent = entry.position != null ? fmtPos(entry.position) + ' ' + rec.symbol : '—';
@@ -1862,7 +1911,7 @@ async function pageTrade(arg) {
       // it is rebuilt when that fact changes (a seed landed) or when the facade got confirmed
       const seededNow = rec.market ? !!rec.market.seeded : null;
       if ((seededNow !== wasSeeded || ticks === 1) && !$('#seedAmt:focus') && !$('#amt:focus')) { wasSeeded = seededNow; renderEntry(); }
-      renderBar(); renderChart(); renderDepth();
+      renderBar(); renderChart(); renderDepth(); renderChartAlt();
       entry.quote = localQuote(); renderQuote(); if (ticks % 3 === 0) nodeQuote(entry.quote);
       if (ticks === 1 || ticks % 3 === 0) loadSettlements();
     }
@@ -1882,7 +1931,7 @@ async function pageTrade(arg) {
     every(CFG.POLL_MS, tick);
   } else {
     // nothing to poll for; keep discovery alive so the selector fills in when a node answers
-    every(15000, async () => { await discoverClasses(); await discoverLines(); if (firstLineId()) navigate('#/trade/' + firstLineId()); });
+    every(15000, async () => { await discoverClasses(); await discoverLines(); if (firstLineId()) navigate('#/store/' + firstLineId()); });
   }
   loadPositions();
 }
@@ -1903,23 +1952,23 @@ function lineRowsHtml(list, opts) {
   opts = opts || {};
   return h`<div class="tbl-wrap"><table class="tbl" id="linesTbl"><thead><tr>
     ${opts.rank ? raw('<th>#</th>') : ''}
-    <th class="l">Line</th><th class="l">Class</th><th class="sortable ${opts.sort === 'price' ? 'sorted' : ''}" data-sort="price">Price (MSK)</th><th>24h</th><th class="sortable ${opts.sort === 'reserve' ? 'sorted' : ''}" data-sort="reserve">Reserve (MSK)</th><th class="sortable ${opts.sort === 'seed' ? 'sorted' : ''}" data-sort="seed" title="The MSK the market opened with, locked for good">Seed (locked)</th><th class="sortable ${opts.sort === 'sold' ? 'sorted' : ''}" data-sort="sold">Sold / Supply</th><th class="sortable ${opts.sort === 'buyback' ? 'sorted' : ''}" data-sort="buyback" title="MSK the mining reward has bought into the pair (ADR-0091)">Mining bought</th><th class="l">Owner</th><th>Versions</th><th class="sortable ${opts.sort === 'usage' ? 'sorted' : ''}" data-sort="usage">Usage (claims)</th><th class="l">Status</th>
+    <th class="l">Model</th><th class="l">Class</th><th class="sortable ${opts.sort === 'usage' ? 'sorted' : ''}" data-sort="usage" title="Paid inferences the fold counted on the current version: the one measurement the chain makes">Used</th><th class="sortable ${opts.sort === 'price' ? 'sorted' : ''}" data-sort="price">Membership (MSK)</th><th>24 h</th><th class="sortable ${opts.sort === 'sold' ? 'sorted' : ''}" data-sort="sold">Members hold</th><th class="sortable ${opts.sort === 'buyback' ? 'sorted' : ''}" data-sort="buyback" title="MSK the mining reward has bought back and retired (ADR-0091)">Mining bought</th><th class="sortable ${opts.sort === 'reserve' ? 'sorted' : ''}" data-sort="reserve" title="MSK the curve holds to buy memberships back">Buy-back (MSK)</th><th class="sortable ${opts.sort === 'seed' ? 'sorted' : ''}" data-sort="seed" title="The MSK the store opened with, locked for good">Opening (locked)</th><th class="l">Owner</th><th>Versions</th><th class="l">Status</th>
   </tr></thead><tbody>
-    ${list.length ? list.map((r, i) => { const m = r.market, row = r.row, o = ownerLabel(row), u = usageOf(r); const held = m ? m.supplyUnits - m.positionUnits : null; const seeded = !!(m && m.seeded); return h`<tr class="row-link" data-href="#/trade/${r.lineId}">
+    ${list.length ? list.map((r, i) => { const m = r.market, row = r.row, o = ownerLabel(row), u = usageOf(r); const held = m ? m.supplyUnits - m.positionUnits : null; const seeded = !!(m && m.seeded); return h`<tr class="row-link" data-href="#/store/${r.lineId}">
       ${opts.rank ? h`<td class="rank">${i + 1}</td>` : ''}
       <td class="l">${nameCell(r)}<br><span class="dim tiny mono">${shortId(r.lineId, 12)}</span></td>
       <td class="l"><span class="mono tiny" title="${r.classId || ''}">${r.classId ? shortId(r.classId) : '—'}</span></td>
-      <td class="num">${seeded && m.price != null ? fmtPrice(m.price) : m && !seeded ? raw('<a class="btn btn-sm btn-accent" href="#/trade/' + esc(r.lineId) + '" title="No market yet: seed it with at least ' + esc(fmtMsk(seedMinFor(m), 0)) + ' MSK">Seed</a>') : '—'}</td>
+      <td class="num" title="attempt + free-prompt claims on the current version, counted by the fold">${u != null ? fmtInt(u) : '—'}</td>
+      <td class="num">${seeded && m.price != null ? fmtPrice(m.price) : m && !seeded ? raw('<a class="btn btn-sm btn-accent" href="#/store/' + esc(r.lineId) + '" title="This store is not open: an opening deposit of at least ' + esc(fmtMsk(seedMinFor(m), 0)) + ' MSK opens it">Open it</a>') : '—'}</td>
       <td class="num">${seeded ? changeCell(r) : raw('<span class="dim">—</span>')}</td>
+      <td class="num" title="${m && m.legacy ? 'pre-ADR-0090 row: not shown' : m ? 'ever taken: ' + fmtPos(m.soldUnits) : ''}">${m && !m.legacy ? fmtPos(held) + ' / ' + fmtPos(m.supplyUnits) : '—'}</td>
+      <td class="num" title="${m && m.buybackSompi != null && bi(m.retiredUnits || 0n) > 0n ? fmtPos(m.retiredUnits) + ' memberships retired' : '5 % of every block\'s reward on this line'}">${m && m.buybackSompi != null ? fmtMsk(m.buybackSompi, 2) : raw('<span class="dim">—</span>')}</td>
       <td class="num">${seeded ? fmtMsk(m.mskReserve, 2) : m ? raw('<span class="dim">0</span>') : '—'}</td>
       <td class="num">${seeded ? (m.seedSompi != null ? fmtMsk(m.seedSompi, 0) : raw('<span class="dim" title="not served by the AMM window">—</span>')) : m ? raw('<span class="dim">none</span>') : '—'}</td>
-      <td class="num" title="${m && m.legacy ? 'pre-ADR-0090 row: not shown' : m ? 'ever bought: ' + fmtPos(m.soldUnits) : ''}">${m && !m.legacy ? fmtPos(held) + ' / ' + fmtPos(m.supplyUnits) : '—'}</td>
-      <td class="num" title="${m && m.buybackSompi != null && bi(m.retiredUnits || 0n) > 0n ? fmtPos(m.retiredUnits) + ' positions retired' : '5 % of every block\'s reward on this line'}">${m && m.buybackSompi != null ? fmtMsk(m.buybackSompi, 2) : raw('<span class="dim">—</span>')}</td>
       <td class="l" title="${o ? o.title : ''}">${o ? o.text : '—'}</td>
       <td class="num">${row && row.versionsPublished != null ? row.versionsPublished + ' (v' + row.current + ')' : '—'}</td>
-      <td class="num" title="attempt + free-prompt claims on the current version, counted by the fold">${u != null ? fmtInt(u) : '—'}</td>
-      <td class="l">${statusTag(r)} <a class="tiny" href="#/line/${r.lineId}">line</a></td>
-    </tr>`; }) : raw('<tr><td colspan="13" class="empty">No lines known yet. ' + (db.classes.size ? 'Waiting for a node to answer.' : 'Configure CLASS_IDS in config.js, or reach an EVM RPC whose registry window is armed.') + '</td></tr>')}
+      <td class="l">${statusTag(r)} <a class="tiny" href="#/line/${r.lineId}">details</a></td>
+    </tr>`; }) : raw('<tr><td colspan="13" class="empty">No models known yet. ' + (db.classes.size ? 'Waiting for a node to answer.' : 'Configure CLASS_IDS in config.js, or reach an EVM RPC whose registry window is armed.') + '</td></tr>')}
   </tbody></table></div>`.s;
 }
 function sortLines(list, key) {
@@ -1939,9 +1988,9 @@ function sortLines(list, key) {
 async function pageLines() {
   const gen = pageState.gen, alive = () => gen === pageState.gen;
   const main = $('#main');
-  const view = { sort: store.get('lines:sort', 'reserve'), q: '' };
-  main.innerHTML = h`<div class="page-h"><h1>Models</h1><span class="sub">every line the node reports across the known classes, priced on its curve</span></div>
-    <div class="toolbar"><input type="search" id="q" placeholder="Filter by name, symbol or id" aria-label="Filter lines"><span class="dim small" id="linesNote"></span></div>
+  const view = { sort: store.get('lines:sort', 'usage'), q: '' };
+  main.innerHTML = h`<div class="page-h"><h1>Models</h1><span class="sub">every model the node reports, what it is used for, and what a membership in it costs</span></div>
+    <div class="toolbar"><input type="search" id="q" placeholder="Filter by name, symbol or id" aria-label="Filter models"><span class="dim small" id="linesNote"></span></div>
     <div id="linesBox"></div>`.s;
   function render() {
     if (!alive()) return;
@@ -1949,7 +1998,7 @@ async function pageLines() {
     if (view.q) { const q = view.q.toLowerCase(); list = list.filter((r) => (r.name || '').toLowerCase().includes(q) || r.symbol.toLowerCase().includes(q) || r.lineId.includes(q) || (r.classId || '').includes(q)); }
     $('#linesBox').innerHTML = lineRowsHtml(list, { sort: view.sort });
     const seededN = Array.from(db.lines.values()).filter((r) => r.market && r.market.seeded).length;
-    $('#linesNote').textContent = db.lines.size + ' line' + (db.lines.size === 1 ? '' : 's') + ' across ' + db.classes.size + ' class' + (db.classes.size === 1 ? '' : 'es') + ' · ' + seededN + ' seeded' + (db.armed === false ? ' · market dormant: no line can be seeded yet' : '') + ' · supply 500,000 whole positions a line';
+    $('#linesNote').textContent = db.lines.size + ' model' + (db.lines.size === 1 ? '' : 's') + ' across ' + db.classes.size + ' class' + (db.classes.size === 1 ? '' : 'es') + ' · ' + seededN + ' open' + (db.armed === false ? ' · the store is dormant on this network: none can be opened yet' : '') + ' · 500,000 memberships a model, fixed for good';
     $$('#linesTbl th.sortable').forEach((th) => th.addEventListener('click', () => { view.sort = th.dataset.sort; store.set('lines:sort', view.sort); render(); }));
   }
   $('#q').addEventListener('input', (e) => { view.q = e.target.value; render(); });
@@ -1962,9 +2011,9 @@ async function pageLines() {
 async function pageLeaderboard() {
   const gen = pageState.gen, alive = () => gen === pageState.gen;
   const main = $('#main');
-  const view = { sort: store.get('lb:sort', 'reserve') };
-  main.innerHTML = h`<div class="page-h"><h1>Leaderboard</h1><span class="sub">lines ranked by what the chain itself measures</span></div>
-    <div class="toolbar"><span class="seg" id="lbSort"><button data-s="reserve">Reserve</button><button data-s="seed">Seed</button><button data-s="sold">Sold</button><button data-s="usage">Usage</button></span><span class="dim small">Usage is the fold's count of paid inferences on the current version. Declared evaluations are not ranked: the chain refuses a quality oracle (ADR-0056 D7, ADR-0088 D5). Unseeded lines have no price and rank last.</span></div>
+  const view = { sort: store.get('lb:sort', 'usage') };
+  main.innerHTML = h`<div class="page-h"><h1>Rankings</h1><span class="sub">models ranked by what the chain itself measures — use first</span></div>
+    <div class="toolbar"><span class="seg" id="lbSort"><button data-s="usage">Used</button><button data-s="sold">Members</button><button data-s="buyback">Bought by mining</button><button data-s="reserve">Buy-back reserve</button><button data-s="seed">Opening deposit</button></span><span class="dim small">Used is the fold's count of paid inferences on the current version. Declared evaluations are not ranked: the chain refuses a quality oracle (ADR-0056 D7, ADR-0088 D5). A store that is not open has no price and ranks last.</span></div>
     <div id="lbBox"></div>`.s;
   function render() {
     if (!alive()) return;
@@ -1994,16 +2043,16 @@ async function pageLine(arg) {
     const versions = rec.versions;
     const inForce = info && info.rootsInForce ? info.rootsInForce : null;
     main.innerHTML = h`
-      <div class="page-h"><h1>${db.label(rec)}</h1><span class="sub">${modelSub(rec) ? modelSub(rec) + ' · ' : ''}${raw('<span class="mono">' + esc(rec.symbol) + ' · ' + esc(shortId(lineId, 16)) + '</span>')}</span>${statusTag(rec)} <a class="btn btn-sm btn-accent" href="#/trade/${lineId}">Trade</a></div>
+      <div class="page-h"><h1>${db.label(rec)}</h1><span class="sub">${modelSub(rec) ? modelSub(rec) + ' · ' : ''}${raw('<span class="mono">' + esc(rec.symbol) + ' · ' + esc(shortId(lineId, 16)) + '</span>')}</span>${statusTag(rec)} <a class="btn btn-sm btn-accent" href="#/store/${lineId}">Open the store</a></div>
       ${rec.notFound ? raw('<div class="banner bad" style="margin-bottom:8px">The node reports no line and no class with this id.</div>') : ''}
       <div class="grid3">
-        <div class="tile"><div class="k">Price (MSK)</div><div class="v">${m && m.price != null ? fmtPrice(m.price) : m && !m.seeded ? raw('<a class="btn btn-sm btn-accent" href="#/trade/' + esc(lineId) + '">Seed this market</a>') : '—'}</div><div class="s">${m ? (m.seeded ? 'seeded at DAA ' + fmtInt(m.openedDaa) : 'not seeded: no reserve, no price; at least ' + fmtMsk(seedMinFor(m), 0) + ' MSK opens it') : ''}</div></div>
-        <div class="tile"><div class="k">Reserve (MSK)</div><div class="v">${m ? fmtMsk(m.mskReserve, 2) : '—'}</div><div class="s">burned ${m ? fmtMsk(m.burnedSompi, 2) : '—'} · owner paid ${m ? fmtMsk(m.ownerPaid, 2) : '—'}</div></div>
-        <div class="tile"><div class="k">Seed (locked)</div><div class="v">${m && m.seeded ? (m.seedSompi != null ? fmtMsk(m.seedSompi, 2) : '—') : m ? 'none' : '—'}</div><div class="s">${m && m.seededBy ? 'by ' + shortId(m.seededBy, 10) + ' (payout payload, for the record)' : m && m.seeded ? 'seeder not served by the AMM window' : 'locked for good once paid; the seeder holds no position'}</div></div>
-        <div class="tile"><div class="k">Sold / Supply</div><div class="v">${m && !m.legacy ? fmtPos(m.supplyUnits - m.positionUnits) + ' / ' + fmtPos(m.supplyUnits) : '—'}</div><div class="s">${m && m.legacy ? 'pre-ADR-0090 row from the node: not shown' : 'whole positions · ever bought ' + (m ? fmtPos(m.soldUnits) : '—')}</div></div>
-        <div class="tile"><div class="k">Bought by mining</div><div class="v">${m && m.buybackSompi != null ? fmtMsk(m.buybackSompi, 2) : m ? '—' : '—'}</div><div class="s">${m && m.buybackSompi != null ? (bi(m.retiredUnits || 0n) > 0n ? fmtPos(m.retiredUnits) + ' positions retired (the chain\'s, for good)' : 'no position retired yet: each slice is under one position\'s price') : 'this node serves no buyback (pre-ADR-0091)'}</div></div>
+        <div class="tile"><div class="k">Used (current version)</div><div class="v">${rec.usage ? fmtInt(rec.usage.attempt + rec.usage.fp) : '—'}</div><div class="s">${rec.usage ? fmtInt(rec.usage.attempt) + ' attempt · ' + fmtInt(rec.usage.fp) + ' free-prompt · ' + fmtInt(rec.usage.workLeaves) + ' leaves' : 'paid inferences counted by the fold'}</div></div>
+        <div class="tile"><div class="k">Membership price (MSK)</div><div class="v">${m && m.price != null ? fmtPrice(m.price) : m && !m.seeded ? raw('<a class="btn btn-sm btn-accent" href="#/store/' + esc(lineId) + '">Open this store</a>') : '—'}</div><div class="s">${m ? (m.seeded ? 'open since DAA ' + fmtInt(m.openedDaa) : 'not open: no reserve, no price; at least ' + fmtMsk(seedMinFor(m), 0) + ' MSK opens it') : ''}</div></div>
+        <div class="tile"><div class="k">Members hold</div><div class="v">${m && !m.legacy ? fmtPos(m.supplyUnits - m.positionUnits) + ' / ' + fmtPos(m.supplyUnits) : '—'}</div><div class="s">${m && m.legacy ? 'pre-ADR-0090 row from the node: not shown' : 'memberships · ever taken ' + (m ? fmtPos(m.soldUnits) : '—')}</div></div>
         <div class="tile"><div class="k">Versions</div><div class="v">${row.versionsPublished != null ? row.versionsPublished : '—'}</div><div class="s">current v${row.current || '—'}${row.previews && row.previews.length ? ' · previews ' + row.previews.join(', ') : ''}</div></div>
-        <div class="tile"><div class="k">Usage (current version)</div><div class="v">${rec.usage ? fmtInt(rec.usage.attempt + rec.usage.fp) : '—'}</div><div class="s">${rec.usage ? fmtInt(rec.usage.attempt) + ' attempt · ' + fmtInt(rec.usage.fp) + ' free-prompt · ' + fmtInt(rec.usage.workLeaves) + ' leaves' : 'claims counted by the fold'}</div></div>
+        <div class="tile"><div class="k">Bought by mining</div><div class="v">${m && m.buybackSompi != null ? fmtMsk(m.buybackSompi, 2) : m ? '—' : '—'}</div><div class="s">${m && m.buybackSompi != null ? (bi(m.retiredUnits || 0n) > 0n ? fmtPos(m.retiredUnits) + ' memberships retired (the chain\'s, for good)' : 'nothing retired yet: each slice is under one membership\'s price') : 'this node serves no buyback (pre-ADR-0091)'}</div></div>
+        <div class="tile"><div class="k">Buy-back reserve (MSK)</div><div class="v">${m ? fmtMsk(m.mskReserve, 2) : '—'}</div><div class="s">burned ${m ? fmtMsk(m.burnedSompi, 2) : '—'} · owner paid ${m ? fmtMsk(m.ownerPaid, 2) : '—'}</div></div>
+        <div class="tile"><div class="k">Opening deposit (locked)</div><div class="v">${m && m.seeded ? (m.seedSompi != null ? fmtMsk(m.seedSompi, 2) : '—') : m ? 'none' : '—'}</div><div class="s">${m && m.seededBy ? 'by ' + shortId(m.seededBy, 10) + ' (payout payload, for the record)' : m && m.seeded ? 'opener not served by the AMM window' : 'locked for good once paid; the opener holds no membership'}</div></div>
         <div class="tile"><div class="k">Roots in force</div><div class="v">${inForce ? inForce.length : '—'}</div><div class="s">for the class at DAA ${info && info.tipDaa != null ? fmtInt(info.tipDaa) : '—'}</div></div>
       </div>
       <div class="grid2 section">
@@ -2021,12 +2070,12 @@ async function pageLine(arg) {
         </dl></div></div>
         <div class="panel"><div class="panel-h">Roles</div><div class="panel-b"><div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Role</th><th class="l">Bond (outpoint)</th><th class="l">Payout payload</th></tr></thead><tbody>
           ${roles.map(([name, bond, payload, dflt]) => h`<tr><td class="l">${name}</td><td class="l">${bond && bond.transactionId ? raw(idCell(bond.transactionId, 10).s + ':' + esc(String(bond.index))) : rec.row ? (dflt || '—') : '—'}</td><td class="l">${payload ? idCell(payload, 16) : rec.row ? (dflt || '—') : '—'}</td></tr>`)}
-        </tbody></table></div><div class="note tiny">A bond is the chain's address-shaped identity (ML-DSA-87). The owner keeps the cold key; the developer signs versions; nothing here moves a position.</div>
+        </tbody></table></div><div class="note tiny">A bond is the chain's address-shaped identity (ML-DSA-87). The owner keeps the cold key; the developer signs versions; nothing here moves a membership.</div>
         <div class="panel-h" style="border-top:1px solid var(--border);margin-top:8px">Roots in force</div>
         <div style="padding:6px 0">${inForce ? (inForce.length ? raw(inForce.map((r) => '<div class="hash">' + (r ? idCell(r, 32).s : '(id not served by the EVM window)') + '</div>').join('')) : '<span class="dim">none</span>') : '—'}</div>
-        </div></div></div>
-        ${raw(benefitsPanel(info))}
+        </div></div>
       </div>
+      <div class="section">${raw(benefitsPanel(info, { always: true }))}</div>
       <div class="panel section"><div class="panel-h">Versions <span class="spacer"></span><span class="dim">the node holds the last 64; the explorer keeps the whole history</span></div><div class="panel-b" id="versionsBox">
         ${!versions ? raw('<div class="empty">Loading versions…</div>') : !versions.length ? raw('<div class="empty">No version rows are held for this line' + (row.hasRow === false ? ' (a founding line nothing touched has its registration root as version 1)' : '') + '.</div>') :
           raw(versions.map((v) => h`<details ${v.status === 'Current' ? 'open' : ''}><summary><b>v${v.version}</b> · ${v.status || '—'}${v.inForce ? raw(' <span class="tag ok">in force</span>') : ''} · root ${shortId(v.root, 12)} · published DAA ${fmtInt(v.publishedDaa)} · usage ${fmtInt(bi(v.attemptClaims) + bi(v.fpClaims))} claims · ${(v.evaluations || []).length} evaluation${(v.evaluations || []).length === 1 ? '' : 's'} <span class="tag declared">declared</span></summary>
@@ -2065,28 +2114,28 @@ async function pagePortfolio() {
   function render() {
     if (!alive()) return;
     const acct = wallet.account;
-    if (!acct) { main.innerHTML = h`<div class="page-h"><h1>Portfolio</h1></div><div class="panel"><div class="empty">Connect a wallet to see its positions across lines, its MSK balance and its history. <br><button class="btn btn-accent" id="pfConnect" style="margin-top:10px">Connect</button></div></div>`.s; $('#pfConnect').addEventListener('click', () => $('#connectBtn').click()); return; }
+    if (!acct) { main.innerHTML = h`<div class="page-h"><h1>My memberships</h1></div><div class="panel"><div class="empty">Connect a wallet to see the memberships it holds, its MSK balance and what it has done. <br><button class="btn btn-accent" id="pfConnect" style="margin-top:10px">Connect</button></div></div>`.s; $('#pfConnect').addEventListener('click', () => $('#connectBtn').click()); return; }
     const p = view.positions;
     let total = 0n, totalKnown = true;
     const rows = (p && p.positions || []).map((x) => { const r = db.line(x.lineId) || db.upsertLine(x.lineId, {}); const m = r.market; const q = m ? curve.sellQuote(m, x.units) : null; if (q) total += q.fees.net; else totalKnown = false; return { x, r, m, q }; });
     main.innerHTML = h`
-      <div class="page-h"><h1>Portfolio</h1><span class="sub mono">${acct}</span>${wallet.onChain() ? '' : raw('<span class="tag bad">wallet not on MISAKA</span>')}</div>
+      <div class="page-h"><h1>My memberships</h1><span class="sub mono">${acct}</span>${wallet.onChain() ? '' : raw('<span class="tag bad">wallet not on MISAKA</span>')}</div>
       <div class="grid3">
         <div class="tile"><div class="k">MSK balance (EVM account)</div><div class="v">${view.balance != null ? fmtWeiMsk(view.balance) : '—'}</div><div class="s">${status.evm === 'up' ? 'eth_getBalance at latest' : 'EVM RPC unreachable'}</div></div>
-        <div class="tile"><div class="k">Positions held</div><div class="v">${p ? p.positions.length : '—'}</div><div class="s">EVM namespace only (a bond's positions are not this account's)</div></div>
-        <div class="tile"><div class="k">Mark value (sell all now, net)</div><div class="v">${p && totalKnown ? fmtMsk(total, 2) + ' MSK' : '—'}</div><div class="s">the net MSK the curves would pay right now, fees included</div></div>
+        <div class="tile"><div class="k">Models you are a member of</div><div class="v">${p ? p.positions.length : '—'}</div><div class="s">EVM namespace only (a bond's memberships are not this account's)</div></div>
+        <div class="tile"><div class="k">If you left every one now</div><div class="v">${p && totalKnown ? fmtMsk(total, 2) + ' MSK' : '—'}</div><div class="s">the net MSK the curves would pay back right now, fees included — a membership itself is never paid anything</div></div>
       </div>
-      <div class="panel section"><div class="panel-h">Positions</div><div class="panel-b">
-        ${!p ? raw('<div class="empty">' + (view.err ? esc(view.err) : 'Loading…') + '</div>') : !rows.length ? raw('<div class="empty">No positions in the EVM namespace for this account. <span class="dim">holder id ' + esc(shortId(p.holder)) + '</span></div>') :
-          h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Line</th><th>Positions (whole)</th><th>Price (MSK)</th><th>Mark value (sell quote, net MSK)</th><th>Average sell price</th><th></th></tr></thead><tbody>${rows.map(({ x, r, m, q }) => h`<tr class="row-link" data-href="#/trade/${x.lineId}"><td class="l"><b>${db.label(r)}</b> <span class="dim tiny mono">${r.symbol}</span></td><td class="num">${fmtPos(x.units)}</td><td class="num">${m && m.price != null ? fmtPrice(m.price) : '—'}</td><td class="num">${q ? fmtMsk(q.fees.net) : '—'}</td><td class="num">${q ? fmtPrice(q.fees.net / x.units) : '—'}</td><td><a href="#/trade/${x.lineId}">Trade</a></td></tr>`)}</tbody></table></div>
-          <div class="note tiny">holder id ${shortId(p.holder, 16)} (evm_holder_v1 of chain ${CFG.CHAIN_ID} and this address), read through ${p.source === 'wrpc' ? 'getPalwModelPositions' : 'the position window'}. Mark value is the net MSK the curve's sell quote returns for the whole position right now.</div>`}
+      <div class="panel section"><div class="panel-h">Memberships</div><div class="panel-b">
+        ${!p ? raw('<div class="empty">' + (view.err ? esc(view.err) : 'Loading…') + '</div>') : !rows.length ? raw('<div class="empty">This account holds no membership in the EVM namespace. <span class="dim">holder id ' + esc(shortId(p.holder)) + '</span></div>') :
+          h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Model</th><th>Memberships</th><th>Price (MSK)</th><th>If you left now (net MSK)</th><th>Per membership</th><th></th></tr></thead><tbody>${rows.map(({ x, r, m, q }) => h`<tr class="row-link" data-href="#/store/${x.lineId}"><td class="l"><b>${db.label(r)}</b> <span class="dim tiny mono">${r.symbol}</span></td><td class="num">${fmtPos(x.units)}</td><td class="num">${m && m.price != null ? fmtPrice(m.price) : '—'}</td><td class="num">${q ? fmtMsk(q.fees.net) : '—'}</td><td class="num">${q ? fmtPrice(q.fees.net / x.units) : '—'}</td><td><a href="#/store/${x.lineId}">Open</a></td></tr>`)}</tbody></table></div>
+          <div class="note tiny">holder id ${shortId(p.holder, 16)} (evm_holder_v1 of chain ${CFG.CHAIN_ID} and this address), read through ${p.source === 'wrpc' ? 'getPalwModelPositions' : 'the position window'}. The last two columns are what the curve would pay if you gave the memberships up now; holding them pays you nothing.</div>`}
       </div></div>
-      <div class="panel section"><div class="panel-h">Settlements <span class="spacer"></span><span class="dim">facade events for this account, last ${CFG.LOG_LOOKBACK_BLOCKS} blocks</span></div><div class="panel-b">
-        ${db.armed === false ? raw('<div class="empty">The market doors are dormant on this network.</div>') : !view.settlements ? raw('<div class="empty">' + (db.armed ? 'Loading…' : 'EVM RPC unreachable.') + '</div>') : !view.settlements.length ? raw('<div class="empty">No settlements found.</div>') :
-          h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Block</th><th class="l">Line</th><th class="l">Event</th><th>Positions</th><th>MSK</th><th>Price after</th></tr></thead><tbody>${view.settlements.map((e) => { const r = db.line(e.lineId); return h`<tr><td class="num">${fmtInt(e.blockNumber)}</td><td class="l">${r ? db.label(r) : shortId(e.lineId)}</td><td class="l ${e.kind === 'Bought' ? 'up' : e.kind === 'Sold' ? 'down' : ''}">${e.kind}${e.kind === 'Refused' ? ' (' + (ACTION_NAME[e.actionId] || '') + ': ' + (REFUSAL[e.reason] || e.reason) + ')' : ''}</td><td class="num">${e.units != null ? fmtPos(e.units) : e.kind === 'Seeded' ? '0 (seed)' : '—'}</td><td class="num">${e.kind === 'Bought' ? fmtMsk(e.mskIn) : e.kind === 'Seeded' ? fmtMsk(e.mskIn) + ' locked' : e.kind === 'Sold' ? fmtMsk(e.mskOut) : e.actionId !== 2 ? fmtMsk(e.amount) + ' refunded' : '—'}</td><td class="num">${e.priceAfter != null ? fmtPrice(e.priceAfter) : '—'}</td></tr>`; })}</tbody></table></div>`}
+      <div class="panel section"><div class="panel-h">Joins and leaves <span class="spacer"></span><span class="dim">facade events for this account, last ${CFG.LOG_LOOKBACK_BLOCKS} blocks</span></div><div class="panel-b">
+        ${db.armed === false ? raw('<div class="empty">The market doors are dormant on this network.</div>') : !view.settlements ? raw('<div class="empty">' + (db.armed ? 'Loading…' : 'EVM RPC unreachable.') + '</div>') : !view.settlements.length ? raw('<div class="empty">Nothing found.</div>') :
+          h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Block</th><th class="l">Model</th><th class="l">What happened</th><th>Memberships</th><th>MSK</th><th>Price after</th></tr></thead><tbody>${view.settlements.map((e) => { const r = db.line(e.lineId); return h`<tr><td class="num">${fmtInt(e.blockNumber)}</td><td class="l">${r ? db.label(r) : shortId(e.lineId)}</td><td class="l ${e.kind === 'Bought' ? 'up' : e.kind === 'Sold' ? 'down' : ''}" title="facade event ${e.kind}">${eventWord(e.kind)}${e.kind === 'Refused' ? ' (' + (ACTION_NAME[e.actionId] || '') + ': ' + (REFUSAL[e.reason] || e.reason) + ')' : ''}</td><td class="num">${e.units != null ? fmtPos(e.units) : e.kind === 'Seeded' ? '0 (opening)' : '—'}</td><td class="num">${e.kind === 'Bought' ? fmtMsk(e.mskIn) : e.kind === 'Seeded' ? fmtMsk(e.mskIn) + ' locked' : e.kind === 'Sold' ? fmtMsk(e.mskOut) : e.actionId !== 2 ? fmtMsk(e.amount) + ' refunded' : '—'}</td><td class="num">${e.priceAfter != null ? fmtPrice(e.priceAfter) : '—'}</td></tr>`; })}</tbody></table></div>`}
       </div></div>
-      <div class="panel section"><div class="panel-h">Order history <span class="spacer"></span><span class="dim">transactions sent from this browser</span></div><div class="panel-b">
-        ${(() => { const list = txlog.forAccount(acct); return !list.length ? raw('<div class="empty">Nothing sent from this browser yet.</div>') : h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Time</th><th class="l">Line</th><th class="l">Action</th><th>Amount</th><th class="l">Status</th><th class="l">Tx</th></tr></thead><tbody>${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}">${t.kind}</td><td class="num">${t.kind === 'sell' ? fmtPos(t.amount) + ' pos' : fmtMsk(t.amount) + ' MSK' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="l">${t.status}${t.status === 'settled' ? (t.kind === 'seed' ? ' · seeded, first price ' + fmtPrice(t.priceAfter) + ' MSK' : ' · ' + fmtPos(t.units) + ' pos / ' + fmtMsk(t.msk) + ' MSK') : ''}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}</tbody></table></div>`; })()}
+      <div class="panel section"><div class="panel-h">My activity <span class="spacer"></span><span class="dim">transactions sent from this browser</span></div><div class="panel-b">
+        ${(() => { const list = txlog.forAccount(acct); return !list.length ? raw('<div class="empty">Nothing sent from this browser yet.</div>') : h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Time</th><th class="l">Model</th><th class="l">What you did</th><th>Amount</th><th class="l">Status</th><th class="l">Tx</th></tr></thead><tbody>${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}" title="facade call ${t.kind}()">${MOVE_WORD[t.kind] || t.kind}</td><td class="num">${t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' MSK' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="l">${t.status}${t.status === 'settled' ? (t.kind === 'seed' ? ' · opened, first price ' + fmtPrice(t.priceAfter) + ' MSK' : ' · ' + fmtPos(t.units) + ' memberships / ' + fmtMsk(t.msk) + ' MSK') : ''}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}</tbody></table></div>`; })()}
       </div></div>`.s;
   }
   async function load() {
@@ -2115,43 +2164,49 @@ function pageDocs() {
   const seedMin = c.seedMinSompi || CURVE_DEFAULTS.seedMinSompi, supply = c.supplyUnits || CURVE_DEFAULTS.supplyUnits;
   const first = curve.price(curve.seed(seedMin, { supplyUnits: supply }));
   $('#main').innerHTML = h`<div class="docs">
-    <div class="page-h"><h1>How the model market works</h1></div>
-    <p>MISAKA Options is a window onto the MISAKA chain's <b>model market</b>. The market lives in the chain's PALW state fold; this site reads it through a node's wRPC and the EVM's read precompiles, and sends seeds and trades through the EVM's writer. Nothing on this site is a number of its own: every figure is an RPC reply or the chain's own curve arithmetic applied to a market row, and a dash means the value is not available.</p>
-    <h2>A pair is made by a seed</h2>
-    <p>A <b>line</b> is a model in the market's sense: a class (a registered model graph), an owner (a bond, the chain's post-quantum identity) and a name. Every class has a founding line whose id is the class id. A line has <b>no market until someone seeds it</b> (ADR-0090): at least <b>${fmtMsk(seedMin, 0)} MSK</b> is locked into the line's sink, on the EVM through the facade's <code>seed()</code> (or the writer's action 3) or on the UTXO side with <code>misaka palw model-seed</code>. The whole seed becomes the curve's reserve, fee-free. It is <b>locked for good</b>: there is no unseed, no LP token, no admin, and no object ever pays a seed out. The seeder receives <b>no position</b> and nothing back; the seeder's payout payload is kept on the row for the record only. One seed a line: a second is refused. A class still waiting for its activation takes a seed (the pair is made when the model is added, before approval); a frozen class takes none.</p>
-    <h2>Positions are whole</h2>
-    <p>Every line opens with <b>${fmtPos(supply)} positions</b> in the curve, fixed at the seed, and a position is a <b>whole number</b>: one unit, no fraction (<code>decimals() = 0</code>). A buy that would release less than one position releases nothing and is refused; a sell names whole positions. A position is bought from the protocol's curve and sold back to it and grants nothing but the right to sell it back: no weight, no vote, no fee discount. <b>There is no transfer</b> between holders, on the chain or on the EVM: the facade's <code>transfer</code>, <code>approve</code> and <code>allowance</code> revert, and a contract can never hold a position.</p>
-    <h2>The curve</h2>
-    <p>Each line's market is a constant-product curve over its real MSK reserve, with <b>no virtual reserve</b>: <code>reserve × positions = K</code>, where <code>K</code> is taken from the row as it stands at every move, so the product can only stay or grow. The price at any moment is <code>reserve / positions in the curve</code>; there is no other price. The first price is <code>seed / ${fmtPos(supply)}</code> (${fmtPrice(first)} MSK at the least seed). A buy adds its net leg to the reserve and releases <code>positions − ⌈K / reserve′⌉</code>; a sell returns positions and pays <code>reserve − ⌈K / positions′⌉</code>, never more than the reserve. Buying raises the price, selling lowers it.</p>
-    <p><b>The seed floor invariant.</b> Because the product never falls, with every position back in the curve the reserve is at the seed or above: <b>the reserve never falls under the seed</b>, by any sequence of buys and sells. A holder's sell is the only thing that moves MSK out of the curve, and it cannot reach the seed.</p>
-    <h2>Mining buys the pair</h2>
-    <p>When a block does PALW work with a model, the worker reward it earns is <b>escrowed</b> and named for its miner only when the block's claim reaches <code>Final</code>. At that moment <b>5 % of that reward buys from the model's pair</b> and stays in it, and the miner is named the other <b>95 %</b> (ADR-0091). The slice takes no fee and gives nobody a position: the positions the curve gives up for it are <b>retired</b> — the chain holds them for good, no object can sell them, and <code>positions in the curve + every holder's + retired = ${fmtPos(supply)}</code>. Nothing is ever distributed to holders; what mining does for a holder is <b>raise the price</b> the curve will pay them when they sell.</p>
-    <p>A line with <b>no pair</b> (unseeded), or one closed to buys, pays its miner in full — nothing is burned for a model. Because the slice enters the reserve, the product rises and the price rises even when the slice is worth less than one position, which at the least seed is every ordinary block: on testnet-11's subsidy the escrow is 2.29690373 MSK, the slice 0.11484518 MSK and the miner's 2.18205855 MSK, which lifts a freshly seeded pair from 0.2 to 0.20000022 MSK a position, and about +2.5 % over a month of such blocks.</p>
+    <div class="page-h"><h1>How the model store works</h1></div>
+    <p>MISAKA Options is a window onto the MISAKA chain's <b>model store</b>. Every model registered on the chain can open a store; what it sells is a <b>membership</b> in that model — access its developer declares on chain and, where the chain can check it, enforces. The store lives in the chain's PALW state fold; this site reads it through a node's wRPC and the EVM's read precompiles, and sends joins and leaves through the EVM's writer. Nothing on this site is a number of its own: every figure is an RPC reply or the chain's own arithmetic applied to a market row, and a dash means the value is not available.</p>
+    <p><b>A membership is not an income.</b> No holder is ever paid, there is no dividend, no rebate, no share of a fee and no claim on the reserve — the chain refuses to store a promise of any of those (ADR-0091, ADR-0095 §4.2). What a membership is worth to you is the access it carries, which the model's owner declares and this site prints on the store page. A membership can also be given back to the store for MSK at whatever the curve then pays, and that number moves. Nothing here supports it.</p>
+    <h2>What a membership gets you</h2>
+    <p>A model's owner declares, on chain and signed, what its members get, in <b>tiers</b>: how many memberships each tier asks for, what it carries, and how long you must have held without leaving. The grants come from a closed set the whole network reads one way — early access to a new version's artifact, a private beta, priority in the line's inference queue, experimental modes, the developer's room, a served request allowance, a voice in what ships next, support answered first. <b>There is no bit for money</b>: a grant is a service or the fold refuses it.</p>
+    <p>Most of that is the developer's to honour off chain, and this site says so. Two parts are not: while a line declares an early-access lead, <b>the fold refuses to make a new version current inside that window</b>, and it refuses to let one skip the window by publishing straight to current — the exclusivity is arithmetic, not a promise. And a declaration that outlives its own cadence or its expiry <b>lapses on its own</b>, with no complaint filed by anyone, and the card then says LAPSED. A weakening or a withdrawal takes effect only after notice, so a member can see what they are about to lose while there is still time to leave (ADR-0095).</p>
+    <p class="dim">Where a store's card says the node serves no declaration, that is what it means: either the node predates ADR-0095 or the rule is not armed on this network yet. Nothing is promised that the chain cannot show you.</p>
+    <h2>A store opens with a deposit, and the deposit never comes back</h2>
+    <p>A <b>line</b> is a model in the store's sense: a class (a registered model graph), an owner (a bond, the chain's post-quantum identity) and a name. Every class has a founding line whose id is the class id. A line has <b>no store until someone opens one</b> (ADR-0090): at least <b>${fmtMsk(seedMin, 0)} MSK</b> is locked into the line's sink, on the EVM through the facade's <code>seed()</code> (or the writer's action 3) or on the UTXO side with <code>misaka palw model-seed</code>. The whole deposit becomes the buy-back reserve, fee-free. It is <b>locked for good</b>: there is no withdrawal, no LP token, no admin, and no object ever pays it out. Whoever opens the store receives <b>no membership</b> and nothing back; their payout payload is kept on the row for the record only. One opening a line: a second is refused. A class still waiting for its activation can be opened (the store is built when the model is listed, before approval); a frozen class cannot.</p>
+    <h2>A membership is whole, and it cannot be handed to anyone</h2>
+    <p>Every store opens with <b>${fmtPos(supply)} memberships</b>, fixed at the opening and forever, and a membership is a <b>whole number</b>: one unit, no fraction (<code>decimals() = 0</code>). A join that would release less than one releases nothing and is refused; a leave names whole memberships. <b>There is no transfer</b> between people, on the chain or on the EVM: the facade's <code>transfer</code>, <code>approve</code> and <code>allowance</code> revert, and a contract can never hold one. So a membership cannot be scalped, lent or resold — the only way in is to pay the protocol, and the only way out is to give it back to the protocol.</p>
+    <h2>What a membership costs</h2>
+    <p>The price is not set by anyone and there is no other buyer or seller: each line's store is a constant-product curve over its real MSK reserve, with <b>no virtual reserve</b>. <code>reserve × memberships = K</code>, where <code>K</code> is taken from the row as it stands at every move, so the product can only stay or grow. The price at any moment is <code>reserve / memberships still in the curve</code>; there is no other price. The first price is <code>deposit / ${fmtPos(supply)}</code> (${fmtPrice(first)} MSK at the least deposit). A join adds its net leg to the reserve and releases <code>memberships − ⌈K / reserve′⌉</code>; a leave returns memberships and pays <code>reserve − ⌈K / memberships′⌉</code>, never more than the reserve. <b>Joining raises the price for the next member; leaving lowers it.</b></p>
+    <p><b>The deposit floor.</b> Because the product never falls, with every membership back in the curve the reserve is at the deposit or above: <b>the reserve never falls under the opening deposit</b>, by any sequence of joins and leaves. A member leaving is the only thing that moves MSK out of the store, and it cannot reach the deposit.</p>
+    <h2>Using the model buys memberships back</h2>
+    <p>When a block does PALW work with a model, the worker reward it earns is <b>escrowed</b> and named for its miner only when the block's claim reaches <code>Final</code>. At that moment <b>5 % of that reward buys memberships from this model's own store</b> and stays in it, and the miner is named the other <b>95 %</b> (ADR-0091). The slice takes no fee and gives nobody a membership: what the curve gives up for it is <b>retired</b> — the chain holds it for good, no object can sell it, and <code>in the curve + every member's + retired = ${fmtPos(supply)}</code>. <b>Nothing is ever distributed to members</b>; what use does for a member is raise the price the store will pay them if they ever leave.</p>
+    <p>A model with <b>no store</b>, or one closed to new members, pays its miner in full — nothing is taken for it. Because the slice enters the reserve, the product rises and the price rises even when the slice is worth less than one membership, which at the least deposit is every ordinary block: on testnet-11's subsidy the escrow is 2.29690373 MSK, the slice 0.11484518 MSK and the miner's 2.18205855 MSK, which lifts a freshly opened store from 0.2 to 0.20000022 MSK a membership, and about +2.5 % over a month of such blocks.</p>
     <h2>Fees</h2>
-    <table><tr><th>on every MSK leg of a buy or a sell</th><th>share</th><th>where it goes</th></tr>
+    <table><tr><th>on every MSK leg of a join or a leave</th><th>share</th><th>where it goes</th></tr>
       <tr><td>burn</td><td>5 %</td><td>destroyed; supply only ever falls</td></tr>
-      <tr><td>owner leg</td><td>1 %</td><td>the line's owner bond (shared with an adopted contributor when the owner says so); burned for an unowned genesis line</td></tr>
-      <tr><td>net</td><td>94 %</td><td>into the reserve on a buy; paid to the seller on a sell</td></tr>
-      <tr><td>the seed</td><td>none</td><td>liquidity, not a trade: every sompi of it enters the reserve</td></tr>
-      <tr><td>the mining slice</td><td>none</td><td>liquidity too: 5 % of a block's reward, whole, into the reserve — what it buys is retired, not held (ADR-0091)</td></tr></table>
-    <p>A round trip therefore costs 12 % plus the curve's slippage. Worked from a market seeded with exactly ${fmtMsk(seedMin, 0)} MSK (first price ${fmtPrice(first)} MSK): a buy of 1,000 MSK burns 50, pays 10 to the owner, puts 940 in the reserve and releases 4,656 positions (price 0.20377757); a second 1,000 MSK buy releases 4,570 more (reserve 101,880); selling all 9,226 back pays 1,879.88976 MSK gross and 1,767.0963744 MSK net, puts 500,000 positions back and leaves the reserve at 100,000.11024 MSK, above the seed. A buy of 0.1 MSK releases nothing; 0.22 MSK releases exactly one position. The <a href="?selftest=1#/docs">self-test</a> checks this site's arithmetic against those golden numbers from the chain's own tests.</p>
-    <h2>Adding a model</h2>
-    <p>The <a href="#/add">Add model</a> page is the checklist: (1) register the class from a node that holds the artifact (a bond, its key and a fee; not something a browser can do), (2) seed the pair with at least ${fmtMsk(seedMin, 0)} MSK, (3) approval, which is the class reaching <code>Active</code> at its activation DAA and its lanes being certified (ADR-0054, ADR-0075; a clock and a court, not a vote), (4) the line trades: buys move the price. The seed may precede the approval; buys wait for <code>Active</code>.</p>
-    <h2>Two doors, one curve</h2>
-    <p>A move can be a carrier transaction on the UTXO side signed by an ML-DSA-87 key, or an EVM transaction from an ordinary account. Both reach the same curve and the same fee table. This site uses the EVM door: the line's <b>MRC-20 facade</b> (address <code>0x4d50…</code>, read from the registry) exposes ERC-20's read half plus <code>buy(minUnitsOut)</code> payable, <code>sell(unitsIn, minMskOutSompi)</code> and <code>seed()</code> payable, which route to the writer at <code>0x…F013</code> (actions 1, 2 and 3).</p>
-    <h2>Settlement timing</h2>
-    <ol><li><b>Emit.</b> Your transaction is included in chain block B. The writer validates the call, escrows a buy's or a seed's value and emits <code>ActionQueued</code>. A seed under the least seed reverts here (<code>SeedTooSmall</code>). Nothing else happens yet.</li>
-      <li><b>Apply.</b> The fold applies the action after block B, after every carrier-borne move of B, quoted on the row as it then stands. Your floor (<code>minUnitsOut</code> or <code>minMskOutSompi</code>) is checked: a worse fill is refused, never partial. A seed on an already seeded line, or on a frozen class, is refused.</li>
-      <li><b>Settle.</b> In block C, the selected child of B, a system op burns a filled buy's or seed's escrow into the line's sink, refunds a refused one, or credits a filled sell's net MSK to your account. The facade emits <code>Bought</code>, <code>Sold</code>, <code>Seeded</code> or <code>Refused</code> there.</li></ol>
-    <p>So a position bought at B is readable, and settled, one chain block later, and a market seeded at B opens one block later. Order history on this site follows exactly that sequence: sent, queued, then settled or refused.</p>
-    <h2>Two holder namespaces</h2>
-    <p>A carrier-side holder is a bond's payout payload. An EVM account's holder id is <code>evm_holder_v1(chain id, address)</code>, a keyed BLAKE2b-512 that this site reads from the position precompile (or derives locally when the EVM RPC is down). A position bought from the EVM is sold from the EVM; one bought by a carrier is sold by a carrier; nothing moves units between the two. An EVM-held position carries the <code>CLASSICAL-ECC</code> security label: it is guarded by a secp256k1 key, not by the chain's post-quantum domain.</p>
+      <tr><td>the model's owner</td><td>1 %</td><td>the line's owner bond (shared with an adopted contributor when the owner says so); burned for an unowned genesis line</td></tr>
+      <tr><td>net</td><td>94 %</td><td>into the buy-back reserve on a join; paid to the member on a leave</td></tr>
+      <tr><td>the opening deposit</td><td>none</td><td>it is the reserve, not a purchase: every sompi of it enters the curve</td></tr>
+      <tr><td>the mining slice</td><td>none</td><td>reserve too: 5 % of a block's reward, whole; what it buys is retired, not held (ADR-0091)</td></tr></table>
+    <p>Joining and then leaving therefore costs 12 % plus what your own move did to the price. Worked from a store opened with exactly ${fmtMsk(seedMin, 0)} MSK (first price ${fmtPrice(first)} MSK): a join of 1,000 MSK burns 50, pays 10 to the owner, puts 940 in the reserve and releases 4,656 memberships (price 0.20377757); a second 1,000 MSK join releases 4,570 more (reserve 101,880); leaving with all 9,226 pays 1,879.88976 MSK gross and 1,767.0963744 MSK net, puts 500,000 memberships back and leaves the reserve at 100,000.11024 MSK, above the deposit. A join of 0.1 MSK releases nothing; 0.22 MSK releases exactly one. The <a href="?selftest=1#/docs">self-test</a> checks this site's arithmetic against those golden numbers from the chain's own tests.</p>
+    <h2>Listing a model</h2>
+    <p>The <a href="#/add">List a model</a> page is the checklist: (1) register the class from a node that holds the artifact (a bond, its key and a fee; not something a browser can do), (2) open the store with at least ${fmtMsk(seedMin, 0)} MSK, (3) approval, which is the class reaching <code>Active</code> at its activation DAA and its lanes being certified (ADR-0054, ADR-0075; a clock and a court, not a vote), (4) members join — and the owner declares what their membership gets them (ADR-0095). The store may be opened before the approval; joins wait for <code>Active</code>.</p>
+    <h2>Two doors, one store</h2>
+    <p>A move can be a carrier transaction on the UTXO side signed by an ML-DSA-87 key, or an EVM transaction from an ordinary account. Both reach the same curve and the same fee table. This site uses the EVM door: the line's <b>MRC-20 facade</b> (address <code>0x4d50…</code>, read from the registry) exposes ERC-20's read half plus <code>buy(minUnitsOut)</code> payable, <code>sell(unitsIn, minMskOutSompi)</code> and <code>seed()</code> payable, which route to the writer at <code>0x…F013</code> (actions 1, 2 and 3). The site says join, leave and open; the ABI says buy, sell and seed, and both name the same call.</p>
+    <h2>When a join lands</h2>
+    <ol><li><b>Emit.</b> Your transaction is included in chain block B. The writer validates the call, escrows a join's or an opening's value and emits <code>ActionQueued</code>. A deposit under the least deposit reverts here (<code>SeedTooSmall</code>). Nothing else happens yet.</li>
+      <li><b>Apply.</b> The fold applies the action after block B, after every carrier-borne move of B, quoted on the row as it then stands. Your floor (<code>minUnitsOut</code> or <code>minMskOutSompi</code>) is checked: a worse result is refused, never partial. An opening on an already open store, or on a frozen class, is refused.</li>
+      <li><b>Settle.</b> In block C, the selected child of B, a system op burns a filled join's or opening's escrow into the line's sink, refunds a refused one, or credits a filled leave's net MSK to your account. The facade emits <code>Bought</code>, <code>Sold</code>, <code>Seeded</code> or <code>Refused</code> there.</li></ol>
+    <p>So a membership taken at B is readable, and settled, one chain block later, and a store opened at B opens one block later. My activity on this site follows exactly that sequence: sent, queued, then settled or refused.</p>
+    <h2>Two member namespaces</h2>
+    <p>A carrier-side member is a bond's payout payload. An EVM account's holder id is <code>evm_holder_v1(chain id, address)</code>, a keyed BLAKE2b-512 that this site reads from the position precompile (or derives locally when the EVM RPC is down). A membership taken from the EVM is given back from the EVM; one taken by a carrier is given back by a carrier; nothing moves units between the two. A tier, though, counts both: a member is not two people (ADR-0095 §4.3). An EVM-held membership carries the <code>CLASSICAL-ECC</code> security label: it is guarded by a secp256k1 key, not by the chain's post-quantum domain.</p>
     <h2>What the chain measures, and what it does not</h2>
-    <p>Usage counters are the fold's own count of paid inferences per version; they say what was used, never how good it was. Evaluations, dataset commitments and runtime hashes are <b>declarations</b> the chain records, labels by signer and never reads. The leaderboard ranks reserve, seed, positions sold and chain-counted usage only; there is no on-chain quality oracle by design.</p>
+    <p>Use counters are the fold's own count of paid inferences per version; they say what was used, never how good it was. Evaluations, dataset commitments and runtime hashes are <b>declarations</b> the chain records, labels by signer and never reads. The rankings order use, members, what mining bought back, the reserve and the opening deposit only; there is no on-chain quality oracle by design.</p>
     <h2>Units on the wire</h2>
-    <p>MSK amounts in the views, quotes and events are in sompi (1 MSK = 10<sup>8</sup> sompi). A buy's or a seed's <code>msg.value</code> is in wei and must be a multiple of 10<sup>10</sup> (1 sompi). Position amounts are whole numbers (<code>decimals() = 0</code>; the market row's <code>positionUnits</code> is a count of positions).</p>
+    <p>MSK amounts in the views, quotes and events are in sompi (1 MSK = 10<sup>8</sup> sompi). A join's or an opening's <code>msg.value</code> is in wei and must be a multiple of 10<sup>10</sup> (1 sompi). Membership amounts are whole numbers (<code>decimals() = 0</code>; the market row's <code>positionUnits</code> is a count of memberships).</p>
     <h2>Read the design</h2>
-    <ul><li><a href="${CFG.ADR_URL}/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md" target="_blank" rel="noopener">ADR-0090: the pair is seeded with real MSK, locked for good, and a position is whole</a></li>
+    <ul><li><a href="${CFG.ADR_URL}/0095-a-position-is-a-membership-not-an-income.md" target="_blank" rel="noopener">ADR-0095: a position is a membership, not an income</a></li>
+      <li><a href="${CFG.ADR_URL}/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md" target="_blank" rel="noopener">ADR-0090: the pair is seeded with real MSK, locked for good, and a position is whole</a></li>
       <li><a href="${CFG.ADR_URL}/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md" target="_blank" rel="noopener">ADR-0091: the reward buys the pair, and no holder is paid</a></li>
       <li><a href="${CFG.ADR_URL}/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md" target="_blank" rel="noopener">ADR-0087: a position is bought from the curve and sold back to it</a></li>
       <li><a href="${CFG.ADR_URL}/0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md" target="_blank" rel="noopener">ADR-0088: the class keeps its graph; a line keeps its owner, and the owner keeps publishing</a></li>
@@ -2162,7 +2217,7 @@ function pageDocs() {
 }
 
 // ============================================================================================
-// 11b. the add-model page (ADR-0090 D5): register, seed, approval, trade, with live status
+// 11b. listing a model (ADR-0090 D5): register, open the store, approval, members, live status
 // ============================================================================================
 function stepTag(state, text) { return h`<span class="tag ${state === 'ok' ? 'ok' : state === 'warn' ? 'warn' : state === 'bad' ? 'bad' : ''}">${text}</span>`; }
 async function pageAdd(arg) {
@@ -2176,10 +2231,10 @@ async function pageAdd(arg) {
   const docs = String(CFG.DOCS_URL || '').replace(/\/$/, '');
   const adr = String(CFG.ADR_URL || '').replace(/\/$/, '');
   main.innerHTML = h`
-    <div class="page-h"><h1>Add a model</h1><span class="sub">from a registered class to a traded pair: register, seed, approval, trade (ADR-0090)</span></div>
+    <div class="page-h"><h1>List a model</h1><span class="sub">from a registered class to a store people can join: register, open, approval, members (ADR-0090)</span></div>
     <div class="panel"><div class="panel-b">
       <div class="add-id">
-        <label for="addId" class="muted small">Class id (128 hex). The founding line of a class has the class id as its line id, so this is also the line the pair is made on.</label>
+        <label for="addId" class="muted small">Class id (128 hex). The founding line of a class has the class id as its line id, so this is also the line the store is opened on.</label>
         <div class="inp-row"><input id="addId" class="idinp mono" spellcheck="false" autocomplete="off" placeholder="class id, 128 hex" value="${st.id}"><button class="btn btn-accent" id="addCheck">Check</button></div>
         <div class="small dim" id="addKnown"></div>
       </div>
@@ -2195,9 +2250,9 @@ async function pageAdd(arg) {
     const f = st.facts, rec = st.lineId ? db.line(st.lineId) : null, m = rec && rec.market;
     const cs = f && f.status;
     const reg = !st.id ? ['', 'enter a class id'] : f == null ? ['', 'checking'] : f.exists === false ? ['bad', 'no class with this id on this chain'] : f.exists ? ['ok', 'registered' + (f.registeredDaa != null ? ' at DAA ' + fmtInt(f.registeredDaa) : '')] : ['', 'the chain did not answer'];
-    const seed = !st.lineId ? ['', 'enter a line id'] : rec && rec.notFound ? ['bad', 'no such line'] : !m ? ['', 'reading the market row'] : m.seeded ? ['ok', 'seeded' + (m.seedSompi != null ? ': ' + fmtMsk(m.seedSompi, 0) + ' MSK locked' : '')] : ['warn', 'not seeded'];
-    const appr = !st.id ? ['', 'enter a class id'] : !cs ? (f && f.exists === false ? ['bad', 'no class'] : ['', 'status not answered']) : cs.head === 'Active' ? ['ok', 'Active: trading open'] : cs.head === 'Registered' ? ['warn', 'Registered, activates at DAA ' + (cs.activationDaa != null ? fmtInt(cs.activationDaa) : '(not served)') + (db.chain.daa != null && cs.activationDaa != null ? ' (now ' + fmtInt(db.chain.daa) + ')' : '')] : cs.head === 'Frozen' ? ['bad', 'Frozen: no seed, no buys'] : cs.head === 'Dormant' ? ['bad', 'Dormant: register again'] : ['', cs.head];
-    const trade = m && m.seeded && cs && cs.head === 'Active' ? ['ok', 'trading'] : m && m.seeded ? ['warn', 'seeded; buys wait for Active'] : ['', 'not yet'];
+    const seed = !st.lineId ? ['', 'enter a line id'] : rec && rec.notFound ? ['bad', 'no such line'] : !m ? ['', 'reading the market row'] : m.seeded ? ['ok', 'open' + (m.seedSompi != null ? ': ' + fmtMsk(m.seedSompi, 0) + ' MSK locked' : '')] : ['warn', 'not open'];
+    const appr = !st.id ? ['', 'enter a class id'] : !cs ? (f && f.exists === false ? ['bad', 'no class'] : ['', 'status not answered']) : cs.head === 'Active' ? ['ok', 'Active: the store is open'] : cs.head === 'Registered' ? ['warn', 'Registered, activates at DAA ' + (cs.activationDaa != null ? fmtInt(cs.activationDaa) : '(not served)') + (db.chain.daa != null && cs.activationDaa != null ? ' (now ' + fmtInt(db.chain.daa) + ')' : '')] : cs.head === 'Frozen' ? ['bad', 'Frozen: no opening, no joins'] : cs.head === 'Dormant' ? ['bad', 'Dormant: register again'] : ['', cs.head];
+    const trade = m && m.seeded && cs && cs.head === 'Active' ? ['ok', 'open to members'] : m && m.seeded ? ['warn', 'open; joins wait for Active'] : ['', 'not yet'];
     return { reg, seed, appr, trade, f, rec, m, cs };
   }
   function renderSteps() {
@@ -2233,11 +2288,11 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \\
         </div>
       </li>
       <li class="step">
-        <div class="step-h"><span class="n">2</span><b>Seed the pair</b> ${stepTag(...s.seed)}</div>
+        <div class="step-h"><span class="n">2</span><b>Open the store</b> ${stepTag(...s.seed)}</div>
         <div class="step-b">
-          <p class="small">The pair is made by locking at least <b>${fmtMsk(seedMin, 0)} MSK</b> into the line. The whole seed becomes the reserve, fee-free and for good; the seeder gets no position; ${fmtPos(supplyFor(m))} whole positions open in the curve at a first price of seed / ${fmtPos(supplyFor(m))}. A class still waiting for its activation takes a seed; its buys wait for Active. From a bond instead of a wallet: <code>misaka palw model-seed --line &lt;line id&gt; --msk ${fmtScaled(seedMin, 8, 0)} --key-file &lt;seed&gt; --yes</code>.</p>
+          <p class="small">A store opens by locking at least <b>${fmtMsk(seedMin, 0)} MSK</b> into the line. The whole deposit becomes the buy-back reserve, fee-free and for good; whoever pays it gets <b>no membership and nothing back</b>; ${fmtPos(supplyFor(m))} memberships open at a first price of deposit / ${fmtPos(supplyFor(m))}. A class still waiting for its activation can be opened; its first members wait for Active. From a bond instead of a wallet: <code>misaka palw model-seed --line &lt;line id&gt; --msk ${fmtScaled(seedMin, 8, 0)} --key-file &lt;seed&gt; --yes</code>.</p>
           <div class="add-id">
-            <label for="addLine" class="muted small">Line id to seed (defaults to the class id, the founding line)</label>
+            <label for="addLine" class="muted small">Line id to open (defaults to the class id, the founding line)</label>
             <div class="inp-row"><input id="addLine" class="idinp mono" spellcheck="false" autocomplete="off" placeholder="line id, 128 hex" value="${st.lineId}"><button class="btn" id="addLineUse">Use</button></div>
           </div>
           <div class="seed-slot entry" id="seedSlot"></div>
@@ -2246,7 +2301,7 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \\
       <li class="step">
         <div class="step-h"><span class="n">3</span><b>Approval</b> ${stepTag(...s.appr)}</div>
         <div class="step-b">
-          <p class="small">"Approved as a model that earns mining rewards" is the class reaching <b>Active</b> at its activation DAA (a clock: nobody submits it) and its lanes being <b>certified</b> by <code>ClassLaneCertified</code> objects the court grades (ADR-0075; <code>palw-certify drill</code> / <code>bind</code> and <code>misaka palw submit-object</code>, in the runbook above). Nothing on this page can do either. <b>Trading opens when Active</b>; until then a buy is refused (reason 3) and the seed stays. From then on the class also earns: every block it produces escrows a worker reward, and at that claim's <code>Final</code> <b>5 % of it buys from this pair</b> and stays in it (the other 95 % is the miner's) — the price rises with the model's own mining, and nothing is paid out to holders (ADR-0091).</p>
+          <p class="small">"Approved as a model that earns mining rewards" is the class reaching <b>Active</b> at its activation DAA (a clock: nobody submits it) and its lanes being <b>certified</b> by <code>ClassLaneCertified</code> objects the court grades (ADR-0075; <code>palw-certify drill</code> / <code>bind</code> and <code>misaka palw submit-object</code>, in the runbook above). Nothing on this page can do either. <b>The store opens to members when Active</b>; until then a join is refused (reason 3) and the deposit stays. From then on the class also earns: every block it produces escrows a worker reward, and at that claim's <code>Final</code> <b>5 % of it buys memberships back</b> and retires them (the other 95 % is the miner's) — the price rises with the model's own use, and nothing is ever paid out to members (ADR-0091).</p>
           <dl class="kv small">
             <dt>Class status</dt><dd>${cs ? cs.head + (cs.activationDaa != null ? ' (activates at DAA ' + fmtInt(cs.activationDaa) + ')' : '') + (cs.sinceDaa != null ? ' (since DAA ' + fmtInt(cs.sinceDaa) + ')' : '') : '—'}${cs ? raw(' <span class="dim tiny">' + esc(cs.raw === 'registry classRow' ? 'from the registry window' : 'from the wRPC') + '</span>') : ''}</dd>
             <dt>Chain DAA now</dt><dd>${db.chain.daa != null ? fmtInt(db.chain.daa) : '—'}${cs && cs.activationDaa != null && db.chain.daa != null && cs.activationDaa > db.chain.daa ? ' (' + fmtInt(cs.activationDaa - db.chain.daa) + ' to go)' : ''}</dd>
@@ -2257,13 +2312,13 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \\
         </div>
       </li>
       <li class="step">
-        <div class="step-h"><span class="n">4</span><b>Trade</b> ${stepTag(...s.trade)}</div>
+        <div class="step-h"><span class="n">4</span><b>Members</b> ${stepTag(...s.trade)}</div>
         <div class="step-b">
-          <p class="small">Once seeded, the line appears in <a href="#/lines">Models</a> with its seed and price, and buys move the price up the curve; sells move it down and can never drain the reserve under the seed.${st.lineId ? raw(' <a class="btn btn-sm btn-accent" href="#/trade/' + esc(st.lineId) + '">Trade ' + esc(rec ? db.label(rec) : shortId(st.lineId)) + '</a> <a class="btn btn-sm" href="#/line/' + esc(st.lineId) + '">Line page</a>') : ''}</p>
+          <p class="small">Once open, the model appears in <a href="#/lines">Models</a> with its membership price; joining raises it for the next member, leaving lowers it, and no sequence of either can drain the reserve under the opening deposit. The last step is the owner's alone: <b>declare what a membership gets its holders</b> (ADR-0095) — early versions, a private beta, priority in the queue, the developer's room — with <code>misaka palw line-benefits</code>. Until they do, the card on the store page says so and the model is one nobody has promised anything about.${st.lineId ? raw(' <a class="btn btn-sm btn-accent" href="#/store/' + esc(st.lineId) + '">Open ' + esc(rec ? db.label(rec) : shortId(st.lineId)) + '</a> <a class="btn btn-sm" href="#/line/' + esc(st.lineId) + '">Model details</a>') : ''}</p>
           <dl class="kv small">
-            <dt>Price</dt><dd>${m && m.price != null ? fmtPrice(m.price) + ' MSK per position' : m && !m.seeded ? 'none (not seeded)' : '—'}</dd>
-            <dt>Reserve</dt><dd>${m ? fmtMsk(m.mskReserve, 2) + ' MSK' : '—'}</dd>
-            <dt>Positions</dt><dd>${m && !m.legacy ? fmtPos(m.supplyUnits - m.positionUnits) + ' sold of ' + fmtPos(m.supplyUnits) : '—'}</dd>
+            <dt>Membership price</dt><dd>${m && m.price != null ? fmtPrice(m.price) + ' MSK' : m && !m.seeded ? 'none (the store is not open)' : '—'}</dd>
+            <dt>Buy-back reserve</dt><dd>${m ? fmtMsk(m.mskReserve, 2) + ' MSK' : '—'}</dd>
+            <dt>Memberships</dt><dd>${m && !m.legacy ? fmtPos(m.supplyUnits - m.positionUnits) + ' taken of ' + fmtPos(m.supplyUnits) : '—'}</dd>
           </dl>
         </div>
       </li>`.s;
@@ -2277,7 +2332,7 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \\
     if (!st.lineId) { slot.innerHTML = '<div class="empty">Enter a class or line id above.</div>'; return; }
     if (rec && rec.notFound) { slot.innerHTML = h`<div class="empty">The node reports no line ${shortId(st.lineId, 12)} (and no class of that id).</div>`.s; return; }
     if (!m) { slot.innerHTML = '<div class="empty">' + (st.err ? esc(st.err) : 'Reading the market row…') + '</div>'; return; }
-    if (m.seeded) { slot.innerHTML = h`<div class="seeded-box"><span class="tag ok">Seeded</span> ${m.seedSompi != null ? fmtMsk(m.seedSompi) + ' MSK locked' : 'reserve ' + fmtMsk(m.mskReserve) + ' MSK'}${m.seededBy ? raw(' by ' + idCell(m.seededBy, 12).s) : ''} at DAA ${fmtInt(m.openedDaa)} · first price was seed / ${fmtPos(m.supplyUnits)}; price now ${m.price != null ? fmtPrice(m.price) : '—'} MSK. One seed a line: a second is refused.</div>`.s; return; }
+    if (m.seeded) { slot.innerHTML = h`<div class="seeded-box"><span class="tag ok">Open</span> ${m.seedSompi != null ? fmtMsk(m.seedSompi) + ' MSK locked' : 'reserve ' + fmtMsk(m.mskReserve) + ' MSK'}${m.seededBy ? raw(' by ' + idCell(m.seededBy, 12).s) : ''} at DAA ${fmtInt(m.openedDaa)} · the first price was the deposit / ${fmtPos(m.supplyUnits)}; a membership is ${m.price != null ? fmtPrice(m.price) : '—'} MSK now. One opening a line: a second is refused.</div>`.s; return; }
     st.seed.balance = st.balance;
     renderSeedPanel(slot, st.seed, () => db.line(st.lineId), () => { renderSteps(); });
   }
@@ -2317,14 +2372,19 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \\
 // ============================================================================================
 // 12. router, boot, self-test
 // ============================================================================================
-const PAGES = { trade: pageTrade, portfolio: pagePortfolio, lines: pageLines, line: pageLine, leaderboard: pageLeaderboard, add: pageAdd, docs: pageDocs };
+const PAGES = { store: pageStore, portfolio: pagePortfolio, lines: pageLines, line: pageLine, leaderboard: pageLeaderboard, add: pageAdd, docs: pageDocs };
 async function route() {
+  const first = parseHash();
+  // Links printed before the store was called a store still exist, in wallets, chats and the
+  // explorer: the old 'trade' route is this page under its former name, so send it on without a
+  // history entry rather than showing the fallback page for a route nothing serves.
+  if (first.name === 'trade') { location.replace('#/store' + (first.arg ? '/' + first.arg : '')); return; }
   pageState.gen = (pageState.gen || 0) + 1;
   clearPage();
   const { name, arg } = parseHash();
   pageState.name = name; pageState.arg = arg;
   renderNav();
-  const page = PAGES[name] || pageTrade;
+  const page = PAGES[name] || pageStore;
   try { await page(arg); } catch (e) { console.error(e); $('#main').innerHTML = h`<div class="panel"><div class="empty">This page failed to render: ${e.message}</div></div>`.s; }
   if (SELFTEST) { const box = document.createElement('pre'); box.className = 'selftest'; box.textContent = selfTestReport(); $('#main').prepend(box); }
 }
