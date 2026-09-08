@@ -30,6 +30,8 @@ version is a new class" is narrowed to a new *graph*; new weights are a new *ver
 and the market stays); ADR-0056 Decision 6's admission clause ("an attempt whose `artifact_root`
 differs is admission-rejected") becomes "differs from every root in force for the class".
 
+> **Amended (2026-09-07, design).** [0095](0095-a-position-is-a-membership-not-an-income.md) makes a position in a line a **membership**: the line's *owner* declares up to eight tiers by held units over a grant set the chain closes, and the fold then refuses a promotion before the declared lead has passed and refuses a straight-to-current publish while a lead stands — so Decision 2's version paths gain two refusals and Decision 12's rows gain the declaration. **A line is not a company and a position in it is not a share of one: see [0087 §0](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md#0-a-position-is-not-a-share--it-is-how-a-models-usefulness-is-held), which is the canonical statement, and §2.1 below for what it means for a line.**
+
 ## 0. The sentence this ADR is
 
 A class is its graph and keeps it; it is the unit of work, share, certification and the court,
@@ -39,6 +41,14 @@ as often as it likes; nothing is examined and nothing is voted. The chain keeps 
 counts how each is used, records what the developer and anyone else *declare* about it, and
 prices the line on ADR-0087's curve. Learning is one team's; research is open (a proposal is a
 record, and adopting it pays); competition is between lines; the judge is the market.
+
+**And the market is a market in a model's usefulness, not in a company.** A line has an owner,
+but the owner is a publisher of weights, not an issuer; a position in a line is not a share of
+the owner's business, buys no income, no vote and no claim on anybody, and what it does buy is a
+service from that line — the next version early, the private beta, the queue, the developer's
+room — with the price moved only by the model actually being used. §2.1 states that in full, and
+[0087 §0](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md#0-a-position-is-not-a-share--it-is-how-a-models-usefulness-is-held)
+is the canonical version for the whole design.
 
 ## 1. What exists, and the wall this ADR goes through
 
@@ -116,6 +126,53 @@ And what makes strengthening *easy*, which the operator asked for beyond the lis
 * **Competition on one architecture.** More than one line may live on one class — Developer B
   founds `QWEN-B` on the same graph as Developer A's `QWEN-A` — and the market compares them.
   The class's share and cadence are the class's; a block is a block whichever line's root it ran.
+
+### 2.1 A line is not a company, and its position is not a share of one
+
+The operator's ⑥ and ⑦ above — "the position is priced", "the AMM discovers the price" — are the
+two steps most easily misread, so this ADR says plainly what a line's position is. The canonical
+statement is [0087 §0](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md#0-a-position-is-not-a-share--it-is-how-a-models-usefulness-is-held);
+what follows is what it means once the market is keyed by a *line* rather than a class.
+
+* **A line's owner is a publisher, not an issuer.** "1 アドレス = 1 モデル開発主体" makes the
+  owner the one address that may publish versions of this model. It does not make the owner a
+  company that sold something: the owner receives no proceeds from a position — a buy's net leg
+  goes into the pair's reserve, never to a person (0087 Decisions 3 and 4) — and owes a holder
+  nothing the fold does not itself enforce. The owner's only income from the market is the 1 % leg of
+  each trade (Decision 8), **paid by the trader for the work of keeping the line alive**, not out
+  of any holder's return, and it stops the day the line stops trading.
+* **The seed is not capital, and nobody subscribed to it.** A market opens because somebody locked
+  at least 100,000 MSK into the pair for good ([0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)
+  Decision 2, accumulated over as many transactions as it takes —
+  [0094](0094-a-seed-is-paid-in-as-many-transactions-as-it-takes.md)). The seeder gets no position
+  for it and can never take it back. It is the pair's floor, not a share issue, and there is no
+  raise, no round, no allocation and no register of subscribers anywhere in this design.
+* **What is bought is the model's use, and a service on top of it.** A line's position is the
+  place where the model's own usefulness is held: every claim that ran this line is attributed to
+  it (Decision 4), and five percent of the worker reward that use earned buys the line's pair and
+  retires what it buys ([0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)). On top of
+  that, [0095](0095-a-position-is-a-membership-not-an-income.md) lets the line declare what its
+  holders get — the next version's artifact before it may be promoted, the private beta, priority
+  in the queue, experimental modes, the developer's room — from a set the fold closes, in which
+  **there is no bit that pays**. A holder buys access to what the model can do, and never a share
+  of what anyone earns.
+* **Competition between lines is competition between products, not between issuers.** Two lines
+  may live on one class (Developer B's `QWEN-B` beside Developer A's `QWEN-A`) and the market
+  compares them on usage the fold counted and on service the fold can check. Nothing here is a
+  claim on either developer's business; a line that stops shipping simply stops granting anything
+  ([0095](0095-a-position-is-a-membership-not-an-income.md) §4.6), on its own, with nobody filing
+  anything.
+* **The registry's rows are provenance, not a prospectus.** The weights hash, the runtime hash,
+  the dataset commitment, the training config, the evaluations and the usage counts exist so a
+  user can tell which bytes they are running and how much the network ran them. Where a row is a
+  *declaration* the chain labels it as declared (Decision 5) and never endorses it; nothing in the
+  registry is an offer, a projection, a forecast or a promise of a price, and no reader — the
+  explorer, the wallet, misakaoptions.com — may present it as one.
+
+**Words.** These are **positions** in a **line**, held by **holders**, conferring a **membership**;
+never *shares*, *stock*, *equity*, *securities*, *dividends*, *investors*, *株*, *株式*, *配当* or
+*出資*. As in 0087, this section states the design's properties, each checkable against the fold;
+whether they satisfy a given jurisdiction's definition is counsel's question, not this ADR's.
 
 ## 3. Decisions
 
@@ -231,6 +288,12 @@ ADR-0087's `model_markets` and `model_positions` are keyed by `line_id`; `ModelB
 objects). For a class with only its founding line every value is identical to ADR-0087 as
 written. A buy on a non-founding line requires the line to exist and be Active; a sell never
 requires anything but the units. Each line gets its own facade address on the EVM (ADR-0089).
+
+Keying the market by a line changes what a position is *about* and nothing about what it is:
+the thing priced is one publisher's model rather than a bare graph, and it is still bought from
+the curve and sold back to it, still untransferable, still owed nothing by anyone. **A position
+in `QWEN-A` is not a share of the entity that publishes `QWEN-A`** — it is a membership in that
+line and a place in its usefulness, and §2.1 is where this ADR says so.
 
 **Decision 10 — State, and no root bump.** New collections: `model_lines: BTreeMap<Hash64,
 PalwModelLineV1>`, `model_versions: BTreeMap<(Hash64, u32), PalwModelVersionV1>` (the last

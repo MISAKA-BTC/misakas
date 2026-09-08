@@ -9,7 +9,7 @@ transfer between holders**, so that a position is never something one person han
 The operator's word is *position* (ポジション), not *share*: it is bought from the protocol's
 curve and sold back to it, and that is the whole of what it is.
 
-> **Amended a fourth time (2026-09-07, design).** [0095](0095-a-position-is-a-membership-not-an-income.md): a position stops granting nothing. It still buys no income, no weight and no vote — ADR-0091 settled that — but it now carries whatever its LINE has declared for its holders: a new version's artifact before the promotion, the private beta, priority in the queue, experimental modes, the developer's room. The grant set is closed and contains nothing that pays; the chain proves the holding and publishes the promise, and the serving stays with whoever serves.
+> **Amended a fourth time (2026-09-07, design).** [0095](0095-a-position-is-a-membership-not-an-income.md): a position stops granting nothing. It still buys no income, no weight and no vote — ADR-0091 settled that — but it now carries whatever its LINE has declared for its holders: a new version's artifact before the promotion, the private beta, priority in the queue, experimental modes, the developer's room. The grant set is closed and contains nothing that pays; the chain proves the holding and publishes the promise, and the serving stays with whoever serves. **§0 below is the canonical statement of what a position is and is not, and is the section to quote when anyone reads this market as shares.**
 
 > **Amended a third time (2026-09-06, design first).** [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) adds the chain's own move to Decision 3: at a claim's `Final`, five percent of its escrowed worker reward buys from the pair of the line the claim ran, the positions the curve gives up are retired (the chain's, for good — M1 counts them), no leg is taken (Decision 4), and the miner is named the other ninety-five percent; nothing is ever distributed to a holder. Decision 8's row gains `buyback_sompi` and `retired_units`.
 >
@@ -25,6 +25,82 @@ curve and sold back to it, and that is the whole of what it is.
 > two doors to Decision 3's two moves and three read precompiles plus a per-class MRC-20 facade to
 > Decision 8; §1's "an optional, non-default feature" is stale — the lane is a default build since
 > 2026-08-21. Map: [`README.md`](README.md).
+
+## 0. A position is not a share — it is how a model's usefulness is held
+
+**A Model Position is not stock, not equity, not a share of an enterprise, not a security by
+intent, and no surface of this project may present it as one.** There is no company, no issuer,
+no capital raised, no profit, and no person who owes a holder anything. What a position *is*:
+**a fixed, non-transferable place in one model line's pair, the only thing the protocol itself
+ever does to its price being to buy the pair with the reward the model's own use earned, and
+which buys its holder a service from that model's developer** — the
+new version's artifact before it may be promoted, the private beta, the front of the inference
+queue, experimental modes, the developer's room ([0095](0095-a-position-is-a-membership-not-an-income.md)).
+It is the way to hold *the added value of an LLM*: not a claim on someone's earnings, but a
+position in the usefulness of a specific model, priced by how much that model is actually asked
+to do.
+
+This is not a disclaimer bolted on after the design. It is what the rules below already do, and
+every row names the rule, so a reader checks it instead of believing it.
+
+| what a share does | what a position does — and the rule that makes it so |
+|---|---|
+| is issued by a company that owes its holders | **no issuer exists.** A line is a `(class, owner, name)` row and its owner is a *publisher of weights*, not a debtor ([0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md) Decision 1) |
+| pays a dividend out of profit | **nothing is ever paid to a holder.** The fold has no move that pays one; the only MSK a holder ever receives is what the curve pays for a position they themselves sell back ([0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) §0) |
+| is a claim on the enterprise's assets | **a holder has no claim on anything** — not the seed, not the reserve, not the weights, not the owner. The seed is locked for good and is paid back to nobody, not even the one who locked it ([0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md) Decision 2) |
+| carries a vote, a seat, governance | no weight, no vote, no seat, no quorum, no bond (§2, Decision 5); the grant set a line may declare is **closed at the fold** and has no bit for any of them ([0095](0095-a-position-is-a-membership-not-an-income.md) §4.2) |
+| is transferred, lent, pledged, wrapped, scalped | **no transfer object exists**, on either lane. The only way in is to pay the curve and the only way out is to sell back to it; the MRC-20 facade is ERC-20's read half with the curve where its transfer half would be, and `supportsInterface(ERC-20) == false` (Decision 5; [0089](0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md)) |
+| returns the fruits of an issuer's and other people's labour | **nothing is owed to a holder and no work is directed at one.** Miners mine for their own ninety-five percent and users ask the model for their own reasons; the five percent that reaches the pair is a rule of the chain, not somebody's effort on a holder's behalf, and the protocol never supports the price — the operator's own constraint ([0095](0095-a-position-is-a-membership-not-an-income.md) §1) |
+| matures, is redeemed, accrues interest | there is no maturity, no redemption value, no interest, and no promise of any price at any block. A seller is paid exactly what the curve's arithmetic gives at that block, and never more |
+
+### 0.1 How the LLM's added value reaches a position, and there is no second path
+
+Someone asks the model to do something. PALW prices that work and a block is produced with it.
+The block's worker reward is *escrowed, never minted* ([0042](0042-palw-mainnet-candidate-ruleset.md)
+Decision 10). When the claim reaches `Final`, **five percent of that reward buys positions out of
+that line's own pair and the chain retires what it buys, for good**; the miner is named the other
+ninety-five ([0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)). The reserve is
+deeper and the positions are fewer, so the curve pays more for each one that is left.
+
+    a person uses the model  →  PALW prices the work  →  the block escrows the worker reward
+                             →  at Final, 5 % buys this line's pair and the units are retired
+                             →  the curve's price per position rises for everyone equally
+
+Nothing was distributed, nobody was handed anything, and the value arrived **because the model
+was used**. A line nobody uses buys nothing back, however highly anyone speaks of it. That is
+the sense in which a position receives an LLM's added value, and it is the only sense this design
+supports: usage is the input, the pair is the meter, and the price is the reading.
+
+### 0.2 What a holder actually receives is a service, not a return
+
+[ADR-0095](0095-a-position-is-a-membership-not-an-income.md) makes the position a **membership in
+the line**: the artifact of a new version ahead of its promotion — a window the fold *enforces*,
+refusing an early promotion rather than trusting a promise — the private beta, priority in the
+queue, experimental modes, the developer's own room, a served quota, a voice in what ships next,
+and support. The set is closed at the fold and contains **nothing that pays**: no share, no
+rebate, no discount in MSK, no claim on the reserve, and an unknown grant bit is *refused*, not
+stored and ignored. **A grant is a service or it is not a grant.** What is bought is access to
+what the model can do; what is not bought is anyone else's income.
+
+The one place a holder may legitimately be paid MSK by a line is the contributor share of an
+adopted **proposal** ([0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md)
+Decision 8) — pay for work that was adopted, open to holders and non-holders alike, not scaled to
+units and not owed to anyone for holding.
+
+### 0.3 The words, because the words are where the misreading starts
+
+In this repository, in the CLI, in the RPC, in the explorer and on misakaoptions.com these are
+**positions**, held by **holders**, in a **line**, conferring a **membership**. They are never
+*shares*, *stock*, *equity*, *securities*, *dividends*, *yield*, *investors*, *株*, *株式*,
+*配当*, *出資* or *利回り*, and no page, wallet label or release note should render them so. The
+operator's word has been *position* (ポジション) since the first line of this ADR; §0.1 is why
+that word is the accurate one and not a euphemism.
+
+**What this section does not decide.** It states properties the design has and refuses, each one
+checkable against the fold. Whether those properties satisfy a particular jurisdiction's
+definition of a security or of an exchange business is a question for counsel — Decision 5 has
+said so since the first draft, and stating the intent more strongly does not turn it into a
+verdict.
 
 ## 1. What exists, and what a market can therefore see
 
@@ -63,9 +139,16 @@ curve and sold back to it, and that is the whole of what it is.
 A per-class position with a fixed supply, bought from a protocol-owned curve in MSK and sold
 back to it, never moved between holders; every trade burns 5 % of its MSK leg and pays 1 % to
 the class's registrant; the whole is supply-neutral except for the burn; every balance and every
-price is a function of the chain alone. A position grants nothing but the right to sell it back:
-no weight, no vote, no seat, no fee discount, no bond — so its price is exactly the market's
-belief about the model and nothing the protocol adds.
+price is a function of the chain alone. As first written, a position granted nothing but the
+right to sell it back: no weight, no vote, no seat, no fee discount, no bond — so its price is
+exactly the market's belief about the model and nothing the protocol adds. That last clause is
+the requirement's spine and survives every amendment: **the protocol never supports the price,
+never pays a holder and never promises one anything.** What [0095](0095-a-position-is-a-membership-not-an-income.md)
+adds on top of it is a *service* — the line's own membership grants, a closed set with nothing
+that pays in it — and what [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) adds
+underneath it is the model's **use**, buying the pair with the reward the use earned. Neither is
+a return on an enterprise, and neither makes a position a share of one; §0 is the statement of
+that, at length, with the rule behind each clause.
 
 ## 3. Decisions
 
@@ -111,8 +194,16 @@ another, and none that lends, locks, wraps, delegates or pledges them: a positio
 not collateral, not a fee, not a seat, not weight. The only way a position changes hands is
 through the curve, and then it is not the same position but a new balance bought at the
 curve's price. This is the design's answer to the operator's constraint that a position must
-not be something exchanged between persons; whether the design meets a legal definition of an
-exchange business is a question for counsel, and this ADR records the intent, not the verdict.
+not be something exchanged between persons.
+
+Read with §0, this decision is the load-bearing half of "a position is not a share": a thing that
+cannot be handed to another person cannot be placed with investors, cannot be lent or scalped, and
+has no holder register anyone could take over. It is a membership one buys from the protocol and
+returns to the protocol — **a position in a model's usefulness, priced by that model's use** —
+and the closed grant set of [0095](0095-a-position-is-a-membership-not-an-income.md) §4.2 keeps
+it that way as the design grows: a line may declare a service, never a payment. Whether the
+design meets a legal definition of a security or of an exchange business is a question for
+counsel, and this ADR records the intent, not the verdict.
 
 **Decision 6 — the market is a consensus rule, armed by activation, never by regenesis.**
 `palw_model_market: Option<ForkActivation>` on the params; below the activation the objects are
