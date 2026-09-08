@@ -2167,6 +2167,25 @@ function pageDocs() {
     <div class="page-h"><h1>How the model store works</h1></div>
     <p>MISAKA Options is a window onto the MISAKA chain's <b>model store</b>. Every model registered on the chain can open a store; what it sells is a <b>membership</b> in that model — access its developer declares on chain and, where the chain can check it, enforces. The store lives in the chain's PALW state fold; this site reads it through a node's wRPC and the EVM's read precompiles, and sends joins and leaves through the EVM's writer. Nothing on this site is a number of its own: every figure is an RPC reply or the chain's own arithmetic applied to a market row, and a dash means the value is not available.</p>
     <p><b>A membership is not an income.</b> No holder is ever paid, there is no dividend, no rebate, no share of a fee and no claim on the reserve — the chain refuses to store a promise of any of those (ADR-0091, ADR-0095 §4.2). What a membership is worth to you is the access it carries, which the model's owner declares and this site prints on the store page. A membership can also be given back to the store for MSK at whatever the curve then pays, and that number moves. Nothing here supports it.</p>
+    <h2>The words on this page, and the chain's</h2>
+    <p>ADR-0087 §0.3 fixes the nouns for this repository, the CLI, the RPC, the explorer and this
+    site: they are <b>positions</b>, held by <b>holders</b>, in a <b>line</b>, conferring a
+    <b>membership</b>. This page leads with what the membership is <i>for</i>, so it says store,
+    membership, join and leave — and every one of those words carries the chain's own name beside
+    it, because a reader has to be able to find the same row in the explorer:</p>
+    <table><tr><th>this page says</th><th>the chain, the CLI and the ABI say</th></tr>
+      <tr><td>store</td><td>the line's market</td></tr>
+      <tr><td>membership, member</td><td>position, holder (<code>decimals() = 0</code>)</td></tr>
+      <tr><td>join / leave</td><td><code>buy(minUnitsOut)</code> / <code>sell(unitsIn, minMskOutSompi)</code></td></tr>
+      <tr><td>open the store, opening deposit</td><td><code>seed()</code>, the seed</td></tr>
+      <tr><td>buy-back reserve</td><td>the curve's MSK reserve</td></tr></table>
+    <p>What a position is <b>not</b>, and what no page here may call it: a share, stock, equity, a
+    security, a dividend, a yield, an investment in an issuer (株・株式・配当・出資・利回り). There is no
+    company, no issuer, no capital raised, no profit and nobody who owes a holder anything —
+    ADR-0087 §0 states this as the canonical answer and names the rule behind every line of it.
+    A position is a fixed, non-transferable place in one model's pair that buys a service from that
+    model's developer, and the only thing the protocol ever does to its price is buy the pair with
+    the reward <b>the model's own use</b> earned.</p>
     <h2>What a membership gets you</h2>
     <p>A model's owner declares, on chain and signed, what its members get, in <b>tiers</b>: how many memberships each tier asks for, what it carries, and how long you must have held without leaving. The grants come from a closed set the whole network reads one way — early access to a new version's artifact, a private beta, priority in the line's inference queue, experimental modes, the developer's room, a served request allowance, a voice in what ships next, support answered first. <b>There is no bit for money</b>: a grant is a service or the fold refuses it.</p>
     <p>Most of that is the developer's to honour off chain, and this site says so. Two parts are not: while a line declares an early-access lead, <b>the fold refuses to make a new version current inside that window</b>, and it refuses to let one skip the window by publishing straight to current — the exclusivity is arithmetic, not a promise. And a declaration that outlives its own cadence or its expiry <b>lapses on its own</b>, with no complaint filed by anyone, and the card then says LAPSED. A weakening or a withdrawal takes effect only after notice, so a member can see what they are about to lose while there is still time to leave (ADR-0095).</p>
