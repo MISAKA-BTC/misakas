@@ -71,13 +71,22 @@ pub enum DepositClaimValidationError {
     /// `pov_daa ≥ refund_timeout` — the lock now belongs to the refund path
     /// (AC-2 exclusivity). Terminal (it only ages further out of the claim window).
     RefundWindowOpen,
+    /// The lock carries more than the bridge's per-move cap. Terminal: the amount is
+    /// the lock's, and no amount of waiting shrinks it. Only past the caps fence.
+    OverPerMoveCap { amount: u64, cap: u64 },
+    /// The lock has not settled for `BRIDGE_MIN_CONFIRMATIONS_DAA` yet.
+    ///
+    /// **Retryable, and it is the only new one that is** — this claim is not wrong, it is
+    /// early, and the very next thing that happens to it is that it becomes eligible. Evicting
+    /// it would silently drop every legitimate deposit made inside the settlement window.
+    NotConfirmedYet { lock_daa: u64, pov_daa: u64, required: u64 },
 }
 
 impl DepositClaimValidationError {
     /// Only the absent/spent miss is transient (retain + retry the queued claim);
     /// every other reason is terminal — the claim can never execute, so evict it.
     pub fn is_retryable(self) -> bool {
-        matches!(self, DepositClaimValidationError::AbsentOrSpent)
+        matches!(self, DepositClaimValidationError::AbsentOrSpent | DepositClaimValidationError::NotConfirmedYet { .. })
     }
 }
 
@@ -87,10 +96,15 @@ impl DepositClaimValidationError {
 /// producer template path so they agree byte-for-byte. Returns the consumed lock
 /// entry on success. Pure + always compiled (the lock parses via kaspa-txscript;
 /// no revm).
+///
+/// `caps_active` is `Params::are_evm_bridge_caps_active` at the ACCEPTING block's DAA. Passed in
+/// rather than read here, because this function is the one place the producer and the verifier
+/// agree, and a fence each of them resolved for itself is a fence they can resolve differently.
 pub fn validate_one_deposit_claim(
     claim: &kaspa_consensus_core::evm::DepositClaim,
     entry: Option<kaspa_consensus_core::tx::UtxoEntry>,
     pov_daa_score: u64,
+    caps_active: bool,
 ) -> Result<kaspa_consensus_core::tx::UtxoEntry, DepositClaimValidationError> {
     use DepositClaimValidationError as E;
     let entry = entry.ok_or(E::AbsentOrSpent)?;
@@ -112,6 +126,24 @@ pub fn validate_one_deposit_claim(
     if pov_daa_score >= lock.timeout_daa_score {
         return Err(E::RefundWindowOpen);
     }
+    if caps_active {
+        // **The per-move cap, and the settlement the credit is made against.**
+        //
+        // The cap is checked on the LOCK's value rather than on what is credited, because the
+        // credit is `amount − tip` and a tip is chosen by the depositor: capping the credit would
+        // let a large tip carry an arbitrarily large lock across.
+        //
+        // The settlement rule reads the entry's own `block_daa_score` — where the lock actually
+        // landed — against the accepting block's. Without it, an EVM balance is credited against
+        // a UTXO a reorg can still take back, and the EVM side does not revert.
+        if claim.amount_sompi > kaspa_consensus_core::evm::BRIDGE_MAX_PER_TX_SOMPI {
+            return Err(E::OverPerMoveCap { amount: claim.amount_sompi, cap: kaspa_consensus_core::evm::BRIDGE_MAX_PER_TX_SOMPI });
+        }
+        let required = kaspa_consensus_core::evm::BRIDGE_MIN_CONFIRMATIONS_DAA;
+        if pov_daa_score.saturating_sub(entry.block_daa_score) < required {
+            return Err(E::NotConfirmedYet { lock_daa: entry.block_daa_score, pov_daa: pov_daa_score, required });
+        }
+    }
     Ok(entry)
 }
 
@@ -128,6 +160,7 @@ pub fn validate_evm_deposit_claims<V: kaspa_consensus_core::utxo::utxo_view::Utx
     payload: &kaspa_consensus_core::evm::EvmExecutionPayload,
     claim_view: &V,
     pov_daa_score: u64,
+    caps_active: bool,
 ) -> Result<Vec<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)>, String> {
     use kaspa_consensus_core::evm::EvmSystemOp;
     let mut consumed = Vec::with_capacity(payload.system_ops.len());
@@ -139,7 +172,7 @@ pub fn validate_evm_deposit_claims<V: kaspa_consensus_core::utxo::utxo_view::Utx
         if !seen.insert(claim.deposit_outpoint) {
             return Err(format!("system op #{i}: duplicate deposit-lock outpoint {}", claim.deposit_outpoint));
         }
-        match validate_one_deposit_claim(claim, claim_view.get(&claim.deposit_outpoint), pov_daa_score) {
+        match validate_one_deposit_claim(claim, claim_view.get(&claim.deposit_outpoint), pov_daa_score, caps_active) {
             Ok(entry) => consumed.push((claim.deposit_outpoint, entry)),
             Err(e) => return Err(format!("system op #{i}: deposit lock {} {e:?}", claim.deposit_outpoint)),
         }
@@ -176,6 +209,7 @@ pub fn prepare_deposit_claims<V: kaspa_consensus_core::utxo::utxo_view::UtxoView
     system_ops: &[kaspa_consensus_core::evm::DepositClaim],
     claim_view: &V,
     pov_daa_score: u64,
+    caps_active: bool,
 ) -> PreparedDepositClaims {
     use kaspa_consensus_core::block::EvmClaimStaleKind;
     let cap = kaspa_consensus_core::evm::MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK;
@@ -190,7 +224,7 @@ pub fn prepare_deposit_claims<V: kaspa_consensus_core::utxo::utxo_view::UtxoView
             // Duplicate within this selection — drop from this template only; keep the queue entry.
             continue;
         }
-        match validate_one_deposit_claim(claim, claim_view.get(&claim.deposit_outpoint), pov_daa_score) {
+        match validate_one_deposit_claim(claim, claim_view.get(&claim.deposit_outpoint), pov_daa_score, caps_active) {
             Ok(entry) => {
                 prepared.accepted.push(claim.clone());
                 prepared.consumed_locks.push((claim.deposit_outpoint, entry));
@@ -270,12 +304,21 @@ pub fn validate_evm_market_settlements(
     Ok(())
 }
 
+/// `caps_active` is `Params::are_evm_bridge_caps_active` at this block's DAA — the same fence the
+/// deposit side reads, resolved once by the caller so the two halves of the bridge cannot disagree
+/// about whether the limits are in force.
+///
+/// **This is where a withdrawal's value limit belongs**, and not in the F002 handler: F002 is
+/// reachable from an inner contract frame, so a single signed transaction routed through a
+/// contract can emit withdrawals the top-level call never named. Everything that materializes
+/// passes through here, whatever emitted it.
 pub fn apply_evm_bridge_effects(
     diff: &mut kaspa_consensus_core::utxo::utxo_diff::UtxoDiff,
     multiset: &mut kaspa_muhash::MuHash,
     pov_daa_score: u64,
     consumed_locks: &[(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)],
     withdrawals: &[kaspa_consensus_core::evm::WithdrawOp],
+    caps_active: bool,
 ) -> Result<(), String> {
     use kaspa_consensus_core::muhash::MuHashExtensions;
     for (outpoint, entry) in consumed_locks {
@@ -290,6 +333,15 @@ pub fn apply_evm_bridge_effects(
         // mint a zero-value or oversized-script synthetic UTXO into the committed set.
         if w.amount_sompi == 0 {
             return Err(format!("withdrawal op (evm_tx {:?}, op {}) has zero amount", w.evm_tx_hash, w.op_index));
+        }
+        if caps_active && w.amount_sompi > kaspa_consensus_core::evm::BRIDGE_MAX_PER_TX_SOMPI {
+            return Err(format!(
+                "withdrawal op (evm_tx {:?}, op {}) carries {} sompi and the per-move bridge cap is {}",
+                w.evm_tx_hash,
+                w.op_index,
+                w.amount_sompi,
+                kaspa_consensus_core::evm::BRIDGE_MAX_PER_TX_SOMPI
+            ));
         }
         if w.script_public_key.script().len() > kaspa_consensus_core::evm::MAX_WITHDRAW_SCRIPT_BYTES {
             return Err(format!(
@@ -2763,6 +2815,84 @@ mod bridge_tests {
         DepositClaim { deposit_outpoint: op, evm_address: EvmAddress::from_bytes(addr), amount_sompi: amount, claim_tip_sompi: tip }
     }
 
+    // ---- the bridge's value limits (operator decision 2026-09-10) ----
+
+    /// **The fence is the whole compatibility story, so it is what gets pinned first.** Below it a
+    /// claim that the new rules would refuse must still be ACCEPTED, byte-identically — otherwise a
+    /// running chain's own history stops validating the moment a node upgrades, which is the
+    /// failure this repository's activation doctrine exists to prevent.
+    #[test]
+    fn below_the_fence_the_bridge_is_exactly_what_it_was() {
+        use kaspa_consensus_core::evm::BRIDGE_MAX_PER_TX_SOMPI;
+        let addr = [0xCC; 20];
+        let op = outpoint(1);
+        let over = BRIDGE_MAX_PER_TX_SOMPI + 1;
+        let mut view = UtxoCollection::default();
+        // Over the per-move cap AND zero settlement: both new rules would refuse it.
+        view.insert(op, UtxoEntry::new(over, lock_spk(addr, u64::MAX, 0), 999, false));
+        let view = MapView(view);
+        assert!(
+            validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, over, 0)]), &view, 999, false).is_ok(),
+            "an un-fenced chain must keep accepting what it accepted yesterday"
+        );
+    }
+
+    /// Past the fence, the per-move cap binds — and binds on the LOCK's value, not on what is
+    /// credited. Capping the credit (`amount − tip`) would let a large tip carry an arbitrarily
+    /// large lock across, since the depositor chooses the tip.
+    #[test]
+    fn the_per_move_cap_binds_on_the_locked_amount_not_the_credit() {
+        use kaspa_consensus_core::evm::BRIDGE_MAX_PER_TX_SOMPI as CAP;
+        let addr = [0xCC; 20];
+        let (ok_op, over_op, tipped_op) = (outpoint(1), outpoint(2), outpoint(3));
+        let mut view = UtxoCollection::default();
+        // Deep enough that only the amount is ever in question.
+        view.insert(ok_op, UtxoEntry::new(CAP, lock_spk(addr, u64::MAX, 0), 0, false));
+        view.insert(over_op, UtxoEntry::new(CAP + 1, lock_spk(addr, u64::MAX, 0), 0, false));
+        // A tip that would drag the CREDIT under the cap while the lock is over it.
+        view.insert(tipped_op, UtxoEntry::new(CAP + 1_000, lock_spk(addr, u64::MAX, 2_000), 0, false));
+        let view = MapView(view);
+        assert!(
+            validate_evm_deposit_claims(&claim_payload(vec![claim(ok_op, addr, CAP, 0)]), &view, 1_000, true).is_ok(),
+            "exactly the cap is legal"
+        );
+        assert!(
+            validate_evm_deposit_claims(&claim_payload(vec![claim(over_op, addr, CAP + 1, 0)]), &view, 1_000, true).is_err(),
+            "one sompi over is not"
+        );
+        assert!(
+            validate_evm_deposit_claims(&claim_payload(vec![claim(tipped_op, addr, CAP + 1_000, 2_000)]), &view, 1_000, true).is_err(),
+            "and a tip must not buy a bigger lock across"
+        );
+    }
+
+    /// The settlement rule, on both sides of its edge — and it must be RETRYABLE, because an
+    /// early claim is not a wrong claim. Evicting it would silently drop every legitimate deposit
+    /// made inside the settlement window.
+    #[test]
+    fn a_deposit_must_settle_before_it_is_credited_and_early_is_not_wrong() {
+        use kaspa_consensus_core::evm::BRIDGE_MIN_CONFIRMATIONS_DAA as DEPTH;
+        let addr = [0xCC; 20];
+        let op = outpoint(1);
+        let mut view = UtxoCollection::default();
+        view.insert(op, UtxoEntry::new(500, lock_spk(addr, u64::MAX, 7), 1_000, false));
+        let view = MapView(view);
+        let at = |pov: u64| validate_one_deposit_claim(&claim(op, addr, 500, 7), view.get(&op), pov, true);
+        assert!(matches!(at(1_000 + DEPTH - 1), Err(DepositClaimValidationError::NotConfirmedYet { .. })), "one short is refused");
+        assert!(at(1_000 + DEPTH).is_ok(), "exactly the required depth is enough");
+        assert!(
+            DepositClaimValidationError::NotConfirmedYet { lock_daa: 0, pov_daa: 0, required: DEPTH }.is_retryable(),
+            "an early claim must be retried, never evicted"
+        );
+        // And the lock's own refund window still owns it at the timeout, caps or no caps.
+        let mut late = UtxoCollection::default();
+        late.insert(op, UtxoEntry::new(500, lock_spk(addr, 2_000, 7), 0, false));
+        assert!(matches!(
+            validate_one_deposit_claim(&claim(op, addr, 500, 7), MapView(late).get(&op), 2_000, true),
+            Err(DepositClaimValidationError::RefundWindowOpen)
+        ));
+    }
+
     /// v0.4 §9.2: the full claim-validation matrix — one valid claim passes and
     /// returns the consumed entry; every producer fault is rejected.
     #[test]
@@ -2774,7 +2904,7 @@ mod bridge_tests {
         let view = MapView(view);
 
         // Valid: fields match, pov below the timeout.
-        let consumed = validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7)]), &view, 999).unwrap();
+        let consumed = validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7)]), &view, 999, false).unwrap();
         assert_eq!(consumed.len(), 1);
         assert_eq!(consumed[0].0, op);
         assert_eq!(consumed[0].1.amount, 500);
@@ -2782,22 +2912,23 @@ mod bridge_tests {
         // Faults, each rejected: absent lock / wrong amount / wrong tip /
         // wrong address / claim at-or-after the refund timeout (AC-2) /
         // duplicate outpoint / a non-lock outpoint.
-        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(outpoint(9), addr, 500, 7)]), &view, 999).is_err());
-        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 400, 7)]), &view, 999).is_err());
-        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 8)]), &view, 999).is_err());
-        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, [0xDD; 20], 500, 7)]), &view, 999).is_err());
+        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(outpoint(9), addr, 500, 7)]), &view, 999, false).is_err());
+        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 400, 7)]), &view, 999, false).is_err());
+        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 8)]), &view, 999, false).is_err());
+        assert!(validate_evm_deposit_claims(&claim_payload(vec![claim(op, [0xDD; 20], 500, 7)]), &view, 999, false).is_err());
         assert!(
-            validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7)]), &view, 1_000).is_err(),
+            validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7)]), &view, 1_000, false).is_err(),
             "refund window open"
         );
         assert!(
-            validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7), claim(op, addr, 500, 7)]), &view, 999).is_err(),
+            validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7), claim(op, addr, 500, 7)]), &view, 999, false)
+                .is_err(),
             "duplicate outpoint"
         );
         let mut plain = UtxoCollection::default();
         plain.insert(op, UtxoEntry::new(500, kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[1u8; 64]), 10, false));
         assert!(
-            validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7)]), &MapView(plain), 999).is_err(),
+            validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7)]), &MapView(plain), 999, false).is_err(),
             "not a lock"
         );
     }
@@ -2824,7 +2955,7 @@ mod bridge_tests {
         let mut diff = UtxoDiff::default();
         let mut multiset = MuHash::new();
         let baseline = multiset.clone();
-        apply_evm_bridge_effects(&mut diff, &mut multiset, 42, &[(op, lock_entry.clone())], std::slice::from_ref(&w)).unwrap();
+        apply_evm_bridge_effects(&mut diff, &mut multiset, 42, &[(op, lock_entry.clone())], std::slice::from_ref(&w), false).unwrap();
 
         assert!(diff.remove.contains_key(&op), "the consumed lock leaves the UTXO set via this block's diff");
         // Keyed by the WITHDRAWING TX's hash — pre-mining-stable (a block-hash

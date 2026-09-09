@@ -184,6 +184,170 @@ pub const F002_WITHDRAW_GAS: u64 = 9_000;
 /// commit so the skipped tx's state never commits), implemented + supply-invariant-
 /// tested as a dedicated activation, NOT a rushed change. Inert until activated.
 pub const MAX_WITHDRAWALS_PER_EVM_BLOCK: usize = 256;
+// --- The bridge's value limits (operator decision 2026-09-10). ---
+//
+// **What these bound, and why a per-transaction cap alone would not.**
+//
+// The bridge is the one place where value leaves the rules that made it. A defect anywhere behind
+// the F002 precompile — a contract, the executor, an accounting slip — reaches the UTXO set
+// through `apply_evm_bridge_effects`, and once a synthetic output is in the committed set it is
+// money. So the limits here are not a fee policy or an anti-spam measure; they are a blast radius.
+//
+// Three of them, and each answers a different question:
+//
+// * [`BRIDGE_MAX_PER_TX_SOMPI`] — *how much can one move take?* Bounds a single bad transaction.
+// * [`BRIDGE_MAX_PER_WINDOW_SOMPI`] over [`BRIDGE_WINDOW_DAA`] — *how much can a day take?* Bounds
+//   a bad transaction REPEATED, which the per-move cap does nothing about: without it, a defect
+//   worth 10,000,000 MSK is worth 10,000,000 MSK every block.
+// * [`BRIDGE_MIN_CONFIRMATIONS_DAA`] — *how settled must the money be before it crosses?* A deposit
+//   claimed the instant its lock lands credits an EVM balance against a UTXO a reorg can still
+//   take back.
+//
+// **These are consensus rules, and they have to be.** A limit a producer could decline to apply is
+// not a limit: the next block builder simply builds without it. They are fenced
+// (`Params::evm_bridge_caps_activation_daa_score`) rather than applied from genesis, because a
+// rule that changes what a block means is a fork, and this repository's doctrine is that consensus
+// changes arrive by activation and never by re-genesis.
+
+/// **One move may carry at most 10,000,000 MSK across the bridge**, either direction.
+///
+/// Spelled in sompi against `SOMPI_PER_KASPA`'s scale so the number a person reads and the number
+/// consensus compares are the same arithmetic.
+pub const BRIDGE_MAX_PER_TX_SOMPI: u64 = 10_000_000 * 100_000_000;
+
+/// **The bridge may carry at most 30,000,000 MSK per direction in any 24-hour span.**
+///
+/// Three full-size moves. Deliberately not a large multiple of the per-move cap: the point of the
+/// window is that repeating the largest legal move is itself bounded.
+pub const BRIDGE_MAX_PER_WINDOW_SOMPI: u64 = 30_000_000 * 100_000_000;
+
+/// The window, in DAA score. One DAA per second at the chain's target rate, so 86,400 is a day.
+///
+/// DAA rather than wall-clock, and DAA rather than block count: it is the only monotone,
+/// consensus-agreed clock every validator already computes identically. A timestamp is the
+/// producer's claim about the world; a block count is not comparable across a DAG's parallel
+/// branches.
+pub const BRIDGE_WINDOW_DAA: u64 = 86_400;
+
+/// **A deposit lock must be 100 DAA deep before it may be claimed.**
+///
+/// The operator's "100 blocks", measured in the unit the chain can actually compare. On a DAG a
+/// "block" is not a depth — parallel blocks share a height — so the rule is stated against the DAA
+/// score the accepting block already carries, which is what every validator agrees on.
+///
+/// This composes with, and does not replace, the existing exclusivity rule: a claim is valid only
+/// strictly before the lock's own `timeout_daa_score`, at which point the refund path owns it.
+pub const BRIDGE_MIN_CONFIRMATIONS_DAA: u64 = 100;
+
+/// **The bridge's remaining allowance, as a bucket that refills rather than a window that resets.**
+///
+/// A fixed 24-hour window has a cliff: 30,000,000 MSK may cross in the last second of one window
+/// and another 30,000,000 in the first second of the next, so "30,000,000 per 24h" would in fact
+/// permit 60,000,000 in two seconds. This refills continuously at
+/// `BRIDGE_MAX_PER_WINDOW_SOMPI / BRIDGE_WINDOW_DAA` per DAA and is capped at the full allowance,
+/// so no 24-hour span anywhere on the chain can carry more than the stated maximum. That is the
+/// promise the number is worth making.
+///
+/// One bucket per DIRECTION. Sharing one would let anyone freeze the exit by depositing: a
+/// deposit spree would consume the allowance that legitimate withdrawals need, which turns a
+/// safety limit into a denial-of-service lever.
+///
+/// # SPECIFIED AND TESTED, NOT YET CARRIED BETWEEN BLOCKS
+///
+/// The per-move cap and the settlement rule are enforced today (`validate_one_deposit_claim` and
+/// `apply_evm_bridge_effects`, both past `evm_bridge_caps_activation_daa_score`). **This bucket is
+/// not**, and the reason is where it would have to live: a rolling window needs the allowance
+/// carried from the selected parent, and the only per-block structure the EVM lane already
+/// persists and agrees on is [`EvmExecutionHeader`] — whose borsh layout is the
+/// `evm_commitment_root` preimage. Adding a field to it changes that root for every block, so it
+/// needs a fence-aware preimage (the `write_header_preimage` version-gating precedent), an
+/// executor that fills the field, and both fold paths reading the parent's.
+///
+/// That is a second consensus change, not a detail of this one, and it is left explicit rather
+/// than half-wired: a budget re-defaulted every block would refill completely between blocks and
+/// enforce nothing at all, while reading in the code and on a status page as though it did. An
+/// inert limit that looks live is worse than an absent one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeBudget {
+    /// Allowance left, in sompi, as of `daa_score`.
+    pub remaining_sompi: u64,
+    /// The DAA score this allowance was last measured at.
+    pub daa_score: u64,
+}
+
+impl Default for BridgeBudget {
+    /// A chain that has never bridged starts with the full allowance — the limit is a ceiling on
+    /// what may cross, never a warm-up a new chain has to earn.
+    fn default() -> Self {
+        Self { remaining_sompi: BRIDGE_MAX_PER_WINDOW_SOMPI, daa_score: 0 }
+    }
+}
+
+impl BridgeBudget {
+    /// The allowance at `now_daa`, refilled from `self` but never above the cap.
+    ///
+    /// `now_daa` below `self.daa_score` refills nothing rather than draining: time does not run
+    /// backwards on the selected-parent chain, and a reader that met such a pair should not
+    /// silently invent allowance out of the sign of a subtraction.
+    pub fn refilled_at(&self, now_daa: u64) -> u64 {
+        let elapsed = now_daa.saturating_sub(self.daa_score) as u128;
+        // u128 throughout: the allowance is 3×10^15 sompi and `elapsed` is unbounded, so the
+        // product overflows u64 within a day of DAA. Saturating at the cap makes the width safe
+        // regardless.
+        let refill = elapsed.saturating_mul(BRIDGE_MAX_PER_WINDOW_SOMPI as u128) / (BRIDGE_WINDOW_DAA as u128);
+        let filled = (self.remaining_sompi as u128).saturating_add(refill);
+        filled.min(BRIDGE_MAX_PER_WINDOW_SOMPI as u128) as u64
+    }
+
+    /// Spend `amount` at `now_daa`, or say why it may not be spent.
+    ///
+    /// Returns the budget as it stands afterwards, so the caller stores one value rather than
+    /// re-deriving the refill at every use — two derivations of one number is two chances to
+    /// disagree about a consensus quantity.
+    pub fn spend(&self, now_daa: u64, amount: u64) -> Result<Self, BridgeLimitError> {
+        if amount > BRIDGE_MAX_PER_TX_SOMPI {
+            return Err(BridgeLimitError::OverPerTxCap { amount, cap: BRIDGE_MAX_PER_TX_SOMPI });
+        }
+        let available = self.refilled_at(now_daa);
+        if amount > available {
+            return Err(BridgeLimitError::OverWindowCap { amount, available, window_daa: BRIDGE_WINDOW_DAA });
+        }
+        Ok(Self { remaining_sompi: available - amount, daa_score: now_daa.max(self.daa_score) })
+    }
+}
+
+/// Why a move the bridge was asked to carry may not cross.
+///
+/// Named rather than stringly-typed because each of these is a different operational fact: the
+/// first is one caller asking for too much, the second is the chain having carried too much
+/// lately, and the third is a deposit that is not settled enough to be safe to credit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BridgeLimitError {
+    OverPerTxCap { amount: u64, cap: u64 },
+    OverWindowCap { amount: u64, available: u64, window_daa: u64 },
+    NotConfirmed { lock_daa: u64, pov_daa: u64, required: u64 },
+}
+
+impl std::fmt::Display for BridgeLimitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OverPerTxCap { amount, cap } => {
+                write!(f, "this move carries {amount} sompi and the per-move bridge cap is {cap}")
+            }
+            Self::OverWindowCap { amount, available, window_daa } => write!(
+                f,
+                "this move carries {amount} sompi and the bridge has {available} left in its rolling {window_daa}-DAA allowance"
+            ),
+            Self::NotConfirmed { lock_daa, pov_daa, required } => write!(
+                f,
+                "this deposit lock landed at DAA {lock_daa} and the accepting block is at {pov_daa} — the bridge \
+                 requires {required} DAA of settlement before a lock may be claimed"
+            ),
+        }
+    }
+}
+
 /// Max byte length of the destination `ScriptPublicKey` SCRIPT a withdraw may
 /// name (the standard ML-DSA P2PKH script is 69 bytes; this is a sanity bound,
 /// the class check is the real gate).
@@ -1753,5 +1917,74 @@ mod tests {
         assert!(EvmHistoryMode::Archive.retains_state_history_past_pruning());
         assert!(!EvmHistoryMode::Recent.retains_state_history_past_pruning());
         assert!(!EvmHistoryMode::Head.retains_state_history_past_pruning());
+    }
+
+    // ---- the bridge's value limits ----
+
+    /// The operator's three numbers, spelled as they were given. A limit that drifts from what was
+    /// decided is not the limit anyone agreed to, so the decision itself is what this pins.
+    #[test]
+    fn the_bridge_limits_are_the_numbers_that_were_decided() {
+        assert_eq!(BRIDGE_MAX_PER_TX_SOMPI, 10_000_000 * 100_000_000, "10,000,000 MSK per move");
+        assert_eq!(BRIDGE_MAX_PER_WINDOW_SOMPI, 30_000_000 * 100_000_000, "30,000,000 MSK per 24h");
+        assert_eq!(BRIDGE_WINDOW_DAA, 86_400, "24 hours at one DAA per second");
+        assert_eq!(BRIDGE_MIN_CONFIRMATIONS_DAA, 100, "100 of settlement before a lock may be claimed");
+        // The window must be a whole multiple of the per-move cap, or the last legal move of a
+        // full bucket is rejected for being one sompi over nothing anybody decided.
+        assert_eq!(BRIDGE_MAX_PER_WINDOW_SOMPI % BRIDGE_MAX_PER_TX_SOMPI, 0);
+        assert_eq!(BRIDGE_MAX_PER_WINDOW_SOMPI / BRIDGE_MAX_PER_TX_SOMPI, 3, "three full-size moves a day");
+    }
+
+    /// An off-by-one in a value limit is a hole or a false refusal, so both sides of both edges are
+    /// pinned: the largest legal amount is ACCEPTED and one sompi more is REFUSED.
+    #[test]
+    fn the_caps_are_pinned_on_both_sides_of_their_edge() {
+        let full = BridgeBudget::default();
+        assert!(full.spend(0, BRIDGE_MAX_PER_TX_SOMPI).is_ok(), "the largest legal move must pass");
+        assert_eq!(
+            full.spend(0, BRIDGE_MAX_PER_TX_SOMPI + 1),
+            Err(BridgeLimitError::OverPerTxCap { amount: BRIDGE_MAX_PER_TX_SOMPI + 1, cap: BRIDGE_MAX_PER_TX_SOMPI }),
+            "one sompi over the per-move cap must be refused"
+        );
+        // A drained bucket refuses even one sompi, and says how much it actually has.
+        let drained = BridgeBudget { remaining_sompi: 0, daa_score: 10 };
+        assert!(matches!(drained.spend(10, 1), Err(BridgeLimitError::OverWindowCap { available: 0, .. })));
+    }
+
+    /// **The property the window exists for.** A fixed window would let the full allowance cross at
+    /// the end of one period and again at the start of the next — 60,000,000 MSK in two seconds
+    /// under a rule that says 30,000,000 a day. The refilling bucket must not.
+    #[test]
+    fn no_twenty_four_hour_span_can_carry_more_than_the_allowance() {
+        // Drain it completely, three full-size moves back to back.
+        let mut b = BridgeBudget::default();
+        for _ in 0..3 {
+            b = b.spend(0, BRIDGE_MAX_PER_TX_SOMPI).expect("three full moves fit exactly");
+        }
+        assert_eq!(b.remaining_sompi, 0, "the allowance is exactly three full-size moves");
+        assert!(b.spend(0, 1).is_err(), "and nothing more in the same instant");
+
+        // One second later, one second's worth of refill and no more.
+        let per_daa = BRIDGE_MAX_PER_WINDOW_SOMPI / BRIDGE_WINDOW_DAA;
+        assert_eq!(b.refilled_at(1), per_daa);
+        assert!(b.spend(1, per_daa + 1).is_err(), "a second does not buy back a day");
+
+        // A full window later, exactly the allowance — never more, however long the wait.
+        assert_eq!(b.refilled_at(BRIDGE_WINDOW_DAA), BRIDGE_MAX_PER_WINDOW_SOMPI);
+        assert_eq!(b.refilled_at(BRIDGE_WINDOW_DAA * 1_000), BRIDGE_MAX_PER_WINDOW_SOMPI, "the bucket has a lid");
+        assert_eq!(b.refilled_at(u64::MAX), BRIDGE_MAX_PER_WINDOW_SOMPI, "including at the end of the number line");
+    }
+
+    /// DAA does not run backwards on the selected-parent chain, but a reader handed such a pair
+    /// must not mint allowance out of the sign of a subtraction.
+    #[test]
+    fn time_running_backwards_refills_nothing() {
+        let b = BridgeBudget { remaining_sompi: 5, daa_score: 1_000 };
+        assert_eq!(b.refilled_at(0), 5);
+        assert_eq!(b.refilled_at(999), 5);
+        // And spending at an earlier DAA keeps the later stamp, so the next block cannot be handed
+        // a budget that claims to be younger than the one before it.
+        let after = b.spend(0, 5).expect("what is there is spendable");
+        assert_eq!(after.daa_score, 1_000);
     }
 }
