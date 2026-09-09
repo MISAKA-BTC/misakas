@@ -610,3 +610,14 @@ mapping is written down.
   refused by name for now), `misaka-studiod --check` / `--strict`, and
   `contrib/components/testnet-11.json` as the offline copy pinned to the class table). Tests at
   that point: core 49, runtime 192, integration 10; clippy 0.
+* **2026-09-10, Decision 9's `json` kind** (`a582ba20`): grammar `json/v1` (one JSON value under
+  RFC 8259 strictly, refused by name and never repaired, emitted as RFC 8785 bytes through the
+  constraint crate's canonicalizer — where the RFC's IEEE-754 number rendering lives; the derive
+  crate spells no float) and transformer `json/canonical/v1` (identity over canonical bytes).
+  Two facts the implementation settled: the kind id is **28**, not 8 — `TEXT` already holds 8 in
+  ADR-0078 D9's candidate table and an id is never reused, and the acceptance rule reads
+  `kind != 0` only, so the row is consensus-inert; and the transformer-id pin was re-pinned on
+  purpose, since every byte of `derive/src` is in every transformer id (ADR-0078 D3) — the ids
+  of every shipped kind move with that commit, before any network relies on them. The gateway
+  derives the json kind for a request that set `response_format` and named no `derive`. The
+  schema-bound grammar id `H(json/v1 ‖ constraint_id)` does not exist yet (Part B).
