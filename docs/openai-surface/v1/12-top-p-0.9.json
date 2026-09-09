@@ -10,6 +10,10 @@
   },
   "expect": {
     "verdict": "refused",
-    "reason_contains": "top_p 0.9 is not a rule on this lane"
+    "reason_contains": "top_p 0.9 is not a rule on this lane",
+    "studio": {
+      "verdict": "accepted",
+      "why": "as case 10: the engine's on the Studio, decided after parsing on the lane"
+    }
   }
 }

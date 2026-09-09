@@ -26,6 +26,10 @@
   },
   "expect": {
     "verdict": "refused",
-    "reason_contains": "`$ref` at \"/properties/address\""
+    "reason_contains": "`$ref` at \"/properties/address\"",
+    "studio": {
+      "verdict": "accepted",
+      "why": "the Studio checks response_format for shape only and hands the schema to the engine (Decision 1's table: the engine's); the lane's subset is the gateway's rule, applied when the request reaches it"
+    }
   }
 }

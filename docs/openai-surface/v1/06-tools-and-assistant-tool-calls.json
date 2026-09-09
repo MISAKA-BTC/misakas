@@ -81,6 +81,13 @@
       "messages[].tool_call_id",
       "messages[].tool_calls[].id",
       "parallel_tool_calls"
-    ]
+    ],
+    "studio": {
+      "verdict": "accepted",
+      "ignored_fields": [
+        "parallel_tool_calls"
+      ],
+      "why": "the Studio forwards messages[].tool_calls[].id and tool_call_id to an engine that speaks them; only parallel_tool_calls is a no-effect field there"
+    }
   }
 }

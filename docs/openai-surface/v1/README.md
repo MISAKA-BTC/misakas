@@ -35,3 +35,18 @@ conformance_corpus`, take the new digest from the failure message, update the co
 append the digest to ADR-0096 §9. A case that only passes on an armed network (a temperature on
 `fp_decode_rules`, a committed format on `fp_decode_constraint`) does not belong here — the
 corpus is what every shipped network answers today.
+
+## Where the two entrances differ, by decision
+
+Five cases carry an `expect.studio` object — the verdict the STUDIO's `/v1` gives the same
+request, where ADR-0096 Decision 1's table makes the two entrances differ on purpose: a sampling
+knob is the engine's on the Studio and the lane's on the gateway (cases 10 and 12 — the Studio
+decides after parsing, when the engine is known, and maps or refuses per `node.sampling_policy`,
+Decision 4); `response_format` is shape-checked by the Studio and handed to the engine, while the
+gateway applies the lane's JSON-Schema subset (case 09); `misaka.require_committed_format` is
+refused by the Studio only once the engine is known to be the lane (case 20); and a tool call's
+ids are forwarded to an engine that speaks them rather than listed as no-effect fields (case 06).
+Each override carries a `why`. The gateway's test ignores `expect.studio`; the Studio's test
+prefers it, and where it is absent the two entrances must agree — on the verdict, and on the
+refusal's substring when `expect.studio.reason_contains` is given. Everything else in this
+directory is byte-identical in both trees, and the digest both pin covers the overrides too.

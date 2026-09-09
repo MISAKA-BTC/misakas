@@ -578,7 +578,7 @@ mapping is written down.
   `float_roundtrip` — and `constraint_id` under `misaka-palw/constraint/v1`), `misaka.format`
   served advisory and said so, `require_committed_format` refused before the inference,
   `GET /v1/models`, and the conformance corpus `docs/openai-surface/v1/` (22 cases; directory
-  digest `a884a871e55af023ee0adc84deababa3469826348f4f8e0eff31bc18838cc9ba`, which the Studio's
+  digest `5cdf928859dccdc7e841b6f4f9b01dc75a1080f3705e515ef1793cf6d08d72b9`, which the Studio's
   mirror pins). `ChainFacts::fp_decode_constraint_armed` reads the node's producer facts (wire
   version 7) and nothing else. Two choices to know: the system line created to hold a tool block
   is "You are a helpful assistant." (Qwen2.5's vendor line names Alibaba; Qwen3's writes nothing),

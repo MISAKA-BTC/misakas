@@ -10,6 +10,10 @@
   },
   "expect": {
     "verdict": "refused",
-    "reason_contains": "palw_fp_decode_rules"
+    "reason_contains": "palw_fp_decode_rules",
+    "studio": {
+      "verdict": "accepted",
+      "why": "a sampling knob is the engine's on the Studio's /v1 (Decision 1); on the lane the Studio maps it to greedy WITH NOTICE or refuses per node.sampling_policy (Decision 4), which happens after parsing, when the engine is known"
+    }
   }
 }

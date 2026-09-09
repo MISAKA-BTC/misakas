@@ -1341,7 +1341,7 @@ mod tests {
     /// SHA-256 over the corpus directory: each file's name, a NUL, its bytes, a NUL, in byte-sorted
     /// name order. The Studio pins the same value over its mirrored copy (ADR-0096 invariant 7),
     /// and §9 of the ADR records it; a corpus edit is a change to this constant in BOTH trees.
-    const OPENAI_SURFACE_V1_CORPUS_SHA256: &str = "a884a871e55af023ee0adc84deababa3469826348f4f8e0eff31bc18838cc9ba";
+    const OPENAI_SURFACE_V1_CORPUS_SHA256: &str = "5cdf928859dccdc7e841b6f4f9b01dc75a1080f3705e515ef1793cf6d08d72b9";
 
     /// **ADR-0096 invariant 7.** Every file in `docs/openai-surface/v1/` is one request and the
     /// verdict this surface must give it, decided by the SAME function the route calls — with

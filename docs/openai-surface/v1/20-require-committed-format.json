@@ -15,6 +15,10 @@
   },
   "expect": {
     "verdict": "refused",
-    "reason_contains": "palw_fp_decode_constraint"
+    "reason_contains": "palw_fp_decode_constraint",
+    "studio": {
+      "verdict": "accepted",
+      "why": "the extension is shape-checked at parse time; the refusal by name happens before anything is sent, once the engine is known to be the lane and the chain's fp_decode_constraint_armed is read (gateway.rs)"
+    }
   }
 }
