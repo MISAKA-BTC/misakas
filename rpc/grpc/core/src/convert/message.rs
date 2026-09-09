@@ -412,6 +412,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwProducerFactsResponse>, protowire:
         palw_retention_dir: item.palw_retention_dir.clone(),
         panel_da_armed: item.panel_da_armed,
         prompt_ids_merkle: item.prompt_ids_merkle,
+        fp_decode_constraint_armed: item.fp_decode_constraint_armed,
         error: None,
     }
 });
@@ -1369,6 +1370,7 @@ try_from!(item: &protowire::GetPalwProducerFactsResponseMessage, RpcResult<kaspa
         palw_retention_dir: item.palw_retention_dir.clone(),
         panel_da_armed: item.panel_da_armed,
         prompt_ids_merkle: item.prompt_ids_merkle,
+        fp_decode_constraint_armed: item.fp_decode_constraint_armed,
     }
 });
 try_from!(item: &protowire::GetPalwDerivedArtifactsRequestMessage, kaspa_rpc_core::GetPalwDerivedArtifactsRequest, {
@@ -2008,6 +2010,8 @@ mod palw_producer_facts_tests {
             locked_bond_outpoints: vec![format!("{}:0", "aa".repeat(64)), format!("{}:7", "bb".repeat(64))],
             panel_da_armed: true,
             prompt_ids_merkle: true,
+            // ADR-0096 Decision 8: `true` so the round trip distinguishes carried from defaulted.
+            fp_decode_constraint_armed: true,
             // ADR-0077 Decision 3: what a gateway reads before it commits.
             fp_certified: true,
             fp_quanta_per_canonical_job: 8,
@@ -2051,6 +2055,7 @@ mod palw_producer_facts_tests {
             back.fp_decode_rules_armed,
             "a builder that loses fp_decode_rules_armed builds jobs for the wrong decode ruleset — honest and unreproducible"
         );
+        assert!(back.fp_decode_constraint_armed, "an entrance that loses fp_decode_constraint_armed serves a committed format nobody replays (ADR-0096)");
         assert_eq!(
             back.palw_retention_dir, response.palw_retention_dir,
             "a submitter that loses the retention directory stages a claim's material where the node never looks (ADR-0084)"
