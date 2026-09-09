@@ -584,3 +584,29 @@ mapping is written down.
   is "You are a helpful assistant." (Qwen2.5's vendor line names Alibaba; Qwen3's writes nothing),
   and JSON rendered into the prompt is RFC 8785 so the job id is not a function of the client's
   key order. Not done: the `json` derived kind (Decision 9), and a live-worker run on this host.
+* **2026-09-10, the gateway admits a bond-less identity exactly when it never commits**
+  (`8d3d671c`, `a273d617`): Decision 10's last bullet on the node side — `identity.json` may omit
+  the bond and the key under `--answer-never-commit`, `/health` says `bond: null`; refused by name
+  otherwise, before any inference.
+* **2026-09-10, the Studio (MISAKA-Studio `feat/adr-0096-everyday-lane`)**: `6a7c5d1` + `a3d9975`
+  (UI: the sampling notice, the format badge, the context and job lines, tool calls shown as the
+  JSON the app must run; conversations through the runtime with `localStorage` as the cache and a
+  one-time migration; Export/Import; the Lane settings; "Request a model" — and, measured on the
+  way, the desktop window has no opener, filesystem or dialog capability, so a link is shown with
+  a Copy button and an export goes to the clipboard), `aaac111` (runtime: Decision 1's surface
+  read from one table, tools/tool_choice/response_format forwarded to a child engine and to the
+  lane, `node.sampling_policy` with `misaka.sampling`, `require_committed_format` refused before
+  anything is sent, the summary job and the continue legs with `misaka.jobs[]` and
+  `misaka.context`, the record keeps `misaka`; conversations as one JSON file each under the data
+  directory with import from the Studio's export, the window's cache, OpenAI's
+  `conversations.json` along `current_node`, or a generic list; the model-request URL),
+  `7a5a31f` (README), `bf98e7a` (invariant 7: `testdata/openai-surface/v1` mirrors this tree's
+  corpus byte for byte and pins the same digest), `01dfc05` (Decisions 10 and 11: every backend's
+  `RuntimeFingerprint` from what its constructor stored, the rebuild predicate over routing
+  inputs and fingerprints with a 61-leaf × 5-kind table test, `GET /api/v1/settings/effective`;
+  `components.rs` as the one search order with the four spellings reduced to wrappers and pinned
+  by a source test, the `misaka/components/v1` reader mirrored rule for rule, `GET
+  /api/v1/components`, `POST …/install` through the verifying download manager (archive members
+  refused by name for now), `misaka-studiod --check` / `--strict`, and
+  `contrib/components/testnet-11.json` as the offline copy pinned to the class table). Tests at
+  that point: core 49, runtime 192, integration 10; clippy 0.
