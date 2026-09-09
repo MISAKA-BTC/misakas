@@ -640,6 +640,10 @@ pub struct VirtualStateProcessor {
     // they survive). Node-local — never affects block validity or any commitment.
     pub(super) evm_history_mode: kaspa_consensus_core::evm::EvmHistoryMode,
     pub(super) evm_activation_daa_score: u64,
+    /// The bridge's value-limit fence, copied in beside its sibling for the same reason: the
+    /// processor resolves a fence against a DAA score many times per block and must not reach
+    /// through a config each time.
+    pub(super) evm_bridge_caps_activation_daa_score: u64,
     // These activation-score fields are only read by the `#[cfg(feature = "evm")]` chain-context
     // path; without that feature the pre-existing dead-code lint fires (allowed to unblock the gate).
     #[cfg_attr(not(feature = "evm"), allow(dead_code))]
@@ -956,6 +960,7 @@ impl VirtualStateProcessor {
             evm_bridge_devnet_unpaused,
             evm_history_mode,
             evm_activation_daa_score: params.evm_activation_daa_score,
+            evm_bridge_caps_activation_daa_score: params.evm_bridge_caps_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: params.evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score: params.evm_f002_withdraw_cap_activation_daa_score,
             evm_f003_mldsa_verify_activation_daa_score: params.evm_f003_mldsa_verify_activation_daa_score,
@@ -1944,7 +1949,12 @@ impl VirtualStateProcessor {
         // not visible). Any violation is an accepting-producer fault.
         let consumed_locks = {
             let claim_view = selected_parent_utxo_view.compose(&ctx.mergeset_diff);
-            validate_evm_deposit_claims(&own_payload, &claim_view, header.daa_score)?
+            validate_evm_deposit_claims(
+                &own_payload,
+                &claim_view,
+                header.daa_score,
+                header.daa_score >= self.evm_bridge_caps_activation_daa_score,
+            )?
         };
         // ADR-0089 Decisions 2, 6 and 9: the window (the selected parent's fold rows), the
         // settlements this block must carry (the ones that fold decided), and the fences at
@@ -2084,6 +2094,7 @@ impl VirtualStateProcessor {
             header.daa_score,
             &consumed_locks,
             &staged.result.withdrawals,
+            header.daa_score >= self.evm_bridge_caps_activation_daa_score,
         )?;
         // ADR-0089 Decision 6: the settlements' sink outputs, into THIS block's diff, keyed by the
         // block whose fold decided them (the selected parent).
@@ -2625,6 +2636,7 @@ impl VirtualStateProcessor {
                 header.daa_score,
                 &consumed_locks,
                 &result.withdrawals,
+                header.daa_score >= self.evm_bridge_caps_activation_daa_score,
             )
             .expect("template bridge effects mirror validation on already-validated inputs");
             crate::processes::evm::apply_evm_market_effects(
@@ -13038,8 +13050,12 @@ impl VirtualStateProcessor {
             }
             kaspa_consensus_core::evm::EvmTemplateData::default()
         };
-        let prepared_claims =
-            crate::processes::evm::prepare_deposit_claims(&evm_template_data.system_ops, virtual_utxo_view, virtual_state.daa_score);
+        let prepared_claims = crate::processes::evm::prepare_deposit_claims(
+            &evm_template_data.system_ops,
+            virtual_utxo_view,
+            virtual_state.daa_score,
+            virtual_state.daa_score >= self.evm_bridge_caps_activation_daa_score,
+        );
 
         // At this point we can safely drop the read lock
         drop(virtual_read);

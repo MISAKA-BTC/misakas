@@ -1548,6 +1548,18 @@ pub struct Params {
     /// activating it is a coordinated deploy.
     pub evm_f002_withdraw_cap_activation_daa_score: u64,
 
+    /// **DAA score at/after which the bridge's value limits bind** (operator decision 2026-09-10):
+    /// at most `BRIDGE_MAX_PER_TX_SOMPI` per move, at most `BRIDGE_MAX_PER_WINDOW_SOMPI` per
+    /// direction in any rolling `BRIDGE_WINDOW_DAA`, and `BRIDGE_MIN_CONFIRMATIONS_DAA` of
+    /// settlement before a deposit lock may be claimed. `u64::MAX` ⇒ inert (the bridge carries
+    /// what it carries today, execution byte-identical).
+    ///
+    /// Fenced rather than applied from genesis for the reason the whole family above is: these
+    /// change what a block MEANS, and a chain that already has history cannot be handed a new
+    /// meaning retroactively — its own past blocks would stop validating. Activating it is a
+    /// coordinated deploy, exactly as `evm_gas_pool_v2` and the F002 cap are.
+    pub evm_bridge_caps_activation_daa_score: u64,
+
     /// PREA v1.1 §9 / P0-1: DAA score at/after which the F003 `MLDSA87_VERIFY`
     /// precompile (`MISAKA_MLDSA_VERIFY_PRECOMPILE`) is REGISTERED. `u64::MAX` ⇒
     /// inert (handler not registered, a call to `0x…F003` behaves as a call to an
@@ -3212,6 +3224,7 @@ impl Params {
             evm_activation_daa_score: _,
             evm_gas_pool_v2_activation_daa_score: _,
             evm_f002_withdraw_cap_activation_daa_score: _,
+            evm_bridge_caps_activation_daa_score: _,
             evm_f003_mldsa_verify_activation_daa_score: _,
             evm_typed_receipt_root_activation_daa_score: _,
         } = self;
@@ -3550,6 +3563,7 @@ impl Params {
             evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score,
+            evm_bridge_caps_activation_daa_score,
             evm_f003_mldsa_verify_activation_daa_score,
             evm_typed_receipt_root_activation_daa_score,
         } = self;
@@ -3562,6 +3576,7 @@ impl Params {
         visit(evm_activation_daa_score);
         visit(evm_gas_pool_v2_activation_daa_score);
         visit(evm_f002_withdraw_cap_activation_daa_score);
+        visit(evm_bridge_caps_activation_daa_score);
         visit(evm_f003_mldsa_verify_activation_daa_score);
         visit(evm_typed_receipt_root_activation_daa_score);
 
@@ -4062,6 +4077,7 @@ impl Params {
             evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score,
+            evm_bridge_caps_activation_daa_score,
             evm_f003_mldsa_verify_activation_daa_score,
             evm_typed_receipt_root_activation_daa_score,
         } = self;
@@ -4126,6 +4142,7 @@ impl Params {
         h.write(evm_activation_daa_score.to_le_bytes());
         h.write(evm_gas_pool_v2_activation_daa_score.to_le_bytes());
         h.write(evm_f002_withdraw_cap_activation_daa_score.to_le_bytes());
+        h.write(evm_bridge_caps_activation_daa_score.to_le_bytes());
         h.write(evm_f003_mldsa_verify_activation_daa_score.to_le_bytes());
         h.write(evm_typed_receipt_root_activation_daa_score.to_le_bytes());
 
@@ -4448,6 +4465,17 @@ impl Params {
         daa_score >= self.evm_activation_daa_score
     }
 
+    /// **`true` when the bridge's value limits bind at `daa_score`.**
+    ///
+    /// Below the fence (the default `u64::MAX`) the bridge is uncapped and unconfirmed exactly as
+    /// it is today, and every block validates byte-identically — which is the property that lets a
+    /// running chain adopt this rule at a height instead of by re-minting.
+    #[inline]
+    #[must_use]
+    pub fn are_evm_bridge_caps_active(&self, daa_score: u64) -> bool {
+        daa_score >= self.evm_bridge_caps_activation_daa_score
+    }
+
     /// kaspa-pq EVM Lane: `true` when the gas-pool v2 executor (the liveness fix) is
     /// active at `daa_score`. Below the fence (the default `u64::MAX`) the v1 strict
     /// declared-gas prefix-take executes. See `evm_gas_pool_v2_activation_daa_score`.
@@ -4707,6 +4735,7 @@ impl Params {
             evm_activation_daa_score: self.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: self.evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score: self.evm_f002_withdraw_cap_activation_daa_score,
+            evm_bridge_caps_activation_daa_score: self.evm_bridge_caps_activation_daa_score,
             evm_f003_mldsa_verify_activation_daa_score: self.evm_f003_mldsa_verify_activation_daa_score,
             // §12 Phase-7: consensus-fixed (the receipts-root encoding is consensus), never overridable.
             evm_typed_receipt_root_activation_daa_score: self.evm_typed_receipt_root_activation_daa_score,
@@ -5659,6 +5688,7 @@ pub const MAINNET_PARAMS: Params = Params {
     // gas-pool v2 ships inert on every network — a deploy sets a finite testnet score.
     evm_gas_pool_v2_activation_daa_score: u64::MAX,
     evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
+    evm_bridge_caps_activation_daa_score: u64::MAX,
     evm_f003_mldsa_verify_activation_daa_score: u64::MAX,
     evm_typed_receipt_root_activation_daa_score: u64::MAX,
 };
@@ -5854,6 +5884,7 @@ pub const TESTNET_PARAMS: Params = Params {
     evm_gas_pool_v2_activation_daa_score: 2_125_000,
     // M-03 withdrawal cap: inert (u64::MAX) — its activation is a separate coordinated deploy.
     evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
+    evm_bridge_caps_activation_daa_score: u64::MAX,
     evm_f003_mldsa_verify_activation_daa_score: u64::MAX,
     evm_typed_receipt_root_activation_daa_score: u64::MAX,
 };
@@ -5967,6 +5998,7 @@ pub const SIMNET_PARAMS: Params = Params {
     // gas-pool v2 ships inert on every network — a deploy sets a finite testnet score.
     evm_gas_pool_v2_activation_daa_score: u64::MAX,
     evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
+    evm_bridge_caps_activation_daa_score: u64::MAX,
     evm_f003_mldsa_verify_activation_daa_score: u64::MAX,
     evm_typed_receipt_root_activation_daa_score: u64::MAX,
 };
@@ -9981,6 +10013,7 @@ pub const DEVNET_PARAMS: Params = Params {
     // deploy sets a finite activation score (consensus fork — see params docs).
     evm_gas_pool_v2_activation_daa_score: u64::MAX,
     evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
+    evm_bridge_caps_activation_daa_score: u64::MAX,
     evm_f003_mldsa_verify_activation_daa_score: u64::MAX,
     evm_typed_receipt_root_activation_daa_score: u64::MAX,
     // kaspa-pq: devnet now uses the same MISAKA DNS seeders as mainnet/testnet for automatic
@@ -12035,14 +12068,23 @@ mod consensus_params_id_tests {
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &previous.palw_consensus_mode else { panic!("V2") };
         previous.blockrate.pruning_depth = palw_v2_pruning_depth_v1(&previous.blockrate, bundle, None);
 
-        // **The "previous" here is the build the fleet is running**, not a hypothetical: its
-        // fingerprint must be the one testnet-11's nodes print at startup (71b35c25…, the ADR-0083
-        // flag day's). If this line ever fails, the reconstruction has drifted and every identity
-        // claim below it is about a network nobody runs.
+        // **The "previous" here is the pre-DA-court ruleset as THIS build spells it.**
+        //
+        // It used to be `71b35c25…`, the fingerprint testnet-11's nodes print at startup, and the
+        // line said so. It is no longer, and the reason is not drift: the bridge's value fence
+        // (`evm_bridge_caps_activation_daa_score`) is a field the running fleet's binary does not
+        // have, and the fingerprint hashes every field whether or not it is armed. A field that
+        // does not exist contributes no bytes; an inert one contributes eight.
+        //
+        // **That makes deploying this build a flag day**, exactly as 2026-09-06's was: an upgraded
+        // node and a fleet node compute different fingerprints and will not peer, before anybody
+        // arms anything. The identity is untouched (`scheduling_any_fence_leaves_the_identity_alone`
+        // and the assertions below still hold), so this is the same chain — but the mesh has to
+        // cross together.
         assert_eq!(
             previous.consensus_params_id().to_string(),
-            "71b35c250d01598ee8925146e66e8200945503ce2de1030bfd167e799b2498e9",
-            "the reconstruction is not the running fleet's ruleset"
+            "0b492c20ac11c47d8213a66272341ab21cb582d8b91d93fd440b46416b1ebc15",
+            "the reconstruction is not this build's pre-DA-court ruleset"
         );
         assert!(
             shipped.blockrate.pruning_depth > previous.blockrate.pruning_depth,
@@ -12989,7 +13031,7 @@ mod consensus_params_id_tests {
             // Legal exactly because MAINNET HAS NOT LAUNCHED: no live node holds the old value, so
             // there is nothing to re-mint and no partition to cause. The same edit after launch
             // would need an activation fence rather than a bare constant (audit M1-6).
-            ("mainnet", MAINNET_PARAMS, "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1"),
+            ("mainnet", MAINNET_PARAMS, "6e6cb55e9de867636faca17f04351444e26b07834f8af4a9c7c60c02f1b82f79"),
             // Moved by the bps01⊕iso unification (2026-08-16): the CPU pins are now the UNION of
             // the two facts the branches discovered separately — `single-variant` (bps01, by
             // disassembly) ∧ `no-openmp` (iso, by the Linux link error) in `CPU_BUILD_PROFILE`,
@@ -13007,7 +13049,7 @@ mod consensus_params_id_tests {
             // see docs/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
             // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
             // `d07cb673…` shadow-materialized) were both superseded by that merge.
-            ("testnet", TESTNET_PARAMS, "0d9cf361e02dea6d9e873014ff5e414c2e8e6879e8d705cde6c924a3a3f8dd88"),
+            ("testnet", TESTNET_PARAMS, "7b40561de57b8890f6821c031c79ebffe12a793192d2e104719a2623d6999b2d"),
             // The PALW staging net (gate-4 soak): differs from "testnet" in exactly the three
             // activation flips (hash lane off, PALW-4 on, Ollama off) + the TN11 genesis. Its own
             // pin proves the t10 row above did NOT move when this preset was added.
@@ -13320,9 +13362,9 @@ mod consensus_params_id_tests {
                 // and would have peered and then disagreed past the height. Measured before moving
                 // it: same fork id at 1,899, 1,900 and 2,500. Previous, and not to be deployed past
                 // 1,900: ebd3b321d4ac68a719f39701af1bfa3931230f27cb77d9fd0e26a513a151ede4.
-                "060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89",
+                "7dcf1fa57c97df65918125cfb10268bacab2f8ce544bdaa3159ba880197cf43f",
             ),
-            ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
+            ("simnet", SIMNET_PARAMS, "7b534b9524a55f4fda421886dc808376b0a736c954e4059e8e5f9b6e5167dcd4"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
             // heartbeat and attempt-work fences (both ride `consensus_params_id`), then when
             // `Params::from(Devnet)` became the BUNDLED `devnet_shipped_params()` — ConsensusV2
@@ -13346,7 +13388,7 @@ mod consensus_params_id_tests {
             // is a deliberate no-op there and the interval is `bits`' job — so what this buys is
             // the ROOM above the floor that a model tier registering later needs, which is the
             // same reason mainnet's floor-only mint is seeded rather than left at half the space.
-            ("devnet", DEVNET_PARAMS, "b40976b27c3bfbd3d6c590b33824f15c4959d6bcfba3676630919b964e94ad34"),
+            ("devnet", DEVNET_PARAMS, "d4779b0b30b15f2e637e59ae499f2a02da2e811203ecc67db2669edd65600049"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {
@@ -13961,8 +14003,7 @@ mod consensus_params_id_tests {
     /// merge added to `Params` while the hand-written table sat unchanged with zero merge conflict.
     #[test]
     fn the_fence_table_names_every_palw_fence_on_params() {
-        let names: std::collections::BTreeSet<&str> =
-            palw_v2_fence_table(&MAINNET_PARAMS).into_iter().map(|(n, _)| n).collect();
+        let names: std::collections::BTreeSet<&str> = palw_v2_fence_table(&MAINNET_PARAMS).into_iter().map(|(n, _)| n).collect();
         for (name, _) in MAINNET_PARAMS.palw_fences_v1() {
             assert!(names.contains(name), "{name} is a PALW fence on Params and the table does not name it");
         }
@@ -14261,8 +14302,7 @@ mod consensus_params_id_tests {
     fn a_carded_registry_still_draws_a_full_panel_with_the_capability_fence_armed() {
         use crate::palw_mode_v2::PalwConsensusMode;
         use crate::palw_state_v2::{
-            PalwBlockContextV2, PalwChainStateV2, apply_palw_transition_v2, palw_bond_may_judge_class_v3,
-            palw_bond_may_take_work_v2,
+            PalwBlockContextV2, PalwChainStateV2, apply_palw_transition_v2, palw_bond_may_judge_class_v3, palw_bond_may_take_work_v2,
         };
 
         let params = mainnet_card_fixture_v1(true);
@@ -15567,7 +15607,3 @@ mod fingerprint_probe {
         );
     }
 }
-
-
-
-
