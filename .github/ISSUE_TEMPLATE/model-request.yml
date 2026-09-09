@@ -1,0 +1,113 @@
+name: Model request
+description: Ask for a model that is not a class on a MISAKA network yet. Public; not a bond; buys no priority.
+title: "Model request: "
+labels: ["model-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A model request is a public note saying which weights you would like to see become a class on a MISAKA network and what you know about them, read by whoever is willing to convert, register, certify and bond the model, and tracked here in the open. A request is not a bond, is not a registration and moves no consensus object: the day the model becomes a line, the line's owner is whoever bonded it (ADR-0088), not whoever asked. It buys no priority, either — the queue is this tracker, and nothing about a request's age or its author changes what the chain prices (ADR-0096 Decision 13). What happens to a request, step by step and who does each step, is in [docs/model-requests.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/model-requests.md).
+
+  - type: input
+    id: weights
+    attributes:
+      label: Weights
+      description: The Hugging Face repository or the URL of the PUBLIC weights. Weights only you can download cannot be converted by anyone else, and the artifact's root must be reproducible from them.
+      placeholder: Qwen/Qwen2.5-1.5B-Instruct
+    validations:
+      required: true
+
+  - type: input
+    id: license
+    attributes:
+      label: License
+      description: The weights' license as their repository states it (SPDX id where one exists). A class serves the model's outputs to strangers, so the license has to allow that.
+      placeholder: Apache-2.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: Architecture
+      description: The model family. Qwen2.5 (dense, A16) and Qwen3.6 (hybrid) have a converter, a profile and an engine in this tree today; anything else is a new lineage, which is code before it is a class (docs/palw-model-onboarding-sdk.md, "Adding a new model family").
+      options:
+        - Qwen2.5
+        - Qwen3
+        - Qwen3.5
+        - Qwen3.6
+        - Llama
+        - Mistral
+        - Gemma
+        - other
+    validations:
+      required: true
+
+  - type: input
+    id: params
+    attributes:
+      label: Parameter count
+      description: As the model card states it (total, and active if it is a mixture of experts).
+      placeholder: 1.5B
+
+  - type: dropdown
+    id: quantization
+    attributes:
+      label: Quantization
+      description: The court replays integer arithmetic, so the artifact is integer-only. W8A16 static PTQ is what the A16 lineage converts to; "integer-only other" means you know the scheme and it is not that one.
+      options:
+        - W8A16 static PTQ (A16 lineage)
+        - integer-only other
+        - unknown
+
+  - type: input
+    id: context
+    attributes:
+      label: Context the request needs
+      description: In tokens, prompt and answer together. The shipped rows are 512. A wider row is a NEW class at mint and never a raised ceiling on a running chain (ADR-0092 Decision 4), so a number above 512 is a request for the next mint, and this field is where that is said.
+      placeholder: "512"
+
+  - type: checkboxes
+    id: lanes
+    attributes:
+      label: Lanes
+      description: Which lane the class should be certified for (docs/palw-certify-a-new-model.md). Both is fine; each is its own drill and binding.
+      options:
+        - label: attempt lane (the canonical job; block production)
+        - label: free-prompt lane (a prompt a person types, through the gateway or the Studio)
+
+  - type: dropdown
+    id: converter
+    attributes:
+      label: Conversion
+      description: Converting the weights into an artifact takes the family's converter and hours on a workstation (docs/palw-model-onboarding-sdk.md). Someone has to run it.
+      options:
+        - I will convert it with the SDK
+        - I need someone to convert it
+
+  - type: dropdown
+    id: bonder
+    attributes:
+      label: Bond
+      description: Registration is priced in bonded collateral (ADR-0056 Decision 3), the line's owner is its bonder (ADR-0088), and the pair opens only on at least 100,000 MSK locked for good (ADR-0090). Saying who intends to bond is the difference between a request and a plan.
+      options:
+        - I will bond the line
+        - I am asking the operators
+        - undecided
+
+  - type: textarea
+    id: machine
+    attributes:
+      label: Your machine
+      description: RAM, accelerator, OS, and the classes you already hold. The Studio's "Request a model" button fills this in from what it knows about the machine; if you are writing it by hand, the same four things are enough.
+      placeholder: |
+        RAM: 24 GiB
+        Accelerator: Apple M2 (GPU unused by the integer runtime)
+        OS: macOS 15
+        Classes held: PALW-QWEN25-A16 (artifact verified)
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything else — why this model, a GGUF you already have, a benchmark you care about. Optional.

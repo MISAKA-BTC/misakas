@@ -112,6 +112,27 @@ jobs:
           zip -r "${archive}" ./bin/*
           echo "archive=${archive}" >> $GITHUB_ENV
 
+      # **The release names what it built, with a digest per component** (ADR-0096 Decision 10,
+      # `docs/components-manifest.md`). Only the components the Studio spawns are rows — today
+      # `kaspad` and `misaka`; the family workers, the gateway and the rail the day this job
+      # builds them — and the script refuses any other name rather than guess a kind. A row
+      # points at the zip this job uploads and names its member, because the zip is what the
+      # release publishes; a `url` at a loose `kaspad` would be a pointer at nothing.
+      - name: Write the components manifest (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          platform=x86_64-unknown-linux-musl
+          py=$(command -v python3 || command -v python)
+          "$py" scripts/misaka-components-manifest.py \
+            --release "${{ github.event.release.tag_name }}" \
+            --network testnet-11 \
+            --platform "$platform" \
+            --url-base "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}" \
+            --archive "${{ env.archive }}" \
+            --out "components-${platform}.json" \
+            bin/kaspad bin/misaka
+          echo "manifest=components-${platform}.json" >> $GITHUB_ENV
+
       - name: Build on Windows
         if: runner.os == 'Windows'
         shell: bash
@@ -142,6 +163,25 @@ jobs:
           powershell "Compress-Archive bin/* \"${archive}\""
           echo "archive=${archive}" >> $GITHUB_ENV
 
+      # The platform is read from the compiler that built the binaries (`rustc -vV`'s host), not
+      # spelled by hand from the runner label: the Windows and macOS builds above pass no
+      # `--target`, so the host triple IS the target. `kaspad.exe` is the row `kaspad`.
+      - name: Write the components manifest (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          platform=$(rustc -vV | sed -n 's/^host: //p')
+          py=$(command -v python3 || command -v python)
+          "$py" scripts/misaka-components-manifest.py \
+            --release "${{ github.event.release.tag_name }}" \
+            --network testnet-11 \
+            --platform "$platform" \
+            --url-base "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}" \
+            --archive "${{ env.archive }}" \
+            --out "components-${platform}.json" \
+            bin/kaspad.exe bin/misaka.exe
+          echo "manifest=components-${platform}.json" >> $GITHUB_ENV
+
       - name: Build on MacOS
         if: runner.os == 'macOS'
         run: |
@@ -171,10 +211,27 @@ jobs:
           zip -r "${archive}" ./bin/*
           echo "archive=${archive}" >> $GITHUB_ENV
 
+      - name: Write the components manifest (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          platform=$(rustc -vV | sed -n 's/^host: //p')
+          py=$(command -v python3 || command -v python)
+          "$py" scripts/misaka-components-manifest.py \
+            --release "${{ github.event.release.tag_name }}" \
+            --network testnet-11 \
+            --platform "$platform" \
+            --url-base "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}" \
+            --archive "${{ env.archive }}" \
+            --out "components-${platform}.json" \
+            bin/kaspad bin/misaka
+          echo "manifest=components-${platform}.json" >> $GITHUB_ENV
+
       - name: Upload release asset
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          files: ./${{ env.archive }}
+          files: |
+            ./${{ env.archive }}
+            ./${{ env.manifest }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
