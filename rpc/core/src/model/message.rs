@@ -2349,6 +2349,14 @@ pub struct GetPalwProducerFactsResponse {
     /// the worker's result under it; a node that does not report it reads as flat, which on a
     /// Merkle network refuses the result rather than filing a job the chain calls something else.
     pub prompt_ids_merkle: bool,
+    /// **Is ADR-0096's decode CONSTRAINT in force at `daa_score`** (version 7) — the fence
+    /// `Params::palw_fp_decode_constraint`, answered by `palw_fp_decode_constraint_active_at` at
+    /// the same chain point every other fact here was read at. Past the fence a free-prompt job
+    /// may carry a `constraint_id` and an entrance may serve `response_format` COMMITTED; before
+    /// it — every shipped preset, and every node that does not report it — an entrance serves a
+    /// format advisory and says so. Fail-closed like `fp_decode_rules_armed`, for the same
+    /// reason: a node that predates the fence cannot be asserting it is dormant.
+    pub fp_decode_constraint_armed: bool,
     /// **Every outpoint a wallet must not spend**, `txid:index` with a 128-hex transaction id.
     ///
     /// Two sources, deliberately in ONE list so a wallet cannot read half of it (audit3 H3, H12):
@@ -2368,14 +2376,15 @@ pub struct GetPalwProducerFactsResponse {
 
 impl Serializer for GetPalwProducerFactsResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        // Version 6: `panel_da_armed` and `prompt_ids_merkle` (ADR-0077 D16 / ADR-0081 D3, the
+        // Version 7: `fp_decode_constraint_armed` (ADR-0096 Decision 8's fence). Version 6:
+        // `panel_da_armed` and `prompt_ids_merkle` (ADR-0077 D16 / ADR-0081 D3, the
         // private-prompts design of 2026-09-05). Version 5: `palw_retention_dir` (ADR-0084 Decision 5). Version 4 added
         // `fp_decode_rules_armed` (ADR-0082 Decisions 10/11's fence). Version 3 added
         // `fp_certified` and the free-prompt price (ADR-0077 Decision 3). Version 2 added
         // `locked_bond_outpoints` (audit3 H3). Every version is a strict suffix, so an older
         // reader stops where its version ended and this reader tolerates an older writer by
         // leaving the later fields at their defaults — additive, never re-ordered.
-        store!(u16, &6, writer)?;
+        store!(u16, &7, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.chain_point, writer)?;
         store!(u64, &self.daa_score, writer)?;
@@ -2404,6 +2413,7 @@ impl Serializer for GetPalwProducerFactsResponse {
         store!(String, &self.palw_retention_dir, writer)?;
         store!(bool, &self.panel_da_armed, writer)?;
         store!(bool, &self.prompt_ids_merkle, writer)?;
+        store!(bool, &self.fp_decode_constraint_armed, writer)?;
         Ok(())
     }
 }
@@ -2450,6 +2460,9 @@ impl Deserializer for GetPalwProducerFactsResponse {
         // force, so a gateway reads "unknown" as "not armed" / "flat" and refuses rather than files.
         let (panel_da_armed, prompt_ids_merkle) =
             if version >= 6 { (load!(bool, reader)?, load!(bool, reader)?) } else { (false, false) };
+        // Version 7 (ADR-0096 Decision 8): fail closed — an older node cannot be asserting the
+        // constraint fence is in force, so an entrance reads "unknown" as "advisory only".
+        let fp_decode_constraint_armed = if version >= 7 { load!(bool, reader)? } else { false };
         Ok(Self {
             available,
             chain_point,
@@ -2479,6 +2492,7 @@ impl Deserializer for GetPalwProducerFactsResponse {
             palw_retention_dir,
             panel_da_armed,
             prompt_ids_merkle,
+            fp_decode_constraint_armed,
         })
     }
 }
@@ -6504,6 +6518,8 @@ mod palw_producer_facts_wire_tests {
             palw_retention_dir: "/var/lib/misaka/palw".to_string(),
             panel_da_armed: true,
             prompt_ids_merkle: true,
+            // Version 7 (ADR-0096 Decision 8), non-default for the same reason.
+            fp_decode_constraint_armed: true,
         }
     }
 
@@ -6521,6 +6537,7 @@ mod palw_producer_facts_wire_tests {
         assert_eq!(back.fp_quanta_per_canonical_job, 8, "the lane's price is the chain's, not the gateway's");
         assert_eq!(back.fp_max_quanta_per_receipt, 64);
         assert!(back.fp_decode_rules_armed, "ADR-0082 D10/D11: a builder on the wrong side of this fence is unreproducible");
+        assert!(back.fp_decode_constraint_armed, "ADR-0096 D8: an entrance that loses this serves a committed format nobody replays");
         assert_eq!(back.locked_bond_outpoints, response.locked_bond_outpoints, "the must-not-spend set must not shorten");
         assert_eq!(back.class_target, response.class_target);
         assert_eq!(back.bond_exposure_ceiling, response.bond_exposure_ceiling);
@@ -6605,6 +6622,7 @@ mod palw_producer_facts_wire_tests {
         assert!(!back.fp_certified, "silence is not certification");
         assert_eq!((back.fp_quanta_per_canonical_job, back.fp_max_quanta_per_receipt), (0, 0), "and it prices nothing");
         assert!(!back.fp_decode_rules_armed, "and a peer older than the fence is not asserting it is dormant either");
+        assert!(!back.fp_decode_constraint_armed, "nor that ADR-0096's constraint fence is (version 7 reads false)");
     }
 
     /// **A version-THREE writer reads as decode-rules-dormant**, and everything version 3 did say

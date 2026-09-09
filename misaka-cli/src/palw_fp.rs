@@ -646,6 +646,7 @@ pub async fn certified(ctx: &Ctx, class_id: &str, json: bool) -> Result<(), CliE
                 "daa_score": facts.daa_score,
                 "fp_certified": facts.fp_certified,
                 "fp_decode_rules_armed": facts.fp_decode_rules_armed,
+                "fp_decode_constraint_armed": facts.fp_decode_constraint_armed,
                 "fp_quanta_per_canonical_job": facts.fp_quanta_per_canonical_job,
                 "fp_max_quanta_per_receipt": facts.fp_max_quanta_per_receipt,
             }))
@@ -670,6 +671,14 @@ pub async fn certified(ctx: &Ctx, class_id: &str, json: bool) -> Result<(), CliE
                 "ARMED — jobs carry (sampling_seed, temperature_q) and decode leaves earn (ADR-0082 D10/D11)"
             } else {
                 "dormant — the pre-ADR-0082 job shape; a job built for the armed rules is unreproducible here"
+            }
+        );
+        println!(
+            "  fp decode constraint: {}",
+            if facts.fp_decode_constraint_armed {
+                "ARMED — a job may carry a constraint_id and an entrance serves response_format COMMITTED (ADR-0096 D6-D8)"
+            } else {
+                "dormant — response_format is served advisory and the answer says so (ADR-0096 D3)"
             }
         );
         println!("  quanta per job / receipt cap: {} / {}", facts.fp_quanta_per_canonical_job, facts.fp_max_quanta_per_receipt);

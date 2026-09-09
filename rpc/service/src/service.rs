@@ -1216,6 +1216,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             // Both fences at the CANDIDATE's score, for the reason `fp_decode_rules_armed` is; the
             // form is genesis-only so the height cannot matter, and it is read the same way anyway.
             panel_da_armed: self.config.params.palw_panel_da_at(facts.daa_score),
+            // ADR-0096 Decision 8's fence at the candidate's score, read the same way.
+            fp_decode_constraint_armed: self.config.params.palw_fp_decode_constraint_active_at(facts.daa_score),
             prompt_ids_merkle: self.config.params.palw_prompt_ids_form_at(facts.daa_score)
                 == kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
             ..Default::default()
