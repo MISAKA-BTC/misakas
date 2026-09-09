@@ -664,8 +664,15 @@ where
     envelope.validate_stateless_v2(network_domain, pre_pow_hash, timestamp, nonce)?;
     envelope.validate_signature_v2(verify_mldsa87)?;
     check_palw_attempt_da_pins_v1(state_params, &envelope.attempt, daa_score)?;
-    let attempt_id =
-        check_palw_attempt_admission_v2_with_bootstrap(state, state_params, admission, ctx, envelope, bootstrap_bond, boundary_budget)?;
+    let attempt_id = check_palw_attempt_admission_v2_with_bootstrap(
+        state,
+        state_params,
+        admission,
+        ctx,
+        envelope,
+        bootstrap_bond,
+        boundary_budget,
+    )?;
     // The anchor is derived HERE, from the header, after the stateless list has agreed that the
     // carried domain IS this network's and the carried challenge IS this position's — so it names
     // the job this header was paid for by, and the attempt has had no say in it (ADR-0072).
@@ -1011,8 +1018,8 @@ mod tests {
         let mut wrong_class = attempt(10, 1);
         wrong_class.attempt.class_id = h64(999);
         wrong_class.attempt.challenge = challenge_v2(h64(NET), h64(PPH), TS, 1, h64(999), &wrong_class.attempt.executor_bond);
-        let err =
-            check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &wrong_class, Some(&declared), false).unwrap_err();
+        let err = check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &wrong_class, Some(&declared), false)
+            .unwrap_err();
         assert!(
             matches!(err, PalwAdmissionV2Error::ClassMissing(_)),
             "only the BOND lookup moves; everything else still reads the parent state: {err:?}"
@@ -1028,7 +1035,8 @@ mod tests {
             101,
             Default::default(),
         );
-        let err = check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &env, Some(&impostor), false).unwrap_err();
+        let err =
+            check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &env, Some(&impostor), false).unwrap_err();
         assert!(
             matches!(err, PalwAdmissionV2Error::BondKeyMismatch),
             "a mergeset-declared bond is still the bond it says it is: {err:?}"
@@ -1954,8 +1962,15 @@ mod tests {
 
         // …and the floor was never refused for this: it is exempt from item 7 entirely, which is
         // why the defect was a fairness and liveness cost rather than a halt.
-        check_palw_attempt_admission_v2(&base_state(), &sp, &admission_params(), &ctx(2, sp.epoch_length(), 2), &attempt(10, 1), false)
-            .expect("the liveness floor crosses a boundary under either reading");
+        check_palw_attempt_admission_v2(
+            &base_state(),
+            &sp,
+            &admission_params(),
+            &ctx(2, sp.epoch_length(), 2),
+            &attempt(10, 1),
+            false,
+        )
+        .expect("the liveness floor crosses a boundary under either reading");
     }
 
     /// **The ADR's claim, asserted rather than assumed: with growth off, the crossing block's
@@ -1973,8 +1988,8 @@ mod tests {
         let crossing = ctx(2, sp.epoch_length(), 2);
         let epoch_index = crossing.daa_score / sp.epoch_length();
 
-        let derived = crate::palw_state_v2::palw_epoch_budgets_for_v2(&parent, &sp, epoch_index)
-            .expect("the parent's share table is not empty");
+        let derived =
+            crate::palw_state_v2::palw_epoch_budgets_for_v2(&parent, &sp, epoch_index).expect("the parent's share table is not empty");
         let (folded, _) = apply_palw_transition_v2(&parent, &sp, &crossing, &[], None).unwrap();
         let stored = folded.epoch_budgets().expect("the fold froze the new epoch's table");
 
@@ -2058,7 +2073,8 @@ mod tests {
         );
         assert_eq!(stored.epoch_index, derived.epoch_index, "the disagreement is about the numbers, not the epoch");
         assert_ne!(
-            stored.budget_blocks, derived.budget_blocks,
+            stored.budget_blocks,
+            derived.budget_blocks,
             "KNOWN GAP (ADR-0045 D2 vs this tree): with class_growth_permille = {} the fold's steps 2c/2d move the share \
              table before step 3b derives the budgets, so the crossing block is admitted against a table the fold does not \
              write. Bounded to one boundary; closing it moves a fold step or re-runs admission at step 4, which is a \

@@ -50,7 +50,7 @@ port; `misaka`, `misaka-palw-gateway` and `misaka-palw-fp-rail` all speak **wRPC
 — it resolves to 27210 on testnet-11 — or omit `--rpc` entirely and let `--network testnet-11`
 supply the default
 (fallback entry nodes: `169.58.232.113:26311`, `169.58.39.220:26311` — the two the seeders
-verify and advertise. `5.104.81.23` does not accept inbound connections and `169.58.232.114`
+verify and advertise. `<host-C>` does not accept inbound connections and `<fleet-host>`
 was withdrawn on 2026-08-29.)
 
 > **The seeders, measured 2026-09-06 from both 1.1.1.1 and 8.8.8.8.** testnet-11 ships four

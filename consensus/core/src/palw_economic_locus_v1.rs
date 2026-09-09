@@ -505,7 +505,7 @@ mod tests {
         // market-payout latency it implies, which is the quotient below. Moving either constant
         // without the other silently changes that latency, so both are asserted here.
         assert!(
-            crate::palw_state_v2::PALW_V2_MAX_PENDING_PAYOUTS % PALW_V2_MAX_PAYOUTS_PER_BLOCK == 0,
+            crate::palw_state_v2::PALW_V2_MAX_PENDING_PAYOUTS.is_multiple_of(PALW_V2_MAX_PAYOUTS_PER_BLOCK),
             "the queue's ceiling is a whole number of drains"
         );
         assert_eq!(

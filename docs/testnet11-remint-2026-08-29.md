@@ -42,16 +42,14 @@ at the handshake instead of at consensus.
 
 | host | unit | appdir | reachable from here |
 |---|---|---|---|
-| `169.58.39.220` (ibm) | `misaka-t11-node0` | `/root/.t11` | yes, directly |
-| `169.58.39.220` (ibm) | `misaka-t11-node1` | `/root/.t11b` | yes, directly |
-| `160.16.131.119` (A) | `misaka-t11-node-b` | `/home/ubuntu/.t11` | yes, via ibm as `ubuntu` |
-| `169.58.232.113` | `misaka-t11-node` | `/root/.t11` | yes, via ibm as `root` |
-| `5.104.81.23` (C) | — | — | **NO** — publickey denied as `root` and `ubuntu` |
-| `169.58.232.114` | — | — | **NO** — publickey denied |
+| `<producer-host>` (ibm) | `misaka-t11-node0` | `/root/.t11` | yes, directly |
+| `<producer-host>` (ibm) | `misaka-t11-node1` | `/root/.t11b` | yes, directly |
+| `<host-A>` (A) | `misaka-t11-node-b` | `/home/ubuntu/.t11` | yes, via ibm as `ubuntu` |
+| `<explorer-host>` | `misaka-t11-node` | `/root/.t11` | yes, via ibm as `root` |
+| `<host-C>` (C) | — | — | **NO** — publickey denied as `root` and `ubuntu` |
+| `<fleet-host>` | — | — | **NO** — publickey denied |
 
-Plus community nodes, seen as inbound peers at the producer: `113.155.23.105`, `133.18.141.168`,
-`183.176.36.141`, `207.180.230.3`, `217.178.131.170`, `60.114.127.4`.
-
+Plus community nodes, seen as inbound peers at the producer: five peer addresses this repository no longer names.
 **Correction to an earlier draft of this file.** It said a partial wipe is worse than none, because
 an un-wiped peer re-supplies the old chain by IBD to every host that was wiped. That is the rule for
 a re-mint at an UNCHANGED fingerprint, and it does not apply here.
@@ -120,13 +118,15 @@ mapping is how a node comes back as something nobody built.
 
 ## Also worth clearing in the same window
 
-A node at `169.58.13.16` answers to the testnet-11 network name on a **different genesis**
+A node at `<peer>` answers to the testnet-11 network name on a **different genesis**
 (`d25a80b9…` against the fleet's `c664a224…`) and retries the handshake about every two seconds. It
 is being refused correctly, but it is a stale deployment that somebody should stop.
 
 ## What the re-mint carries
 
-Everything in `docs/palw-mainnet-audit3-2026-08-29.md`: four criticals, eleven highs, the M2-10
+Everything the third mainnet audit of 2026-08-29 found (that report has since been removed from
+the tree — it published the fleet's SSH reachability; read it in git history if you need it): four
+criticals, eleven highs, the M2-10
 producer gate, and the R-3 acceptance test made deterministic. Two items are explicitly recorded as
 fixed-but-untested, in the source rather than in a table — S-04's refusing half (needs a two-bond
 harness) and S-01's court round trip (needs a two-node one).
@@ -136,16 +136,16 @@ harness) and S-01's court round trip (needs a two-node one).
 
 ## Outcome (2026-08-29, same day)
 
-**Migrated to `95265934…`:** `169.58.39.220` node0 (producer), `160.16.131.119` (A, producing),
-`169.58.232.113` (node + explorer + seeder + MTP), `5.104.81.23` (C, seat2).
+**Migrated to `95265934…`:** `<producer-host>` node0 (producer), `<host-A>` (A, producing),
+`<explorer-host>` (node + explorer + seeder + MTP), `<host-C>` (C, seat2).
 
-**Withdrawn from the network:** `169.58.232.114` — stopped, `systemctl disable`d and its datadir
+**Withdrawn from the network:** `<fleet-host>` — stopped, `systemctl disable`d and its datadir
 removed at the operator's instruction. It is a games host and no longer participates. No DNS name
 resolved to it, so nothing needed changing there; the join doc's fallback-entry list did name it and
 has been corrected.
 
 **Reachability, corrected.** The earlier table said C and `.114` were unreachable. That was an
-artefact of driving them *from ibm with ibm's key*; both answer directly to `~/.ssh/claude_key`.
+artefact of driving them *from ibm with ibm's key*; both answer directly to `~/.ssh/<fleet-key>`.
 The right lesson is to try the key you have from where you are before recording a host as
 unreachable.
 
@@ -159,18 +159,18 @@ consensus decision: the host cannot hold both.
 
 | host | before | after | what was freed |
 |---|---|---|---|
-| ibm `169.58.39.220` | 97% (12 GB) | 80% (59 GB) | 6 superseded datadir backups, journal + rotated syslog, `/tmp` algo-4 GGUFs, 3 rebuildable `target/` dirs |
-| C `5.104.81.23` | 99% (5.7 GB) | 42% (227 GB) | `/home/Azaraseal/.rusty-kaspa/misaka-testnet-10` — 215 GB, last written 2026-07-30, no unit referencing it, no open files — plus the old-fingerprint t11 datadirs |
-| A `160.16.131.119` | 20% | 17% | two closed June logs (15 GB + 1.3 GB) |
+| ibm `<producer-host>` | 97% (12 GB) | 80% (59 GB) | 6 superseded datadir backups, journal + rotated syslog, `/tmp` algo-4 GGUFs, 3 rebuildable `target/` dirs |
+| C `<host-C>` | 99% (5.7 GB) | 42% (227 GB) | `/home/Azaraseal/.rusty-kaspa/misaka-testnet-10` — 215 GB, last written 2026-07-30, no unit referencing it, no open files — plus the old-fingerprint t11 datadirs |
+| A `<host-A>` | 20% | 17% | two closed June logs (15 GB + 1.3 GB) |
 | `.113` | 4% | 4% | nothing needed |
 | `.114` | 10% | 9% | its t11 datadir, on withdrawal |
 
 No model artifact was deleted on any host.
 
-**DNS.** `seeder1.misakascan.com` → `169.58.39.220`, `169.58.232.113`; `seeder3.misakascan.com` →
-`5.104.81.23`, `169.58.39.220`. All four are on the new fingerprint, so the seed names hand out only
+**DNS.** `seeder1.misakascan.com` → `<producer-host>`, `<explorer-host>`; `seeder3.misakascan.com` →
+`<host-C>`, `<producer-host>`. All four are on the new fingerprint, so the seed names hand out only
 nodes a joiner can actually reach. `seeder2`/`seeder4.misakascan.com` and `seeder1.misakastake.com`
-do not answer, and `seeder{1,2,3}.misakachain.com` all resolve to `85.131.213.182`, a registrar
+do not answer, and `seeder{1,2,3}.misakachain.com` all resolve to `<peer>`, a registrar
 wildcard rather than a seeder — both pre-existing and both a registrar-side fix. Note that
 testnet-11 ships `dns_seeders: &[]`, so none of this is on the joining path for t11 today; the
 fleet uses `--addpeer`.

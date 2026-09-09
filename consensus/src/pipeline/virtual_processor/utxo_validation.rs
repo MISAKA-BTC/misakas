@@ -32,8 +32,8 @@ use kaspa_consensus_core::{
     api::args::TransactionValidationArgs,
     coinbase::*,
     dns_finality::{
-        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondMutation, BondStatus, DnsParams, FeeSplitParams,
-        EpochTally, OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, RewardedEpochSet, SlashingSideEffect, StakeAttestation,
+        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondMutation, BondStatus, DnsParams, EpochTally,
+        FeeSplitParams, OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, RewardedEpochSet, SlashingSideEffect, StakeAttestation,
         UNBOND_REQUEST_CONTEXT, attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score,
         compute_challenges_with_ids, decode_attestation_shard, deferred_quality_bonus_outputs_for_block, effective_bond_status,
         epoch_meets_quality_floor, epochs_finalized_at, is_bond_active_at, mandatory_attestation_mass_capacity,
@@ -712,8 +712,7 @@ impl VirtualStateProcessor {
         // after it is arithmetic, and lives in `reserve_drip_outputs_for_block` so the per-block
         // rate limit can be stated over a MULTI-epoch crossing — the shape a fixture on a linear
         // chain cannot build and the shape the defect only appears in.
-        let finalized: Vec<(u64, EpochTally)> =
-            tallies.into_iter().filter(|(epoch, _)| *epoch >= e_min && *epoch <= e_max).collect();
+        let finalized: Vec<(u64, EpochTally)> = tallies.into_iter().filter(|(epoch, _)| *epoch >= e_min && *epoch <= e_max).collect();
         let bounds = self
             .palw_validator_payout_bounds
             .is_some_and(|fence| fence.is_active(daa_score))
@@ -1430,8 +1429,7 @@ impl VirtualStateProcessor {
         // and a per-epoch bound would bound nothing. The DAG's job ends at the list below; the
         // budget is carried across it in `deferred_quality_bonus_outputs_for_block`, so the coinbase
         // this node builds cannot exceed the isolation cap this node then applies to it.
-        let finalized: Vec<(u64, EpochTally)> =
-            tallies.into_iter().filter(|(epoch, _)| *epoch >= e_min && *epoch <= e_max).collect();
+        let finalized: Vec<(u64, EpochTally)> = tallies.into_iter().filter(|(epoch, _)| *epoch >= e_min && *epoch <= e_max).collect();
         let bounds = self
             .palw_validator_payout_bounds
             .is_some_and(|fence| fence.is_active(daa_score))

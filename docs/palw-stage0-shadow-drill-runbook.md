@@ -74,7 +74,7 @@ matches the parameter set (10 on the 120 s net, 120 on deci). Fund each printed 
 misaka wallet send \
   --to <drill-treasury-or-host-address> --amount 0.1 \
   --key-file /home/ubuntu/kpq-9b-validator.seed \
-  --network testnet-10 --rpc 95.111.236.186:27610
+  --network testnet-10 --rpc <host-B>:27610
 # review the preview, then re-run with --yes
 ```
 

@@ -13,7 +13,6 @@ $crates = @(
   "kaspa-wallet-cli-wasm",
   "kaspa-wasm",
   "kaspa-cli",
-  "kaspa-os",
   "kaspa-daemon"
 )
 

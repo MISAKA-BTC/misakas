@@ -191,9 +191,9 @@ memory risk on these hosts; the build is.
 this fleet is a **23 GB, 8-CPU** machine, and every one of them is already running the chain it is
 about to be wiped of. Measured 2026-09-03, before touching anything:
 
-    169.58.39.220 (ibm)   8 cpu   23 G ram   13 G available   swap 4/7 used    kaspad RSS 18.0 G
-    169.58.232.113        8 cpu   23 G ram   10 G available   swap 2/15 used   kaspad RSS 22.4 G
-    5.104.81.23           8 cpu   23 G ram   12 G available   swap 4/19 used   kaspad RSS 20.1 G
+    <producer-host> (ibm)   8 cpu   23 G ram   13 G available   swap 4/7 used    kaspad RSS 18.0 G
+    <explorer-host>        8 cpu   23 G ram   10 G available   swap 2/15 used   kaspad RSS 22.4 G
+    <host-C>           8 cpu   23 G ram   12 G available   swap 4/19 used   kaspad RSS 20.1 G
 
 A default `cargo build --release` takes one rustc per CPU. Eight concurrent rustc on this workspace
 against 10–13 GB of headroom, with swap already a third to a half consumed, races the producers into
@@ -303,8 +303,8 @@ turned out to be filtered upstream.
 
 **Reachability measured for testnet-11** (2026-08-22, from outside the fleet):
 
-    169.58.39.220:26411
-    5.104.81.23:26411
+    <producer-host>:26411
+    <host-C>:26411
 
 Two public entry points, which is what an announcement needs; a third fleet host peers outbound
 only. Which bond each host carries is deliberately not published — on a fleet this small the map
@@ -337,7 +337,7 @@ hosts that actually carry the chain.
 The journal line is emitted at connection ESTABLISHMENT. A peer that connected before the window
 opened and has stayed connected since never appears in it again. The scrape measures the shape of
 the log, not the thing the log describes — and the single most-connected peer on this fleet
-(`169.58.232.113`, which we dial OUTBOUND four times, and which runs three kaspad of its own) had
+(`<explorer-host>`, which we dial OUTBOUND four times, and which runs three kaspad of its own) had
 **zero journal lines in three hours**. A wipe driven by the journal list would have left it running,
 and an unwiped peer re-feeds the old chain by IBD to every host you just cleaned.
 
@@ -351,7 +351,7 @@ Then split that list in two, because the halves need opposite treatment:
 
 | | how to tell | what to do |
 |---|---|---|
-| **ours** | **answers a key you hold, today**: `ssh -i ~/.ssh/claude_key root@<ip> hostname` | stop, then wipe — every appdir, not "the" appdir |
+| **ours** | **answers a key you hold, today**: `ssh -i ~/.ssh/<fleet-key> root@<ip> hostname` | stop, then wipe — every appdir, not "the" appdir |
 | **not ours** | does not | cannot be wiped, and does not need to be — see below |
 
 **The ownership test is the ssh, and only the ssh.** `known_hosts` is useful for building the
@@ -383,16 +383,16 @@ something is broken. Nothing is. Measured on the public entry, all three at once
 A peer can hold an ESTABLISHED socket and never complete a handshake — a foreign-genesis dialer is
 refused at the handshake and keeps the socket. So the TCP list is the right instrument for the WIPE
 list (it is the set of machines that could re-feed a chain) and the wrong one for "how many peers do
-we have". The loudest talker on this fleet, `111.67.115.228`, holds an established socket and is
+we have". The loudest talker on this fleet, `<peer>`, holds an established socket and is
 being refused ~3,000 times a day: it is foreign, we cannot wipe it, and it is not feeding anyone the
 old chain — it is being turned away by us.
 
 **Wipe by ENUMERATING each host's kaspad processes, never by naming an appdir.** The fleet does not
 hold one appdir per host:
 
-    169.58.39.220  (ibm)  /root/.t11  /root/.t11b
-    169.58.232.113        /root/.t11  /root/.t11c  /var/lib/misaka-minerpool/slots/slot-01/appdir
-    5.104.81.23           /root/.t11
+    <producer-host>  (ibm)  /root/.t11  /root/.t11b
+    <explorer-host>        /root/.t11  /root/.t11c  /var/lib/misaka-minerpool/slots/slot-01/appdir
+    <host-C>           /root/.t11
 
 The miner-pool slot on `.113` carries a full appdir under `/var/lib/`, nowhere near the others, and
 is invisible to anything that greps for `.t11`. Get the list from the processes themselves — and
@@ -414,7 +414,7 @@ is invisible to anything that greps for `.t11`. Get the list from the processes 
 `scripts/relaunch-fleet-wipe.sh census` does exactly this across all three hosts.
 
 **And the seeders are part of the wipe.** Two hosts run `misaka-dnsseeder` (`.113` and
-`5.104.81.23`). A seeder that survives the relaunch keeps handing out old-genesis peers to every new
+`<host-C>`). A seeder that survives the relaunch keeps handing out old-genesis peers to every new
 joiner, so the first thing a newcomer meets is the dead chain — with a handshake failure that looks
 like the joiner's fault. Stop both, and clear their peer databases, before the producer starts.
 
@@ -424,9 +424,9 @@ like the joiner's fault. Stop both, and clear their peer databases, before the p
     .113   misaka-t11-node   misaka-t11-seat4  misaka-minerpool  misaka-pool-slot@01  misaka-dnsseeder
     .23    misaka-t11-seat2  misaka-miner-c    misaka-validator-c  misaka-dnsseeder
 
-**`5.104.81.228` looks like ours and is not — settled, not assumed.** It connects INBOUND to both
+**`<peer>` looks like ours and is not — settled, not assumed.** It connects INBOUND to both
 of ibm's ports and it IS in `known_hosts`, which is how it got onto the candidate list. But port 22
-is open and refuses `claude_key` for both `root` and `ubuntu` (port 2222 is filtered). We hold no
+is open and refuses the fleet key for both `root` and `ubuntu` (port 2222 is filtered). We hold no
 credential for it. A `known_hosts` entry records that we once accepted a host key, not that we can
 log in — so it is evidence of contact, never of control, and it is exactly the kind of entry that
 makes a candidate list longer than the wipe list. **It cannot be wiped, so it is external**, and the
@@ -434,7 +434,7 @@ paragraph below covers it. The general rule: an address is "ours" only if it ans
 *today*; anything else is a stranger with a familiar address, and the check is one ssh, not a memory.
 
 **And the converse is the part that cannot be fixed by wiping:** the five external peers
-(`60.114.127.4`, `183.176.36.141`, `121.81.248.189`, `111.67.115.228`, `5.104.81.228`) are not ours
+(five peer addresses, no longer named here) are not ours
 and cannot be stopped. They will keep answering to this network name on their own genesis after the relaunch,
 which is exactly the state §"the name is already contested" describes. That is not a fault to
 resolve before launching; it is the reason the genesis hash is the value a joiner checks.

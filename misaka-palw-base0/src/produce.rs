@@ -699,17 +699,9 @@ pub fn base0_disclose_trace_event_v1(
         if row >= decode || tile as u64 >= tiles {
             return Ok(D::OutOfRange { binding: boxed });
         }
-        let (row_root, row_opening, tile_lanes, tile_opening) =
-            tiled_trace_event_disclosure_v1(&binding.job_context, rows, row, tile)
-                .ok_or_else(|| "the retained rows do not build the tiled trees".to_string())?;
-        return Ok(D::Tiled {
-            binding: boxed,
-            generated_token_ids: ids.to_vec(),
-            row_root,
-            row_opening,
-            tile_lanes,
-            tile_opening,
-        });
+        let (row_root, row_opening, tile_lanes, tile_opening) = tiled_trace_event_disclosure_v1(&binding.job_context, rows, row, tile)
+            .ok_or_else(|| "the retained rows do not build the tiled trees".to_string())?;
+        return Ok(D::Tiled { binding: boxed, generated_token_ids: ids.to_vec(), row_root, row_opening, tile_lanes, tile_opening });
     }
     Err("this class commits under a scheme no disclosure form names".to_string())
 }

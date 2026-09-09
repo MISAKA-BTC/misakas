@@ -51,7 +51,7 @@ helpが表示されればOKです。
 自分のVPS IPを確認します。
 
 ```bash
-misaka-probe --ip 217.76.57.217
+misaka-probe --ip <seeder-ns1>
 ```
 
 あなたのVPSでは、まずこの形で使えば大丈夫です。
@@ -85,7 +85,7 @@ Validator verdict               UNKNOWN: IP alone cannot prove validator partici
 validatorのbond作成後は、`bond_outpoint` を渡します。
 
 ```bash
-misaka-probe --ip 217.76.57.217 --stake-bond <txid>:0
+misaka-probe --ip <seeder-ns1> --stake-bond <txid>:0
 ```
 
 `<txid>:0` は、`kaspa-pq-validator bond` 実行後に表示された `bond_outpoint` に置き換えます。
@@ -114,14 +114,14 @@ misaka-probe
 明示した方が確実なので、通常は以下がおすすめです。
 
 ```bash
-misaka-probe --ip 217.76.57.217
+misaka-probe --ip <seeder-ns1>
 ```
 
 ### 2. network / RPC / seedを明示して確認
 
 ```bash
 misaka-probe \
-  --ip 217.76.57.217 \
+  --ip <seeder-ns1> \
   --network testnet-10 \
   --rpc 127.0.0.1:27210 \
   --seed seeder1.misakascan.com
@@ -130,7 +130,7 @@ misaka-probe \
 ### 3. local checkを飛ばして外部確認だけ行う
 
 ```bash
-misaka-probe --ip 217.76.57.217 --skip-local
+misaka-probe --ip <seeder-ns1> --skip-local
 ```
 
 これは、手元PCや別サーバーから軽く確認したい場合に便利です。
@@ -152,8 +152,8 @@ dig @ns1.xdomain.ne.jp ns-seeder1.misakascan.com A +short   # → 委任先の I
 dig @<その IP> seeder1.misakascan.com A +short              # → 委任先が答えるか
 ```
 
-**seeder2 / seeder4 は 2026-09-06 時点で SERVFAIL。** 委任 (`ns-seeder2` → `217.76.57.217`、
-`ns-seeder4` → `217.178.101.111`) は生きているが、どちらのホストも :53 に応答しない。
+**seeder2 / seeder4 は 2026-09-06 時点で SERVFAIL。** 委任 (`ns-seeder2` → `<seeder-ns1>`、
+`ns-seeder4` → `<seeder-ns2>`) は生きているが、どちらのホストも :53 に応答しない。
 どちらも当プロジェクトが管理していないホストで、既知の状態
 (`docs/testnet11-relaunch5-runbook.md` 項目 2)。**答えるのは seeder1 / seeder3 の 2 本**で、
 新規ノードの discovery はその 2 本で足りる。
@@ -163,13 +163,13 @@ dig @<その IP> seeder1.misakascan.com A +short              # → 委任先が
 ### 5. P2P portだけを確認
 
 ```bash
-nc -vz -w 5 217.76.57.217 26211
+nc -vz -w 5 <seeder-ns1> 26211
 ```
 
 成功例です。
 
 ```text
-Connection to 217.76.57.217 port 26211 [tcp/*] succeeded!
+Connection to <seeder-ns1> port 26211 [tcp/*] succeeded!
 ```
 
 ## 判定の意味

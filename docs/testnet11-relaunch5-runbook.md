@@ -66,30 +66,30 @@ measured rather than assumed.
 
 1. **This wipes a live, producing network with third-party participants.** `.113`'s node accepted
    37 blocks in the half hour before this was written, and its log shows outside peers
-   (`13.140.185.225`, `111.67.115.228`) failing handshake with genesis values of their own — people
+   (two peers, no longer named here) failing handshake with genesis values of their own — people
    are running builds against t11 today. A re-genesis strands every one of them until they upgrade,
    and there is no channel from here that reaches them.
 2. **Two of the four shipped DNS seeder names do not resolve at all.** `seeder2.misakascan.com` and
    `seeder4.misakascan.com` return NXDOMAIN on every discovery round; only `seeder1` and `seeder3`
-   answer (both → `169.58.39.220`, `169.58.232.113`). Those two are also the only ones this fleet
+   answer (both → `<producer-host>`, `<explorer-host>`). Those two are also the only ones this fleet
    can reconfigure — the other pair answers from hosts it does not administer. Shipping four names
    of which two are dead is a discovery configuration decision, not a code fix; `dns_seeders` is
    deliberately outside `consensus_params_id`, so removing them is a plain edit and not a flag day.
 
    **Re-measured 2026-09-06 — the failure mode changed, the conclusion did not.** They now return
    **SERVFAIL**, not NXDOMAIN: each `seederN` IS delegated (`seederN.misakascan.com NS
-   ns-seederN.misakascan.com`), and the glue resolves — `ns-seeder2` → `217.76.57.217`, `ns-seeder4`
-   → `217.178.101.111` — but neither host answers on :53 (`ns-seeder1` → `169.58.232.113` and
-   `ns-seeder3` → `95.111.236.186` both do). `217.76.57.217` pings and has :22 open, so the host is
+   ns-seederN.misakascan.com`), and the glue resolves — `ns-seeder2` → `<seeder-ns1>`, `ns-seeder4`
+   → `<seeder-ns2>` — but neither host answers on :53 (`ns-seeder1` → `<explorer-host>` and
+   `ns-seeder3` → `<host-B>` both do). `<seeder-ns1>` pings and has :22 open, so the host is
    up and only the seeder is not running. Still not ours to restart. A newcomer reporting
    "seeder2 SERVFAIL from both 1.1.1.1 and 8.8.8.8" is seeing this and nothing else; discovery
    succeeds on seeder1/seeder3.
-3. ~~**`169.58.39.220` is in the seeder answer set and in no inventory here.**~~ **RESOLVED
+3. ~~**`<producer-host>` is in the seeder answer set and in no inventory here.**~~ **RESOLVED
    2026-09-02: it is `misaka-ibm` itself** — `hostname` returns `vmi3450148`, the same host the
    node0 journal is written by. It was an unknown only because the inventory recorded the ssh alias
-   and the seeder records the address. `169.58.232.114` is likewise not a participant: it answers
+   and the seeder records the address. `<fleet-host>` is likewise not a participant: it answers
    ssh as `vmi3527649`, runs no misaka unit and has 26311 closed. The only non-fleet peer touching
-   t11 is `111.67.115.228`, which handshake-fails on genesis and is a third party.
+   t11 is `<peer>`, which handshake-fails on genesis and is a third party.
 4. **Twelve commits are unmerged to `main`.** Step 2 below is the flag-day landing and has not
    happened; until it does, `main` builds Relaunch-4 binaries.
 5. **The key custody findings from the fleet preflight are unresolved.** Seats 2,3,4,5 — half the
@@ -189,9 +189,9 @@ pool-slot ×11; zero on Ready nodes).
 
 ### Public surface at 02:24 CEST — what a newcomer meets
 
-* **Seeders**: `seeder1`/`seeder3.misakascan.com` answer with `169.58.232.113` and `169.58.39.220`,
+* **Seeders**: `seeder1`/`seeder3.misakascan.com` answer with `<explorer-host>` and `<producer-host>`,
   the two nodes the seeder verifies on this fingerprint. `seeder2`/`seeder4` stay in the shipped
-  list and stay dead. `5.104.81.23` (host C) does not accept inbound P2P and was removed from the
+  list and stay dead. `<host-C>` (host C) does not accept inbound P2P and was removed from the
   join page's fallback list.
 * **Explorer / API / wallet**: `misakascan.com/info/blockdag` reports `misaka-testnet-11` on the new
   chain; `wallet.misakascan.com` answers. The explorer DB begins at blue score 498 (01:53:41): the

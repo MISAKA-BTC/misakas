@@ -5716,7 +5716,7 @@ pub const TESTNET_PARAMS: Params = Params {
     // Third zone (`misakastake.com`) added 2026-08-10, on purpose: `misakascan.com` and
     // `misakachain.com` both delegate to the same two hosts that back the fleet's own nodes,
     // so a bootstrap has been single-operator AND single-pair since launch. seeder1 here is
-    // delegated to host C (5.104.81.23) — the third machine, previously build-only — which
+    // delegated to host C (<host-C>) — the third machine, previously build-only — which
     // makes the discovery path survive the loss of either original host.
     dns_seeders: &[
         "seeder1.misakascan.com",

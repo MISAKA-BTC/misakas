@@ -363,8 +363,8 @@ lives; neither is on `origin/main`.
 
 The repository half of every claim above is checkable from this branch. This half is not: it is what
 four hosts said on 2026-08-26, and it is recorded here because an argument nobody can re-derive is
-one that decays into a citation of itself. Hosts: `169.58.39.220` (ibm; node0 `.t11`, node1 `.t11b`),
-`169.58.232.113`, `169.58.232.114`. All four ran the same binary, `sha256 60231610baf8a65e…`,
+one that decays into a citation of itself. Hosts: `<producer-host>` (ibm; node0 `.t11`, node1 `.t11b`),
+`<explorer-host>`, `<fleet-host>`. All four ran the same binary, `sha256 60231610baf8a65e…`,
 `kaspad 1.1.0`, built from `a760c9a1` = `3aa28476` + one kaspad commit.
 
 **The class table, `kaspad --palw-dump-classes`, daa 3306 (09:47 UTC):**

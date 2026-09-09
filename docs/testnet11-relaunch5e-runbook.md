@@ -53,10 +53,10 @@ Ports, appdirs and launchers are unchanged from 5c/5d, and so are the producer c
 
 | host | unit | appdir | role |
 |---|---|---|---|
-| ibm `169.58.39.220` | `misaka-t11-node1` | `/root/.t11b` | floor producer, heartbeat, panel |
+| ibm `<producer-host>` | `misaka-t11-node1` | `/root/.t11b` | floor producer, heartbeat, panel |
 | ibm | `misaka-t11-node0` | `/root/.t11` | QWEN36 producer (`5bd9ae3d…`), panel |
-| C `5.104.81.23` | `misaka-t11-seat2` | `/root/.t11` | A16 producer (`71bbb755…`), panel |
-| `.113` `169.58.232.113` | `misaka-t11-node` | `/root/.t11` | public entry, panel |
+| C `<host-C>` | `misaka-t11-seat2` | `/root/.t11` | A16 producer (`71bbb755…`), panel |
+| `.113` `<explorer-host>` | `misaka-t11-node` | `/root/.t11` | public entry, panel |
 | `.113` | `misaka-t11-seat4` | `/root/.t11c` | panel seat 4 |
 | `.113` | `misaka-pool-slot@01` | `/var/lib/misaka-minerpool/slots/slot-01/appdir` | hosted producer |
 
