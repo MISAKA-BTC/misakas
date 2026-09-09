@@ -1710,7 +1710,7 @@ mod tests {
         };
         let refused = identity_from_file(file(), false).err().expect("no bond, no flag");
         assert!(refused.contains("--answer-never-commit") && refused.contains("bond_txid"), "{refused}");
-        let admitted = identity_from_file(file(), true).ok().expect("no bond, never commits");
+        let admitted = identity_from_file(file(), true).expect("no bond, never commits");
         assert!(admitted.bond_txid_hex.is_empty());
         assert_eq!(admitted.executor_bond.transaction_id, TransactionId::from_bytes(Hash64::default().as_bytes()));
         assert!(admitted.executor_pubkey.is_empty());
@@ -1723,7 +1723,7 @@ mod tests {
         let mut complete = file();
         complete.bond_txid = "44".repeat(64);
         complete.executor_pubkey = "ab".repeat(8);
-        let full = identity_from_file(complete, false).ok().expect("bonded");
+        let full = identity_from_file(complete, false).expect("bonded");
         assert_eq!(full.executor_bond.index, 0);
         assert_eq!(full.executor_pubkey.len(), 8);
     }
