@@ -1012,7 +1012,16 @@ fn handle_chat(
     // `DerivedArtifactV1` whose claim never entered the state (`DerivedClaimMissing`). Deriving
     // for a commitment this gateway has just declined to write would put an object in the outbox
     // that no chain can ever accept, and would spend the derivation budget doing it.
-    let derivation = match (chat.derive.as_deref(), commit_refusal.is_none()) {
+    //
+    // **ADR-0096 Decision 3, advisory mode: "the `json` kind (Decision 9) is derived when it
+    // parses."** A request that carried a `response_format` and named no kind is derived under
+    // `json/canonical/v1` — the transformer by name, so the entrance does not depend on which
+    // transformer a kind row happens to resolve to first. An explicit `derive` wins: a person who
+    // asked for a scene under a schema gets the scene. A parse failure is `Outcome::Refused` and
+    // never an error (X4); the claim is untouched either way.
+    let derive_spec: Option<&str> =
+        chat.derive.as_deref().or_else(|| admitted.format.as_ref().map(|_| misaka_palw_derive::kinds::json::TRANSFORMER_NAME));
+    let derivation = match (derive_spec, commit_refusal.is_none()) {
         (Some(spec), true) => Some(derive::run(
             spec,
             &derive::DeriveConfig { seed: config.derive_seed, serve_dsl: chat.serve_dsl },
@@ -1028,7 +1037,7 @@ fn handle_chat(
         )?),
         _ => None,
     };
-    let derive_refusal = match (chat.derive.as_deref(), commit_refusal.as_deref()) {
+    let derive_refusal = match (derive_spec, commit_refusal.as_deref()) {
         (Some(_), Some(why)) => Some(format!(
             "nothing was derived: a derivation names a claim, and this answer did not become one ({why}) — consensus would \
              refuse the object as DerivedClaimMissing"

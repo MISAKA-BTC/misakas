@@ -309,6 +309,11 @@ pub mod kind {
     pub const MANUFACTURING: u16 = 25;
     pub const BUILDING: u16 = 26;
     pub const PROCEDURAL: u16 = 27;
+    // ADR-0096 Decision 9 — the `json` kind, ADR-0078 Decision 8's eighth row. Its id is 28 and
+    // not 8: Decision 9's candidate table had already assigned 8 to `text`, and "ids are assigned
+    // once and never reused" (Decision 9). Adding this row is not a ruleset move: the transition
+    // reads `kind != 0` and nothing else (`check_derived_shape_v1`).
+    pub const JSON: u16 = 28;
 
     /// Every assigned id with its name, in id order.
     pub const ALL: &[(u16, &str)] = &[
@@ -339,6 +344,7 @@ pub mod kind {
         (MANUFACTURING, "manufacturing"),
         (BUILDING, "building"),
         (PROCEDURAL, "procedural"),
+        (JSON, "json"),
     ];
 
     /// The table's name for an id, `None` for an id the table has not assigned. A reader's
@@ -614,7 +620,7 @@ mod tests {
     fn an_unassigned_kind_and_an_unknown_transformer_pass_the_shape_check() {
         let mut o = sample();
         // Past the last assigned row, and at the top of the space.
-        for k in [28u16, 1_000, u16::MAX] {
+        for k in [29u16, 1_000, u16::MAX] {
             o.kind = k;
             assert_eq!(kind::name(k), None, "{k} is deliberately an id the table has not assigned");
             assert!(check_derived_shape_v1(&o).is_ok(), "kind {k} must ride: adding a row is never a ruleset move (X8)");
@@ -668,7 +674,8 @@ mod tests {
             ["scene", "image", "cad", "code", "map", "music", "simulation"]
         );
         assert_eq!(kind::name(0), None);
-        assert_eq!(kind::name(28), None);
+        assert_eq!(kind::name(28), Some("json"), "ADR-0096 Decision 9's row; 8 was already `text`");
+        assert_eq!(kind::name(29), None);
     }
 
     #[test]

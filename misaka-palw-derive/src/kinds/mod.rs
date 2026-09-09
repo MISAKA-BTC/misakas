@@ -7,6 +7,7 @@ use crate::{Grammar, Transformer};
 pub mod cad;
 pub mod code;
 pub mod image;
+pub mod json;
 pub mod map;
 pub mod music;
 pub mod scene;
@@ -21,6 +22,8 @@ fn all() -> Vec<(Vec<Box<dyn Grammar>>, Vec<Box<dyn Transformer>>)> {
         map::register(),
         image::register(),
         simulation::register(),
+        // ADR-0096 Decision 9: ADR-0078 Decision 8's eighth row, kind id 28.
+        json::register(),
     ]
 }
 

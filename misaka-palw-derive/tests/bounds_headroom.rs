@@ -26,9 +26,10 @@
 //!   image/png/v1             40,497 /  4 MiB     1,049,236 / 32 MiB           103x  /    31x
 //!   simulation/trace/v1       3,562 /  4 MiB        74,255 / 64 MiB         1,177x  /   903x
 //!   code/evm/v1               1,209 /  4 MiB           548 / 16 MiB         3,469x  / 30,615x
+//!   json/canonical/v1           214 /  1 MiB           214 /  1 MiB         4,899x  /  4,899x   (2026-09-10)
 //! ```
 //!
-//! Seven of the eight transformers appear: `contract/evm/v1` shares the `code` corpus directory
+//! Eight of the nine transformers appear: `contract/evm/v1` shares the `code` corpus directory
 //! and has none of its own, so it contributes no measurement and the loop skips it.
 //!
 //! # The bound that actually governs the demonstration is not in this crate
@@ -41,7 +42,9 @@
 //!
 //! That is below **every** kind's `max_dsl_bytes`, the tightest of which is `cad/stl/v1`'s 64 KiB,
 //! and it is the reason the step and artifact ceilings cannot bite either: both are functions of
-//! the DSL. `scene/glb/v1`'s 65,536-vertex budget is the one worth checking by hand, because it is
+//! the DSL. `json/canonical/v1` (ADR-0096 Decision 9) is the degenerate case: its artifact IS the
+//! canonical DSL and its step count is the DSL's byte count, so all three of its ceilings are the
+//! same 1 MiB and none can bite below the DSL wall. `scene/glb/v1`'s 65,536-vertex budget is the one worth checking by hand, because it is
 //! the ceiling a few bytes of DSL could plausibly name — and in this grammar it cannot. There is no
 //! procedural primitive: the only vertex-multiplying shape is `Prism`, whose vertex count is `6n`
 //! in the number of base points, and every base point is spelled out in the DSL (~10 bytes
@@ -101,7 +104,7 @@ fn no_declared_dsl_ceiling_can_refuse_an_answer_the_gateway_can_produce() {
             m.max_dsl_bytes
         );
     }
-    assert_eq!(rows.len(), 8, "the kind table changed; re-read this file's header before trusting its conclusion");
+    assert_eq!(rows.len(), 9, "the kind table changed; re-read this file's header before trusting its conclusion");
 }
 
 /// **Every corpus answer that derives lands far under its transformer's ceilings**, and the

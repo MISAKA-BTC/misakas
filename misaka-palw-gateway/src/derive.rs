@@ -294,6 +294,8 @@ pub const SERVED_ARTIFACT_TYPES: &[(&str, &str)] = &[
     ("mmap", "application/octet-stream"),
     ("mcod", "application/octet-stream"),
     ("msim", "application/octet-stream"),
+    // ADR-0096 Decision 9: the artifact IS the canonical bytes, served as what they are.
+    ("json", "application/json"),
 ];
 
 /// Resolve one artifact by its derived id (ADR-0078 Decision 6's fetch handle).
@@ -435,6 +437,12 @@ mod tests {
             assert_eq!(registry::transformer_by_name(by_kind).unwrap().manifest().kind, k);
         }
         assert!(resolve_transformer("no-such-kind").unwrap_err().contains("this build has"));
+        // ADR-0096 Decision 9: `"derive": "json"` resolves the way `"derive": "scene"` does, and to
+        // the one transformer the advisory entrance names on its own (Decision 3).
+        assert_eq!(resolve_transformer("json").unwrap(), misaka_palw_derive::kinds::json::TRANSFORMER_NAME);
+        assert_eq!(resolve_transformer("json/canonical/v1").unwrap(), "json/canonical/v1");
+        assert_eq!(registry::transformer_by_name(resolve_transformer("json").unwrap()).unwrap().manifest().kind, kind::JSON);
+        assert_eq!(kind::name(kind::JSON), Some("json"));
     }
 
     /// **ADR-0078 SA-4: the closed extension table is closed over the kinds that ship.**
@@ -455,14 +463,16 @@ mod tests {
             kinds::map::EXTENSION,
             kinds::code::EXTENSION,
             kinds::simulation::EXTENSION,
+            kinds::json::EXTENSION,
             "png",
         ] {
             assert!(served.contains(ext), "a shipped kind files artifacts under {ext:?} and the fetch handle would 404 them");
         }
         assert_eq!(served.len(), SERVED_ARTIFACT_TYPES.len(), "an extension is listed twice");
-        // One transformer per kind row, and seven rows: if the crate grows an eighth kind this
-        // count moves and the list above has to be revisited rather than silently under-covering.
-        assert_eq!(registry::transformer_names().len(), 8, "the kind table changed; re-check the served extension list");
+        // One transformer per kind row, eight rows, and `contract` sharing `code`'s: if the crate
+        // grows a kind this count moves and the list above has to be revisited rather than
+        // silently under-covering.
+        assert_eq!(registry::transformer_names().len(), 9, "the kind table changed; re-check the served extension list");
     }
 
     /// **ADR-0078 SA-4, and the reason the probe is safe.** Only 128 ASCII hex digits reach the

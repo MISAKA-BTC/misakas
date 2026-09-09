@@ -43,6 +43,7 @@ of them beyond `kind != 0`.
 | music | 6 | `music/v1` | `music/smf/v1` | `.mid` (SMF format 1, no running status) | 4 MiB | 16 MiB | 65,536 midi-note |
 | simulation | 7 | `simulation/v1` | `simulation/trace/v1` | `.msim` step-hash chain + summary + final state | 4 MiB | 64 MiB | 100,000 simulation-step |
 | contract | 22 | `code/v1` | `contract/evm/v1` | `.mcod` | 4 MiB | 16 MiB | 7,710,000,000 evm-gas |
+| json | 28 | `json/v1` | `json/canonical/v1` | `.json` (RFC 8785 / JCS canonical bytes; the artifact IS the canonical DSL) | 1 MiB | 1 MiB | 1,048,576 canonical-dsl-byte |
 
 The three ceilings are ADR-0078 SA-2's, and they are manifest fields: they are in `transformer_id`'s
 preimage, so loosening one is a NEW transformer and the derivations made under the old one stay
@@ -82,6 +83,53 @@ Both rows execute a program a model wrote, so neither runs in the process that a
 Running the crate's tests therefore builds two binaries: `cargo test -p misaka-palw-derive`.
 `cargo test -p misaka-palw-derive --lib` does not build binaries, and every EVM test then fails
 naming the absent runner — that is the gate holding, not a broken test.
+
+### `json`: the answer's own shape (ADR-0096 Decisions 3 and 9)
+
+The eighth row of ADR-0078 Decision 8's table, and its id is 28, not 8: Decision 9's candidate
+table had already given 8 to `text`, and an id is assigned once and never reused. It is the one
+kind whose DSL is not a language of this tree's — the DSL is the answer's JSON text, the grammar
+`json/v1` is RFC 8785 (the JSON Canonicalization Scheme), and the transformer `json/canonical/v1`
+is the identity over the result, so the artifact IS the canonical bytes and `artifact_hash` is a
+hash of exactly what `dsl_hash` covers.
+
+**When a derivation happens.** The answer — the full committed rendering, never the display trim —
+parses as ONE JSON value under RFC 8259, strictly: no comments, no trailing commas, no
+`NaN`/`Infinity`, nothing after the first value, no byte-order mark, no duplicate member names
+(I-JSON's rule, which RFC 8785 §3.1 requires; serde would keep the last, a semantic choice the
+grammar must not make), at most 1 MiB and 64 levels deep. The canonical bytes are then RFC 8785's:
+members sorted by UTF-16 code units, numbers in ECMAScript `Number::toString` form (`1.0` → `1`,
+`1E30` → `1e+30`, an integer past 2^53 → the nearest double, as I-JSON reads it — "numbers outside
+JSON's canonical form" is the row's own not-covered column), strings with exactly the RFC's escapes,
+no insignificant whitespace. Anything else is a refusal by name and never a repair: a code-fenced
+answer is a parse failure, not unwrapped (ADR-0078 Decision 2). A refusal derives nothing and the
+inference still certifies and mines (X4). It is asked for like every kind — `"derive": "json"` —
+and it is ALSO the derivation the entrance makes on its own when the request carried a
+`response_format` and no `derive` (Decision 3's advisory mode: "the `json` kind is derived when it
+parses"); an explicit `derive` wins. With `--derive-seed` that derivation is signed into the outbox
+like any other.
+
+**What `misaka.format` adds when `response_format` was set** (Decision 3): `requested` (`type`
+`json_object` | `json_schema`, the schema's `name`, `constraint_id` =
+`H("misaka-palw/constraint/v1" ‖ RFC 8785 schema bytes)` and `constraint_bytes`), `enforcement` —
+`"advisory"` on every network this build can reach, because `Params::palw_fp_decode_constraint` is
+`None` on every preset — `valid`, `errors` (the schema check's, on the SHOWN answer) and
+`canonical_sha256`. Advisory means exactly this: the schema rode the prompt as text, the run was
+unconstrained, and the check is after the fact. The derivation beside it is under
+`grammar_id = H(json/v1)` today. Once Part B arms (Decision 8's fence), a job that carried a
+constraint derives under `grammar_id = H(json/v1 ‖ constraint_id)`, so a consumer checks both that
+the bytes are canonical JSON and that they were produced under the schema the claim committed —
+that grammar id does NOT exist yet, and nothing in this build names one.
+
+**The discipline, said plainly.** The transformer is byte-exact. The grammar's number rendering
+lives in `misaka-palw-constraint` and goes through an IEEE 754 double — parsed correctly rounded
+(the constraint crate enables serde_json's `float_roundtrip` for it), printed as the shortest
+round-tripping digits — a bit-exact function of the double on every IEEE 754 host, with the RFC's
+Appendix B vectors pinned there. The manifest declares `integer`, the arm the byte-exact `code` and
+`map` transformers declare, because the vocabulary has no arm for "canonical JSON, IEEE 754 numbers
+by the RFC"; the derive crate's discipline scan does not follow calls out of the crate, and the
+two-architecture drill (X3) is the empirical check — `corpus/json` carries the RFC's own examples
+for it.
 
 ## The bounds, and what refuses what (SA-2, SA-3, SA-5)
 
@@ -124,6 +172,7 @@ Request fields, beside the OpenAI ones:
 |---|---|
 | `"derive": "<kind or transformer>"` | derive after the inference; absent = the answer is the product |
 | `"serve_dsl": true` | elect this claim's DSL into the data-availability obligation (default off) |
+| `"response_format"` (OpenAI's) | ADR-0096 Decision 3: the shape rides the prompt as text, the answer is checked after the fact (`misaka.format`), and it is derived under `json` when it parses unless `derive` named another kind |
 
 Gateway flags: `--derive-seed <file>` (the bond key's 32-byte seed — the gateway then signs the
 object itself; without it the object is left unsigned for the rail), `--artifact-inline-max <bytes>`

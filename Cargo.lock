@@ -6027,6 +6027,7 @@ dependencies = [
  "kaspa-hashes",
  "misaka-palw",
  "misaka-palw-base0",
+ "misaka-palw-constraint",
  "revm",
  "serde",
  "serde_json",

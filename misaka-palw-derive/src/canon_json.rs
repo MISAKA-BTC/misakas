@@ -110,7 +110,7 @@ fn convert(v: &Value) -> Result<CanonValue, DeriveError> {
 /// serde_json silently keeps the LAST of two equal keys. Canonicalization must not choose, so
 /// a duplicate key inside any one object is refused here with a scan that tracks nesting and
 /// string state — enough to find `{"a":1,"a":2}` at any depth without a second parser.
-fn reject_duplicate_keys(text: &str) -> Result<(), DeriveError> {
+pub(crate) fn reject_duplicate_keys(text: &str) -> Result<(), DeriveError> {
     #[derive(Default)]
     struct Frame {
         is_object: bool,

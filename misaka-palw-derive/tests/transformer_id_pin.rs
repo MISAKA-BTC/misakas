@@ -1,4 +1,4 @@
-//! **The eight `transformer_id`s, pinned — because otherwise they move in silence.**
+//! **The nine `transformer_id`s, pinned — because otherwise they move in silence.**
 //!
 //! ADR-0078 Decision 3 makes a transformer's manifest carry "the build's source-tree hash", so
 //! that `transformer_id` names the code. `build.rs` computes that hash over **every non-dot file
@@ -6,7 +6,7 @@
 //! included (see `src/source_tree.rs`, which is the one spelling of the walk). Every manifest
 //! quotes it. So:
 //!
-//! > **A single byte changed anywhere under `misaka-palw-derive/src/` moves ALL EIGHT
+//! > **A single byte changed anywhere under `misaka-palw-derive/src/` moves ALL NINE
 //! > `transformer_id`s at once.**
 //!
 //! That is correct and deliberate — Decision 3's whole point is that the id names the code — but
@@ -57,41 +57,45 @@
 use misaka_palw_derive::{SOURCE_TREE_SHA256_HEX, ids::transformer_id, registry};
 
 /// The source-tree hash every manifest quotes.
-const SOURCE_TREE: &str = "637858dba5ea5e34b9459a580b2b81d1361aecf450bc615a4ee9621d4953a988";
+const SOURCE_TREE: &str = "cf8e21abb06efc84603dad6f95bbdb10c803a12c355854cfdc6403c71d595421";
 
 /// `(transformer name, transformer_id)` for every transformer this build registers.
 const PINNED: &[(&str, &str)] = &[
     (
         "cad/stl/v1",
-        "83e0f5088cd0f9b7e55e5add8fdfdf941f40e45f413e03943f23817d907bed17900747ecd0a7e4e1e8193d6ced9c1320d4775f72e38e4cc1e6238e391db05ca0",
+        "4cd63604421ac097ebaabba3fac1ad05fd8f141ece5813f85d2c58b3ea9eb57c7558bd2616fbfb66ee6976018c1269789952405ad4bec1b7a578cace64719e74",
     ),
     (
         "code/evm/v1",
-        "9cc43a428fe50667dec97d5673162c11d864039206bf7754e38c13d285ce4661f7496f170fd1c30eb0a1fc20318601fde93a2f52984f509ebe83cf93b349eb26",
+        "3b6a37d591d25ba8a3f780199bf4a3ebba33504856bafd09695bfead7ca56a94bf21db82628e05039c2858628fb10a708fbda4ad7ae98d5f82318a331f071985",
     ),
     (
         "contract/evm/v1",
-        "efc8813e0bac6b94ef2ad35777583e16746bf25914b6b82cac98e026cf6b67be9243cbfa1e05fe36fee056472a5e98da7fda811c3517fae98396260e30efa0fe",
+        "9fa0635d0448d0386be65509b52e4982dd47db36f59bf3e00338ea70621e315075cc6018506d32c95ff453bf73ca25eacba1ffb8d88ca9ac6a19fe52a3db519c",
     ),
     (
         "image/png/v1",
-        "67f57ddd196f4125b4d132f9160d2863973058ca18b193f92afac8f67531d7fa92a8fe94487f4da9002fa29ef3febf0e56f58108a253d0053cb7d3d7920a9e87",
+        "b1566ebb704559faeec97d03860272edb5135a8698e6efb75daf3627b27cc1c621a7d063a6c005b3ed155919a53ec209821506871eca204708672d1b85870846",
+    ),
+    (
+        "json/canonical/v1",
+        "67c698e7023358d94189523a28c74164a531365375b66708c682b663e4c5a25ffe874d8b917feb6e60563e537f176e1fae439b75f1fd2f8c6b1d4428ff5e5f70",
     ),
     (
         "map/mmap/v1",
-        "a1bfc8d9a06e12c08189c52a3bf243af7cbaed4d057c764c51e8f0aab4f6c98d04b76ba3f44d2f3aad75c79e837829b08b3041a9f50157d16b431085ef7fed47",
+        "c52b0952ea8b39bda6e1644114619f95ba439b41cfbaca6f379b02c29c17e8bb3eae7a09a09e0eecfec54da575322a51dd29b99c09f23ff1b7f8009f441003ef",
     ),
     (
         "music/smf/v1",
-        "cb5f27b4e63d9601a3e743486ea61b6aed9825c651b8fefa4305756cfec8f5aca69f7c27161f2a8a2e6f69eafd626fcaa4e28878b8c8989d24491be9b58ed0a8",
+        "c7e1c5548384adc60f022897375e95b5b2c28838c2bb13095566db11ac746816275f16eed3de801ee9d1fae500d7b4b0c68c6ad1f254d295a5b734b6669db0b6",
     ),
     (
         "scene/glb/v1",
-        "4dd08df643160b205fe46f14ffb9c2cf36de83bddd1342e50f91551bc6b6d5b8234f3bbf6fa9a36f9bd72c08dcc5b4ad2dcfa5f6d5aa33cbe94a197b238d8f7a",
+        "b268e5cde7c047d98bb0501ced6787f3726614a225a444a6c0f0289190528f183bb58063c06a0a7dc924bb7cc2fb9f93adbce23b1bf87f2611fb8564e50e45b4",
     ),
     (
         "simulation/trace/v1",
-        "389bf2942f7ee53cf0c9fe1096188b4de361e12f1b689f8b5b83d6874006c0fa6c1d8569ea31ac00deff1d1c19ae8b60a0b2373360e60f580ce41b2501627a62",
+        "d55c3d31bdde26503b11c6bca7834c3e5b7483847ef1dd60bc993a1fc0b14f0b0d0a28044161b5f1c4e2a445bc3d6f11f783aeb47818ea3a2e4e08d31b5e377c",
     ),
 ];
 
@@ -132,7 +136,7 @@ fn the_transformer_ids_are_the_ones_this_build_was_pinned_with() {
     assert_eq!(SOURCE_TREE_SHA256_HEX, SOURCE_TREE, "the source-tree hash moved but every id matched: that cannot happen");
 }
 
-/// The pin covers the whole registry — a ninth transformer must be pinned, not merely appear.
+/// The pin covers the whole registry — a tenth transformer must be pinned, not merely appear.
 #[test]
 fn the_pin_covers_every_registered_transformer() {
     assert_eq!(

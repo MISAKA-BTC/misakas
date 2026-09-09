@@ -1,0 +1,37 @@
+{
+  "01-rfc8785-example.json": {
+    "artifact_bytes": 118,
+    "artifact_hash": "65a3fd8eccbba6bb1f5df2df3890c756e90f3671f41a276c81392e3382569db1ac9d02ab870c28525ce63fc84d66a2ea6032dcb5725e4413c84c8805e2ded6fc",
+    "dsl_hash": "0f098bcfc583be1757c946056065967950e2dd4ccce2386be4a3b54e677abc539be5f8e6359ce8b07b1b549a36ad826f5838aae658ddbdd39fe69915c8fc8c98"
+  },
+  "02-member-order-utf16.json": {
+    "artifact_bytes": 214,
+    "artifact_hash": "346de7fd093e5c8cd404cc5080e2b9ac7228a16a475d90700fc603d1697f653314ffb97392b076a8bd8c4238809b7458544af3cb131f7356c0c4c6f5be5042df",
+    "dsl_hash": "fdd9395d67fc6788ffa7d4493b9a9720571f5dcf39c5cd1283696daaceb8574d9108a449e33d283ff758eaa2c2b8e8a67aaae31383c10360329bda30847ea7c0"
+  },
+  "03-numbers-es-form.json": {
+    "artifact_bytes": 135,
+    "artifact_hash": "167b9f87c4fee6a8b575306f0ba4c17a4bca0a12a682cbf2b9e76de003f3919407232eaa4fe3f67f8a3e772a50fb55a96aeb077cf3856635101f47cc165b03a4",
+    "dsl_hash": "853dea8ce44f18858618808851a8884b6da2b0506c077843248109106b52294ed63306f95666dbd76ce6ae823927fe5ccd3e21e1172d94c88cdf9c649f1e5d2b"
+  },
+  "04-extraction-answer.json": {
+    "artifact_bytes": 155,
+    "artifact_hash": "d4ccda6d2107ff01517b7617797567c9ab12822c32f0d0b6c70d02a15c5c50cb454afdfb2d5786054a67e601e2f400a1bbd4cdf41d4f02d271ed9acad5fa1c66",
+    "dsl_hash": "8024223117a68b16955438120aae7ab128172df2ad29f5de478550bd588a68511e26109936fd230a57991201b2c5ccdd91ebe09c2e400b0c5aaf10490f96c0e7"
+  },
+  "05-fenced-refused.json": {
+    "refused": "grammar: the answer is wrapped in a code fence; a fence is not JSON and is refused rather than unwrapped (ADR-0078 Decision 2)"
+  },
+  "06-trailing-comma-refused.json": {
+    "refused": "grammar: the answer is not one JSON value: trailing comma at line 1 column 21"
+  },
+  "07-nan-refused.json": {
+    "refused": "grammar: the answer is not one JSON value: expected value at line 1 column 7"
+  },
+  "08-duplicate-key-refused.json": {
+    "refused": "grammar: duplicate key \"a\""
+  },
+  "09-too-deep-refused.json": {
+    "refused": "grammar: the value nests 65 deep, past the pinned MAX_DEPTH of 64"
+  }
+}
