@@ -548,3 +548,14 @@ mapping is written down.
   `feat/adr-0096-everyday-lane` opened in both repositories. Step 1 of §6 begins on the gateway
   (Decisions 1–5's node half) and on the Studio (Decisions 1, 3, 4, 5, 11, 12); what has landed
   is appended here as it lands.
+* **2026-09-10, Decision 8's fence declared** (`feat/adr-0096-partb-fence`, `b62e89c2`):
+  `Params::palw_fp_decode_constraint`, `None` on every preset, Some-only in both fingerprints and
+  in the schedule id (a shipped network is byte-identical to a build without the field), `never()`
+  collapses to absence, and `validate_palw_v2` refuses a scheduled height in the sentence
+  ADR-0082 Decision 11's refusal uses — the three halves are absent on this build. The wire says
+  which side of it a node is on: `GetPalwProducerFactsResponse` version 7 adds
+  `fp_decode_constraint_armed` (borsh suffix, fail-closed on an older writer; gRPC field 29; the
+  service answers it at the candidate's score; `misaka palw facts` prints it). Tests: dormant on
+  every preset and visible the moment it is not; refused at assembly by name; the borsh and gRPC
+  round trips carry it and a version-6 writer reads as dormant (15 + 4 + 1 green). Nothing of
+  Decisions 6, 7 or 9 exists yet: no v6 job, no automaton, no v3 refutation, no `render_answer_v2`.
