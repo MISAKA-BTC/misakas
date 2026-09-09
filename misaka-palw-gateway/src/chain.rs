@@ -89,10 +89,12 @@ pub struct ChainFacts {
     /// **ADR-0096 Decision 8's fence, `Params::palw_fp_decode_constraint`** — whether this network
     /// commits a `response_format` as a decode constraint the seat replays and the court can try.
     ///
-    /// **A constant `false` for now, on purpose.** The fence does not exist in consensus-core yet
-    /// (Part B of the ADR: job version 6, selection rule v3, refutation v3, `render_answer_v2`, the
-    /// token-to-bytes table as served material), and `GetPalwProducerFactsResponse` has no
-    /// `fp_decode_constraint_armed` field to read it from. Until both land, the honest reading of
+    /// **Read from the node, and `false` on every network today.** The fence is declared in
+    /// consensus-core (`Params::palw_fp_decode_constraint`, `None` on every preset, and REFUSED
+    /// at assembly until the build carries Part B of the ADR: job version 6, selection rule v3,
+    /// refutation v3, `render_answer_v2`, the token-to-bytes table as served material), and
+    /// `GetPalwProducerFactsResponse` version 7 answers `fp_decode_constraint_armed` at the
+    /// candidate's score; an older node, or no node, reads as `false`. So the honest reading of
     /// every network is "dormant", and Decision 3's mode is therefore `advisory` on every request:
     /// the schema is rendered into the prompt as text, the run is unconstrained, the answer is
     /// validated after the fact and the response SAYS so. A request that sets
@@ -330,6 +332,10 @@ impl RpcChainSource {
                 facts.fp_decode_rules_armed = producer.fp_decode_rules_armed;
                 facts.panel_da_armed = producer.panel_da_armed;
                 facts.prompt_ids_merkle = producer.prompt_ids_merkle;
+                // ADR-0096 Decision 8's fence, read the way the two above are: the node answers
+                // it at the candidate's score (wire version 7), an older node reads as false, and
+                // false is "serve the format advisory and say so" — the cheap direction.
+                facts.fp_decode_constraint_armed = producer.fp_decode_constraint_armed;
             }
             Err(e) => facts.read_error = Some(e),
         }
@@ -476,13 +482,13 @@ mod tests {
         assert!(!ChainFacts::default().fp_decode_constraint_armed);
         assert!(!certified().fp_decode_constraint_armed, "a certified class on a live node is still on a network without the fence");
         assert_eq!(certified().health_json()["fp_decode_constraint_armed"], serde_json::json!(false));
-        // The RPC read path does not set it: there is no field to read it from yet, and a field
-        // that appeared with a default of `true` would be the expensive kind of disagreement. The
-        // needle is assembled at run time so this assertion does not match its own source line.
+        // The RPC read path is the ONLY thing that sets it — once, from the producer facts the
+        // node answered (wire version 7) — so every other source reads the fail-closed default.
+        // The needle is assembled at run time so this assertion does not match its own source line.
         let needle = format!("facts.fp_decode_{}_armed =", "constraint");
         let source = std::include_str!("chain.rs");
         let assignments = source.lines().filter(|l| l.contains(&needle)).count();
-        assert_eq!(assignments, 0, "nothing in this tree can set the fence until the RPC carries it");
+        assert_eq!(assignments, 1, "the fence is read from the node's producer facts and from nowhere else");
     }
 
     #[test]

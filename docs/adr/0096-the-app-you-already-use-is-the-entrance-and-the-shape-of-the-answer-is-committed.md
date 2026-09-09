@@ -568,3 +568,19 @@ mapping is written down.
   `components-<platform>.json` beside the archive for the two components the job builds today
   (`kaspad`, `misaka`); the workers, gateway and rail become rows the day the job builds them,
   and the writer refuses any other name rather than guess a kind.
+* **2026-09-10, Part A's node half** (`339ed0ad`, wired to the fence in `cc8b47f7`'s merge and
+  after): `misaka-palw-gateway/src/surface.rs` (the request read once; `admit_request` before the
+  queue and before the worker), `wire.rs` (tools as Qwen's own Hermes-style text under the
+  `-tools/v1` template ids; `parse_tool_calls` touching no committed byte), the new crate
+  `misaka-palw-constraint` (Decision 7's JSON-Schema subset, RFC 8785 — whose Appendix-B vectors
+  found two real defects on the way: Rust's `{:e}` does not round half-even on a shortest tie, and
+  serde_json's default float parser is not correctly rounded, so the crate enables
+  `float_roundtrip` — and `constraint_id` under `misaka-palw/constraint/v1`), `misaka.format`
+  served advisory and said so, `require_committed_format` refused before the inference,
+  `GET /v1/models`, and the conformance corpus `docs/openai-surface/v1/` (22 cases; directory
+  digest `a884a871e55af023ee0adc84deababa3469826348f4f8e0eff31bc18838cc9ba`, which the Studio's
+  mirror pins). `ChainFacts::fp_decode_constraint_armed` reads the node's producer facts (wire
+  version 7) and nothing else. Two choices to know: the system line created to hold a tool block
+  is "You are a helpful assistant." (Qwen2.5's vendor line names Alibaba; Qwen3's writes nothing),
+  and JSON rendered into the prompt is RFC 8785 so the job id is not a function of the client's
+  key order. Not done: the `json` derived kind (Decision 9), and a live-worker run on this host.
