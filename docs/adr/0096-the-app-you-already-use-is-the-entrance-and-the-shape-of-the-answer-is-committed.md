@@ -559,3 +559,12 @@ mapping is written down.
   every preset and visible the moment it is not; refused at assembly by name; the borsh and gRPC
   round trips carry it and a version-6 writer reads as dormant (15 + 4 + 1 green). Nothing of
   Decisions 6, 7 or 9 exists yet: no v6 job, no automaton, no v3 refutation, no `render_answer_v2`.
+* **2026-09-10, Decision 13's door and Decision 10's node half** (`0de50b0f`):
+  `.github/ISSUE_TEMPLATE/model-request.yml`, `docs/model-requests.md` (the eight hands a request
+  passes through, each with its ADR), `docs/components-manifest.md` (schema `misaka/components/v1`;
+  a row points at the platform archive the release publishes and names the member — a loose
+  binary URL would point at nothing), `scripts/misaka-components-manifest.py` (write / `--check` /
+  `--validate` / `--self-test`, 39 checks) and one deploy step per platform writing
+  `components-<platform>.json` beside the archive for the two components the job builds today
+  (`kaspad`, `misaka`); the workers, gateway and rail become rows the day the job builds them,
+  and the writer refuses any other name rather than guess a kind.
