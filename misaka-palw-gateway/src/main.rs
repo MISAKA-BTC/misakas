@@ -85,10 +85,18 @@ struct IdentityFile {
     network_domain: String,
     /// 64-byte hex: the registered execution class this gateway's worker embodies.
     class_id: String,
-    /// 64-byte hex transaction id of the executor bond outpoint.
+    /// 64-byte hex transaction id of the executor bond outpoint. **May be absent** (ADR-0096
+    /// Decision 10): a gateway that only ANSWERS — the Studio's local integer engine — has no
+    /// bond, and is admitted without one exactly when `--answer-never-commit` is set, so the two
+    /// facts cannot disagree (a bond-less gateway that could commit would sign nothing anyone
+    /// could adjudicate; a bonded one that never commits is just a choice).
+    #[serde(default)]
     bond_txid: String,
+    #[serde(default)]
     bond_index: u32,
-    /// Hex: the bond's ML-DSA-87 public key (carried; the signer sidecar holds the secret).
+    /// Hex: the bond's ML-DSA-87 public key (carried; the signer sidecar holds the secret). May be
+    /// absent under the same rule as `bond_txid`.
+    #[serde(default)]
     executor_pubkey: String,
     /// 64-byte hex: the operator identity registered with the bond.
     operator_id: String,
@@ -375,25 +383,42 @@ fn hex_bytes(s: &str, what: &str) -> Vec<u8> {
     out
 }
 
-fn load_identity(path: &Path) -> Identity {
+fn load_identity(path: &Path, answer_never_commit: bool) -> Identity {
     let raw = std::fs::read_to_string(path).unwrap_or_else(|e| die(format!("cannot read identity file {}: {e}", path.display())));
     let file: IdentityFile = serde_json::from_str(&raw).unwrap_or_else(|e| die(format!("identity file is not valid JSON: {e}")));
-    let pubkey = hex_bytes(&file.executor_pubkey, "executor_pubkey");
-    if pubkey.is_empty() {
-        die("executor_pubkey is empty — an unaccountable gateway must not produce commitments".into());
+    identity_from_file(file, answer_never_commit).unwrap_or_else(|e| die(e))
+}
+
+/// **A bond-less identity is admitted only for a gateway that never commits** (ADR-0096 Decision
+/// 10). The Studio's local integer engine is this gateway with no bond and no key: it answers
+/// under the class, `/health` says `can_submit: false` and `bond: null`, and every job is
+/// answered-not-committed by the same refusal a bonded gateway in that mode gives. Without the
+/// flag, a missing bond or key is refused here rather than discovered as an unsignable
+/// commitment after the inference.
+fn identity_from_file(file: IdentityFile, answer_never_commit: bool) -> Result<Identity, String> {
+    let bond_absent = file.bond_txid.trim().is_empty();
+    let pubkey = if file.executor_pubkey.trim().is_empty() { Vec::new() } else { hex_bytes(&file.executor_pubkey, "executor_pubkey") };
+    if (bond_absent || pubkey.is_empty()) && !answer_never_commit {
+        return Err(format!(
+            "identity file names no {}: an unaccountable gateway must not produce commitments — run with --answer-never-commit \
+             (ADR-0096 Decision 10: a gateway that only answers needs no bond), or name the bond and its key",
+            if bond_absent { "bond (`bond_txid`)" } else { "executor key (`executor_pubkey`)" }
+        ));
     }
-    Identity {
+    let executor_bond = if bond_absent {
+        TransactionOutpoint { transaction_id: TransactionId::from_bytes(Hash64::default().as_bytes()), index: 0 }
+    } else {
+        TransactionOutpoint { transaction_id: TransactionId::from_bytes(hex64(&file.bond_txid, "bond_txid").as_bytes()), index: file.bond_index }
+    };
+    Ok(Identity {
         network_domain: hex64(&file.network_domain, "network_domain"),
         class_id: hex64(&file.class_id, "class_id"),
         class_id_hex: file.class_id.clone(),
         bond_txid_hex: file.bond_txid.clone(),
-        executor_bond: TransactionOutpoint {
-            transaction_id: TransactionId::from_bytes(hex64(&file.bond_txid, "bond_txid").as_bytes()),
-            index: file.bond_index,
-        },
+        executor_bond,
         executor_pubkey: pubkey,
         operator_id: hex64(&file.operator_id, "operator_id"),
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1321,7 +1346,7 @@ fn main() {
     }
 
     std::fs::create_dir_all(&config.outbox).unwrap_or_else(|e| die(format!("cannot create the outbox: {e}")));
-    let identity = load_identity(&config.identity_path);
+    let identity = load_identity(&config.identity_path, config.answer_never_commit);
 
     // ADR-0077 Decision 3: the chain, or an honest statement that there is none.
     let chain_source = match (&rpc_endpoint, &anchor_path) {
@@ -1477,7 +1502,14 @@ fn serve_connection(
                     "class_id": hex(identity.class_id),
                     "network_domain": hex(identity.network_domain),
                     "operator_id": hex(identity.operator_id),
-                    "bond": format!("{}:{}", identity.executor_bond.transaction_id, identity.executor_bond.index),
+                    // `null` for a bond-less answer-only gateway (ADR-0096 Decision 10), so a
+                    // reader sees "no bond" rather than an all-zero outpoint that looks like one.
+                    "bond": if identity.bond_txid_hex.is_empty() {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::json!(format!("{}:{}", identity.executor_bond.transaction_id, identity.executor_bond.index))
+                    },
+                    "bond_present": !identity.bond_txid_hex.is_empty(),
                     "chain": facts.health_json(),
                     "commit_refusal": facts.commit_refusal(),
                     "can_submit": chain_source.can_submit(),
@@ -1662,6 +1694,40 @@ fn serve_connection(
 
 #[cfg(test)]
 mod tests {
+    /// **ADR-0096 Decision 10: a bond-less identity is admitted exactly when the gateway never
+    /// commits.** Without the flag the refusal names what is missing and the flag that would
+    /// admit it; with it the bond is the zero outpoint and the key is empty, which `/health`
+    /// reports as `bond: null` rather than as an outpoint that looks like one.
+    #[test]
+    fn a_bondless_identity_is_admitted_only_for_an_answer_only_gateway() {
+        let file = || IdentityFile {
+            network_domain: "11".repeat(64),
+            class_id: "22".repeat(64),
+            bond_txid: String::new(),
+            bond_index: 0,
+            executor_pubkey: String::new(),
+            operator_id: "33".repeat(64),
+        };
+        let refused = identity_from_file(file(), false).err().expect("no bond, no flag");
+        assert!(refused.contains("--answer-never-commit") && refused.contains("bond_txid"), "{refused}");
+        let admitted = identity_from_file(file(), true).ok().expect("no bond, never commits");
+        assert!(admitted.bond_txid_hex.is_empty());
+        assert_eq!(admitted.executor_bond.transaction_id, TransactionId::from_bytes(Hash64::default().as_bytes()));
+        assert!(admitted.executor_pubkey.is_empty());
+        // A bond with no key is the other half of the same rule.
+        let mut keyless = file();
+        keyless.bond_txid = "44".repeat(64);
+        let refused = identity_from_file(keyless, false).err().expect("a bond with no key cannot sign");
+        assert!(refused.contains("executor_pubkey"), "{refused}");
+        // And a complete identity parses as it always did, flag or no flag.
+        let mut complete = file();
+        complete.bond_txid = "44".repeat(64);
+        complete.executor_pubkey = "ab".repeat(8);
+        let full = identity_from_file(complete, false).ok().expect("bonded");
+        assert_eq!(full.executor_bond.index, 0);
+        assert_eq!(full.executor_pubkey.len(), 8);
+    }
+
     use super::*;
 
     fn bounded_config() -> Config {
