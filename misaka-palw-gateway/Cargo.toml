@@ -35,6 +35,11 @@ misaka-palw-base0.workspace = true
 # guard, and the reachable-secret check. A second copy here would be a second answer to the same
 # question, and this repository has paid that bill before.
 misaka-palw.workspace = true
+# ADR-0096 Decisions 3 and 7: the JSON-Schema subset a `response_format` may name, its RFC 8785
+# bytes (also what the tool convention renders JSON with — one canonical form, both trees), and
+# the constraint id. The gateway validates with it after the run (advisory); Part B's compiler is
+# meant to be built beside it.
+misaka-palw-constraint.workspace = true
 # ADR-0077 Decision 4: the ONE submit path's shared vocabulary — the anchor TTL and the `.expired`
 # suffix, so the gateway's sweep and the rail's refusal cannot disagree about what "stale" is.
 misaka-palw-fp-submit.workspace = true
@@ -50,6 +55,8 @@ faster-hex.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# `misaka.format.canonical_sha256`: the digest a consumer checks its stored canonical JSON against.
+sha2.workspace = true
 
 [lints]
 workspace = true

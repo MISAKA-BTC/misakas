@@ -1,0 +1,31 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Extract the address."
+      }
+    ],
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "with_ref",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "address": {
+              "$ref": "#/components/schemas/Address"
+            }
+          },
+          "required": [
+            "address"
+          ]
+        }
+      }
+    }
+  },
+  "expect": {
+    "verdict": "refused",
+    "reason_contains": "`$ref` at \"/properties/address\""
+  }
+}

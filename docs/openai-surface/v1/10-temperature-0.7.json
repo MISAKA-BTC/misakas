@@ -1,0 +1,15 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Write a haiku."
+      }
+    ],
+    "temperature": 0.7
+  },
+  "expect": {
+    "verdict": "refused",
+    "reason_contains": "palw_fp_decode_rules"
+  }
+}

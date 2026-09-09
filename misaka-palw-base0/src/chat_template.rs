@@ -91,6 +91,46 @@ pub const TEMPLATE_ID_CHAT_SEGMENTS_V1: &str = "misaka-palw/fp-gateway-template/
 /// The same transform with the model's own closed think block appended to the generation prompt.
 /// A distinct id because the ids it produces differ, and ids are what consensus sees.
 pub const TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_V1: &str = "misaka-palw/fp-gateway-template/chat-segments-think-closed/v1";
+/// The gateway's plain-marker fallback (`### User:` lines), carried as ONE `Text` segment so the
+/// user's text is encoded with special-token parsing DISABLED even on a model whose control tokens
+/// the gateway cannot name. A distinct id from the original `…/plain-markers/v1`, which rode the
+/// `Text` arm with specials ENABLED: same rendered string, different ids, and ids are what
+/// consensus sees. The renderer lives in the gateway (`wire::render_plain_markers`); the id lives
+/// HERE because [`template_id_with_tools_v1`] has to map it, and a table that spelled an id spelled
+/// elsewhere would be two spellings of one id.
+pub const TEMPLATE_ID_PLAIN_SEGMENTS_V1: &str = "misaka-palw/fp-gateway-template/plain-markers-segments/v1";
+
+// ADR-0096 Decision 2: a request that carries tools, a `tool` turn or an assistant `tool_calls`
+// turn is rendered under the model's own Hermes-style convention — the tool list as text in the
+// system turn, a call as a `<tool_call>` block, a tool's reply as a `<tool_response>` user turn.
+// That is a different transform from messages to model input than the three above, so it is a
+// different id: a `/health` that advertises `chat-segments/v1` keeps advertising the transform
+// the model selects (the tools id is a property of ONE request, not of the class), and the golden
+// tests for the three base renders are untouched because their ids are untouched.
+/// [`TEMPLATE_ID_CHAT_SEGMENTS_V1`] with the tool convention spoken in the text.
+pub const TEMPLATE_ID_CHAT_SEGMENTS_TOOLS_V1: &str = "misaka-palw/fp-gateway-template/chat-segments-tools/v1";
+/// [`TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_V1`] with the tool convention spoken in the text.
+pub const TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_TOOLS_V1: &str =
+    "misaka-palw/fp-gateway-template/chat-segments-think-closed-tools/v1";
+/// [`TEMPLATE_ID_PLAIN_SEGMENTS_V1`] with the tool convention spoken in the text.
+pub const TEMPLATE_ID_PLAIN_SEGMENTS_TOOLS_V1: &str = "misaka-palw/fp-gateway-template/plain-segments-tools/v1";
+
+/// **The `-tools` sibling of a base template id** (ADR-0096 Decision 2).
+///
+/// The base id is the model's: `qwen_chat_variant_v1` reads it off the declared tokens, and
+/// `/health` advertises it. The tools id is the REQUEST's: it names "that transform, with the tool
+/// convention rendered into the text", and a job whose prompt carried a tool block must not carry
+/// the id of a prompt that did not — two prompts under one id is the drift the ids exist to
+/// prevent. `None` for an id this table does not know: a caller must refuse rather than guess,
+/// because an id that passed through unchanged would be exactly that drift, silently.
+pub fn template_id_with_tools_v1(base: &'static str) -> Option<&'static str> {
+    match base {
+        TEMPLATE_ID_CHAT_SEGMENTS_V1 => Some(TEMPLATE_ID_CHAT_SEGMENTS_TOOLS_V1),
+        TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_V1 => Some(TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_TOOLS_V1),
+        TEMPLATE_ID_PLAIN_SEGMENTS_V1 => Some(TEMPLATE_ID_PLAIN_SEGMENTS_TOOLS_V1),
+        _ => None,
+    }
+}
 
 /// The ChatML markers, by NAME. Nothing in this module ever holds an id it did not look up.
 pub const CHATML_START: &str = "<|im_start|>";
@@ -524,5 +564,47 @@ mod tests {
         );
         // The GGUF's own template, verbatim, is the reason for those exact bytes.
         assert_eq!(CLOSED_THINK_PREAMBLE, "<think>\n\n</think>\n\n");
+    }
+
+    /// **ADR-0096 Decision 2: the tools ids are a table, and the table is total over the three
+    /// base ids and nothing else.** Six distinct ids; each `-tools` id is its base id with the
+    /// convention named; an id the table does not know gets `None`, never itself.
+    #[test]
+    fn the_tools_template_ids_are_a_total_table_over_the_base_ids() {
+        assert_eq!(template_id_with_tools_v1(TEMPLATE_ID_CHAT_SEGMENTS_V1), Some(TEMPLATE_ID_CHAT_SEGMENTS_TOOLS_V1));
+        assert_eq!(
+            template_id_with_tools_v1(TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_V1),
+            Some(TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_TOOLS_V1)
+        );
+        assert_eq!(template_id_with_tools_v1(TEMPLATE_ID_PLAIN_SEGMENTS_V1), Some(TEMPLATE_ID_PLAIN_SEGMENTS_TOOLS_V1));
+        assert_eq!(
+            template_id_with_tools_v1("misaka-palw/fp-gateway-template/plain-markers/v1"),
+            None,
+            "the retired id has no sibling"
+        );
+        assert_eq!(template_id_with_tools_v1(TEMPLATE_ID_CHAT_SEGMENTS_TOOLS_V1), None, "a tools id has no tools sibling of its own");
+
+        let all = [
+            TEMPLATE_ID_CHAT_SEGMENTS_V1,
+            TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_V1,
+            TEMPLATE_ID_PLAIN_SEGMENTS_V1,
+            TEMPLATE_ID_CHAT_SEGMENTS_TOOLS_V1,
+            TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_TOOLS_V1,
+            TEMPLATE_ID_PLAIN_SEGMENTS_TOOLS_V1,
+        ];
+        for (i, a) in all.iter().enumerate() {
+            assert!(a.starts_with("misaka-palw/fp-gateway-template/") && a.ends_with("/v1"), "{a}");
+            for b in &all[i + 1..] {
+                assert_ne!(a, b, "two transforms must never carry one id");
+            }
+        }
+        for base in &all[..3] {
+            let tools = template_id_with_tools_v1(base).unwrap();
+            assert!(tools.ends_with("-tools/v1"), "{tools} names the convention in its own id");
+            assert!(all[3..].contains(&tools) && !all[..3].contains(&tools), "a tools id is never a base id");
+        }
+        // The variants still select their BASE ids: the tools id is a per-request fact.
+        assert_eq!(QwenChatVariantV1::Chatml.template_id(), TEMPLATE_ID_CHAT_SEGMENTS_V1);
+        assert_eq!(QwenChatVariantV1::ChatmlThinkClosed.template_id(), TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_V1);
     }
 }

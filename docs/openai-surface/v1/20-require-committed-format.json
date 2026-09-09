@@ -1,0 +1,20 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Give me a JSON object with one key."
+      }
+    ],
+    "response_format": {
+      "type": "json_object"
+    },
+    "misaka": {
+      "require_committed_format": true
+    }
+  },
+  "expect": {
+    "verdict": "refused",
+    "reason_contains": "palw_fp_decode_constraint"
+  }
+}

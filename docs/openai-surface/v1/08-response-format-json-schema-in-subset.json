@@ -1,0 +1,52 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Extract the person: Ada Lovelace, 36, mathematician."
+      }
+    ],
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "person",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "age": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 150
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 4
+            },
+            "kind": {
+              "enum": [
+                "person",
+                "robot"
+              ]
+            }
+          },
+          "required": [
+            "name",
+            "age"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "expect": {
+    "verdict": "accepted"
+  }
+}

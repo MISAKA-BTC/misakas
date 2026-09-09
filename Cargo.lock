@@ -6006,6 +6006,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-constraint"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "kaspa-hashes",
+ "regex",
+ "serde_json",
+]
+
+[[package]]
 name = "misaka-palw-derive"
 version = "1.1.0"
 dependencies = [
@@ -6052,11 +6062,13 @@ dependencies = [
  "kaspa-wrpc-client",
  "misaka-palw",
  "misaka-palw-base0",
+ "misaka-palw-constraint",
  "misaka-palw-derive",
  "misaka-palw-fp-submit",
  "rand 0.8.6",
  "serde",
  "serde_json",
+ "sha2 0.10.8",
  "tokio",
 ]
 

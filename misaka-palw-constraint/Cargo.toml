@@ -1,0 +1,35 @@
+[package]
+name = "misaka-palw-constraint"
+description = "ADR-0096 Decisions 3 and 7: the JSON-Schema subset a free-prompt answer may be asked to take, its RFC 8785 canonical bytes, and the constraint id those bytes are named by. Pure functions over JSON — the entrance validates with it today (advisory), and Part B's compiler is meant to be built beside it."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# `Hash64` and the tree's ONE keyed BLAKE2b-512 helper, so a constraint id is spelled the way
+# every other free-prompt id is (`canonical_id` in consensus-core: the domain as the key, the
+# u64-LE length, then the bytes).
+kaspa-hashes.workspace = true
+# `pattern` is validated with the crate the workspace already pins; a regex it cannot compile is
+# refused by name rather than approximated (ADR-0096 Decision 7's "pinned by table" is Part B's;
+# until then the table is "what `regex` 1.x accepts").
+regex.workspace = true
+# `float_roundtrip`: serde_json's default float parser is best-effort, not correctly rounded —
+# RFC 8785's own example, `333333333.33333329`, parsed to the NEIGHBOURING double without it, and
+# a canonical byte string that depends on which parser read the text is not canonical. The feature
+# unifies onto every build that carries this crate (the gateway, the Studio); it makes float
+# parsing slower and never less correct.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+
+[dev-dependencies]
+# The tests re-spell the id construction with the two-`update` form consensus-core uses, so the
+# one-call helper above and the transition's own hashing are checked to be the same function.
+blake2b_simd.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,15 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello"
+      }
+    ],
+    "n": 2
+  },
+  "expect": {
+    "verdict": "refused",
+    "reason_contains": "n 2 is refused by name"
+  }
+}

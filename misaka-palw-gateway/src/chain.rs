@@ -86,6 +86,25 @@ pub struct ChainFacts {
     /// the same reason as `fp_decode_rules_armed`. Fail-closed: a node that reports nothing reads
     /// as dormant.
     pub panel_da_armed: bool,
+    /// **ADR-0096 Decision 8's fence, `Params::palw_fp_decode_constraint`** — whether this network
+    /// commits a `response_format` as a decode constraint the seat replays and the court can try.
+    ///
+    /// **A constant `false` for now, on purpose.** The fence does not exist in consensus-core yet
+    /// (Part B of the ADR: job version 6, selection rule v3, refutation v3, `render_answer_v2`, the
+    /// token-to-bytes table as served material), and `GetPalwProducerFactsResponse` has no
+    /// `fp_decode_constraint_armed` field to read it from. Until both land, the honest reading of
+    /// every network is "dormant", and Decision 3's mode is therefore `advisory` on every request:
+    /// the schema is rendered into the prompt as text, the run is unconstrained, the answer is
+    /// validated after the fact and the response SAYS so. A request that sets
+    /// `misaka.require_committed_format: true` is refused by name while this is false, before the
+    /// inference — an integration that needs the guarantee must never receive a lookalike.
+    ///
+    /// When the RPC grows the field, this is set in `RpcChainSource::read` the way
+    /// `fp_decode_rules_armed` is — and fail-closed the same way: a node that reports nothing
+    /// reads as dormant. The field is here rather than a gateway flag for the reason
+    /// `fp_decode_rules_armed` gives above: a flag could disagree with the network, and the
+    /// direction it would disagree in is the expensive one.
+    pub fp_decode_constraint_armed: bool,
     /// **ADR-0081 Decision 3's prompt-commitment form**: `true` where the network hashes prompts
     /// as a tiled Merkle root. The worker's result is re-bound under it (`prompt_ids_form`), so a
     /// worker started for the wrong network is refused here rather than at the chain.
@@ -188,6 +207,7 @@ impl ChainFacts {
             "fp_max_quanta_per_receipt": self.fp_max_quanta_per_receipt,
             "fp_decode_rules_armed": self.fp_decode_rules_armed,
             "panel_da_armed": self.panel_da_armed,
+            "fp_decode_constraint_armed": self.fp_decode_constraint_armed,
             "prompt_ids_merkle": self.prompt_ids_merkle,
             "anchor_daa": self.anchor_daa,
         })
@@ -445,6 +465,24 @@ mod tests {
         assert_eq!(exposure_room("nonsense", "0"), 0);
         // u128 quantities clamp into sompi rather than wrapping.
         assert_eq!(exposure_room(&u128::MAX.to_string(), "0"), u64::MAX);
+    }
+
+    /// **ADR-0096 Decision 8's fence reads as dormant on every source** — a constant `false`
+    /// until consensus-core carries the fence and the RPC carries the flag — and `/health` says so
+    /// by name rather than omitting it, so an operator reading "why is my format advisory" finds
+    /// the answer where the other fences are.
+    #[test]
+    fn the_decode_constraint_fence_is_dormant_everywhere_and_health_says_so() {
+        assert!(!ChainFacts::default().fp_decode_constraint_armed);
+        assert!(!certified().fp_decode_constraint_armed, "a certified class on a live node is still on a network without the fence");
+        assert_eq!(certified().health_json()["fp_decode_constraint_armed"], serde_json::json!(false));
+        // The RPC read path does not set it: there is no field to read it from yet, and a field
+        // that appeared with a default of `true` would be the expensive kind of disagreement. The
+        // needle is assembled at run time so this assertion does not match its own source line.
+        let needle = format!("facts.fp_decode_{}_armed =", "constraint");
+        let source = std::include_str!("chain.rs");
+        let assignments = source.lines().filter(|l| l.contains(&needle)).count();
+        assert_eq!(assignments, 0, "nothing in this tree can set the fence until the RPC carries it");
     }
 
     #[test]

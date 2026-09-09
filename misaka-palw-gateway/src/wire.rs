@@ -27,17 +27,18 @@ use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpPromptSegmentV1, PalwFpWork
 // in place is a fork of the class, so a change of transform is a change of id.
 // ---------------------------------------------------------------------------------------------
 
-/// The plain-marker transform, carried as ONE `Text` segment — so the user's text is encoded with
-/// special-token parsing DISABLED even on a model whose control tokens this gateway cannot name.
-/// A distinct id from the original `…/plain-markers/v1` because that one rode the `Text` arm with
-/// specials ENABLED: same rendered string, different ids, and ids are what consensus sees.
-pub const TEMPLATE_ID_PLAIN_SEGMENTS_V1: &str = "misaka-palw/fp-gateway-template/plain-markers-segments/v1";
-// ADR-0077 Decision 6 places the model's own control tokens segment-wise, and there are now two
-// such transforms: `…/chat-segments/v1`, which ends the generation prompt at `assistant\n`, and
-// `…/chat-segments-think-closed/v1`, which ends it with a reasoning model's own closed think
-// block. Neither id is spelled here — both live beside the renderer that produces them, in
-// `misaka_palw_base0::chat_template`, because two constants with the same value in two crates is
-// how they stop having the same value. `template_id_for` below is this file's way to ask.
+// Every id this gateway can run under is spelled ONCE, in `misaka_palw_base0::chat_template`,
+// beside the table that maps each to its ADR-0096 `-tools` sibling: `…/chat-segments/v1` (ADR-0077
+// Decision 6, ends the generation prompt at `assistant\n`), `…/chat-segments-think-closed/v1`
+// (ends it with a reasoning model's own closed think block), and `…/plain-markers-segments/v1`
+// (this file's own fallback, `render_plain_markers` below: ONE `Text` segment, so the user's text
+// is encoded with special-token parsing DISABLED even on a model whose control tokens this gateway
+// cannot name — a distinct id from the retired `…/plain-markers/v1`, which rode the `Text` arm with
+// specials ENABLED: same rendered string, different ids, and ids are what consensus sees). The
+// plain id used to be spelled here; it moved the day the tools table needed to name it, because
+// two constants with the same value in two crates is how they stop having the same value.
+// `template_id_for` below is this file's way to ask which transform a model selects.
+pub use misaka_palw_base0::chat_template::TEMPLATE_ID_PLAIN_SEGMENTS_V1;
 
 pub const MARKER_SYSTEM: &str = "### System:\n";
 pub const MARKER_USER: &str = "### User:\n";
@@ -47,8 +48,10 @@ pub const TURN_SEPARATOR: &str = "\n\n";
 /// the SHOWN answer. Presentation only — the commitment covers every executed token.
 pub const STOP_GUARD: &str = "\n###";
 
-/// One chat turn, as this surface accepts it.
-#[derive(Clone, Debug)]
+/// One chat turn as the TEMPLATE accepts it: a role in system|user|assistant and its text. A
+/// request's richer messages (parts, tool calls, `tool` turns) are reduced to these by
+/// [`render_tools_into_turns`] before any template sees them.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Turn {
     pub role: String,
     pub content: String,
@@ -154,6 +157,329 @@ pub fn build_prompt(manifest: &PalwFpWorkerManifestV1, messages: &[Turn]) -> Res
         declared_specials: plan.declared_specials,
         displayed: plan.displayed,
     })
+}
+
+/// **[`build_prompt`] for turns that may have spoken the tool convention** (ADR-0096 Decision 2).
+///
+/// The segments are the same — a tool block is a `Text` segment like any other user text, and
+/// SA-3's subsequence check is unchanged — but the ID is not: a prompt that carried a tool block,
+/// a `<tool_call>` turn or a `<tool_response>` turn ran under a different transform from messages
+/// to model input than one that did not, and two transforms under one id is the drift the ids
+/// exist to prevent. `/health` keeps advertising the BASE id: that is the model's transform, read
+/// off its declared tokens; the tools id is a fact about one request.
+pub fn build_prompt_with_tools(manifest: &PalwFpWorkerManifestV1, tool_turns: &ToolTurns) -> Result<PromptPlan, String> {
+    let mut plan = build_prompt(manifest, &tool_turns.turns)?;
+    if tool_turns.spoke_tool_convention {
+        plan.template_id = misaka_palw_base0::chat_template::template_id_with_tools_v1(plan.template_id).ok_or_else(|| {
+            format!(
+                "the template id {} has no tools sibling (ADR-0096 Decision 2): a prompt that spoke the tool convention cannot \
+                 be committed under the id of one that did not, so the job is refused before the inference",
+                plan.template_id
+            )
+        })?;
+    }
+    Ok(plan)
+}
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0096 Decision 2 — a tool call is a turn of text, in the model's own convention
+// ---------------------------------------------------------------------------------------------
+//
+// The shipped classes' models (Qwen2.5-Instruct, Qwen3.x) were trained on the Hermes-style tool
+// convention, and the lane's template is the model's (ADR-0077 Decision 6): the tool list rides the
+// SYSTEM turn as `<tools>…</tools>` JSON, a call is a `<tool_call>{…}</tool_call>` block in an
+// assistant turn, and a tool's reply is a `user` turn wrapping `<tool_response>…</tool_response>`.
+// Everything below is TEXT — a `Text` segment, encoded with specials disabled like any other user
+// text, so SA-3's subsequence check is untouched and the ids are the prompt's. The round-trip (the
+// app executes the tool and sends the result back) is the app's; each leg is its own inference
+// and its own claim (R0), and nothing on chain knows what a tool is.
+//
+// The strings are verbatim from `Qwen/Qwen2.5-1.5B-Instruct`'s `tokenizer_config.json`
+// `chat_template` (read 2026-09-10). Where that template renders JSON with Python's `json.dumps`
+// (`", "` and `": "` separators, the client's key order), this file renders RFC 8785 bytes: the
+// client's key order and serde_json's map order are two things a prompt — and therefore a job id
+// — must not be a function of, and the canonical form is one both trees can reproduce.
+
+/// The system line placed when a request that needs a system turn (tools, a response format) has
+/// none. Qwen2.5's own template writes its vendor line here and Qwen3's writes nothing; this
+/// entrance and the Studio share ONE sentence so the two trees render one prompt.
+pub const DEFAULT_SYSTEM_TURN: &str = "You are a helpful assistant.";
+
+/// The head of the tool block, verbatim from the template. Each tool follows as `"\n"` + its JSON.
+pub const TOOLS_BLOCK_HEAD: &str = "\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided \
+                                    with function signatures within <tools></tools> XML tags:\n<tools>";
+/// The tail of the tool block, verbatim from the template.
+pub const TOOLS_BLOCK_TAIL: &str = "\n</tools>\n\nFor each function call, return a json object with function name and arguments within \
+                                    <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": \
+                                    <args-json-object>}\n</tool_call>";
+
+/// One tool, as the request declared it (OpenAI's `tools[].function`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: Option<String>,
+    pub parameters: Option<serde_json::Value>,
+    pub strict: Option<bool>,
+}
+
+impl ToolSpec {
+    /// The tool as the template renders it: OpenAI's `{"type": "function", "function": {…}}`
+    /// object, in RFC 8785 bytes.
+    pub fn render(&self) -> Result<String, String> {
+        let mut function = serde_json::Map::new();
+        function.insert("name".into(), serde_json::Value::String(self.name.clone()));
+        if let Some(description) = &self.description {
+            function.insert("description".into(), serde_json::Value::String(description.clone()));
+        }
+        if let Some(parameters) = &self.parameters {
+            function.insert("parameters".into(), parameters.clone());
+        }
+        if let Some(strict) = self.strict {
+            function.insert("strict".into(), serde_json::Value::Bool(strict));
+        }
+        let object = serde_json::json!({ "type": "function", "function": function });
+        canonical_text(&object).map_err(|why| format!("tool `{}` has no canonical rendering: {why}", self.name))
+    }
+}
+
+/// RFC 8785 bytes as a `String` — canonical JSON is UTF-8 by construction.
+fn canonical_text(value: &serde_json::Value) -> Result<String, String> {
+    let bytes = misaka_palw_constraint::canonical::to_rfc8785(value)?;
+    String::from_utf8(bytes).map_err(|e| format!("canonical JSON is UTF-8 by construction: {e}"))
+}
+
+/// One call an assistant turn made, as the request replayed it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolCallTurn {
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+/// One message as the entrance admitted it: a role in system|user|assistant|tool, its text, and —
+/// on an assistant turn — the calls it made.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChatTurn {
+    pub role: String,
+    pub content: String,
+    pub tool_calls: Vec<ToolCallTurn>,
+}
+
+impl ChatTurn {
+    pub fn text(role: &str, content: &str) -> Self {
+        Self { role: role.to_string(), content: content.to_string(), tool_calls: Vec::new() }
+    }
+}
+
+/// OpenAI's `tool_choice`, as this lane serves it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolChoice {
+    /// The default: the tools are offered and the model decides.
+    Auto,
+    /// The tools are not rendered at all.
+    None,
+    /// The model is TOLD it must call a function. Advisory (Decision 2): nothing masks the decode.
+    Required,
+    /// The model is TOLD it must call this function. Advisory, the same way.
+    Named(String),
+}
+
+impl ToolChoice {
+    /// Decision 2's advisory sentence — what the model is told, since on a dormant network
+    /// nothing else can be done. `None` for the choices that ask nothing.
+    pub fn advisory_sentence(&self) -> Option<String> {
+        match self {
+            Self::Auto | Self::None => None,
+            Self::Required => Some("You must call a function.".to_string()),
+            Self::Named(name) => Some(format!("You must call the function `{name}`.")),
+        }
+    }
+
+    /// What `misaka.tool_choice.requested` reports: the choice in OpenAI's own spelling.
+    pub fn requested_json(&self) -> serde_json::Value {
+        match self {
+            Self::Auto => serde_json::json!("auto"),
+            Self::None => serde_json::json!("none"),
+            Self::Required => serde_json::json!("required"),
+            Self::Named(name) => serde_json::json!({ "type": "function", "function": { "name": name } }),
+        }
+    }
+}
+
+/// What [`render_tools_into_turns`] produced: the text turns, and whether the tool convention
+/// was spoken anywhere in them — which is what decides the template id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolTurns {
+    pub turns: Vec<Turn>,
+    pub spoke_tool_convention: bool,
+}
+
+/// **Append text to the system turn, creating one when the request has none.**
+///
+/// The template treats `messages[0]` as the system turn and nothing else as one, so this reads
+/// the first turn only; a system turn elsewhere is an ordinary turn to the model and stays one.
+/// A created turn holds [`DEFAULT_SYSTEM_TURN`] before the appended text, so a request with tools
+/// and no system line renders the line Qwen's template would (modulo the vendor's wording).
+pub fn append_to_system_turn(turns: &mut Vec<Turn>, text: &str) {
+    match turns.first_mut() {
+        Some(first) if first.role == "system" => first.content.push_str(text),
+        _ => turns.insert(0, Turn { role: "system".into(), content: format!("{DEFAULT_SYSTEM_TURN}{text}") }),
+    }
+}
+
+/// **Render tool turns and the tool list into plain text turns** (ADR-0096 Decision 2), in the
+/// model's own convention:
+///
+/// * a `tool` message becomes a `user` turn holding `<tool_response>\n…\n</tool_response>`, and a
+///   RUN of them becomes ONE user turn, the responses separated by `\n` — the template's own
+///   merge rule;
+/// * an assistant message with `tool_calls` becomes its content (possibly empty) followed by one
+///   `\n<tool_call>\n{"name": "…", "arguments": {…}}\n</tool_call>` per call, which is byte for
+///   byte what the template writes after `assistant` (its leading `\n` is the one
+///   `qwen_chat_prompt` writes after the role);
+/// * with a non-empty `tools` list and a `tool_choice` other than `"none"`, the tool block is
+///   appended to the system turn (created if absent), and `"required"` or a named function
+///   appends its advisory sentence after it.
+///
+/// Everything else passes through unchanged. `spoke_tool_convention` is true when any of the
+/// three happened, and only then does the plan carry a `-tools` template id.
+pub fn render_tools_into_turns(turns: &[ChatTurn], tools: &[ToolSpec], tool_choice: &ToolChoice) -> Result<ToolTurns, String> {
+    let mut out: Vec<Turn> = Vec::with_capacity(turns.len() + 1);
+    let mut spoke = false;
+    let mut i = 0;
+    while i < turns.len() {
+        let turn = &turns[i];
+        match turn.role.as_str() {
+            "tool" => {
+                let mut responses: Vec<String> = Vec::new();
+                while i < turns.len() && turns[i].role == "tool" {
+                    responses.push(format!("<tool_response>\n{}\n</tool_response>", turns[i].content));
+                    i += 1;
+                }
+                out.push(Turn { role: "user".into(), content: responses.join("\n") });
+                spoke = true;
+                continue;
+            }
+            "assistant" if !turn.tool_calls.is_empty() => {
+                // The template's tail after `assistant`: `\n` + content when there is content, then
+                // `\n<tool_call>…</tool_call>` per call. The renderer writes `assistant\n` itself, so
+                // exactly one leading `\n` is dropped here.
+                let mut tail = String::new();
+                if !turn.content.is_empty() {
+                    tail.push('\n');
+                    tail.push_str(&turn.content);
+                }
+                for call in &turn.tool_calls {
+                    let name = canonical_text(&serde_json::Value::String(call.name.clone()))?;
+                    let arguments = canonical_text(&call.arguments)
+                        .map_err(|why| format!("tool call `{}` has arguments with no canonical rendering: {why}", call.name))?;
+                    tail.push_str(&format!("\n<tool_call>\n{{\"name\": {name}, \"arguments\": {arguments}}}\n</tool_call>"));
+                }
+                let content = tail.strip_prefix('\n').unwrap_or(&tail).to_string();
+                out.push(Turn { role: "assistant".into(), content });
+                spoke = true;
+            }
+            _ => out.push(Turn { role: turn.role.clone(), content: turn.content.clone() }),
+        }
+        i += 1;
+    }
+    if !tools.is_empty() && *tool_choice != ToolChoice::None {
+        let mut block = String::from(TOOLS_BLOCK_HEAD);
+        for tool in tools {
+            block.push('\n');
+            block.push_str(&tool.render()?);
+        }
+        block.push_str(TOOLS_BLOCK_TAIL);
+        if let Some(sentence) = tool_choice.advisory_sentence() {
+            block.push_str("\n\n");
+            block.push_str(&sentence);
+        }
+        append_to_system_turn(&mut out, &block);
+        spoke = true;
+    }
+    Ok(ToolTurns { turns: out, spoke_tool_convention: spoke })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Decision 2, the answer side — `<tool_call>` blocks become `tool_calls[]`, and nothing committed
+// moves
+// ---------------------------------------------------------------------------------------------
+
+/// One call the model made, parsed out of the shown answer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParsedToolCall {
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+/// The shown answer with its well-formed `<tool_call>` blocks lifted out.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ParsedAnswer {
+    /// What remains once the parsed blocks are removed, trimmed.
+    pub text: String,
+    pub calls: Vec<ParsedToolCall>,
+    /// Blocks that were not a `{"name", "arguments"}` object, or never closed. They stay in
+    /// `text` — the model said them, and a block the entrance could not read is still the answer.
+    pub unparsed_blocks: usize,
+}
+
+const TOOL_CALL_OPEN: &str = "<tool_call>";
+const TOOL_CALL_CLOSE: &str = "</tool_call>";
+
+/// **Parse every `<tool_call>…</tool_call>` block out of the shown answer.**
+///
+/// A pure function over the DISPLAYED text — it takes a `&str` and returns new strings, so by
+/// construction it can touch neither the ids nor the bytes the commitment covers: the roots of a
+/// run with and without parsing are the roots of the same run (ADR-0096 invariant 8). A block
+/// whose body is not JSON with a string `name` and an `arguments` member is left where it was and
+/// counted, never repaired.
+pub fn parse_tool_calls(shown: &str) -> ParsedAnswer {
+    let mut out = ParsedAnswer::default();
+    let mut text = String::with_capacity(shown.len());
+    let mut rest = shown;
+    while let Some(open) = rest.find(TOOL_CALL_OPEN) {
+        let after_open = &rest[open + TOOL_CALL_OPEN.len()..];
+        let Some(close) = after_open.find(TOOL_CALL_CLOSE) else {
+            // Never closed: the budget or the display cut ended the block. It stays as text.
+            out.unparsed_blocks += 1;
+            text.push_str(rest);
+            rest = "";
+            break;
+        };
+        let body = after_open[..close].trim();
+        let block_end = open + TOOL_CALL_OPEN.len() + close + TOOL_CALL_CLOSE.len();
+        match serde_json::from_str::<serde_json::Value>(body) {
+            Ok(serde_json::Value::Object(mut members))
+                if members.get("name").is_some_and(serde_json::Value::is_string) && members.contains_key("arguments") =>
+            {
+                let name = members.remove("name").and_then(|n| n.as_str().map(str::to_string)).expect("checked: a string");
+                let arguments = members.remove("arguments").expect("checked: present");
+                out.calls.push(ParsedToolCall { name, arguments });
+                text.push_str(&rest[..open]);
+            }
+            _ => {
+                out.unparsed_blocks += 1;
+                text.push_str(&rest[..block_end]);
+            }
+        }
+        rest = &rest[block_end..];
+    }
+    text.push_str(rest);
+    out.text = text.trim().to_string();
+    out
+}
+
+/// The domain the call ids are minted under. OpenAI's ids are opaque strings; this lane's are a
+/// keyed hash of `(job id, index)`, so the same job names the same calls on every read and no
+/// process holds a counter.
+const TOOL_CALL_ID_DOMAIN: &[u8] = b"misaka-palw/tool-call-id/v1";
+
+/// `call_` + the first 24 hex characters of `H(domain ‖ job_id ‖ index_le32)`.
+pub fn tool_call_id(job_id: kaspa_hashes::Hash64, index: u32) -> String {
+    let mut preimage = Vec::with_capacity(68);
+    preimage.extend_from_slice(job_id.as_byte_slice());
+    preimage.extend_from_slice(&index.to_le_bytes());
+    let digest = kaspa_hashes::blake2b_512_keyed(TOOL_CALL_ID_DOMAIN, &preimage);
+    format!("call_{}", &faster_hex::hex_string(digest.as_byte_slice())[..24])
 }
 
 /// Every id the worker's manifest calls a control token — the set no `Text` segment may ever
@@ -755,6 +1081,264 @@ mod tests {
         }
         assert_eq!(deltas.trim_end(), stream.shown());
         assert_eq!(stream.shown(), "The answer is four.");
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // ADR-0096 Decision 2 — tools as the model's own text
+    // -----------------------------------------------------------------------------------------
+
+    fn weather_tool() -> ToolSpec {
+        ToolSpec {
+            name: "get_weather".into(),
+            description: Some("Get the weather".into()),
+            parameters: Some(
+                serde_json::json!({ "type": "object", "properties": { "city": { "type": "string" } }, "required": ["city"] }),
+            ),
+            strict: None,
+        }
+    }
+
+    /// The tool block, byte for byte, is Qwen2.5-Instruct's own `chat_template` text with the
+    /// tool JSON in RFC 8785 form — and a request with no system turn gets one that holds the
+    /// shared default line and the block.
+    #[test]
+    fn the_tool_block_is_the_models_own_template_text() {
+        let rendered =
+            render_tools_into_turns(&[ChatTurn::text("user", "weather in Paris?")], &[weather_tool()], &ToolChoice::Auto).unwrap();
+        assert!(rendered.spoke_tool_convention);
+        assert_eq!(rendered.turns.len(), 2, "a system turn was created");
+        assert_eq!(rendered.turns[0].role, "system");
+        assert_eq!(
+            rendered.turns[0].content,
+            "You are a helpful assistant.\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided \
+             with function signatures within <tools></tools> XML tags:\n<tools>\n\
+             {\"function\":{\"description\":\"Get the weather\",\"name\":\"get_weather\",\"parameters\":{\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"}},\"type\":\"function\"}\n\
+             </tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> \
+             XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>"
+        );
+        assert_eq!(rendered.turns[1], Turn { role: "user".into(), content: "weather in Paris?".into() });
+
+        // An existing system turn is appended to, never duplicated; two tools are two lines.
+        let two = render_tools_into_turns(
+            &[ChatTurn::text("system", "Be brief."), ChatTurn::text("user", "hi")],
+            &[weather_tool(), ToolSpec { name: "get_time".into(), description: None, parameters: None, strict: Some(true) }],
+            &ToolChoice::Auto,
+        )
+        .unwrap();
+        assert_eq!(two.turns.len(), 2);
+        assert!(two.turns[0].content.starts_with("Be brief.\n\n# Tools\n\n"));
+        assert!(two.turns[0].content.contains("\n<tools>\n{\"function\":{\"description\":\"Get the weather\""));
+        assert!(
+            two.turns[0]
+                .content
+                .contains("}\n{\"function\":{\"name\":\"get_time\",\"strict\":true},\"type\":\"function\"}\n</tools>\n")
+        );
+
+        // `tool_choice: "none"` renders no block and speaks no convention: the plain transform.
+        let none = render_tools_into_turns(&[ChatTurn::text("user", "hi")], &[weather_tool()], &ToolChoice::None).unwrap();
+        assert_eq!(none, ToolTurns { turns: vec![Turn { role: "user".into(), content: "hi".into() }], spoke_tool_convention: false });
+        // And no tools at all is the identity on plain turns.
+        let plain =
+            render_tools_into_turns(&[ChatTurn::text("system", "s"), ChatTurn::text("user", "u")], &[], &ToolChoice::Auto).unwrap();
+        assert!(!plain.spoke_tool_convention);
+        assert_eq!(plain.turns, turns(&[("system", "s"), ("user", "u")]));
+    }
+
+    /// `required` and a named function are ADVISORY: one sentence after the block, and nothing
+    /// else — a decode mask is Part B's, and the report says `advisory`.
+    #[test]
+    fn tool_choice_required_and_named_are_one_advisory_sentence() {
+        let required = render_tools_into_turns(&[ChatTurn::text("user", "hi")], &[weather_tool()], &ToolChoice::Required).unwrap();
+        assert!(required.turns[0].content.ends_with("</tool_call>\n\nYou must call a function."));
+        let named =
+            render_tools_into_turns(&[ChatTurn::text("user", "hi")], &[weather_tool()], &ToolChoice::Named("get_weather".into()))
+                .unwrap();
+        assert!(named.turns[0].content.ends_with("</tool_call>\n\nYou must call the function `get_weather`."));
+        assert_eq!(ToolChoice::Auto.advisory_sentence(), None);
+        assert_eq!(ToolChoice::None.advisory_sentence(), None);
+        assert_eq!(
+            ToolChoice::Named("f".into()).requested_json(),
+            serde_json::json!({ "type": "function", "function": { "name": "f" } })
+        );
+        assert_eq!(ToolChoice::Required.requested_json(), serde_json::json!("required"));
+    }
+
+    /// The round-trip's two turns render as the template renders them: an assistant turn's calls
+    /// as `<tool_call>` blocks after its content (the leading newline is the renderer's), and a
+    /// run of `tool` turns as ONE user turn of `<tool_response>` blocks.
+    #[test]
+    fn tool_calls_and_tool_responses_render_as_the_templates_text() {
+        let history = vec![
+            ChatTurn::text("user", "weather in Paris and Rome?"),
+            ChatTurn {
+                role: "assistant".into(),
+                content: String::new(),
+                tool_calls: vec![
+                    ToolCallTurn { name: "get_weather".into(), arguments: serde_json::json!({ "city": "Paris" }) },
+                    ToolCallTurn { name: "get_weather".into(), arguments: serde_json::json!({ "city": "Rome" }) },
+                ],
+            },
+            ChatTurn::text("tool", "{\"temp_c\": 21}"),
+            ChatTurn::text("tool", "{\"temp_c\": 27}"),
+            ChatTurn::text("user", "and Berlin?"),
+        ];
+        let rendered = render_tools_into_turns(&history, &[], &ToolChoice::Auto).unwrap();
+        assert!(rendered.spoke_tool_convention, "a tool turn is the convention even without a tools list");
+        assert_eq!(rendered.turns.len(), 4, "two tool turns merged into one user turn");
+        assert_eq!(
+            rendered.turns[1],
+            Turn {
+                role: "assistant".into(),
+                content: "<tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"city\":\"Paris\"}}\n</tool_call>\n\
+                          <tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"city\":\"Rome\"}}\n</tool_call>"
+                    .into()
+            }
+        );
+        assert_eq!(
+            rendered.turns[2],
+            Turn {
+                role: "user".into(),
+                content: "<tool_response>\n{\"temp_c\": 21}\n</tool_response>\n<tool_response>\n{\"temp_c\": 27}\n</tool_response>"
+                    .into()
+            }
+        );
+        assert_eq!(rendered.turns[3], Turn { role: "user".into(), content: "and Berlin?".into() });
+
+        // With content, the template writes the content first and the block on the next line —
+        // and through `build_prompt` the whole thing is exactly Qwen's `assistant\n` + tail.
+        let with_text = vec![ChatTurn {
+            role: "assistant".into(),
+            content: "Let me check.".into(),
+            tool_calls: vec![ToolCallTurn { name: "get_time".into(), arguments: serde_json::json!({}) }],
+        }];
+        let rendered = render_tools_into_turns(&with_text, &[], &ToolChoice::Auto).unwrap();
+        assert_eq!(rendered.turns[0].content, "Let me check.\n<tool_call>\n{\"name\": \"get_time\", \"arguments\": {}}\n</tool_call>");
+        let plan =
+            build_prompt(&manifest(true), &[rendered.turns[0].clone(), Turn { role: "user".into(), content: "u".into() }]).unwrap();
+        assert!(plan.displayed.starts_with(
+            "<|im_start|>assistant\nLet me check.\n<tool_call>\n{\"name\": \"get_time\", \"arguments\": {}}\n</tool_call><|im_end|>\n"
+        ));
+    }
+
+    /// **The tools id is per request, the base id is the model's** (ADR-0096 Decision 2): the
+    /// same manifest yields the base id for a plain request and the `-tools` id for one that
+    /// spoke the convention, the SEGMENTS differ only by text, and SA-3's declared specials are
+    /// identical — the tool block is a `Text` segment like any other user text.
+    #[test]
+    fn a_request_that_spoke_the_convention_carries_the_tools_id_and_the_same_specials() {
+        use misaka_palw_base0::chat_template::{
+            TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_TOOLS_V1, TEMPLATE_ID_CHAT_SEGMENTS_TOOLS_V1, TEMPLATE_ID_PLAIN_SEGMENTS_TOOLS_V1,
+        };
+        let plain_turns =
+            render_tools_into_turns(&[ChatTurn::text("system", "s"), ChatTurn::text("user", "u")], &[], &ToolChoice::Auto).unwrap();
+        let tool_turns = render_tools_into_turns(
+            &[ChatTurn::text("system", "s"), ChatTurn::text("user", "u")],
+            &[weather_tool()],
+            &ToolChoice::Auto,
+        )
+        .unwrap();
+        for (m, base, tools) in [
+            (manifest(true), TEMPLATE_ID_CHAT_SEGMENTS_V1, TEMPLATE_ID_CHAT_SEGMENTS_TOOLS_V1),
+            (think_manifest(), TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_V1, TEMPLATE_ID_CHAT_SEGMENTS_THINK_CLOSED_TOOLS_V1),
+            (manifest(false), TEMPLATE_ID_PLAIN_SEGMENTS_V1, TEMPLATE_ID_PLAIN_SEGMENTS_TOOLS_V1),
+        ] {
+            let plain = build_prompt_with_tools(&m, &plain_turns).unwrap();
+            let with_tools = build_prompt_with_tools(&m, &tool_turns).unwrap();
+            assert_eq!(plain.template_id, base, "{}", m.model_id);
+            assert_eq!(plain.template_id, template_id_for(&m), "/health advertises the model's transform");
+            assert_eq!(with_tools.template_id, tools, "{}", m.model_id);
+            assert_ne!(template_id_for(&m), with_tools.template_id, "the tools id is a fact about ONE request, never advertised");
+            assert_eq!(plain.declared_specials, with_tools.declared_specials, "the tool block placed no control token");
+            assert_eq!(plain.segments.len(), with_tools.segments.len());
+            assert!(with_tools.displayed.contains("<tools>\n{\"function\""), "the block is in the text");
+            for segment in &with_tools.segments {
+                if let PalwFpPromptSegmentV1::Text(bytes) = segment {
+                    assert!(!String::from_utf8_lossy(bytes).contains("<|im_"), "no control token rides inside the block");
+                }
+            }
+            // And SA-3 holds over the tools prompt with the same honest ids it holds over the plain one.
+            let control = control_token_ids(&m);
+            let honest: Vec<u32> = plain.declared_specials.iter().flat_map(|id| [*id, 10]).collect();
+            if !honest.is_empty() {
+                check_committed_prompt_ids(&with_tools, &honest, &control).expect("the same declared specials");
+            }
+        }
+    }
+
+    /// **The answer side parses; the commitment does not move** (ADR-0096 invariant 8). Two
+    /// well-formed blocks become calls, a malformed one and an unterminated one stay in the text
+    /// and are counted, and the stream's ids and bytes — what W5 compares and what the roots are
+    /// computed over — are untouched by any of it.
+    #[test]
+    fn tool_call_blocks_parse_out_of_the_shown_answer_and_nothing_committed_moves() {
+        let eog: BTreeSet<u32> = [151_645u32].into_iter().collect();
+        let mut stream = AnswerStream::new();
+        let pieces: [(u32, &str); 6] = [
+            (1, "Checking both.\n<tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\"}}\n</tool_call>"),
+            (2, "\n<tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Rome\", \"unit\": 1.0}}\n</tool_call>"),
+            (3, "\n<tool_call>\nnot json\n</tool_call>"),
+            (4, "\n<tool_call>\n{\"name\": \"x\""),
+            (151_645, "<|im_end|>"),
+            (5, " tail past the display cut"),
+        ];
+        for (id, text) in pieces {
+            stream.push(id, text.as_bytes(), &eog);
+        }
+        stream.finish();
+        let rendered: String = pieces.iter().map(|(_, t)| *t).collect();
+        let result = result_with(pieces.iter().map(|(id, _)| *id).collect(), &rendered);
+        assert!(check_streamed_answer(&stream, &result).unwrap(), "the honest run binds");
+        let roots_before = (result.output_root, result.trace_root, result.output_token_ids.clone(), stream.bytes().to_vec());
+
+        let parsed = parse_tool_calls(&stream.shown());
+        assert_eq!(parsed.calls.len(), 2);
+        assert_eq!(parsed.calls[0], ParsedToolCall { name: "get_weather".into(), arguments: serde_json::json!({ "city": "Paris" }) });
+        assert_eq!(parsed.calls[1].arguments, serde_json::json!({ "city": "Rome", "unit": 1.0 }));
+        assert_eq!(parsed.unparsed_blocks, 2, "the malformed block and the unterminated one");
+        // The parsed blocks are gone; the text around them — including the newline that preceded
+        // each — and the two unparsed blocks are kept verbatim, then the whole is trimmed.
+        assert_eq!(parsed.text, "Checking both.\n\n\n<tool_call>\nnot json\n</tool_call>\n<tool_call>\n{\"name\": \"x\"");
+
+        // `parse_tool_calls` takes a `&str` and returns new strings: by construction it reached
+        // neither the ids nor the bytes. Pinned anyway, because "by construction" rots.
+        assert_eq!((result.output_root, result.trace_root, result.output_token_ids.clone(), stream.bytes().to_vec()), roots_before);
+        assert!(check_streamed_answer(&stream, &result).unwrap(), "and W5 still binds the same run");
+
+        // Edge shapes: no block is the identity (trimmed); a block whose object lacks `arguments`
+        // is not a call; only-a-call leaves empty text.
+        let none = parse_tool_calls("  just text  ");
+        assert_eq!(none, ParsedAnswer { text: "just text".into(), calls: vec![], unparsed_blocks: 0 });
+        let no_args = parse_tool_calls("<tool_call>{\"name\": \"f\"}</tool_call>");
+        assert_eq!((no_args.calls.len(), no_args.unparsed_blocks), (0, 1));
+        let only = parse_tool_calls("<tool_call>\n{\"arguments\": {}, \"name\": \"f\"}\n</tool_call>\n");
+        assert_eq!(only.text, "");
+        assert_eq!(only.calls[0].name, "f");
+    }
+
+    /// Call ids are a keyed hash of `(job id, index)`: stable across reads, distinct across
+    /// indices and jobs, and OpenAI-shaped.
+    #[test]
+    fn tool_call_ids_are_a_function_of_the_job_and_the_index() {
+        let job = Hash64::from_u64_word(42);
+        let id0 = tool_call_id(job, 0);
+        assert_eq!(id0, tool_call_id(job, 0));
+        assert_eq!(id0.len(), "call_".len() + 24);
+        assert!(id0.starts_with("call_") && id0[5..].bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_ne!(id0, tool_call_id(job, 1));
+        assert_ne!(id0, tool_call_id(Hash64::from_u64_word(43), 0));
+    }
+
+    /// `append_to_system_turn` reads `messages[0]` only, as the template does: a later system turn
+    /// is an ordinary turn and a created one carries the shared default line.
+    #[test]
+    fn the_system_turn_is_the_first_turn_or_a_created_one() {
+        let mut first = turns(&[("system", "A"), ("user", "u")]);
+        append_to_system_turn(&mut first, "\n\nB");
+        assert_eq!(first, turns(&[("system", "A\n\nB"), ("user", "u")]));
+        let mut later = turns(&[("user", "u"), ("system", "late")]);
+        append_to_system_turn(&mut later, "\n\nB");
+        assert_eq!(later, turns(&[("system", "You are a helpful assistant.\n\nB"), ("user", "u"), ("system", "late")]));
+        assert_eq!(DEFAULT_SYSTEM_TURN, "You are a helpful assistant.");
     }
 
     /// The persistent-stream frame reader: a clean end is `None`, a truncated frame is an error.

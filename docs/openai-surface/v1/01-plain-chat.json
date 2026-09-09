@@ -1,0 +1,15 @@
+{
+  "request": {
+    "model": "misaka-palw-fp-v3",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is 2+2?"
+      }
+    ],
+    "max_tokens": 32
+  },
+  "expect": {
+    "verdict": "accepted"
+  }
+}

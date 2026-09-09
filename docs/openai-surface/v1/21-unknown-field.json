@@ -1,0 +1,15 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello"
+      }
+    ],
+    "reasoning_effort": "low"
+  },
+  "expect": {
+    "verdict": "refused",
+    "reason_contains": "`reasoning_effort` is not a field this surface serves"
+  }
+}

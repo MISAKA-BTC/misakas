@@ -28,9 +28,16 @@
 //! signature belongs to the signer sidecar (ADR-0079 Decision 4 — this process holds no key), and
 //! the summary names that and `misaka-palw-fp-rail --submit` as the remaining steps.
 //!
-//! **HTTP, hand-rolled.** One POST route, a health probe and an artifact fetch over std's
-//! `TcpListener`, following `rpc/eth`'s in-tree precedent of not pulling an async HTTP stack for a
-//! small, exact surface. `stream: true` is served as SSE (ADR-0077 Decision 2).
+//! **HTTP, hand-rolled.** One POST route, a health probe, a models list and an artifact fetch over
+//! std's `TcpListener`, following `rpc/eth`'s in-tree precedent of not pulling an async HTTP stack
+//! for a small, exact surface. `stream: true` is served as SSE (ADR-0077 Decision 2).
+//!
+//! **The OpenAI surface is one module** (ADR-0096 Decision 1): `surface` reads the request shape a
+//! stock client sends — content parts, tools and tool turns, `response_format`, the sampling knobs
+//! an SDK sets by default — and `surface::admit_request` is the ONE function every refusal comes
+//! from, called before the queue is reserved and before the worker is touched. What it admits is
+//! rendered by `wire` (tool turns as the model's own text, Decision 2) and checked after the run
+//! (`response_format`, advisory on every network whose fence is dormant, Decision 3).
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -62,8 +69,11 @@ mod derive;
 mod chain;
 // ADR-0077 Decisions 2 and 6 + SA-3: the prompt plan, the stream, and the two bindings.
 mod wire;
+// ADR-0096 Decision 1: the request shape, and every refusal, before the worker.
+mod surface;
 
-use wire::{AnswerStream, PromptPlan, Turn};
+use surface::{AdmittedRequest, ChatRequest};
+use wire::{AnswerStream, PromptPlan};
 
 // ---------------------------------------------------------------------------------------------
 // Config
@@ -210,6 +220,9 @@ struct Config {
     /// ADR-0079 Decision 5's platform half, installed and PROVEN at boot before the bind guard
     /// reads it. `none` when there is none — which Decision 10 then refuses a public bind on.
     confinement: Confinement,
+    /// When this process started, in Unix seconds — `GET /v1/models` reports it as the model's
+    /// `created`, the moment the class became reachable here.
+    booted_at_unix: u64,
 }
 
 /// The exposure numbers actually in force for one job: the operator's declaration where they made
@@ -553,46 +566,9 @@ impl WorkerSupervisor {
 }
 
 // ---------------------------------------------------------------------------------------------
-// OpenAI-compatible request/response shapes (the subset this surface serves)
+// OpenAI-compatible request/response shapes: the request lives in `surface` (ADR-0096 Decision 1);
+// the sampler rule stays here, spelled once, and `surface::admit_request` calls it.
 // ---------------------------------------------------------------------------------------------
-
-#[derive(Deserialize)]
-struct ChatMessage {
-    role: String,
-    content: String,
-}
-
-#[derive(Deserialize)]
-struct ChatRequest {
-    #[serde(default)]
-    model: Option<String>,
-    messages: Vec<ChatMessage>,
-    #[serde(default)]
-    max_tokens: Option<u32>,
-    /// ADR-0077 Decision 2: the answer streams as SSE; the commitment does not.
-    #[serde(default)]
-    stream: Option<bool>,
-    /// ADR-0078: the kind the person asked for — a transformer name (`scene/glb/v1`) or a kind
-    /// name (`scene`). Absent: the answer is the product and nothing is derived.
-    #[serde(default)]
-    derive: Option<String>,
-    /// ADR-0078 Decision 6: elect this claim's DSL into the data-availability obligation, so
-    /// third parties can verify the derivation on request. Default off — the DSL is the answer
-    /// to the person's prompt, and it is theirs to publish.
-    #[serde(default)]
-    serve_dsl: bool,
-    /// **ADR-0082 Decision 11: the sampling temperature the person asked for**, as an ordinary
-    /// float, in the class's own logit units — the number an OpenAI-shaped client already sends.
-    /// Quantized to Q24 by [`sampling_from_request`] and carried into the job id; absent or `0.0`
-    /// is the greedy default, which is the only value a network without the fence admits.
-    #[serde(default)]
-    temperature: Option<f64>,
-    /// ADR-0082 Decision 11: 64 hex characters, the seed the sampler draws under. Absent is the
-    /// zero seed. Named by the requester rather than rolled here so the same request twice is the
-    /// same answer twice — and so nothing about the draw is the gateway's to choose.
-    #[serde(default)]
-    seed: Option<String>,
-}
 
 /// **ADR-0082 Decision 11: the request's sampler inputs, quantized and gated on the chain.**
 ///
@@ -799,6 +775,18 @@ impl SseSink<'_> {
         self.event(&value);
     }
 
+    /// OpenAI's `stream_options.include_usage` chunk: an empty `choices` and the `usage` counts.
+    fn usage_chunk(&mut self, usage: serde_json::Value) {
+        let value = serde_json::json!({
+            "id": self.id,
+            "object": "chat.completion.chunk",
+            "model": self.model,
+            "choices": [],
+            "usage": usage,
+        });
+        self.event(&value);
+    }
+
     fn done(&mut self) {
         let _ = self.stream.write_all(b"data: [DONE]\n\n");
         let _ = self.stream.flush();
@@ -845,24 +833,31 @@ fn expire_stale_commitments(outbox: &Path, current_anchor_daa: u64, ttl_daa: u64
     retired
 }
 
+/// `chat` is the parsed request and `admitted` is what `surface::admit_request` made of it: every
+/// refusal the surface can raise has already been raised, before the queue and before the worker
+/// (ADR-0096 invariant 6). `facts` were read once, by the caller, for this job.
 #[allow(clippy::too_many_arguments)]
 fn handle_chat(
     config: &Config,
     identity: &Identity,
     worker: &WorkerSupervisor,
     budget: &Mutex<PublicJobBudget>,
-    chain_source: &chain::ChainSource,
-    chat: ChatRequest,
+    facts: &chain::ChainFacts,
+    chat: &ChatRequest,
+    admitted: AdmittedRequest,
     sink: &mut dyn ChatSink,
 ) -> Result<serde_json::Value, String> {
-    // ADR-0079 Decision 10: every bound is mandatory, and exceeding one is a 4xx rather than a
-    // queue. These are checked BEFORE the job is sent, which is the point of having them here.
-    if chat.messages.len() > MAX_CHAT_MESSAGES {
-        return Err(format!("{} messages exceeds the {MAX_CHAT_MESSAGES}-message cap", chat.messages.len()));
-    }
     let manifest = worker.manifest();
-    let turns: Vec<Turn> = chat.messages.iter().map(|m| Turn { role: m.role.clone(), content: m.content.clone() }).collect();
-    let plan: PromptPlan = wire::build_prompt(manifest, &turns)?;
+    // ADR-0096 Decision 2: tool turns and the tool list become the model's own text; Decision 3:
+    // the format instruction rides the system turn as text. Both BEFORE the template, which then
+    // sees plain turns and nothing else.
+    let mut tool_turns = wire::render_tools_into_turns(&admitted.turns, &admitted.tools, &admitted.tool_choice)?;
+    if let Some(format) = &admitted.format {
+        wire::append_to_system_turn(&mut tool_turns.turns, &format.instruction());
+    }
+    let plan: PromptPlan = wire::build_prompt_with_tools(manifest, &tool_turns)?;
+    // ADR-0079 Decision 10: every bound is mandatory, and exceeding one is a 4xx rather than a
+    // queue. Checked BEFORE the job is sent, which is the point of having it here.
     if plan.displayed_len() > config.max_prompt_bytes {
         return Err(format!(
             "the rendered prompt is {} bytes and the cap is {} — refused before the job is sent",
@@ -870,10 +865,9 @@ fn handle_chat(
             config.max_prompt_bytes
         ));
     }
-    let decode_limit = chat.max_tokens.unwrap_or(config.max_decode_default).clamp(1, config.max_decode_cap);
+    let decode_limit = admitted.max_tokens.unwrap_or(config.max_decode_default).clamp(1, config.max_decode_cap);
 
     // ADR-0077 Decision 3: the chain this gateway commits to, read for THIS job.
-    let facts = chain_source.read();
     if facts.anchor_block == Hash64::default() {
         return Err(facts.read_error.clone().unwrap_or_else(|| "no anchor is available for this job".to_string()));
     }
@@ -884,7 +878,7 @@ fn handle_chat(
     // the inference whether this one may spend exposure — the answer is produced either way; only
     // the commitment is withheld, which is what makes "answer, never commit" a mode and not an
     // outage, and what makes an uncertified class an answer rather than a refusal.
-    let price = ExposurePrice::resolve(config, &facts);
+    let price = ExposurePrice::resolve(config, facts);
     let mut commit_refusal = facts.commit_refusal();
     if commit_refusal.is_none() {
         commit_refusal = budget.lock().expect("the budget lock is never poisoned").may_commit(config, price).err();
@@ -892,9 +886,9 @@ fn handle_chat(
     let mut job_nonce = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut job_nonce);
 
-    // ADR-0082 Decision 11, decided from the request and the CHAIN — before the model is loaded,
-    // so a refusal costs a 4xx rather than an inference.
-    let (sampling_seed, temperature_q) = sampling_from_request(&chat, &facts)?;
+    // ADR-0082 Decision 11, decided from the request and the CHAIN by `admit_request` — before the
+    // model is loaded, so a refusal cost a 4xx rather than an inference.
+    let (sampling_seed, temperature_q) = admitted.sampling;
 
     let request = PalwFpWorkerRequestV3 {
         version: PALW_FP_V3_VERSION,
@@ -908,7 +902,7 @@ fn handle_chat(
         job_nonce,
         decode_token_limit: decode_limit,
         max_context_tokens: manifest.n_ctx,
-        privacy_mode: privacy_mode_for_request(config, &facts)?,
+        privacy_mode: privacy_mode_for_request(config, facts)?,
         prompt_mode: PALW_FP_PROMPT_MODE_USER,
         sampling_seed,
         temperature_q,
@@ -1017,6 +1011,29 @@ fn handle_chat(
         _ => None,
     };
     let (job_context_hash, family, job_context) = derive::read_worker_manifest(&config.outbox.join("traces").join(hex(job_id)));
+
+    // **ADR-0096 Decisions 2 and 3, on the SHOWN answer.** Both read the display string and write
+    // new strings: the ids and the bytes the commitment covers are untouched, which is why they
+    // run here, after the bindings and after the commitment was (or was not) written.
+    let shown = if streamed_checked { stream.shown() } else { wire::display_trim(&rendered_string).to_string() };
+    let parsed = wire::parse_tool_calls(&shown);
+    let format_report = admitted.format.as_ref().map(|format| format.check(&shown));
+    let format_json = admitted.format.as_ref().zip(format_report.as_ref()).map(|(format, report)| format.report_json(report));
+    let tool_calls_json: Vec<serde_json::Value> = parsed
+        .calls
+        .iter()
+        .enumerate()
+        .map(|(index, call)| {
+            let arguments = misaka_palw_constraint::canonical::to_rfc8785(&call.arguments)
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_else(|_| call.arguments.to_string());
+            serde_json::json!({
+                "id": wire::tool_call_id(job_id, index as u32),
+                "type": "function",
+                "function": { "name": call.name, "arguments": arguments },
+            })
+        })
+        .collect();
     let summary = serde_json::json!({
         "schema": "misaka.palw.fp-v3-gateway-artifact.v1",
         "fp_job_id": hex(job_id),
@@ -1057,6 +1074,10 @@ fn handle_chat(
         "commit_by_anchor_daa": commitment.job.anchor_daa.saturating_add(COMMITMENT_ANCHOR_TTL_DAA),
         "committed": commit_refusal.is_none(),
         "not_committed_because": commit_refusal.clone(),
+        // ADR-0096: what the entrance made of the shown answer — presentation, never commitment.
+        "tool_calls_parsed": parsed.calls.len(),
+        "tool_calls_unparsed": parsed.unparsed_blocks,
+        "format": format_json,
         "pending_for_chain_submission": [
             "ML-DSA-87 signature over fp_claim_id (signer sidecar, or the rail's --bond-key-seed)",
             "misaka-palw-fp-rail --artifact <stem> ... --submit --rpc <host:port> (ADR-0077 Decision 4)",
@@ -1065,17 +1086,37 @@ fn handle_chat(
     std::fs::write(&artifact_json, serde_json::to_vec_pretty(&summary).unwrap())
         .map_err(|e| format!("cannot write {}: {e}", artifact_json.display()))?;
 
-    let shown = if streamed_checked { stream.shown() } else { wire::display_trim(&rendered_string).to_string() };
-    let finish_reason = match result.stop_reason {
-        PalwFpStopReasonV3::EndOfGeneration => "stop",
-        PalwFpStopReasonV3::ExactBudgetReached => {
-            if shown.len() < rendered_string.trim_end().len() {
-                "stop" // the guard or an EOG id ended the shown answer; the budget ended the run
-            } else {
-                "length"
+    let finish_reason = if !parsed.calls.is_empty() {
+        "tool_calls" // ADR-0096 Decision 2: OpenAI's word for an answer that made calls
+    } else {
+        match result.stop_reason {
+            PalwFpStopReasonV3::EndOfGeneration => "stop",
+            PalwFpStopReasonV3::ExactBudgetReached => {
+                if shown.len() < rendered_string.trim_end().len() {
+                    "stop" // the guard or an EOG id ended the shown answer; the budget ended the run
+                } else {
+                    "length"
+                }
             }
         }
     };
+    // ADR-0096 Decision 4: what was asked, beside what ran. Nobody is told a false thing about
+    // the decode, because the greedy rule the seat replays is printed next to the request's knobs.
+    let sampling = serde_json::json!({
+        "requested": admitted.sampling_requested,
+        "applied": {
+            "temperature": temperature_q as f64 / kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_T_ONE as f64,
+            "seed": faster_hex::hex_string(&sampling_seed),
+        },
+        "reason": if facts.fp_decode_rules_armed {
+            "palw_fp_decode_rules is armed on this network (ADR-0082 Decision 11): the job carries the temperature and seed it asked for"
+        } else {
+            "palw_fp_decode_rules is not armed on this network (ADR-0082 Decision 11): the seat replays a greedy decode and nothing else"
+        },
+        "not_a_rule_on_this_lane": admitted.not_a_rule_on_this_lane,
+    });
+    let tool_choice = (admitted.tool_choice_given || !admitted.tools.is_empty())
+        .then(|| serde_json::json!({ "requested": admitted.tool_choice.requested_json(), "enforcement": "advisory" }));
     let misaka = serde_json::json!({
         "fp_job_id": hex(job_id),
         "trace_root": hex(result.trace_root),
@@ -1107,14 +1148,30 @@ fn handle_chat(
         // operator staked on it.
         "committed": commit_refusal.is_none(),
         "not_committed_because": commit_refusal,
+        // ADR-0096 Decision 2: the shown answer before any `<tool_call>` block was lifted out of
+        // it — the text the model actually said, whole.
+        "answer_untrimmed": rendered_string,
+        "tool_choice": tool_choice,
+        "tool_calls_unparsed": parsed.unparsed_blocks,
+        // ADR-0096 Decision 3: which mode served the format, and what the check found.
+        "format": format_json,
+        // ADR-0096 Decisions 1 and 4.
+        "sampling": sampling,
+        "ignored_fields": admitted.ignored_fields,
     });
+    let mut message = serde_json::json!({ "role": "assistant", "content": shown });
+    if !parsed.calls.is_empty() {
+        // OpenAI's shape: the calls as `tool_calls[]`, the remaining text as `content` or `null`.
+        message["content"] = if parsed.text.is_empty() { serde_json::Value::Null } else { serde_json::json!(parsed.text) };
+        message["tool_calls"] = serde_json::Value::Array(tool_calls_json);
+    }
     Ok(serde_json::json!({
         "id": format!("palwcmpl-{}", &hex(job_id)[..24]),
         "object": "chat.completion",
-        "model": chat.model.unwrap_or_else(|| "misaka-palw-fp-v3".to_string()),
+        "model": chat.model.clone().unwrap_or_else(|| surface::MODEL_ID.to_string()),
         "choices": [{
             "index": 0,
-            "message": { "role": "assistant", "content": shown },
+            "message": message,
             "finish_reason": finish_reason,
         }],
         "usage": {
@@ -1224,6 +1281,7 @@ fn main() {
         privacy_mode,
         per_source_jobs_per_window,
         confinement: Confinement::none(),
+        booted_at_unix: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
     };
 
     // -----------------------------------------------------------------------------------------
@@ -1471,12 +1529,16 @@ fn serve_connection(
                 respond(stream, "400 Bad Request", &error_body("the body exceeds the request cap"));
                 return;
             }
-            // Parsed BEFORE the queue reservation so `stream: true` decides the response shape
-            // while a status code is still possible.
-            let chat: ChatRequest = match serde_json::from_slice(&request.body) {
-                Ok(chat) => chat,
+            // Parsed AND ADMITTED before the queue reservation and before the worker is touched
+            // (ADR-0096 invariant 6): every refusal the surface can raise is a status code here,
+            // never an inference — and `stream: true` decides the response shape only for a
+            // request that was admitted. The chain is read once, for this job; `handle_chat`
+            // prices and anchors against the same facts the sampler and the format were gated on.
+            let facts = chain_source.read();
+            let (chat, admitted) = match surface::parse_and_admit(&request.body, &facts) {
+                Ok(parsed) => parsed,
                 Err(e) => {
-                    respond(stream, "400 Bad Request", &error_body(&format!("request body is not a chat completion: {e}")));
+                    respond(stream, "400 Bad Request", &error_body(&e));
                     return;
                 }
             };
@@ -1498,22 +1560,41 @@ fn serve_connection(
                 // on TCP back-pressure and hold the resident worker for as long as it liked. A
                 // write timeout turns that into a dropped connection.
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
-                let model = chat.model.clone().unwrap_or_else(|| "misaka-palw-fp-v3".to_string());
+                let model = chat.model.clone().unwrap_or_else(|| surface::MODEL_ID.to_string());
                 let mut nonce = [0u8; 12];
                 rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
                 // The chunk id is drawn per RESPONSE: the job id does not exist until the run
                 // ends, and an OpenAI client needs a stable id from the first chunk.
+                let include_usage = admitted.include_usage;
                 let mut sink = SseSink { stream, id: format!("palwcmpl-{}", faster_hex::hex_string(&nonce)), model, started: false };
                 sink.head();
-                let outcome = handle_chat(config, identity, worker, budget, chain_source, chat, &mut sink);
+                let outcome = handle_chat(config, identity, worker, budget, &facts, &chat, admitted, &mut sink);
                 in_flight.fetch_sub(1, Ordering::AcqRel);
                 match outcome {
                     Ok(body) => {
                         // The terminal chunk carries the finish reason and, in the same event, the
                         // `misaka` object: whether this answer became a claim and, if not, why.
                         // An SSE client that never sees it is a client that was told nothing.
+                        // ADR-0096 Decision 2: the block text streamed as text; the parsed calls
+                        // ride the terminal delta in OpenAI's streaming shape (with `index`).
                         let finish = body["choices"][0]["finish_reason"].clone();
-                        sink.chunk(serde_json::json!({}), finish);
+                        let delta = match body["choices"][0]["message"].get("tool_calls").and_then(serde_json::Value::as_array) {
+                            Some(calls) => serde_json::json!({
+                                "tool_calls": calls.iter().enumerate().map(|(index, call)| {
+                                    let mut call = call.clone();
+                                    call["index"] = serde_json::json!(index);
+                                    call
+                                }).collect::<Vec<_>>(),
+                            }),
+                            None => serde_json::json!({}),
+                        };
+                        sink.chunk(delta, finish);
+                        if include_usage {
+                            // `stream_options.include_usage` (ADR-0096 Decision 1): OpenAI's own
+                            // usage chunk — no choices, the counts — for a client that reads
+                            // that and not the `misaka` event below, which carries them anyway.
+                            sink.usage_chunk(body["usage"].clone());
+                        }
                         sink.event(&serde_json::json!({ "misaka": body["misaka"].clone(), "usage": body["usage"].clone() }));
                         sink.done();
                     }
@@ -1527,7 +1608,7 @@ fn serve_connection(
                 }
             } else {
                 let mut sink = BufferedSink;
-                let outcome = handle_chat(config, identity, worker, budget, chain_source, chat, &mut sink);
+                let outcome = handle_chat(config, identity, worker, budget, &facts, &chat, admitted, &mut sink);
                 in_flight.fetch_sub(1, Ordering::AcqRel);
                 match outcome {
                     Ok(body) => respond(stream, "200 OK", &body),
@@ -1557,10 +1638,24 @@ fn serve_connection(
                 None => respond(stream, "404 Not Found", &error_body("no artifact under that derived id")),
             }
         }
+        // ADR-0096 Decision 1: the one class this gateway serves, in the shape a stock client lists
+        // models with — so a base-URL change is the whole migration.
+        ("GET", "/v1/models") => respond(
+            stream,
+            "200 OK",
+            &surface::models_body(
+                &hex(identity.class_id),
+                worker.manifest(),
+                wire::template_id_for(worker.manifest()),
+                config.booted_at_unix,
+            ),
+        ),
         _ => respond(
             stream,
             "404 Not Found",
-            &error_body("this gateway serves POST /v1/chat/completions, GET /health and GET /v1/artifacts/<derived-id>"),
+            &error_body(
+                "this gateway serves POST /v1/chat/completions, GET /v1/models, GET /health and GET /v1/artifacts/<derived-id>",
+            ),
         ),
     }
 }
@@ -1590,6 +1685,7 @@ mod tests {
             confinement: Confinement::none(),
             derive_seed: None,
             artifact_inline_max: 4 << 20,
+            booted_at_unix: 0,
         }
     }
 
@@ -1806,14 +1902,9 @@ mod tests {
     fn the_gateway_refuses_sampling_until_the_chain_arms_it() {
         use kaspa_consensus_core::palw_decode_select_v2::{PALW_DECODE_SEED_GREEDY, PALW_DECODE_T_ONE};
         let chat = |temperature: Option<f64>, seed: Option<&str>| ChatRequest {
-            model: None,
-            messages: Vec::new(),
-            max_tokens: None,
-            stream: None,
-            derive: None,
-            serve_dsl: false,
             temperature,
             seed: seed.map(str::to_string),
+            ..Default::default()
         };
         let dormant = chain::ChainFacts::default();
         let armed = chain::ChainFacts { fp_decode_rules_armed: true, ..Default::default() };
@@ -1906,6 +1997,7 @@ mod tests {
             ("main.rs", std::include_str!("main.rs")),
             ("wire.rs", std::include_str!("wire.rs")),
             ("chain.rs", std::include_str!("chain.rs")),
+            ("surface.rs", std::include_str!("surface.rs")),
         ] {
             for line in source.lines() {
                 let trimmed = line.trim_start();

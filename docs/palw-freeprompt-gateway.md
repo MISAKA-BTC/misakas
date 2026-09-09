@@ -269,6 +269,106 @@ running worker is a `Refused` job naming the two digests, never a crash. Nothing
 carries prompt text or prompt ids: a refusal names the rule and the position it was broken at
 (ADR-0079 SA-7).
 
+## The OpenAI surface (ADR-0096)
+
+A client written against `api.openai.com` works against this gateway with the base URL changed
+and nothing else — and where it cannot, it is told why, by name, before any inference runs.
+`GET /v1/models` lists the one class this gateway serves as `misaka-palw-fp-v3` (with the class
+id, the manifest's model id, `n_ctx` and the template id under `misaka`); `model` in a request is
+echoed, never matched. Every refusal below comes from one function (`surface::admit_request`),
+called before the queue is reserved and before the worker is touched, so a refusal is a 400 and
+never a spent inference. The conformance corpus in
+[`openai-surface/v1/`](openai-surface/v1/README.md) pins every row of this table as a request and
+its verdict; the Studio runs the same files against its `/v1`.
+
+| field | what the gateway does |
+|---|---|
+| `messages[].content` as a list of `{type:"text"}` parts | flattened to one string, parts joined by `\n` |
+| `messages[].content` with a non-text part (`image_url`, `input_audio`, `file`, …) | refused by name, with the message and part index |
+| `tools`, `tool_choice`, `messages[].tool_calls`, role `tool` | rendered as the model's own text (below) |
+| `response_format` (`text` / `json_object` / `json_schema`) | advisory mode (below); a schema outside the subset is refused by name |
+| `temperature`, `seed` | ADR-0082 Decision 11, unchanged: anything but greedy is refused naming `palw_fp_decode_rules` while the fence is dormant |
+| `top_p`, `top_k`, `min_p`, `repeat_penalty`, `frequency_penalty`, `presence_penalty` | accepted at their identity value only (1, 0, 0, 1, 0, 0) and reported; any other value is refused by name — no consensus rule exists for them, and none will |
+| `stop`, `logit_bias` | accepted empty; refused by name otherwise (the display cut is the template's; trim in your app) |
+| `n ≠ 1`, `logprobs`, `top_logprobs`, `functions` / `function_call` (legacy), any `stream_options` key but `include_usage` | refused by name |
+| `max_completion_tokens` | read as `max_tokens`; both present and different is refused by name |
+| `user`, `metadata`, `store`, `parallel_tool_calls`, `messages[].name`, `messages[].tool_call_id`, the ids on replayed `tool_calls` | accepted, no effect, listed in `misaka.ignored_fields` |
+| `misaka.require_committed_format: true` | refused by name naming `palw_fp_decode_constraint` until the network arms it |
+| `stream_options: {include_usage: true}` | OpenAI's usage chunk before `[DONE]` (the `misaka` event carries the counts anyway) |
+| `Authorization: Bearer …` | ignored; the pool slot token is the credential |
+| any field not named here | refused by name, never dropped |
+
+**Tools are the model's own text (Decision 2).** The shipped classes' models were trained on the
+Hermes-style convention, and the template is the model's (ADR-0077 Decision 6), so the tool list
+rides the system turn as text — created with `You are a helpful assistant.` when the request has
+no system turn — in the exact words of Qwen2.5-Instruct's `chat_template`:
+
+```text
+# Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"function":{"description":"Get the weather","name":"get_weather","parameters":{…}},"type":"function"}
+</tools>
+
+For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{"name": <function-name>, "arguments": <args-json-object>}
+</tool_call>
+```
+
+An assistant message carrying `tool_calls` renders as its content followed by one
+`<tool_call>\n{"name": "…", "arguments": {…}}\n</tool_call>` per call; a `tool` message renders as
+a `user` turn wrapping `<tool_response>\n…\n</tool_response>`, and consecutive tool messages merge
+into one user turn. Every JSON object in the prompt is written in RFC 8785 form (sorted keys, no
+whitespace) so the prompt — and therefore the job id — is not a function of the client's key
+order. The tool block is a `Text` segment like any other user text: SA-3's check is unchanged and
+no control token is placed. What changes is the template id: a prompt that spoke the convention
+carries `…/chat-segments-tools/v1` (or the think-closed / plain sibling) while `/health` keeps
+advertising the base id, because the tools id is a fact about one request and the base id is the
+model's. After the run, every well-formed `<tool_call>` block in the shown answer becomes
+`choices[0].message.tool_calls[]` in OpenAI's shape (`id: call_…` is a keyed hash of the job id and
+the index) with `finish_reason: "tool_calls"`; a malformed block stays in the text and is counted
+in `misaka.tool_calls_unparsed`. Parsing reads the display string and changes nothing committed —
+the ids, the bytes and the roots are those of the same run. `tool_choice: "required"` or a named
+function is ADVISORY: one sentence is appended to the system turn and
+`misaka.tool_choice.enforcement` says `advisory`; the round-trip (execute the tool, send the result
+back) is the app's, and each leg is its own inference and its own claim.
+
+**`response_format` has two enforcement modes, and the answer says which (Decision 3).** The mode
+is the chain's to decide. *Committed* — the network has armed `Params::palw_fp_decode_constraint`
+(ADR-0096 Decision 8; Part B of the ADR, not in this tree): the schema compiles to a decode
+constraint the seat replays and the court can try. *Advisory* — every shipped network today: the
+instruction rides the system turn as text (`Respond with a single JSON value and nothing else.`,
+or `… that conforms to this JSON Schema and nothing else:` followed by the schema in RFC 8785
+form), the run is unconstrained, and the shown answer — whitespace trimmed, a code fence refused
+rather than unwrapped — is parsed as one JSON value and validated after the fact. The schema
+subset is `misaka-palw-constraint`'s (draft 2020-12: `type`, `properties`, `required`,
+`additionalProperties`, `items`, `minItems`/`maxItems`, `enum`, `const`, `pattern`,
+`minLength`/`maxLength`, `minimum`/`maximum`, nesting to 16); `$ref`, `oneOf`, `anyOf`, `allOf`,
+`not`, `if`, `format`, `patternProperties`, `dependentRequired` and the rest are refused by name
+in both modes rather than approximated. An integration that needs the guarantee sets
+`misaka.require_committed_format: true` and is refused by name on a dormant network before any
+inference — it never receives a lookalike. `/health` reports `fp_decode_constraint_armed` beside
+the other fences.
+
+**What the `misaka` object gained.** Beside the job, claim, roots, `output_token_ids`,
+`job_context` and derivation it already carried:
+
+| key | what it says |
+|---|---|
+| `sampling` | `{requested: {…the knobs as sent…}, applied: {temperature, seed}, reason, not_a_rule_on_this_lane: […]}` — what was asked, beside what ran (Decision 4) |
+| `ignored_fields` | the accepted no-effect fields this request sent, by name |
+| `tool_choice` | `{requested, enforcement: "advisory"}` when the request declared tools or a choice |
+| `tool_calls_unparsed` | `<tool_call>` blocks left in the text because they were not a `{name, arguments}` object or never closed |
+| `format` | `{requested: {type, name, constraint_id, constraint_bytes}, enforcement: "advisory", valid, errors: […], canonical_sha256}` — `constraint_id` is `H("misaka-palw/constraint/v1" ‖ RFC 8785 schema bytes)`, `canonical_sha256` the digest of the answer's canonical bytes when valid |
+| `answer_untrimmed` | the whole rendering, before any block was lifted out of it |
+
+The same object rides the SSE stream's terminal event; the terminal chunk's `delta` carries the
+parsed `tool_calls` (with `index`) and the finish reason.
+
 ## Boundaries to know
 
 - **Prompts are public.** PublicDA is the only weight-bearing mode: the committed job carries
@@ -324,6 +424,8 @@ re-derive exactly what your gateway committed. The gateway smoke adds the two AD
 the SSE answer equals the buffered one and `answer_stream_checked` is true (Decision 2 / W5), and
 `prompt_ids_checked` is true on the artifact (SA-3) — and reads `/health` for all four chain names.
 
-The unit tests need no model at all: `cargo test -p misaka-palw-gateway -p misaka-palw-fp-submit`
-covers the prompt plan, the SA-3 divergence, the W5 mismatch, the UTF-8-safe stream, the four
-chain-side refusals, the anchor expiry, and the stage/broadcast/rename ordering.
+The unit tests need no model at all: `cargo test -p misaka-palw-gateway -p misaka-palw-fp-submit
+-p misaka-palw-constraint` covers the prompt plan, the SA-3 divergence, the W5 mismatch, the
+UTF-8-safe stream, the four chain-side refusals, the anchor expiry, the stage/broadcast/rename
+ordering, the OpenAI surface's every refusal and the conformance corpus, the tool render and
+parse, the schema subset and RFC 8785 (with the RFC's own vectors).
