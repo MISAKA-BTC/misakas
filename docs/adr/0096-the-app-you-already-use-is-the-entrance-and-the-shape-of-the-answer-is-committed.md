@@ -190,7 +190,14 @@ both trees. Accepted, and what happens to each:
 
 The envelope gains nothing OpenAI does not have except the `misaka` object every gateway answer
 already carries (job, claim, roots, `output_token_ids`, `job_context`, derivation), which Decisions
-2–5 extend. A field this table does not name is refused by name, never dropped.
+2–5 extend. A field this table does not name is refused by name, never dropped — with two
+deliberate exceptions, both reported rather than silent: a sampling knob at its IDENTITY value
+(`top_p: 1`, `top_k: 0`, `min_p: 0`, `repeat_penalty: 1`, `frequency_penalty: 0`,
+`presence_penalty: 0`, `temperature: 0`), which a stock SDK sends by default and which asks for
+nothing, is accepted and listed in `misaka.sampling.requested`; and the fields OpenAI defines as
+having no effect on the answer (`user`, `metadata`, `store`, `parallel_tool_calls`,
+`max_completion_tokens` as an alias of `max_tokens`) are accepted and listed in
+`misaka.ignored_fields`. A knob at any other value is refused by name on the gateway (Decision 4).
 
 **Decision 2 — a tool call is a turn of text; the round-trip is the app's; the schema is the
 model's own template.** The lane's chat template is the model's (ADR-0077 Decision 6), and the
