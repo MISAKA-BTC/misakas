@@ -456,6 +456,13 @@ impl ConsensusSessionOwned {
         self.consensus.heartbeat_adapt_block_template(template)
     }
 
+    /// ADR-0102 Decision 2: whether the heartbeat miner should stand aside for a bonded block that
+    /// is waiting to be merged. Reads the virtual state and one header per virtual-mergeset member
+    /// — cheaper than the adapter above, the same call profile.
+    pub fn heartbeat_yield_hint(&self) -> kaspa_consensus_core::palw_heartbeat_v1::HeartbeatYieldHintV1 {
+        self.consensus.heartbeat_yield_hint()
+    }
+
     pub fn get_virtual_bits(&self) -> u32 {
         // Accessing cached virtual fields is lock-free and does not require spawn_blocking
         self.consensus.get_virtual_bits()

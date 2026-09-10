@@ -529,6 +529,68 @@ quarantine — the node logs exactly that at WARN each time it fires.
 
 ---
 
+## 7a. If every block is a heartbeat and DNS finality has stopped
+
+This is what testnet-11 did from 11:41Z to ~13:20Z on 2026-09-10, and until
+[ADR-0102](adr/0102-a-heartbeat-never-turns-a-bonded-block-red.md)'s fence is armed on this network
+nothing inside the chain ends it on its own.
+
+**What you see:**
+
+* every new block on [misakascan](https://misakascan.com) is **algo 8** (a heartbeat — the block page
+  names the lane), usually two to four siblings every ~120 s, and no algo-6/9 block is a chain block;
+* bonded blocks still land, but none of them becomes a chain block;
+* `misaka validator status` (or `getDnsConfirmation` over wRPC) shows `pow_confirmed: false` with
+  `work_depth` far below `required_work_depth` — on 2026-09-10 it was **~10 / 100** — and
+  `dns_health` `DegradedCertificateCensored`, while attestations are still being included;
+* the EVM bridge stays paused (it requires a DNS-confirmed anchor).
+
+**Why it holds.** A heartbeat is allowed one hour after a bonded selected parent and 120 s after a
+heartbeat one. If no bonded block becomes the selected parent for an hour — node restarts that lose
+the producers' in-flight draws are enough — a heartbeat takes the chain, and from then on the lane
+runs every 120 s. A bonded block carries the timestamp and parents of the TEMPLATE it was drawn on;
+a Qwen3.6 draw takes ~17 minutes on the fleet's hosts, so it lands about eight heartbeats behind the
+tip. It is never selected, and at this network's `ghostdag_k = 1` those heartbeats make it a red
+block whose work counts for nothing. Heartbeats weigh 1 each, so the work piled on any anchor inside
+the episode never reaches 100. It lasts as long as any heartbeat miner runs.
+
+**How to get out.**
+
+* **On a build with ADR-0102 Decision 2** (the heartbeat miner steps aside by itself): nothing to do.
+  When a bonded block is waiting to be merged, each such miner logs
+
+  ```
+  [INFO ] [palw-heartbeat-miner] standing aside: the chain runs on heartbeats and a bonded block is waiting to be merged — …
+  ```
+
+  and stops mining until that block's timestamp plus one hour, or until a bonded block is the
+  selected parent. The next bonded draw then lands on a tip nobody extended and takes the chain
+  back. The miner stands aside for **at most one hour per episode**, so a producer whose blocks can
+  never take the chain cannot hold the clock with them. It only works if **every** heartbeat miner
+  on the network does it: one miner on an older build keeps the chain on heartbeats.
+* **On an older build, or if the chain has not come back within the hour**: stop **every** heartbeat
+  miner — remove `--palw-heartbeat-miner-address` and restart — for one bonded draw (on the fleet,
+  ~20 minutes). The next bonded block becomes the sink, `work_depth` jumps past 1,000,000 and DNS
+  confirms within minutes (measured 2026-09-10: sink algo-6 by 13:16Z, DNS confirmed 13:26Z). Then
+  put one miner back (below). If no bonded block lands at all, the producers are the problem, not
+  the heartbeats — check them before anything else.
+
+**How not to get in.**
+
+* **Before restarting a producer, check how old the last bonded CHAIN block's timestamp is** — its
+  header timestamp, which is its template's time, not when it arrived. If it is already more than
+  ~30 minutes old, a restart that loses the in-flight draws can push it past the hour and hand the
+  chain to the heartbeat lane. Restart producers one at a time, and not all at once.
+* **Run at most one heartbeat miner per operator**, on a build that carries ADR-0102 Decision 2 —
+  preferably on a node that is not also producing. More miners do not make the clock more alive
+  (the width bound merges at most four heartbeats per block), they only add siblings; and a miner on
+  a build without the yield undoes the yield of every other one. This replaces the Relaunch 5
+  runbook's "heartbeat miners on every host", which assumed bonded blocks every 120 s.
+* Do not remove the heartbeat lane for good: it is what keeps the chain's clock — and every PALW
+  timeout sweep — running when every bonded lane is down.
+
+---
+
 ## 8. Emission at launch
 
 * Full schedule **4445.62 MSK/block** (rate-preserving 120 s table).
