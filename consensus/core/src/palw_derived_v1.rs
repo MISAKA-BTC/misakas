@@ -309,6 +309,11 @@ pub mod kind {
     pub const MANUFACTURING: u16 = 25;
     pub const BUILDING: u16 = 26;
     pub const PROCEDURAL: u16 = 27;
+    // ADR-0096 Decision 9 — a structured answer is a thing a consumer verifies, and it had no kind
+    // to be filed under: `TEXT` is the answer's own bytes and `DATA` is the tabular kind. Appended,
+    // never renumbering: 28 is the id `kind_table_ids_and_names_are_unique_and_never_zero` used to
+    // pin as unassigned, and the probe moves to 29 with it.
+    pub const JSON: u16 = 28;
 
     /// Every assigned id with its name, in id order.
     pub const ALL: &[(u16, &str)] = &[
@@ -339,6 +344,7 @@ pub mod kind {
         (MANUFACTURING, "manufacturing"),
         (BUILDING, "building"),
         (PROCEDURAL, "procedural"),
+        (JSON, "json"),
     ];
 
     /// The table's name for an id, `None` for an id the table has not assigned. A reader's
@@ -613,8 +619,10 @@ mod tests {
     #[test]
     fn an_unassigned_kind_and_an_unknown_transformer_pass_the_shape_check() {
         let mut o = sample();
-        // Past the last assigned row, and at the top of the space.
-        for k in [28u16, 1_000, u16::MAX] {
+        // Past the last assigned row, and at the top of the space. `28` was the first of these
+        // until ADR-0096 Decision 9 assigned it `json`; the probe moves with the table, and THAT is
+        // the property — the ids below it kept their meanings and the check kept refusing nothing.
+        for k in [29u16, 1_000, u16::MAX] {
             o.kind = k;
             assert_eq!(kind::name(k), None, "{k} is deliberately an id the table has not assigned");
             assert!(check_derived_shape_v1(&o).is_ok(), "kind {k} must ride: adding a row is never a ruleset move (X8)");
@@ -668,7 +676,11 @@ mod tests {
             ["scene", "image", "cad", "code", "map", "music", "simulation"]
         );
         assert_eq!(kind::name(0), None);
-        assert_eq!(kind::name(28), None);
+        // ADR-0096 Decision 9 appended `json` at 28; the "never assigned" probe moves to 29 and the
+        // twenty-seven ids before it are untouched — which is the whole content of "append-only".
+        assert_eq!(kind::name(28), Some("json"));
+        assert_eq!(kind::id("json"), Some(28));
+        assert_eq!(kind::name(29), None);
     }
 
     #[test]

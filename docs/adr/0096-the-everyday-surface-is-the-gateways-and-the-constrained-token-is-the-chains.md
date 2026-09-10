@@ -362,3 +362,39 @@ this ADR.
 and the README's marker moves to 0097 in the same commit. If a concurrent session claimed 0096
 first, this file renumbers — it is the later writer by the README's rule, and nothing outside
 `docs/adr/` cites it by number yet except the fence's doc comments, which move with it.
+
+## 9. What has landed
+
+Kept current as the work lands, on `claude/adr-0096-partb-fence-uwo64p` from `main` at `7f4dded`.
+
+**Step 1 — the fence's scaffolding. DONE.** `Params::palw_fp_decode_constraint`, `None` on every
+shipped preset; `palw_fp_decode_constraint_fence()` / `_active_at()` with the ConsensusV2 mode
+folded in and NO dependency on `palw_fp_decode_rules`; the `Some(never())` collapse; named in
+`consensus_identity_id` and in the schedule id; Some-only in `for_each_fence`; `fork_id_v1`'s name
+map; **and the arming refusal in `validate_palw_v2`**, which is the operative part. Invariants 5–7
+hold: `the_fp_decode_constraint_fence_is_dormant_and_independent_of_the_sampler` builds all four
+fence states and asserts four distinct rulesets — Decision 7's separateness, executable — and
+`shipped_presets_have_pinned_fingerprints` passes unedited.
+
+**The wire. DONE.** `GetPalwProducerFactsResponse` at version 7 with `fp_decode_constraint_armed`,
+read fail-closed by anything older; the proto field, both gRPC conversions, the service's fill at
+the candidate's DAA, the gateway's `ChainFacts` and `/health`, and `misaka palw certified`'s own
+line in both output modes. The version-6 test is built by rewriting the version prefix and dropping
+the last byte, so it fails if the field is ever inserted anywhere but the end.
+
+**Decision 8's rule. DONE, as pure functions.** `consensus/core/src/palw_decode_constraint_v1.rs`:
+the constrained argmax, the refutation's two arms, and a bitmap admitted set. Invariants 1, 2 and 4
+are swept there, and the selection rule and the refutation are tested against each other rather
+than separately, so the corner they must agree about (nothing admitted) cannot drift.
+
+**Decision 9. DONE.** `kind::JSON = 28`, appended; ids 1–27 untouched and the "never assigned"
+probe moved to 29.
+
+**Outstanding:** step 2 (the constraint crate — the schema subset, RFC 8785 canonicalisation and
+the automaton, invariant 3), step 3 (Part A in the gateway, Decisions 2–6 and invariant 8), step 5
+(Decisions 10 and 11 in the runtimes that have the problem), and step 6 (the engine, and the build
+that may lift the arming refusal).
+
+**Two gates are red on `main` and this branch adds nothing to either**, measured against a stashed
+tree rather than assumed: `cargo fmt --all -- --check` reports the same 23 files on both, and the
+clippy gate the same 7 findings, none of them in code this branch touches.
