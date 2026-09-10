@@ -701,6 +701,25 @@ mapping is written down.
   licence is reachable (3 `Valid` of 5 seats, the executor never sits), which the drill now says at
   preflight; the run was stopped there. Evidence: `run1-evidence.txt` beside the run directory.
 
+* **2026-09-11, drill run 5 — a version-6 claim licensed by three masked replays** (commit
+  `e9e02e0a` built, no bypass; the drill at `5ea835b2`; four nodes, all holding the artifact and
+  all producing the dense class, the claim executed under bond 4, which no node runs). Stages 1–5
+  as in run 1; the same prompt answered `{"name":"Taro Yamada","age":34,"city":"Osaka"}`,
+  committed and valid. Claim `de0a000d…` was accepted at DAA 32 under bond 4 and reached
+  `FreePromptCommitted`, `PanelBound` and **`ReceiptLicensed` on every node**: node-1, node-2 and
+  node-3 each replayed the job masked through the automaton and the pinned table and filed `Valid`
+  (node-3 filed `Unavailable` once before its material arrived; node-0, busy with the dense blocks'
+  duties, filed nothing), and the quorum of three licensed it. Two later licensing objects were
+  dropped as "in the wrong phase for ReceiptQuorum" — they arrived after the licence. **`Final` was
+  not reached**: about 100 DAA before it, the host (a 24 GB, 12-core laptop) panicked — "watchdog
+  timeout: no checkins from watchdogd in 91 seconds" — after five hours of four dense producers and
+  their seats' replays. The drill's own findings on the way: the first free-prompt claim ran under
+  node-0's bond and lost its fee float to node-0's panel paying for receipts (run 3; fixed by
+  `EXECUTOR_BOND`), a block count read empty killed a run in bash arithmetic (run 2; fixed), and
+  three nodes can never license a claim (3 `Valid` of 5 seats, the executor never sits; the drill
+  now says so at preflight). Evidence: `run5-evidence.txt` beside the run directory, and the
+  claim's material and answer envelope kept.
+
 ## 10. Amendment 2026-09-10 — what the court needs, found while building the drill
 
 Decision 7 said the court "recomputes `s` by running the automaton over the rendered prefix —
