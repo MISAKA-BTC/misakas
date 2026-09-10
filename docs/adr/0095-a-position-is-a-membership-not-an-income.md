@@ -1,6 +1,10 @@
 # ADR-0095 — A position is a membership, not an income
 
-* Status: PROPOSED 2026-09-07
+* Status: PROPOSED 2026-09-07; **IMPLEMENTED 2026-09-07 → 2026-09-10** behind
+  `Params::palw_model_benefits` — scheduled on testnet-11 at DAA 2,400
+  (`PALW_RC_MODEL_BENEFITS_FENCE_DAA`), `None` on every other preset and on every card — **except
+  §4.9's holder mark**, which is a fold write and waits for a decision (§10). §7 lists the steps;
+  §10 records what landed and what the implementation found.
 * Amends: [0087](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md) Decision 1's
   "grants nothing but the right to sell it back" — it now also grants what its LINE declares;
   [0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md) Decision 2 (a version's
@@ -284,9 +288,17 @@ a decision someone took.
 3. State: the row, the tenure map, the fold arm, the refusals (N4–N6, N9), and §4.4's two
    refusals in the version paths (N7, N8). **(done — 6 tests, and the fence of §4.11)**
 4. RPC (`benefits` on the line), CLI (`line-benefits`, and the card on `line-show`). **(done)**
+   §4.10's other two readers — `getPalwModelBenefitTier` and `misaka palw benefits` — were not in
+   this step's "done" and landed on 2026-09-10 (§10). **(done)**
 5. The site: the benefits card on the line and trade pages, the next tier's distance, the lapse.
+   **(done 2026-09-10 — the card and the lapse had landed with the store rename; where the connected
+   account stands, and what the next tier needs, landed here, §10)**
 6. A reference gateway check — verify the signature, read the tier, choose a queue — so the serving
-   side has something to copy rather than invent.
+   side has something to copy rather than invent. **(done 2026-09-10, §10)**
+7. §4.9's holder mark — `by_holder_tier` on an evaluation or a proposal, the tier its author held at
+   the height it landed. **Not done, and not an implementation detail:** it is a fold write into rows
+   that enter the state root, so it needs its own activation (the lesson ADR-0094's amendment
+   records), and on testnet-11 a height after 2,400 or a second flag day. §10 says what it needs.
 
 ## 8. What is deliberately not decided
 
@@ -303,3 +315,88 @@ a decision someone took.
 ## 9. Number hygiene
 
 0095 was the README's next free number on 2026-09-07. The next is 0096.
+
+## 10. Implementation record
+
+**2026-09-07** (`14c453d1`, on `origin/main`): §7 steps 1–4 as recorded there — the pure module,
+the state (declaration row, tenure map, fold arm, §4.4's two refusals, §4.7's notice), the fence of
+§4.11, `benefits` on `getPalwModelLine`, `misaka palw line-benefits` and the card on `line-show`.
+
+**2026-09-10** (`feat/adr-0095-membership-serving`):
+
+* **The tier read** (`b86d6808`). `getPalwModelBenefitTier(line, holders)` — op 177 through
+  rpc-core, the service, gRPC (messages 1156/1157), wRPC and the integration test — answers from
+  `PalwChainStateV2::model_benefit_tier_across` at the tip through the new
+  `ConsensusApi::palw_model_benefit_tier_v1`: the ids summed each once, the most recent clock, the
+  tier, the next rung, and the declaration in effect in the shape the line read carries (both reads
+  now resolve §4.6 through one helper). The list is bounded by `PALW_MODEL_BENEFIT_MAX_PROOF_IDS`
+  (16) before it is parsed. `misaka palw benefits --line [--key-file] [--holder …]` prints where a
+  person stands and what the next rung needs — in positions, in MSK at the tip's price (the chain's
+  own buy quote, bisected to the least buy that reaches it), and in tenure — and with `--nonce
+  --daa` signs the §4.8 proof a gateway checks. Two constants give §4.8 one spelling:
+  `PALW_MODEL_BENEFIT_CHALLENGE_MLDSA87_CONTEXT` (its own context, because the key that proves a
+  membership is the key that signs a sell) and `palw_model_benefit_challenge_evm_digest_v1` (EIP-191
+  `personal_sign` over the challenge's 64 bytes).
+* **The reference gateway check** (`6b00692a`, `misaka-palw-gateway/src/membership.rs`), behind
+  `--membership-line <line>` (which needs `--rpc`); without the flag nothing about the gateway
+  changes. `GET /v1/membership/challenge` issues a single-use nonce bound to the tip's DAA (a bounded
+  book, 300 s); the chat body carries `misaka_membership {nonce, daa, carrier[], evm[]}`; the nonce
+  is consumed before any signature is checked, so a proof answers one attempt; the carrier lane's
+  holder id is derived from the ML-DSA-87 key and its signature must cover the challenge built for
+  that id; the EVM lane recovers `personal_sign` with alloy on k256; the tier is
+  `getPalwModelBenefitTier` over exactly the proved ids. `PRIORITY_INFERENCE` buys the priority
+  queue — two reserved in-flight places and the one job slot ahead of any waiting stranger — and
+  every other grant is reported in `misaka.membership`, the operator's to honour. A proof that does
+  not verify is a 403 naming why, never a job quietly served in the public queue. §4.8 says the
+  gateway "reads the tier at `daa`": the fold keeps only the tip, so the gateway reads the tip,
+  which is at or after the height the challenge named.
+* **The site** (`6745584a`): with a wallet connected, the card on the store page and the line page
+  says where that account stands — the chain's tier for its EVM holder id, the time since it last
+  left, its rung marked, and what the next rung needs (memberships priced as the least join the
+  curve fills, and tenure). A node from before the read is reported as not serving it, never as
+  "not a member". Self-test 68/68.
+
+Tests: consensus-core 10/10 in `palw_model_benefits_v1` plus
+`the_tenure_clock_restarts_on_a_sale_and_a_person_is_counted_once` (N3 and N11 had no state-level
+test until now); misaka-cli 3; the gateway 44 (nine for the membership check, among them a
+personal_sign signature recovered to its account and to no other, the EVM digest checked against
+alloy's `eip191_hash_message`, and a waiting member served before a waiting stranger). The
+integration crate's `GetPalwModelBenefitTier` case (absent line, a repeated id echoed once, a
+malformed id and an over-long list refused) type-checks; it was not run here, because it starts a
+daemon.
+
+**What the implementation found**, recorded so none of it becomes a surprise:
+
+1. **`consensus_params_id` destructures `palw_model_benefits` and never hashes it** — the
+   `unused variable` warning at `consensus/core/src/config/params.rs` since `14c453d1`. The
+   handshake is unaffected by design (`consensus_identity_id` normalises a scheduled fence away,
+   and the fork id and the schedule id both carry the 2,400 height through `for_each_fence`), but
+   the fingerprint a node PRINTS at startup is the same with and without this fence: a seat on a
+   build from before `14c453d1` and a seat on one after it both print testnet-11's pinned
+   `060e3597…`, so the fingerprint an operator confirms during a rollout cannot tell them apart.
+   The fix is one `h.write` beside `palw_model_lines`'s — and it moves testnet-11's fingerprint pin.
+   **Not changed here: that is the operator's call**, and it is the same flag-day arithmetic §4.11's
+   fence already carries.
+2. **`model_position_across` summed a repeated id twice** — a caller naming one id three times held
+   three times its units. Fixed: each id is counted once (the read is off the fold; no state
+   moves). The RPC also sorts and deduplicates, and echoes the set it computed over.
+3. **A position held from before the fence has no tenure clock.** The clock is written only on a
+   balance change past the fence, and `model_position_tenure` reads a missing clock as zero — so a
+   holder who joined between a line's opening (testnet-11: DAA 1,947) and 2,400 and never trades
+   again never meets a `min_hold_daa` tier, however long they hold. The honest lower bound for such
+   a holder is "since the fence": nothing past the fence changed their balance, or a clock would
+   exist. Reading it that way is a read-side rule (the tier is not a fold input today) but it is
+   still §4.5's meaning, so it is recorded here and not decided.
+4. **§4.9's holder mark is not implemented** (§7 step 7). It is the one part of this ADR the fold
+   would have to WRITE: the author's tier at the landing height, into evaluation and proposal rows
+   that enter the state root. The rows cannot be extended in place on a live chain (ADR-0094's
+   amendment), so it needs either a derivable encoding or a collection of its own that enters the
+   root only when non-empty, and an activation of its own.
+5. **The gateway was never secp-free.** `misaka-palw-derive` links `kaspa-evm`, and with it alloy and
+   k256, so the EVM lane's recovery adds no curve to the binary; it names a coupling that existed.
+   A first draft of this step put the EVM lane behind an opt-in feature on the premise that it
+   would; `cargo tree` said otherwise once it was asked properly (a check piped through
+   `2>/dev/null` had reported the absence of what it could not see).
+6. **ADR-0096's branch rewrites the gateway's request surface** so that a field its table does not
+   name is refused by name. `misaka_membership` must join that table when the two branches meet, or
+   every membership proof becomes a 400.
