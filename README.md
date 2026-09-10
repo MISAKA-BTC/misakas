@@ -4,28 +4,35 @@
 
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
-> **Status (2026-09-06).** The live public network is **`testnet-11`** — the PALW release candidate,
+> **Status (2026-09-10).** The live public network is **`testnet-11`** — the PALW release candidate,
 > Relaunch 5f. Explorer at **[misakascan.com](https://misakascan.com)**, web wallet at
 > **[wallet.misakascan.com](https://wallet.misakascan.com)**. Current network identity: consensus
 > fingerprint **`060e3597…`**, genesis **`ad30b5cb…`** (three execution classes and the
 > 347M MSK community allocation in genesis).
 >
-> **Build from `main` at `06bf5118` or later.** Do **not** build the tag
-> `testnet-11-relaunch-5f-adr0083-h1150`: it is the build the fork-id gate refuses, and this line
-> used to send joiners to it. A node on it reaches peers, holds them for minutes, drops to
-> `broken pipe` / `stream ended`, and its own produced blocks never reach the explorer — that is the
-> partition, not a connectivity fault, and **the reject is sent by the older side**, so nothing the
-> fleet deploys ends it for you.
+> **Build from `main` at `891a1a14` or later.** The network crossed a fourth fence — ADR-0095's
+> model benefits at **DAA 2400** — on 2026-09-09, and every node built from an earlier `main` has
+> been on its own arm since DAA ≈2,241: refused at the handshake (by its own older gate), its
+> virtual DAA far behind the explorer, `Seeder mesh overlap: NONE` in `misaka node doctor`, and its
+> address listed under *Refused at handshake* on the explorer's
+> [Peers page](https://misakascan.com/#/peers). **The fingerprint did not change**, so it cannot tell
+> you which side you are on; the build above prints, on the line after it,
+> `Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000`, and that line is the check. Do **not**
+> run `7f4dded4` (the first build with that fence): it cannot sync from an empty datadir. To rejoin,
+> rebuild, move your `datadir` aside (keep the rest of the appdir) and resync — the steps are in
+> [the node-operator doc](docs/testnet11-node-operator.md). Validators: restart yours once the node
+> is synced; DNS finality, and with it the EVM lane and bridge, has been stalled since DAA 2,246
+> because most bonded stake has been attesting on the dead arm.
 >
-> The chain was re-minted 2026-09-03 (Relaunch 5f) — no flag day since has re-minted the genesis, so
-> if you joined after 5f your appdir is fine. Three fences are scheduled on it: ADR-0083's at
-> **DAA 1150** (live), the DA court, private prompts and the model market at **DAA 1900**, and
-> ADR-0084 U-08's refutation ladder at **DAA 2150**. A build missing any of them is refused from the
-> first height it does not carry — now, not at the height itself.
+> The chain was re-minted 2026-09-03 (Relaunch 5f) — no flag day since has re-minted the genesis.
+> Four fences are scheduled on it: ADR-0083's at **DAA 1150**, the DA court, private prompts and the
+> model market at **DAA 1900**, ADR-0084 U-08's refutation ladder at **DAA 2150**, and ADR-0095's
+> model benefits at **DAA 2400** — all four crossed. A build missing any of them is refused, and the
+> refusal arrives when the first node carrying the new fence connects, not at its height.
 >
 > A node with state older than 5f must wipe its appdir and resync; a node on an older ruleset is
-> refused at handshake by fingerprint, which is the intended behaviour. The value to trust is the one
-> your own node prints on startup, not the one on this page.
+> refused at handshake. The values to trust are the two your own node prints on startup, not the
+> ones on this page.
 > `testnet-10` has been **stopped**; its parameter set still exists so historical data can be read,
 > but nothing operates it and its public entry point is closed.
 >
@@ -82,10 +89,13 @@ cargo build --release -p kaspad
 ./target/release/kaspad --testnet --netsuffix=11 --utxoindex
 ```
 
-The log must show this fingerprint, or you are on the wrong ruleset:
+The log must show this fingerprint and, on the next line, this fence schedule, or you are on the
+wrong ruleset (the fingerprint alone does not move when a fence is added, which is why the second
+line exists):
 
 ```
 Consensus params fingerprint: 060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89 (network testnet-11)
+Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000 (schedule id …)
 ```
 
 and the genesis the network builds on is
@@ -140,9 +150,9 @@ current ruleset in its notes but attaches no binaries, and the last release that
 Downloading it is the single most common way to end up with a node that peers, drops after minutes,
 and mines blocks nobody accepts.
 
-The check is never the tag: it is the fingerprint your node prints on its second startup line. If it
-does not match the one in the Status block above, you are on the wrong ruleset whatever you
-downloaded. Older releases on that page are earlier chains and are refused at the handshake.
+The check is never the tag: it is the fingerprint your node prints on its second startup line and
+the fence schedule on the line after it. If either does not match the Status block above, you are
+on the wrong ruleset whatever you downloaded. Older releases on that page are earlier chains and are refused at the handshake.
 
 Linux x86_64 binaries (`kaspad`, `kaspa-pq-miner`, `kaspa-pq-validator`, `kaspa-pq-signer`, `misaka`) are published under [Releases](https://github.com/MISAKA-BTC/misakas/releases). Each release is built from the source snapshot of the same tag; verify with the `SHA256SUMS` attached to the release.
 
