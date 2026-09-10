@@ -671,11 +671,21 @@ mapping is written down.
   (`01e9c31c…`, 151,936 ids, lowest EOG 151,643, reproduced by an independent implementation), the
   a16 engine's masked decode with the table passed in by its caller, the worker's lazily built table,
   the seat's masked replay (`--palw-class-tokenizer`), the rail's version-6 build and the
-  entrance's masked and committed modes. The fence is still refused at assembly: the court half
-  (B5, B6, B10) is being built beside this, and `--palw-fp-constraint-devnet` arms the fence on a
-  private devnet only through the same check. The first constrained drill ran on a build whose
-  refusal was bypassed locally for that run only (never committed), while the court half was
-  written; its evidence is recorded when it finishes.
+  entrance's masked and committed modes.
+* **2026-09-10, the court half, and the fence assembles** (`3e1864ce`, merged in `5869baa1`;
+  `e9e02e0a`). Two appended close variants (borsh tags 5 and 6, earlier tags pinned):
+  `ConstrainedDecode` (B5: binding, tiled pin, job, automaton, segments, the beating lane's table
+  opening; a version-5 job is tried by the v2 rule through the same arm) and `ConstrainedRendering`
+  (B6: binding, job, ids, segments, a position and its opening). Both answer the step the ladder
+  narrowed to. Past the fence `DecodeToken`/`DecodeTokenTiled` are refused against a free-prompt
+  claim (`DecodeCloseWithoutTheJob`), the new arms are refused against an attempt claim and on a
+  dormant network, and `adjudicate_court_close_v2` takes the fence at the block's DAA. Tested
+  through `adjudicate_court_close_v2` on synthetic pins and end to end on a real masked a16 run at
+  151,936 lanes through the pinned table (an honest run acquitted, a producer that ignored its
+  constraint convicted, a lying rendering convicted, the old arm refused where armed). With the
+  court half in, `validate_palw_v2` no longer refuses the fence; it stays `None` on every preset.
+  The first constrained drill (run 1) started before this merge on a build whose refusal was
+  bypassed locally for that run only and never committed; the final drill runs this commit.
 
 ## 10. Amendment 2026-09-10 — what the court needs, found while building the drill
 
@@ -806,3 +816,23 @@ answer-only gateway, 2026-09-10).
 * **`finish_reason` is `stop` when the answer ended itself.** A masked answer's EOG renders empty,
   so the byte comparison that decided `stop` saw no cut and said `length`; the stream records that
   the answer ended.
+
+**B13 — what the court half found, still open.**
+
+* **The worst-case close is a split close.** At the Qwen2.5 row (151,936 lanes, 511 decode
+  positions) a B5 close counts 190,033 bytes and a B6 close 139,532, against 83,333 counted bytes
+  per lifecycle carrier; the segments dominate, not the 16 KiB automaton (B2's reason for its cap
+  was wrong). It needs a three-chunk split close, which fits testnet-11's 2,250,000-byte close
+  ceiling and is refused as `CloseTooLarge` on a network whose close budget is one carrier.
+* **B6 has no per-segment bound, on purpose.** The segments are the claimant's own commitment; a
+  bound that refused an over-long segment would let a claimant escape by committing one. B6
+  convicts it instead, and B5 keeps its bounds because B6 convicts what B5 refuses.
+* **A claimant that commits segments it never serves is untriable in court.** Both arms need the
+  segments that reproduce the claim's `output_root`. With the job-less arms refused, such a claim's
+  decode tokens cannot be tried — but honest seats replay it masked and do not license it, so it
+  matters only under a colluding panel. Closing it needs a close that proves every segment from the
+  table (about 725 KB).
+* **Only tiled-logits classes have a constrained close.** A free-prompt claim on a flat-logits class
+  has no decode close past the fence, and acceptance does not yet refuse a version-6 job on such a
+  class or on a class whose vocabulary differs from the pinned table's width. Every class certified
+  for the free-prompt lane today is tiled; the refusal belongs where class facts are read.
