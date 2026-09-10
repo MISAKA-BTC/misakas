@@ -67,10 +67,13 @@ lane.
 >         expects fence 2125000 next, not 2400. ... from peer: 169.58.232.113:26311
 > ```
 >
-> **The fingerprint is unchanged — `060e3597…` on both sides.** A fence scheduled for a future height
-> is normalised out of it (that is what lets two builds peer through a rollout), so the startup line
-> this page used to tell you to trust cannot tell the two builds apart. The build below prints its
-> fence heights on the next line; the check is that line:
+> **The fingerprint is unchanged — `060e3597…` on both sides.** It carries the height of every other
+> scheduled fence — that is why the 1900 fences and the 2150 ladder each moved it (`71b35c25…` →
+> `b511dd1e…` → `ebd3b321…` → `060e3597…`) — but the commit that added ADR-0095's fence (`14c453d1`)
+> left `palw_model_benefits` out of it, so for this one fence the startup line this page used to tell
+> you to trust cannot tell the two builds apart. (What normalises a scheduled fence away is the
+> handshake's *identity* id, which is what lets two builds peer through a rollout; the fingerprint is
+> not normalised.) The build below prints its fence heights on the next line; the check is that line:
 >
 > ```
 > [INFO ] Consensus params fingerprint: 060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89 (network testnet-11)
@@ -167,7 +170,8 @@ lane.
 >   coinbase payload marker `misaka-palw-rc`) — measured from the running node's own startup line,
 >   which is the only value your node will be judged by.
 > * build: **`main` at `891a1a14` or later**. The fingerprint above is necessary and no longer
->   sufficient: the builds on either side of the DAA-2400 fence print the same one. The check is the
+>   sufficient: the builds on either side of the DAA-2400 fence print the same one (it is the one
+>   fence the fingerprint leaves out; see the top of this section). The check is the
 >   line after it, `Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000`, which builds from
 >   before `891a1a14` do not print. Builds from before `06bf5118` — the 5f tag
 >   `testnet-11-relaunch-5f-adr0083-h1150` (`16a2f277`), the fleet's previous `cef2ecdb`, and the 5f

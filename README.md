@@ -90,8 +90,8 @@ cargo build --release -p kaspad
 ```
 
 The log must show this fingerprint and, on the next line, this fence schedule, or you are on the
-wrong ruleset (the fingerprint alone does not move when a fence is added, which is why the second
-line exists):
+wrong ruleset (the fingerprint carries every scheduled fence's height except ADR-0095's at 2400,
+which the build that added it left out — so the second line is the check that sees every fence):
 
 ```
 Consensus params fingerprint: 060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89 (network testnet-11)
