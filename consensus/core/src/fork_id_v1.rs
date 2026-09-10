@@ -516,6 +516,7 @@ mod tests {
             "palw_court_responder_coverage" => params.palw_court_responder_coverage = Some(at),
             "palw_fp_decode_rules" => params.palw_fp_decode_rules = Some(at),
             "palw_fp_decode_constraint" => params.palw_fp_decode_constraint = Some(at),
+            "palw_shard_court" => params.palw_shard_court = Some(at),
             "palw_difficulty_priced_rows" => params.palw_difficulty_priced_rows = Some(at),
             "palw_receipt_rows_unpriced" => params.palw_receipt_rows_unpriced = Some(at),
             "palw_attempt_header_pins" => params.palw_attempt_header_pins = Some(at),

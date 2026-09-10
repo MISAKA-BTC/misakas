@@ -1402,6 +1402,31 @@ pub struct Params {
     /// 3–4).
     pub palw_fp_decode_constraint: Option<ForkActivation>,
 
+    /// **ADR-0099 Decision 5's fence: a court opened at a NAMED leaf, decided in one move.**
+    ///
+    /// Active, a bonded accuser — a seat of the claim's panel holding one shard of the class, or
+    /// any active bond — files `PalwShardCourtAccusationV1` (`palw_shard_court_v1`): the leaf it
+    /// names, the refutation it already holds (the leaf's committed output and inputs opened
+    /// against the claim's roots), and the artifact rows opened against the class's registered
+    /// root. The chain adjudicates it with the court's own terminal check
+    /// (`check_execution_step_refutation_capped_v1`) at the ruleset's ladder: a fault voids the
+    /// claim and slashes its executor, a refutation that proves none slashes the accuser, and a
+    /// fused attention leaf is answered `NeedsDissection` (ADR-0082's protocol, ADR-0093's
+    /// responder). No ladder, no responder, no clock — nothing is asked of the accused. It is the
+    /// half of ADR-0077 Decision 8 that a seat holding one shard can play, and without it no
+    /// party on a sharded class can convict anyone.
+    ///
+    /// A bare fence, top level, `None` on every shipped preset — the `palw_fp_decode_constraint`
+    /// shape directly above, for its reasons.
+    ///
+    /// **ARMING IT IS REFUSED BY [`Self::validate_palw_v2`] ON THIS BUILD**: the accusation is
+    /// a type and a verdict function and not a consensus object — no acceptance rule takes it,
+    /// no fold slashes on its verdict, its signing context is not in the bundle's registry, and
+    /// no seat files one. A fence that read as armed while no object exists would promise a
+    /// conviction nobody can carry. The refusal lifts when the build carries all four
+    /// (ADR-0099 §6).
+    pub palw_shard_court: Option<ForkActivation>,
+
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
     /// Past this fence `calculate_difficulty_bits` sizes its expected duration by the rows in the
@@ -2055,6 +2080,20 @@ impl Params {
                  constraint automaton and no version-6 free-prompt job (no job may carry a constraint_id), the court has no \
                  v3 refutation arm, and no engine masks a decode — the fence may only be armed by a build that carries all \
                  three",
+            ));
+        }
+        // **ADR-0099 Decision 5 cannot be armed by this build either** — the same shape, for the
+        // same reason: the shard court's accusation is a type, not a consensus object, so a
+        // configuration that read as "armed" would promise a one-move conviction no acceptance
+        // rule takes and no fold applies. `never()` is absence and is exempt.
+        if let Some(activation) = self.palw_shard_court
+            && activation != ForkActivation::never()
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_shard_court is armed and this build cannot carry ADR-0099 Decision 5: PalwShardCourtAccusationV1 is \
+                 not a consensus object (no acceptance rule takes it, no fold slashes on its verdict, its signing context is \
+                 not in the bundle's registry, and no seat files one) — the fence may only be armed by a build that carries \
+                 all four",
             ));
         }
         // **ADR-0081 Decision 3 / ADR-0082 Decision 5: the prompt-commitment form is a property
@@ -2813,6 +2852,10 @@ impl Params {
         if self.palw_fp_decode_constraint == Some(ForkActivation::never()) {
             self.palw_fp_decode_constraint = None;
         }
+        // ADR-0099 Decision 5, likewise.
+        if self.palw_shard_court == Some(ForkActivation::never()) {
+            self.palw_shard_court = None;
+        }
         // ADR-0083 Decision 1, the same shape: a bare fence, `never()` is absence.
         if self.palw_difficulty_priced_rows == Some(ForkActivation::never()) {
             self.palw_difficulty_priced_rows = None;
@@ -3180,6 +3223,20 @@ impl Params {
         self.palw_fp_decode_constraint_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// ADR-0099 Decision 5's fence with the mode condition already folded in — `Some` only on a
+    /// `ConsensusV2` network that has armed it. The ONE place the shard court is decided.
+    pub fn palw_shard_court_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_shard_court) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Is ADR-0099's shard court in force at `daa_score`? `false` on every shipped preset.
+    pub fn palw_shard_court_active_at(&self, daa_score: u64) -> bool {
+        self.palw_shard_court_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// ADR-0081 Decision 3's fence with the mode condition already folded in — `Some` only on a
     /// `ConsensusV2` network that has armed it.
     pub fn palw_prompt_ids_merkle_fence(&self) -> Option<ForkActivation> {
@@ -3294,6 +3351,7 @@ impl Params {
             palw_court_responder_coverage,
             palw_fp_decode_rules,
             palw_fp_decode_constraint,
+            palw_shard_court,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -3341,6 +3399,7 @@ impl Params {
             ("palw_court_responder_coverage", *palw_court_responder_coverage),
             ("palw_fp_decode_rules", *palw_fp_decode_rules),
             ("palw_fp_decode_constraint", *palw_fp_decode_constraint),
+            ("palw_shard_court", *palw_shard_court),
             ("palw_difficulty_priced_rows", *palw_difficulty_priced_rows),
             ("palw_receipt_rows_unpriced", *palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
@@ -3496,6 +3555,11 @@ impl Params {
             h.write(b"palw_fp_decode_constraint");
             h.write(constraint.daa_score().to_le_bytes());
         }
+        // ADR-0099 Decision 5's fence, NAMED for the same reason: it changes what convicts.
+        if let Some(court) = self.palw_shard_court {
+            h.write(b"palw_shard_court");
+            h.write(court.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -3638,6 +3702,7 @@ impl Params {
             palw_court_responder_coverage,
             palw_fp_decode_rules,
             palw_fp_decode_constraint,
+            palw_shard_court,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -3924,6 +3989,10 @@ impl Params {
         if let Some(activation) = palw_fp_decode_constraint.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0099 Decision 5. Some-only, likewise.
+        if let Some(activation) = palw_shard_court.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0083 Decision 1. Some-only, likewise.
         if let Some(activation) = palw_difficulty_priced_rows.as_mut() {
             fork(activation, visit);
@@ -4165,6 +4234,7 @@ impl Params {
             palw_court_responder_coverage,
             palw_fp_decode_rules,
             palw_fp_decode_constraint,
+            palw_shard_court,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4465,6 +4535,13 @@ impl Params {
         // `None` and fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_fp_decode_constraint {
             h.write(b"palw_fp_decode_constraint");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0099 Decision 5, Some-only for the same reason: arming it changes what convicts a
+        // producer, and every shipped preset leaves it `None` and fingerprints byte-identically
+        // to a build without the field.
+        if let Some(activation) = palw_shard_court {
+            h.write(b"palw_shard_court");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0083 Decision 1, Some-only for the same reason: arming it changes the `bits` every
@@ -4816,6 +4893,7 @@ impl Params {
             palw_court_responder_coverage: self.palw_court_responder_coverage,
             palw_fp_decode_rules: self.palw_fp_decode_rules,
             palw_fp_decode_constraint: self.palw_fp_decode_constraint,
+            palw_shard_court: self.palw_shard_court,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
@@ -5769,6 +5847,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_court_responder_coverage: None,
     palw_fp_decode_rules: None,
     palw_fp_decode_constraint: None,
+    palw_shard_court: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -5934,6 +6013,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_court_responder_coverage: None,
     palw_fp_decode_rules: None,
     palw_fp_decode_constraint: None,
+    palw_shard_court: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6081,6 +6161,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_court_responder_coverage: None,
     palw_fp_decode_rules: None,
     palw_fp_decode_constraint: None,
+    palw_shard_court: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -10298,6 +10379,7 @@ pub const DEVNET_PARAMS: Params = Params {
     // mistake.
     palw_fp_decode_rules: None,
     palw_fp_decode_constraint: None,
+    palw_shard_court: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -12122,6 +12204,11 @@ mod consensus_params_id_tests {
                 "palw_fp_decode_constraint",
                 (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_constraint = Some(a)) as fn(&mut Params, ForkActivation),
             ),
+            // ADR-0099 Decision 5: the same refusal — the accusation is a type, not an object.
+            (
+                "palw_shard_court",
+                (|p: &mut Params, a: ForkActivation| p.palw_shard_court = Some(a)) as fn(&mut Params, ForkActivation),
+            ),
         ] {
             for activation in [ForkActivation::always(), ForkActivation::new(9_000_000)] {
                 let mut armed = shipped.clone();
@@ -12467,13 +12554,56 @@ mod consensus_params_id_tests {
         // alias it (ADR-0096 Decision 8, last sentence).
         let mut rules_only = shipped.clone();
         rules_only.palw_fp_decode_rules = Some(ForkActivation::new(9_000_000));
-        assert_ne!(rules_only.consensus_params_id(), armed.consensus_params_id(), "the sampler and the constraint are distinct fences");
+        assert_ne!(
+            rules_only.consensus_params_id(),
+            armed.consensus_params_id(),
+            "the sampler and the constraint are distinct fences"
+        );
         // The mode condition is folded in: outside ConsensusV2 the fence answers nothing.
         let mut legacy = MAINNET_PARAMS.clone();
         legacy.palw_fp_decode_constraint = Some(ForkActivation::always());
         assert!(matches!(legacy.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::Disabled));
         assert_eq!(legacy.palw_fp_decode_constraint_fence(), None);
         assert!(!legacy.palw_fp_decode_constraint_active_at(u64::MAX));
+    }
+
+    /// **ADR-0099 Decision 5's fence is dormant on every shipped preset and visible the moment it
+    /// is not** — the constraint fence's property directly above, for its reason: this fence
+    /// decides what convicts, so a node that disagreed about it would slash on an object another
+    /// node ignores.
+    #[test]
+    fn the_shard_court_fence_is_dormant_and_visible_the_moment_it_is_not() {
+        for (name, shipped) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(shipped.palw_shard_court.is_none(), "{name} must leave ADR-0099 Decision 5 dormant");
+            assert!(!shipped.palw_shard_court_active_at(u64::MAX), "{name}: a dormant fence is never active");
+        }
+        let shipped = devnet_shipped_params();
+        assert!(shipped.palw_shard_court.is_none(), "the bundled devnet leaves it dormant too");
+        let mut armed = shipped.clone();
+        armed.palw_shard_court = Some(ForkActivation::new(9_000_000));
+        assert_ne!(shipped.consensus_params_id(), armed.consensus_params_id(), "arming the shard court must move the fingerprint");
+        assert_ne!(shipped.consensus_schedule_id(), armed.consensus_schedule_id(), "the operator log must name it");
+        assert!(armed.palw_shard_court_active_at(9_000_000));
+        assert!(!armed.palw_shard_court_active_at(8_999_999));
+        let mut never_armed = shipped.clone();
+        never_armed.palw_shard_court = Some(ForkActivation::never());
+        assert_eq!(never_armed.consensus_identity_id(), shipped.consensus_identity_id(), "Some(never()) is absence");
+        let mut at_genesis = shipped.clone();
+        at_genesis.palw_shard_court = Some(ForkActivation::always());
+        assert_ne!(at_genesis.consensus_identity_id(), shipped.consensus_identity_id(), "in force from block 1 is a rule difference");
+        let mut constraint_only = shipped.clone();
+        constraint_only.palw_fp_decode_constraint = Some(ForkActivation::new(9_000_000));
+        assert_ne!(
+            constraint_only.consensus_params_id(),
+            armed.consensus_params_id(),
+            "the shard court and the constraint are distinct fences"
+        );
+        let mut legacy = MAINNET_PARAMS.clone();
+        legacy.palw_shard_court = Some(ForkActivation::always());
+        assert_eq!(legacy.palw_shard_court_fence(), None);
+        assert!(!legacy.palw_shard_court_active_at(u64::MAX));
     }
 
     #[test]

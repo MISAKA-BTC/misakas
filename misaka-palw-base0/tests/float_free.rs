@@ -136,6 +136,8 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/bin/palw-model-fit.rs", "measurement tool: reports the walls a class meets; executes no class arithmetic"),
     // ADR-0098's generator: it measures the seats' draw and prints percentages for a person.
     ("src/bin/palw-seat-coverage.rs", "measurement tool: reports the panel's coverage; executes no class arithmetic"),
+    // ADR-0099's generator: the shard plan and what a shard costs a seat, in GiB for a person.
+    ("src/bin/palw-shard-plan.rs", "measurement tool: reports the shard plan; executes no class arithmetic"),
     (
         "src/bin/palw-tile-measure.rs",
         "measurement tool: U-00's close sweep over derive_court_cost_shaped_v1; it prices, it computes no engine arithmetic",

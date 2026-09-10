@@ -231,6 +231,10 @@ pub mod palw_job_state;
 /// checkpoint commitments. Land-stage, consensus-inert.
 pub mod palw_legs;
 pub mod palw_lifecycle_objects_v2;
+/// ADR-0099 Decision 1 — a model is a manifest, and the Measured Model Artifact is what the
+/// network makes of it: the deterministic half any node recomputes and refuses by the field, the
+/// self-reported half carried and labelled. Consensus-inert.
+pub mod palw_measured_model_v1;
 pub mod palw_mode_v2;
 pub mod palw_model_benefits_v1;
 /// ADR-0097 — a model's fit is a lookup: every wall a class meets on a ruleset, named with its
@@ -246,6 +250,16 @@ pub mod palw_producer_v2;
 /// ADR-0098 — the panel's coverage of one claim, measured with the draw the seats run
 /// (ADR-0077 Decision 8): the number ADR-0081 Decision 8 asked for and never took. A report.
 pub mod palw_seat_coverage_v1;
+/// ADR-0099 Decision 5 — the court a shard seat can open at a named leaf: a one-move accusation
+/// over the court's own terminal check. A type and a verdict function; its arming is
+/// `Params::palw_shard_court`, refused at assembly on this build.
+pub mod palw_shard_court_v1;
+/// ADR-0099 Decision 3 — a shard is a capability a bond declares, and the panel is drawn per
+/// shard. Consensus-inert.
+pub mod palw_shard_panel_v1;
+/// ADR-0099 Decision 2 — a seat holds a shard, not the model: the plan (contiguous layer ranges,
+/// derived), what a shard costs a seat, and the two transfer forms. Consensus-inert.
+pub mod palw_shard_plan_v1;
 /// ADR-0081 Decision 3 — the one decision of ADR-0081 that survives its refutation: the
 /// prompt's token ids as a tiled Merkle root, so a gather proves ONE id instead of carrying
 /// all of them. Dormant (`Params::palw_prompt_ids_merkle` is `None` on every preset).
