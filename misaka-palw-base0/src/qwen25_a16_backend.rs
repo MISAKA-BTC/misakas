@@ -661,10 +661,13 @@ impl Qwen25A16Backend {
         Err(format!(
             "this artifact declares no tokenizer: `tokenizer_commitment` is all zeros, so every job this class \
              produces would publish `tokenizer_id` 0 and no replay could prove it read the ids this class means. \
-             Re-convert it with a tokenizer bound — `qwen25-convert <checkpoint-dir> --a16 --out <path>`, where \
-             <checkpoint-dir> holds tokenizer.json beside model.safetensors — and register the artifact_root the \
-             re-conversion produces: binding a tokenizer moves `artifact_digest`, so this is a new artifact and a \
-             genesis decision, not an upgrade of the one on disk (artifact digest {})",
+             Bind one — `palw-class bind-tokenizer --network <id> --tokenizer <tokenizer.json> --out <path> --model-id \
+             <this class's model id> <artifact>` sets that one field, reads the result back bound, and prints every \
+             row's registered root before and after: a row that registers the INVENTORY root (the tiled-map rows — \
+             graph-v2, graph-v3, graph-v5@512) keeps it, and a row that registers the artifact DIGEST gets a new \
+             artifact and a genesis decision, because the commitment is inside `artifact_digest`. Re-converting with a \
+             tokenizer bound (`qwen25-convert <checkpoint-dir> --a16 --out <path>`, tokenizer.json beside \
+             model.safetensors) is the route that needs no existing artifact (artifact digest {})",
             artifact.artifact_digest()
         ))
     }
@@ -2975,6 +2978,7 @@ mod free_prompt_tests {
         .expect("a converted artifact with a zero tokenizer commitment must be refused");
         assert!(message.contains("tokenizer_commitment"), "the refusal names the field: {message}");
         assert!(message.contains("qwen25-convert"), "and the command that fixes it: {message}");
+        assert!(message.contains("palw-class bind-tokenizer"), "and the cheap command, first (ADR-0096 D10): {message}");
 
         // Bound: it serves, and the job it builds publishes THAT identity rather than zero.
         let bound = std::sync::Arc::new(

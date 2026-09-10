@@ -369,6 +369,55 @@ the other fences.
 The same object rides the SSE stream's terminal event; the terminal chunk's `delta` carries the
 parsed `tool_calls` (with `index`) and the finish reason.
 
+## An answer-only local engine (ADR-0096 Decision 10)
+
+The gateway is also the local chat engine: the same binary, over the same family worker, filing
+nothing. This is what MISAKA Studio's `misaka` engine runs, and it needs no node, no bond and no
+key.
+
+```text
+identity.json   {}                                        # no bond, no key, no class
+anchor.json     {"anchor_block": "<128 hex, not zero>", "anchor_daa": 0}
+```
+
+```bash
+MISAKA_PALW_NETWORK_ID=testnet-11 \
+MISAKA_PALW_ARTIFACT=/abs/qwen25-1.5b-a16.bound.palwart \
+MISAKA_PALW_TOKENIZER=/abs/tokenizer.json \
+misaka-palw-gateway --listen 127.0.0.1:18899 --worker /abs/palw-a16-fp-worker \
+  --outbox /abs/outbox --identity /abs/identity.json --anchor /abs/anchor.json \
+  --answer-never-commit --max-decode-cap 512
+```
+
+* **The identity may be `{}`** — only with `--answer-never-commit` and `--anchor`. The bond, the
+  key, the network domain and the operator read as zeros, and the class id is adopted from the
+  worker's manifest after boot (the one value the worker would refuse any other of). `--rpc`
+  still needs the class id, because it reads the class's facts by id. `/health` then says
+  `bond: null`, `can_submit: false`, and every answer says `committed: false`.
+* **The anchor must not be zero** (the gateway refuses a zero anchor as "no anchor available")
+  and should not be a real block: the Studio uses
+  `blake2b-512("misaka-studio/local-answer-only-anchor/v1")`.
+* **The artifact must declare its tokenizer.** The family worker refuses, at boot, an artifact
+  whose `tokenizer_commitment` is all zeros — and the published `qwen25-1.5b-a16.palwart`
+  (sha256 `a8c4e53e…`) is one (measured 2026-09-10). Bind it once:
+
+  ```bash
+  palw-class bind-tokenizer --network testnet-11 --tokenizer /abs/tokenizer.json \
+    --out qwen25-1.5b-a16.bound.palwart --model-id 'Qwen/Qwen2.5-1.5B/graph-v5@512' qwen25-1.5b-a16.palwart
+  ```
+
+  It sets that one field, reads the result back bound, and prints every row's registered root
+  before and after. Measured on the published file: the tiled-map rows (`graph-v2`, `graph-v3`,
+  `graph-v5@512`) keep the inventory root `1a7457f1…`; the one-byte-map rows move with the
+  digest, and for them the output is a new artifact. The output's sha256 was `3f8fc5066bafae28…` —
+  the `bound-candidate.palwart` the testnet-11 fleet runs — so anyone can reproduce the fleet's
+  file from the public one and the public `tokenizer.json`, and compare by digest. 41 s, 6.4 GB
+  peak memory on an M4 Pro.
+
+Measured end to end on that file: from `{}`, the gateway adopted class `4277d84f…` and answered;
+a `response_format: json_object` request returned `{"capital":"Paris"}` in 7 s with
+`misaka.format` advisory and valid.
+
 ## Boundaries to know
 
 - **Prompts are public.** PublicDA is the only weight-bearing mode: the committed job carries
