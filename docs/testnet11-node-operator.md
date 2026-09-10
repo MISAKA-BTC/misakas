@@ -67,20 +67,26 @@ lane.
 >         expects fence 2125000 next, not 2400. ... from peer: 169.58.232.113:26311
 > ```
 >
-> **The fingerprint is unchanged — `060e3597…` on both sides.** It carries the height of every other
-> scheduled fence — that is why the 1900 fences and the 2150 ladder each moved it (`71b35c25…` →
-> `b511dd1e…` → `ebd3b321…` → `060e3597…`) — but the commit that added ADR-0095's fence (`14c453d1`)
-> left `palw_model_benefits` out of it, so for this one fence the startup line this page used to tell
-> you to trust cannot tell the two builds apart. (What normalises a scheduled fence away is the
-> handshake's *identity* id, which is what lets two builds peer through a rollout; the fingerprint is
-> not normalised.) The build below prints its fence heights on the next line; the check is that line:
+> **The fingerprint was unchanged — `060e3597…` on both sides.** It carries the height of every
+> other scheduled fence — that is why the 1900 fences and the 2150 ladder each moved it (`71b35c25…`
+> → `b511dd1e…` → `ebd3b321…` → `060e3597…`) — but the commit that added ADR-0095's fence
+> (`14c453d1`) left `palw_model_benefits` out of it, so for this one fence the startup line this page
+> used to tell you to trust could not tell the two builds apart. (What normalises a scheduled fence
+> away is the handshake's *identity* id, which is what lets two builds peer through a rollout; the
+> fingerprint is not normalised.) **Fixed 2026-09-11:** the fingerprint writes that fence now, which
+> moved testnet-11's value to `ecbdbc22…` without moving any rule, and a test fails the build if a
+> fence is ever left out again. Every build with the 2400 fence prints its fence heights on the line
+> after the fingerprint; that line is the check:
 >
 > ```
-> [INFO ] Consensus params fingerprint: 060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89 (network testnet-11)
+> [INFO ] Consensus params fingerprint: ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5 (network testnet-11)
 > [INFO ] Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000 (schedule id …)
 > ```
 >
-> No such line, or no `2400` in it, means you are on the old build.
+> A build from `891a1a14` up to `a5f1bdf7` prints `060e3597…` on the first line and the same second
+> line: same ruleset, and it peers with the builds after it (both log `schedules a FUTURE fence
+> differently` for the other — expected here, not a refusal). No second line, or no `2400` in it,
+> means you are on the old build.
 >
 > **Do not run `7f4dded4`**, the first build with the 2400 fence. It put ADR-0095's new kinds in the
 > middle of two enums whose borsh discriminant is their position — one the chain carries in every
@@ -158,7 +164,9 @@ lane.
 > on the fleet can end this for you — the refusal is sent by your own binary.
 >
 > **No datadir wipe.** Genesis and the peering identity are unchanged from 5f; only the fingerprint
-> moves. Rebuild, restart, keep your appdir. Confirm with the startup line:
+> moves. Rebuild, restart, keep your appdir. Confirm with the startup line (the value that flag day's
+> builds printed; a build from 2026-09-11 on prints `ecbdbc22…` for the same ruleset — see the top of
+> this section):
 >
 > ```
 > [INFO ] Consensus params fingerprint: 060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89 (network testnet-11)
@@ -179,17 +187,19 @@ lane.
 > > first rode 1900, where the gate could not see it at all — two builds peering and then disagreeing
 > > about which closes are valid. Moving it to 2150 is what makes the difference visible.
 >
-> * consensus fingerprint: **`060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89`**
->   (2026-09-06 flag day; the pre-flag-day value `71b35c25…` names the same genesis and the same
->   peering identity, and is refused by the gate as above).
+> * consensus fingerprint: **`ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5`**
+>   (2026-09-11: the first value that carries ADR-0095's 2400 fence). Builds from `891a1a14` up to
+>   `a5f1bdf7` print **`060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89`** for the
+>   same ruleset and stay peers; the pre-flag-day value `71b35c25…` names the same genesis and the
+>   same peering identity, and is refused by the gate as above.
 > * genesis hash: **`ad30b5cb965ad305dfa1dc7516935763ea2623105581b83bb9359c7247157d36b0f8003b337cdad366e3895c8f159e99332be16e258b144dddf483bf9b33edb7`** (`PALW_RC_GENESIS`,
 >   coinbase payload marker `misaka-palw-rc`) — measured from the running node's own startup line,
 >   which is the only value your node will be judged by.
-> * build: **`main` at `891a1a14` or later**. The fingerprint above is necessary and no longer
->   sufficient: the builds on either side of the DAA-2400 fence print the same one (it is the one
->   fence the fingerprint leaves out; see the top of this section). The check is the
->   line after it, `Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000`, which builds from
->   before `891a1a14` do not print. Builds from before `06bf5118` — the 5f tag
+> * build: **`main` at `891a1a14` or later**. Up to `a5f1bdf7` the fingerprint was necessary and not
+>   sufficient: the builds on either side of the DAA-2400 fence printed the same one (it was the one
+>   fence the fingerprint left out; see the top of this section). From 2026-09-11 it carries every
+>   fence. The readable check is the line after it, `Consensus fence schedule: 1150, 1900, 2150,
+>   2400, 2125000`, which builds from before `891a1a14` do not print. Builds from before `06bf5118` — the 5f tag
 >   `testnet-11-relaunch-5f-adr0083-h1150` (`16a2f277`), the fleet's previous `cef2ecdb`, and the 5f
 >   cut `2222e054…` — were on the far side of the gate from the second flag day on; and
 >   `4fcce4b0` / `6dea4f5f` (fingerprints `b511dd1e…` / `ebd3b321…`) from **1900**.
