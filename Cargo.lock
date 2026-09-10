@@ -6010,6 +6010,7 @@ name = "misaka-palw-constraint"
 version = "1.1.0"
 dependencies = [
  "blake2b_simd",
+ "kaspa-consensus-core",
  "kaspa-hashes",
  "regex",
  "serde_json",

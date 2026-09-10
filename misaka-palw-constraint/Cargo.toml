@@ -11,6 +11,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# ADR-0096 Decision 7, Part B: the automaton `compile` emits is consensus-core's pinned form
+# (`palw_decode_constraint_v1`). This crate PRODUCES that form and consensus-core never depends on
+# what produces it — a leaf crate imports the tree, never the reverse.
+kaspa-consensus-core.workspace = true
 # `Hash64` and the tree's ONE keyed BLAKE2b-512 helper, so a constraint id is spelled the way
 # every other free-prompt id is (`canonical_id` in consensus-core: the domain as the key, the
 # u64-LE length, then the bytes).

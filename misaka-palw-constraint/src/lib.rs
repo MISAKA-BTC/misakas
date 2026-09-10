@@ -1,12 +1,14 @@
 //! **ADR-0096 Decisions 3 and 7 — the shape an answer may be asked to take, named by its bytes.**
 //!
-//! Three pure functions and nothing else:
+//! Pure functions and nothing else:
 //!
 //! ```text
 //!   schema::parse      a JSON-Schema (draft 2020-12) SUBSET, refused by keyword outside it
 //!   schema::validate   an answer against a parsed schema, errors at JSON-pointer paths
 //!   canonical          RFC 8785 (JCS) bytes of any JSON value
 //!   constraint_id      H("misaka-palw/constraint/v1" ‖ len ‖ canonical bytes)
+//!   compile            Part B: a parsed schema → consensus-core's byte-level automaton
+//!                      (`PalwDecodeConstraintV1`), content-named by `compile::compiler_id_v1`
 //! ```
 //!
 //! **Why a subset, and why refuse-by-name.** Decision 3 serves `response_format` in two
@@ -29,12 +31,15 @@
 //!
 //! **What Part B changes and what it does not.** Decision 7's `constraint_id` is over the
 //! compiled automaton bytes (with a `compiler_id` in their header) and rides inside `fp_job_id_v3`
-//! at job version 6. Part A — this crate as it stands — names the constraint by its canonical
-//! SCHEMA bytes under the same domain, reports it in `misaka.format.requested.constraint_id`, and
-//! commits nothing: an advisory id is advisory. The domain is kept so the two never collide with
-//! any other free-prompt id, and the compiler, when it lands, sits beside `schema` here.
+//! at job version 6. Part A names the constraint by its canonical SCHEMA bytes under the same
+//! domain, reports it in `misaka.format.requested.constraint_id`, and commits nothing: an advisory
+//! id is advisory. The domain is kept so the two never collide with any other free-prompt id.
+//! [`compile`] is the compiler — the same [`constraint_id`] over `compile_v1(schema).to_bytes()`
+//! is the id a version-6 job will carry; consensus-core's `constraint_id_v1` is the same function
+//! by construction, and `compile::tests` holds the two spellings equal.
 
 pub mod canonical;
+pub mod compile;
 pub mod schema;
 
 use kaspa_hashes::Hash64;
