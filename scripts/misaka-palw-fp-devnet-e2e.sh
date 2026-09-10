@@ -256,7 +256,22 @@ for ((i=0; i<NODES; i++)); do
 done
 
 CLI=("$CLI_BIN" --network devnet --rpc 127.0.0.1:$RPC_BASE)
-blocks_of() { grep -c "produced block #" "$WORK_DIR/node-$1.log" 2>/dev/null || true; }
+# **Always a number.** Run 2 of the ADR-0096 drill (2026-09-10) died in stage 3 with
+# `total + : syntax error` — one read of a node's log printed NOTHING (grep failed, its stderr
+# discarded) and bash 3.2's arithmetic refused the empty operand, so the EXIT trap stopped every
+# node forty minutes in. A read that fails is retried and then counted as 0: a transient
+# undercount only shortens one best-effort wait, and every stage after it polls the chain itself.
+# (`grep -c` prints "0" and exits 1 on no match, so the capture is not followed by a second
+# fallback that would print the zero twice.)
+blocks_of() {
+  local n="" _try
+  for _try in 1 2 3; do
+    n=$(grep -c "produced block #" "$WORK_DIR/node-$1.log" 2>/dev/null) || true
+    [ -n "$n" ] && break
+    sleep 0.2
+  done
+  echo "${n:-0}"
+}
 # **The chain's progress is the SET's, not node-0's.**
 #
 # Every wait below wants the same thing: DAA has moved, so the next window can open. Reading it off
