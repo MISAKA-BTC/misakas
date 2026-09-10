@@ -4,10 +4,11 @@
 
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
-> **Status (2026-09-10).** The live public network is **`testnet-11`** — the PALW release candidate,
+> **Status (2026-09-11).** The live public network is **`testnet-11`** — the PALW release candidate,
 > Relaunch 5f. Explorer at **[misakascan.com](https://misakascan.com)**, web wallet at
 > **[wallet.misakascan.com](https://wallet.misakascan.com)**. Current network identity: consensus
-> fingerprint **`060e3597…`**, genesis **`ad30b5cb…`** (three execution classes and the
+> fingerprint **`ecbdbc22…`** — builds from `891a1a14` up to `a5f1bdf7` print `060e3597…` for the
+> same ruleset, see below — and genesis **`ad30b5cb…`** (three execution classes and the
 > 347M MSK community allocation in genesis).
 >
 > **Build from `main` at `891a1a14` or later.** The network crossed a fourth fence — ADR-0095's
@@ -15,14 +16,16 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > been on its own arm since DAA ≈2,241: refused at the handshake (by its own older gate), its
 > virtual DAA far behind the explorer, `Seeder mesh overlap: NONE` in `misaka node doctor`, and its
 > address listed under *Refused at handshake* on the explorer's
-> [Peers page](https://misakascan.com/#/peers). **The fingerprint did not change**, so it cannot tell
-> you which side you are on; the build above prints, on the line after it,
+> [Peers page](https://misakascan.com/#/peers). **The fingerprint did not change** across that fence
+> — until 2026-09-11 it left ADR-0095's fence out — so it could not tell you which side you were on;
+> the build above prints, on the line after it,
 > `Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000`, and that line is the check. Do **not**
 > run `7f4dded4` (the first build with that fence): it cannot sync from an empty datadir. To rejoin,
 > rebuild, move your `datadir` aside (keep the rest of the appdir) and resync — the steps are in
 > [the node-operator doc](docs/testnet11-node-operator.md). Validators: restart yours once the node
-> is synced; DNS finality, and with it the EVM lane and bridge, has been stalled since DAA 2,246
-> because most bonded stake has been attesting on the dead arm.
+> is synced. DNS finality stalled from DAA 2,246 while most bonded stake attested on the dead arm; it
+> recovered on the network's chain on 2026-09-10, and the EVM bridge carried its first deposit the
+> same day.
 >
 > The chain was re-minted 2026-09-03 (Relaunch 5f) — no flag day since has re-minted the genesis.
 > Four fences are scheduled on it: ADR-0083's at **DAA 1150**, the DA court, private prompts and the
@@ -90,13 +93,19 @@ cargo build --release -p kaspad
 ```
 
 The log must show this fingerprint and, on the next line, this fence schedule, or you are on the
-wrong ruleset (the fingerprint carries every scheduled fence's height except ADR-0095's at 2400,
-which the build that added it left out — so the second line is the check that sees every fence):
+wrong ruleset:
 
 ```
-Consensus params fingerprint: 060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89 (network testnet-11)
+Consensus params fingerprint: ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5 (network testnet-11)
 Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000 (schedule id …)
 ```
+
+A build from `891a1a14` up to `a5f1bdf7` prints `060e3597cd2950bc…` on the first line and the same
+second line. It runs the same ruleset: until 2026-09-11 the fingerprint left ADR-0095's fence at 2400
+out (the build that added it never wrote it), and writing it moved the value without moving any rule.
+The two stay peers — the handshake logs `schedules a FUTURE fence differently` between them rather
+than refusing — but rebuilding is how the first line becomes a check again. The second line is the
+one that names heights, and it is the same on both.
 
 and the genesis the network builds on is
 `ad30b5cb965ad305…` (the node prints it in any `Genesis mismatch` warning). If your log shows

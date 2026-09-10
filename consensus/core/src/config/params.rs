@@ -4337,6 +4337,17 @@ impl Params {
             h.write(b"palw_model_lines");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0095 (a position is a membership): the same contract. 14c453d1 bound this field in
+        // the destructure above and never wrote it, so testnet-11's DAA-2400 fence was the one
+        // scheduled height the printed fingerprint did not carry: the build that crossed it and
+        // the build without it both printed `060e3597…` on 2026-09-09, and an operator told to
+        // compare fingerprints could not see the flag day coming. The identity is unaffected —
+        // `normalize_values_a_scheduled_fence_drags_with_it` collapses a scheduled benefits fence
+        // to `None`, which writes nothing, exactly as before this line existed.
+        if let Some(activation) = palw_model_benefits {
+            h.write(b"palw_model_benefits");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0089 Decision 9: the same contract.
         if let Some(activation) = palw_model_evm {
             h.write(b"palw_model_evm");
@@ -12906,6 +12917,93 @@ mod consensus_params_id_tests {
         }
     }
 
+    /// **ADR-0095's fence is inside the fingerprint and outside the identity** — the property
+    /// 14c453d1 broke on the first half and never touched on the second.
+    ///
+    /// testnet-11 schedules `palw_model_benefits` at DAA 2,400. Until this was fixed the printed
+    /// fingerprint did not write it, so the build that crossed the fence on 2026-09-09 and the build
+    /// without it both printed `060e3597…`. Writing it must move the fingerprint (moving the height
+    /// moves it too) and must NOT move the identity: a scheduled fence is normalised to `None`
+    /// there, which writes nothing — so the fixed build and the one before it stay peers, and the
+    /// handshake reports a schedule difference instead of refusing.
+    #[test]
+    fn the_benefits_fence_is_inside_the_fingerprint_and_outside_the_identity() {
+        let shipped = palw_rc_shipped_params();
+        let fence = shipped.palw_model_benefits.expect("testnet-11 schedules ADR-0095's fence");
+        assert_eq!(fence.daa_score(), PALW_RC_MODEL_BENEFITS_FENCE_DAA);
+
+        let mut moved = shipped.clone();
+        moved.palw_model_benefits = Some(ForkActivation::new(PALW_RC_MODEL_BENEFITS_FENCE_DAA + 1));
+        let mut unscheduled = shipped.clone();
+        unscheduled.palw_model_benefits = None;
+
+        for (what, other) in [("moving the height by one", &moved), ("unscheduling it", &unscheduled)] {
+            assert_ne!(shipped.consensus_params_id(), other.consensus_params_id(), "{what} must move the printed fingerprint");
+            assert_eq!(
+                shipped.consensus_identity_id(),
+                other.consensus_identity_id(),
+                "{what} moved the IDENTITY — a scheduled fence must stay a schedule difference, or the fix itself is a flag day"
+            );
+        }
+        assert_ne!(shipped.consensus_schedule_id(), moved.consensus_schedule_id(), "the operator log must name the height");
+    }
+
+    /// **Every fence the visitor reaches is inside the fingerprint** — on every shipped preset, as
+    /// the node materialises it.
+    ///
+    /// `consensus_params_id` is exhaustive over `Params` by destructuring, and that is exactly what
+    /// let 14c453d1 through: binding a field satisfies the compiler whether or not the body writes
+    /// it. This asks the question behaviourally instead. `for_each_fence` visits every fence (the
+    /// identity's normalisation depends on it reaching all of them); moving any ONE of them by one
+    /// step must move the fingerprint. A visit that changes nothing (the stand-in an absent
+    /// Some-only fence is visited through) is skipped by comparing the whole `Params`.
+    #[test]
+    fn every_fence_the_visitor_reaches_moves_the_fingerprint() {
+        // testnet-11 materialises as the PALW-RC ruleset (`palw_rc_shipped_params`); suffix 12 is
+        // retired into it and `From<NetworkId>` refuses it by design.
+        let nets = [MAINNET_PARAMS.net, TESTNET_PARAMS.net, TESTNET11_PARAMS.net, SIMNET_PARAMS.net, DEVNET_PARAMS.net];
+        let mut failures = Vec::new();
+        for net in nets {
+            let base = Params::from(net);
+            let base_debug = format!("{base:?}");
+            let base_id = base.consensus_params_id();
+            let mut index = 0usize;
+            let mut moved_count = 0usize;
+            loop {
+                let mut tweaked = base.clone();
+                let mut visited = 0usize;
+                tweaked.for_each_fence(&mut |score| {
+                    if visited == index {
+                        *score = match *score {
+                            u64::MAX => u64::MAX - 1,
+                            s => s + 1,
+                        };
+                    }
+                    visited += 1;
+                });
+                if index >= visited {
+                    break;
+                }
+                if format!("{tweaked:?}") != base_debug {
+                    moved_count += 1;
+                    if tweaked.consensus_params_id() == base_id {
+                        let named = base
+                            .palw_fences_v1()
+                            .into_iter()
+                            .zip(tweaked.palw_fences_v1())
+                            .find(|(a, b)| a.1 != b.1)
+                            .map(|(a, _)| a.0)
+                            .unwrap_or("a non-PALW fence");
+                        failures.push(format!("{net}: visit #{index} ({named}) moved and the fingerprint did not"));
+                    }
+                }
+                index += 1;
+            }
+            assert!(moved_count > 0, "{net}: the visitor changed nothing — the sweep would be vacuous");
+        }
+        assert!(failures.is_empty(), "fences outside the fingerprint:\n{}", failures.join("\n"));
+    }
+
     /// The scheduling cases above only mean anything if the fences they arm are NOT already
     /// genesis-active on this preset — arming a genesis-active fence somewhere else is a rule
     /// change and SHOULD move the identity, which is the assertion in
@@ -13381,7 +13479,17 @@ mod consensus_params_id_tests {
                 // and would have peered and then disagreed past the height. Measured before moving
                 // it: same fork id at 1,899, 1,900 and 2,500. Previous, and not to be deployed past
                 // 1,900: ebd3b321d4ac68a719f39701af1bfa3931230f27cb77d9fd0e26a513a151ede4.
-                "060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89",
+                // **Re-pinned 2026-09-11: the fingerprint finally carries ADR-0095's fence.**
+                // 14c453d1 scheduled `palw_model_benefits` at DAA 2,400 and never wrote it, so the
+                // build that crossed it and the one without it both printed 060e3597… — the third
+                // flag day was invisible to the one check the README told operators to make. No
+                // rule moved: the identity is unchanged (a scheduled fence normalises to `None`,
+                // `the_benefits_fence_is_inside_the_fingerprint_and_outside_the_identity`), so a
+                // node on this build and one on the build before it stay peers; the handshake
+                // reports a schedule difference between them instead of refusing. Previous, which
+                // every build from 14c453d1 to a5f1bdf7 prints:
+                // 060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89.
+                "ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
