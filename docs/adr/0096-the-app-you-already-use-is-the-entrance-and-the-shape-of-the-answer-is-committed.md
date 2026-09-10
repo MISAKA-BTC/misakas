@@ -664,3 +664,76 @@ mapping is written down.
   `3f8fc5066bafae28…` to `Misakachain/Qwen2.5-1.5B-PALW-A16-runtime` and moving the pin is one
   upload and one line, after which the fallback has no user; it is an outward-facing act, so it
   waits for the operator.
+
+## 10. Amendment 2026-09-10 — what the court needs, found while building the drill
+
+Decision 7 said the court "recomputes `s` by running the automaton over the rendered prefix —
+which needs the class's token-to-bytes table (Decision 8)", and Decision 8 said the table is
+"served material". Building toward the drill showed that this is not adjudicable as written. The
+court is run by every node inside the fold, a node holds no tokenizer, and the only
+tokenizer-derived value the chain can reach is the artifact's `tokenizer_commitment` — a flat hash
+of `tokenizer.json`, from which no single token's bytes can be proven. And the claim record the
+court reads (`PalwClaimStateV2`) holds roots, not the job. A court that needs a file only some
+nodes have is a consensus split, and a court that cannot try a constrained token convicts an
+honest one: a challenger who could state "no constraint" would win against every masked token.
+So Decisions 7 and 8 are completed here, and the fence stays refused at assembly until every
+item below is in the build.
+
+**B1 — the job's version 6 layout.** `PalwFreePromptJobV3` serializes byte-for-byte as today for
+version 5 and appends `constraint_id: Hash64` for version 6 only, so every version-5 job id, claim
+id and pinned golden stays what it is. Version 6 requires a non-zero `constraint_id`, and version
+5 has none, so one meaning never has two encodings. The worker result and the commitment payload
+move with the job, as they already do (one version constant today).
+
+**B2 — the payload carries the constraint.** Under `PublicDa` a version-6 payload appends the
+constraint's canonical bytes, bounded to **16 KiB** (not the automaton's own 64 KiB — the bytes
+must fit a court carrier beside the rest of a close, B5). Acceptance parses them canonically and
+requires `constraint_id_v1(bytes) == job.constraint_id`. Seats replay from it. `PanelDa` with
+version 6 is refused by name until a private route for the constraint exists.
+
+**B3 — the answer is committed token by token.** For a version-6 job, the family's rendered-output
+hash is `rendered_segments_hash_v1` over the per-token byte strings, length-prefixed, in order —
+not a keyed hash of the ids. `output_root = output_commitment_v2(context, ids, rendered)` then
+binds each position's bytes, so a close can carry the rendering and the court checks it against
+the claim's own `output_root` without a new field anywhere.
+
+**B4 — the token tables are the build's.** For each tokenizer a class may constrain under,
+consensus-core pins `(tokenizer_commitment, vocab_len, token_table_root)`, where the root is a
+Merkle root over leaves `H(domain ‖ id ‖ len ‖ bytes)` for every id in `0..vocab_len` (an id the
+tokenizer cannot render has the empty-bytes leaf and is never admitted). The pin is produced by a
+script from the tokenizer file and checked against the file by a test, the Gumbel table's shape
+(ADR-0082 Decision 11). A tokenizer with no row cannot carry a version-6 job. This is ADR-0067's
+rule applied to tokenizers: classes are chain data, kernels — and now token tables — are the build.
+
+**B5 — the constrained decode close.** A new close arm carries the tiled pin (as today), the
+version-6 job (checked: `fp_job_id_v3(job) == binding.job_context.job_id`, and the binding is
+already checked against the claim's `execution_root`), the constraint bytes (checked against
+`job.constraint_id`), and the per-token segments (checked: `output_commitment_v2` over the pin's
+ids and `rendered_segments_hash_v1(segments)` equals the claim's `output_root`). The court walks
+the automaton over `segments[..p]`. The one-disclosure arm needs no tile: the committed token at
+`p` is not admitted from `s_p` (under B7's finish rule). The two-disclosure arm adds the beating
+lane's bytes with a Merkle opening against the pinned table root, and convicts only if that lane is
+admitted and its key beats the committed one's.
+
+**B6 — the rendering close.** A lie about the segments themselves is tried separately. The close
+carries the segments (checked against `output_root` as in B5), a position `q`, and the table
+opening for `ids[q]`, and convicts if `segments[q]` is not the table's bytes. A challenger's own
+segmentation cannot be substituted, because the segments are checked against the claimant's
+`output_root`, not supplied on trust.
+
+**B7 — the finish rule.** Once no lane is admitted (a complete root value admits nothing), the
+committed token is the lowest EOG id at that position and at every later one; the automaton is in
+a distinguished finished state, and the run still ends at the declared budget
+(`ExactBudgetReached`), so the job context and its hash are built before the run exactly as today.
+`render_answer_v2` renders up to the first committed EOG id, so the answer a derivation reads is
+exactly the constrained value.
+
+**B8 — the qwen36 family.** Its engine does not mask yet; a version-6 job for it is refused by the
+worker by name.
+
+**What the drill proves, and what it does not.** On a private devnet with the fence scheduled: a
+constrained claim is committed, accepted, replayed by every seat and reaches `Final`. The court
+arms (B5, B6) are proven by tests through `adjudicate_court_close_v2`, the fold's own entry, over
+a real constrained run on a fixture-sized artifact: an honest run acquitted, an altered id
+convicted by the one-disclosure arm, a forbidden beating lane not a fault, a lying segment
+convicted by B6. A live court round trip is the court drill's job, not this one's.
