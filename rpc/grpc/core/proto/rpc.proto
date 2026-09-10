@@ -1372,6 +1372,11 @@ message GetPalwProducerFactsResponseMessage {
   // Version 6: ADR-0077 D16 `PanelDa` at the candidate, and ADR-0081 D3's prompt-commitment form.
   bool panelDaArmed = 27;
   bool promptIdsMerkle = 28;
+  // Version 7: ADR-0096 Decision 7 — is the decode constraint (`palw_fp_decode_constraint`) in
+  // force at daaScore? A gateway tells its callers whether `response_format` was ENFORCED on the
+  // strength of this, so a peer that does not report it must read as false. False whenever
+  // `available` is false.
+  bool fpDecodeConstraintArmed = 29;
   RPCError error = 1000;
 }
 

@@ -90,6 +90,18 @@ pub struct ChainFacts {
     /// as a tiled Merkle root. The worker's result is re-bound under it (`prompt_ids_form`), so a
     /// worker started for the wrong network is refused here rather than at the chain.
     pub prompt_ids_merkle: bool,
+    /// **ADR-0096 Decision 7's decode constraint** at the node's candidate, read off
+    /// `GetPalwProducerFactsResponse::fp_decode_constraint_armed` (wire version 7).
+    ///
+    /// It is the field the `misaka.format` object's `enforced` is answered from (ADR-0096
+    /// Decision 6), and that is a stronger obligation than the two fences above it carry: a wrong
+    /// `true` here does not cost a refused commitment, it tells a caller that an unconstrained
+    /// answer was bound by their schema. Fail-closed for that reason — a node that reports nothing
+    /// reads as dormant, and a dormant read costs the caller only the word "advisory".
+    ///
+    /// Read INDEPENDENTLY of `fp_decode_rules_armed`: the two fences do not imply each other, and
+    /// constrained greedy is the configuration `response_format` actually wants.
+    pub fp_decode_constraint_armed: bool,
     /// The freshness binding, from the node's sink (`--rpc`) or from `anchor.json`.
     pub anchor_block: Hash64,
     pub anchor_daa: u64,
@@ -189,6 +201,7 @@ impl ChainFacts {
             "fp_decode_rules_armed": self.fp_decode_rules_armed,
             "panel_da_armed": self.panel_da_armed,
             "prompt_ids_merkle": self.prompt_ids_merkle,
+            "fp_decode_constraint_armed": self.fp_decode_constraint_armed,
             "anchor_daa": self.anchor_daa,
         })
     }
@@ -310,6 +323,7 @@ impl RpcChainSource {
                 facts.fp_decode_rules_armed = producer.fp_decode_rules_armed;
                 facts.panel_da_armed = producer.panel_da_armed;
                 facts.prompt_ids_merkle = producer.prompt_ids_merkle;
+                facts.fp_decode_constraint_armed = producer.fp_decode_constraint_armed;
             }
             Err(e) => facts.read_error = Some(e),
         }

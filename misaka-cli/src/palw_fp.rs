@@ -617,6 +617,10 @@ pub(crate) fn build_carrier_v1(
 ///   force at the chain point the facts were read at. Past the fence a job carries
 ///   `(sampling_seed, temperature_q)` inside its context hash and decode leaves are what earn, so
 ///   a builder on the wrong side of it produces claims that are honest and unreproducible.
+/// * `fp_decode_constraint_armed` (ADR-0096 Decision 7) — whether `palw_fp_decode_constraint` is in
+///   force at the same chain point. It is read and printed SEPARATELY from the line above because
+///   the two fences are independent: constrained greedy is a state a network can be in, and an
+///   operator who saw one line for both would read a dormant sampler as a dormant constraint.
 ///
 /// Nothing signs and nothing spends: one read. A node older than the field answers `false`, which
 /// is the fail-closed reading the wire format documents — hold back and retry, never submit on an
@@ -646,6 +650,7 @@ pub async fn certified(ctx: &Ctx, class_id: &str, json: bool) -> Result<(), CliE
                 "daa_score": facts.daa_score,
                 "fp_certified": facts.fp_certified,
                 "fp_decode_rules_armed": facts.fp_decode_rules_armed,
+                "fp_decode_constraint_armed": facts.fp_decode_constraint_armed,
                 "fp_quanta_per_canonical_job": facts.fp_quanta_per_canonical_job,
                 "fp_max_quanta_per_receipt": facts.fp_max_quanta_per_receipt,
             }))
@@ -670,6 +675,14 @@ pub async fn certified(ctx: &Ctx, class_id: &str, json: bool) -> Result<(), CliE
                 "ARMED — jobs carry (sampling_seed, temperature_q) and decode leaves earn (ADR-0082 D10/D11)"
             } else {
                 "dormant — the pre-ADR-0082 job shape; a job built for the armed rules is unreproducible here"
+            }
+        );
+        println!(
+            "  fp decode constraint: {}",
+            if facts.fp_decode_constraint_armed {
+                "ARMED — the committed token is the argmax over the ADMITTED lanes (ADR-0096 D7)"
+            } else {
+                "dormant — a response_format is prompt text here, never a rule; the answer is unconstrained"
             }
         );
         println!("  quanta per job / receipt cap: {} / {}", facts.fp_quanta_per_canonical_job, facts.fp_max_quanta_per_receipt);

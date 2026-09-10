@@ -412,6 +412,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwProducerFactsResponse>, protowire:
         palw_retention_dir: item.palw_retention_dir.clone(),
         panel_da_armed: item.panel_da_armed,
         prompt_ids_merkle: item.prompt_ids_merkle,
+        fp_decode_constraint_armed: item.fp_decode_constraint_armed,
         error: None,
     }
 });
@@ -1396,6 +1397,7 @@ try_from!(item: &protowire::GetPalwProducerFactsResponseMessage, RpcResult<kaspa
         palw_retention_dir: item.palw_retention_dir.clone(),
         panel_da_armed: item.panel_da_armed,
         prompt_ids_merkle: item.prompt_ids_merkle,
+        fp_decode_constraint_armed: item.fp_decode_constraint_armed,
     }
 });
 try_from!(item: &protowire::GetPalwDerivedArtifactsRequestMessage, kaspa_rpc_core::GetPalwDerivedArtifactsRequest, {
@@ -2074,6 +2076,8 @@ mod palw_producer_facts_tests {
             // round trip can distinguish "carried" from "defaulted" — the field's own default is
             // false, and a conversion that dropped it would pass against a false fixture.
             fp_decode_rules_armed: true,
+            // ADR-0096 Decision 7, `true` for the reason directly above it.
+            fp_decode_constraint_armed: true,
             palw_retention_dir: "/var/lib/misaka/testnet-11/palw-retention".to_string(),
         };
         let wire: crate::protowire::GetPalwProducerFactsResponseMessage = RpcResult::Ok(&response).into();
@@ -2108,6 +2112,10 @@ mod palw_producer_facts_tests {
         assert!(
             back.fp_decode_rules_armed,
             "a builder that loses fp_decode_rules_armed builds jobs for the wrong decode ruleset — honest and unreproducible"
+        );
+        assert!(
+            back.fp_decode_constraint_armed,
+            "a gateway that loses fp_decode_constraint_armed tells its caller an unconstrained answer was enforced (ADR-0096 D7)"
         );
         assert_eq!(
             back.palw_retention_dir, response.palw_retention_dir,

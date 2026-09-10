@@ -472,9 +472,13 @@ enum PalwCmd {
     /// ADR-0082's decode ruleset in force (`fp_decode_rules_armed` — past that fence a job carries
     /// its sampling seed and temperature inside its context hash and decode leaves are what earn)?
     ///
+    /// ADR-0096 Decision 7's `fp_decode_constraint_armed` is printed beside it and is a SEPARATE
+    /// fence: past it the committed token is the argmax over the lanes a job's constraint admits,
+    /// and below it a `response_format` is prompt text rather than a rule.
+    ///
     /// A job on an uncertified class is still answered and its commitment is unsubmittable; a job
-    /// built for the wrong decode ruleset is honest and unreproducible. Neither is guessable and
-    /// both are one read. Nothing signs, nothing spends.
+    /// built for the wrong decode ruleset is honest and unreproducible. None of the three is
+    /// guessable and all are one read. Nothing signs, nothing spends.
     Certified {
         /// 128-hex class id (`execution_class_id`, the shape profile id).
         class_id: String,

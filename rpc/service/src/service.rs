@@ -1220,6 +1220,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             panel_da_armed: self.config.params.palw_panel_da_at(facts.daa_score),
             prompt_ids_merkle: self.config.params.palw_prompt_ids_form_at(facts.daa_score)
                 == kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            // **ADR-0096 Decision 7's fence, at the CANDIDATE's score**, for the reason
+            // `fp_decode_rules_armed` above is read there. `palw_fp_decode_constraint_active_at`
+            // folds in the ConsensusV2 mode condition, and it is read INDEPENDENTLY of the sampler's
+            // fence: a network may arm constrained-greedy without arming a temperature.
+            fp_decode_constraint_armed: self.config.params.palw_fp_decode_constraint_active_at(facts.daa_score),
             ..Default::default()
         };
         if let Some(bond_facts) = facts.bond.as_ref() {

@@ -2349,6 +2349,17 @@ pub struct GetPalwProducerFactsResponse {
     /// the worker's result under it; a node that does not report it reads as flat, which on a
     /// Merkle network refuses the result rather than filing a job the chain calls something else.
     pub prompt_ids_merkle: bool,
+    /// **ADR-0096 Decision 7's decode constraint, at the candidate's DAA** (version 7): `true`
+    /// where `palw_fp_decode_constraint` is in force. It is on the wire for the reason
+    /// `fp_decode_rules_armed` above it is, with one difference that makes it matter more: a
+    /// gateway tells its caller whether `response_format` was ENFORCED on the strength of this
+    /// field, so a wrong `true` is not a refused claim but an answer reported as something it is
+    /// not.
+    ///
+    /// False whenever `available` is false, and false on any pre-version-7 peer — the same
+    /// fail-closed reading every fence flag here takes. `false` costs a client an advisory schema
+    /// it could have had; `true` costs it a guarantee it never had.
+    pub fp_decode_constraint_armed: bool,
     /// **Every outpoint a wallet must not spend**, `txid:index` with a 128-hex transaction id.
     ///
     /// Two sources, deliberately in ONE list so a wallet cannot read half of it (audit3 H3, H12):
@@ -2368,14 +2379,15 @@ pub struct GetPalwProducerFactsResponse {
 
 impl Serializer for GetPalwProducerFactsResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        // Version 6: `panel_da_armed` and `prompt_ids_merkle` (ADR-0077 D16 / ADR-0081 D3, the
+        // Version 7: `fp_decode_constraint_armed` (ADR-0096 Decision 7's fence). Version 6:
+        // `panel_da_armed` and `prompt_ids_merkle` (ADR-0077 D16 / ADR-0081 D3, the
         // private-prompts design of 2026-09-05). Version 5: `palw_retention_dir` (ADR-0084 Decision 5). Version 4 added
         // `fp_decode_rules_armed` (ADR-0082 Decisions 10/11's fence). Version 3 added
         // `fp_certified` and the free-prompt price (ADR-0077 Decision 3). Version 2 added
         // `locked_bond_outpoints` (audit3 H3). Every version is a strict suffix, so an older
         // reader stops where its version ended and this reader tolerates an older writer by
         // leaving the later fields at their defaults — additive, never re-ordered.
-        store!(u16, &6, writer)?;
+        store!(u16, &7, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.chain_point, writer)?;
         store!(u64, &self.daa_score, writer)?;
@@ -2404,6 +2416,7 @@ impl Serializer for GetPalwProducerFactsResponse {
         store!(String, &self.palw_retention_dir, writer)?;
         store!(bool, &self.panel_da_armed, writer)?;
         store!(bool, &self.prompt_ids_merkle, writer)?;
+        store!(bool, &self.fp_decode_constraint_armed, writer)?;
         Ok(())
     }
 }
@@ -2450,6 +2463,10 @@ impl Deserializer for GetPalwProducerFactsResponse {
         // force, so a gateway reads "unknown" as "not armed" / "flat" and refuses rather than files.
         let (panel_da_armed, prompt_ids_merkle) =
             if version >= 6 { (load!(bool, reader)?, load!(bool, reader)?) } else { (false, false) };
+        // Version 7 (ADR-0096 Decision 7): fail closed like every fence flag above it, and here the
+        // asymmetry is sharpest — reading an older peer as `false` costs a caller an advisory
+        // schema, reading it as `true` would report an unconstrained answer as an enforced one.
+        let fp_decode_constraint_armed = if version >= 7 { load!(bool, reader)? } else { false };
         Ok(Self {
             available,
             chain_point,
@@ -2479,6 +2496,7 @@ impl Deserializer for GetPalwProducerFactsResponse {
             palw_retention_dir,
             panel_da_armed,
             prompt_ids_merkle,
+            fp_decode_constraint_armed,
         })
     }
 }
@@ -6618,10 +6636,11 @@ mod palw_producer_facts_wire_tests {
             // "defaulted" — the field's own default is false and a lost field would pass silently.
             fp_decode_rules_armed: true,
             locked_bond_outpoints: vec![format!("{}:0", "aa".repeat(64)), format!("{}:7", "bb".repeat(64))],
-            // Version 5 and 6 fields, non-default so a lost field cannot pass as a carried one.
+            // Version 5, 6 and 7 fields, non-default so a lost field cannot pass as a carried one.
             palw_retention_dir: "/var/lib/misaka/palw".to_string(),
             panel_da_armed: true,
             prompt_ids_merkle: true,
+            fp_decode_constraint_armed: true,
         }
     }
 
@@ -6639,6 +6658,10 @@ mod palw_producer_facts_wire_tests {
         assert_eq!(back.fp_quanta_per_canonical_job, 8, "the lane's price is the chain's, not the gateway's");
         assert_eq!(back.fp_max_quanta_per_receipt, 64);
         assert!(back.fp_decode_rules_armed, "ADR-0082 D10/D11: a builder on the wrong side of this fence is unreproducible");
+        assert!(
+            back.fp_decode_constraint_armed,
+            "ADR-0096 D7: a gateway that lost this reports an unconstrained answer as an enforced one"
+        );
         assert_eq!(back.locked_bond_outpoints, response.locked_bond_outpoints, "the must-not-spend set must not shorten");
         assert_eq!(back.class_target, response.class_target);
         assert_eq!(back.bond_exposure_ceiling, response.bond_exposure_ceiling);
@@ -6763,6 +6786,42 @@ mod palw_producer_facts_wire_tests {
         assert_eq!(back.fp_quanta_per_canonical_job, r.fp_quanta_per_canonical_job);
         assert_eq!(back.fp_max_quanta_per_receipt, r.fp_max_quanta_per_receipt);
         assert!(!back.fp_decode_rules_armed, "a version-3 peer knows nothing about the fence — read fail-closed");
+    }
+
+    /// **A version-SIX writer reads as decode-constraint-dormant, and the suffix property is what
+    /// makes the test constructible** (ADR-0096 Decision 7).
+    ///
+    /// Version 7 adds exactly one trailing `bool` to version 6, so a version-6 encoding of the same
+    /// facts IS the version-7 bytes with the version prefix rewritten and the last byte dropped.
+    /// Building it that way rather than by re-listing twenty-eight `store!` calls means the test
+    /// FAILS if the new field is ever inserted anywhere but the end — which is the invariant the
+    /// version prefix exists to protect, and the one a hand-written field list would hide.
+    #[test]
+    fn a_version_six_writer_reads_as_decode_constraint_dormant() {
+        let r = v4_response();
+        assert!(r.fp_decode_constraint_armed, "the fixture must set it, or this test cannot tell carried from defaulted");
+        let mut v7 = Vec::new();
+        Serializer::serialize(&r, &mut v7).unwrap();
+
+        // The last byte is the version-7 field; everything before it is the version-6 encoding.
+        let (body, tail) = v7.split_at(v7.len() - 1);
+        assert_eq!(tail, [1u8], "the trailing byte is the new bool, or the field is not last");
+        let mut v6 = Vec::new();
+        store!(u16, &6, &mut v6).unwrap();
+        v6.extend_from_slice(&body[2..]);
+
+        let back = <GetPalwProducerFactsResponse as Deserializer>::deserialize(&mut v6.as_slice()).unwrap();
+        // Everything version 6 DID say is read, and nothing shifted.
+        assert!(back.panel_da_armed && back.prompt_ids_merkle, "the version-6 pair must survive unchanged");
+        assert_eq!(back.palw_retention_dir, r.palw_retention_dir);
+        assert!(back.fp_decode_rules_armed, "and the version-4 flag is still where it was");
+        assert_eq!(back.locked_bond_outpoints, r.locked_bond_outpoints);
+        // And the one thing it did not say is read as absent, not as asserted.
+        assert!(
+            !back.fp_decode_constraint_armed,
+            "a version-6 peer knows nothing about palw_fp_decode_constraint — reading its silence as armed would report \
+             an unconstrained answer as an enforced one"
+        );
     }
 }
 
