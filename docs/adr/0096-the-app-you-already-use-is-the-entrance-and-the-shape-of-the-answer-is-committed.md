@@ -686,6 +686,20 @@ mapping is written down.
   court half in, `validate_palw_v2` no longer refuses the fence; it stays `None` on every preset.
   The first constrained drill (run 1) started before this merge on a build whose refusal was
   bypassed locally for that run only and never committed; the final drill runs this commit.
+* **2026-09-10, drill run 1 — a version-6 claim on a live devnet** (`misaka-palw-fp-devnet-e2e.sh`
+  with `CONSTRAINED=1`, three nodes, the fence armed at DAA 0, graph-v5@512 class `4277d84f…`, the
+  bound artifact and the pinned Qwen2.5 table on every node). The gateway committed the format:
+  "Extract the person as JSON: Taro Yamada is 34 years old and lives in Osaka." answered
+  `{"name":"Taro Yamada","age":34,"city":"Osaka"}`, enforcement `committed`, valid, automaton
+  `fe3fb23f…` (1,090 bytes), `finish_reason` `stop`. The worker built the table and said it is the
+  pin (`01e9c31c…`). The rail signed a job of version 6 and the node accepted it (claim
+  `d620161f…`, tx `a65edf84…`). `FreePromptCommitted` and `PanelBound` reached every node. The
+  capture was 19.7 MB, over the transport cap, so the seats had only the answer envelope: node-2
+  (no artifact) filed `Incapable`, and **node-1 replayed the version-6 job masked through the
+  automaton and the pinned table, reproduced both roots and the priced work, and filed `Valid`**
+  (18:58 JST) — the masked decode is the same in two processes on two nodes. With three nodes no
+  licence is reachable (3 `Valid` of 5 seats, the executor never sits), which the drill now says at
+  preflight; the run was stopped there. Evidence: `run1-evidence.txt` beside the run directory.
 
 ## 10. Amendment 2026-09-10 — what the court needs, found while building the drill
 
