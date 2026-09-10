@@ -310,10 +310,13 @@ fences decide for each thing the table above accepts — `response_format.json_s
 chain (`public_da` / `panel_da_available`) and in which form (`flat` / `merkle`). A client that reads
 this budgets its request as arithmetic and never learns the window from a 400.
 
-When a request does exceed a bound the gateway checks before the chain, the 400's `error` string
-is exactly what it was (the Studio parses it) and `misaka.refusal` rides beside it with a code:
-`context_length_exceeded` carries `prompt_tokens`, `decode_ceiling`, `context_window` and
-`room_for_answer`; `prompt_bytes_exceeded` carries `prompt_bytes` and `max_prompt_bytes`. Every
+When a request does exceed a bound the gateway checks before the chain, the refusal is the
+gateway's ordinary error body — `{"error": {"message", "type": "invalid_request_error"}}`, the
+sentence unchanged — with `error.code` added (`context_length_exceeded`, which is OpenAI's own code
+for the same refusal, or `prompt_bytes_exceeded`) and the numbers under `misaka.refusal`:
+`prompt_tokens`, `decode_ceiling`, `context_window` and `room_for_answer` for the first,
+`prompt_bytes` and `max_prompt_bytes` for the second. The body is the same whether it arrives as a
+400 (`stream: false`) or as an SSE event after the 200 head (`stream: true`). Every
 answer also carries `misaka.decode = {requested_max_tokens, applied_limit, cap, clamped}`, because
 a `max_tokens` past `--max-decode-cap` is clamped and a clamp nobody is told about is a downgrade
 nobody agreed to. Whether a MODEL fits this chain at a width — every wall, with its number — is

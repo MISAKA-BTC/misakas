@@ -778,8 +778,9 @@ fn surface_limits(config: &Config) -> surface::SurfaceLimits {
     }
 }
 
+/// The one spelling lives in `surface` (ADR-0097 Decision 2), so a refusal and an error cannot drift.
 fn error_body(message: &str) -> serde_json::Value {
-    serde_json::json!({ "error": { "message": message, "type": "invalid_request_error" } })
+    surface::error_body(message)
 }
 
 fn hex(h: Hash64) -> String {

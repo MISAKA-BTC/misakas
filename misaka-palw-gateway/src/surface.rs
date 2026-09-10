@@ -915,10 +915,14 @@ pub fn limits_body(manifest: &PalwFpWorkerManifestV1, limits: &SurfaceLimits, fa
             "prompt_ids_on_chain": if facts.panel_da_armed { "panel_da_available" } else { "public_da" },
             "prompt_ids_form": if facts.prompt_ids_merkle { "merkle" } else { "flat" },
         },
-        // What a refusal looks like, so a client can branch on a code instead of a sentence.
+        // What a refusal looks like, so a client can branch on a code instead of a sentence. The
+        // code is where OpenAI puts one (`error.code`; `context_length_exceeded` is OpenAI's own
+        // value), the numbers ride `misaka.refusal`, and the body is the same on both shapes: a
+        // 400 when `stream` is false, an SSE event after the 200 head when it is true.
         "refusals": {
-            "context_length_exceeded": { "status": 400, "where": "misaka.refusal.code" },
-            "prompt_bytes_exceeded": { "status": 400, "where": "misaka.refusal.code" },
+            "codes": ["context_length_exceeded", "prompt_bytes_exceeded"],
+            "code_at": "error.code",
+            "numbers_at": "misaka.refusal",
         },
     })
 }
@@ -944,10 +948,21 @@ pub fn prompt_bytes_refusal(message: &str) -> Option<(u64, u64)> {
     Some((bytes.trim().parse().ok()?, cap.parse().ok()?))
 }
 
-/// **A refusal a client can branch on** (ADR-0097 Decision 2): the `error` string every caller
-/// already reads — unchanged, byte for byte, because the Studio parses it — and beside it, when
-/// the sentence is one of the two bounds a request meets before the chain, `misaka.refusal` with
-/// a code and the numbers. Any other message is `{"error": message}` exactly as before.
+/// **The gateway's error body — the one spelling** (OpenAI's shape: `{"error": {"message", "type"}}`).
+///
+/// `main.rs`'s `error_body` delegates here, so a refusal built by [`refusal_body`] and an error
+/// built anywhere else in the gateway cannot drift apart. Every client reads `error.message`: the
+/// OpenAI SDKs, and the Studio's `Lane::send` for a 400 and its SSE parser for a stream.
+pub fn error_body(message: &str) -> Value {
+    serde_json::json!({ "error": { "message": message, "type": "invalid_request_error" } })
+}
+
+/// **A refusal a client can branch on** (ADR-0097 Decision 2): [`error_body`], and — when the
+/// sentence is one of the two bounds a request meets before the chain — `error.code` set to a
+/// stable code (`context_length_exceeded` is OpenAI's own value for the same refusal, so a stock
+/// SDK's `err.code` already reads it) and `misaka.refusal` carrying the numbers. It only ADDS:
+/// `error.message` and `error.type` are exactly [`error_body`]'s, and any other message is
+/// [`error_body`] byte for byte.
 pub fn refusal_body(message: &str) -> Value {
     let refusal = if let Some((prompt_tokens, decode_ceiling, context_window)) = context_refusal(message) {
         Some(serde_json::json!({
@@ -964,10 +979,12 @@ pub fn refusal_body(message: &str) -> Value {
     } else {
         None
     };
-    match refusal {
-        Some(refusal) => serde_json::json!({ "error": message, "misaka": { "refusal": refusal } }),
-        None => serde_json::json!({ "error": message }),
+    let mut body = error_body(message);
+    if let Some(refusal) = refusal {
+        body["error"]["code"] = refusal["code"].clone();
+        body["misaka"] = serde_json::json!({ "refusal": refusal });
     }
+    body
 }
 
 #[cfg(test)]
@@ -1495,7 +1512,7 @@ mod tests {
         }
     }
 
-    /// **ADR-0097 invariant 4.** The limits object says the window, the most an answer can be
+    /// **ADR-0097 invariant 7.** The limits object says the window, the most an answer can be
     /// (never the whole window: a prompt token precedes it, and never past the operator's cap),
     /// the tokenizer, and — per feature — the word the chain's fences decide. On a dormant
     /// network the format is advisory and the sampler is greedy; arm each fence and the word moves.
@@ -1522,6 +1539,14 @@ mod tests {
         assert_eq!(body["features"]["sampling"]["temperature"], json!("greedy_only"));
         assert_eq!(body["privacy"]["prompt_ids_on_chain"], json!("public_da"));
         assert_eq!(body["privacy"]["prompt_ids_form"], json!("flat"));
+        // Where a refusal's code and numbers are — the places `refusal_body` actually writes.
+        assert_eq!(body["refusals"]["code_at"], json!("error.code"));
+        assert_eq!(body["refusals"]["numbers_at"], json!("misaka.refusal"));
+        let refused = refusal_body("prompt 600 + decode ceiling 8 exceeds max_context_tokens 512");
+        assert_eq!(
+            refused["error"]["code"], body["refusals"]["codes"][0],
+            "the first listed code is the one the window refusal carries"
+        );
 
         // The operator's cap binds when it is the smaller number.
         let tight = SurfaceLimits { max_decode_cap: 64, max_decode_default: 256, max_prompt_bytes: 4_096 };
@@ -1545,15 +1570,22 @@ mod tests {
         assert_eq!(body["privacy"]["prompt_ids_form"], json!("merkle"));
     }
 
-    /// **ADR-0097 invariant 5.** The two refusals a request meets before the chain carry a code
-    /// and their numbers beside the sentence; the sentence itself is byte-identical (the Studio
-    /// parses it), and every other message is `{"error": message}` and nothing more.
+    /// **ADR-0097 invariant 8.** The two refusals a request meets before the chain carry a code
+    /// where OpenAI puts one (`error.code`) and their numbers under `misaka.refusal`; everything
+    /// a client already read — `error.message`, `error.type` — is [`error_body`]'s exactly, and
+    /// every other message is [`error_body`] byte for byte.
+    ///
+    /// Written after the first version of this test pinned `{"error": "<message>"}` — a string
+    /// where every client reads an object — and passed, because it compared the function with
+    /// itself rather than with the body the gateway already served (found by the Studio half).
     #[test]
-    fn a_context_refusal_carries_a_code_and_its_numbers_and_the_sentence_is_untouched() {
+    fn a_context_refusal_carries_a_code_and_its_numbers_and_the_body_is_the_gateways_own() {
         let worker = "the worker refused the job: prompt 51 + decode ceiling 476 exceeds max_context_tokens 512";
         assert_eq!(context_refusal(worker), Some((51, 476, 512)));
         let body = refusal_body(worker);
-        assert_eq!(body["error"], json!(worker));
+        assert_eq!(body["error"]["message"], json!(worker), "the sentence is where every client reads it");
+        assert_eq!(body["error"]["type"], json!("invalid_request_error"));
+        assert_eq!(body["error"]["code"], json!("context_length_exceeded"), "OpenAI's own code for this refusal");
         assert_eq!(body["misaka"]["refusal"]["code"], json!("context_length_exceeded"));
         assert_eq!(body["misaka"]["refusal"]["prompt_tokens"], json!(51));
         assert_eq!(body["misaka"]["refusal"]["decode_ceiling"], json!(476));
@@ -1563,11 +1595,19 @@ mod tests {
         let bytes = "the rendered prompt is 70000 bytes and the cap is 65536 — refused before the job is sent";
         assert_eq!(prompt_bytes_refusal(bytes), Some((70_000, 65_536)));
         let body = refusal_body(bytes);
-        assert_eq!(body["misaka"]["refusal"]["code"], json!("prompt_bytes_exceeded"));
+        assert_eq!(body["error"]["code"], json!("prompt_bytes_exceeded"));
         assert_eq!(body["misaka"]["refusal"]["max_prompt_bytes"], json!(65_536));
 
+        // It only adds: remove what it added and the gateway's own body is what is left.
+        for message in [worker, bytes] {
+            let mut stripped = refusal_body(message);
+            stripped["error"].as_object_mut().unwrap().remove("code");
+            stripped.as_object_mut().unwrap().remove("misaka");
+            assert_eq!(stripped, error_body(message), "{message}");
+        }
         let other = "temperature 0.7 is refused by name";
-        assert_eq!(refusal_body(other), json!({ "error": other }));
+        assert_eq!(refusal_body(other), error_body(other));
+        assert_eq!(error_body(other), json!({ "error": { "message": other, "type": "invalid_request_error" } }));
         assert_eq!(
             context_refusal("prompt 512 + decode ceiling 8 exceeds max_context_tokens"),
             None,

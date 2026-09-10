@@ -217,10 +217,12 @@ ceiling, the tokenizer id and vocabulary (so a client that counts fetches the ta
 Decision 8 serves), `jobs_per_request: 1`, and — per feature the surface accepts — the word the
 chain's fences decide: `advisory` / `committed` for formats, `greedy_only` / `requested` for the
 sampler, `public_da` / `panel_da_available` and `flat` / `merkle` for the ids. The two refusals a
-request meets before the chain — the window and the prompt bytes — carry `misaka.refusal = {code,
-…numbers}` beside the `error` string, which stays **byte-identical** (the Studio parses it), with
-`code: "context_length_exceeded"` and `room_for_answer` so a client branches on a code and
-computes its retry from numbers. And the clamp §1.6 found is reported: every answer carries
+request meets before the chain — the window and the prompt bytes — are the gateway's own error
+body (`{"error": {"message", "type"}}`, the sentence unchanged: every client reads
+`error.message`) with `error.code` added — `context_length_exceeded`, which is OpenAI's own code
+for the same refusal, so a stock SDK's `err.code` already reads it — and the numbers under
+`misaka.refusal` (`room_for_answer` among them), so a client branches on a code and computes its
+retry from numbers. And the clamp §1.6 found is reported: every answer carries
 `misaka.decode = {requested_max_tokens, applied_limit, cap, clamped}`. Nothing is refused that was
 served before, and nothing is downgraded that the response does not now say.
 
@@ -301,8 +303,9 @@ reproduce; and **silent context compression** — the entrance trims and SAYS so
 7  The limits object says the window, the answer ceiling (never the whole window, never past the
    operator's cap), the tokenizer, and — per feature — the word each fence decides; arming each
    fence moves exactly its own word.
-8  A context refusal and a prompt-bytes refusal carry a code and their numbers beside the
-   sentence; the sentence is byte-identical; every other message is {"error": message} exactly.
+8  A context refusal and a prompt-bytes refusal are the gateway's own error body plus
+   error.code and misaka.refusal — remove those two and error_body(message) is what is left; every
+   other message is error_body(message) byte for byte; the code is OpenAI's own where one exists.
 ```
 
 1–6 are `consensus/core/tests/palw_adr0097_model_fit.rs` and the module's own tests; 7–8 are
@@ -369,7 +372,13 @@ to §9's record. A concurrent claimant renumbers the later writer. **The next fr
   `prompt_bytes_refusal`, `misaka.decode`; two new tests and the model-list test extended, the
   corpus unchanged at `5cdf9288…`), `docs/palw-freeprompt-gateway.md` (the limits and the refusal), and
   `docs/palw-model-fit-testnet11-2026-09-10.md` (the generator's RC output, as a dated record and
-  not as a source). Measured on the way, and recorded in §1 because none of it was in `docs/`:
+  not as a source). **Corrected the same day, by the Studio half (§6 item 3):** the first
+  `refusal_body` served `{"error": "<sentence>"}` — a string where the gateway's own `error_body`,
+  every OpenAI SDK and the Studio's `Lane::send` read an object — and its test compared the
+  function with itself, so it passed. It now builds on the one spelling (`surface::error_body`,
+  which `main.rs` delegates to), puts the code in `error.code`, and the test asserts that removing
+  what the refusal adds leaves `error_body(message)`. Measured on the way, and recorded in §1
+  because none of it was in `docs/`:
   the dense row's ladder width is 651 (not the 574 the profile comment says), the hybrid row is
   held at 204 by the ladder alone, the devnet cannot carry the hybrid row at all (one carrier),
   and the K3 stand-in fits at ten positions.
