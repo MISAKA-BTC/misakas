@@ -19783,6 +19783,100 @@ pub(crate) mod tests {
         assert_eq!(revert_delta_v2(&split_done, &split_delta, &p).unwrap().state_root(), c1.state_root());
     }
 
+    /// **The SHIPPED cutter's own output assembles and adjudicates** (ADR-0102).
+    ///
+    /// [`a_three_carrier_close_and_a_whole_one_reach_the_same_state`] proves the transition, and it
+    /// cuts with [`split_close_v1`] — a test's cutter, sized so three carriers can be exercised
+    /// without building 200 kB of proof. That is the right trade for testing the ARM, and it leaves
+    /// one thing unproven: whether the cutter every filer actually uses produces parts this arm
+    /// accepts. Two cutters, one of them never run against the assembler, is exactly the shape
+    /// ADR-0102 exists to remove — so this one builds a close big enough to genuinely split, cuts
+    /// it with `palw_plan_court_close_carriage_v1`, and files what that returns, byte for byte.
+    ///
+    /// The court passed to the planner is built with `with_cost_ceilings` rather than taken from a
+    /// shipped preset: the number under test is the CUT, and no ruleset fingerprint should move for
+    /// a test. The transition does not read it — a chunk count is bounded there by
+    /// [`PALW_COURT_CLOSE_MAX_CHUNKS`], the row's own bitmap — which is why the planner's ceiling
+    /// can be a test's while the assembly stays the chain's.
+    #[test]
+    fn the_planner_the_filers_use_cuts_a_close_this_arm_assembles() {
+        let (p, s5, claim_id, session_id) = split_close_fixture_funded(50_000_000);
+        // A close wide enough that one carrier will not hold it. Every byte of the padding is
+        // operand-opening bytes — the part of a real close that grows with the evidence.
+        let close = {
+            let mut close = a_court_close(session_id, PalwCourtVerdictV2::ExecutorGuilty);
+            let PalwConsensusObjectV2::CourtClosed { proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
+                operand_openings, ..
+            }, .. } = &mut close else {
+                panic!("the fixture stopped building an arithmetic close");
+            };
+            operand_openings.push(crate::palw_artifact::PalwArtifactOpeningV1 {
+                operand: crate::palw_artifact::PalwArtifactOperandV1 {
+                    tensor_name: "blk.0.attn_q.weight".to_string(),
+                    layer: Some(0),
+                    row_start: 0,
+                    bytes: vec![0x5Au8; 2 * PALW_COURT_CLOSE_CHUNK_MAX_BYTES + PALW_COURT_CLOSE_CHUNK_MAX_BYTES / 2],
+                },
+                leaf_index: 0,
+                leaf_count: 1,
+                path: Vec::new(),
+            });
+            close
+        };
+        // A court that pays for more than one carrier, and nothing shipped.
+        let court = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
+            1 << 22,
+            45,
+            1,
+            crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(8),
+            1 << 30,
+            64,
+        )
+        .expect("a court that pays for eight carriers");
+        let plan = crate::palw_close_carriage::palw_plan_court_close_carriage_v1(&close, &court, Some(PalwCourtSideV1::Executor))
+            .expect("the shipped planner cuts this close");
+        assert_eq!(plan.chunk_count, 3, "this test is about a close that needs more than one carrier");
+
+        // The declaration the planner returns is unsigned by design — consensus-core holds no key —
+        // and `palw_lifecycle_object_may_ride_v2` is what refuses it. The TRANSITION does not read
+        // signatures, so the fixture supplies one the way every other object here does.
+        let mut declaration = plan.parts[0].clone();
+        let PalwConsensusObjectV2::CourtCloseDeclared { signature, .. } = &mut declaration else {
+            panic!("part 0 is not the declaration");
+        };
+        assert!(signature.is_empty(), "the planner signed something, and the key is not its to hold");
+        *signature = vec![1; 8];
+
+        let (d, _) = apply(&s5, &p, &ctx(6, 200, 6), &[declaration], None);
+        let group = d.court_close_group(&session_id, PalwCourtSideV1::Executor).expect("the declaration opened a group");
+        assert_eq!(group.count, plan.chunk_count);
+        assert_eq!(group.close_digest, plan.close_digest, "the group pins a digest the planner did not compute");
+        let (c0, _) = apply(&d, &p, &ctx(7, 201, 7), &plan.parts[1..2], None);
+        let (c1, _) = apply(&c0, &p, &ctx(8, 202, 8), &plan.parts[2..3], None);
+        assert!(c1.court_session(&session_id).is_some(), "the session must still be open one carrier from the end");
+        let (split_done, _) = apply(&c1, &p, &ctx(9, 203, 9), &plan.parts[3..], None);
+
+        // The same close on one carrier, at the same DAA, so nothing dated can differ.
+        let (w6, _) = apply(&s5, &p, &ctx(6, 200, 6), &[], None);
+        let (w7, _) = apply(&w6, &p, &ctx(7, 201, 7), &[], None);
+        let (w8, _) = apply(&w7, &p, &ctx(8, 202, 8), &[], None);
+        let (whole_done, _) = apply(&w8, &p, &ctx(9, 203, 9), std::slice::from_ref(&close), None);
+        assert_eq!(
+            split_done.state_root(),
+            whole_done.state_root(),
+            "the shipped cutter's parts reached a different state from the close they were cut from"
+        );
+        assert!(
+            matches!(
+                split_done.claim(&claim_id).map(|c| &c.phase),
+                Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. })
+            ),
+            "the assembled close did not convict: {:?}",
+            split_done.claim(&claim_id).map(|c| c.phase.clone())
+        );
+        assert!(split_done.court_close_group(&session_id, PalwCourtSideV1::Executor).is_none(), "the group outlived its close");
+    }
+
     /// **The other verdict, through the same arm.** `ChallengerDefeated` re-arms the claim and
     /// charges the accuser; a split close must reach that too, or design A would only work for
     /// convictions.
