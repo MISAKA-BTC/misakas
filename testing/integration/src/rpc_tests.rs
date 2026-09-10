@@ -1057,6 +1057,44 @@ async fn sanity_test() {
                     assert!(!response.exists && response.proposals.is_empty(), "a line that does not exist holds no proposal");
                 })
             }
+            // ADR-0095 §4.3/§4.10: the same absent-versus-malformed distinction, plus the two
+            // things this read promises about its list — it is bounded, and it names the set it
+            // was computed over, each id once.
+            KaspadPayloadOps::GetPalwModelBenefitTier => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let holder = "11".repeat(64);
+                    let response = rpc_client
+                        .get_palw_model_benefit_tier_call(
+                            None,
+                            GetPalwModelBenefitTierRequest { line_id: "00".repeat(64), holders: vec![holder.clone(), holder.clone()] },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!response.exists && response.tier.is_none() && response.units == 0, "no line, no tier, and no error");
+                    assert_eq!(response.holders, vec![holder], "a repeated id is one id");
+                    assert!(
+                        rpc_client
+                            .get_palw_model_benefit_tier_call(
+                                None,
+                                GetPalwModelBenefitTierRequest { line_id: "00".repeat(64), holders: vec!["nonsense".into()] },
+                            )
+                            .await
+                            .is_err(),
+                        "a malformed holder id is an error, not an absence"
+                    );
+                    assert!(
+                        rpc_client
+                            .get_palw_model_benefit_tier_call(
+                                None,
+                                GetPalwModelBenefitTierRequest { line_id: "00".repeat(64), holders: vec!["22".repeat(64); 17] },
+                            )
+                            .await
+                            .is_err(),
+                        "the list is bounded"
+                    );
+                })
+            }
             KaspadPayloadOps::GetTokenSupply => {
                 tst!(op, "TOK supply read — inert preset answers available:false by design")
             }

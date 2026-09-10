@@ -64,7 +64,38 @@ fn msk(sompi: u64) -> String {
     format!("{}.{:08} MSK", sompi / SOMPI_PER_MSK, sompi % SOMPI_PER_MSK)
 }
 
-fn market_from_response(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwModelMarketV1 {
+/// **The least MSK a buy must carry to release at least `positions` from `market`**, by the chain's
+/// own quote ([`palw_model_buy_quote_v1`]) rather than an inverse spelled here — so the number a
+/// holder is told about the next membership tier is the number the fold will charge them now.
+/// `None` when the curve cannot release that many: unopened, closed to buys, or not enough
+/// positions left in it. Nothing here is a promise about the price later: a buy that lands after
+/// another fills at the curve's price then, which is what `--min-positions` is for.
+pub(crate) fn msk_for_positions(market: &PalwModelMarketV1, positions: u64) -> Option<u64> {
+    if positions == 0 {
+        return Some(0);
+    }
+    let units = positions.checked_mul(PALW_MODEL_POSITION_UNITS_V1)?;
+    if units >= market.position_units {
+        return None;
+    }
+    let enough = |msk_in: u64| palw_model_buy_quote_v1(market, msk_in).is_some_and(|q| q.units_out >= units);
+    // An upper bound by doubling, then a bisection: the quote is monotone in what goes in.
+    let mut hi = market.price_sompi_per_position_v1().max(1).saturating_mul(positions);
+    while !enough(hi) {
+        if hi == u64::MAX {
+            return None;
+        }
+        hi = hi.saturating_mul(2);
+    }
+    let mut lo = 0u64; // releases nothing, so never enough
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if enough(mid) { hi = mid } else { lo = mid }
+    }
+    Some(hi)
+}
+
+pub(crate) fn market_from_response(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwModelMarketV1 {
     PalwModelMarketV1 {
         opened_daa: r.opened_daa,
         msk_reserve: r.msk_reserve,
@@ -574,7 +605,10 @@ pub async fn sell(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_msk_amount;
+    use super::{
+        PALW_MODEL_POSITION_SUPPLY_V1, PALW_MODEL_POSITION_UNITS_V1, PalwModelMarketV1, SOMPI_PER_MSK, msk_for_positions,
+        palw_model_buy_quote_v1, parse_msk_amount,
+    };
 
     #[test]
     fn msk_amounts_parse_to_sompi() {
@@ -584,5 +618,29 @@ mod tests {
         assert_eq!(parse_msk_amount("1250000000sompi").unwrap(), 1_250_000_000);
         assert!(parse_msk_amount("1.123456789").is_err());
         assert!(parse_msk_amount("abc").is_err());
+    }
+
+    /// ADR-0095 §4.10's "what the next tier costs at today's price" is the LEAST buy the chain's
+    /// own quote fills with that many positions — one sompi less must fall short — and it is
+    /// honest about what the curve cannot do.
+    #[test]
+    fn the_price_of_a_rung_is_the_least_buy_that_reaches_it() {
+        use kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1;
+        let market = PalwModelMarketV1::seed_v1(100, PALW_MODEL_SEED_MIN_SOMPI_V1, Default::default());
+        assert_eq!(msk_for_positions(&market, 0), Some(0));
+        for positions in [1u64, 7, 4_656, 100_000] {
+            let msk = msk_for_positions(&market, positions).expect("an open curve quotes it");
+            let got = palw_model_buy_quote_v1(&market, msk).expect("the answer is a real buy").units_out;
+            assert!(got >= positions * PALW_MODEL_POSITION_UNITS_V1, "{positions}: {msk} sompi releases {got}");
+            let short = palw_model_buy_quote_v1(&market, msk - 1).map(|q| q.units_out).unwrap_or(0);
+            assert!(short < positions * PALW_MODEL_POSITION_UNITS_V1, "{positions}: one sompi less must fall short");
+        }
+        // ADR-0090 §4's golden: 1,000 MSK releases 4,656 positions from the least seed, so the
+        // least buy for 4,656 is at most 1,000 MSK.
+        assert!(msk_for_positions(&market, 4_656).unwrap() <= 1_000 * SOMPI_PER_MSK);
+        // The whole curve can never be bought out, and a closed curve quotes nothing.
+        assert_eq!(msk_for_positions(&market, PALW_MODEL_POSITION_SUPPLY_V1), None);
+        let closed = PalwModelMarketV1 { closed_to_buys: true, ..market };
+        assert_eq!(msk_for_positions(&closed, 1), None);
     }
 }

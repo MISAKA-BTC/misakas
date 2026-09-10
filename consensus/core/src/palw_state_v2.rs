@@ -4956,7 +4956,14 @@ impl PalwChainStateV2 {
     pub fn model_position_across(&self, line_id: &Hash64, holders: &[Hash64], daa: u64) -> (u64, u64) {
         let mut units = 0u64;
         let mut tenure = u64::MAX;
+        // Each proved id counts ONCE. A caller that repeats an id is still one holding, and summing
+        // the repeat would buy a tier with units nobody holds — the one direction this read must
+        // never err in, since a gateway grants service on it.
+        let mut counted = BTreeSet::new();
         for h in holders {
+            if !counted.insert(*h) {
+                continue;
+            }
             let held = self.model_position(line_id, h);
             if held == 0 {
                 continue;
@@ -23892,6 +23899,45 @@ pub(crate) mod tests {
                 "M2: what went in (the seed and the reward's slices included) is where the ADR says it is"
             );
             assert!(m.msk_reserve >= m.seed_sompi, "ADR-0090 P1: the reserve never falls under the seed");
+        }
+
+        /// **ADR-0095 §4.5, N11 — the tenure clock restarts on a sale and never on a buy**, driven
+        /// through the fold's own buy and sell arms past the membership fence; and §4.3/N3 — what a
+        /// person holds is the sum over the ids they proved, each id ONCE.
+        #[test]
+        fn the_tenure_clock_restarts_on_a_sale_and_a_person_is_counted_once() {
+            let p = params();
+            let class = h64(1);
+            let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let (s2, _) = apply_0094(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)]);
+            let (s3, _) = apply_0094(&s2, &p, &ctx(3, 110, 3), &[buy(class, holder(1), 1_000 * MSK, 0)]);
+            assert_eq!(s3.model_position_tenure(&class, &holder(1), 150), 40, "the clock starts at the first buy");
+
+            // N11: buying more keeps the clock — punishing a holder for adding would be perverse.
+            let (s4, _) = apply_0094(&s3, &p, &ctx(4, 130, 4), &[buy(class, holder(1), 100 * MSK, 0)]);
+            assert_eq!(s4.model_position_tenure(&class, &holder(1), 150), 40, "a buy does not reset it");
+
+            // N11: selling ONE unit restarts it at the sale's height — it measures time since the
+            // holder last sold, not time spent above some balance.
+            let (s5, _) = apply_0094(&s4, &p, &ctx(5, 140, 5), &[sell_from(&s4, class, holder(1), 1, 0)]);
+            assert_eq!(s5.model_position_tenure(&class, &holder(1), 150), 10, "a sale restarts it");
+
+            // A second id of the same person, bought later.
+            let (s6, _) = apply_0094(&s5, &p, &ctx(6, 145, 6), &[buy(class, holder(2), 500 * MSK, 0)]);
+            let (a, b) = (s6.model_position(&class, &holder(1)), s6.model_position(&class, &holder(2)));
+            assert!(a > 0 && b > 0);
+            // N3: both ids are one person; the tenure is the MOST RECENT clock, so trading in one
+            // hand is not hidden by a long clock in the other.
+            assert_eq!(s6.model_position_across(&class, &[holder(1), holder(2)], 150), (a + b, 5));
+            // Each id once: repeating an id buys nothing it does not hold.
+            assert_eq!(s6.model_position_across(&class, &[holder(1), holder(1), holder(1)], 150), (a, 10));
+            // An id that holds nothing adds nothing and does not pull the clock to zero.
+            assert_eq!(s6.model_position_across(&class, &[holder(1), holder(7)], 150), (a, 10));
+
+            // Selling out removes the clock with the balance.
+            let (s7, _) = apply_0094(&s6, &p, &ctx(7, 146, 7), &[sell_from(&s6, class, holder(1), a, 0)]);
+            assert_eq!(s7.model_position(&class, &holder(1)), 0);
+            assert_eq!(s7.model_position_tenure(&class, &holder(1), 150), 0);
         }
 
         /// The happy path: a class with no registrant (the genesis case), two buyers, a sell, the

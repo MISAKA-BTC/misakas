@@ -92,6 +92,7 @@ message KaspadRequest {
     GetPalwModelVersionRequestMessage getPalwModelVersionRequest = 1150;
     GetPalwModelLinesRequestMessage getPalwModelLinesRequest = 1152;
     GetPalwModelProposalsRequestMessage getPalwModelProposalsRequest = 1154;
+    GetPalwModelBenefitTierRequestMessage getPalwModelBenefitTierRequest = 1156;
   }
 }
 
@@ -179,6 +180,7 @@ message KaspadResponse {
     GetPalwModelVersionResponseMessage getPalwModelVersionResponse = 1151;
     GetPalwModelLinesResponseMessage getPalwModelLinesResponse = 1153;
     GetPalwModelProposalsResponseMessage getPalwModelProposalsResponse = 1155;
+    GetPalwModelBenefitTierResponseMessage getPalwModelBenefitTierResponse = 1157;
   }
 }
 

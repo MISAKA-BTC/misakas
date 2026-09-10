@@ -77,6 +77,24 @@ pub struct PalwModelLineReadV1 {
     pub benefits: Option<PalwModelBenefitsReadV1>,
 }
 
+/// **ADR-0095 §4.3/§4.10: `getPalwModelBenefitTier`'s answer** — what a PERSON (the holder ids
+/// they proved, §4.8) holds of a line at the tip, how long since they last sold, and the tier that
+/// buys them. The one place the network computes a tier, so a gateway, a wallet and the explorer
+/// cannot answer the same question three ways.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwModelBenefitTierReadV1 {
+    pub tip_daa: u64,
+    /// Summed over the ids, each once (`PalwChainStateV2::model_position_across`).
+    pub units: u64,
+    /// The most recent of the held ids' tenure clocks (§4.5).
+    pub tenure_daa: u64,
+    /// The index into `benefits.in_effect` and the tier; `None` below the first rung, or where
+    /// nothing is in effect.
+    pub tier: Option<(usize, crate::palw_model_benefits_v1::PalwModelBenefitTierV1)>,
+    /// The line's declaration resolved at the tip, `None` where nothing was ever declared.
+    pub benefits: Option<PalwModelBenefitsReadV1>,
+}
+
 /// ADR-0088 Decision 12: `getPalwModelVersion`'s answer — the row and its evaluations, each
 /// with the bond that posted it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -325,6 +343,17 @@ pub trait ConsensusApi: Send + Sync {
     /// line nothing touched), the current version's root, and the roots in force for its class at
     /// the tip DAA. `None` when neither a row nor a class of that id exists.
     fn palw_model_line_v1(&self, _line_id: kaspa_hashes::Hash64) -> Option<PalwModelLineReadV1> {
+        None
+    }
+
+    /// **ADR-0095 §4.3/§4.10: the tier a person holds on a line, at the tip.** `holders` are the
+    /// ids the caller proved (§4.8); each counts once. `None` when neither a line row nor a class
+    /// of that id exists, or off ConsensusV2.
+    fn palw_model_benefit_tier_v1(
+        &self,
+        _line_id: kaspa_hashes::Hash64,
+        _holders: &[kaspa_hashes::Hash64],
+    ) -> Option<PalwModelBenefitTierReadV1> {
         None
     }
 

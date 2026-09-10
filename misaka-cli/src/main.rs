@@ -782,6 +782,31 @@ enum PalwCmd {
         #[arg(long)]
         yes: bool,
     },
+    /// **ADR-0095 §4.3/§4.10: where a key — and any other ids its holder proves — stands on a
+    /// line's membership.** The tier is the chain's (`getPalwModelBenefitTier`); the next rung is
+    /// named in positions, in MSK at today's price, and in tenure. With `--nonce` and `--daa` from
+    /// a gateway's challenge (§4.8) it also prints this key's membership proof. Read-only: nothing
+    /// is sent to the chain and nothing is spent.
+    Benefits {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// Another 128-hex holder id of the same person — an EVM account's `holderIdOf` — once per
+        /// id. The chain cannot tell two ids are one person; a gateway believes only what is signed.
+        #[arg(long = "holder")]
+        holders: Vec<String>,
+        /// A gateway challenge's nonce (hex): sign a membership proof with the key.
+        #[arg(long, requires = "daa")]
+        nonce: Option<String>,
+        /// The same challenge's DAA score.
+        #[arg(long, requires = "nonce")]
+        daa: Option<u64>,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
     LineRoles {
         #[command(flatten)]
         key: KeyArgs,
@@ -1540,6 +1565,9 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::LineBenefits { key, line, tiers, cadence_daa, expires_daa, yes }) => {
             palw_line::line_benefits(&ctx, &key.source(), &line, tiers, cadence_daa, expires_daa, yes).await
         }
+        Command::Palw(PalwCmd::Benefits { key, line, holders, nonce, daa, json }) => {
+            palw_line::benefits(&ctx, key.source_opt().as_ref(), &line, holders, nonce.zip(daa), json).await
+        }
         Command::Palw(PalwCmd::LineRoles { key, line, developer, maintainer, contributor_permille, yes }) => {
             palw_line::line_roles(&ctx, &key.source(), &line, developer, maintainer, contributor_permille, yes).await
         }
@@ -1757,5 +1785,19 @@ mod cli_surface_tests {
         // The sibling forwarder is deliberately untouched: `validator` forwards to a binary this
         // tree actually builds, which is the difference SA-4 turns on.
         assert!(Cli::command().find_subcommand("validator").is_some());
+    }
+
+    /// ADR-0095 §4.8: a membership proof answers ONE challenge, so its two halves come together —
+    /// a nonce with no height (or the reverse) is refused at the parser, not signed as something
+    /// the gateway will reject after the key has been unlocked for it.
+    #[test]
+    fn a_membership_challenge_is_a_nonce_and_a_height_together() {
+        let line = "00".repeat(64);
+        assert!(Cli::try_parse_from(["misaka", "palw", "benefits", "--line", &line]).is_ok(), "a plain read needs no key");
+        let (a, b) = ("11".repeat(64), "22".repeat(64));
+        assert!(Cli::try_parse_from(["misaka", "palw", "benefits", "--line", &line, "--holder", &a, "--holder", &b]).is_ok());
+        assert!(Cli::try_parse_from(["misaka", "palw", "benefits", "--line", &line, "--nonce", "ab", "--daa", "7"]).is_ok());
+        assert!(Cli::try_parse_from(["misaka", "palw", "benefits", "--line", &line, "--nonce", "ab"]).is_err());
+        assert!(Cli::try_parse_from(["misaka", "palw", "benefits", "--line", &line, "--daa", "7"]).is_err());
     }
 }

@@ -29,6 +29,19 @@ pub const PALW_MODEL_BENEFIT_MAX_TIERS: usize = 8;
 /// name of the room. It is a label, never a rule.
 pub const PALW_MODEL_BENEFIT_MAX_NOTE: usize = 64;
 
+/// §4.3/§4.8: the most holder ids one person may present in one proof, and so the most one tier
+/// read sums. A person with more addresses than this consolidates; a reader that summed without a
+/// bound would be a walk whose length the caller chose.
+pub const PALW_MODEL_BENEFIT_MAX_PROOF_IDS: usize = 16;
+
+/// §4.8, carrier lane: the ML-DSA-87 context a holder signs a membership challenge under.
+///
+/// Its own context, because the key that signs it is the key that signs a SELL
+/// (`PALW_MODEL_SELL_MLDSA87_CONTEXT`): the challenge message is domain-separated already, and a
+/// separate context makes "a proof of membership can never be replayed as any other signed object"
+/// a property of the signature scheme rather than of two hash preimages happening to differ.
+pub const PALW_MODEL_BENEFIT_CHALLENGE_MLDSA87_CONTEXT: &[u8] = b"misaka-palw-model-benefit-challenge-v1";
+
 /// §4.2 — the grant set, closed, and the chain's rather than a line's.
 ///
 /// **Nothing that pays is in here, and nothing that pays may be added without amending ADR-0095.**
@@ -327,6 +340,23 @@ pub fn palw_model_benefit_challenge_v1(network_domain: Hash64, line_id: &Hash64,
     finish(s)
 }
 
+/// §4.8, EVM lane: what an EVM account signs to prove the same challenge — EIP-191's
+/// `personal_sign` over the challenge's 64 bytes, `keccak256("\x19Ethereum Signed Message:\n64" ‖
+/// challenge)`.
+///
+/// A browser wallet produces a signature over exactly this from `personal_sign(0x<challenge>,
+/// account)`, with nothing MISAKA-specific inside the wallet; the verifier recovers the account
+/// from it and derives the holder id the fold keys that account's positions by
+/// (`evm_holder_v1`). The prefix is also what keeps the signature from being a transaction: no
+/// EVM transaction's signing hash begins with it.
+pub fn palw_model_benefit_challenge_evm_digest_v1(challenge: &Hash64) -> [u8; 32] {
+    use sha3::{Digest, Keccak256};
+    let mut h = Keccak256::new();
+    h.update(b"\x19Ethereum Signed Message:\n64");
+    h.update(challenge.as_byte_slice());
+    h.finalize().into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -494,6 +524,34 @@ mod tests {
         assert_ne!(a, palw_model_benefit_challenge_v1(nd, &line, &who, b"n", 101));
         assert_ne!(a, palw_model_benefit_challenge_v1(nd, &line, &who, b"m", 100));
         assert_ne!(a, palw_model_benefit_challenge_v1(nd, &line, &Hash64::from_slice(&[4u8; 64]), b"n", 100));
+    }
+
+    /// §4.8, EVM lane: the digest is EIP-191's, byte for byte — the prefix names the 64-byte
+    /// length in decimal, and the challenge follows it. A digest that differed from what a wallet's
+    /// `personal_sign` hashes would make every EVM proof fail with a valid signature.
+    #[test]
+    fn the_evm_digest_is_personal_sign_over_the_challenge() {
+        use sha3::{Digest, Keccak256};
+        let challenge = palw_model_benefit_challenge_v1(
+            Hash64::from_slice(&[5u8; 64]),
+            &Hash64::from_slice(&[6u8; 64]),
+            &Hash64::from_slice(&[7u8; 64]),
+            b"nonce",
+            42,
+        );
+        let mut preimage = b"\x19Ethereum Signed Message:\n64".to_vec();
+        preimage.extend_from_slice(challenge.as_byte_slice());
+        let want: [u8; 32] = Keccak256::digest(&preimage).into();
+        assert_eq!(palw_model_benefit_challenge_evm_digest_v1(&challenge), want);
+        // And it moves with the challenge, so a proof for one height is not a proof for the next.
+        let other = palw_model_benefit_challenge_v1(
+            Hash64::from_slice(&[5u8; 64]),
+            &Hash64::from_slice(&[6u8; 64]),
+            &Hash64::from_slice(&[7u8; 64]),
+            b"nonce",
+            43,
+        );
+        assert_ne!(palw_model_benefit_challenge_evm_digest_v1(&other), want);
     }
 
     #[test]

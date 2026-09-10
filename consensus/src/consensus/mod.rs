@@ -1135,6 +1135,23 @@ impl Consensus {
             line,
         })
     }
+
+    /// ADR-0095: a line's declaration resolved at `daa` — the row, the tiers governing, the
+    /// lapse and the lead the fold enforces. One spelling for the two reads that carry it
+    /// (`palw_model_line_v1`, `palw_model_benefit_tier_v1`), so a card and a gateway cannot be
+    /// handed two different resolutions of §4.6 for the same height.
+    fn palw_model_benefits_read_v1(
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        line_id: &kaspa_hashes::Hash64,
+        daa: u64,
+    ) -> Option<kaspa_consensus_core::api::PalwModelBenefitsReadV1> {
+        state.model_benefits(line_id).map(|b| kaspa_consensus_core::api::PalwModelBenefitsReadV1 {
+            row: b.clone(),
+            in_effect: state.model_benefit_tiers_in_effect(line_id, daa),
+            lapse: state.model_benefit_lapse(line_id, daa),
+            enforced_lead_daa: state.model_benefit_enforced_lead(line_id, daa),
+        })
+    }
 }
 
 impl ConsensusApi for Consensus {
@@ -1340,14 +1357,23 @@ impl ConsensusApi for Consensus {
         let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
         let current_root = state.model_version(&line_id, row.line.current).map(|v| v.root);
         let roots_in_force = state.class_roots_in_force(&row.line.class_id, tip_daa);
-        // ADR-0095: resolved here, at the tip, so every caller sees the same answer §4.6 gives.
-        let benefits = state.model_benefits(&line_id).map(|b| kaspa_consensus_core::api::PalwModelBenefitsReadV1 {
-            row: b.clone(),
-            in_effect: state.model_benefit_tiers_in_effect(&line_id, tip_daa),
-            lapse: state.model_benefit_lapse(&line_id, tip_daa),
-            enforced_lead_daa: state.model_benefit_enforced_lead(&line_id, tip_daa),
-        });
+        let benefits = Self::palw_model_benefits_read_v1(&state, &line_id, tip_daa);
         Some(kaspa_consensus_core::api::PalwModelLineReadV1 { row, current_root, roots_in_force, tip_daa, benefits })
+    }
+
+    /// ADR-0095 §4.3/§4.10: the tier at the tip, from the same snapshot every registry read takes.
+    fn palw_model_benefit_tier_v1(
+        &self,
+        line_id: kaspa_hashes::Hash64,
+        holders: &[kaspa_hashes::Hash64],
+    ) -> Option<kaspa_consensus_core::api::PalwModelBenefitTierReadV1> {
+        let state = self.palw_state_v2_tip()?;
+        state.model_line_or_founding(&line_id)?;
+        let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
+        let (units, tenure_daa) = state.model_position_across(&line_id, holders, tip_daa);
+        let tier = state.model_benefit_tier_across(&line_id, holders, tip_daa);
+        let benefits = Self::palw_model_benefits_read_v1(&state, &line_id, tip_daa);
+        Some(kaspa_consensus_core::api::PalwModelBenefitTierReadV1 { tip_daa, units, tenure_daa, tier, benefits })
     }
 
     fn palw_model_version_v1(

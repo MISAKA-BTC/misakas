@@ -622,6 +622,19 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwModelLineResponse::default())
     }
 
+    /// ADR-0095 §4.3/§4.10: the tier the proved holder ids hold on a line, at the tip.
+    async fn get_palw_model_benefit_tier(&self, line_id: String, holders: Vec<String>) -> RpcResult<GetPalwModelBenefitTierResponse> {
+        self.get_palw_model_benefit_tier_call(None, GetPalwModelBenefitTierRequest { line_id, holders }).await
+    }
+    async fn get_palw_model_benefit_tier_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelBenefitTierRequest,
+    ) -> RpcResult<GetPalwModelBenefitTierResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelBenefitTierResponse::default())
+    }
+
     /// ADR-0088 Decision 12: one version of a line, with its usage and its evaluations.
     async fn get_palw_model_version(&self, line_id: String, version: u32) -> RpcResult<GetPalwModelVersionResponse> {
         self.get_palw_model_version_call(None, GetPalwModelVersionRequest { line_id, version }).await

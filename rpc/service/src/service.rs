@@ -996,6 +996,53 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         })
     }
 
+    /// **ADR-0095 §4.3/§4.10: the gateway's question, answered by the chain.** A tier read is public
+    /// like every position, so nothing here asks whether the caller may name these ids; what it
+    /// bounds is the list, and what it guarantees is that each id is counted once.
+    async fn get_palw_model_benefit_tier_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwModelBenefitTierRequest,
+    ) -> RpcResult<GetPalwModelBenefitTierResponse> {
+        use kaspa_consensus_core::palw_model_benefits_v1::PALW_MODEL_BENEFIT_MAX_PROOF_IDS;
+        let line_id = parse_hash64(&request.line_id, "line id")?;
+        // Bounded BEFORE anything is parsed: the length of this list is the caller's choice.
+        if request.holders.len() > PALW_MODEL_BENEFIT_MAX_PROOF_IDS {
+            return Err(RpcError::General(format!(
+                "at most {PALW_MODEL_BENEFIT_MAX_PROOF_IDS} holder ids may be summed in one tier read; got {}",
+                request.holders.len()
+            )));
+        }
+        let mut holders = request.holders.iter().map(|h| parse_hash64(h, "holder")).collect::<RpcResult<Vec<_>>>()?;
+        // Each id once, in one order, so the answer can name the set it was computed over.
+        holders.sort();
+        holders.dedup();
+        let holders_text: Vec<String> = holders.iter().map(|h| h.to_string()).collect();
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(read) = session.palw_model_benefit_tier_v1(line_id, &holders) else {
+            return Ok(GetPalwModelBenefitTierResponse { line_id: line_id.to_string(), holders: holders_text, ..Default::default() });
+        };
+        let in_effect = read.benefits.as_ref().map(|b| b.in_effect.as_slice()).unwrap_or(&[]);
+        // The next rung is the one above the tier held — or the first, when none is — so a holder
+        // held back by tenure alone is shown the rung whose clock they have not served yet.
+        let next = match &read.tier {
+            Some((i, _)) => in_effect.get(i + 1),
+            None => in_effect.first(),
+        };
+        Ok(GetPalwModelBenefitTierResponse {
+            exists: true,
+            line_id: line_id.to_string(),
+            holders: holders_text,
+            tip_daa: read.tip_daa,
+            units: read.units,
+            tenure_daa: read.tenure_daa,
+            tier_index: read.tier.as_ref().map(|(i, _)| *i as u32),
+            tier: read.tier.as_ref().map(|(_, t)| rpc_palw_model_benefit_tier(t)),
+            next_tier: next.map(rpc_palw_model_benefit_tier),
+            benefits: read.benefits.as_ref().map(rpc_palw_model_benefits),
+        })
+    }
+
     async fn get_palw_model_version_call(
         &self,
         _connection: Option<&DynRpcConnection>,
@@ -2616,21 +2663,27 @@ fn parse_hash64(text: &str, what: &str) -> RpcResult<kaspa_hashes::Hash64> {
     text.parse::<kaspa_hashes::Hash64>().map_err(|_| RpcError::General(format!("{what} '{text}' is not a 128-hex Hash64")))
 }
 
+/// ADR-0095 §4.1: one tier for the wire — the raw bitset beside the names this node knows.
+fn rpc_palw_model_benefit_tier(
+    t: &kaspa_consensus_core::palw_model_benefits_v1::PalwModelBenefitTierV1,
+) -> kaspa_rpc_core::RpcPalwModelBenefitTier {
+    use kaspa_consensus_core::palw_model_benefits_v1::grant;
+    kaspa_rpc_core::RpcPalwModelBenefitTier {
+        min_units: t.min_units,
+        grants: t.grants,
+        grant_names: grant::names_of(t.grants).into_iter().map(String::from).collect(),
+        lead_daa: t.lead_daa,
+        min_hold_daa: t.min_hold_daa,
+        note: String::from_utf8_lossy(&t.note).to_string(),
+    }
+}
+
 /// ADR-0088 Decision 12: one line's row for the wire.
 /// ADR-0095: the membership as a card — the tiers governing now, the weakening waiting out its
 /// notice, and why the promise is silent when it is.
 fn rpc_palw_model_benefits(read: &kaspa_consensus_core::api::PalwModelBenefitsReadV1) -> kaspa_rpc_core::RpcPalwModelBenefits {
-    use kaspa_consensus_core::palw_model_benefits_v1::{PalwModelBenefitLapseV1, grant};
-    fn tier(t: &kaspa_consensus_core::palw_model_benefits_v1::PalwModelBenefitTierV1) -> kaspa_rpc_core::RpcPalwModelBenefitTier {
-        kaspa_rpc_core::RpcPalwModelBenefitTier {
-            min_units: t.min_units,
-            grants: t.grants,
-            grant_names: grant::names_of(t.grants).into_iter().map(String::from).collect(),
-            lead_daa: t.lead_daa,
-            min_hold_daa: t.min_hold_daa,
-            note: String::from_utf8_lossy(&t.note).to_string(),
-        }
-    }
+    use kaspa_consensus_core::palw_model_benefits_v1::PalwModelBenefitLapseV1;
+    let tier = rpc_palw_model_benefit_tier;
     let (lapsed, lapse_daa) = match read.lapse {
         Some(PalwModelBenefitLapseV1::Expired { at_daa }) => (Some("expired".to_string()), Some(at_daa)),
         Some(PalwModelBenefitLapseV1::CadenceMissed { due_daa }) => (Some("cadenceMissed".to_string()), Some(due_daa)),

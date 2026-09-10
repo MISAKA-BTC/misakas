@@ -101,6 +101,7 @@ impl Factory {
                 GetPalwModelVersion,
                 GetPalwModelLines,
                 GetPalwModelProposals,
+                GetPalwModelBenefitTier,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 NotifyBlockAdded,

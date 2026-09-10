@@ -392,6 +392,15 @@ impl ConsensusSessionOwned {
         self.consensus.palw_model_line_v1(line_id)
     }
 
+    /// ADR-0095 §4.3/§4.10: the tier the proved ids hold on a line, at the tip.
+    pub fn palw_model_benefit_tier_v1(
+        &self,
+        line_id: kaspa_consensus_core::Hash64,
+        holders: &[kaspa_consensus_core::Hash64],
+    ) -> Option<kaspa_consensus_core::api::PalwModelBenefitTierReadV1> {
+        self.consensus.palw_model_benefit_tier_v1(line_id, holders)
+    }
+
     /// ADR-0088 Decision 12: one version of a line, with its usage and evaluations.
     pub fn palw_model_version_v1(
         &self,

@@ -3475,6 +3475,98 @@ impl Deserializer for RpcPalwModelBenefits {
     }
 }
 
+/// **ADR-0095 §4.3/§4.10: `getPalwModelBenefitTier(line_id, holders)`** — the gateway's question.
+///
+/// `holders` are the ids the caller has PROVED (§4.8): a carrier-lane payout id
+/// (`palw_model_holder_of_pubkey_v1` of an ML-DSA-87 key) and/or EVM-lane ids (`evm_holder_v1` of
+/// an account). The chain cannot tell that two ids are one person, so a person is the set they can
+/// sign for — the node sums exactly that set, each id once, and never asks whether the caller may
+/// name them: a tier read is public, like every position.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelBenefitTierRequest {
+    /// 128-hex line id — a class id names the class's founding line.
+    pub line_id: String,
+    /// 128-hex holder ids, at most `PALW_MODEL_BENEFIT_MAX_PROOF_IDS`.
+    pub holders: Vec<String>,
+}
+
+impl Serializer for GetPalwModelBenefitTierRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.line_id, writer)?;
+        store!(Vec<String>, &self.holders, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelBenefitTierRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let line_id = load!(String, reader)?;
+        let holders = load!(Vec<String>, reader)?;
+        Ok(Self { line_id, holders })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelBenefitTierResponse {
+    /// False when neither a line row nor a class of that id exists (or the chain is not
+    /// ConsensusV2); every other field is then its default.
+    pub exists: bool,
+    pub line_id: String,
+    /// The ids the answer was computed over, as the node parsed them: sorted, each once.
+    pub holders: Vec<String>,
+    pub tip_daa: u64,
+    /// What the ids hold of the line, summed (§4.3).
+    pub units: u64,
+    /// How long since any of the held ids last sold (§4.5): the most recent clock.
+    pub tenure_daa: u64,
+    /// The index into `benefits.tiers` of the tier held; absent below the first rung.
+    pub tier_index: Option<u32>,
+    pub tier: Option<RpcPalwModelBenefitTier>,
+    /// The first rung above `tier` (the first rung when none is held): what the card says the
+    /// next step needs, in units and in tenure.
+    pub next_tier: Option<RpcPalwModelBenefitTier>,
+    /// The declaration resolved at `tip_daa`, the same shape `getPalwModelLine` carries.
+    pub benefits: Option<RpcPalwModelBenefits>,
+}
+
+impl Serializer for GetPalwModelBenefitTierResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.exists, writer)?;
+        store!(String, &self.line_id, writer)?;
+        store!(Vec<String>, &self.holders, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(u64, &self.units, writer)?;
+        store!(u64, &self.tenure_daa, writer)?;
+        store!(Option<u32>, &self.tier_index, writer)?;
+        serialize!(Option<RpcPalwModelBenefitTier>, &self.tier, writer)?;
+        serialize!(Option<RpcPalwModelBenefitTier>, &self.next_tier, writer)?;
+        serialize!(Option<RpcPalwModelBenefits>, &self.benefits, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelBenefitTierResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let exists = load!(bool, reader)?;
+        let line_id = load!(String, reader)?;
+        let holders = load!(Vec<String>, reader)?;
+        let tip_daa = load!(u64, reader)?;
+        let units = load!(u64, reader)?;
+        let tenure_daa = load!(u64, reader)?;
+        let tier_index = load!(Option<u32>, reader)?;
+        let tier = deserialize!(Option<RpcPalwModelBenefitTier>, reader)?;
+        let next_tier = deserialize!(Option<RpcPalwModelBenefitTier>, reader)?;
+        let benefits = deserialize!(Option<RpcPalwModelBenefits>, reader)?;
+        Ok(Self { exists, line_id, holders, tip_daa, units, tenure_daa, tier_index, tier, next_tier, benefits })
+    }
+}
+
 /// ADR-0088 Decision 2: one version's row. The four hashes are DECLARATIONS the chain recorded
 /// and never read (Decision 2); the usage is what the fold counted (Decision 4).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

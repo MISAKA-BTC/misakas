@@ -89,6 +89,7 @@ impl Router {
                 GetPalwModelVersion,
                 GetPalwModelLines,
                 GetPalwModelProposals,
+                GetPalwModelBenefitTier,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 GetValidatorAttestationTarget,

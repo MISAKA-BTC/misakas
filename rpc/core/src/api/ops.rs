@@ -197,6 +197,9 @@ pub enum RpcApiOps {
     GetPalwModelLines = 175,
     /// ADR-0088 Decision 12: the proposals attached to a line.
     GetPalwModelProposals = 176,
+    /// ADR-0095 §4.3/§4.10: the membership tier the proved holder ids hold on a line — the
+    /// gateway's question, answered by the chain rather than re-derived by every server.
+    GetPalwModelBenefitTier = 177,
 }
 
 impl RpcApiOps {

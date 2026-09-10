@@ -786,6 +786,181 @@ fn print_benefits(b: Option<&kaspa_rpc_core::RpcPalwModelBenefits>, tip_daa: u64
     }
 }
 
+/// **ADR-0095 §4.3/§4.8/§4.10 — `misaka palw benefits --line <id> [--key-file …] [--holder <id> …]`.**
+///
+/// Where a person stands: the card, what their ids hold, how long since they last sold, the tier
+/// that buys them, and what the next rung needs. The tier is the NODE's answer
+/// (`getPalwModelBenefitTier`), never re-derived here — a wallet that computed its own would be a
+/// second spelling of §4.3 that a gateway does not share. The one number this tool adds is the
+/// next rung's price, from the chain's own quote at the tip.
+///
+/// With `challenge` (a gateway's nonce and height, §4.8) it also signs and prints this key's
+/// membership proof: the JSON a request carries as `misaka_membership`. Nothing is submitted and
+/// nothing is spent — proving a membership costs the network no byte.
+pub async fn benefits(
+    ctx: &Ctx,
+    ks: Option<&crate::keys::KeySource>,
+    line_id: &str,
+    extra_holders: Vec<String>,
+    challenge: Option<(String, u64)>,
+    json: bool,
+) -> CliResult {
+    use kaspa_consensus_core::palw_model_benefits_v1::{
+        PALW_MODEL_BENEFIT_CHALLENGE_MLDSA87_CONTEXT, PALW_MODEL_BENEFIT_MAX_PROOF_IDS, palw_model_benefit_challenge_v1,
+    };
+    use kaspa_consensus_core::palw_model_market_v1::palw_model_holder_of_pubkey_v1;
+    let line = parse_hash(line_id, "line id")?;
+    let key = ks.map(|k| k.load_key()).transpose()?;
+    let own = key.as_ref().map(|k| palw_model_holder_of_pubkey_v1(k.public_key()));
+    let mut holders: Vec<Hash64> = own.into_iter().collect();
+    for h in &extra_holders {
+        holders.push(parse_hash(h, "holder")?);
+    }
+    if holders.len() > PALW_MODEL_BENEFIT_MAX_PROOF_IDS {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!("at most {PALW_MODEL_BENEFIT_MAX_PROOF_IDS} holder ids are summed in one tier read; got {}", holders.len()),
+        ));
+    }
+    let challenge = match challenge {
+        None => None,
+        Some((nonce_hex, daa)) => {
+            if key.is_none() {
+                return Err(CliError::new(exit::GENERIC, "a membership proof is signed by a key: name --key-file or --key-stdin"));
+            }
+            let nonce_hex = nonce_hex.trim_start_matches("0x");
+            let mut nonce = vec![0u8; nonce_hex.len() / 2];
+            if nonce_hex.is_empty() || nonce_hex.len() % 2 != 0 || faster_hex::hex_decode(nonce_hex.as_bytes(), &mut nonce).is_err() {
+                return Err(CliError::new(exit::GENERIC, format!("--nonce '{nonce_hex}' is not hex")));
+            }
+            Some((nonce, daa))
+        }
+    };
+    let nv = connect(ctx).await?;
+    let r = nv
+        .client
+        .get_palw_model_benefit_tier(line.to_string(), holders.iter().map(|h| h.to_string()).collect())
+        .await
+        .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwModelBenefitTier: {e}")))?;
+    // The next rung's price at the tip, from the chain's own quote. A read that fails leaves the
+    // price unknown — said as unknown, never as zero.
+    let market = if r.exists { nv.client.get_palw_model_market(line.to_string()).await.ok().filter(|m| m.found) } else { None };
+    let proof = match (&challenge, &key, own) {
+        (Some((nonce, daa)), Some(k), Some(holder)) => {
+            let message = palw_model_benefit_challenge_v1(network_domain(&nv), &line, &holder, nonce, *daa);
+            let signature = k.sign_with_context(message.as_byte_slice(), PALW_MODEL_BENEFIT_CHALLENGE_MLDSA87_CONTEXT);
+            Some(serde_json::json!({
+                "nonce": faster_hex::hex_string(nonce),
+                "daa": daa,
+                "carrier": [{
+                    "public_key": faster_hex::hex_string(k.public_key()),
+                    "signature": faster_hex::hex_string(&signature),
+                }],
+            }))
+        }
+        _ => None,
+    };
+    let _ = nv.client.disconnect().await;
+
+    let positions = |units: u64| units / kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_POSITION_UNITS_V1;
+    let short_units = r.next_tier.as_ref().map(|t| t.min_units.saturating_sub(r.units)).unwrap_or(0);
+    let short_hold = r.next_tier.as_ref().map(|t| t.min_hold_daa.saturating_sub(r.tenure_daa)).unwrap_or(0);
+    let next_cost = match (&r.next_tier, &market) {
+        (Some(_), Some(m)) if short_units > 0 => {
+            crate::palw_model::msk_for_positions(&crate::palw_model::market_from_response(m), positions(short_units))
+        }
+        (Some(_), _) if short_units == 0 => Some(0),
+        _ => None,
+    };
+
+    if json || ctx.output == OutputFormat::Json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema": "misaka.palw.model-benefit-tier.v1",
+                "exists": r.exists,
+                "line_id": r.line_id,
+                "tip_daa": r.tip_daa,
+                "holders": r.holders,
+                "units": r.units,
+                "positions": positions(r.units),
+                "tenure_daa": r.tenure_daa,
+                "tier_index": r.tier_index,
+                "tier": r.tier.as_ref().map(benefit_tier_json),
+                "next_tier": r.next_tier.as_ref().map(benefit_tier_json),
+                "next_tier_needs": r.next_tier.as_ref().map(|_| serde_json::json!({
+                    "units": short_units,
+                    "positions": positions(short_units),
+                    "msk_sompi_at_tip_price": next_cost,
+                    "hold_daa": short_hold,
+                })),
+                "benefits_declared": r.benefits.is_some(),
+                "lapsed": r.benefits.as_ref().and_then(|b| b.lapsed.clone()),
+                "membership_proof": proof,
+            }))
+            .expect("serializable")
+        );
+    } else if !r.exists {
+        println!("this chain holds no line {line} (and no class of that id)");
+    } else {
+        println!("line {}  at DAA {}", r.line_id, r.tip_daa);
+        print_benefits(r.benefits.as_ref(), r.tip_daa);
+        if r.holders.is_empty() {
+            println!("  you            name a key (--key-file) or --holder to see where a holder stands");
+        } else {
+            println!("  ids            {}", r.holders.join("\n                 "));
+            println!("  hold           {} positions, {} daa since any of these ids last sold", positions(r.units), r.tenure_daa);
+            match (&r.tier_index, &r.tier) {
+                (Some(i), Some(t)) => println!("  tier           #{} ({} units) — {}", i + 1, t.min_units, t.grant_names.join(", ")),
+                _ if r.benefits.is_none() => println!("  tier           none — nothing is declared on this line"),
+                _ => println!("  tier           none"),
+            }
+            if let Some(t) = &r.next_tier {
+                let mut needs = Vec::new();
+                if short_units > 0 {
+                    needs.push(match next_cost {
+                        Some(sompi) => format!(
+                            "{} more positions (about {}.{:08} MSK at the tip's price)",
+                            positions(short_units),
+                            sompi / 100_000_000,
+                            sompi % 100_000_000
+                        ),
+                        None => format!("{} more positions (the curve cannot quote that many now)", positions(short_units)),
+                    });
+                }
+                if short_hold > 0 {
+                    needs.push(format!("{short_hold} more daa held without selling"));
+                }
+                println!(
+                    "  next           {} units — {}{}",
+                    t.min_units,
+                    t.grant_names.join(", "),
+                    if needs.is_empty() { String::new() } else { format!("\n                 needs {}", needs.join(" and ")) }
+                );
+            }
+        }
+        if let Some(p) = &proof {
+            println!("membership proof (send as `misaka_membership` in the request body; it answers this one challenge):");
+            println!("{}", serde_json::to_string(p).expect("serializable"));
+        }
+    }
+    if !r.exists {
+        return Err(CliError::new(exit::GENERIC, format!("this chain holds no line {line}")));
+    }
+    Ok(())
+}
+
+fn benefit_tier_json(t: &kaspa_rpc_core::RpcPalwModelBenefitTier) -> serde_json::Value {
+    serde_json::json!({
+        "min_units": t.min_units,
+        "grants": t.grants,
+        "grant_names": t.grant_names,
+        "lead_daa": t.lead_daa,
+        "min_hold_daa": t.min_hold_daa,
+        "note": t.note,
+    })
+}
+
 /// **ADR-0095 §4.1 — `misaka palw line-benefits --line <id> --tier <spec> …`.**
 ///
 /// A tier is one `--tier` argument: `units:GRANT[,GRANT…][:lead][:hold][:note]`, e.g.

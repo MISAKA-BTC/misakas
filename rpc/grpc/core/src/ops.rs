@@ -117,6 +117,8 @@ pub enum KaspadPayloadOps {
     GetPalwModelVersion,
     GetPalwModelLines,
     GetPalwModelProposals,
+    // ADR-0095 §4.3/§4.10: the membership tier of the proved holder ids
+    GetPalwModelBenefitTier,
     GetTokenSupply,
     GetTokenEmissionInfo,
 

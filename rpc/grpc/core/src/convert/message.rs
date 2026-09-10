@@ -652,6 +652,24 @@ from!(item: &kaspa_rpc_core::RpcPalwModelBenefits, protowire::RpcPalwModelBenefi
         enforced_lead_daa: item.enforced_lead_daa,
     }
 });
+from!(item: &kaspa_rpc_core::GetPalwModelBenefitTierRequest, protowire::GetPalwModelBenefitTierRequestMessage, {
+    Self { line_id: item.line_id.clone(), holders: item.holders.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelBenefitTierResponse>, protowire::GetPalwModelBenefitTierResponseMessage, {
+    Self {
+        exists: item.exists,
+        line_id: item.line_id.clone(),
+        holders: item.holders.clone(),
+        tip_daa: item.tip_daa,
+        units: item.units,
+        tenure_daa: item.tenure_daa,
+        tier_index: item.tier_index,
+        tier: item.tier.as_ref().map(protowire::RpcPalwModelBenefitTier::from),
+        next_tier: item.next_tier.as_ref().map(protowire::RpcPalwModelBenefitTier::from),
+        benefits: item.benefits.as_ref().map(protowire::RpcPalwModelBenefits::from),
+        error: None,
+    }
+});
 from!(item: &kaspa_rpc_core::GetPalwModelVersionRequest, protowire::GetPalwModelVersionRequestMessage, {
     Self { line_id: item.line_id.clone(), version: item.version }
 });
@@ -1634,6 +1652,23 @@ try_from!(item: &protowire::RpcPalwModelBenefits, kaspa_rpc_core::RpcPalwModelBe
         lapsed: item.lapsed.clone(),
         lapse_daa: item.lapse_daa,
         enforced_lead_daa: item.enforced_lead_daa,
+    }
+});
+try_from!(item: &protowire::GetPalwModelBenefitTierRequestMessage, kaspa_rpc_core::GetPalwModelBenefitTierRequest, {
+    Self { line_id: item.line_id.clone(), holders: item.holders.clone() }
+});
+try_from!(item: &protowire::GetPalwModelBenefitTierResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelBenefitTierResponse>, {
+    Self {
+        exists: item.exists,
+        line_id: item.line_id.clone(),
+        holders: item.holders.clone(),
+        tip_daa: item.tip_daa,
+        units: item.units,
+        tenure_daa: item.tenure_daa,
+        tier_index: item.tier_index,
+        tier: item.tier.as_ref().map(kaspa_rpc_core::RpcPalwModelBenefitTier::try_from).transpose()?,
+        next_tier: item.next_tier.as_ref().map(kaspa_rpc_core::RpcPalwModelBenefitTier::try_from).transpose()?,
+        benefits: item.benefits.as_ref().map(kaspa_rpc_core::RpcPalwModelBenefits::try_from).transpose()?,
     }
 });
 try_from!(item: &protowire::GetPalwModelVersionRequestMessage, kaspa_rpc_core::GetPalwModelVersionRequest, {

@@ -1641,6 +1641,26 @@ message RpcPalwModelBenefits {
   uint64 enforcedLeadDaa = 9;
 }
 
+// ADR-0095 §4.3/§4.10: the tier the proved holder ids hold on a line, at the tip.
+message GetPalwModelBenefitTierRequestMessage {
+  string lineId = 1;
+  repeated string holders = 2;
+}
+
+message GetPalwModelBenefitTierResponseMessage {
+  bool exists = 1;
+  string lineId = 2;
+  repeated string holders = 3;
+  uint64 tipDaa = 4;
+  uint64 units = 5;
+  uint64 tenureDaa = 6;
+  optional uint32 tierIndex = 7;
+  optional RpcPalwModelBenefitTier tier = 8;
+  optional RpcPalwModelBenefitTier nextTier = 9;
+  optional RpcPalwModelBenefits benefits = 10;
+  RPCError error = 1000;
+}
+
 message RpcPalwModelVersion {
   string lineId = 1;
   uint32 version = 2;
