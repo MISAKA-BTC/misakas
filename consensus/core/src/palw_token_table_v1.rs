@@ -491,9 +491,8 @@ impl PalwTokenTableV1 {
     /// Is this table the one the build pins for `tokenizer_commitment` — its length, its root and
     /// its end-of-generation id, all three?
     pub fn is_pinned_for(&self, tokenizer_commitment: &Hash64) -> bool {
-        token_table_pin_for_v1(tokenizer_commitment).is_some_and(|pin| {
-            pin.vocab_len == self.vocab_len() && pin.root == self.root && pin.lowest_eog_id == self.lowest_eog_id
-        })
+        token_table_pin_for_v1(tokenizer_commitment)
+            .is_some_and(|pin| pin.vocab_len == self.vocab_len() && pin.root == self.root && pin.lowest_eog_id == self.lowest_eog_id)
     }
 }
 

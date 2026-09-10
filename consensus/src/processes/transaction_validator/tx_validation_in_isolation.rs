@@ -37,7 +37,12 @@ impl TransactionValidator {
         check_transaction_output_value_ranges(tx)?;
         check_duplicate_transaction_inputs(tx)?;
         check_gas(tx)?;
-        check_transaction_subnetwork(tx, self.palw_panel_da_admissible, self.palw_fp_decode_constraint_admissible, self.palw_prompt_ids_form)?;
+        check_transaction_subnetwork(
+            tx,
+            self.palw_panel_da_admissible,
+            self.palw_fp_decode_constraint_admissible,
+            self.palw_prompt_ids_form,
+        )?;
         check_transaction_version(tx)
     }
 

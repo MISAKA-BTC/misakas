@@ -1197,12 +1197,8 @@ pub(crate) mod tests {
     ) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, crate::palw_step_refute::PalwStepRefuteError> {
         let segs = segments(&pin.generated_token_ids);
         let beat = segment(pin.beat_lane);
-        let court = PalwDecodeConstraintCourtV1 {
-            constraint: c,
-            segments: &segs,
-            beat_lane_bytes: Some(&beat),
-            eog_token_ids: &EOG_IDS,
-        };
+        let court =
+            PalwDecodeConstraintCourtV1 { constraint: c, segments: &segs, beat_lane_bytes: Some(&beat), eog_token_ids: &EOG_IDS };
         check_tiled_decode_token_refutation_v3(binding, pin, sampling, Some(court), cap())
     }
 
@@ -1241,7 +1237,8 @@ pub(crate) mod tests {
                 }
                 _ => EOG_LOW,
             };
-            cursor = constraint_cursor_advance_v1(c, &cursor, &segment(next), next == EOG_LOW).expect("the honest run follows the rule");
+            cursor =
+                constraint_cursor_advance_v1(c, &cursor, &segment(next), next == EOG_LOW).expect("the honest run follows the rule");
             ids.push(next);
         }
         ids
@@ -1400,10 +1397,7 @@ pub(crate) mod tests {
             for p in 0..6u32 {
                 let bare = one_disclosure_pin(&binding.job_context, &rows, &ids, p);
                 assert!(
-                    matches!(
-                        try_v3(&binding, &bare, sampling, &c),
-                        Err(PalwStepRefuteError::NoFaultFound)
-                    ),
+                    matches!(try_v3(&binding, &bare, sampling, &c), Err(PalwStepRefuteError::NoFaultFound)),
                     "honest position {p} under the one-disclosure arm"
                 );
                 for beat in [0u32, b'x' as u32, b'[' as u32, b'3' as u32, b']' as u32, BRACKET_SEVEN, EOG_HIGH, VOCAB as u32 - 1] {
@@ -1412,10 +1406,7 @@ pub(crate) mod tests {
                     }
                     let pin = tiled_pin(&binding.job_context, &rows, &ids, p, beat);
                     assert!(
-                        matches!(
-                            try_v3(&binding, &pin, sampling, &c),
-                            Err(PalwStepRefuteError::NoFaultFound)
-                        ),
+                        matches!(try_v3(&binding, &pin, sampling, &c), Err(PalwStepRefuteError::NoFaultFound)),
                         "honest position {p} against lane {beat}"
                     );
                 }
@@ -1427,8 +1418,7 @@ pub(crate) mod tests {
             altered[1] = b'x' as u32;
             let binding = constrained_binding(&rows, &altered);
             let bare = one_disclosure_pin(&binding.job_context, &rows, &altered, 1);
-            let verdict =
-                try_v3(&binding, &bare, sampling, &c).expect("convicted");
+            let verdict = try_v3(&binding, &bare, sampling, &c).expect("convicted");
             assert_eq!(verdict.fault, fault_at(1));
             // With tiles supplied the same arm convicts first — no tile is read for it.
             let pin = tiled_pin(&binding.job_context, &rows, &altered, 1, 0);
@@ -1436,24 +1426,15 @@ pub(crate) mod tests {
             // A position AFTER the altered one is not adjudicated from a dead state: the court
             // names the earlier fault instead.
             let later = one_disclosure_pin(&binding.job_context, &rows, &altered, 2);
-            assert!(matches!(
-                try_v3(&binding, &later, sampling, &c),
-                Err(PalwStepRefuteError::InputSetNotCanonical(_))
-            ));
+            assert!(matches!(try_v3(&binding, &later, sampling, &c), Err(PalwStepRefuteError::InputSetNotCanonical(_))));
             // An unrenderable id is not admitted either — and is convicted where it sits.
             let mut padded = ids.clone();
             padded[1] = UNRENDERABLE;
             let binding = constrained_binding(&rows, &padded);
             let bare = one_disclosure_pin(&binding.job_context, &rows, &padded, 1);
-            assert_eq!(
-                try_v3(&binding, &bare, sampling, &c).map(|v| v.fault),
-                Ok(fault_at(1))
-            );
+            assert_eq!(try_v3(&binding, &bare, sampling, &c).map(|v| v.fault), Ok(fault_at(1)));
             let later = one_disclosure_pin(&binding.job_context, &rows, &padded, 2);
-            assert!(matches!(
-                try_v3(&binding, &later, sampling, &c),
-                Err(PalwStepRefuteError::InputSetNotCanonical(_))
-            ));
+            assert!(matches!(try_v3(&binding, &later, sampling, &c), Err(PalwStepRefuteError::InputSetNotCanonical(_))));
         }
     }
 
@@ -1479,10 +1460,7 @@ pub(crate) mod tests {
             let binding = constrained_binding(&rows, &cheated);
             // The one-disclosure arm finds nothing: the token IS admitted.
             let bare = one_disclosure_pin(&binding.job_context, &rows, &cheated, 1);
-            assert!(matches!(
-                try_v3(&binding, &bare, sampling, &c),
-                Err(PalwStepRefuteError::NoFaultFound)
-            ));
+            assert!(matches!(try_v3(&binding, &bare, sampling, &c), Err(PalwStepRefuteError::NoFaultFound)));
             // The admitted argmax beats it: convicted.
             let pin = tiled_pin(&binding.job_context, &rows, &cheated, 1, best as u32);
             let verdict = try_v3(&binding, &pin, sampling, &c).expect("convicted");
@@ -1490,26 +1468,17 @@ pub(crate) mod tests {
             // `x` has the row's greatest key and the constraint forbids it: NOT a fault under the
             // claim's constraint — and a conviction under v2, which knows no constraint.
             let forbidden = tiled_pin(&binding.job_context, &rows, &cheated, 1, b'x' as u32);
-            assert!(matches!(
-                try_v3(&binding, &forbidden, sampling, &c),
-                Err(PalwStepRefuteError::NoFaultFound)
-            ));
+            assert!(matches!(try_v3(&binding, &forbidden, sampling, &c), Err(PalwStepRefuteError::NoFaultFound)));
             assert!(check_tiled_decode_token_refutation_capped_v2(&binding, &forbidden, sampling, cap()).is_ok());
             // An unrenderable beating lane, and the EOG token as a beating lane, are forbidden too.
             for beat in [UNRENDERABLE, EOG_LOW, EOG_HIGH, BRACKET_SEVEN] {
                 let pin = tiled_pin(&binding.job_context, &rows, &cheated, 1, beat);
-                assert!(matches!(
-                    try_v3(&binding, &pin, sampling, &c),
-                    Err(PalwStepRefuteError::NoFaultFound)
-                ));
+                assert!(matches!(try_v3(&binding, &pin, sampling, &c), Err(PalwStepRefuteError::NoFaultFound)));
             }
             // A beating lane that is admitted but does not beat: no fault.
             let weaker = tiled_pin(&binding.job_context, &rows, &honest, 1, b'1' as u32);
             let binding = constrained_binding(&rows, &honest);
-            assert!(matches!(
-                try_v3(&binding, &weaker, sampling, &c),
-                Err(PalwStepRefuteError::NoFaultFound)
-            ));
+            assert!(matches!(try_v3(&binding, &weaker, sampling, &c), Err(PalwStepRefuteError::NoFaultFound)));
         }
     }
 
@@ -1544,10 +1513,7 @@ pub(crate) mod tests {
         early[1] = EOG_LOW;
         let binding = constrained_binding(&rows, &early);
         let bare = one_disclosure_pin(&binding.job_context, &rows, &early, 1);
-        assert_eq!(
-            try_v3(&binding, &bare, sampling, &c).map(|v| v.fault),
-            Ok(fault_at(1))
-        );
+        assert_eq!(try_v3(&binding, &bare, sampling, &c).map(|v| v.fault), Ok(fault_at(1)));
         // A multi-byte token: `[7` at position 0 is admitted (and wins when `[` is masked away by
         // a rows edit), after which only `]` is live and the stop fires one position earlier.
         let mut rows2 = rows.clone();
@@ -1557,10 +1523,7 @@ pub(crate) mod tests {
         let binding = constrained_binding(&rows2, &ids);
         for p in 0..6u32 {
             let bare = one_disclosure_pin(&binding.job_context, &rows2, &ids, p);
-            assert!(matches!(
-                try_v3(&binding, &bare, sampling, &c),
-                Err(PalwStepRefuteError::NoFaultFound)
-            ));
+            assert!(matches!(try_v3(&binding, &bare, sampling, &c), Err(PalwStepRefuteError::NoFaultFound)));
         }
         // And a class with no EOG id at all cannot try the stop: malformed binding, no verdict.
         let segs = segments(&ids);
@@ -1582,10 +1545,7 @@ pub(crate) mod tests {
         let ids = honest_run(&c, &rows, sampling);
         let binding = constrained_binding(&rows, &ids);
         let refused = |pin: &PalwTiledDecodePinV1| {
-            matches!(
-                try_v3(&binding, pin, sampling, &c),
-                Err(PalwStepRefuteError::InputSetNotCanonical(_))
-            )
+            matches!(try_v3(&binding, pin, sampling, &c), Err(PalwStepRefuteError::InputSetNotCanonical(_)))
         };
         let mut bent = tiled_pin(&binding.job_context, &rows, &ids, 1, b'3' as u32);
         bent.beat_tile_lanes[0] = bent.beat_tile_lanes[0].wrapping_add(1);
@@ -1606,10 +1566,7 @@ pub(crate) mod tests {
         // bound to a run it does not describe, it reads the run as forbidden at position 0.
         let other = object_ab();
         let bare = one_disclosure_pin(&binding.job_context, &rows, &ids, 0);
-        assert_eq!(
-            try_v3(&binding, &bare, sampling, &other).map(|v| v.fault),
-            Ok(fault_at(0))
-        );
+        assert_eq!(try_v3(&binding, &bare, sampling, &other).map(|v| v.fault), Ok(fault_at(0)));
     }
 
     // ---------------------------------------------------------------------------------------

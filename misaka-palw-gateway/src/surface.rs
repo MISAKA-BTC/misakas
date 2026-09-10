@@ -429,7 +429,8 @@ pub fn parse_and_admit(body: &[u8], facts: &ChainFacts) -> Result<(ChatRequest, 
     if let Some(format) = admitted.format.as_mut()
         && let Some(canonical) = format.canonical_schema.as_deref()
     {
-        format.prompt_schema = schema_in_client_order(body).filter(|(_, sorted)| sorted.as_slice() == canonical).map(|(ordered, _)| ordered);
+        format.prompt_schema =
+            schema_in_client_order(body).filter(|(_, sorted)| sorted.as_slice() == canonical).map(|(ordered, _)| ordered);
     }
     Ok((chat, admitted))
 }
@@ -461,7 +462,9 @@ impl<'de> Deserialize<'de> for InOrder {
                 Ok(InOrder::Scalar(Value::from(v)))
             }
             fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<InOrder, E> {
-                serde_json::Number::from_f64(v).map(|n| InOrder::Scalar(Value::Number(n))).ok_or_else(|| E::custom("not a JSON number"))
+                serde_json::Number::from_f64(v)
+                    .map(|n| InOrder::Scalar(Value::Number(n)))
+                    .ok_or_else(|| E::custom("not a JSON number"))
             }
             fn visit_str<E>(self, v: &str) -> Result<InOrder, E> {
                 Ok(InOrder::Scalar(Value::String(v.to_string())))
@@ -524,7 +527,9 @@ impl InOrder {
                     if i > 0 {
                         out.push(b',');
                     }
-                    out.extend(misaka_palw_constraint::canonical::to_rfc8785(&Value::String(name.clone())).map_err(|e| e.to_string())?);
+                    out.extend(
+                        misaka_palw_constraint::canonical::to_rfc8785(&Value::String(name.clone())).map_err(|e| e.to_string())?,
+                    );
                     out.push(b':');
                     value.render(sorted, out)?;
                 }
@@ -972,7 +977,8 @@ fn admit_response_format(format: Option<&Value>) -> Result<Option<FormatRequest>
             // The automaton a masked run follows. A schema the subset parses but the compiler cannot
             // bound (a `pattern` today) is still served advisory; only a mask needs it compiled.
             let compiled = misaka_palw_constraint::compile::compile_v1(&schema).map(|c| c.to_bytes());
-            let constraint_id = compiled.as_ref().ok().map(|bytes| kaspa_consensus_core::palw_decode_constraint_v1::constraint_id_v1(bytes));
+            let constraint_id =
+                compiled.as_ref().ok().map(|bytes| kaspa_consensus_core::palw_decode_constraint_v1::constraint_id_v1(bytes));
             Ok(Some(FormatRequest {
                 kind: FormatKind::JsonSchema,
                 name: spec.get("name").and_then(Value::as_str).map(str::to_string),
@@ -1290,7 +1296,11 @@ mod tests {
         // not the schema's own bytes, which the model reads as text.
         let compiled = misaka_palw_constraint::compile::compile_v1(format.schema.as_ref().unwrap()).unwrap().to_bytes();
         assert_eq!(format.mask_bytes(), Some(compiled.as_slice()));
-        assert_eq!(format.constraint_id, Some(kaspa_consensus_core::palw_decode_constraint_v1::constraint_id_v1(&compiled)), "the id names the automaton");
+        assert_eq!(
+            format.constraint_id,
+            Some(kaspa_consensus_core::palw_decode_constraint_v1::constraint_id_v1(&compiled)),
+            "the id names the automaton"
+        );
         assert_eq!(
             format.instruction(),
             format!(

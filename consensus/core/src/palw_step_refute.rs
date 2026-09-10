@@ -7283,7 +7283,8 @@ pub fn check_tiled_decode_token_refutation_v3(
     };
     let v_committed = open_tile(&pin.committed_tile_lanes, &pin.committed_opening, committed as usize)?;
     let v_beat = open_tile(&pin.beat_tile_lanes, &pin.beat_opening, beat_lane)?;
-    let beat_bytes = court.beat_lane_bytes.ok_or(bad("a two-disclosure close names a beating lane and carries no rendering for it"))?;
+    let beat_bytes =
+        court.beat_lane_bytes.ok_or(bad("a two-disclosure close names a beating lane and carries no rendering for it"))?;
     if constraint_admits_lane_v1(court.constraint, state, Some(beat_bytes)).is_none() {
         return Err(PalwStepRefuteError::NoFaultFound);
     }

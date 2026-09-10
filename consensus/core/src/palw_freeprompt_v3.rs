@@ -2868,7 +2868,14 @@ mod tests {
         env.commitment.job.constraint_id = Hash64::from_u64_word(3);
         for arming in [armed(false), armed(true)] {
             assert_eq!(
-                env.validate_v3(Some(net()), arming.panel_da, false, arming.decode_constraint, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None),
+                env.validate_v3(
+                    Some(net()),
+                    arming.panel_da,
+                    false,
+                    arming.decode_constraint,
+                    PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+                    None
+                ),
                 Err(PalwFpV3Error::ConstraintOnUnconstrainedVersion)
             );
         }
@@ -3342,17 +3349,26 @@ mod fp_material_tests {
         assert_eq!((a.material.constraint.as_slice(), a.output_token_ids.as_slice()), (constraint.as_slice(), &[5u32, 6][..]));
         let c = palw_fp_capture_decode_v1(&palw_fp_capture_encode_constrained_v1(&v6, &ids, &constraint, &[9]), form).expect("FPC1");
         assert_eq!(c.material.constraint, constraint);
-        assert_eq!(palw_fp_job_material_decode_v1(&palw_fp_answer_encode_constrained_v1(&v6, &ids, &constraint, &[5]), form), Some(m.clone()));
+        assert_eq!(
+            palw_fp_job_material_decode_v1(&palw_fp_answer_encode_constrained_v1(&v6, &ids, &constraint, &[5]), form),
+            Some(m.clone())
+        );
 
         // Refused: a version-6 material with no automaton, with another automaton, and with bytes
         // that are not a canonical automaton; a version-5 job cannot be handed one at all.
         assert!(palw_fp_material_decode_v1(&palw_fp_material_encode_v1(&v6, &ids), form).is_none(), "no automaton");
         let mut other = constraint.clone();
         other.push(0);
-        assert!(palw_fp_answer_decode_v1(&palw_fp_answer_encode_constrained_v1(&v6, &ids, &other, &[5]), form).is_none(), "not canonical");
+        assert!(
+            palw_fp_answer_decode_v1(&palw_fp_answer_encode_constrained_v1(&v6, &ids, &other, &[5]), form).is_none(),
+            "not canonical"
+        );
         let mut foreign = v6.clone();
         foreign.constraint_id = Hash64::from_u64_word(9);
-        assert!(palw_fp_capture_decode_v1(&palw_fp_capture_encode_constrained_v1(&foreign, &ids, &constraint, &[9]), form).is_none(), "another id");
+        assert!(
+            palw_fp_capture_decode_v1(&palw_fp_capture_encode_constrained_v1(&foreign, &ids, &constraint, &[9]), form).is_none(),
+            "another id"
+        );
         assert!(
             borsh::to_vec(&PalwFpMaterialV1 { job: v5, prompt_token_ids: ids.to_vec(), constraint }).is_err(),
             "a version-5 material cannot carry an automaton"
@@ -3533,7 +3549,8 @@ mod fp_material_tests {
         );
         let mut wrong_count = job(&ids);
         wrong_count.prompt_tokens = 2;
-        let body = borsh::to_vec(&PalwFpMaterialV1 { job: wrong_count, prompt_token_ids: ids.to_vec(), constraint: Vec::new() }).unwrap();
+        let body =
+            borsh::to_vec(&PalwFpMaterialV1 { job: wrong_count, prompt_token_ids: ids.to_vec(), constraint: Vec::new() }).unwrap();
         let mut bytes = PALW_FP_MATERIAL_V1_MAGIC.to_vec();
         bytes.extend_from_slice(&body);
         assert!(

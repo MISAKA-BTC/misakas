@@ -795,7 +795,6 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     }
 }
 
-
 /// **A version-6 answer's `output_root`** (ADR-0096 §10 B3): `output_commitment_v2` over the
 /// context, the ids, and [`crate::palw_decode_constraint_v1::rendered_segments_hash_v1`] of each
 /// id's rendering in the class's token table. One spelling for the engine that commits it, the

@@ -313,17 +313,15 @@ fn a16_execute_streaming_v1(
             _ => None,
         };
         let id = match running {
-            Some(state) => {
-                decode_token_select_v3(row, &k.sampling.seed, position, k.sampling.temperature_q, |lane| {
-                    constraint_admits_lane_v1(k.constraint, &state, Some(k.table.segment(lane as u32))).is_some()
-                })
-                .ok_or_else(|| {
-                    format!(
-                        "no token of this class's table continues the constraint at position {position} although a byte does — \
+            Some(state) => decode_token_select_v3(row, &k.sampling.seed, position, k.sampling.temperature_q, |lane| {
+                constraint_admits_lane_v1(k.constraint, &state, Some(k.table.segment(lane as u32))).is_some()
+            })
+            .ok_or_else(|| {
+                format!(
+                    "no token of this class's table continues the constraint at position {position} although a byte does — \
                          the vocabulary is not byte-complete, and a constrained class requires it (ADR-0096 §10 B7)"
-                    )
-                })? as u32
-            }
+                )
+            })? as u32,
             None => k.table.lowest_eog_id(),
         };
         *cur = constraint_cursor_advance_v1(k.constraint, cur, k.table.segment(id), id == k.table.lowest_eog_id())

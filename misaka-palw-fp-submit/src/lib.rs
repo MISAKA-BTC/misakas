@@ -854,8 +854,13 @@ mod tests {
             trace_chunk_count: 1,
             trace_retention_daa: 200_000,
         };
-        let payload =
-            PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids: ids, signature: vec![7u8; 32], constraint: Vec::new() };
+        let payload = PalwFpCommitmentTxPayloadV3 {
+            version: PALW_FP_V3_VERSION,
+            commitment,
+            prompt_token_ids: ids,
+            signature: vec![7u8; 32],
+            constraint: Vec::new(),
+        };
         let bytes = borsh::to_vec(&payload).unwrap();
         (payload, bytes)
     }

@@ -2440,10 +2440,9 @@ impl PalwPanelService {
                         // pinned table (ADR-0096 §10 B7): an unmasked re-run would "disprove"
                         // every honest constrained claim.
                         let (constraint, table) = (job.constraint.clone(), self.fp_token_table(&job.job));
-                        let Ok((_backend, run)) = offload(backend, move |b| {
-                            execute_fp_job_v1(b, &claimed_job, &prompt, &constraint, table.as_deref())
-                        })
-                        .await
+                        let Ok((_backend, run)) =
+                            offload(backend, move |b| execute_fp_job_v1(b, &claimed_job, &prompt, &constraint, table.as_deref()))
+                                .await
                         else {
                             continue;
                         };
@@ -2684,14 +2683,12 @@ impl PalwPanelService {
                     // The job that was CLAIMED: the user's for a free prompt (ADR-0073 Decision
                     // 1d), the block's for an attempt.
                     let work = match &fp_job {
-                        Some(job) => {
-                            Some(ReplayWork::FreePrompt(
-                                job.job.clone(),
-                                job.prompt_token_ids.iter().map(|t| *t as usize).collect(),
-                                job.constraint.clone(),
-                                self.fp_token_table(&job.job),
-                            ))
-                        }
+                        Some(job) => Some(ReplayWork::FreePrompt(
+                            job.job.clone(),
+                            job.prompt_token_ids.iter().map(|t| *t as usize).collect(),
+                            job.constraint.clone(),
+                            self.fp_token_table(&job.job),
+                        )),
                         None => self
                             .job_anchor_for_claim(
                                 &session,
@@ -3352,7 +3349,9 @@ impl PalwPanelService {
                             .or_else(|| {
                                 kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(&bytes, self.config.prompt_ids_form)
                                     .map(|answer| answer.material)
-                                    .filter(|m| m.job.version >= kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED)
+                                    .filter(|m| {
+                                        m.job.version >= kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED
+                                    })
                             }) else {
                                 continue;
                             };
@@ -3407,10 +3406,9 @@ impl PalwPanelService {
                                 false => None,
                             };
                             let constraint = material.constraint.clone();
-                            let Ok((_backend, run)) = offload(backend, move |b| {
-                                execute_fp_job_v1(b, &material_job, &prompt, &constraint, table.as_deref())
-                            })
-                            .await
+                            let Ok((_backend, run)) =
+                                offload(backend, move |b| execute_fp_job_v1(b, &material_job, &prompt, &constraint, table.as_deref()))
+                                    .await
                             else {
                                 continue;
                             };
