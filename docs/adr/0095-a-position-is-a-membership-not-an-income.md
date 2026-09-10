@@ -322,9 +322,15 @@ a decision someone took.
 the state (declaration row, tenure map, fold arm, §4.4's two refusals, §4.7's notice), the fence of
 §4.11, `benefits` on `getPalwModelLine`, `misaka palw line-benefits` and the card on `line-show`.
 
+**2026-09-10, on `main`** (`891a1a14`, another session): the three new kinds moved to the END of
+their enums. `14c453d1` had inserted `ModelLineBenefitsDeclared` mid-way through the consensus
+object enum and `ModelBenefits`/`ModelPositionSince` mid-way through the delta entry enum; borsh
+numbers variants by position, so every kind below them was renumbered, and a node syncing
+testnet-11 from an empty datadir on `7f4dded4` died on the chain's only market seed (DAA 1,945).
+
 **2026-09-10** (`feat/adr-0095-membership-serving`):
 
-* **The tier read** (`b86d6808`). `getPalwModelBenefitTier(line, holders)` — op 177 through
+* **The tier read** (`cdc5cd26`). `getPalwModelBenefitTier(line, holders)` — op 177 through
   rpc-core, the service, gRPC (messages 1156/1157), wRPC and the integration test — answers from
   `PalwChainStateV2::model_benefit_tier_across` at the tip through the new
   `ConsensusApi::palw_model_benefit_tier_v1`: the ids summed each once, the most recent clock, the
@@ -337,7 +343,7 @@ the state (declaration row, tenure map, fold arm, §4.4's two refusals, §4.7's 
   `PALW_MODEL_BENEFIT_CHALLENGE_MLDSA87_CONTEXT` (its own context, because the key that proves a
   membership is the key that signs a sell) and `palw_model_benefit_challenge_evm_digest_v1` (EIP-191
   `personal_sign` over the challenge's 64 bytes).
-* **The reference gateway check** (`6b00692a`, `misaka-palw-gateway/src/membership.rs`), behind
+* **The reference gateway check** (`773f6e7c`, `misaka-palw-gateway/src/membership.rs`), behind
   `--membership-line <line>` (which needs `--rpc`); without the flag nothing about the gateway
   changes. `GET /v1/membership/challenge` issues a single-use nonce bound to the tip's DAA (a bounded
   book, 300 s); the chat body carries `misaka_membership {nonce, daa, carrier[], evm[]}`; the nonce
@@ -350,7 +356,7 @@ the state (declaration row, tenure map, fold arm, §4.4's two refusals, §4.7's 
   not verify is a 403 naming why, never a job quietly served in the public queue. §4.8 says the
   gateway "reads the tier at `daa`": the fold keeps only the tip, so the gateway reads the tip,
   which is at or after the height the challenge named.
-* **The site** (`6745584a`): with a wallet connected, the card on the store page and the line page
+* **The site** (`22b6e0e2`): with a wallet connected, the card on the store page and the line page
   says where that account stands — the chain's tier for its EVM holder id, the time since it last
   left, its rung marked, and what the next rung needs (memberships priced as the least join the
   curve fills, and tenure). A node from before the read is reported as not serving it, never as
@@ -367,16 +373,19 @@ daemon.
 
 **What the implementation found**, recorded so none of it becomes a surprise:
 
-1. **`consensus_params_id` destructures `palw_model_benefits` and never hashes it** — the
-   `unused variable` warning at `consensus/core/src/config/params.rs` since `14c453d1`. The
-   handshake is unaffected by design (`consensus_identity_id` normalises a scheduled fence away,
-   and the fork id and the schedule id both carry the 2,400 height through `for_each_fence`), but
-   the fingerprint a node PRINTS at startup is the same with and without this fence: a seat on a
-   build from before `14c453d1` and a seat on one after it both print testnet-11's pinned
-   `060e3597…`, so the fingerprint an operator confirms during a rollout cannot tell them apart.
-   The fix is one `h.write` beside `palw_model_lines`'s — and it moves testnet-11's fingerprint pin.
-   **Not changed here: that is the operator's call**, and it is the same flag-day arithmetic §4.11's
-   fence already carries.
+1. **`consensus_params_id` hashes every scheduled fence's height except this one's** — it
+   destructures `palw_model_benefits` and never writes it (the `unused variable` warning in
+   `consensus/core/src/config/params.rs` since `14c453d1`). So on 2026-09-09 the build carrying the
+   DAA 2,400 fence and the build without it both PRINTED `060e3597…` while the fork-id gate refused
+   one from the other, and operators who checked the fingerprint were cut off when the fleet crossed
+   the height (`03757f0b` records the cost). `e33f909b` now prints the fence schedule at startup —
+   the right check, and the docs name it — but its message and `03757f0b`'s docs explain the
+   silence as "a future fence is normalised out of the fingerprint". That is
+   `consensus_identity_id`. The printed fingerprint writes `palw_da_court`'s, `palw_court_ladder`'s
+   and the three market fences' heights — which is why 1,900 and 2,150 each moved testnet-11's pin —
+   and only this fence is missing. The fix is one `h.write` beside `palw_model_lines`'s; it moves the
+   pin. **Not changed here: the operator's call**, and whichever way it goes the docs' explanation
+   should be corrected, or the next flag day will be checked against the wrong mechanism.
 2. **`model_position_across` summed a repeated id twice** — a caller naming one id three times held
    three times its units. Fixed: each id is counted once (the read is off the fold; no state
    moves). The RPC also sorts and deduplicates, and echoes the set it computed over.
