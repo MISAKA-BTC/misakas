@@ -459,7 +459,10 @@ not whoever asked.
 * **Producer**: per position, `admit` over the vocabulary — 151,936 lanes × the token's bytes
   (mean ~3) ≈ 4.5 × 10⁵ automaton steps, a few milliseconds on the a16 host against ~1 s/token
   of decode. A state-indexed lane cache (llama.cpp's grammar sampler's trick) brings it under
-  1 ms. Measured in §9 when the engine half lands.
+  1 ms. **Measured 2026-09-10 (§9): about 12 ms per position** in release over a synthetic
+  151,936-entry table (685,279 bytes, about 18 ns per byte), about 15 ms through a per-lane
+  lookup closure — four times the estimate above, and still about 1 % of a ~1 s decode step.
+  The lane cache is the engine's work and is not optional at a larger vocabulary.
 * **Data availability**: ≤ 64 KiB per constrained claim in the answer envelope; the tokenizer
   table once per class (≈ 3 MB for the Qwen vocabulary), served like the artifact.
 * **Wire**: one `GetPalwProducerFactsResponse` version step; the job's borsh gains 64 bytes (a
@@ -621,3 +624,18 @@ mapping is written down.
   of every shipped kind move with that commit, before any network relies on them. The gateway
   derives the json kind for a request that set `response_format` and named no `derive`. The
   schema-bound grammar id `H(json/v1 ‖ constraint_id)` does not exist yet (Part B).
+* **2026-09-10, Decision 7 as pure consensus functions** (`28adec54`; nothing armed):
+  `consensus/core/src/palw_decode_constraint_v1.rs` — the automaton form (a pushdown automaton of
+  sorted byte-range frames with a 16-bit seen mask, so object keys are any order and at most once;
+  64 KiB, 65,535 nodes, depth 16, an epsilon-hop cap), `constraint_id_v1`, `admit`,
+  `decode_token_select_v3` (every lane admitted → v2 on every row; `T_q = 0` → v1), and
+  `check_tiled_decode_token_refutation_v3` appended to `palw_step_refute.rs` (no constraint →
+  the v2 verdict byte for byte; the one-disclosure "not admitted" arm; the two-disclosure arm
+  with a forbidden beating lane not a fault). One thing the text above did not say and the court
+  needs: **the EOG ids**, beside the token-to-bytes table — without them it cannot try Decision
+  7's stop rule, and either convicts an honest stop or leaves the stop position untriable. The
+  compiler (`misaka-palw-constraint/src/compile.rs`) admits RFC 8785's canonical form with key
+  order free; `pattern` is refused by name, `minimum`/`maximum` stay post-hoc, and a single
+  string's `maxLength` is practically about 250 under the 64 KiB cap. §4's producer cost is
+  measured and corrected above. Still absent: job version 6, `render_answer_v2`, the engines'
+  mask, the served token table, and the assembly refusal's removal.
