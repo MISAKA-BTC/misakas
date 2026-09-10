@@ -84,6 +84,11 @@ CONSTRAINED="${CONSTRAINED:-0}"
 # and only watches the rest. `SEATS_HOLD_ARTIFACT=1` hands the artifact to every node (production
 # stays on nodes 0 and 1), and `NODES=4` then gives three capable seats — the quorum.
 SEATS_HOLD_ARTIFACT="${SEATS_HOLD_ARTIFACT:-0}"
+# **How many nodes produce the dense class.** The chain's pace IS the dense producers' (the floor's
+# seed on this ruleset is minutes per fixture block): measured at ~3 minutes a block with two, and a
+# claim needs ~150 DAA from landing to `Final` on the devnet windows. Every node that holds the
+# artifact may produce it; more producers is the one lever on the wall clock a drill has.
+DENSE_PRODUCERS="${DENSE_PRODUCERS:-2}"
 FENCE_ARGS=()
 if [ "$CONSTRAINED" = 1 ]; then FENCE_ARGS=(--palw-fp-constraint-devnet=0); fi
 PREMINE_TXID="6d6973616b612d7072656d696e65$(printf '0%.0s' $(seq 1 100))"   # "misaka-premine", zero-padded
@@ -120,7 +125,9 @@ done
 [ -n "${MISAKA_DEVNET_GENESIS:-}" ] || die "MISAKA_DEVNET_GENESIS must be the devnet genesis hash, 128 hex chars (consensus/core/src/config/genesis.rs, DEVNET_GENESIS). A guessed value silently produces claims no seat can replay."
 [ "${#MISAKA_DEVNET_GENESIS}" -eq 128 ] || die "MISAKA_DEVNET_GENESIS is ${#MISAKA_DEVNET_GENESIS} chars, not 128"
 command -v python3 >/dev/null || die "python3 is required (key derivation and the HTTP client)"
-capable_seats=$((NODES > 1 ? 1 : 0))
+# Seats that hold the artifact: every dense producer but the executor (node-0), plus every other
+# node when SEATS_HOLD_ARTIFACT=1.
+capable_seats=$(( (DENSE_PRODUCERS < NODES ? DENSE_PRODUCERS : NODES) - 1 ))
 if [ "$SEATS_HOLD_ARTIFACT" = 1 ]; then capable_seats=$((NODES - 1)); fi
 if [ "$capable_seats" -lt 3 ]; then
   log "NOTE: $capable_seats seat(s) can judge the dense class and a licence needs 3 Valid of 5 — this run cannot reach"
@@ -233,8 +240,11 @@ for ((i=0; i<NODES; i++)); do
   # Two dense producers (node-0 and node-1), so one lost draw does not stall stage 1: a dense
   # attempt is ~2.4 min of inference on this host and the chain needs three blocks. node-2 stays
   # a floor-only seat, which is the shape of a fleet host without the artifact.
-  if [ "$i" -le 1 ]; then args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT" --palw-producer-class="$EXPECTED_CLASS_ID"); fi
-  if [ "$i" -gt 1 ] && [ "$SEATS_HOLD_ARTIFACT" = 1 ]; then args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT"); fi
+  if [ "$i" -lt "$DENSE_PRODUCERS" ]; then
+    args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT" --palw-producer-class="$EXPECTED_CLASS_ID")
+  elif [ "$SEATS_HOLD_ARTIFACT" = 1 ]; then
+    args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT")
+  fi
   if [ "$i" -gt 0 ]; then args+=(--connect=127.0.0.1:$P2P_BASE); fi
   if [ "$CONSTRAINED" = 1 ]; then args+=(--palw-fp-constraint-devnet=0 --palw-class-tokenizer="$MISAKA_PALW_TOKENIZER"); fi
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
