@@ -142,8 +142,17 @@ operator decision and ADR-0092 §7 already records it.
 
 ## 5. Invariants the tests must hold
 
-1. A family whose `attn_tile_claim` is `None` reports `supports_court() == false`, and an assembly
-   arming a k-ary court over it is refused — the same shape as the C-5 coverage fence.
+1. A family whose `attn_tile_claim` is `None` reports **`supports_dissection() == false`** — the
+   dissection turn's own predicate (Decision 2); `supports_court()` keeps its meaning (disclose and
+   take an arithmetic turn) and is not moved by this ADR. Every shipped family is pinned there today
+   by `no_shipped_family_can_take_a_fused_dissections_turn_yet` (`misaka-palw-base0/src/backend.rs`),
+   which fails in both directions — a family that advertises the turn without the verb, and the day
+   one implements the verb. While a registered fused family cannot answer, its silence is excused in
+   the fold, not refused at assembly: past `palw_court_responder_coverage`, a session that
+   `owes_the_dissection_opening` ends through `rearm_after_unanswered_opening` and convicts nobody
+   (Decision 2). *(Corrected 2026-09-10: this invariant first read "`supports_court() == false`,
+   and an assembly arming a k-ary court over it is refused" — the first draft's shape, which Decision
+   2 withdrew; a k-ary court is armed over these families today, §4.)*
 2. For every registered fused class, the tile claims fold to the root the responder files:
    `palw_attn_fold_check_v1` accepts the responder's own tree at every rung. A drill vector, not a
    fixture — the audit's own lesson is that a court drilled on an n_ctx-32 toy geometry cannot

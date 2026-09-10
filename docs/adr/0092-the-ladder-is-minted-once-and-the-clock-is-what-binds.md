@@ -202,8 +202,13 @@ What the table must answer before a mainnet card is minted:
   armed, and §8 records what it derives on this tree. Decision 3 now says so. The draft's error is
   left visible rather than deleted, because "the value stays open" is exactly the kind of claim that
   becomes a work item nobody can close.
-* **Whether testnet-11's ladder is re-armed at a height.** ADR-0084 U-08 / audit H-4 is an arming
-  of `Params::palw_court_ladder`, and its schedule is an operator decision.
+* ~~**Whether testnet-11's ladder is re-armed at a height.**~~ **Decided 2026-09-06** (`06bf5118`):
+  ADR-0084 U-08 / audit H-4 is an arming of `Params::palw_court_ladder`, and testnet-11 schedules
+  it at `PALW_RC_COURT_LADDER_FENCE_DAA` = 2,150 — a height of its own, 250 DAA after the 1,900
+  flag day, because the fork-id gate digests heights, not rules: a rule added at a height the
+  schedule already names is invisible to it (the constant's doc in
+  `consensus/core/src/config/params.rs` gives the measurement). *(This bullet still read "an
+  operator decision" until 2026-09-10.)*
 * **Any number.** §5 says why.
 
 ## 8. Implementation record (2026-09-06)
@@ -232,8 +237,11 @@ the pair silently gains room.
 
 So Decision 3's knob is not a refinement. On this window, raising the arity is what makes a wider
 ladder reachable *at a real context at all*, and the decision table is where the two numbers are
-priced against one another. The value stays open, as §7 says: this measures the wall clock, and the
-bytes one round carries are the close ceiling's half of the same question.
+priced against one another. ~~The value stays open, as §7 says~~ — *corrected 2026-09-10: §7
+withdrew that. The value is not open; it is derived (Decision 3), and the next paragraph measures
+what the derivation returns on this tree.* This table measures the wall clock; the bytes one round
+carries are the close ceiling's half of the same question, and `palw_court_arity_v1` weighs both
+halves before it returns an arity.
 
 **The derived arity, measured.** The generator now also calls the production derivation. On this
 tree the widest registered site is 512 history positions at 8 lanes, and

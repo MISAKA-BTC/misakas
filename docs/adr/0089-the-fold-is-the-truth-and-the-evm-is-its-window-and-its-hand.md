@@ -4,7 +4,12 @@
 >
 > **Amended (2026-09-05, implemented the same day).** [ADR-0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md) adds a third action to the writer (`3`, the seed — `msg.value` is the seed, at least 100,000 MSK), `seed()` and the `Seeded` event to the facade, `SeedTooSmall()`, the settlement's `action` in place of `is_buy`, and puts the least seed in `constants()` where the virtual reserve was; `decimals()` is 0. Decisions 3, 5 and 6 read with that in mind.
 
-**Status:** PROPOSED 2026-09-05, design only (no implementation yet). Requested by the operator
+**Status:** PROPOSED 2026-09-05; **IMPLEMENTED 2026-09-05** on `palw-adr0088-0089-impl` (§9 —
+§8's items 1–5 and the devnet drill, 12/12); the fence `palw_model_evm` is scheduled on
+testnet-11 at DAA 1,900 (`PALW_RC_DA_COURT_FENCE_DAA`, beside `palw_model_market` and
+`palw_model_lines`, with ADR-0090's release of 2026-09-06) and is `None` on every other preset.
+*(Corrected 2026-09-10: this line read "design only (no implementation yet)" until then — the
+status of the day it was written, never updated when §9 landed.)* Requested by the operator
 on 2026-09-05, on top of ADR-0087 and ADR-0088: Model Positions are not to be "a mere copy of
 ERC-20" (ERC-20 の単なるコピーにせず); `ModelPosition`, `ModelRegistry` and `ModelAMM` are to be
 **native primitives of the MISAKA EVM** — the thing that is MISAKA's own reason to exist
@@ -533,7 +538,10 @@ drill's own traps are in the script's comments.
 the tip and a past view would need a replay this RPC does not run (`eth_rpc.rs` says so at the
 site); the `CLASSICAL-ECC` label (E12) — the fold keys a position by holder id alone and cannot
 tell an EVM-derived id from an ML-DSA one, so the RPC has nothing to label with; the wallet label;
-the explorer; arming on testnet-11.
+the explorer. ~~Arming on testnet-11~~ — scheduled since 2026-09-06: `palw_model_evm` rides
+ADR-0090's release at DAA 1,900 (`PALW_RC_DA_COURT_FENCE_DAA` in
+`consensus/core/src/config/params.rs`, one height with `palw_model_market` and `palw_model_lines`;
+ADR-0090's closing section records the flag day).
 
 ## 10. What is deliberately not decided
 
