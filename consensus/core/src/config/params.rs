@@ -12470,7 +12470,11 @@ mod consensus_params_id_tests {
         // alias it (ADR-0096 Decision 8, last sentence).
         let mut rules_only = shipped.clone();
         rules_only.palw_fp_decode_rules = Some(ForkActivation::new(9_000_000));
-        assert_ne!(rules_only.consensus_params_id(), armed.consensus_params_id(), "the sampler and the constraint are distinct fences");
+        assert_ne!(
+            rules_only.consensus_params_id(),
+            armed.consensus_params_id(),
+            "the sampler and the constraint are distinct fences"
+        );
         // The mode condition is folded in: outside ConsensusV2 the fence answers nothing.
         let mut legacy = MAINNET_PARAMS.clone();
         legacy.palw_fp_decode_constraint = Some(ForkActivation::always());
