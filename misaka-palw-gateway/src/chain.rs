@@ -248,6 +248,23 @@ impl ChainSource {
     pub fn can_submit(&self) -> bool {
         matches!(self, Self::Rpc(_))
     }
+
+    /// **ADR-0095 §4.10: the tier the proved ids hold on `line`, at the node's tip.** Only a node
+    /// can answer; the offline form refuses rather than guess a membership it cannot read.
+    pub fn benefit_tier(&self, line: &Hash64, holders: &[Hash64]) -> Result<kaspa_rpc_core::GetPalwModelBenefitTierResponse, String> {
+        match self {
+            Self::Rpc(rpc) => rpc.benefit_tier(line, holders),
+            Self::AnchorFile(_) => Err("this gateway reads no chain (--anchor): a membership is read from a node (--rpc)".to_string()),
+        }
+    }
+
+    /// The node's virtual DAA score — the height a membership challenge is bound to.
+    pub fn tip_daa(&self) -> Result<u64, String> {
+        match self {
+            Self::Rpc(rpc) => rpc.tip_daa(),
+            Self::AnchorFile(_) => Err("this gateway reads no chain (--anchor): a membership is read from a node (--rpc)".to_string()),
+        }
+    }
 }
 
 /// **The node, asked fresh per job.**
@@ -316,10 +333,8 @@ impl RpcChainSource {
         facts
     }
 
-    /// The two calls, in one connection: the sink and its DAA (the anchor Decision 3 says must be
-    /// fresh), and the producer facts (the other three names).
-    async fn read_async(&self) -> Result<((String, u64), kaspa_rpc_core::GetPalwProducerFactsResponse), String> {
-        use kaspa_rpc_core::api::rpc::RpcApi;
+    /// One connection, made for one read and dropped after it (the reason is on the struct).
+    async fn connect(&self) -> Result<kaspa_wrpc_client::KaspaRpcClient, String> {
         use kaspa_wrpc_client::{
             KaspaRpcClient, WrpcEncoding,
             client::{ConnectOptions, ConnectStrategy},
@@ -334,6 +349,39 @@ impl RpcChainSource {
             ..Default::default()
         };
         client.connect(Some(options)).await.map_err(|e| e.to_string())?;
+        Ok(client)
+    }
+
+    /// ADR-0095 §4.10 — see [`ChainSource::benefit_tier`].
+    pub fn benefit_tier(&self, line: &Hash64, holders: &[Hash64]) -> Result<kaspa_rpc_core::GetPalwModelBenefitTierResponse, String> {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        self.runtime.block_on(async {
+            let client = self.connect().await?;
+            let r = client
+                .get_palw_model_benefit_tier(line.to_string(), holders.iter().map(|h| h.to_string()).collect())
+                .await
+                .map_err(|e| e.to_string());
+            let _ = client.disconnect().await;
+            r
+        })
+    }
+
+    /// See [`ChainSource::tip_daa`].
+    pub fn tip_daa(&self) -> Result<u64, String> {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        self.runtime.block_on(async {
+            let client = self.connect().await?;
+            let r = client.get_block_dag_info().await.map(|d| d.virtual_daa_score).map_err(|e| e.to_string());
+            let _ = client.disconnect().await;
+            r
+        })
+    }
+
+    /// The two calls, in one connection: the sink and its DAA (the anchor Decision 3 says must be
+    /// fresh), and the producer facts (the other three names).
+    async fn read_async(&self) -> Result<((String, u64), kaspa_rpc_core::GetPalwProducerFactsResponse), String> {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        let client = self.connect().await?;
         let dag = client.get_block_dag_info().await.map_err(|e| e.to_string())?;
         let producer = client
             .get_palw_producer_facts(self.class_id.clone(), self.bond_txid.clone(), self.bond_index, !self.bond_txid.is_empty())

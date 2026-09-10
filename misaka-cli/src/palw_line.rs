@@ -830,7 +830,10 @@ pub async fn benefits(
             }
             let nonce_hex = nonce_hex.trim_start_matches("0x");
             let mut nonce = vec![0u8; nonce_hex.len() / 2];
-            if nonce_hex.is_empty() || nonce_hex.len() % 2 != 0 || faster_hex::hex_decode(nonce_hex.as_bytes(), &mut nonce).is_err() {
+            if nonce_hex.is_empty()
+                || !nonce_hex.len().is_multiple_of(2)
+                || faster_hex::hex_decode(nonce_hex.as_bytes(), &mut nonce).is_err()
+            {
                 return Err(CliError::new(exit::GENERIC, format!("--nonce '{nonce_hex}' is not hex")));
             }
             Some((nonce, daa))

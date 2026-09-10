@@ -50,6 +50,14 @@ faster-hex.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# ADR-0095 §4.8, EVM lane: recover a `personal_sign` membership proof with the EVM lane's OWN
+# ecrecover. Not a new curve in this binary: `misaka-palw-derive` already links `kaspa-evm`, and
+# with it alloy and k256 — this names that coupling for the one use that is this crate's own.
+alloy-primitives = { version = "0.8", features = ["k256"] }
+
+[dev-dependencies]
+# ADR-0095 §4.8: a wallet's signature, made in a test the way a wallet makes it.
+k256 = { version = "0.13", features = ["ecdsa"] }
 
 [lints]
 workspace = true

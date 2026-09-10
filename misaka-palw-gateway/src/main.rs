@@ -62,6 +62,8 @@ mod derive;
 mod chain;
 // ADR-0077 Decisions 2 and 6 + SA-3: the prompt plan, the stream, and the two bindings.
 mod wire;
+// ADR-0095 §4.8 / §7 step 6: verify the signature, read the tier, choose a queue.
+mod membership;
 
 use wire::{AnswerStream, PromptPlan, Turn};
 
@@ -210,6 +212,10 @@ struct Config {
     /// ADR-0079 Decision 5's platform half, installed and PROVEN at boot before the bind guard
     /// reads it. `none` when there is none — which Decision 10 then refuses a public bind on.
     confinement: Confinement,
+    /// **ADR-0095 §4.8: the line whose holders this gateway serves ahead of strangers**, and the
+    /// network their proofs are bound to. `None` (no `--membership-line`) checks no memberships and
+    /// changes nothing about the queue.
+    membership: Option<membership::MembershipConfig>,
 }
 
 /// The exposure numbers actually in force for one job: the operator's declaration where they made
@@ -592,6 +598,11 @@ struct ChatRequest {
     /// same answer twice — and so nothing about the draw is the gateway's to choose.
     #[serde(default)]
     seed: Option<String>,
+    /// **ADR-0095 §4.8: a membership proof** — signatures over a challenge this gateway issued
+    /// (`GET /v1/membership/challenge`). Absent: a public job. Present on a gateway with no
+    /// `--membership-line`: refused by name rather than ignored.
+    #[serde(default)]
+    misaka_membership: Option<membership::MembershipProof>,
 }
 
 /// **ADR-0082 Decision 11: the request's sampler inputs, quantized and gated on the chain.**
@@ -726,6 +737,18 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
     let mut body = vec![0u8; content_length];
     reader.read_exact(&mut body).map_err(|e| format!("cannot read the body: {e}"))?;
     Ok(HttpRequest { method, path, body })
+}
+
+/// ADR-0095 §4.8: the answer says which membership the chain gave the caller and which queue
+/// that bought — so a member can see the tier they were served under, and nobody is told a
+/// promotion happened that did not.
+fn with_membership(mut body: serde_json::Value, verdict: Option<&membership::Verdict>) -> serde_json::Value {
+    if let Some(v) = verdict
+        && let Some(misaka) = body.get_mut("misaka").and_then(|m| m.as_object_mut())
+    {
+        misaka.insert("membership".to_string(), v.json());
+    }
+    body
 }
 
 fn respond(stream: &mut TcpStream, status: &str, body: &serde_json::Value) {
@@ -1148,6 +1171,7 @@ fn main() {
     let mut answer_never_commit = false;
     let mut privacy_mode: u8 = PALW_FP_PRIVACY_PUBLIC_DA;
     let mut per_source_jobs_per_window: u32 = 120;
+    let mut membership_line: Option<Hash64> = None;
     while let Some(arg) = args.pop_front() {
         let mut value = |what: &str| args.pop_front().unwrap_or_else(|| die(format!("{what} needs a value")));
         match arg.as_str() {
@@ -1191,8 +1215,14 @@ fn main() {
             "--per-source-jobs-per-window" => {
                 per_source_jobs_per_window = value("--per-source-jobs-per-window").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
+            // ADR-0095 §4.8: a class id names the class's founding line (ADR-0088 Decision 9).
+            "--membership-line" => {
+                let text = value("--membership-line");
+                membership_line =
+                    Some(text.parse().unwrap_or_else(|_| die(format!("--membership-line '{text}' is not a 128-hex line id"))))
+            }
             other => die(format!(
-                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--public-job-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
+                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--public-job-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>] [--membership-line <line-id> (needs --rpc)]"
             )),
         }
     }
@@ -1224,6 +1254,7 @@ fn main() {
         privacy_mode,
         per_source_jobs_per_window,
         confinement: Confinement::none(),
+        membership: None,
     };
 
     // -----------------------------------------------------------------------------------------
@@ -1264,6 +1295,14 @@ fn main() {
 
     std::fs::create_dir_all(&config.outbox).unwrap_or_else(|e| die(format!("cannot create the outbox: {e}")));
     let identity = load_identity(&config.identity_path);
+    // ADR-0095 §4.8: the proofs are bound to the network the identity names, and the tier is the
+    // node's to read — so a membership line without a node is refused at boot, not per request.
+    if let Some(line_id) = membership_line {
+        if rpc_endpoint.is_none() {
+            die("--membership-line needs --rpc: a membership is read from the chain, and --anchor reads none".into());
+        }
+        config.membership = Some(membership::MembershipConfig { line_id, network_domain: identity.network_domain });
+    }
 
     // ADR-0077 Decision 3: the chain, or an honest statement that there is none.
     let chain_source = match (&rpc_endpoint, &anchor_path) {
@@ -1336,6 +1375,8 @@ fn main() {
     let connections = Arc::new(AtomicUsize::new(0));
     let budget = Arc::new(Mutex::new(PublicJobBudget::new()));
     let sources = Arc::new(Mutex::new(SourceRates::default()));
+    // ADR-0095 §4.8: the challenges this gateway issued, and the one job slot's two queues.
+    let door = Arc::new(membership::MembershipDoor::default());
 
     let listener = TcpListener::bind(&config.listen).unwrap_or_else(|e| die(format!("cannot bind {}: {e}", config.listen)));
     for stream in listener.incoming() {
@@ -1348,6 +1389,7 @@ fn main() {
         let (config, identity, worker, chain_source) =
             (Arc::clone(&config), Arc::clone(&identity), Arc::clone(&worker), Arc::clone(&chain_source));
         let (in_flight, budget, sources) = (Arc::clone(&in_flight), Arc::clone(&budget), Arc::clone(&sources));
+        let door = Arc::clone(&door);
         let connections = Arc::clone(&connections);
         let acknowledged_bind = acknowledged;
         std::thread::spawn(move || {
@@ -1360,6 +1402,7 @@ fn main() {
                 &in_flight,
                 &budget,
                 &sources,
+                &door,
                 backend,
                 acknowledged_bind,
             );
@@ -1378,6 +1421,7 @@ fn serve_connection(
     in_flight: &AtomicUsize,
     budget: &Mutex<PublicJobBudget>,
     sources: &Mutex<SourceRates>,
+    door: &membership::MembershipDoor,
     backend: ConfinementBackend,
     acknowledged_bind: bool,
 ) {
@@ -1457,6 +1501,14 @@ fn serve_connection(
                         "answered_without_commit": snapshot.answered_without_commit,
                         "commitment_anchor_ttl_daa": COMMITMENT_ANCHOR_TTL_DAA,
                     },
+                    // ADR-0095 §4.8: whose holders this gateway serves ahead of strangers, and how.
+                    "membership": config.membership.as_ref().map(|m| serde_json::json!({
+                        "line": m.line_id.to_string(),
+                        "challenge": "GET /v1/membership/challenge",
+                        "acts_on": ["PRIORITY_INFERENCE"],
+                        "reserved_in_flight": membership::MEMBER_RESERVED_IN_FLIGHT,
+                        "lanes": ["carrier (ML-DSA-87)", "evm (personal_sign)"],
+                    })),
                 }),
             );
         }
@@ -1473,7 +1525,7 @@ fn serve_connection(
             }
             // Parsed BEFORE the queue reservation so `stream: true` decides the response shape
             // while a status code is still possible.
-            let chat: ChatRequest = match serde_json::from_slice(&request.body) {
+            let mut chat: ChatRequest = match serde_json::from_slice(&request.body) {
                 Ok(chat) => chat,
                 Err(e) => {
                     respond(stream, "400 Bad Request", &error_body(&format!("request body is not a chat completion: {e}")));
@@ -1481,9 +1533,36 @@ fn serve_connection(
                 }
             };
             let streaming = chat.stream == Some(true);
+            // ADR-0095 §4.8: a proof is checked BEFORE the queue, because the queue is what it buys.
+            let verdict = match (chat.misaka_membership.take(), &config.membership) {
+                (None, _) => None,
+                (Some(_), None) => {
+                    respond(
+                        stream,
+                        "400 Bad Request",
+                        &error_body(
+                            "this request carries misaka_membership and this gateway checks no memberships (it runs without \
+                             --membership-line) — refused rather than served as if the proof had not been sent",
+                        ),
+                    );
+                    return;
+                }
+                (Some(proof), Some(cfg)) => {
+                    match membership::check(cfg, &door.challenges, &proof, |line, ids| chain_source.benefit_tier(line, ids)) {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            respond(stream, "403 Forbidden", &error_body(&format!("the membership proof was refused: {e}")));
+                            return;
+                        }
+                    }
+                }
+            };
+            let queue = verdict.as_ref().map(|v| v.queue).unwrap_or(membership::Queue::Public);
             // The bounded in-flight queue. Reserved BEFORE the slot is contended, so the depth of
             // the wait is a number this process chose rather than one the network chose for it.
-            if in_flight.fetch_add(1, Ordering::AcqRel) >= MAX_IN_FLIGHT_JOBS {
+            if in_flight.fetch_add(1, Ordering::AcqRel)
+                >= membership::in_flight_cap(MAX_IN_FLIGHT_JOBS, queue, config.membership.is_some())
+            {
                 in_flight.fetch_sub(1, Ordering::AcqRel);
                 respond(
                     stream,
@@ -1505,9 +1584,11 @@ fn serve_connection(
                 // ends, and an OpenAI client needs a stable id from the first chunk.
                 let mut sink = SseSink { stream, id: format!("palwcmpl-{}", faster_hex::hex_string(&nonce)), model, started: false };
                 sink.head();
+                let slot = door.slot.acquire(queue);
                 let outcome = handle_chat(config, identity, worker, budget, chain_source, chat, &mut sink);
+                drop(slot);
                 in_flight.fetch_sub(1, Ordering::AcqRel);
-                match outcome {
+                match outcome.map(|body| with_membership(body, verdict.as_ref())) {
                     Ok(body) => {
                         // The terminal chunk carries the finish reason and, in the same event, the
                         // `misaka` object: whether this answer became a claim and, if not, why.
@@ -1527,12 +1608,43 @@ fn serve_connection(
                 }
             } else {
                 let mut sink = BufferedSink;
+                let slot = door.slot.acquire(queue);
                 let outcome = handle_chat(config, identity, worker, budget, chain_source, chat, &mut sink);
+                drop(slot);
                 in_flight.fetch_sub(1, Ordering::AcqRel);
-                match outcome {
+                match outcome.map(|body| with_membership(body, verdict.as_ref())) {
                     Ok(body) => respond(stream, "200 OK", &body),
                     Err(e) => respond(stream, "400 Bad Request", &error_body(&e)),
                 }
+            }
+        }
+        // ADR-0095 §4.8: a challenge to sign. It spends nothing and is rate-limited like a fetch;
+        // a gateway with no membership line has no such route.
+        ("GET", "/v1/membership/challenge") => {
+            let Some(cfg) = &config.membership else {
+                respond(
+                    stream,
+                    "404 Not Found",
+                    &error_body("this gateway checks no memberships (it runs without --membership-line)"),
+                );
+                return;
+            };
+            if let Some(source) = source
+                && !sources.lock().expect("the source lock is never poisoned").admit_fetch(source)
+            {
+                respond(stream, "429 Too Many Requests", &error_body("per-source request rate exceeded"));
+                return;
+            }
+            match chain_source.tip_daa() {
+                Ok(daa) => {
+                    let nonce = door.challenges.issue(daa);
+                    respond(stream, "200 OK", &membership::challenge_json(cfg, &nonce, daa));
+                }
+                Err(e) => respond(
+                    stream,
+                    "503 Service Unavailable",
+                    &error_body(&format!("the node could not be read for a challenge: {e}")),
+                ),
             }
         }
         // ADR-0078 Decision 6's fetch handle: a derived artifact too large to ride inline is
@@ -1560,7 +1672,10 @@ fn serve_connection(
         _ => respond(
             stream,
             "404 Not Found",
-            &error_body("this gateway serves POST /v1/chat/completions, GET /health and GET /v1/artifacts/<derived-id>"),
+            &error_body(
+                "this gateway serves POST /v1/chat/completions, GET /health, GET /v1/artifacts/<derived-id> and, with \
+                 --membership-line, GET /v1/membership/challenge",
+            ),
         ),
     }
 }
@@ -1588,6 +1703,7 @@ mod tests {
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
             per_source_jobs_per_window: 2,
             confinement: Confinement::none(),
+            membership: None,
             derive_seed: None,
             artifact_inline_max: 4 << 20,
         }
@@ -1814,6 +1930,7 @@ mod tests {
             serve_dsl: false,
             temperature,
             seed: seed.map(str::to_string),
+            misaka_membership: None,
         };
         let dormant = chain::ChainFacts::default();
         let armed = chain::ChainFacts { fp_decode_rules_armed: true, ..Default::default() };
